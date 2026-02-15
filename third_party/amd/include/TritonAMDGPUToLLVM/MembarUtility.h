@@ -11,7 +11,7 @@ namespace mlir::triton::AMD {
 //
 // 1) Async-write / local_load filter
 //    Suppresses barriers between an async write (any op carrying
-//    MemAsyncLocalWriteOpTrait) and a local_load on the same shared-memory
+//    MemAsyncLocalStoreOpTrait) and a local_load on the same shared-memory
 //    allocation, provided the local_load's token chains back to an async_wait.
 //
 //    Membar analysis conservatively assumes a hazard because it cannot

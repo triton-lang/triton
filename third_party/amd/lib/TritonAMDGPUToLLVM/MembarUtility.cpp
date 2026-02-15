@@ -9,7 +9,7 @@ namespace mlir::triton::AMD {
 namespace {
 
 bool isAsyncWrite(Operation *op) {
-  return op->hasTrait<OpTrait::MemAsyncLocalWriteOpTrait>();
+  return op->hasTrait<OpTrait::MemAsyncLocalStoreOpTrait>();
 }
 
 bool isLocalLoadSyncedViaWait(Operation *op) {

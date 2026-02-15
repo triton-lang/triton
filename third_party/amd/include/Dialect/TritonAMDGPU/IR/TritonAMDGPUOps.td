@@ -335,7 +335,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 
 def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
   AttrSizedOperandSegments,
-  MemAsyncLocalWriteOpTrait,
+  MemAsyncLocalStoreOpTrait,
   BufferOpInterface,
   TypesMatchWith<"dest element type matches pointee type of ptr", "dest", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"infer mask shape from offsets",
@@ -762,7 +762,8 @@ def AsyncCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_copy_local_to_global", [
 // AsyncTDMCopyGlobalToLocalOp
 //===----------------------------------------------------------------------===//
 
-def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local", [AttrSizedOperandSegments, MemAsyncLocalWriteOpTrait]> {
+def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
+    [AttrSizedOperandSegments, MemAsyncLocalStoreOpTrait]> {
   let summary = "Copy data based on descriptor from global memory to local memory asynchronously";
 
   let description = [{
@@ -876,7 +877,7 @@ def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter"> {
 // AsyncTDMGatherOp
 //===----------------------------------------------------------------------===//
 
-def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather", [MemAsyncLocalWriteOpTrait]> {
+def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather", [MemAsyncLocalStoreOpTrait]> {
   let summary = "Gather data from non-contiguous global memory rows to local memory asynchronously";
 
   let description = [{

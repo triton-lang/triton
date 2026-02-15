@@ -15,7 +15,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 def MemDescViewTrait : NativeOpTrait<"MemDescViewTrait">;
 def LocalLoadTrait : NativeOpTrait<"LocalLoadTrait">;
 def MemWaitOpTrait : NativeOpTrait<"MemWaitOpTrait">;
-def MemAsyncLocalWriteOpTrait : NativeOpTrait<"MemAsyncLocalWriteOpTrait">;
+def MemAsyncLocalStoreOpTrait : NativeOpTrait<"MemAsyncLocalStoreOpTrait">;
 
 // Common parameter helpers.
 def LinearLayoutParam : AttrOrTypeParameter<"LinearLayout",

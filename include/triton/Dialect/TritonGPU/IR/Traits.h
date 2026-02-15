@@ -26,29 +26,27 @@ public:
   }
 };
 
+// Marks an op that produces a sub-view of a shared memory descriptor
+// (e.g., memdesc_subview, memdesc_index).
 template <typename ConcreteType>
 class MemDescViewTrait
-    : public mlir::OpTrait::TraitBase<ConcreteType, MemDescViewTrait> {
-  // Optional: Add methods or verification logic here
-};
+    : public mlir::OpTrait::TraitBase<ConcreteType, MemDescViewTrait> {};
 
+// Marks an op that loads from shared (local) memory into registers.
 template <typename ConcreteType>
 class LocalLoadTrait
-    : public mlir::OpTrait::TraitBase<ConcreteType, LocalLoadTrait> {
-  // Optional: Add methods or verification logic here
-};
+    : public mlir::OpTrait::TraitBase<ConcreteType, LocalLoadTrait> {};
 
+// Marks an op that waits for outstanding asynchronous operations to complete.
 template <typename ConcreteType>
 class MemWaitOpTrait
-    : public mlir::OpTrait::TraitBase<ConcreteType, MemWaitOpTrait> {
-  // Optional: Add methods or verification logic here
-};
+    : public mlir::OpTrait::TraitBase<ConcreteType, MemWaitOpTrait> {};
 
 // Marks an op that initiates an asynchronous write to shared memory.
 // Completion is only guaranteed after an explicit wait.
 template <typename ConcreteType>
-class MemAsyncLocalWriteOpTrait
-    : public mlir::OpTrait::TraitBase<ConcreteType, MemAsyncLocalWriteOpTrait> {
+class MemAsyncLocalStoreOpTrait
+    : public mlir::OpTrait::TraitBase<ConcreteType, MemAsyncLocalStoreOpTrait> {
 };
 
 } // namespace OpTrait
