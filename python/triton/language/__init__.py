@@ -6,6 +6,7 @@ from . import extra
 from .standard import (
     argmax,
     argmin,
+    bitonic_merge,
     cdiv,
     cumprod,
     cumsum,
@@ -14,11 +15,15 @@ from .standard import (
     max,
     min,
     ravel,
+    reduce_or,
     sigmoid,
     softmax,
     sort,
+    squeeze,
     sum,
     swizzle2d,
+    topk,
+    unsqueeze,
     xor_sum,
     zeros,
     zeros_like,
@@ -26,13 +31,11 @@ from .standard import (
 from .core import (
     PropagateNan,
     TRITON_MAX_TENSOR_NUMEL,
-    _experimental_descriptor_load,
-    _experimental_descriptor_store,
     load_tensor_descriptor,
     store_tensor_descriptor,
     make_tensor_descriptor,
-    _experimental_reinterpret_tensor_descriptor,
     tensor_descriptor,
+    tensor_descriptor_type,
     add,
     advance,
     arange,
@@ -53,8 +56,10 @@ from .core import (
     cat,
     cast,
     clamp,
+    condition,
     const,
     constexpr,
+    constexpr_type,
     debug_barrier,
     device_assert,
     device_print,
@@ -82,16 +87,17 @@ from .core import (
     join,
     load,
     make_block_ptr,
+    map_elementwise,
     max_constancy,
     max_contiguous,
     maximum,
     minimum,
+    mul,
     multiple_of,
     num_programs,
     permute,
     pi32_t,
     pointer_type,
-    nv_tma_desc_type,
     program_id,
     range,
     reduce,
@@ -102,7 +108,9 @@ from .core import (
     static_print,
     static_range,
     store,
+    sub,
     tensor,
+    to_tensor,
     trans,
     tuple,
     tuple_type,
@@ -128,16 +136,14 @@ from .random import (
     randn4x,
     uint_to_uniform_float,
 )
+from . import target_info
 
 __all__ = [
     "PropagateNan",
     "TRITON_MAX_TENSOR_NUMEL",
-    "_experimental_descriptor_load",
-    "_experimental_descriptor_store",
     "load_tensor_descriptor",
     "store_tensor_descriptor",
     "make_tensor_descriptor",
-    "_experimental_reinterpret_tensor_descriptor",
     "tensor_descriptor",
     "abs",
     "add",
@@ -156,6 +162,7 @@ __all__ = [
     "atomic_xchg",
     "atomic_xor",
     "bfloat16",
+    "bitonic_merge",
     "block_type",
     "broadcast",
     "broadcast_to",
@@ -164,8 +171,10 @@ __all__ = [
     "cdiv",
     "ceil",
     "clamp",
+    "condition",
     "const",
     "constexpr",
+    "constexpr_type",
     "cos",
     "cumprod",
     "cumsum",
@@ -208,6 +217,7 @@ __all__ = [
     "log",
     "log2",
     "make_block_ptr",
+    "map_elementwise",
     "math",
     "max",
     "max_constancy",
@@ -215,6 +225,7 @@ __all__ = [
     "maximum",
     "min",
     "minimum",
+    "mul",
     "multiple_of",
     "num_programs",
     "pair_uniform_to_normal",
@@ -223,7 +234,6 @@ __all__ = [
     "philox_impl",
     "pi32_t",
     "pointer_type",
-    "nv_tma_desc_type",
     "program_id",
     "rand",
     "rand4x",
@@ -234,6 +244,7 @@ __all__ = [
     "range",
     "ravel",
     "reduce",
+    "reduce_or",
     "reshape",
     "rsqrt",
     "slice",
@@ -244,13 +255,18 @@ __all__ = [
     "split",
     "sqrt",
     "sqrt_rn",
+    "squeeze",
     "static_assert",
     "static_print",
     "static_range",
     "store",
+    "sub",
     "sum",
     "swizzle2d",
+    "target_info",
     "tensor",
+    "topk",
+    "to_tensor",
     "trans",
     "tuple",
     "uint16",
@@ -259,6 +275,7 @@ __all__ = [
     "uint8",
     "uint_to_uniform_float",
     "umulhi",
+    "unsqueeze",
     "view",
     "void",
     "where",
@@ -268,12 +285,12 @@ __all__ = [
 ]
 
 
-def str_to_ty(name):
+def str_to_ty(name, c):
     from builtins import tuple
 
     if isinstance(name, tuple):
         fields = type(name).__dict__.get("_fields", None)
-        return tuple_type([str_to_ty(x) for x in name], fields)
+        return tuple_type([str_to_ty(x, c) for x in name], fields)
 
     if name[0] == "*":
         name = name[1:]
@@ -281,14 +298,52 @@ def str_to_ty(name):
         if name[0] == "k":
             name = name[1:]
             const = True
-        ty = str_to_ty(name)
+        ty = str_to_ty(name, c)
         return pointer_type(element_ty=ty, const=const)
 
-    if name == "nvTmaDesc":
-        return nv_tma_desc_type()
+    if name.startswith("tensordesc"):
+        # Determine mode from type name: tensordesc_im2col vs tensordesc
+        is_im2col = name.startswith("tensordesc_im2col")
 
-    if name == "constexpr":
-        return constexpr
+        inner = name.split("<")[1].rstrip(">")
+        dtype, rest = inner.split("[", maxsplit=1)
+        block_shape, rest = rest.split("]", maxsplit=1)
+        block_shape = [int(s.strip()) for s in block_shape.rstrip("]").split(",")]
+        # For im2col, parse optional input_rank=N (e.g., ",input_rank=4,layout")
+        tensor_rank = None
+        import re as _re
+        rank_match = _re.search(r",input_rank=(\d+)", rest)
+        if rank_match:
+            tensor_rank = int(rank_match.group(1))
+            rest = rest[:rank_match.start()] + rest[rank_match.end():]
+        layout_str = rest.lstrip(",")
+        is_gluon = len(layout_str)
+        dtype = str_to_ty(dtype, None)
+        # For im2col with tensor_rank, use it for shape/stride types; otherwise use block_shape ndim
+        ndim = tensor_rank if (is_im2col and tensor_rank is not None) else len(block_shape)
+        shape_type = tuple_type([int32] * ndim)
+        # FIXME: Last dim stride should be constexpr(1)
+        stride_type = tuple_type(([int64] * ndim))
+        block = block_type(dtype, block_shape)
+        if is_gluon:
+            from triton.experimental.gluon.language._layouts import NVMMASharedLayout, PaddedSharedLayout, SwizzledSharedLayout
+            from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor_type as nvidia_tensor_descriptor_type
+            from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor_im2col_type as nvidia_tensor_descriptor_im2col_type
+            from triton.experimental.gluon.language.amd.gfx1250.tdm import tensor_descriptor_type as amd_tensor_descriptor_type
+            layout = eval(
+                layout_str,
+                dict(NVMMASharedLayout=NVMMASharedLayout, PaddedSharedLayout=PaddedSharedLayout,
+                     SwizzledSharedLayout=SwizzledSharedLayout))
+            if isinstance(layout, NVMMASharedLayout):
+                if is_im2col:
+                    return nvidia_tensor_descriptor_im2col_type(block, shape_type, stride_type, layout)
+                return nvidia_tensor_descriptor_type(block, shape_type, stride_type, layout)
+            else:
+                return amd_tensor_descriptor_type(block, shape_type, stride_type, layout)
+        return tensor_descriptor_type(block, shape_type, stride_type)
+
+    if name.startswith("constexpr"):
+        return constexpr_type(c)
 
     tys = {
         "fp8e4nv": float8e4nv,

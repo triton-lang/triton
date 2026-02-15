@@ -13,7 +13,7 @@ LogicalResult verifyTransposeOpInterface(Operation *op) {
   TransposeOpInterface transposeOp = cast<TransposeOpInterface>(op);
   auto rank = cast<ShapedType>(transposeOp.getSrc().getType()).getRank();
   auto order = transposeOp.getOrder();
-  if (rank != order.size()) {
+  if (static_cast<size_t>(rank) != order.size()) {
     return op->emitError(
         "order must have the same size as the rank of the operand and result");
   }

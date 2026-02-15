@@ -2,7 +2,6 @@
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;
 

@@ -41,6 +41,8 @@ static void allocateGMem(Operation *parentOp,
     uint32_t nbytes = 0;
     uint32_t align = 0;
     if (auto alloc = dyn_cast<triton::gpu::GlobalScratchAllocOp>(op)) {
+      if (alloc.getBackend() != "default")
+        return;
       nbytes = alloc.getNbytes();
       align = alloc.getAlignment();
     } else if (auto callOp = dyn_cast<triton::CallOp>(op)) {

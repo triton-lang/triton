@@ -22,17 +22,25 @@
  */
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
-#include "llvm/ADT/TypeSwitch.h"
-
+#include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Interfaces.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/TypeSwitch.h"
+#include <limits>
 
 // clang-format off
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.cpp.inc"
 // clang-format on
+
+#include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
+#include "third_party/amd/lib/TritonAMDGPUToLLVM/TDMUtility.h"
 
 using namespace mlir;
 using namespace mlir::triton::amdgpu;
@@ -47,6 +55,8 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 #define GET_OP_LIST
 #include "Dialect/TritonAMDGPU/IR/Ops.cpp.inc"
       >();
+
+  addInterfaces<TritonInlinerInterface>();
 }
 
 #include "Dialect/TritonAMDGPU/IR/TritonAMDGPUEnums.cpp.inc"
@@ -56,83 +66,178 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 
 #define GET_OP_CLASSES
 #include "Dialect/TritonAMDGPU/IR/Ops.cpp.inc"
+#include "Dialect/TritonAMDGPU/IR/TritonAMDGPUOpInterfaces.cpp.inc"
 
 namespace mlir::triton::amdgpu {
 
+std::string getStringFromCoords(mlir::triton::AMD::ElemLocationKey coords) {
+  std::string result;
+  llvm::raw_string_ostream os(result);
+  os << "[";
+  llvm::interleaveComma(coords, os,
+                        [&](const auto &coord) { os << coord.second; });
+  os << "]";
+  return os.str();
+}
+
+// Helper function to verify TDM block dimensions
+static LogicalResult verifyTDMBlockSize(Operation *op,
+                                        ArrayRef<int64_t> blockShape) {
+  constexpr int64_t maxBlockSize = std::numeric_limits<uint16_t>::max();
+  for (size_t i = 0; i < blockShape.size(); ++i) {
+    if (blockShape[i] > maxBlockSize) {
+      return op->emitOpError("TDM block dimension ")
+             << i << " (" << blockShape[i] << ") exceeds maximum size of "
+             << maxBlockSize;
+    }
+  }
+  return success();
+}
+
 LogicalResult ExtractSliceOp::verify() {
-  auto srcTy = getSource().getType();
-  auto srcLayout = srcTy.getEncoding();
-  auto srcElementType = getElementTypeOrSelf(srcTy);
-  auto resultTy = getResult().getType();
-  auto resultLayout = resultTy.getEncoding();
-  auto resultElementType = getElementTypeOrSelf(resultTy);
+  // Basic type/rank checks.
+  auto srcTypeVal = getSource().getType();
+  auto dstTypeVal = getResult().getType();
+  auto srcTy = mlir::cast<RankedTensorType>(srcTypeVal);
+  auto dstTy = mlir::cast<RankedTensorType>(dstTypeVal);
 
-  if (srcElementType != resultElementType) {
+  auto srcElm = getElementTypeOrSelf(srcTy);
+  auto resElm = getElementTypeOrSelf(dstTy);
+  if (srcElm != resElm)
     return emitError("result element type must match source element type");
-  }
-  if (srcLayout != resultLayout) {
-    return emitError("result layout must match source layout");
-  }
-  if (srcTy.getRank() != resultTy.getRank()) {
+  if (srcTy.getRank() != dstTy.getRank())
     return emitError("result rank must be equal to source rank");
-  }
-  if (srcTy.getRank() != 2) {
-    return emitError("currently only 2D tensors are supported");
-  }
 
+  // Per-dimension shape/offset checks
   auto srcShape = srcTy.getShape();
-
-  // ExtractSlice only supports slicing where offsets and sizes are multiples of
-  // shapePerCTATile. This condition ensures that slice has the same layout as
-  // the original tensor.
-
+  auto dstShape = dstTy.getShape();
   auto offsets = getStaticOffsets();
-  if (offsets.size() != 2) {
-    return emitError("invalid offset shape ") << offsets;
+  size_t rank = srcShape.size();
+
+  auto failDim = [&](StringRef msg, int i) -> LogicalResult {
+    return emitError(msg) << " at dimension " << i;
+  };
+
+  for (size_t i = 0; i < rank; ++i) {
+    if (dstShape[i] > srcShape[i])
+      return failDim("result shape cannot exceed source shape", i);
+    if (offsets[i] + dstShape[i] > srcShape[i])
+      return failDim("invalid offset", i);
   }
 
-  SmallVector<int64_t, 2> sizes;
-  for (auto i = 0; i < 2; ++i) {
-    auto resultDimSize = resultTy.getDimSize(i);
-    auto srcDimSize = srcTy.getDimSize(i);
-    if (resultDimSize == 0) {
-      return emitError("result tensor dimension size zero at dimension ") << i;
+  auto linearLayoutSrc = triton::gpu::toLinearLayout(srcTy);
+  auto linearLayoutDst = triton::gpu::toLinearLayout(dstTy);
+  auto ctx = srcTy.getContext();
+
+  auto getBases = [&](StringRef name) {
+    auto key = StringAttr::get(ctx, name);
+    return std::pair{linearLayoutSrc.getBases().lookup(key),
+                     linearLayoutDst.getBases().lookup(key)};
+  };
+
+  StringAttr kReg = StringAttr::get(ctx, "register");
+  auto dstRegBases = linearLayoutDst.getBases().lookup(kReg);
+
+  int dstRegCount = 1 << dstRegBases.size();
+  SmallVector<Value> resultVals;
+
+  // Algorithm:
+  // 1. for every dst register
+  // 2.   get dst element coordinates relative to tile start
+  // 3.   add coordinates of tile start relative to parent tensor
+  // 4.   check if exists source register which holds dst value
+
+  // 1. for every dst register
+  for (int regId = 0; regId < dstRegCount; ++regId) {
+    // 2.   get dst element coordinates relative to tile start
+    auto elemCoords = mlir::triton::AMD::getElemCoordinatesFromRegisters(
+        linearLayoutDst, regId, ctx);
+    // 3.   add coordinates of tile start relative to parent tensor
+
+    for (int i = 0; i < rank; ++i)
+      elemCoords[i].second += offsets[i];
+
+    // 4.   check if exists source register which holds dst value
+    std::optional<int> srcReg = mlir::triton::AMD::getRegFromCoordinates(
+        linearLayoutSrc, elemCoords, ctx);
+
+    if (!srcReg.has_value()) {
+      std::string msg;
+      llvm::raw_string_ostream os(msg);
+      os << "No source register holds the element for destination index "
+         << getStringFromCoords(elemCoords);
+      return emitError(os.str());
     }
-    if (srcDimSize == 0) {
-      return emitError("source tensor dimension size zero at dimension ") << i;
-    }
-    if (resultDimSize > srcDimSize) {
-      return emitError(
-                 "result shape cannot be larger than input shape at dimension ")
-             << i;
-    }
-    if (offsets[i] + resultDimSize > srcDimSize) {
-      return emitError("invalid offset ")
-             << offsets[i] << " at dimension " << i;
-    }
-    sizes.push_back(resultDimSize);
   }
 
-  auto shapePerCTATile = mlir::triton::gpu::getShapePerCTATile(srcTy);
-  shapePerCTATile[0] =
-      std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
-  shapePerCTATile[1] =
-      std::min(static_cast<unsigned>(srcShape[1]), shapePerCTATile[1]);
-  if (sizes[0] % shapePerCTATile[0] != 0 ||
-      sizes[1] % shapePerCTATile[1] != 0) {
-    return emitError() << "sizes [" << sizes
-                       << "] must be a multiple of shapePerCTATile ["
-                       << shapePerCTATile << "]";
-  }
-
-  if (offsets[0] % shapePerCTATile[0] != 0 ||
-      offsets[1] % shapePerCTATile[1] != 0) {
-    return emitError() << "offset [" << offsets
-                       << "] must be a multiple of shapePerCTATile ["
-                       << shapePerCTATile << "]";
+  auto [laneSrc, laneDst] = getBases("lane");
+  auto [warpSrc, warpDst] = getBases("warp");
+  if (laneSrc != laneDst || warpSrc != warpDst) {
+    return emitError("Lane and warp dim basis must match between source and "
+                     "destination layout.");
   }
 
   return success();
+}
+
+// This pattern optimizes the combination of extract_slice and concat
+// operations. When extract_slice is used to extract a portion that exactly
+// matches one of the original tensors concatenated by a concat operation, we
+// can eliminate extract_slice op and use the original tensor directly.
+struct CononicalizeExtractSliceAndConcat
+    : public mlir::OpRewritePattern<amdgpu::ExtractSliceOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(amdgpu::ExtractSliceOp op,
+                  PatternRewriter &rewriter) const override {
+    // Try to match preceding Concat op
+    auto concatOp = op.getSource().getDefiningOp<amdgpu::ConcatOp>();
+    if (!concatOp)
+      return failure();
+
+    auto offset = op.getStaticOffsets();
+    auto sliceResult = op.getResult();
+    auto sliceResultType = sliceResult.getType();
+    RankedTensorType dstType =
+        cast<RankedTensorType>(concatOp.getResult().getType());
+    auto dstShape = dstType.getShape();
+
+    auto concatItem = concatOp.getSources().front();
+    auto concatItemType = dyn_cast<RankedTensorType>(concatItem.getType());
+    if (!concatItemType)
+      return failure();
+
+    if (sliceResultType != concatItemType)
+      return failure();
+
+    // Calculate which concat operand contains our slice
+    auto srcShape = concatItemType.getShape();
+    auto rank = srcShape.size();
+    std::vector<unsigned> defaultOrder(rank);
+    std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
+
+    // Convert multidimensional offset to concat operand index
+    auto multiDimSrcIdx = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
+        offset, srcShape, std::divides<unsigned>());
+    auto srcToDstShape = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
+        dstShape, srcShape, std::divides<unsigned>());
+    auto linearSrcIdx =
+        mlir::LLVM::linearize(multiDimSrcIdx, srcToDstShape, defaultOrder);
+
+    // Replace extract_slice with the concat operand
+    assert(linearSrcIdx < concatOp->getNumOperands() &&
+           "concat index must be in bounds");
+    Value concreteConcatItem = concatOp->getOperand(linearSrcIdx);
+    rewriter.replaceOp(op, concreteConcatItem);
+
+    return success();
+  }
+};
+
+void ExtractSliceOp::getCanonicalizationPatterns(
+    mlir::RewritePatternSet &patterns, mlir::MLIRContext *context) {
+  patterns.add<CononicalizeExtractSliceAndConcat>(context);
 }
 
 LogicalResult UpcastMXFPOp::verify() {
@@ -143,9 +248,11 @@ LogicalResult UpcastMXFPOp::verify() {
   Builder b(getContext());
   if (xTy.getElementType() != b.getBF16Type() &&
       xTy.getElementType() != b.getF16Type() &&
-      xTy.getElementType() != b.getI8Type()) {
-    return emitOpError(
-        "element type of the first operand must be bf16/fp16 or i8");
+      xTy.getElementType() != b.getI8Type() &&
+      xTy.getElementType() != b.getType<Float8E4M3FNType>() &&
+      xTy.getElementType() != b.getType<Float8E5M2Type>()) {
+    return emitOpError("element type of the first operand must be bf16/fp16, "
+                       "OCP fp8/bf8 or i8");
   }
 
   if (scaleTy.getElementType() != b.getI8Type()) {
@@ -218,27 +325,30 @@ UpcastMXFPOp::deduceOutputType(TypedValue<RankedTensorType> inputTensor,
                                Type outputElemType) {
   MLIRContext *ctx = inputTensor.getContext();
   auto xTy = inputTensor.getType();
-  if (inputElemType != ScaleDotElemType::E2M1)
+  if (!(inputElemType == ScaleDotElemType::E2M1 ||
+        inputElemType == ScaleDotElemType::E4M3 ||
+        inputElemType == ScaleDotElemType::E5M2))
     return xTy;
 
+  auto factor = inputElemType == ScaleDotElemType::E2M1 ? 2 : 1;
   auto xShape = xTy.getShape();
   auto newShape = llvm::to_vector(xShape);
   auto encoding = xTy.getEncoding();
   if (!encoding) {
-    newShape.back() *= 2;
+    newShape.back() *= factor;
     return RankedTensorType::get(xShape, outputElemType);
   }
 
   auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
-  auto newVEncoding = DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(),
-                                                  oldEncoding.getParent(),
-                                                  oldEncoding.getKWidth() * 2);
+  auto newVEncoding = DotOperandEncodingAttr::get(
+      ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),
+      oldEncoding.getKWidth() * factor);
   // Figure out the K dimension for the input A/B, given that the return
   // type is upcasted A/B type so we need to update the proper dim size.
   const int opIdx = oldEncoding.getOpIdx();
   const bool hasBatch = xShape.size() == 3;
   const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
-  newShape[kIdx] *= 2;
+  newShape[kIdx] *= factor;
   return RankedTensorType::get(newShape, outputElemType, newVEncoding);
 }
 
@@ -263,12 +373,13 @@ LogicalResult InThreadTransposeOp::verify() {
     return emitOpError("Expect input tensor in Blocked encoding");
   }
 
-  auto dstEncoding = dstTy.getEncoding();
   auto expectedLinearLayout = deduceOutputLayout(shape, srcEncoding);
-  auto dstLinearLayout = triton::gpu::toLinearLayout(shape, dstEncoding);
+  auto dstLinearLayout = triton::gpu::toLinearLayout(dstTy);
   if (dstLinearLayout != expectedLinearLayout) {
-    return emitOpError("Expect output layout to be transposed per thread: " +
-                       expectedLinearLayout.toString());
+    return emitOpError(
+        "Expect output layout to be transposed per thread: " +
+        expectedLinearLayout.toString() +
+        "\nGot following dst layout: " + dstLinearLayout.toString());
   }
   return success();
 }
@@ -283,10 +394,17 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
   std::swap(newRegOrder[rank - 2], newRegOrder[rank - 1]);
 
   // Make in-register transposed tile
+  SmallVector<unsigned> sizePerThread{srcEncoding.getSizePerThread()};
+  // Trim sizePerThread to tensor shape,
+  // to ensure deduced layout does not refer to elements outside of tensor
+  for (int i = 0; i < rank; ++i) {
+    sizePerThread[i] =
+        std::min(sizePerThread[i], static_cast<unsigned>(shape[i]));
+  }
   auto ctx = srcEncoding.getContext();
   auto regDimName = StringAttr::get(ctx, "register");
-  auto inThreadTransposedTile = identityStandardND(
-      regDimName, srcEncoding.getSizePerThread(), newRegOrder);
+  auto inThreadTransposedTile =
+      identityStandardND(regDimName, sizePerThread, newRegOrder);
   // make sure basis in same order as in srcLayout
   SmallVector<StringAttr> outDimNames(srcLL.getOutDimNames());
   inThreadTransposedTile = inThreadTransposedTile.transposeOuts(outDimNames);
@@ -294,12 +412,576 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
   // Copy original bases, and replace register tile with transposed one
   LinearLayout::BasesT bases = srcLL.getBases();
   auto &regBase = *bases.find(regDimName);
-  int regsTransposed = inThreadTransposedTile.getInDimSizeLog2(regDimName);
-  for (int i = 0; i < regsTransposed; ++i)
-    regBase.second[i] = inThreadTransposedTile.getBasis(regDimName, i);
+  int regBasesTransposed = inThreadTransposedTile.getInDimSizeLog2(regDimName);
+  for (int baseIdx = 0; baseIdx < regBasesTransposed; ++baseIdx)
+    regBase.second[baseIdx] =
+        inThreadTransposedTile.getBasis(regDimName, baseIdx);
+  int regBasesInTile = llvm::Log2_32(product(srcEncoding.getSizePerThread()));
+  for (int baseIdx = regBasesTransposed; baseIdx < regBasesInTile; ++baseIdx)
+    llvm::for_each(regBase.second[baseIdx], [](int32_t &val) { val = 0; });
 
   LinearLayout transposedLL(bases, SmallVector<StringAttr>(outDimNames));
   return transposedLL;
+}
+
+LogicalResult ScaledUpcastFp4Op::verify() {
+  RankedTensorType inputTy = getInput().getType();
+  RankedTensorType outputTy = getOutput().getType();
+  RankedTensorType scaleTy = getScale().getType();
+  auto axis = getAxis();
+
+  if (outputTy.getShape() != scaleTy.getShape())
+    return emitError() << "scale and output should have the same shape";
+
+  // Reuse Fp4ToFpOp's verifier to check types of input and output
+  auto rank = inputTy.getRank();
+
+  if (rank != outputTy.getRank())
+    return emitError() << "source rank " << rank << " != result rank "
+                       << outputTy.getRank();
+
+  auto srcShape = inputTy.getShape();
+  auto resShape = outputTy.getShape();
+
+  if (!(0 <= axis && axis < rank))
+    return emitError() << "axis " << axis << " out of range for rank " << rank;
+
+  for (int i = 0; i < rank; ++i) {
+    if (i == axis) {
+      if (resShape[i] != srcShape[i] * 2)
+        return emitError() << "axis " << axis
+                           << " dimension must be 2x source dimension (src="
+                           << srcShape[i] << ", dst=" << resShape[i] << ")";
+    } else {
+      if (resShape[i] != srcShape[i])
+        return emitError() << "dimension " << i
+                           << " mismatch (src=" << srcShape[i]
+                           << ", dst=" << resShape[i] << ", axis=" << axis
+                           << ")";
+    }
+  }
+  return success();
+}
+
+Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
+                                              Attribute srcEnc) {
+  // The layout of scale is the same as that of the result
+  if (opIdx == 1)
+    return srcEnc;
+  Attribute dstEnc;
+  auto shape = getInput().getType().getShape();
+
+  auto iface =
+      srcEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>();
+  // Given the fp4 operand is packed, we can reuse the infer utility of
+  // Fp4ToFpOp
+  auto result =
+      iface->inferFp4ToFpOpEncoding(shape, getAxis(), srcEnc, dstEnc,
+                                    /*fwdInference*/ true, std::nullopt);
+  assert(succeeded(result));
+  return dstEnc;
+}
+
+Attribute ScaledUpcastFp4Op::inferSrcEncoding(unsigned opIdx,
+                                              Attribute dstEnc) {
+  // The layout of scale is the same as that of the result
+  if (opIdx == 1)
+    return dstEnc;
+  Attribute srcEnc;
+  auto shape = getInput().getType().getShape();
+
+  auto iface =
+      dstEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>();
+  // Given the fp4 operand is packed, we can reuse the infer utility of
+  // Fp4ToFpOp
+  if (succeeded(iface->inferFp4ToFpOpEncoding(shape, getAxis(), dstEnc, srcEnc,
+                                              /*fwdInference*/ false,
+                                              std::nullopt))) {
+    return srcEnc;
+  }
+  return {};
+}
+
+Attribute ScaledUpcastFp8Op::inferDstEncoding(unsigned opIdx,
+                                              Attribute srcEnc) {
+  return srcEnc;
+}
+
+Attribute ScaledUpcastFp8Op::inferSrcEncoding(unsigned opIdx,
+                                              Attribute dstEnc) {
+  return dstEnc;
+}
+
+LogicalResult ConcatOp::verify() {
+  auto sources = getSources();
+  auto result = getResult();
+
+  auto srcType = cast<RankedTensorType>(sources.front().getType());
+  auto dstType = cast<RankedTensorType>(result.getType());
+
+  auto srcShape = srcType.getShape();
+  auto dstShape = dstType.getShape();
+  unsigned rank = srcShape.size();
+
+  // 1) Shape related checks.
+  if (rank != dstShape.size())
+    return emitError()
+           << "Source and destination tensors must have the same rank.";
+
+  unsigned numTiles = 1;
+  for (int i = 0; i < rank; ++i) {
+    if (dstShape[i] % srcShape[i] != 0)
+      return emitError() << "Source and destination tensor shapes don't match.";
+    numTiles *= dstShape[i] / srcShape[i];
+  }
+
+  if (numTiles != sources.size())
+    return emitError() << "Number of source tiles (" << sources.size()
+                       << ") doesn't match required count (" << numTiles
+                       << ").";
+
+  // 2) Check that all sources have same type and element type match.
+  for (auto src : sources) {
+    auto curr = dyn_cast<RankedTensorType>(src.getType());
+    if (curr != srcType)
+      return emitError() << "All sources must have identical tensor types.";
+  }
+
+  if (dstType.getElementType() != srcType.getElementType())
+    return emitError()
+           << "Element types of sources and destination must match.";
+
+  auto linearLayoutSrc = triton::gpu::toLinearLayout(srcType);
+  auto linearLayoutDst = triton::gpu::toLinearLayout(dstType);
+  auto ctx = srcType.getContext();
+
+  auto getBases = [&](StringRef name) {
+    auto key = StringAttr::get(ctx, name);
+    return std::pair{linearLayoutSrc.getBases().lookup(key),
+                     linearLayoutDst.getBases().lookup(key)};
+  };
+
+  auto srcToDstShape = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
+      dstShape, srcShape, std::divides<unsigned>());
+  std::vector<unsigned> defaultOrder(rank);
+  std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
+
+  StringAttr kReg = StringAttr::get(ctx, "register");
+  auto dstRegBases = linearLayoutDst.getBases().lookup(kReg);
+  int dstRegCount = 1 << dstRegBases.size();
+
+  // Algorithm:
+  // 1. for all elements in dst tensor
+  // 2.   get dst value location in tensor
+  // 3.   find, which input tile holds the dst value
+  // 4.   subtract dst coordinates and start coordinates of the tile
+  // 5.   check if exist source register which holds dst value
+
+  // 1. for all elements in dst tensor
+  for (int regId = 0; regId < dstRegCount; ++regId) {
+    // 2.   get dst value location in tensor
+    auto elemCoords = mlir::triton::AMD::getElemCoordinatesFromRegisters(
+        linearLayoutDst, regId, ctx);
+    auto elemCoordsArray = llvm::to_vector(llvm::make_second_range(elemCoords));
+
+    // 3.   find, which input tile holds the dst value
+    auto multiDimOperandIdx = LLVM::AMD::multiDimElementwise<int32_t, int64_t>(
+        elemCoordsArray, srcShape, std::divides<unsigned>());
+    auto linearOperandIdx =
+        mlir::LLVM::linearize(multiDimOperandIdx, srcToDstShape, defaultOrder);
+
+    // 4.   subtract dst coordinates and start coordinates of the tile
+
+    for (int dim = 0; dim < rank; ++dim)
+      elemCoords[dim].second -= multiDimOperandIdx[dim] * srcShape[dim];
+
+    std::optional<int> srcReg = mlir::triton::AMD::getRegFromCoordinates(
+        linearLayoutSrc, elemCoords, ctx);
+    // 5.   check if exist source register which holds dst value
+
+    if (!srcReg.has_value()) {
+      auto coordsStr = getStringFromCoords(elemCoords);
+      std::string msg =
+          "No source register holds the element for destination index " +
+          coordsStr;
+      return emitError(msg);
+    }
+  }
+
+  auto [laneSrc, laneDst] = getBases("lane");
+  auto [warpSrc, warpDst] = getBases("warp");
+  if (laneSrc != laneDst || warpSrc != warpDst) {
+    return emitError("Lane and warp dim basis must match between source and "
+                     "destination layout.");
+  }
+
+  return success();
+}
+
+LogicalResult LocalLoadPackedTransposedOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  auto srcShape = srcTy.getShape();
+
+  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (!dotEnc)
+    return emitOpError("only works with DotOperandEncodingAttr dst encoding");
+
+  auto sharedEnc =
+      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
+  if (!sharedEnc)
+    return emitOpError(
+        "only works with SwizzledSharedEncodingAttr src encoding");
+
+  auto order = sharedEnc.getOrder();
+  bool isA = dotEnc.getOpIdx() == 0;
+
+  // operand A: [0, 1] / [1, 2, 0]
+  // operand B: [1, 0] / [2, 1, 0]
+  bool hasBatchDim = srcShape.size() == 3;
+
+  if (isA) {
+    bool matchingOrderA =
+        order.equals({0, 1}) || (hasBatchDim && order.equals({1, 2, 0}));
+    if (!matchingOrderA)
+      return emitOpError("Order of dimensions don't match expected");
+
+    SmallVector<int64_t> srcShapeBasedOnDstA(dstTy.getShape());
+    srcShapeBasedOnDstA[hasBatchDim ? 1 : 0] /= 2;
+    srcShapeBasedOnDstA[hasBatchDim ? 2 : 1] *= 2;
+
+    bool aDimMatch = srcShape.equals(ArrayRef(srcShapeBasedOnDstA));
+    if (!aDimMatch)
+      return emitOpError(
+          "Input and output dimensions don't match after packing changes");
+  } else {
+    bool matchingOrderB =
+        order.equals({1, 0}) || (hasBatchDim && order.equals({2, 1, 0}));
+    if (!matchingOrderB)
+      return emitOpError("Order of dimensions don't match expected");
+
+    SmallVector<int64_t> srcShapeBasedOnDstB(dstTy.getShape());
+    srcShapeBasedOnDstB[hasBatchDim ? 1 : 0] *= 2;
+    srcShapeBasedOnDstB[hasBatchDim ? 2 : 1] /= 2;
+
+    bool bDimMatch = srcShape.equals(ArrayRef(srcShapeBasedOnDstB));
+    if (!bDimMatch)
+      return emitOpError(
+          "Input and output dimensions don't match after packing changes");
+  }
+
+  return success();
+}
+
+// This pattern removes a concatOp if it has a single input operand.
+// This scenario can potentially happen as a result of ops refinement.
+mlir::LogicalResult foldConcatOpFromSingleSource(amdgpu::ConcatOp op,
+                                                 PatternRewriter &rewriter) {
+  auto sources = op.getSources();
+  if (sources.size() == 1) {
+    auto source = sources.front();
+    auto result = op.getResult();
+    result.replaceAllUsesWith(source);
+    return success();
+  }
+  return failure();
+}
+
+void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
+                                           mlir::MLIRContext *context) {
+  patterns.add(foldConcatOpFromSingleSource);
+}
+
+LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
+  auto tensorDescTy = getDesc().getType();
+  auto smemTy = getResult().getType();
+
+  // Check that every dimension of the block shape is <= 2^16
+  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
+  if (failed(verifyResult))
+    return verifyResult;
+
+  auto swizzledEnc =
+      llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
+  if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
+    return emitOpError("TDM does not support swizzling");
+
+  auto paddedEnc =
+      llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
+  if (!paddedEnc && !swizzledEnc)
+    return emitOpError("Invalid shared memory layout for TDM");
+
+  Type elementType = smemTy.getElementType();
+  auto elementBitWidth = elementType.getIntOrFloatBitWidth();
+  if (paddedEnc) {
+    unsigned dwordSize = 32;
+    for (auto [interval, padding] :
+         llvm::zip(paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
+      auto intervalInDwords = interval * elementBitWidth / dwordSize;
+      if (intervalInDwords < 2)
+        return emitOpError("TDM padding interval must be at least 2 dwords");
+
+      auto paddingInDwords = padding * elementBitWidth / dwordSize;
+      if (paddingInDwords < 1)
+        return emitOpError("TDM padding amount must be at least 1 dword");
+    }
+  }
+
+  return success();
+}
+
+// -- AsyncCopyLocalToGlobalOp --
+LogicalResult AsyncCopyLocalToGlobalOp::verify() {
+  // Verify the source is local memory (shared memory)
+  auto srcTy = getSrc().getType();
+  if (!isa<gpu::SharedMemorySpaceAttr>(srcTy.getMemorySpace()))
+    return emitOpError("source must be in shared memory");
+
+  return success();
+}
+
+LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
+  auto tensorDescTy = getDesc().getType();
+  auto smemTy = getSrc().getType();
+
+  // Check that every dimension of the block shape is <= 2^16
+  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
+  if (failed(verifyResult))
+    return verifyResult;
+
+  auto swizzledEnc =
+      llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
+  if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
+    return emitOpError("TDM does not support swizzling");
+
+  auto paddedEnc =
+      llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
+  if (paddedEnc) {
+    // Check if we can apply the padding workaround, see the lowering to LLVM
+    // for more details.
+    auto intervals = paddedEnc.getIntervals();
+    if (intervals.size() != 1)
+      return emitOpError("TDM store only supports single interval paddings.");
+
+    if (intervals[0] != blockShape.back())
+      return emitOpError("TDM store padding is only supported when padding "
+                         "interval equals the innermost block dimension (got "
+                         "padInterval=")
+             << intervals[0] << ", innermost dimension=" << blockShape.back()
+             << ")";
+  }
+
+  if (!paddedEnc && !swizzledEnc)
+    return emitOpError("Invalid shared memory layout for TDM");
+
+  return success();
+}
+
+LogicalResult AsyncTDMScatterOp::verify() {
+  auto tensorDescTy = getDesc().getType();
+  auto smemTy = getSrc().getType();
+
+  // TDM scatter mode only supports 2D tensors
+  auto blockShape = tensorDescTy.getBlockType().getShape();
+  if (blockShape.size() != 2)
+    return emitOpError("TDM scatter only supports 2D tensors, got ")
+           << blockShape.size() << "D";
+
+  // Check that every dimension of the block shape is <= 2^16
+  auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
+  if (failed(verifyResult))
+    return verifyResult;
+
+  auto dstRowIndicesType = cast<RankedTensorType>(getDstRowIndices().getType());
+  if (dstRowIndicesType.getRank() != 1)
+    return emitOpError("dst_row_indices must be a 1D tensor");
+
+  // Element type (i16 or i32) is already verified by ODS constraint
+  // TensorOf<[I16, I32]>
+
+  int64_t numIndices = dstRowIndicesType.getShape()[0];
+  if (!llvm::isPowerOf2_64(numIndices))
+    return emitOpError("dst_row_indices size must be a power of 2, got ")
+           << numIndices;
+
+  auto swizzledEnc =
+      llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
+  if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
+    return emitOpError("TDM does not support swizzling");
+
+  auto paddedEnc =
+      llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
+  if (paddedEnc)
+    return emitOpError("TDM scatter does not support padding");
+
+  if (!paddedEnc && !swizzledEnc)
+    return emitOpError("Invalid shared memory layout for TDM");
+
+  return success();
+}
+
+LogicalResult AsyncTDMGatherOp::verify() {
+  auto tensorDescTy = getDesc().getType();
+  auto smemTy = getDst().getType();
+
+  // TDM gather mode only supports 2D tensors
+  auto blockShape = tensorDescTy.getBlockType().getShape();
+  if (blockShape.size() != 2)
+    return emitOpError("TDM gather only supports 2D tensors, got ")
+           << blockShape.size() << "D";
+
+  // Check that every dimension of the block shape is <= 2^16
+  auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
+  if (failed(verifyResult))
+    return verifyResult;
+
+  auto srcRowIndicesType = cast<RankedTensorType>(getSrcRowIndices().getType());
+  if (srcRowIndicesType.getRank() != 1)
+    return emitOpError("src_row_indices must be a 1D tensor");
+
+  // Element type (i16 or i32) is already verified by ODS constraint
+  // TensorOf<[I16, I32]>
+
+  int64_t numIndices = srcRowIndicesType.getShape()[0];
+  if (!llvm::isPowerOf2_64(numIndices))
+    return emitOpError("src_row_indices size must be a power of 2, got ")
+           << numIndices;
+
+  auto swizzledEnc =
+      llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
+  if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
+    return emitOpError("TDM does not support swizzling");
+
+  auto paddedEnc =
+      llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
+  if (paddedEnc && !(paddedEnc.getIntervals().size() == 1 &&
+                     paddedEnc.getPaddings().size() == 1))
+    return emitOpError(
+        "TDM gather does not support multiple interval-padding pairs");
+
+  if (!paddedEnc && !swizzledEnc)
+    return emitOpError("Invalid shared memory layout for TDM");
+
+  return success();
+}
+
+// -- InitBarrierOp --
+LogicalResult InitBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  if (getCount() < 1)
+    return emitOpError("count must be greater than or equal to 1");
+  return success();
+}
+
+// -- WaitBarrierOp --
+LogicalResult WaitBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+// -- ArriveBarrierOp --
+LogicalResult ArriveBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  if (getCount() < 1)
+    return emitOpError("count must be greater than or equal to 1");
+  return success();
+}
+
+// -- AsyncCopyMbarrierArriveOp --
+LogicalResult AsyncCopyMbarrierArriveOp::verify() {
+  if (failed(verifyBarrierType(*this, getBarrier().getType())))
+    return failure();
+  return success();
+}
+
+// -- TDMPrefetchOp --
+// This op optionally returns the prefetch offsets (testing-only). When
+// `returnOffsets` is absent, it produces no results. When present, it yields an
+// int64 tensor of the prefetch addresses relative to the tensor base. The
+// tensor shape is:
+//   [num_programs, block_shape[:-1], block_shape[-1] / elements_per_prefetch]
+// i.e., the last dimension is scaled by how many elements fit in one 256-byte
+// prefetch. Values are the byte offsets added to the base pointer for each
+// prefetch instruction.
+LogicalResult TDMPrefetchOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  TDMPrefetchOp::Adaptor ad(operands, attributes, properties, regions);
+
+  // If returnOffsets is not set the op will not return any results
+  if (!ad.getReturnOffsets().has_value()) {
+    return success();
+  }
+
+  auto descType = cast<triton::TensorDescType>(ad.getDesc().getType());
+  auto blockType = descType.getBlockType();
+  auto blockShape = blockType.getShape();
+  auto elementType = blockType.getElementType();
+
+  // Lookup the module to get the number of threads per warp, number of warps
+  // and number of CTAs
+  ModuleOp mod;
+  for (auto operand : operands) {
+    if (auto op = operand.getDefiningOp()) {
+      mod = op->getParentOfType<ModuleOp>();
+      break;
+    } else if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
+      auto parentOp = blockArg.getOwner()->getParentOp();
+      if (parentOp) {
+        mod = parentOp->getParentOfType<ModuleOp>();
+        break;
+      }
+    }
+  }
+  assert(mod);
+
+  auto threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  auto numWarps = triton::gpu::lookupNumWarps(mod);
+  auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+
+  // Prefetches 256 bytes into L2
+  const int bytesPerPrefetch = 256;
+  int elemPerPrefetch =
+      (bytesPerPrefetch * 8) / elementType.getIntOrFloatBitWidth();
+
+  // Scale the block shape by the number of elements per prefetch
+  SmallVector<int64_t> scaledBlockShape(blockShape.begin(), blockShape.end());
+  scaledBlockShape.back() =
+      ceil<int64_t>(scaledBlockShape.back(), elemPerPrefetch);
+
+  // Use the default blocked encoding to unroll the TDM tile
+  auto enc = triton::gpu::getDefaultBlockedEncoding(
+      context, scaledBlockShape, numWarps, threadsPerWarp, numCTAs);
+  IntegerType i64Type = IntegerType::get(context, 64);
+  auto tensorTy = RankedTensorType::get(scaledBlockShape, i64Type, enc);
+
+  inferredReturnTypes.push_back(tensorTy);
+
+  return success();
+}
+
+// -- ClusterBarrierSignalOp --
+LogicalResult ClusterBarrierArriveOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+// -- ClusterBarrierWaitOp --
+LogicalResult ClusterBarrierWaitOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+  if (numCTAs <= 1)
+    return emitOpError("requires ttg.num-ctas > 1");
+  return success();
 }
 
 } // namespace mlir::triton::amdgpu

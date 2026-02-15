@@ -276,3 +276,66 @@ def test_inductor_cummax_bool(device):
     triton_[(1, )](a, values, indices, 64)
     torch.testing.assert_close(ref.values, values)
     torch.testing.assert_close(ref.indices, indices)
+
+
+def test_permutation_ptxas_bug(device):
+
+    @triton.jit
+    def _matmul(
+        X,
+        W,
+        Out,
+        M: tl.constexpr,
+        N: tl.constexpr,
+        K: tl.constexpr,
+        stride_xm,
+        stride_wn,
+        stride_ym,
+    ):
+        BLOCK_M: tl.constexpr = 16
+        BLOCK_N: tl.constexpr = 8
+        BLOCK_K: tl.constexpr = 32
+
+        offs_m = tl.arange(0, BLOCK_M)
+        offs_n = tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+
+        mask_m = offs_m < M
+        mask_n = offs_n < N
+        mask_k = offs_k < K
+
+        XPtrs = X + offs_m[:, None] * stride_xm + offs_k[None, :]
+
+        # column major
+        WPtrs = W + offs_k[:, None] + offs_n[None, :] * stride_wn
+
+        x = tl.load(XPtrs, mask=(mask_m[:, None] & mask_k[None, :]), other=0.0)
+        w = tl.load(WPtrs, mask=(mask_k[:, None] & mask_n[None, :]), other=0.0)
+        out = tl.dot(x, w)
+
+        YPtrs = Out + offs_m[:, None] * stride_ym + offs_n[None, :]
+        tl.store(YPtrs, out, mask=(mask_m[:, None] & mask_n[None, :]))
+
+    torch.manual_seed(0)
+
+    M, N, K = 8, 8, 8
+    dtype = torch.float8_e5m2
+
+    X = torch.randn((M, K), device=device).to(dtype)
+    W = torch.randn((N, K), device=device).to(dtype).T
+    Out = torch.zeros((M, N), device=device, dtype=dtype)
+
+    _matmul[(1, )](
+        X,
+        W,
+        Out,
+        M,
+        N,
+        K,
+        X.stride(0),
+        W.stride(1),
+        Out.stride(0),
+        num_warps=1,
+    )
+    ref = torch.matmul(X.float(), W.float()).to(dtype)
+    torch.testing.assert_close(Out.to(torch.float32), ref.to(torch.float32), rtol=0.25, atol=0.0625)

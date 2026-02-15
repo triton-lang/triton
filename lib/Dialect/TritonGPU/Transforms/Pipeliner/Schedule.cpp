@@ -12,7 +12,6 @@
 
 using namespace mlir;
 namespace tt = mlir::triton;
-namespace ttg = mlir::triton::gpu;
 
 bool tt::CoarseSchedule::insertMinimum(Operation *op, int stage,
                                        Cluster cluster) {
@@ -87,22 +86,88 @@ bool tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
   return inserted;
 }
 
+void tt::CoarseSchedule::shrinkToFit() {
+  int minStage = std::numeric_limits<int>::max();
+  int maxStage = std::numeric_limits<int>::min();
+  for (auto &[op, stageAndCluster] : opToStageAndCluster) {
+    auto [stage, cluster] = stageAndCluster;
+    minStage = std::min(minStage, stage);
+    maxStage = std::max(maxStage, stage);
+  }
+  for (auto &[op, stageAndCluster] : opToStageAndCluster)
+    stageAndCluster.first -= minStage;
+  numStages = maxStage - minStage + 1;
+}
+
+// Split the cluster containing op into two clusters, one containing all
+// operations before the op and one containing op and all operations after the
+// op. Return the cluster containing op and all operations after the op. Do not
+// split if the op is the first operation in the cluster.
+tt::CoarseSchedule::Cluster
+tt::CoarseSchedule::splitClusterBefore(Operation *op, scf::ForOp forOp) {
+  auto cluster = opToStageAndCluster[op].second;
+  std::optional<tt::CoarseSchedule::Cluster> newCluster = std::nullopt;
+  for (auto &_op : forOp.getBody()->without_terminator()) {
+    if (&_op == op) {
+      break;
+    }
+    if (opToStageAndCluster[&_op].second == cluster) {
+      if (!newCluster) {
+        newCluster = clusters.newBefore(cluster);
+      }
+      opToStageAndCluster[&_op].second = *newCluster;
+    }
+  }
+  return cluster;
+}
+
+// Check if op a will show up before op b in the final unrolled code.
+bool tt::CoarseSchedule::isOpBefore(Operation *a, Operation *b) const {
+  assert(opToStageAndCluster.count(a) && opToStageAndCluster.count(b) &&
+         "Operations must be in the schedule");
+  auto [aStage, aCluster] = opToStageAndCluster.lookup(a);
+  auto [bStage, bCluster] = opToStageAndCluster.lookup(b);
+  if (aStage != bStage) {
+    return aStage < bStage;
+  }
+  if (aCluster != bCluster) {
+    return clusters.isBefore(aCluster, bCluster);
+  }
+  return a->isBeforeInBlock(b);
+}
+
+bool tt::CoarseSchedule::isOpInEarlierCluster(Operation *a,
+                                              Operation *b) const {
+  assert(opToStageAndCluster.count(a) && opToStageAndCluster.count(b) &&
+         "Operations must be in the schedule");
+  return clusters.isBefore(opToStageAndCluster.lookup(a).second,
+                           opToStageAndCluster.lookup(b).second);
+}
+
+bool tt::CoarseSchedule::isOpInSameCluster(Operation *a, Operation *b) const {
+  assert(opToStageAndCluster.count(a) && opToStageAndCluster.count(b) &&
+         "Operations must be in the schedule");
+  return opToStageAndCluster.lookup(a).second ==
+         opToStageAndCluster.lookup(b).second;
+}
+
 SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
-tt::CoarseSchedule::getOpsInOrder(scf::ForOp forOp) {
+tt::CoarseSchedule::getOpsInOrder(scf::ForOp forOp) const {
   SmallVector<SmallVector<std::tuple<Operation *, int, Cluster>>, 8>
       orderClusters(clusters.size());
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (opToStageAndCluster.count(&op) == 0) {
+    auto it = opToStageAndCluster.find(&op);
+    if (it == opToStageAndCluster.end()) {
       continue;
     }
-    assert(opToStageAndCluster[&op].first < numStages &&
-           "Op with invalid stage!");
-    int clusterId = *opToStageAndCluster[&op].second;
+    auto [stage, cluster] = it->second;
+    assert(cluster != Cluster{} && "Op with invalid cluster!");
+    assert(stage < numStages && "Op with invalid stage!");
+    int clusterId = *cluster;
     assert(clusterId == std::distance(clusters.begin(),
-                                      opToStageAndCluster[&op].second) &&
+                                      ClusterList::const_iterator(cluster)) &&
            "Cluster ID mismatch!");
-    orderClusters[clusterId].push_back(make_tuple(
-        &op, opToStageAndCluster[&op].first, opToStageAndCluster[&op].second));
+    orderClusters[clusterId].push_back(make_tuple(&op, stage, cluster));
   }
   SmallVector<std::tuple<Operation *, int, Cluster>> opsInOrder;
   for (int i = 0; i < orderClusters.size(); i++) {
@@ -115,7 +180,7 @@ tt::CoarseSchedule::getOpsInOrder(scf::ForOp forOp) {
 }
 
 std::vector<std::pair<Operation *, unsigned>>
-tt::CoarseSchedule::createFinalSchedule(scf::ForOp forOp) {
+tt::CoarseSchedule::createFinalSchedule(scf::ForOp forOp) const {
   SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
       opsInOrder = getOpsInOrder(forOp);
   std::vector<std::pair<Operation *, unsigned>> schedule;
@@ -183,17 +248,22 @@ static std::optional<int> tryGetMaxStage(scf::ForOp &forOp) {
 }
 
 // Set <stage, cluster> based on CoarseSchedule.
-void tt::CoarseSchedule::serialize(scf::ForOp &forOp) {
+void tt::CoarseSchedule::serialize(scf::ForOp &forOp) const {
   for (auto [op, stage, cluster] : getOpsInOrder(forOp)) {
     setStageCluster(op, stage, *cluster);
   }
+
+  Builder b(forOp.getContext());
+  int maxStages = numStages - 1;
+  if (auto maxStageAttr = tryGetMaxStage(forOp))
+    maxStages = std::max(maxStages, *maxStageAttr);
   forOp->setAttr(mlir::triton::kScheduledMaxStageAttrName,
-                 IntegerAttr::get(IntegerType::get(forOp.getContext(), 32),
-                                  numStages - 1));
+                 b.getI32IntegerAttr(maxStages));
 }
 
 // Create a CoarseSchedule based on forOp's <stage, cluster>.
-LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
+LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp,
+                                              bool normalizeClusterId) {
   auto [minClusterId, maxClusterId] = getMinMaxCluster(forOp);
   std::optional<int> maxStage = tryGetMaxStage(forOp);
   if (!maxStage) {
@@ -202,9 +272,16 @@ LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
   numStages = *maxStage + 1;
 
   DenseMap<int, tt::CoarseSchedule::Cluster> clustersMap;
-  for (int i = minClusterId; i < maxClusterId + 1; i++) {
-    clustersMap.insert({i, clusters.newAtBack()});
+  if (normalizeClusterId) {
+    for (int i = minClusterId; i < maxClusterId + 1; i++) {
+      clustersMap.insert({i, clusters.newAtBack()});
+    }
+  } else {
+    for (int i = 0; i < maxClusterId + 1; i++) {
+      clustersMap.insert({i, clusters.newAtBack()});
+    }
   }
+
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (!op.hasAttr(mlir::triton::kLoopStageAttrName))
       continue;
@@ -217,6 +294,115 @@ LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
 // TODO: Should this be moved somewhere else?
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
 // the same stage and ordering cluster as the anchor op.
+// ============================================================
+// LinearizedIterator Implementation
+// ============================================================
+
+tt::CoarseSchedule::LinearizedIterator::LinearizedIterator(
+    scf::ForOp forOp, const CoarseSchedule &schedule, Operation *initialOp)
+    : forOp(forOp), schedule(&schedule), initialOp(initialOp), atEnd(false),
+      maxStages(schedule.getNumStages()) {
+  clusterBegin = schedule.clusters.begin();
+  clusterEnd = schedule.clusters.end();
+  opIt = forOp.getBody()->without_terminator().begin();
+  opEnd = forOp.getBody()->without_terminator().end();
+
+  // Find the cluster containing initialOp and its stage
+  auto it = schedule.opToStageAndCluster.find(initialOp);
+  if (it != schedule.opToStageAndCluster.end()) {
+    auto [stage, cluster] = it->second;
+    clusterIt = cluster;
+    currStageLimit = stage;
+    // Find initialOp within its cluster
+    while (opIt != opEnd) {
+      Operation *op = &*opIt;
+      if (op == initialOp) {
+        break;
+      }
+      ++opIt;
+    }
+    // Move past initialOp to start iteration from the next op
+    ++opIt;
+    advanceToNextScheduledOp();
+  } else {
+    atEnd = true;
+    currentOp = nullptr;
+  }
+}
+
+void tt::CoarseSchedule::LinearizedIterator::advanceToNextScheduledOp() {
+  while (true) {
+    while (opIt != opEnd) {
+      Operation *op = &*opIt;
+      auto it = schedule->opToStageAndCluster.find(op);
+      if (it != schedule->opToStageAndCluster.end()) {
+        auto [stage, cluster] = it->second;
+        if (cluster == clusterIt) {
+          // Check if we've come back to initialOp
+          if (op == initialOp) {
+            // Check termination condition
+            if (currStageLimit >= maxStages) {
+              atEnd = true;
+              currentOp = nullptr;
+              return;
+            }
+          }
+          // Only yield if stage <= currStageLimit
+          if (stage <= currStageLimit) {
+            currentOp = op;
+            return;
+          }
+        }
+      }
+      ++opIt;
+    }
+    // Move to next cluster
+    ++clusterIt;
+    opIt = forOp.getBody()->without_terminator().begin();
+
+    // Wrap around to the beginning if we've reached the end
+    if (clusterIt == clusterEnd) {
+      clusterIt = clusterBegin;
+      // Increment stage limit as we are in the next iteration.
+      currStageLimit++;
+    }
+  }
+}
+
+tt::CoarseSchedule::LinearizedIterator &
+tt::CoarseSchedule::LinearizedIterator::operator++() {
+  if (atEnd)
+    return *this;
+  ++opIt;
+  advanceToNextScheduledOp();
+  return *this;
+}
+
+tt::CoarseSchedule::LinearizedIterator
+tt::CoarseSchedule::LinearizedIterator::operator++(int) {
+  LinearizedIterator tmp = *this;
+  ++(*this);
+  return tmp;
+}
+
+Operation *tt::CoarseSchedule::LinearizedIterator::operator*() const {
+  return currentOp;
+}
+
+bool tt::CoarseSchedule::LinearizedIterator::operator==(
+    const LinearizedIterator &other) const {
+  if (atEnd && other.atEnd)
+    return true;
+  if (atEnd != other.atEnd)
+    return false;
+  return currentOp == other.currentOp;
+}
+
+bool tt::CoarseSchedule::LinearizedIterator::operator!=(
+    const LinearizedIterator &other) const {
+  return !(*this == other);
+}
+
 void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule) {
   int numStages = schedule.getNumStages();
   SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
@@ -226,7 +412,8 @@ void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule) {
     for (auto [op, stage_, cluster] : opsInOrder) {
       if (stage_ != stage)
         continue;
-      schedule.insertDepsOfOp(op, stage, cluster, false);
+      schedule.insertDepsOfOp(op, stage, cluster, /*includeArg=*/false,
+                              /*insertIfEarlier=*/true);
     }
   }
 }

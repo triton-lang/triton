@@ -67,6 +67,21 @@ def TT_AtomicRMWAttr : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
+def TT_DescriptorReduceKindAttr : I32EnumAttr<
+    "DescriptorReduceKind", "",
+    [
+        I32EnumAttrCase<"ADD", 1, "add">,
+        I32EnumAttrCase<"MIN", 2, "min">,
+        I32EnumAttrCase<"MAX", 3, "max">,
+        I32EnumAttrCase<"INC", 4, "inc">,
+        I32EnumAttrCase<"DEC", 5, "dec">,
+        I32EnumAttrCase<"AND", 6, "and">,
+        I32EnumAttrCase<"OR", 7, "or">,
+        I32EnumAttrCase<"XOR", 8, "xor">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
 def TT_MemSyncScopeAttr : I32EnumAttr<
     "MemSyncScope", "",
     [
@@ -114,7 +129,9 @@ def TT_InputPrecisionAttr : I32EnumAttr<
     [
       I32EnumAttrCase<"TF32", 0, "tf32">,
       I32EnumAttrCase<"TF32x3", 1, "tf32x3">,
-      I32EnumAttrCase<"IEEE", 2, "ieee">
+      I32EnumAttrCase<"IEEE", 2, "ieee">,
+      I32EnumAttrCase<"BF16x3", 3, "bf16x3">,
+      I32EnumAttrCase<"BF16x6", 4, "bf16x6">
     ]>{
   let cppNamespace = "::mlir::triton";
 }

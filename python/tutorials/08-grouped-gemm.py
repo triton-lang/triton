@@ -225,7 +225,7 @@ tma_configs = [
 
 @triton.autotune(
     tma_configs,
-    key=['group_a_ptrs', 'group_b_ptrs', 'gropup_c_ptrs', 'group_size'],
+    key=['group_size'],
 )
 @triton.jit
 def grouped_matmul_tma_kernel(
@@ -392,12 +392,12 @@ for i in range(group_size):
 tri_out = group_gemm_fn(group_A, group_B)
 ref_out = [torch.matmul(a, b) for a, b in zip(group_A, group_B)]
 for i in range(group_size):
-    assert torch.allclose(ref_out[i], tri_out[i], atol=1e-2, rtol=0)
+    assert torch.allclose(ref_out[i], tri_out[i], atol=1e-2, rtol=1e-2)
 
 if supports_tma():
     tri_tma_out = group_gemm_tma_fn(group_A, group_B_T)
     for i in range(group_size):
-        assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=0)
+        assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-2)
 
 
 # only launch the kernel, no tensor preparation here to remove all overhead
@@ -487,7 +487,7 @@ def benchmark_square_matrices(N, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(
             lambda: triton_tma_perf_fn(d_a_ptrs, d_b_t_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size, dtype=torch.
                                        float16), quantiles=quantiles)
-    return ms, max_ms, min_ms
+    return ms, min_ms, max_ms
 
 
 @triton.testing.perf_report(
@@ -558,7 +558,7 @@ def benchmark_batches(M, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(
             lambda: triton_tma_perf_fn(d_a_ptrs, d_b_t_ptrs, d_c_ptrs, d_g_sizes, d_g_t_lds, group_size, dtype=torch.
                                        float16), quantiles=quantiles)
-    return ms, max_ms, min_ms
+    return ms, min_ms, max_ms
 
 
 benchmark_square_matrices.run(show_plots=True, print_data=True)

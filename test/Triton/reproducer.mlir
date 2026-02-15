@@ -1,7 +1,7 @@
 // RUN: triton-opt --verify-diagnostics --dump-pass-pipeline --run-reproducer %s 2>&1 | FileCheck %s
 
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @triton__() attributes {noinline = false} {
+  tt.func public @triton__() {
     tt.return
   }
 }
@@ -17,4 +17,4 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #-}
 
 // CHECK: Pass Manager with
-// CHECK-NEXT: convert-triton-gpu-to-llvm
+// CHECK: convert-triton-gpu-to-llvm

@@ -13,66 +13,71 @@
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter can only be non-zero for Ampere or Hopper MMA parent}}
-#mma = #ttg.nvidia_mma<{versionMajor = 1, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 1, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
 
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter is mandatory for Ampere or Hopper MMA parent}}
-#mma = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
 #dot_op = #ttg.dot_op<{opIdx = 0, parent = #mma}>
 
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter is mandatory for Ampere or Hopper MMA parent}}
-#mma = #ttg.nvidia_mma<{versionMajor = 3, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
 #dot_op = #ttg.dot_op<{opIdx = 0, parent = #mma}>
 
 // -----
 
 // expected-error@+2 {{ttg.dot_op opIdx parameter must be 0 for Hopper MMA parent, since Hopper WGMMA only allows first operand to be in registers}}
-#mma = #ttg.nvidia_mma<{versionMajor = 3, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
 
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter is mandatory for MFMA parent}}
-#mfma = #ttg.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [32, 32, 8], isTransposed = false}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #mfma}>
 
 // -----
 
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 8/16 for gfx12}}
-#wmma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
+// expected-error@+2 {{ttg.dot_op kWidth parameter must be 8/16 for WMMA v1 (including packed cases for `scaled_dot`)}}
+#wmma = #ttg.amd_wmma<{version = 1, ctaLayout = {warp = [[0, 1], [0, 2]]}}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma}>
 
 // -----
 
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 8/16 for gfx12}}
-#wmma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
-#dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma, kWidth = 8}>
-
-// -----
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 8/16 for gfx12}}
-#wmma = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 4]}>
+// expected-error@+2 {{ttg.dot_op kWidth parameter must be 4/8/16 for WMMA v2 (including packed cases for `scaled_dot`)}}
+#wmma = #ttg.amd_wmma<{version = 2, ctaLayout = {warp = [[0, 1], [0, 2]]}}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma, kWidth = 32}>
 
 // -----
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 8/16 for gfx12}}
-#wmma = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 4]}>
-#dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma, kWidth = 4}>
+
+// expected-error@+1 {{invalid WMMA v1 instruction shape}}
+#wmma = #ttg.amd_wmma<{version = 1, ctaLayout = {warp = []}, instrShape = [16, 16, 32]}>
 
 // -----
 
-// expected-error@+1 {{major version must be in the [0, 4] range}}
-#mfma = #ttg.amd_mfma<{versionMajor = 10, versionMinor = 0, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
+// expected-error@+1 {{invalid WMMA v2 instruction shape}}
+#wmma = #ttg.amd_wmma<{version = 2, ctaLayout = {warp = []}, instrShape = [16, 16, 64]}>
 
 // -----
 
-// expected-error@+1 {{minor version must be 0}}
-#mfma = #ttg.amd_mfma<{versionMajor = 2, versionMinor = 5, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
+// expected-error@+1 {{invalid WMMA v3 instruction shape}}
+#wmma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = []}, instrShape = [16, 16, 16]}>
 
 // -----
 
-// expected-error@+1 {{(M, N) cases other than (32, 32) or (16, 16) unimplemented}}
-#mfma = #ttg.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1, 1], instrShape = [16, 8], isTransposed = false}>
+// expected-error@+1 {{version must be in the [0, 4] range}}
+#mfma = #ttg.amd_mfma<{version = 10, warpsPerCTA = [1, 1, 1], instrShape = [32, 32, 8], isTransposed = false}>
+
+// -----
+
+// expected-error@+1 {{invalid (mDim, nDim) combination}}
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 8, 8], isTransposed = false}>
+
+// -----
+
+// expected-error@+1 {{elementBitWidth must be 32 or 64}}
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 16, 16], isTransposed = false, elementBitWidth = 16}>

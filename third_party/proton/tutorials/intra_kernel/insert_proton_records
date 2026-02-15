@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""
+Script to automatically add proton.record statements to the examplar vector-add ttgir.
+"""
+
+import glob
+import os
+import re
+import sys
+
+
+def add_proton_records(input_file):
+    """Add proton.record statements to a ttgir file."""
+
+    with open(input_file, "r") as f:
+        content = f.read()
+        lines = f.readlines()
+
+    # Assert no proton.record already exists
+    if "proton.record" in content:
+        raise AssertionError("File already contains `proton.record` statements! Please clean-up.")
+
+    # Reset file pointer and read lines again
+    with open(input_file, "r") as f:
+        lines = f.readlines()
+
+    result_lines = []
+    load_and_add_started = False
+
+    for i, line in enumerate(lines):
+        # Add kernel record start after function declaration
+        if "tt.func public @" in line and "{" in line:
+            result_lines.append(line)
+            result_lines.append('      proton.record start "kernel"\n')
+            continue
+
+        # Add load_and_add record start before first load
+        if "tt.load" in line and not load_and_add_started:
+            result_lines.append('      proton.record start "load_and_add"\n')
+            load_and_add_started = True
+
+        # Add individual load records
+        if "tt.load" in line:
+            # Extract variable name (x, y, etc.) - just the letters before '_'
+            match = re.search(r"%(\w+)_\d+\s*=\s*tt\.load", line)
+            if match:
+                var_name = match.group(1)
+                result_lines.append(f'      proton.record start "load_{var_name}_issue"\n')
+                result_lines.append(line)
+                result_lines.append(f'      proton.record end "load_{var_name}_issue"\n')
+                continue
+
+        # Add load_and_add record end after arithmetic operation
+        if "arith.addf" in line and load_and_add_started:
+            result_lines.append(line)
+            result_lines.append('      proton.record end "load_and_add"\n')
+            load_and_add_started = False
+            continue
+
+        # Add kernel record end before return
+        if "tt.return" in line:
+            result_lines.append('      proton.record end "kernel"\n')
+            result_lines.append(line)
+            continue
+
+        # Default: just add the line
+        result_lines.append(line)
+
+    # Write output in-place
+    with open(input_file, "w") as f:
+        f.writelines(result_lines)
+
+    print(f"Added proton records to {input_file}")
+
+
+def find_and_process_ttgir():
+    """Find all ttgir files in ttgir_dump directory and process them."""
+
+    # Find ttgir_dump directory
+    ttgir_dump_path = None
+    for root, dirs, files in os.walk("."):
+        if "ttgir_dump" in dirs:
+            ttgir_dump_path = os.path.join(root, "ttgir_dump")
+            break
+
+    if not ttgir_dump_path:
+        print("Error: ttgir_dump directory not found!")
+        sys.exit(1)
+
+    # Process the ttgir file
+    ttgir_files = glob.glob(os.path.join(ttgir_dump_path, "**", "*.ttgir"), recursive=True)
+
+    if not ttgir_files:
+        print(f"No ttgir files found in {ttgir_dump_path}")
+        return
+
+    if len(ttgir_files) > 1:
+        print(f"Warning: Found {len(ttgir_files)} ttgir files, expected at most 1")
+
+    ttgir_file = ttgir_files[0]  # Take the first (and expected only) file
+    try:
+        print(f"Processing {ttgir_file}...")
+        add_proton_records(ttgir_file)
+        print("Successfully processed ttgir file")
+    except AssertionError as e:
+        print(f"Skipping {ttgir_file}: {e}")
+    except Exception as e:
+        print(f"Error processing {ttgir_file}: {e}")
+
+
+if __name__ == "__main__":
+    find_and_process_ttgir()

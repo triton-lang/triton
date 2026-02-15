@@ -4,9 +4,8 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-import triton.tools.experimental_descriptor
 
-from triton._internal_testing import is_cuda, is_hopper, is_hip_cdna, is_hip_cdna2, is_hip
+from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip
 
 
 def check_capabilities():
@@ -90,12 +89,12 @@ def matmul_kernel_tma(  #
     offs_k = 0
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for _ in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
-        a = tl._experimental_descriptor_load(a_ptr, [offs_am, offs_k], [BLOCK_M, BLOCK_K], tl.float16)
-        b = tl._experimental_descriptor_load(b_ptr, [offs_k, offs_bn], [BLOCK_K, BLOCK_N], tl.float16)
+        a = a_ptr.load([offs_am, offs_k])
+        b = b_ptr.load([offs_k, offs_bn])
         accumulator = tl.dot(a, b, acc=accumulator)
         offs_k += BLOCK_K
     accumulator = accumulator.to(tl.float16)
-    tl._experimental_descriptor_store(output_ptr, accumulator, [offs_am, offs_bn])
+    output_ptr.store([offs_am, offs_bn], accumulator)
 
 
 @triton.jit
@@ -234,7 +233,7 @@ def test_pipeline_matmul(scale, device):
         scale_a = torch.randint(74, (M, K // 32), device=device, dtype=torch.uint8)
         # Use e5m2 for Ampere, as it does not support fp_to_fp conversions for fp8e4m3
         # Use bf16 for Hopper as the rhs must come from shmem
-        b_type = "bf16" if is_hopper() else "e5m2"
+        b_type = "bf16" if is_hopper_or_newer() else "e5m2"
         if b_type == "bf16":
             b = torch.randn((K, N), device=device, dtype=torch.bfloat16)
         else:
@@ -251,15 +250,13 @@ def test_pipeline_matmul(scale, device):
         a_type, b_type = None, None
         output = torch.empty((M, N), dtype=torch.float16, device=device)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    use_tma = not scale and is_hopper()
+    use_tma = not scale and is_hopper_or_newer()
 
     if use_tma:
-        a_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(a.data_ptr(), M, K, BLOCK_M, BLOCK_K,
-                                                                              a.element_size())
-        b_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(b.data_ptr(), K, N, BLOCK_K, BLOCK_N,
-                                                                              b.element_size())
-        output_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(output.data_ptr(), M, N, BLOCK_M,
-                                                                                   BLOCK_N, output.element_size())
+        from triton.tools.tensor_descriptor import TensorDescriptor
+        a_tma = TensorDescriptor.from_tensor(a, block_shape=[BLOCK_M, BLOCK_K])
+        b_tma = TensorDescriptor.from_tensor(b, block_shape=[BLOCK_K, BLOCK_N])
+        output_tma = TensorDescriptor.from_tensor(output, block_shape=[BLOCK_M, BLOCK_N])
         handler = matmul_kernel_tma[grid](a_tma, b_tma, output_tma, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
                                           NUM_STAGES=NUM_STAGES)
     else:
@@ -305,7 +302,7 @@ def test_pipeline_matmul(scale, device):
             if torch.cuda.get_device_capability()[0] == 10:
                 if scale:
                     # A, B, scale, decomposed A shmem
-                    count = 5
+                    count = 4
                 else:
                     # A, B, MMA barrier
                     count = 3
@@ -545,3 +542,36 @@ def test_scatter_pipeline(device):
     torch.testing.assert_close(c, ref)
 
     assert kernel.asm["ttgir"].count("tma_store_wait") == 2, "expected pipelined TMA scatter"
+
+
+@pytest.mark.parametrize("num_stages", [1, 2, 3])
+def test_conditional_store_pipeline(num_stages, device):
+    """
+    Test for the conditional store pipelining bugfix.
+    This reproduces the race condition where conditional code gets moved to epilogue cluster,
+    causing users of loads to be scheduled in later clusters than the loads themselves.
+    """
+    check_capabilities()
+
+    @triton.jit
+    def conditional_store_kernel(
+        arange_ptr,
+        output_ptr,
+        loop_stages: tl.constexpr,
+        N: tl.constexpr,
+        always_true_but_not_constexpr,
+    ):
+        for i in tl.range(0, N, num_stages=loop_stages):
+            out_idx = tl.load(arange_ptr + i + tl.arange(0, 1))
+            if always_true_but_not_constexpr:
+                tl.store(output_ptr + out_idx, i + 1)
+
+    N = 17
+    arange = torch.arange(N, dtype=torch.int32, device=device)
+    output = torch.zeros((N, ), dtype=torch.int32, device=device)
+
+    conditional_store_kernel[(1, )](arange, output, num_stages, N, True)
+
+    # Expected output: [1, 2, 3, 4, ..., N]
+    expected = torch.arange(1, N + 1, dtype=torch.int32, device=device)
+    assert torch.equal(output, expected)

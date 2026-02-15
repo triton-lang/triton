@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/ValueRange.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
@@ -324,10 +325,12 @@ private:
       bases;
 
   llvm::MapVector<StringAttr, int32_t /*size*/> outDims;
-  bool surjective;
+  int32_t rank = 0;
 
 public:
   using BasesT = decltype(bases);
+
+  LinearLayout() = default;
 
   // The 0-dimensional layout that maps everything to 0.  This is useful as a
   // starting point when doing something like
@@ -335,12 +338,19 @@ public:
   //   LinearLayout ret = LinearLayout::empty();
   //   for (...) ret *= ...;
   //   return ret;
-  static LinearLayout empty() { return LinearLayout(BasesT{}, {}); }
+  static LinearLayout empty() { return {}; }
+
+  // Creates a 1D -> 1D layout that's the function L(x) = stride * x
+  // for x in [0, size).
+  static LinearLayout strided1D(int32_t size, int32_t stride, StringAttr inDim,
+                                StringAttr outDim);
 
   // Creates a 1D -> 1D layout that's the identity function, i.e. L(x) = x
   // for x in [0, size).
   static LinearLayout identity1D(int32_t size, StringAttr inDim,
-                                 StringAttr outDim);
+                                 StringAttr outDim) {
+    return strided1D(size, /*stride=*/1, inDim, outDim);
+  }
 
   // Creates a 1D -> 1D layout that maps every input value to 0, i.e. L(x) = 0
   // for x in [0, size). By default this creates a surjective layout where
@@ -415,11 +425,16 @@ public:
       ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>> bases,
       ArrayRef<std::pair<StringAttr, int32_t>> outDims, bool requireSurjective);
 
-  bool isSurjective() const { return surjective; }
+  bool isSurjective() const { return rank == getTotalOutDimSizeLog2(); }
+  bool isInjective() const { return rank == getTotalInDimSizeLog2(); }
 
   bool isInvertible() const {
-    return surjective && getTotalInDimSize() == getTotalOutDimSize();
+    return isSurjective() && getTotalInDimSize() == getTotalOutDimSize();
   }
+
+  // Remove a dimension of size 1 from the layout.
+  [[nodiscard]] LinearLayout unsqueezeIn(StringAttr dim) const;
+  [[nodiscard]] LinearLayout unsqueezeOut(StringAttr dim) const;
 
   const BasesT &getBases() const { return bases; }
 
@@ -428,7 +443,8 @@ public:
   ArrayRef<int32_t> getBasis(StringAttr inDim, int32_t pos) const {
     auto it = bases.find(inDim);
     assert(it != bases.end());
-    assert(pos < it->second.size());
+    assert(pos >= 0);
+    assert(static_cast<size_t>(pos) < it->second.size());
     return it->second[pos];
   }
 
@@ -441,6 +457,20 @@ public:
   auto getInDimNames() const { return llvm::make_first_range(bases); }
   auto getOutDimNames() const { return llvm::make_first_range(outDims); }
   auto getOutDimSizes() const { return llvm::make_second_range(outDims); }
+
+  // Relevant for reshaping
+
+  SmallVector<std::pair<StringAttr, int32_t>> getInDims() const {
+    SmallVector<std::pair<StringAttr, int32_t>> inDims;
+    inDims.reserve(bases.size());
+    for (auto [inDim, inDimBases] : bases) {
+      inDims.push_back({inDim, getInDimSize(inDim)});
+    }
+    return inDims;
+  }
+  SmallVector<std::pair<StringAttr, int32_t>> getOutDims() const {
+    return to_vector(outDims);
+  }
 
   // Gets the position that this outDim occupies in getOutDimNames().  Asserts
   // if the dim is not present.
@@ -537,18 +567,35 @@ public:
     return reshapeOuts({{*getOutDimNames().begin(), getTotalOutDimSize()}});
   }
 
-  // Concatenates two layouts by their input dimensions. The layouts must have
-  // the same output dimensions and sizes and different input dimensions. The
-  // input dimensions of this layout are placed before those of 'other'. This
-  // can be thought of as the opposite of `sublayout`, which slices a layout
-  // from a larger one.
+  // Resizes the dimension to one that is smallre or equal to the given size.
+  // These operations are similar to `sublayout` but at a dimension level.
+  [[nodiscard]] LinearLayout resizeInDim(StringAttr inDim,
+                                         int32_t newSize) const;
+  [[nodiscard]] LinearLayout resizeOutDim(StringAttr outDim,
+                                          int32_t newSize) const;
+
+  [[nodiscard]] LinearLayout renameInDim(StringAttr oldDim,
+                                         StringAttr newDim) const {
+    auto bases = getBases();
+    auto it = bases.find(oldDim);
+    assert(it != bases.end());
+    auto value = std::move(it->second);
+    bases.erase(it);
+    bases.insert({newDim, std::move(value)});
+    return LinearLayout(std::move(bases), getOutDims(),
+                        /*requireSurjective=*/isSurjective());
+  }
+
+  // Concatenates two layouts by their in (resp. out) dimensions. The layouts
+  // must have the same output (resp. input) dimensions and sizes and different
+  // input (resp. output) dimensions. The input dimensions of this layout are
+  // placed before those of 'other'. This can be thought of as the opposite of
+  // `sublayout`, which slices a layout from a larger one.
   [[nodiscard]] LinearLayout concatIns(const LinearLayout &other) const;
-  // Concatenates two layouts by their output dimensions. The layouts must have
-  // the same input dimensions and sizes and different output dimensions. The
-  // output dimensions of this layout are placed before those of 'other'. This
-  // can be thought of as the opposite of `sublayout`, which slices a layout
-  // from a larger one.
   [[nodiscard]] LinearLayout concatOuts(const LinearLayout &other) const;
+
+  // Remove all the bases that equal to 0 for the given input dimension.
+  [[nodiscard]] LinearLayout unsqueezeIns(StringAttr dim) const;
 
   // Computes the direct sum of two layouts.
   // https://en.wikipedia.org/wiki/Direct_sum#Direct_sum_of_matrices
@@ -580,11 +627,11 @@ public:
   //
   //    - identity1D(4, "i", "o") * zeros1D(2, "i", "o") => L(x) = x % 4
   //      for x in [0,8).
-  //      The output matrix is [[1, 0, 0], [0, 1, 0], [0, 0, 0]]
+  //      The output matrix is [[1, 0, 0], [0, 1, 0]]
   //
   //    - zeros1D(2, "i", "o") * identity1D(4, "i", "o") => L(x) = x / 2
   //      for x in [0,8).
-  //      The output matrix is [[0, 0, 0], [0, 1, 0], [0, 0, 1]]
+  //      The output matrix is [[0, 1, 0], [0, 0, 1]]
 
   //    - identity1D(4, "i", "o1") * identity1D(8, "i", "o2") =>
   //      L(x) = (x % 4, x / 4) for x in [0,32).
@@ -608,6 +655,25 @@ public:
     *this = *this * outer;
     return *this;
   }
+
+  // Compute a C such that A = B * C if it exists.
+  // In other words, C = B^{-1} * A.
+  // For divideRight, we compute A = C * B, that is, C = A * B^{-1}.
+  // Note that such a C exists iff (every pair of input/output dim of) A is
+  // of the form
+  // [[B, 0],
+  //  [0, C]]
+  // as a matrix, whenever those dimensions are present in B.
+  //
+  // C will always have the same input/output dimensions as A.
+  // When there are dimensions of size 1 there is some ambiguity in the
+  // division, as in `operator*` we treat missing dimensions as dimensions
+  // of size 1 whenever it makes sense to do so. The rule that C has the
+  // same dimensions as A ensures that C is well-defined.
+  friend std::optional<LinearLayout> divideLeft(const LinearLayout &A,
+                                                const LinearLayout &B);
+  friend std::optional<LinearLayout> divideRight(const LinearLayout &A,
+                                                 const LinearLayout &B);
 
   // Returns true if this layout acts trivially (as the identity) on the given
   // dimensions. This means that it's the identity on those dimensions, and it
@@ -722,8 +788,8 @@ public:
 
   std::string toString() const;
 
-  friend bool operator==(LinearLayout lhs, LinearLayout rhs);
-  friend bool operator!=(LinearLayout lhs, LinearLayout rhs) {
+  friend bool operator==(const LinearLayout &lhs, const LinearLayout &rhs);
+  friend bool operator!=(const LinearLayout &lhs, const LinearLayout &rhs) {
     return !(lhs == rhs);
   }
   bool equalIgnoringOutDimSizes(const LinearLayout &other) const;
@@ -755,6 +821,83 @@ inline std::ostream &operator<<(std::ostream &os, const LinearLayout &layout) {
   os << layout.toString();
   return os;
 }
+
+// Defines a map acting on the columns (i.e. bases) a given input dimension of a
+// layout as per:
+//  action[i] -> i.
+// This action can be:
+//  - Applied to a layout to get a new layout with the same input dimensions
+//    but with the bases permuted (and perhaps some of them dropped).
+//  - Applied to a range of Values to apply the same transformation to them
+//
+// E.g. if action = [2, 0, 1] and basesDim = [1, 2, 4]
+//  - action.apply(layout) returns a LL with basesDim = [4, 1, 2]
+//  - action.apply(range) with range.size() == 8, returns a range permuted as
+//    [x[0], x[4], x[1], x[5], x[2], x[6], x[3], x[7]]
+class ColumnAction {
+private:
+  SmallVector<size_t> action;
+  StringAttr inDim;
+  size_t inSizeLog2;
+  bool m_isIdentity = true;
+
+public:
+  ColumnAction() = default;
+  ColumnAction(ArrayRef<size_t> action, StringAttr inDim, size_t inSizeLog2)
+      : action(action), inDim(inDim), inSizeLog2(inSizeLog2) {
+    auto it = llvm::max_element(action);
+    // Assert in the constructor... ugh
+    assert(it == action.end() || *it < inSizeLog2);
+    // In many cases the action will be the identity, so we save that as an
+    // early return
+    m_isIdentity = action.size() == inSizeLog2 &&
+                   llvm::equal(action, llvm::seq<size_t>(action.size()));
+  }
+
+  // Act on the columns of a layout
+  // Examples:
+  //  - if action = [2, 0, 1] and layout.getBases()[inDim] = [[1], [2], [4]]
+  //    - action.apply(layout) returns a LL with basesDim = [[4], [1], [2]]
+  //  - if action = [2, 0] and layout.getBases()[inDim] = [[1], [4], [2]]
+  //    - action.apply(layout) returns a LL with bases[inDim] = [[2], [1]]
+  LinearLayout apply(const LinearLayout &layout) const;
+
+  // Act on a range of values (representing registers)
+  // e.g. if action = [2, 0, 1] and inSizeLog2 = 3 and inDim.str() = "register"
+  //  - action.apply(range) with range.size() == 8, returns
+  //    [x[0], x[4], x[1], x[5], x[2], x[6], x[3], x[7]]
+  SmallVector<Value> apply(ValueRange values) const;
+
+  // Inverse of the action
+  ColumnAction inverse() const;
+
+  // Given two permutations self, other seen as functions, returns
+  // ret(x) = other(self(x))
+  ColumnAction leftCompose(const ColumnAction &other) const;
+
+  static ColumnAction identity(StringAttr inDim, size_t inSizeLog2) {
+    return ColumnAction(llvm::to_vector(llvm::seq<size_t>(inSizeLog2)), inDim,
+                        inSizeLog2);
+  }
+
+  // Returns true if the action is the identity
+  bool isIdentity() const { return m_isIdentity; }
+
+  std::string toString() const;
+};
+
+inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
+                                     const ColumnAction &action) {
+  os << action.toString();
+  return os;
+}
+
+inline std::ostream &operator<<(std::ostream &os, const ColumnAction &action) {
+  os << action.toString();
+  return os;
+}
+
+std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout);
 
 } // namespace mlir::triton
 

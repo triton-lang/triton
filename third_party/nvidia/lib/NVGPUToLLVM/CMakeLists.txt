@@ -3,5 +3,8 @@ add_triton_library(NVGPUToLLVM
 
     DEPENDS
     NVGPUConversionPassIncGen
+    TritonGPUOpInterfacesIncGen
+
+    LINK_LIBS PUBLIC
     NVGPUIR
 )

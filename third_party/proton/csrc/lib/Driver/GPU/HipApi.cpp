@@ -17,6 +17,11 @@ struct ExternLibHip : public ExternLibBase {
 
 void *ExternLibHip::lib = nullptr;
 
+DEFINE_DISPATCH(ExternLibHip, launchKernel, hipModuleLaunchKernel,
+                hipFunction_t, unsigned int, unsigned int, unsigned int,
+                unsigned int, unsigned int, unsigned int, unsigned int,
+                hipStream_t, void **, void **)
+
 DEFINE_DISPATCH(ExternLibHip, deviceSynchronize, hipDeviceSynchronize)
 
 DEFINE_DISPATCH(ExternLibHip, deviceGetAttribute, hipDeviceGetAttribute, int *,
@@ -26,6 +31,39 @@ DEFINE_DISPATCH(ExternLibHip, getDeviceCount, hipGetDeviceCount, int *);
 
 DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDeviceProperties,
                 hipDeviceProp_t *, int);
+
+DEFINE_DISPATCH(ExternLibHip, memAllocHost, hipMemAllocHost, void **, size_t)
+
+DEFINE_DISPATCH(ExternLibHip, memHostAlloc, hipHostAlloc, void **, size_t,
+                unsigned int)
+
+DEFINE_DISPATCH(ExternLibHip, memFreeHost, hipFreeHost, void *)
+
+DEFINE_DISPATCH(ExternLibHip, memHostGetDevicePointer, hipHostGetDevicePointer,
+                hipDeviceptr_t *, void *, unsigned int)
+
+DEFINE_DISPATCH(ExternLibHip, memAlloc, hipMemAlloc, hipDeviceptr_t *, size_t)
+
+DEFINE_DISPATCH(ExternLibHip, memFree, hipFree, hipDeviceptr_t)
+
+DEFINE_DISPATCH(ExternLibHip, memsetD32Async, hipMemsetD32Async, hipDeviceptr_t,
+                int, size_t, hipStream_t)
+
+DEFINE_DISPATCH(ExternLibHip, ctxGetDevice, hipCtxGetDevice, hipDevice_t *)
+
+DEFINE_DISPATCH(ExternLibHip, ctxGetStreamPriorityRange,
+                hipDeviceGetStreamPriorityRange, int *, int *)
+
+DEFINE_DISPATCH(ExternLibHip, streamCreateWithPriority,
+                hipStreamCreateWithPriority, hipStream_t *, unsigned int, int)
+
+DEFINE_DISPATCH(ExternLibHip, streamSynchronize, hipStreamSynchronize,
+                hipStream_t)
+
+DEFINE_DISPATCH(ExternLibHip, streamDestroy, hipStreamDestroy, hipStream_t)
+
+DEFINE_DISPATCH(ExternLibHip, memcpyDToHAsync, hipMemcpyDtoHAsync, void *,
+                hipDeviceptr_t, size_t, hipStream_t)
 
 Device getDevice(uint64_t index) {
   int clockRate;

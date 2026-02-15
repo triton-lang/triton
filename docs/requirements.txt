@@ -1,0 +1,11 @@
+tabulate
+cmake
+sphinx
+matplotlib
+myst_parser
+sphinx-rtd-theme
+pandas<3.0
+pytest
+sphinx-gallery
+sphinx-multiversion
+llnl-hatchet

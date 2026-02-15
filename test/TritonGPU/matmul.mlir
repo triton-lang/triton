@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -convert-triton-to-tritongpu=target=cuda:80 -tritongpu-remove-layout-conversions -tritongpu-pipeline=num-stages=3 -canonicalize -test-print-allocation 2>&1 | FileCheck %s
+// RUN: triton-opt %s -convert-triton-to-tritongpu=target=cuda:80 -tritongpu-remove-layout-conversions -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline=num-stages=3 -canonicalize -test-print-allocation 2>&1 | FileCheck %s
 
 // CHECK: offset = 0, size = 32768
 // CHECK: offset = 32768, size = 32768

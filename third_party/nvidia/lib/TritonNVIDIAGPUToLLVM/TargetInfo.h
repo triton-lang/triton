@@ -17,20 +17,30 @@ public:
   Value ballot(RewriterBase &rewriter, Location loc, Type type,
                Value cmp) const override;
 
+  void barrier(Location loc, RewriterBase &rewriter,
+               triton::gpu::AddrSpace targets) const override;
+  void clusterBarrier(Location loc, RewriterBase &rewriter) const override;
+
+  void warpSync(Location loc, RewriterBase &rewriter) const override;
+
   void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Value val,
                     Value pred) const override;
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                    std::optional<Value> ctaId, Type elemTy,
-                    Value pred) const override;
+                    std::optional<Value> ctaId, Type elemTy, Value pred,
+                    Operation *localLoadOp = nullptr) const override;
 
-  bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
-                      ArrayRef<unsigned> paddedRepShape,
-                      ArrayRef<unsigned> order,
-                      int swizzleByteSize) const override;
-
-  void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
-                         Value val) const override;
+  bool supportLdMatrix() const override { return computeCapability >= 75; }
+  bool supportStMatrix() const override { return computeCapability >= 90; }
+  bool supportLdStMatrixB8() const override { return computeCapability >= 100; }
+  bool supportBitwidth16Elementwise() const override {
+    // Hopper (sm90) and newer.
+    return computeCapability >= 90;
+  }
+  bool supportBitwidth32Elementwise() const override {
+    // Blackwell (sm100) and newer.
+    return computeCapability >= 100;
+  }
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
@@ -41,12 +51,15 @@ public:
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                    Value i) const override;
 
+  Value permute(RewriterBase &rewriter, Location loc, Value a, Value b,
+                Value selector) const override;
+
   Value programId(RewriterBase &rewriter, Location loc, ModuleOp moduleOp,
-                  int axis) const override;
+                  ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                  triton::ReduceOp op, unsigned numLaneToReduce,
-                  unsigned interleave) const override;
+                  triton::ReduceOp op,
+                  unsigned reduceLaneIdMask) const override;
 
   std::string getMulhiFuncName(Type resultElementTy) const override;
 
@@ -68,6 +81,9 @@ public:
   bool supportVectorizedAtomics() const override;
 
   int getPtxVersion() const { return ptxVersion; }
+  int getComputeCapability() const { return computeCapability; }
+
+  bool isCuda() const override { return true; }
 
 private:
   int computeCapability;

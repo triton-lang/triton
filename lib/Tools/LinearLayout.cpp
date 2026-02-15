@@ -8,11 +8,11 @@
 #include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
 #define DEBUG_TYPE "linear_layout"
@@ -63,56 +63,6 @@ void dumpMatrix(uint64_t *m, int numRows, int numCols) {
     }
     llvm::errs() << "\n";
   }
-}
-
-// Build a matrix of size sum(outDimSizeLog2) x sum(inDimSizeLog2) representing
-// the bases of the given layout.  This can then be used by f2reduce.
-//
-// This function is called from the constructor of LinearLayout, so be careful
-// not to use any functions that create LLs in here.
-std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
-  int numRows = layout.getTotalOutDimSizeLog2();
-  int numCols = layout.getTotalInDimSizeLog2();
-
-  // Don't handle giant LLs.  This makes some things easier; for example, each
-  // row can be a single uint64_t.
-  assert(numCols <= 64 && "LinearLayout too large");
-  assert(numRows <= 64 && "LinearLayout too large");
-
-  // Suppose we have a layout specified by the following values.
-  //
-  //   L(0,1) = (0b01, 0b1)
-  //   L(0,2) = (0b10, 0b0)
-  //   L(1,0) = (0b10, 0b0)
-  //   L(2,0) = (0b11, 0b0)
-  //
-  // We will create one column per entry above.  The max bit width of the
-  // codomain is (2,1), so our matrix will have 2+1=3 rows.  The final matrix
-  // will be
-  //
-  //  | L(0,1)[0] L(0,2)[0] L(1,0)[0] L(2,0)[0] |   | 0b1001 |
-  //  |    ↓         ↓         ↓         ↓      |   | 0b0111 |
-  //  | L(0,1)[1] L(0,2)[1] L(1,0)[1] L(2,0)[1] | = | 0b1000 |
-  //  |    ↓         ↓         ↓         ↓      |
-  //
-  // Note `new uint64_t[n]()` is zero-initialized, but `new uint64_t[n]` is not.
-  std::unique_ptr<uint64_t[]> m(new uint64_t[numRows]());
-  int r = 0;
-  for (StringAttr outDim : layout.getOutDimNames()) {
-    int c = 0;
-    for (StringAttr inDim : layout.getInDimNames()) {
-      for (int i = 0; i < layout.getInDimSizeLog2(inDim); i++) {
-        uint64_t basis = layout.getBasis(inDim, i, outDim);
-        for (int j = 0; j < layout.getOutDimSizeLog2(outDim); j++) {
-          m[r + j] |= ((basis >> j) & 1) << c;
-        }
-        c++;
-      }
-    }
-    r += layout.getOutDimSizeLog2(outDim);
-  }
-
-  return m;
 }
 
 // Compute the rank of the matrix formed by taking the bases for the given
@@ -271,12 +221,11 @@ LinearLayout::checkInvariants(bool requireSurjective) {
   // the rank of our matrix using Gaussian elimination, which runs in O(n^3)
   // for an n x n matrix.  Our matrix size is sum(inDimSizeLog2) x
   // sum(outDimSizeLog2), so this should be plenty fast.
-  this->surjective =
+  this->rank =
       getMatrixRank(getMatrix(*this), /*numRows=*/getTotalOutDimSizeLog2(),
-                    /*numCols=*/getTotalInDimSizeLog2()) ==
-      getTotalOutDimSizeLog2();
+                    /*numCols=*/getTotalInDimSizeLog2());
 
-  if (requireSurjective && !surjective) {
+  if (requireSurjective && !isSurjective()) {
     return "Layout is expected to be surjective, i.e. every `out` coordinate "
            "can be reached by some `in` coordinate, but was not:" +
            toString();
@@ -295,18 +244,20 @@ LinearLayout::LinearLayout(
     ArrayRef<std::pair<StringAttr, int32_t>> outDims, bool requireSurjective)
     : LinearLayout(makeBasesMap(bases), outDims, requireSurjective) {}
 
-/*static*/ LinearLayout LinearLayout::identity1D(int32_t size,
-                                                 StringAttr inDimName,
-                                                 StringAttr outDimName) {
+/*static*/ LinearLayout LinearLayout::strided1D(int32_t size, int32_t stride,
+                                                StringAttr inDimName,
+                                                StringAttr outDimName) {
   if (size == 0)
     return LinearLayout::empty();
 
   assert(llvm::isPowerOf2_32(size));
-  std::vector<std::vector<int32_t>> powersOf2;
+  std::vector<std::vector<int32_t>> bases;
   for (int32_t i = 1; i < size; i *= 2) {
-    powersOf2.emplace_back().push_back(i);
+    bases.emplace_back(std::vector<int32_t>{i * stride});
   }
-  return LinearLayout({{inDimName, std::move(powersOf2)}}, {outDimName});
+  bool requiresSurjective = (stride == 1);
+  return LinearLayout({{inDimName, std::move(bases)}},
+                      {{outDimName, stride * size}}, requiresSurjective);
 }
 
 /*static*/ LinearLayout LinearLayout::zeros1D(int32_t size,
@@ -318,8 +269,8 @@ LinearLayout::LinearLayout(
 
   assert(llvm::isPowerOf2_32(size));
   std::vector<std::vector<int32_t>> zeros;
-  for (int i = 0; i < llvm::Log2_32(size); i++) {
-    zeros.emplace_back().push_back(0);
+  for (int i = 1; i < size; i *= 2) {
+    zeros.emplace_back(std::vector<int32_t>{0});
   }
   return LinearLayout({{inDimName, zeros}}, {{outDimName, outDimSize}},
                       /*requiresSurjective=*/outDimSize == 1);
@@ -339,7 +290,7 @@ int32_t LinearLayout::getOutDimIndex(StringAttr outDim) const {
 
 int32_t LinearLayout::getInDimSizeLog2(StringAttr inDim) const {
   auto it = bases.find(inDim);
-  assert(it != bases.end());
+  assert(it != bases.end() && "inDim not found in layout");
   return it->second.size();
 }
 
@@ -352,7 +303,7 @@ int32_t LinearLayout::getTotalInDimSizeLog2() const {
 
 int32_t LinearLayout::getOutDimSizeLog2(StringAttr outDim) const {
   auto it = outDims.find(outDim);
-  assert(it != outDims.end());
+  assert(it != outDims.end() && "outDim not found in layout");
   return llvm::Log2_32(it->second);
 }
 
@@ -402,7 +353,7 @@ LinearLayout LinearLayout::transposeIns(ArrayRef<StringAttr> newInDims) const {
     newBases[inDim] = bases.find(inDim)->second;
   }
   return LinearLayout(std::move(newBases), llvm::to_vector(outDims),
-                      surjective);
+                      isSurjective());
 }
 
 LinearLayout
@@ -430,7 +381,7 @@ LinearLayout::transposeOuts(ArrayRef<StringAttr> newOutDims) const {
   for (auto outDim : newOutDims) {
     newOutDimSizes.push_back({outDim, getOutDimSize(outDim)});
   }
-  return LinearLayout(std::move(newBases), newOutDimSizes, surjective);
+  return LinearLayout(std::move(newBases), newOutDimSizes, isSurjective());
 }
 
 LinearLayout LinearLayout::reshapeIns(
@@ -457,12 +408,12 @@ LinearLayout LinearLayout::reshapeIns(
   int i = 0;
   for (const auto &[inDim, inDimSize] : newInDims) {
     auto &newInDimBases = newBases[inDim];
-    for (int j = 0; j < llvm::Log2_32(inDimSize); j++) {
+    for (int j = 1; j < inDimSize; j *= 2) {
       newInDimBases.push_back(flatBases[i++]);
     }
   }
   return LinearLayout(std::move(newBases), llvm::to_vector(outDims),
-                      surjective);
+                      isSurjective());
 }
 
 LinearLayout LinearLayout::reshapeOuts(
@@ -508,7 +459,41 @@ LinearLayout LinearLayout::reshapeOuts(
     }
   }
 
-  return LinearLayout(std::move(newBases), newOutDims, surjective);
+  return LinearLayout(std::move(newBases), newOutDims, isSurjective());
+}
+
+LinearLayout LinearLayout::resizeInDim(StringAttr inDim,
+                                       int32_t newSize) const {
+  assert(llvm::isPowerOf2_32(newSize));
+  assert(newSize <= getInDimSize(inDim));
+  auto newBases = bases;
+  newBases[inDim].resize(llvm::Log2_32(newSize));
+  return LinearLayout(std::move(newBases), getOutDims(),
+                      /*requiresSurjective=*/false);
+}
+
+LinearLayout LinearLayout::resizeOutDim(StringAttr outDim,
+                                        int32_t newSize) const {
+  assert(llvm::isPowerOf2_32(newSize));
+  assert(newSize <= getOutDimSize(outDim));
+  auto newBases = bases;
+  // Zero-out the basis vectors that are greater than or equal to the new size
+  for (auto &[inDim, inDimBases] : newBases) {
+    for (auto &basis : inDimBases) {
+      auto &b = basis[getOutDimIndex(outDim)];
+      if (b >= newSize) {
+        b = 0;
+      }
+    }
+  }
+  auto outDims = getOutDims();
+  for (auto &[dim, size] : outDims) {
+    if (dim == outDim) {
+      size = newSize;
+    }
+  }
+  return LinearLayout(std::move(newBases), outDims,
+                      /*requiresSurjective=*/false);
 }
 
 LinearLayout LinearLayout::concatIns(const LinearLayout &other) const {
@@ -558,6 +543,162 @@ LinearLayout LinearLayout::concatOuts(const LinearLayout &other) const {
     newOutDims.emplace_back(outDim, outDimSize);
   return LinearLayout(std::move(result), newOutDims,
                       /*requiresSurjective=*/false);
+}
+
+std::optional<LinearLayout> divideLeft(const LinearLayout &A,
+                                       const LinearLayout &B) {
+  // Compute a C such that A = B * C if it exists.
+  // Note that such a C exists iff (every pair of input/output dim of) A is of
+  // the form
+  // [[B, 0],
+  //  [0, C]]
+  // as a matrix, whenever those dimensions are present in B.
+  for (StringAttr dim : B.getInDimNames()) {
+    if (!llvm::is_contained(A.getInDimNames(), dim))
+      return std::nullopt;
+  }
+  for (StringAttr dim : B.getOutDimNames()) {
+    if (!llvm::is_contained(A.getOutDimNames(), dim))
+      return std::nullopt;
+  }
+  // Compute candidate C's log-sizes for output dimensions.
+  llvm::MapVector<StringAttr, int32_t> cOutDimSizes;
+  for (StringAttr outDim : A.getOutDimNames()) {
+    int outA = A.getOutDimSizeLog2(outDim);
+    int outB = B.hasOutDim(outDim) ? B.getOutDimSizeLog2(outDim) : 0;
+    int outC = outA - outB;
+    if (outC < 0)
+      return std::nullopt;
+    cOutDimSizes[outDim] = 1 << outC;
+  }
+
+  LinearLayout::BasesT cBases;
+  for (StringAttr inDim : A.getInDimNames()) {
+    int inA = A.getInDimSizeLog2(inDim);
+    int inB = B.hasInDim(inDim) ? B.getInDimSizeLog2(inDim) : 0;
+    int inC = inA - inB;
+    if (inC < 0)
+      return std::nullopt;
+
+    std::vector<std::vector<int32_t>> basesForDim;
+    // Check that A’s first inB entries agree with B.
+    for (int i = 0; i < inB; ++i) {
+      for (StringAttr outDim : A.getOutDimNames()) {
+        int expected = B.hasOutDim(outDim) ? B.getBasis(inDim, i, outDim) : 0;
+        int actual = A.getBasis(inDim, i, outDim);
+        if (actual != expected)
+          return std::nullopt;
+      }
+    }
+
+    // Extract the candidate C bases from the remaining (shifted) entries in A.
+    for (int i = inB; i < inA; ++i) {
+      std::vector<int32_t> candidateBasis;
+      for (StringAttr outDim : llvm::make_first_range(cOutDimSizes)) {
+        int outB = B.hasOutDim(outDim) ? B.getOutDimSizeLog2(outDim) : 0;
+        int v = A.getBasis(inDim, i, outDim);
+
+        // The lower outB bits must be zero.
+        if ((v & ((1 << outB) - 1)) != 0)
+          return std::nullopt;
+        candidateBasis.push_back(v >> outB);
+      }
+      basesForDim.push_back(std::move(candidateBasis));
+    }
+    cBases[inDim] = basesForDim;
+  }
+
+  SmallVector<std::pair<StringAttr, int32_t>> COutDims;
+  for (auto [outDim, outC] : cOutDimSizes) {
+    COutDims.push_back({outDim, outC});
+  }
+  // If the layout A and B are surjective, then C should also be surjective.
+  LinearLayout C(std::move(cBases), COutDims,
+                 /*requireSurjective=*/A.isSurjective() && B.isSurjective());
+  assert(B * C == A);
+  return C;
+}
+
+std::optional<LinearLayout> divideRight(const LinearLayout &A,
+                                        const LinearLayout &B) {
+  // Compute a C such that A = C * B if it exists.
+  // Note that such a C exists iff (every pair of input/output dim of) A is of
+  // the form
+  // [[C, 0],
+  //  [0, B]]
+  // as a matrix, whenever those dimensions are present in B.
+
+  // Check that B's in-dimensions and out-dimensions are contained in A.
+  for (StringAttr dim : B.getInDimNames()) {
+    if (!llvm::is_contained(A.getInDimNames(), dim))
+      return std::nullopt;
+  }
+  for (StringAttr dim : B.getOutDimNames()) {
+    if (!llvm::is_contained(A.getOutDimNames(), dim))
+      return std::nullopt;
+  }
+
+  // Compute candidate C's log-sizes for output dimensions.
+  llvm::MapVector<StringAttr, int32_t> cOutDimSizes;
+  for (StringAttr outDim : A.getOutDimNames()) {
+    int outA = A.getOutDimSizeLog2(outDim);
+    int outB = B.hasOutDim(outDim) ? B.getOutDimSizeLog2(outDim) : 0;
+    int outC = outA - outB;
+    if (outC < 0)
+      return std::nullopt;
+    cOutDimSizes[outDim] = 1 << outC;
+  }
+
+  // For candidate C, its in-dim sizes come from subtracting B's in-dim sizes
+  // from A's.
+  LinearLayout::BasesT cBases;
+  for (StringAttr inDim : A.getInDimNames()) {
+    int inA = A.getInDimSizeLog2(inDim);
+    int inB = B.hasInDim(inDim) ? B.getInDimSizeLog2(inDim) : 0;
+    int inC = inA - inB;
+    if (inC < 0)
+      return std::nullopt;
+
+    std::vector<std::vector<int32_t>> basesForDim;
+    // The first inC basis vectors come directly from C.
+    for (int i = 0; i < inC; ++i) {
+      std::vector<int32_t> candidate;
+      for (StringAttr outDim : llvm::make_first_range(cOutDimSizes)) {
+        candidate.push_back(A.getBasis(inDim, i, outDim));
+      }
+      basesForDim.push_back(std::move(candidate));
+    }
+
+    // The remaining inB basis vectors in A should correspond to B after being
+    // shifted.
+    for (int i = inC; i < inA; ++i) {
+      int j = i - inC; // Index into B's basis vectors for this inDim.
+      for (StringAttr outDim : B.getOutDimNames()) {
+        int outA = A.getOutDimSizeLog2(outDim);
+        int outB = B.getOutDimSizeLog2(outDim);
+        int outC = outA - outB; // Expected log2 size for C in this output.
+        int shift = outC;
+        int v = A.getBasis(inDim, i, outDim);
+        // The lower shift bits must be zero.
+        if ((v & ((1 << shift) - 1)) != 0)
+          return std::nullopt;
+        int recovered = v >> shift;
+        int expected = B.getBasis(inDim, j, outDim);
+        if (recovered != expected)
+          return std::nullopt;
+      }
+    }
+    cBases[inDim] = basesForDim;
+  }
+
+  SmallVector<std::pair<StringAttr, int32_t>> COutDims;
+  for (auto [outDim, size] : cOutDimSizes)
+    COutDims.push_back({outDim, size});
+  // If A and B are surjective, then C should also be surjective.
+  LinearLayout C(std::move(cBases), COutDims,
+                 /*requireSurjective=*/A.isSurjective() && B.isSurjective());
+  assert(C * B == A);
+  return C;
 }
 
 LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
@@ -625,9 +766,9 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
 
 bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
   for (StringAttr dim : dimNames) {
-    if (!llvm::is_contained(getInDimNames(), dim) &&
-        !llvm::is_contained(getOutDimNames(), dim)) {
-      return false;
+    if (!hasInDim(dim) || !hasOutDim(dim)) {
+      llvm::report_fatal_error(
+          ("dim " + dim.str() + " must be present in the layout").c_str());
     }
   }
 
@@ -659,6 +800,10 @@ bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
 
 std::optional<LinearLayout>
 LinearLayout::quotient(ArrayRef<StringAttr> dimNames) const {
+  if (llvm::any_of(dimNames,
+                   [this](StringAttr dim) { return !hasInDim(dim); })) {
+    return std::nullopt;
+  }
   if (!isTrivialOver(dimNames)) {
     return std::nullopt;
   }
@@ -782,28 +927,38 @@ LinearLayout LinearLayout::compose(const LinearLayout &outer) const {
 namespace {
 std::unique_ptr<uint64_t[]> concatMatrices(const LinearLayout &A,
                                            const LinearLayout &B) {
-  // In plain words, "convert_layout does not change the shape of a tensor"
-  assert(A.getTotalOutDimSizeLog2() == B.getTotalOutDimSizeLog2() &&
-         "Matrices must have the same number of output dimensions");
-  int numRows = A.getTotalOutDimSizeLog2();
+  // conv
+  assert(A.getTotalOutDimSizeLog2() >= B.getTotalOutDimSizeLog2() &&
+         "A must have at least as many output bits as B");
   int numColsA = A.getTotalInDimSizeLog2();
 
   // rref expects the lower bits to be the lower indices of the matrix
   auto concat = getMatrix(A);
   auto BMat = getMatrix(B);
-  for (int r = 0; r < numRows; r++) {
-    concat[r] |= BMat[r] << numColsA;
+  int rowA = 0;
+  int rowB = 0;
+  for (auto [outDim, outDimSize] : A.getOutDims()) {
+    for (int r = 0; r < llvm::Log2_32(outDimSize); r++) {
+      if (r < llvm::Log2_32(B.getOutDimSize(outDim))) {
+        concat[rowA] |= BMat[rowB] << numColsA;
+        rowB++;
+      }
+      rowA++;
+    }
   }
   return concat;
 }
 
 LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
-  // Solve the least square system AX = B for A = outer, B = *this
-  // and return the least square solution X of minimal norm
+  // Solve the least square system AX = B
+  // and return the least square solution X by computing RREF and setting
+  // the free variables to zero.
   // A and B may not be surjective, but we assume that Im(B) \subset Im(A)
   // Sketch of the algorithm:
   // https://github.com/triton-lang/triton/pull/5309#discussion_r1869084111
   int numRows = A.getTotalOutDimSizeLog2();
+  assert(numRows >= B.getTotalOutDimSizeLog2() &&
+         "A.lstsq(B) called with incompatible output shapes");
   int numColsA = A.getTotalInDimSizeLog2();
   int numColsB = B.getTotalInDimSizeLog2();
   int numCols = numColsA + numColsB;
@@ -814,7 +969,7 @@ LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
   // Compute the pivot columns
   // Since A and B have the same image, each row will either have a pivot
   // or will be all zeros
-  SmallVector<int32_t> pivotCols;
+  SmallVector<int32_t> pivotRowOfCol(numColsA, -1);
   for (int r = 0; r < numRows; r++) {
     auto row = combinedMat[r];
     if (row == 0) {
@@ -822,21 +977,22 @@ LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
     }
     int c = __builtin_ctzll(row);
     assert(c < numColsA && "Precondition broken. Im(B) not contained in Im(A)");
-    assert(pivotCols.empty() ||
-           pivotCols.back() < c && "Pivot columns are not in increasing order");
-    pivotCols.push_back(c);
+    assert(pivotRowOfCol[c] == -1 &&
+           "duplicate pivot => matrix not in RREF or A not injective");
+    pivotRowOfCol[c] = r;
   }
 
   // Extract A^{-1}B and complete the matrix using zeros
   std::unique_ptr<uint64_t[]> retMat(new uint64_t[numColsA]());
-  int j = 0;
-  for (int r = 0; r < numColsA; r++) {
-    auto isPivot = j < pivotCols.size() && pivotCols[j] == r;
-    retMat[r] = isPivot ? combinedMat[j++] >> numColsA : 0;
+  for (int c = 0; c < numColsA; ++c) {
+    int row = pivotRowOfCol[c];
+    retMat[c] = (row == -1) ? 0 : (combinedMat[row] >> numColsA);
   }
 
   // We need names for the in/out dim of the flattened layout we're going to
   // read off from `m`.  These could be anything, doesn't matter.
+  assert(!A.getInDimNames().empty() &&
+         "attempt to solve lstsq for empty layout");
   StringAttr inDim1D = *A.getInDimNames().begin();
   StringAttr outDim1D = *A.getOutDimNames().begin();
 
@@ -882,14 +1038,12 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   const auto &B = *this;
   const auto A = outer.transposeOuts(outDims);
   for (auto dim : outDims) {
-    assert(A.getOutDimSize(dim) == B.getOutDimSize(dim) &&
-           "Convert layout does not change the shape of a tensor");
+    assert(A.getOutDimSize(dim) >= B.getOutDimSize(dim) &&
+           ("A.invertAndCompose(B) called with incompatible output shapes in " +
+            dim.str() + ": " + std::to_string(A.getOutDimSize(dim)) +
+            " >= " + std::to_string(B.getOutDimSize(dim)))
+               .c_str());
   }
-
-  // We'll write A^{-1} to mean the inverse or the pseudo-inverse of A
-  // We are computing A^{-1}B so A must be surjective so that
-  // it has a left inverse.
-  assert(A.isSurjective());
 
   // Broadcasting heuristic
   // Imagine we have two layouts with `warps = [[0, 0],  [0, 0]]`
@@ -903,6 +1057,9 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   // - Otherwise, we just call lstsq (i.e. map all the equivalent elements
   //   to the same input element) to take advantage of broadcasting in shared
   //   memory and avoid saving repeated elements in shared memory
+
+  // FIXME: We should check that the other dimensions don't touch the image of
+  // this dimension.
   SmallVector<StringAttr> identityDims;
   for (auto dim : A.getInDimNames()) {
     if (B.hasInDim(dim) &&
@@ -927,9 +1084,8 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   auto BReduced = B.sublayout(BNonIdentityInDims, outDims);
 
   // If one is empty, the other must be empty as well
-  assert((AReduced == LinearLayout::empty()) ==
-         (BReduced == LinearLayout::empty()));
-  bool isEmpty = AReduced == LinearLayout::empty();
+  assert((ANonIdentityInDims.empty()) == (BNonIdentityInDims.empty()));
+  bool isEmpty = ANonIdentityInDims.empty();
 
   auto ret = isEmpty ? LinearLayout::empty() : lstsq(AReduced, BReduced);
 
@@ -954,14 +1110,33 @@ LinearLayout LinearLayout::invert() const {
 }
 
 LinearLayout LinearLayout::pseudoinvert() const {
-  // A^-1(x) = A^-1(I(x)), thus A.invert() = I.invertAndCompose(A)
-  assert(isSurjective() &&
-         "A linear layout must be surjective to compute its pseudoinverse");
   LinearLayout identity = LinearLayout::empty();
   for (auto outDim : getOutDimNames()) {
     identity *= LinearLayout::identity1D(getOutDimSize(outDim), outDim, outDim);
   }
   return identity.invertAndCompose(*this);
+}
+
+LinearLayout LinearLayout::unsqueezeIn(StringAttr dim) const {
+  assert(getInDimSize(dim) == 1);
+  SmallVector<std::pair<StringAttr, int32_t>> newInDims;
+  for (auto inDim : getInDimNames()) {
+    if (inDim != dim) {
+      newInDims.push_back({inDim, getInDimSize(inDim)});
+    }
+  }
+  return reshapeIns(newInDims);
+}
+
+LinearLayout LinearLayout::unsqueezeOut(StringAttr dim) const {
+  assert(getOutDimSize(dim) == 1);
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
+  for (auto [outDim, outDimSize] : getOutDims()) {
+    if (outDim != dim) {
+      newOutDims.push_back({outDim, outDimSize});
+    }
+  }
+  return LinearLayout(bases, newOutDims, isSurjective());
 }
 
 llvm::MapVector<StringAttr, int32_t>
@@ -1013,7 +1188,13 @@ LinearLayout LinearLayout::removeZeroBasesAlongDim(StringAttr stripDim) const {
       }
     }
   }
-  return LinearLayout(std::move(result), llvm::to_vector(getOutDimNames()));
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDimSizes;
+  for (auto outDim : getOutDimNames()) {
+    newOutDimSizes.push_back({outDim, getOutDimSize(outDim)});
+  }
+  auto newLayout = LinearLayout(std::move(result), ArrayRef(newOutDimSizes),
+                                this->isSurjective());
+  return newLayout;
 }
 
 size_t hash_value(const LinearLayout &layout) {
@@ -1040,7 +1221,7 @@ size_t hash_value(const LinearLayout &layout) {
   return seed;
 }
 
-bool operator==(LinearLayout lhs, LinearLayout rhs) {
+bool operator==(const LinearLayout &lhs, const LinearLayout &rhs) {
   if (!lhs.equalIgnoringOutDimSizes(rhs))
     return false;
 
@@ -1106,6 +1287,125 @@ std::string LinearLayout::toString() const {
   }
   ret += "where out dims are: " + outDimsStr;
   return ret;
+}
+
+LinearLayout ColumnAction::apply(const LinearLayout &layout) const {
+  assert(layout.hasInDim(inDim));
+  assert(layout.getInDimSizeLog2(inDim) == inSizeLog2 &&
+         "Layout has a different size than the ColumnAction");
+  if (m_isIdentity) {
+    return layout;
+  }
+
+  auto bases = layout.getBases();
+  const auto &basesInDim = bases[inDim];
+  std::vector<std::vector<int32_t>> newBases;
+  newBases.reserve(action.size());
+  for (size_t a : action) {
+    newBases.push_back(basesInDim[a]);
+  }
+  bases[inDim] = std::move(newBases);
+
+  SmallVector<std::pair<StringAttr, int32_t>> outDims;
+  for (auto outDim : layout.getOutDimNames()) {
+    outDims.emplace_back(outDim, layout.getOutDimSize(outDim));
+  }
+  return LinearLayout(std::move(bases), std::move(outDims),
+                      /*requireSurjective=*/false);
+}
+
+SmallVector<Value> ColumnAction::apply(ValueRange values) const {
+  assert(values.size() == (1 << inSizeLog2) &&
+         "Values have a different size than the ColumnAction");
+  assert(inDim.str() == "register" && "Values are in registers, so we can only "
+                                      "apply ColumnAction to registers");
+  if (m_isIdentity) {
+    return values;
+  }
+  auto permLL = apply(LinearLayout::identity1D(values.size(), inDim, inDim));
+  SmallVector<Value> ret;
+  ret.reserve(permLL.getInDimSize(inDim));
+  for (int i = 0; i < permLL.getInDimSize(inDim); i++) {
+    int32_t srcIdx = permLL.apply({{inDim, i}}).begin()->second;
+    ret.push_back(values[srcIdx]);
+  }
+  return ret;
+}
+
+ColumnAction ColumnAction::leftCompose(const ColumnAction &other) const {
+  assert(inDim == other.inDim);
+  assert(inSizeLog2 == other.inSizeLog2);
+  assert(action.size() == other.action.size());
+  auto newAction = SmallVector<size_t>(action.size());
+  for (size_t i = 0; i < action.size(); i++) {
+    newAction[i] = action[other.action[i]];
+  }
+  return ColumnAction(newAction, inDim, inSizeLog2);
+}
+
+ColumnAction ColumnAction::inverse() const {
+  auto invPerm = SmallVector<size_t>(action.size());
+  for (size_t i = 0; i < action.size(); i++) {
+    invPerm[action[i]] = i;
+  }
+  return ColumnAction(invPerm, inDim, inSizeLog2);
+}
+
+std::string ColumnAction::toString() const {
+  std::string ret = "ColumnAction([";
+  ret += join(action, ", ");
+  ret += "], " + inDim.str() + ", " + std::to_string(inSizeLog2) + ")";
+  return ret;
+}
+
+// Build a matrix of size sum(outDimSizeLog2) x sum(inDimSizeLog2) representing
+// the bases of the given layout.  This can then be used by f2reduce.
+//
+// This function is called from the constructor of LinearLayout, so be careful
+// not to use any functions that create LLs in here.
+std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
+  int numRows = layout.getTotalOutDimSizeLog2();
+  int numCols = layout.getTotalInDimSizeLog2();
+
+  // Don't handle giant LLs.  This makes some things easier; for example, each
+  // row can be a single uint64_t.
+  assert(numCols <= 64 && "LinearLayout too large");
+  assert(numRows <= 64 && "LinearLayout too large");
+
+  // Suppose we have a layout specified by the following values.
+  //
+  //   L(0,1) = (0b01, 0b1)
+  //   L(0,2) = (0b10, 0b0)
+  //   L(1,0) = (0b10, 0b0)
+  //   L(2,0) = (0b11, 0b0)
+  //
+  // We will create one column per entry above.  The max bit width of the
+  // codomain is (2,1), so our matrix will have 2+1=3 rows.  The final matrix
+  // will be
+  //
+  //  | L(0,1)[0] L(0,2)[0] L(1,0)[0] L(2,0)[0] |   | 0b1001 |
+  //  |    ↓         ↓         ↓         ↓      |   | 0b0111 |
+  //  | L(0,1)[1] L(0,2)[1] L(1,0)[1] L(2,0)[1] | = | 0b1000 |
+  //  |    ↓         ↓         ↓         ↓      |
+  //
+  // Note `new uint64_t[n]()` is zero-initialized, but `new uint64_t[n]` is not.
+  std::unique_ptr<uint64_t[]> m(new uint64_t[numRows]());
+  int r = 0;
+  for (StringAttr outDim : layout.getOutDimNames()) {
+    int c = 0;
+    for (StringAttr inDim : layout.getInDimNames()) {
+      for (int i = 0; i < layout.getInDimSizeLog2(inDim); i++) {
+        uint64_t basis = layout.getBasis(inDim, i, outDim);
+        for (int j = 0; j < layout.getOutDimSizeLog2(outDim); j++) {
+          m[r + j] |= ((basis >> j) & 1) << c;
+        }
+        c++;
+      }
+    }
+    r += layout.getOutDimSizeLog2(outDim);
+  }
+
+  return m;
 }
 
 } // namespace mlir::triton

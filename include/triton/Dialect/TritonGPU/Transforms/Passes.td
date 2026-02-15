@@ -26,36 +26,27 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   ];
 }
 
-def TritonGPUTestPipelineAssignLatencies : Pass<"tritongpu-test-pipeline-assign-latencies", "mlir::ModuleOp"> {
-  let summary = "test assigning latencies to interesting ops ahead of pipelining";
+def TritonGPUAssignLatencies : Pass<"tritongpu-assign-latencies", "mlir::ModuleOp"> {
+  let summary = "assign latencies to interesting ops ahead of pipelining";
 
   let description = [{
-    This is a test pass that tests `assignLatencies` method of `TritonGPUPipeline`.
+    The `tritongpu-assign-latencies` pass assigns latencies to latency ops based
+    on the number of stages.
   }];
 
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                           "mlir::scf::SCFDialect",
-                           "mlir::arith::ArithDialect"];
-
   let options = [
-    Option<"numStages", "num-stages",
-           "int32_t", /*default*/"3",
+    Option<"numStages", "num-stages", "int32_t", /*default*/"3",
            "number of pipeline stages">
   ];
 }
 
-def TritonGPUTestPipelineScheduleLoop : Pass<"tritongpu-test-pipeline-schedule-loop", "mlir::ModuleOp"> {
-  let summary = "test scheduling a loop for software pipelining";
+def TritonGPUScheduleLoops : Pass<"tritongpu-schedule-loops", "mlir::ModuleOp"> {
+  let summary = "software pipeline loop scheduling";
 
   let description = [{
-    This is a test pass that tests `scheduleLoop` method of `TritonGPUPipeline`.
+    The `tritongpu-schedule-loops` pass performs scheduling for loop pipelining
+    for loops with latency ops.
   }];
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                           "mlir::scf::SCFDialect",
-                           "mlir::arith::ArithDialect"];
 }
 
 def TritonGPUHoistTMEMAlloc : Pass<"tritongpu-hoist-tmem-alloc", "mlir::ModuleOp"> {
@@ -69,6 +60,11 @@ def TritonGPUHoistTMEMAlloc : Pass<"tritongpu-hoist-tmem-alloc", "mlir::ModuleOp
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
+  let options = [
+    Option<"hoistOutOfIf", "hoist-out-of-if",
+           "bool", /*default*/"false",
+           "Hoist TMEM allocations out of if statements">
+  ];
 }
 
 def TritonGPUTestPipelineLowerLoop : Pass<"tritongpu-test-pipeline-lower-loop", "mlir::ModuleOp"> {
@@ -115,30 +111,13 @@ def TritonGPUAutomaticWarpSpecialization : Pass<"tritongpu-automatic-warp-specia
     "mlir::triton::gpu::TritonGPUDialect",
     "mlir::scf::SCFDialect",
     "mlir::arith::ArithDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+    "triton::nvws::NVWSDialect"
   ];
 
   let options = [
     Option<"numStages", "num-stages", "int32_t", /*default*/"3",
            "number of pipeline stages">
-  ];
-}
-
-def TritonGPURewritePartitionDependencies : Pass<"tritongpu-rewrite-partition-dependencies", "mlir::ModuleOp"> {
-  let summary = "test pass for rewriting partition dependencies";
-
-  let description = [{
-    The `tritongpu-rewrite-partition-dependencies` pass analyzes the partitions
-    assigned to a loop and their SSA dependencies. It rewrites the dependencies
-    to be passed through shared memory, applying multi-buffering according to
-    the assigned stages of the partitions.
-  }];
-
-  let dependentDialects = [
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::scf::SCFDialect",
-    "mlir::arith::ArithDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];
 }
 
@@ -152,7 +131,10 @@ def TritonGPUPartitionLoops : Pass<"tritongpu-partition-loops", "mlir::ModuleOp"
     between any of the partitions.
   }];
 
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "triton::nvws::NVWSDialect"
+  ];
 }
 
 def TritonGPUOptimizePartitionWarps : Pass<"tritongpu-optimize-partition-warps", "mlir::ModuleOp"> {
@@ -165,33 +147,33 @@ def TritonGPUOptimizePartitionWarps : Pass<"tritongpu-optimize-partition-warps",
   }];
 }
 
-def TritonGPULoadMMASpecialization : Pass<"tritongpu-load-mma-specialization", "mlir::ModuleOp"> {
-  let summary = "load MMA specialization";
+def TritonGPUPartitionScheduling : Pass<"tritongpu-partition-scheduling", "mlir::ModuleOp"> {
+  let summary = "warp specialization partitioning pass";
 
   let description = [{
-    The `tritongpu-load-mma-specialization` pass looks for matmul loops in the
-    module and attempts to create a partition schedule, separating async loads
-    and async MMAs into separate partitions.
+    The `tritongpu-partition-scheduling` analyzes the loads, MMAs, and other
+    operations in a loop that is meant to be warp specialized and determines
+    which partitions to assign to each operation.
   }];
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
-
-  let options = [
-    Option<"numStages", "num-stages", "int32_t", /*default*/"3",
-           "number of pipeline stages">
-  ];
 }
 
 def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
-  let summary = "3xTF32 trick";
+  let summary = "Emulate dot-product tensor core precision using TF32s or BF16s";
 
   let description = [{
-    Decompose fp32 `DotOp` instructions into 4 pointwise ops and 3 fp16 `DotOp`s
-    to allow using TensorCores. See https://github.com/NVIDIA/cutlass/discussions/385
+      Generic pass to emulate/decompose f32 `DotOp` instructions.
+    * Decompose fp32 `DotOp` instructions into 4 pointwise ops and 3 fp16 `DotOp`s
+      to allow using TensorCores. See https://github.com/NVIDIA/cutlass/discussions/385.
+    * Decompose fp32 `DotOp` instructions into BF16 operations.
+      See https://arxiv.org/abs/1904.06376
   }];
 
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+  let options = [
+    Option<"emuTF32", "emu-tf32",
+           "bool", /*default*/"false",
+           "whether to handle InputPrecision TF32xN for Nvidia GPUs">
+  ];
 }
 
 def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
@@ -217,23 +199,6 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
 }
-
-def TritonGPUWGMMAPrefetch : Pass<"tritongpu-wgmma-prefetch", "mlir::ModuleOp"> {
-   let summary = "prefetch for wgmma mixed precision";
-
-   let description = [{
-       This pass attempts to prefetch from shared memory for mixed-precision
-       wgmma when operand A is in the shared memory and needs to be loaded
-       to the local registers.
-   }];
-
-   let dependentDialects = [ "mlir::triton::gpu::TritonGPUDialect",
-                             "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                             "mlir::scf::SCFDialect",
-                             "mlir::arith::ArithDialect"];
-}
-
-
 
 def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::ModuleOp"> {
   let summary = "accelerate matmul";

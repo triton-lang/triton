@@ -466,6 +466,10 @@ def fast_expf(arg0):
     ...
 
 
+def fast_tanhf(arg0):
+    ...
+
+
 def fast_tanf(arg0):
     ...
 

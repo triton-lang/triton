@@ -2,7 +2,7 @@
 // RUN: triton-opt %s -split-input-file -triton-amdgpu-insert-instruction-sched-hints="variant=attention" -triton-amdgpu-lower-insert-instruction-sched-hints -verify-diagnostics | FileCheck %s -check-prefix=LOWER_HINT
 
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [2, 4], order = [1, 0]}>
-#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [2, 4], instrShape = [32, 32], isTransposed = true}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 4], instrShape = [32, 32, 8], isTransposed = true}>
 #dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>
 #dot_op_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>
 // INSTR_HINT-LABEL: @insert_schedule_hint
@@ -16,8 +16,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   ) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
     // INSTR_HINT: scf.for
-    // INSTR_HINT-NEXT: amdgpu.instruction_sched_hint
-    // INSTR_HINT-SAME: variant = #amdgpu.SchedHintVariant<attention>
+    // INSTR_HINT-NEXT: amdg.instruction_sched_hint
+    // INSTR_HINT-SAME: variant = #amdg.SchedHintVariant<attention>
 
     // LOWER_HINT: scf.for
     // LOWER_HINT-NEXT: rocdl.sched.barrier 0

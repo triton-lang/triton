@@ -354,7 +354,7 @@ struct FpToFpOpConversion
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
-    return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
+    return LLVM::FPExtOp::create(rewriter, loc, f32_ty, v);
   }
 
   static Value convertFp32ToBf16(Location loc,
@@ -417,7 +417,7 @@ struct FpToFpOpConversion
 
     auto undefRounding = static_cast<RoundingMode>(-1);
 
-    static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, Fp8ConversionDesc>
+    DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, Fp8ConversionDesc>
         srcMap = {
             // F8 -> F16
             {{F8E4M3TyID, F16TyID, undefRounding}, Fp8E4M3Nv_to_Fp16},
@@ -428,10 +428,12 @@ struct FpToFpOpConversion
              Fp16_to_Fp8E5M2_RTNE(computeCapability >= 89)},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTZ}, Fp16_to_Fp8E5M2_RTZ},
             // F8 -> BF16
+            // mul{.rnd}.bf16 and mul{.rnd}.bf16x2 requires sm_90 or higher.
             {{F8E5M2TyID, BF16TyID, undefRounding},
-             Fp8E5M2_to_Bf16(computeCapability >= 89)},
+             Fp8E5M2_to_Bf16(computeCapability >= 90)},
+            // cvt with .bf16.f16' requires .target sm_90 or higher
             {{F8E4M3TyID, BF16TyID, undefRounding},
-             Fp8E4M3Nv_to_Bf16(computeCapability >= 89)},
+             Fp8E4M3Nv_to_Bf16(computeCapability >= 90)},
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
              Bf16_to_Fp8E5M2(computeCapability >= 89)},
@@ -485,6 +487,12 @@ struct FpToFpOpConversion
             "Unsupported rounding mode for conversion to fp8: " +
             stringifyRoundingMode(roundingMode.value()) + "\n");
       }
+    }
+
+    if (srcElementType.isF16() && dstElementType.isF32()) {
+      return llvm::to_vector(llvm::map_range(operands[0], [&](Value v) {
+        return convertFp16ToFp32(loc, rewriter, v);
+      }));
     }
 
     if (srcElementType.isF32() && dstElementType.isF16()) {
@@ -551,7 +559,7 @@ struct FDivOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+    unsigned bitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
     StringRef name;
     Type resultTy;
     if (32 == bitwidth) {
@@ -600,7 +608,7 @@ struct SIToFPOpConversion
       assert(outVals.size() == 4);
       return outVals;
     } else {
-      return {rewriter.create<LLVM::SIToFPOp>(loc, elemTy, operands[0][0])};
+      return {LLVM::SIToFPOp::create(rewriter, loc, elemTy, operands[0][0])};
     }
   }
 
@@ -619,7 +627,7 @@ struct FPToSIOpConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     auto inElemTy = getElementType(op.getIn());
-    return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0][0])};
+    return {LLVM::FPToSIOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
 };
 
@@ -635,14 +643,14 @@ struct ExpOpConversionApprox
                                    Location loc) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     // For non-FP32 input, call __nv_expf for higher-precision calculation
-    if (elemTy.getIntOrFloatBitWidth() != 32)
+    if (getIntOrFloatOrPtrBitWidth(elemTy) != 32)
       return {};
 
     const double log2e = 1.4426950408889634;
     Value prod = b.fmul(f32_ty, operands[0][0], b.f32_val(log2e));
 
     Type resultTy = operands[0][0].getType();
-    StringRef name = "llvm.nvvm.ex2.approx.f";
+    StringRef name = "llvm.nvvm.ex2.approx.f32";
     auto callOp =
         LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, resultTy, {prod});
     return {callOp.getResult(0)};
@@ -663,7 +671,11 @@ struct ClampFOpConversion
         computeCapability(computeCapability) {}
 
   bool isClipPattern(ClampFOp op) const {
-    bool xorsignAbsAvailable = (computeCapability >= 90);
+    // min.xorsign.abs requires hopper or newer
+    if (computeCapability < 90) {
+      return false;
+    }
+
     // Pattern matching the sequence of clamp(x, -limit, limit) to generate
     // more efficient PTX code. NOTE: This pattern matching is not general
     // enough, but it is sufficient. We detect only two cases here:
@@ -676,38 +688,40 @@ struct ClampFOpConversion
     //   %cst_6 = arith.constant dense<-6.0000e+00>
     //   %cst_7 = arith.constant dense<6.0000e+00>
     //   %160 = tt.clamp %158, %cst_6, %cst_7
-    bool patternFound = false;
 
     auto getSplatInitializer = [](Value v) -> std::optional<double> {
-      if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
-        if (auto attr = mlir::dyn_cast<DenseIntOrFPElementsAttr>(
-                constOp.getValueAttr())) {
-          if (attr.isSplat()) {
-            return attr.getSplatValue<APFloat>().convertToDouble();
-          }
+      DenseIntOrFPElementsAttr denseAttr;
+      if (matchPattern(v, m_Constant(&denseAttr))) {
+        if (denseAttr.isSplat()) {
+          return denseAttr.getSplatValue<APFloat>().convertToDouble();
         }
+        return std::nullopt;
+      }
+      FloatAttr floatAttr;
+      if (matchPattern(v, m_Constant(&floatAttr))) {
+        return floatAttr.getValue().convertToDouble();
       }
       return std::nullopt;
     };
 
-    if (xorsignAbsAvailable) {
-      if (auto subOp = op.getOperand(1).getDefiningOp<arith::SubFOp>()) {
-        if (subOp.getOperand(1) == op.getOperand(2)) {
-          auto initializer = getSplatInitializer(subOp.getOperand(0));
-          if (initializer.has_value() && initializer.value() == 0.0) {
-            patternFound = true;
-          }
-        }
-      } else {
-        auto initializer1 = getSplatInitializer(op.getOperand(1));
-        auto initializer2 = getSplatInitializer(op.getOperand(2));
-        if (initializer1.has_value() && initializer2.has_value() &&
-            initializer1.value() == -initializer2.value()) {
-          patternFound = true;
+    // clampf %x (sub 0.0 %max) %max
+    if (auto subOp = op.getOperand(1).getDefiningOp<arith::SubFOp>()) {
+      if (subOp.getOperand(1) == op.getOperand(2)) {
+        auto initializer = getSplatInitializer(subOp.getOperand(0));
+        if (initializer.has_value() && initializer.value() == 0.0) {
+          return true;
         }
       }
     }
-    return patternFound;
+
+    // clampf %x, %min, %max (where min = -max = constant)
+    auto initializer1 = getSplatInitializer(op.getOperand(1));
+    auto initializer2 = getSplatInitializer(op.getOperand(2));
+    if (initializer1.has_value() && initializer2.has_value() &&
+        initializer1.value() == -initializer2.value()) {
+      return true;
+    }
+    return false;
   }
 
   SmallVector<Value> emitOptimization(ClampFOp op,
@@ -789,10 +803,10 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
 
-  patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
-      typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);
-  patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
-      typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
+  patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseSqrtOp>>(
+      typeConverter, axisInfoAnalysis, "llvm.nvvm.sqrt.rn.f", benefit);
+  patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseDivFOp>>(
+      typeConverter, axisInfoAnalysis, "llvm.nvvm.div.rn.f", benefit);
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);

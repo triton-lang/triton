@@ -15,12 +15,26 @@ set(LLVM_TARGET_DEFINITIONS TritonGPUAttrDefs.td)
 mlir_tablegen(AttrInterfaces.h.inc -gen-attr-interface-decls)
 mlir_tablegen(AttrInterfaces.cpp.inc -gen-attr-interface-defs)
 mlir_tablegen(AttrDefs.h.inc -gen-attrdef-decls)
+
+set(LLVM_TARGET_DEFINITIONS TritonGPUAttrImpls.td)
 mlir_tablegen(AttrDefs.cpp.inc -gen-attrdef-defs)
+add_public_tablegen_target(TritonGPUAttrDefsIncGen)
+
+set(LLVM_TARGET_DEFINITIONS TritonGPUEnums.td)
 mlir_tablegen(OpsEnums.h.inc -gen-enum-decls)
 mlir_tablegen(OpsEnums.cpp.inc -gen-enum-defs)
-add_public_tablegen_target(TritonGPUAttrDefsIncGen)
+add_public_tablegen_target(TritonGPUOpsEnumsIncGen)
+
+set(LLVM_TARGET_DEFINITIONS CGAEncodingAttr.td)
+mlir_tablegen(CGAEncodingAttr.h.inc -gen-attrdef-decls)
+add_public_tablegen_target(TritonGPUCGAAttrIncGen)
 
 set(LLVM_TARGET_DEFINITIONS TritonGPUTypeInterfaces.td)
 mlir_tablegen(TypeInterfaces.h.inc -gen-type-interface-decls)
 mlir_tablegen(TypeInterfaces.cpp.inc -gen-type-interface-defs)
 add_public_tablegen_target(TritonGPUTypeInterfacesIncGen)
+
+set(LLVM_TARGET_DEFINITIONS TritonGPUOpInterfaces.td)
+mlir_tablegen(OpInterfaces.h.inc -gen-op-interface-decls)
+mlir_tablegen(OpInterfaces.cpp.inc -gen-op-interface-defs)
+add_public_tablegen_target(TritonGPUOpInterfacesIncGen)

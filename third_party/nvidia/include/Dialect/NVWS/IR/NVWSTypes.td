@@ -42,9 +42,10 @@ def NVWS_ArefType : NVWS_TypeDef<"Aref", "aref"> {
         as pipelining and warp specialization. Lowers to the underlying type, and
         operations that use this should insert appropriate barriers during lowering.
     }];
-  let parameters = (ins "TypeArrayAttr":$baseType,
-                         DefaultValuedParameter<"std::optional<int>", "0">:$numBatchAxes);
-  let assemblyFormat = "`<` $baseType (`,` $numBatchAxes^)? `>`";
+  let parameters = (ins "TypeArrayAttr":$baseType);
+  let assemblyFormat = "`<` $baseType `>`";
 }
+
+def NVWS_TokenType : NVWS_TypeDef<"Token", "token">;
 
 #endif // NVWS_TYPES

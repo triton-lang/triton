@@ -84,6 +84,29 @@ tt.func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f3
     tt.return %ptr1 : tensor<8x!tt.ptr<f32>>
 }
 
+// CHECK-LABEL: @test_combine_addptr_pattern_discardableattrs
+tt.func @test_combine_addptr_pattern_discardableattrs(%base: !tt.ptr<f32>) -> !tt.ptr<f32> {
+    %off0 = arith.constant 8 : i32
+    %off1 = arith.constant 4 : i32
+    // CHECK-NEXT: %[[cst:.*]] = arith.constant 12 : i32
+    // CHECK-NEXT: %0 = tt.addptr %{{.*}}, %[[cst]] {tt.constancy = 8 : i32, tt.contiguity = 512 : i32, tt.divisibility = 16 : i32} : !tt.ptr<f32>, i32
+    %ptr0 = tt.addptr %base, %off0 : !tt.ptr<f32>, i32
+    %ptr1 = tt.addptr %ptr0, %off1 {tt.divisibility = 16 : i32, tt.constancy = 8 : i32, tt.contiguity = 512 : i32} : !tt.ptr<f32>, i32
+
+    tt.return %ptr1 : !tt.ptr<f32>
+}
+
+// CHECK-LABEL: @test_combine_addptr_pattern_discardableattrs_disallowed
+tt.func @test_combine_addptr_pattern_discardableattrs_disallowed(%base: !tt.ptr<f32>) -> !tt.ptr<f32> {
+    %off0 = arith.constant 8 : i32
+    %off1 = arith.constant 4 : i32
+    // CHECK-NEXT: %[[cst:.*]] = arith.constant 12 : i32
+    // CHECK-NEXT: %0 = tt.addptr %{{.*}}, %[[cst]] {tt.divisibility = 16 : i32} : !tt.ptr<f32>, i32
+    %ptr0 = tt.addptr %base, %off0 : !tt.ptr<f32>, i32
+    %ptr1 = tt.addptr %ptr0, %off1 {tt.divisibility = 16 : i32, tt.disallowed = 8 : i32} : !tt.ptr<f32>, i32
+
+    tt.return %ptr1 : !tt.ptr<f32>
+}
 // CHECK-LABEL: @test_combine_addptr_pattern_i64
 tt.func @test_combine_addptr_pattern_i64(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>> {
     %off0 = arith.constant 10 : i64
@@ -389,4 +412,40 @@ tt.func @test_rank_reduce_desc_load(%0: !tt.tensordesc<tensor<1x128x64xf16>>) ->
   %l = tt.descriptor_load %0[%c0, %c0, %c0] : !tt.tensordesc<tensor<1x128x64xf16>> -> tensor<1x128x64xf16>
   %r = tt.reshape %l : tensor<1x128x64xf16> -> tensor<128x64xf16>
   tt.return %r :  tensor<128x64xf16>
+}
+
+// CHECK-LABEL: @test_combine_dot_add_no_fold_when_imprecise_allowed
+tt.func @test_combine_dot_add_no_fold_when_imprecise_allowed() -> (tensor<128x128xf32>) {
+    // CHECK-DAG: %[[D:.*]] = arith.constant dense<3.000000e+00> : tensor<128x128xf32>
+    %a    = arith.constant dense<1.0> : tensor<128x128xf32>
+    %b    = arith.constant dense<2.0> : tensor<128x128xf32>
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32>
+    %d    = arith.constant dense<3.0> : tensor<128x128xf32>
+
+    %dot_out = tt.dot %a, %b, %zero {maxNumImpreciseAcc = 1 : i32}
+               : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+
+    // CHECK: arith.addf %{{.*}}, %[[D]] : tensor<128x128xf32>
+    // CHECK-NEXT: tt.return %{{.*}} : tensor<128x128xf32>
+    %res = arith.addf %dot_out, %d : tensor<128x128xf32>
+    tt.return %res : tensor<128x128xf32>
+}
+
+// CHECK-LABEL: @test_combine_dot_add_fold_when_precise_required
+tt.func @test_combine_dot_add_fold_when_precise_required() -> (tensor<128x128xf32>) {
+    // CHECK-DAG: %[[D:.*]] = arith.constant dense<3.000000e+00> : tensor<128x128xf32>
+    // CHECK-DAG: %[[B:.*]] = arith.constant dense<2.000000e+00> : tensor<128x128xf32>
+    // CHECK-DAG: %[[A:.*]] = arith.constant dense<1.000000e+00> : tensor<128x128xf32>
+    %a    = arith.constant dense<1.0> : tensor<128x128xf32>
+    %b    = arith.constant dense<2.0> : tensor<128x128xf32>
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32>
+    %d    = arith.constant dense<3.0> : tensor<128x128xf32>
+
+    %dot_out = tt.dot %a, %b, %zero {maxNumImpreciseAcc = 0 : i32}
+               : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+
+    // CHECK-NEXT: %[[RES:.*]] = tt.dot %[[A]], %[[B]], %[[D]] : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+    // CHECK-NEXT: tt.return %[[RES]] : tensor<128x128xf32>
+    %res = arith.addf %dot_out, %d : tensor<128x128xf32>
+    tt.return %res : tensor<128x128xf32>
 }

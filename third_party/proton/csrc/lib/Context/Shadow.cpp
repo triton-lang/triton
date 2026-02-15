@@ -6,10 +6,6 @@
 namespace proton {
 
 void ShadowContextSource::initializeThreadContext() {
-  if (!mainContextStack) {
-    mainContextStack = &threadContextStack[this];
-    threadContextInitialized[this] = false;
-  }
   if (!threadContextInitialized[this]) {
     threadContextStack[this] = *mainContextStack;
     threadContextInitialized[this] = true;
@@ -39,6 +35,12 @@ void ShadowContextSource::exitScope(const Scope &scope) {
     throw std::runtime_error("Context stack is not balanced");
   }
   threadContextStack[this].pop_back();
+}
+
+void ShadowContextSource::clear() {
+  ContextSource::clear();
+  threadContextStack[this].clear();
+  threadContextInitialized[this] = false;
 }
 
 /*static*/ thread_local std::map<ShadowContextSource *, bool>

@@ -4,7 +4,12 @@
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
+
+namespace mlir::triton {
+class FuncOp;
+}
 
 namespace mlir::triton::AMD {
 
@@ -28,17 +33,26 @@ namespace mlir::triton::AMD {
 /// See visitRegionSuccessors.
 struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   using dataflow::IntegerRangeAnalysis::IntegerRangeAnalysis;
+  using Base = dataflow::IntegerRangeAnalysis;
   TritonIntegerRangeAnalysis(
       DataFlowSolver &solver,
-      const DenseMap<Value, SetVector<Operation *>> &assumptions)
-      : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions) {}
+      const DenseMap<Value, SetVector<Operation *>> &assumptions,
+      DominanceInfo *dominanceInfo, bool assumeNoArithOverflow_ = false)
+      : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions),
+        domInfo(dominanceInfo), assumeNoArithOverflow(assumeNoArithOverflow_) {}
 
   void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) override;
+
+  void initializeFuncOp(triton::FuncOp funcOp);
+
+  LogicalResult initialize(Operation *top) override;
 
   LogicalResult visitOperation(
       Operation *op,
       ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
       ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) override;
+
+  std::optional<int64_t> maybeGetTripCount(LoopLikeOpInterface loop);
 
   /// This method (which overloads
   /// AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors)
@@ -70,7 +84,7 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   /// the loop operands and all users and all users of the results of the loop.
   void visitRegionSuccessors(
       ProgramPoint *point, RegionBranchOpInterface branch,
-      RegionBranchPoint successor,
+      RegionSuccessor successor,
       ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) override;
 
   /// Collect all operands that participate in assumptions (see description of
@@ -87,7 +101,10 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   ///   llvm.intr.assume %assumesltlhs : i1
   /// for %K, will produce a final range
   ///   [0, 2147483647] ∩ [-2147483648, 128] = [0, 128]
-  std::optional<ConstantIntRanges> maybeGetAssumedRange(Value anchor) const;
+  std::optional<ConstantIntRanges> maybeGetAssumedRange(Value anchor,
+                                                        Block *useBlock) const;
+
+  int64_t getTotalLoopTripCount(LoopLikeOpInterface loop);
 
   /// Trip counts of all loops with static loop bounds contained under the root
   /// operation being analyzed. Note, nested loops have trip counts computed as
@@ -115,9 +132,35 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   /// If one uses collectAssumptions below then `assumptions` will look like
   /// %K -> {arith.cmpi slt..., arith.cmpi sge}.
   llvm::DenseMap<Value, SetVector<Operation *>> assumptions;
+
+  /// The defaultTransferFunc is the default transfer function for this dataflow
+  /// problem.
+  /// @param[in] op: the Operation in question
+  /// @param[in] result: a particular value defined by this op. Note that op
+  ///            may define multiple values.
+  /// @param[in] srcLattices: lattices of all source operands
+  /// @param[in] destLattices: lattices all all result values
+  /// @param[in] incomingRange: the value-range inffered for result
+  void defaultTransferFunc(
+      Operation *op, Value result,
+      ArrayRef<const dataflow::IntegerValueRangeLattice *> srcLattices,
+      ArrayRef<dataflow::IntegerValueRangeLattice *> destLattices,
+      const IntegerValueRange &incomingRange);
+
+private:
+  void visitYieldHelper(Operation *yieldOp, Value value);
+  LogicalResult visitOperationHelper(
+      Operation *op,
+      ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
+      ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices);
+
+  DenseSet<Value> signedIntValues;
+  llvm::SmallMapVector<Value, ConstantIntRanges, 2> opResultAssumption;
+  DominanceInfo *domInfo = nullptr;
+  bool assumeNoArithOverflow = false;
 };
 
-std::optional<SmallVector<ConstantIntRanges>>
+std::optional<SmallVector<std::optional<ConstantIntRanges>>>
 collectRanges(const DataFlowSolver &solver, ValueRange values);
 
 bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp);
@@ -126,6 +169,9 @@ bool isEmptyInitializedRange(ConstantIntRanges rv);
 
 void populateFoldTrueCmpIOpPatterns(RewritePatternSet &patterns,
                                     DataFlowSolver *solver);
+
+void initializeFuncOps(Operation *op,
+                       TritonIntegerRangeAnalysis *rangeAnalysis);
 
 } // namespace mlir::triton::AMD
 

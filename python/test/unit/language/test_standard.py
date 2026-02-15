@@ -26,25 +26,36 @@ def test_maximum_minium(dtype, op, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
+@pytest.mark.parametrize("M, N", [[1, 1], [1, 512], [8, 64], [256, 16], [512, 8]])
+@pytest.mark.parametrize("k", [None, 8])
 @pytest.mark.parametrize("descending", [False, True])
 @pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32', 'bfloat16'])
-def test_sort(M, N, descending, dtype_str, device):
+def test_sort(M, N, k, descending, dtype_str, device):
 
     @triton.jit
-    def sort_kernel(X, Z, N: tl.constexpr, M: tl.constexpr, descending: tl.constexpr):
-        offx = tl.arange(0, M)
-        offy = tl.arange(0, N) * M
-        off2d = offx[None, :] + offy[:, None]
-        x = tl.load(X + off2d)
-        x = tl.sort(x, descending=descending)
-        tl.store(Z + off2d, x)
+    def sort_kernel(X, stride_xm, Z, stride_zm, M: tl.constexpr, N: tl.constexpr, k: tl.constexpr,
+                    descending: tl.constexpr):
+        offs_m = tl.arange(0, M)
+        offs_x_n = tl.arange(0, N)
+        offs_z_n = offs_x_n if k is None else tl.arange(0, k)
+        offs_x = offs_m[:, None] * stride_xm + offs_x_n[None, :]
+        x = tl.load(X + offs_x)
+        if k is None or x.numel < k:
+            z = tl.sort(x, descending=descending)
+        else:
+            z = tl.topk(x, k, descending=descending)
+        offs_z = offs_m[:, None] * stride_zm + offs_z_n[None, :]
+        tl.store(Z + offs_z, z)
 
-    x = numpy_random((N, M), dtype_str=dtype_str)
+    z_shape = (M, N if k is None else k)
+    x = numpy_random((M, N), dtype_str=dtype_str)
     x = torch.from_numpy(x).to(device)
-    y = torch.sort(x, descending=descending)[0]
-    z = torch.empty_like(x)
-    sort_kernel[(1, )](x, z, N, M, descending, num_warps=8)
+    z = torch.empty(z_shape, dtype=x.dtype, device=x.device)
+    if k is None or x.numel() < k:
+        y = torch.sort(x, descending=descending)[0]
+    else:
+        y = torch.topk(x, k=k, largest=descending).values
+    sort_kernel[(1, )](x, x.stride(0), z, z.stride(0), M, N, k, descending, num_warps=8)
     assert (y == z).all(), (y, z)
 
 
@@ -54,24 +65,26 @@ def test_sort(M, N, descending, dtype_str, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
+@pytest.mark.parametrize("M, N, K", [[1, 16, 64], [8, 2, 256], [32, 1, 2], [128, 8, 1]])
 @pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32', 'bfloat16'])
-def test_flip(M, N, dtype_str, device):
+@pytest.mark.parametrize("dim", [0, 1, 2, -2])
+def test_flip(M, N, K, dtype_str, dim, device):
 
     @triton.jit
-    def flip_kernel(X, Z, N: tl.constexpr, M: tl.constexpr):
-        offx = tl.arange(0, M)
-        offy = tl.arange(0, N) * M
-        off2d = offx[None, :] + offy[:, None]
-        x = tl.load(X + off2d)
-        x = tl.flip(x)
-        tl.store(Z + off2d, x)
+    def flip_kernel(X, Z, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, dim: tl.constexpr):
+        offx = tl.arange(0, M) * N * K
+        offy = tl.arange(0, N) * K
+        offz = tl.arange(0, K)
+        off3d = offx[:, None, None] + offy[None, :, None] + offz[None, None, :]
+        x = tl.load(X + off3d)
+        x = tl.flip(x, dim)
+        tl.store(Z + off3d, x)
 
-    x = numpy_random((N, M), dtype_str=dtype_str)
+    x = numpy_random((M, N, K), dtype_str=dtype_str)
     x = torch.from_numpy(x).to(device)
-    y = torch.flip(x, (1, ))
+    y = torch.flip(x, (dim, ))
     z = torch.empty_like(x, device=device)
-    flip_kernel[(1, )](x, z, N, M, num_warps=8)
+    flip_kernel[(1, )](x, z, M, N, K, dim, num_warps=8)
     assert (y == z).all(), (y, z)
 
 
@@ -130,3 +143,43 @@ def test_swizzle2d(size_i, size_j, size_g, device):
     expected_order = torch.tensor([[0, 3, 6, 9, 12, 15, 18], [1, 4, 7, 10, 13, 16, 19], [2, 5, 8, 11, 14, 17, 20],
                                    [21, 23, 25, 27, 29, 31, 33], [22, 24, 26, 28, 30, 32, 34]]).to(device)
     assert (output == expected_order).all(), (output, expected_order)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("shape, dim", [((1, 2, 4), 0), ((2, 1, 4), 1), ((2, 4, 1), 2)])
+def test_squeeze(shape, dim, device):
+
+    @triton.jit
+    def triton_squeeze(out_ptr, dim: tl.constexpr, s0: tl.constexpr, s1: tl.constexpr, s2: tl.constexpr):
+        a = tl.arange(0, 8)
+        a = tl.reshape(a, (s0, s1, s2))
+        a = tl.squeeze(a, dim)
+        a = tl.ravel(a)
+        tl.store(out_ptr + tl.arange(0, 8), a)
+
+    out = torch.empty((8, ), device=device, dtype=torch.int32)
+    triton_squeeze[(1, )](out, dim, shape[0], shape[1], shape[2])
+
+    expected = torch.arange(0, 8, device=device, dtype=torch.int32)
+    expected = expected.reshape(shape).squeeze(dim).reshape(-1)
+    assert (out == expected).all()
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dim", [0, 1, 2])
+def test_unsqueeze(dim, device):
+
+    @triton.jit
+    def triton_unsqueeze(out_ptr, dim: tl.constexpr):
+        a = tl.arange(0, 8)
+        a = tl.reshape(a, (2, 4))
+        a = tl.unsqueeze(a, dim)
+        a = tl.ravel(a)
+        tl.store(out_ptr + tl.arange(0, 8), a)
+
+    out = torch.empty((8, ), device=device, dtype=torch.int32)
+    triton_unsqueeze[(1, )](out, dim)
+
+    expected = torch.arange(0, 8, device=device, dtype=torch.int32)
+    expected = expected.reshape(2, 4).unsqueeze(dim).reshape(-1)
+    assert (out == expected).all()

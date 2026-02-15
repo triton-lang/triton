@@ -1,15 +1,17 @@
+import expecttest
 import importlib.util
 import itertools
 import os
+import re
 import shutil
 import pathlib
+from concurrent.futures import Executor, Future, ThreadPoolExecutor
 
 import pytest
 import torch
 
 import triton
 import triton.language as tl
-from triton.runtime.jit import JITFunction
 from triton._internal_testing import is_hip
 
 
@@ -127,6 +129,42 @@ def test_combine_fn_change():
         seen_keys.add(key)
 
 
+@triton.constexpr_function
+def constexpr_flag_fn():
+    return False
+
+
+@triton.jit
+def constexpr_fn_user(out):
+    a: tl.constexpr = constexpr_flag_fn()
+    tl.store(out, a)
+
+
+def test_constexpr_fn_change():
+    baseline = constexpr_fn_user.cache_key
+
+    orig_src = constexpr_flag_fn.src
+    new_src = orig_src.replace("False", "True")
+    constexpr_flag_fn._unsafe_update_src(new_src)
+    constexpr_fn_user.hash = None
+    updated = constexpr_fn_user.cache_key
+    assert baseline != updated
+
+    constexpr_flag_fn._unsafe_update_src(orig_src)
+    constexpr_fn_user.hash = None
+    assert constexpr_fn_user.cache_key == baseline
+
+
+@triton.constexpr_function
+def invalid_constexpr_fn():
+    return torch.cuda.get_device_capability()
+
+
+def test_invalid_constexpr_fn():
+    with pytest.raises(RuntimeError):
+        invalid_constexpr_fn.cache_key
+
+
 def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
     temp_file.write_text(('# extra line\n' * num_extra_lines) + code)
     spec = importlib.util.spec_from_file_location("module.name", str(temp_file))
@@ -160,7 +198,7 @@ def test_reuse(device, fresh_triton_cache):
         nonlocal counter
         counter += 1
 
-    JITFunction.cache_hook = inc_counter
+    triton.knobs.runtime.jit_cache_hook = inc_counter
     x = torch.empty(1, dtype=torch.int32, device=device)
     for i in range(10):
         kernel[(1, )](x, 1, BLOCK=1024)
@@ -175,7 +213,7 @@ def test_specialize(mode, device, fresh_triton_cache):
         nonlocal counter
         counter += 1
 
-    JITFunction.cache_hook = inc_counter
+    triton.knobs.runtime.jit_cache_hook = inc_counter
     x = torch.empty(1, dtype=torch.int32, device=device)
     function = {'enable': kernel, 'disable': kernel_nospec, 'disable_on_alignment': kernel_nospec_on_alignment}[mode]
     target = {'enable': 3, 'disable': 1, 'disable_on_alignment': 2}[mode]
@@ -363,6 +401,27 @@ def test_cache_builtin_as_global():
     assert "global variable" in str(e.value).lower()
 
 
+def test_cache_closure():
+
+    def make_closure(cst):
+
+        @triton.jit
+        def closure():
+            tl.full((16, ), cst, dtype=tl.int32)
+
+        return closure
+
+    cst = tl.constexpr(42)
+    closure = make_closure(cst)
+
+    closure[(1, )]()
+    cst.value = 43
+    with pytest.raises(RuntimeError) as e:
+        closure[(1, )]()
+
+    assert "cst has changed since we compiled this kernel, from constexpr[42] to constexpr[43]" in str(e.value)
+
+
 @triton.jit
 def no_cache_callable_inner():
     pass
@@ -377,6 +436,25 @@ def test_no_cache_callable():
     kernel[(1, )]()
     # `no_cache_callable_inner` should not be entered into used_global_vals.
     assert not kernel.used_global_vals
+
+
+def test_constexpr_cache_invalidation_recreated(device):
+
+    def test_run(val):
+        VAL = tl.constexpr(val)
+
+        @triton.jit
+        def kernel(out):
+            tl.store(out, VAL)
+
+        out = torch.zeros(1, device=device)
+        kernel[(1, )](out)
+        return out.item()
+
+    assert test_run(123) == 123
+    assert test_run(123) == 123
+    assert test_run(1234) == 1234
+    assert test_run(1234) == 1234
 
 
 def test_jit_warmup_cache(device) -> None:
@@ -448,19 +526,6 @@ def test_jit_noinline(device) -> None:
     assert inline_ttir != noinline_ttir
 
 
-def test_memory_leak() -> None:
-
-    @triton.jit
-    def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
-        xnumel = 10
-        xoffset = tl.program_id(0) * XBLOCK
-        xindex = xoffset + tl.arange(0, XBLOCK)[:]
-        xmask = xindex < xnumel
-        x0 = xindex
-        tmp0 = tl.load(in_ptr0 + (x0), xmask)
-        tl.store(out_ptr0 + (x0 + tl.zeros([XBLOCK], tl.int32)), tmp0, xmask)
-
-
 def test_preload(device, fresh_triton_cache) -> None:
 
     @triton.jit
@@ -484,7 +549,7 @@ def test_preload(device, fresh_triton_cache) -> None:
         nonlocal specialization_data
         specialization_data = kwargs["compile"]["specialization_data"]
 
-    JITFunction.cache_hook = cache_hook
+    triton.knobs.runtime.jit_cache_hook = cache_hook
     pre_compile = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
     hash = pre_compile.hash
     assert specialization_data is not None
@@ -505,9 +570,8 @@ def test_preload(device, fresh_triton_cache) -> None:
         nonlocal counter
         counter += 1
 
-    JITFunction.cache_hook = inc_counter
+    triton.knobs.runtime.jit_cache_hook = inc_counter
     final_kernel = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
-    JITFunction.cache_hook = None
     assert counter == 0
     assert len(kernel_add.device_caches[device][0]) == 1
     assert final_kernel.hash == hash
@@ -515,6 +579,12 @@ def test_preload(device, fresh_triton_cache) -> None:
     # test that we can't preload a mismatched kernel
     with pytest.raises(RuntimeError, match="Specialization data is for"):
         kernel_sub.preload(specialization_data)
+
+    specialization_data_unknown_target = re.sub(r'("target"\s*:\s*\{[^{}]*"backend"\s*:\s*)"(.*?)"',
+                                                r'\1"unknown_target"', specialization_data, count=1)
+
+    with pytest.raises(RuntimeError, match="Specialization data is for {'backend': 'unknown_target'"):
+        kernel_add.preload(specialization_data_unknown_target)
 
 
 def test_hooks(device, fresh_triton_cache) -> None:
@@ -529,6 +599,7 @@ def test_hooks(device, fresh_triton_cache) -> None:
     specialization_data = None
     is_warmup = False
     key = 0
+    name = None
 
     def cache_hook(*args, **kwargs):
         nonlocal specialization_data
@@ -537,6 +608,8 @@ def test_hooks(device, fresh_triton_cache) -> None:
         is_warmup = kwargs["compile"]["is_warmup"]
         nonlocal key
         key = kwargs["compile"]["key"]
+        nonlocal name
+        name = kwargs["fn"].name
 
     specialization_data_compiled = None
 
@@ -544,27 +617,24 @@ def test_hooks(device, fresh_triton_cache) -> None:
         nonlocal specialization_data_compiled
         specialization_data_compiled = kwargs["compile"]["specialization_data"]
 
-    JITFunction.cache_hook = cache_hook
-    JITFunction.compiled_hook = compiled_hook
+    triton.knobs.runtime.jit_cache_hook = cache_hook
+    triton.knobs.runtime.jit_post_compile_hook = compiled_hook
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
     assert specialization_data is not None and specialization_data_compiled == specialization_data
     assert is_warmup is True
     assert key in kernel_add.device_caches[getattr(torch, device).current_device()][0]
+    assert name == "test_hooks.<locals>.kernel_add"
 
 
 @pytest.mark.skipif(reason="within_2g is a HIP specific optimization", condition=not is_hip())
 def test_within_2gb(device, fresh_triton_cache) -> None:
     default_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0")
-    from triton.backends import backends
-
-    amd_backend = backends["amd"]
     try:
         use_buffer_ops_opts = ["1", "0"]
         # The ranges should only be available when buffer ops are enabled
         pointer_ranges = [[(0, )], []]
         for use_buffer_ops, pointer_range in zip(use_buffer_ops_opts, pointer_ranges):
             # Set AMDGCN_USE_BUFFER_OPS
-            amd_backend.compiler.use_buffer_ops.cache_clear()
             os.environ["AMDGCN_USE_BUFFER_OPS"] = use_buffer_ops
 
             @triton.jit
@@ -580,7 +650,7 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
                     k for k, v in kwargs["compile"]["configs"][0].items() if ["tt.pointer_range", 32] in v
                 ]
 
-            JITFunction.cache_hook = cache_hook
+            triton.knobs.runtime.jit_cache_hook = cache_hook
             # In warmup we assume that the pointer range is 32 bits
             kernel_add.warmup(torch.float32, grid=(1, ))
             assert pointer_range_32 == pointer_range
@@ -591,7 +661,6 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
             kernel_add[(1, 0)](torch.empty(2**31 - 1, dtype=torch.int8, device=device))
             assert pointer_range_32 == pointer_range
     finally:
-        amd_backend.compiler.use_buffer_ops.cache_clear()
         os.environ["AMDGCN_USE_BUFFER_OPS"] = default_buffer_ops
 
 
@@ -617,8 +686,6 @@ def test_function_arguments(device):
     def kernel(Y, fn: tl.constexpr, fn_args):
         tl.store(Y, fn(*fn_args))
 
-    JITFunction.cache_hook = None
-    JITFunction.compiled_hook = None
     y = torch.zeros((5, ), dtype=torch.int32, device=device)
     kernel[(1, )](y[0], func1, tuple())
     kernel[(1, )](y[1], func2, tuple())
@@ -627,3 +694,200 @@ def test_function_arguments(device):
     kernel[(1, )](y[4], func1, tuple())
     assert len(kernel.device_caches[0][0]) == 4
     assert y.tolist() == [1, 2, 3, 7, 1]
+
+
+class MockThreadPool(Executor):
+
+    def __init__(self):
+        self.work_queue = []
+
+    def submit(self, fn, *args, **kwargs):
+        future = Future()
+
+        def task():
+            if not future.set_running_or_notify_cancel():
+                return
+
+            try:
+                result = fn(*args, **kwargs)
+                future.set_result(result)
+            except Exception as e:
+                future.set_exception(e)
+
+        self.work_queue.append(task)
+        return future
+
+    def run_one(self):
+        task = self.work_queue.pop(0)
+        task()
+
+    def run_all(self):
+        while self.work_queue:
+            self.run_one()
+
+    def shutdown(self, wait=True, *, cancel_futures=False):
+        self.run_all()
+
+
+def test_async_compile_mock(device, fresh_triton_cache):
+
+    @triton.jit
+    def kernel(Y, a: tl.constexpr):
+        tl.store(Y, a)
+
+    with (
+            MockThreadPool() as pool,
+            triton.AsyncCompileMode(pool),
+    ):
+        a = torch.empty((16, 16), device=device)
+        b = torch.empty((16, 16), dtype=torch.int32, device=device)
+        kernel.warmup(a, 0, grid=(1, ))
+        kernel.warmup(a, 1, grid=(1, ))
+        kernel.warmup(b, 0, grid=(1, ))
+        kernel.warmup(b, 1, grid=(1, ))
+
+        # Nothing has actually compiled yet
+        assert len(kernel.device_caches[0][0]) == 4
+        assert len(pool.work_queue) == 4
+
+        # Duplicates are only submitted once
+        kernel.warmup(a, 0, grid=(1, ))
+        kernel.warmup(a, 1, grid=(1, ))
+        assert len(kernel.device_caches[0][0]) == 4
+        assert len(pool.work_queue) == 4
+
+        pool.run_one()
+        kernel[(1, )](a, 0)
+        assert len(kernel.device_caches[0][0]) == 4
+        assert a[0, 0] == 0.0
+
+        pool.run_all()
+
+
+def test_async_compile(device, fresh_triton_cache):
+
+    @triton.jit
+    def kernel(Y, a: tl.constexpr):
+        tl.store(Y, a)
+
+    with (
+            ThreadPoolExecutor(2) as pool,
+            triton.AsyncCompileMode(pool),
+    ):
+        a = torch.empty((16, 16), device=device)
+        b = torch.empty((16, 16), dtype=torch.int32, device=device)
+        kernel.warmup(a, 0, grid=(1, ))
+        kernel.warmup(a, 1, grid=(1, ))
+        kernel.warmup(b, 0, grid=(1, ))
+        kernel.warmup(b, 1, grid=(1, ))
+
+        assert len(kernel.device_caches[0][0]) == 4
+
+        kernel[(1, )](b, 1)
+        assert b[0, 0] == 1
+        kernel[(1, )](b, 0)
+        assert b[0, 0] == 0
+        kernel[(1, )](a, 0)
+        assert a[0, 0] == 0
+        kernel[(1, )](a, 1)
+        assert a[0, 0] == 1
+        kernel[(1, )](a, 2)
+        assert a[0, 0] == 2
+
+
+def test_higher_order_kernel(device, fresh_triton_cache, capsys):
+
+    @triton.jit
+    def fn_a():
+        tl.static_print("Compiling with fn_a")
+        return 0
+
+    @triton.jit
+    def kernel(out_ptr, FUNC: tl.constexpr) -> None:
+        val = FUNC()
+        tl.store(out_ptr, val)
+
+    output = torch.empty((), device=device, dtype=torch.int32)
+    kernel[(1, )](output, fn_a)
+    assert output.item() == 0
+
+    # Test we can update src in-place
+    orig_src = fn_a.src
+    new_src = orig_src.replace("with fn_a", "with fn_a after modification")
+    new_src = new_src.replace("0", "1")
+    fn_a._unsafe_update_src(new_src)
+    kernel[(1, )](output, fn_a)
+    assert output.item() == 1
+
+    # Test that the on disc cache works
+    kernel.device_caches.clear()
+    kernel[(1, )](output, fn_a)
+    assert output.item() == 1
+
+    fn_a._unsafe_update_src(orig_src)
+    kernel[(1, )](output, fn_a)
+    assert output.item() == 0
+
+    expecttest.assert_expected_inline(capsys.readouterr().out, """\
+Compiling with fn_a
+Compiling with fn_a after modification
+""")
+
+
+def test_preload_higher_order_kernels(device, fresh_triton_cache) -> None:
+
+    @triton.jit
+    def fn_a():
+        return 17
+
+    @triton.jit
+    def fn_b():
+        return 31
+
+    @triton.jit
+    def kernel(out_ptr, FUNC: tl.constexpr) -> None:
+        val = FUNC()
+        tl.store(out_ptr, val)
+
+    device = getattr(torch, device).current_device()
+
+    # get the serialized specialization data
+    specialization_data = None
+
+    def cache_hook(*args, **kwargs):
+        nonlocal specialization_data
+        specialization_data = kwargs["compile"]["specialization_data"]
+
+    triton.knobs.runtime.jit_cache_hook = cache_hook
+    output = torch.empty((), device=device, dtype=torch.int32)
+    compiled_kernel = kernel[(1, )](output, fn_a)
+    assert output.item() == 17
+    hash = compiled_kernel.hash
+    assert specialization_data is not None
+
+    # clear the cache
+    shutil.rmtree(fresh_triton_cache)
+    kernel.device_caches[device][0].clear()
+
+    # preload the kernel
+    kernel_preload = kernel.preload(specialization_data)
+    assert kernel_preload.hash == hash
+    assert len(kernel.device_caches[device][0]) == 1
+
+    # we should hit the cache and not compile anything
+    counter = 0
+
+    def inc_counter(*args, **kwargs):
+        nonlocal counter
+        counter += 1
+
+    triton.knobs.runtime.jit_cache_hook = inc_counter
+    final_kernel = kernel[(1, )](output, fn_a)
+    assert counter == 0
+    assert len(kernel.device_caches[device][0]) == 1
+    assert final_kernel.hash == hash
+
+    # different function should compile and not hit the cache
+    kernel[(1, )](output, fn_b)
+    assert counter == 1
+    assert output.item() == 31

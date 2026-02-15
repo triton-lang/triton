@@ -12,7 +12,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // GFX942: llvm.intr.maxnum
 
 // GFX950: llvm.func @min_max
-// GFX950-NEXT: llvm.intr.minimum
+// GFX950: llvm.intr.minimum
 // GFX950-NEXT: llvm.intr.maximum
   tt.func public @min_max(%arg0: f32, %arg1: f32) {
     %0 = arith.minimumf %arg0, %arg1 : f32

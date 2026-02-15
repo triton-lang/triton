@@ -2,8 +2,10 @@ add_triton_library(TritonGPUToLLVM
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM/FMADotUtility.cpp
     AllocateSharedMemory.cpp
+    AllocateSharedMemoryUtility.cpp
     AllocateWarpGroups.cpp
     AssertOpToLLVM.cpp
+    CanonicalizeLLVMIR.cpp
     ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
@@ -20,6 +22,7 @@ add_triton_library(TritonGPUToLLVM
     TypeConverter.cpp
     Utility.cpp
     ViewOpToLLVM.cpp
+    WarpSpecializeUtility.cpp
 
     DEPENDS
     TritonGPUConversionPassIncGen

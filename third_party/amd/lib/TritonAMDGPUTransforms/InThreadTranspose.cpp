@@ -5,9 +5,7 @@
 #include "mlir/Transforms/WalkPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Debug.h"
 
 // InThreadTranspose pass optimizes inefficient
@@ -20,13 +18,14 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h.inc"
-
-using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttag = mlir::triton::amdgpu;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUINTHREADTRANSPOSE
+#include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
 
@@ -63,7 +62,7 @@ void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
     if (tensorType) {
       Type newType = replaceEncoding(tensorType, encoding);
       newArgs.push_back(
-          rewriter.create<ttg::ConvertLayoutOp>(loc, newType, operand));
+          ttg::ConvertLayoutOp::create(rewriter, loc, newType, operand));
     } else {
       newArgs.push_back(operand);
     }
@@ -71,7 +70,7 @@ void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
 
   // Construct new load with the new encoding
   auto attrs = load->getAttrs();
-  auto newLoad = rewriter.create<tt::LoadOp>(loc, newArgs, attrs);
+  auto newLoad = tt::LoadOp::create(rewriter, loc, newArgs, attrs);
 
   // Cast the results back to the original layout
   auto loadType = load.getType();
@@ -91,17 +90,17 @@ void transposeInRegsitersBeforeStoreInLocalMemory(
 
   auto transposedLayout =
       ttag::InThreadTransposeOp::deduceOutputLayout(loadShape, newLoadEncoding);
-  auto transposedEncoding =
-      ttg::LinearEncodingAttr::get(memStoreOp->getContext(), transposedLayout);
+  auto transposedEncoding = ttg::LinearEncodingAttr::get(
+      memStoreOp->getContext(), std::move(transposedLayout));
 
   auto loc = memStoreOp->getLoc();
   auto newLoadType = replaceEncoding(data.getType(), newLoadEncoding);
   auto nonTransposed =
-      rewriter.create<ttg::ConvertLayoutOp>(loc, newLoadType, data);
+      ttg::ConvertLayoutOp::create(rewriter, loc, newLoadType, data);
 
   auto transposedType = replaceEncoding(data.getType(), transposedEncoding);
-  auto inThreadTransposed = rewriter.create<ttag::InThreadTransposeOp>(
-      loc, transposedType, nonTransposed);
+  auto inThreadTransposed = ttag::InThreadTransposeOp::create(
+      rewriter, loc, transposedType, nonTransposed);
   rewriter.startOpModification(memStoreOp);
   memStoreOp->setOperand(0, inThreadTransposed);
   rewriter.finalizeOpModification(memStoreOp);
@@ -111,14 +110,14 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
   auto ctx = operandType.getContext();
   auto dotOperandEnc =
       cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
-  auto ctaLayout = ttg::getCTALayout(dotOperandEnc);
+  auto cgaLayout = ttg::getCGALayout(dotOperandEnc);
   auto bitWidth = operandType.getElementTypeBitWidth();
   SmallVector<unsigned> order{1, 0};
   if (dotOperandEnc.getOpIdx() == 1)
     std::swap(order[0], order[1]);
 
   auto tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-      ctx, dotOperandEnc, operandType.getShape(), order, ctaLayout, bitWidth,
+      ctx, dotOperandEnc, operandType.getShape(), order, cgaLayout, bitWidth,
       /*needTrans=*/false);
 
   auto sharedVec = tempAttr.getVec();
@@ -126,7 +125,7 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
   auto maxPhase = tempAttr.getMaxPhase();
 
   auto newSharedEnc = ttg::AMDRotatingSharedEncodingAttr::get(
-      ctx, sharedVec, perPhase, maxPhase, order, ctaLayout);
+      ctx, sharedVec, perPhase, maxPhase, order, cgaLayout);
 
   return newSharedEnc;
 }
@@ -155,7 +154,7 @@ struct GlobalToSharedMemoryOpChain {
   SetVector<tt::LoadOp> globalLoads;
   // list of localAllocOp and localStoreOp operations
   SetVector<Operation *> localAllocStores;
-  // list of MemDescSubviewOp, control flow results and block operands
+  // list of MemDescIndexOp, control flow results and block operands
   SmallVector<Value> sharedMemVals;
 };
 
@@ -476,7 +475,7 @@ FailureOr<SmallVector<Op>> findAllDefiningOps(Value val) {
 ///
 /// ttg.local_alloc -----x-------------------------> ttg.local_dealloc
 ///                      V
-/// tt.load -> ttg.local_store -> ttg.mem_subview -> ttg.local_load
+/// tt.load -> ttg.local_store -> ttg.memdesc_index -> ttg.local_load
 ///
 /// \returns partially filled GlobalToSharedMemoryOpChain structure of failure.
 FailureOr<GlobalToSharedMemoryOpChain>
@@ -509,11 +508,16 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
       } else if (isa<ttg::LocalStoreOp>(candidate)) {
         foundNetwork.localAllocStores.insert(candidate);
         smemOperand = candidate->getOperand(1);
-      } else if (isa<ttg::MemDescSubviewOp>(candidate)) {
+      } else if (isa<ttg::MemDescIndexOp>(candidate)) {
         smemOutput = candidate->getResult(0);
         smemOperand = candidate->getOperand(0);
       } else if (isa<ttg::LocalLoadOp, ttg::LocalDeallocOp>(candidate)) {
         smemOperand = candidate->getOperand(0);
+      } else if (isa<ttg::AsyncCopyGlobalToLocalOp,
+                     tt::amdgpu::BufferLoadToLocalOp>(candidate)) {
+        // InTheadTranspose cannot be used with direct-to-lds loads
+        LDBG(" skip because of direct-to-lds load");
+        return failure();
       } else {
         // this operation is not part of shared memory def-use network,
         // algorithm should not reach this point
@@ -533,7 +537,7 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
           foundNetwork.sharedMemVals.push_back(def);
           if (Operation *op = def.getDefiningOp()) {
             // additional check, to ignore control flow operations
-            if (isa<ttg::MemDescSubviewOp, ttg::LocalAllocOp>(op))
+            if (isa<ttg::MemDescIndexOp, ttg::LocalAllocOp>(op))
               nextTraversalStep.push_back(op);
           }
         }
@@ -570,10 +574,10 @@ unsigned getMaxSizePerThread(RankedTensorType type, int dimIdx) {
 // ttg.local_alloc ---x
 //                    |
 //                    V
-// tt.load --> ttg.local_store --> ttg.memdesc_subview --> ttg.local_load
+// tt.load --> ttg.local_store --> ttg.memdesc_index --> ttg.local_load
 //
 // Actual network could vary, because of different control flow,
-// optional ttg.memdesc_subview and ttg.local_store operations.
+// optional ttg.memdesc_index and ttg.local_store operations.
 //
 // If data flow pattern match, check applicability
 // of inThreadTrasnpose optimization and return found pattern.
@@ -593,7 +597,7 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
     return failure();
   }
 
-  // find local_alloc, local_store, local_load and ttg.memdesc_subview
+  // find local_alloc, local_store, local_load and ttg.memdesc_index
   // operations
   auto sharedMemSearch = findReachableSMemOps(lLoad);
   if (failed(sharedMemSearch)) {
@@ -724,7 +728,7 @@ ttg::BlockedEncodingAttr getTransposableBlockedEnc(int dotOperandIdx,
   auto ctx = blockedEnc.getContext();
   auto numWarps = product(blockedEnc.getWarpsPerCTA());
   auto threadsPerWarp = product(blockedEnc.getThreadsPerWarp());
-  auto numCTAs = product(blockedEnc.getCTALayout().getCTAsPerCGA());
+  auto numCTAs = product(blockedEnc.getCGALayout().getCTAsPerCGA());
   return ttg::BlockedEncodingAttr::get(ctx, shape, newSizePerThread, order,
                                        numWarps, threadsPerWarp, numCTAs);
 }
@@ -775,25 +779,21 @@ public:
   }
 };
 
-} // namespace
+} // anonymous namespace
 
 class TritonAMDGPUInThreadTransposePass
-    : public TritonAMDGPUInThreadTransposeBase<
+    : public impl::TritonAMDGPUInThreadTransposeBase<
           TritonAMDGPUInThreadTransposePass> {
 
 public:
-  TritonAMDGPUInThreadTransposePass() = default;
-
   void runOnOperation() override {
     tt::FuncOp f = getOperation();
 
     auto ctx = f.getContext();
     RewritePatternSet patterns(ctx);
-    patterns.add<::InThreadTransposePattern>(ctx, /*benefit=*/1);
+    patterns.add<InThreadTransposePattern>(ctx, /*benefit=*/1);
     walkAndApplyPatterns(f, std::move(patterns));
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUInThreadTransposePass() {
-  return std::make_unique<TritonAMDGPUInThreadTransposePass>();
-}
+} // namespace mlir

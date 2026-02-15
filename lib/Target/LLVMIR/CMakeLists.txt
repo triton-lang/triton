@@ -1,6 +1,8 @@
 add_triton_library(TritonLLVMIR
         LLVMDIScope.cpp
+        LLVMDILocalVariable.cpp
         LLVMIRBreakPhiStruct.cpp
+        LLVMDIUtils.cpp
 
         DEPENDS
         LLVMIRIncGen
@@ -13,6 +15,7 @@ add_triton_library(TritonLLVMIR
         MLIRIndexToLLVM
         MLIRIR
         MLIRLLVMDialect
+        MLIRNVVMToLLVM
         MLIRLLVMToLLVMIRTranslation
         MLIRNVVMToLLVMIRTranslation
         MLIRROCDLToLLVMIRTranslation

@@ -21,8 +21,10 @@ public:
                       bool enableIntraWaveReduce) const;
 
   Value emitPairedAtomicForEvenTID(RewriterBase &rewriter, Value rmwPtr,
-                                   Value valElem, Value rmwMask,
-                                   bool checkPairs = true) const;
+                                   Value valElem, Value rmwMask) const;
+  void setAtomicOrdering(LLVM::AtomicOrdering memOrder) {
+    this->memOrder = memOrder;
+  }
 
 private:
   const mlir::triton::AMD::TargetInfo &targetInfo;

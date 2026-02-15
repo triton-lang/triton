@@ -2,6 +2,7 @@ import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
 import re
+from triton.compiler import ASTSource
 
 
 def test_compile_only_sm100() -> None:
@@ -37,15 +38,15 @@ def test_compile_only_dot() -> None:
         triton.compiler.ASTSource(fn=simple_dot, signature={"a_base": "*fp16", "b_base": "*fp16", "out": "*fp16"},
                                   constexprs={}), target=GPUTarget("cuda", 100, 32))
     ttgir = k.asm["ttgir"]
-    pattern = (r"%(?P<A>\d+) = tt\.load"
+    pattern = (r"%(?P<A>\w+) = tt\.load"
                r"(.|\n)*?"
-               r"%(?P<A_SHMEM>\d+) = ttg\.local_alloc %(?P=A)"
+               r"%(?P<A_SHMEM>\w+) = ttg\.local_alloc %(?P=A)"
                r"(.|\n)*?"
-               r"%(?P<B>\d+) = tt\.load"
+               r"%(?P<B>\w+) = tt\.load"
                r"(.|\n)*?"
-               r"%(?P<B_SHMEM>\d+) = ttg\.local_alloc %(?P=B)"
+               r"%(?P<B_SHMEM>\w+) = ttg\.local_alloc %(?P=B)"
                r"(.|\n)*?"
-               r"%(?P<TMEM_BASE>\d+) = ttng\.tmem_alloc"
+               r"%(?P<TMEM_BASE>\w+) = ttng\.tmem_alloc"
                r"(.|\n)*?"
                r"ttng\.tc_gen5_mma %(?P=A_SHMEM), %(?P=B_SHMEM), %(?P=TMEM_BASE)"
                r"(.|\n)*?"
@@ -64,9 +65,9 @@ def test_compile_only_dot() -> None:
                r"(.|\n)*"
                r"tcgen05\.mma\.cta_group::1.kind::f16"
                r"(.|\n)*"
-               r"tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64"
+               r"tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64"
                r"(.|\n)*"
-               r"mbarrier.try_wait.parity.shared.b64"
+               r"mbarrier.try_wait.parity.shared::cta.b64"
                r"(.|\n)*"
                r"tcgen05.ld.sync.aligned.16x32bx2.x32.b32"
                r"(.|\n)*"
@@ -156,3 +157,66 @@ def test_compile_only_dot_mxfp() -> None:
     pattern = (r"tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X")
     assert re.search(pattern, str(ptx)), "The PTX does not match the expected pattern."
     assert k.asm["cubin"] != b""
+
+
+def test_signature_ordering():
+    """
+    Checks that ASTSource always uses the argument order from
+    fn.arg_names and not the signature.
+    """
+
+    @triton.jit
+    def kernel(a, o, N: tl.constexpr):
+        tl.store(o + N, tl.load(a + N))
+
+    # Add the arguments so the order always differs
+    # from the order in fn.arg_names.
+    signature = {}
+    signature["N"] = "constexpr"
+    signature["a"] = "*fp32"
+    signature["o"] = "*fp32"
+    src = ASTSource(
+        fn=kernel,
+        constexprs={"N": 32},
+        signature=signature,
+    )
+    target = triton.runtime.driver.active.get_current_target()
+    triton.compile(src=src, target=target)
+
+
+def test_fp8_compiles_for_multiple_architectures_hip():
+    """
+    Validate FP8 compilation succeeds for architectures with different
+    hardware support.
+
+    gfx950 has native FP8 instructions; gfx942 does not and requires software
+    conversion. Compiling for both in sequence must succeed for each target.
+    """
+
+    @triton.jit
+    def fp8_convert(src, dst):
+        idx = tl.arange(0, 64)
+        tl.store(dst + idx, tl.load(src + idx).to(tl.float8e5))
+
+    src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
+    triton.compile(src, target=GPUTarget("hip", "gfx950", 64))
+    triton.compile(src, target=GPUTarget("hip", "gfx942", 64))
+
+
+def test_fp8_compiles_for_multiple_architectures_cuda():
+    """
+    Validate FP8 compilation succeeds for architectures with different
+    hardware support.
+
+    SM90 has native FP8 instructions; SM80 does not and requires software
+    conversion. Compiling for both in sequence must succeed for each target.
+    """
+
+    @triton.jit
+    def fp8_convert(src, dst):
+        idx = tl.arange(0, 64)
+        tl.store(dst + idx, tl.load(src + idx).to(tl.float8e5))
+
+    src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
+    triton.compile(src, target=GPUTarget("cuda", 90, 32))
+    triton.compile(src, target=GPUTarget("cuda", 80, 32))

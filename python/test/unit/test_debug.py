@@ -5,17 +5,19 @@ import triton
 
 
 @pytest.mark.parametrize('cond', [True, False])
+@pytest.mark.parametrize('mask', [True, False, None])
 @pytest.mark.parametrize('opt_flag', [True, False, None])
 @pytest.mark.parametrize('env_var', [True, False])
 @pytest.mark.parametrize('jit_flag', [True, False])
 @pytest.mark.forked
-def test_device_assert(monkeypatch, cond, opt_flag, env_var, jit_flag, device):
+def test_device_assert(monkeypatch, cond, mask, opt_flag, env_var, jit_flag, device):
     monkeypatch.setenv("TRITON_DEBUG", str(int(env_var)))
+    triton.knobs.refresh_knobs()
     torch.zeros([1], dtype=torch.int32, device=device)
 
     @triton.jit(debug=jit_flag)
-    def _kernel(COND: tl.constexpr):
-        tl.device_assert(COND, 'test')
+    def _kernel(COND: tl.constexpr, MASK: tl.constexpr):
+        tl.device_assert(COND, 'test', mask=MASK)
 
     is_debug = env_var or (opt_flag if opt_flag is not None else jit_flag)
 
@@ -23,18 +25,19 @@ def test_device_assert(monkeypatch, cond, opt_flag, env_var, jit_flag, device):
     if opt_flag is not None:
         kwargs["debug"] = opt_flag
 
-    if not cond and is_debug:
+    if not cond and is_debug and mask is not False:
         with pytest.raises(RuntimeError):
-            _kernel[(1, )](cond, **kwargs)
+            _kernel[(1, )](cond, mask, **kwargs)
             getattr(torch, device).synchronize()
         return
 
-    _kernel[(1, )](cond, **kwargs)
+    _kernel[(1, )](cond, mask, **kwargs)
     getattr(torch, device).synchronize()
 
 
 def test_device_assert_barrier(monkeypatch, device):
     monkeypatch.setenv("TRITON_DEBUG", "1")
+    triton.knobs.refresh_knobs()
     tensor = torch.zeros([16], dtype=torch.int32, device=device)
 
     @triton.jit

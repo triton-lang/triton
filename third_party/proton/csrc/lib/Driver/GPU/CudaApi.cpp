@@ -24,10 +24,47 @@ DEFINE_DISPATCH(ExternLibCuda, ctxSynchronize, cuCtxSynchronize)
 
 DEFINE_DISPATCH(ExternLibCuda, ctxGetCurrent, cuCtxGetCurrent, CUcontext *)
 
+DEFINE_DISPATCH(ExternLibCuda, ctxGetDevice, cuCtxGetDevice, CUdevice *)
+
+DEFINE_DISPATCH(ExternLibCuda, ctxGetStreamPriorityRange,
+                cuCtxGetStreamPriorityRange, int *, int *)
+
 DEFINE_DISPATCH(ExternLibCuda, deviceGet, cuDeviceGet, CUdevice *, int)
 
 DEFINE_DISPATCH(ExternLibCuda, deviceGetAttribute, cuDeviceGetAttribute, int *,
                 CUdevice_attribute, CUdevice)
+
+DEFINE_DISPATCH(ExternLibCuda, streamCreateWithPriority,
+                cuStreamCreateWithPriority, CUstream *, unsigned int, int)
+
+DEFINE_DISPATCH(ExternLibCuda, streamSynchronize, cuStreamSynchronize, CUstream)
+
+DEFINE_DISPATCH(ExternLibCuda, streamDestroy, cuStreamDestroy, CUstream)
+
+DEFINE_DISPATCH(ExternLibCuda, memcpyDToHAsync, cuMemcpyDtoHAsync, void *,
+                CUdeviceptr, size_t, CUstream)
+
+DEFINE_DISPATCH(ExternLibCuda, memsetD32Async, cuMemsetD32Async, CUdeviceptr,
+                unsigned int, size_t, CUstream)
+
+DEFINE_DISPATCH(ExternLibCuda, memAlloc, cuMemAlloc, CUdeviceptr *, size_t)
+
+DEFINE_DISPATCH(ExternLibCuda, memFree, cuMemFree, CUdeviceptr)
+
+DEFINE_DISPATCH(ExternLibCuda, memAllocHost, cuMemAllocHost, void **, size_t)
+
+DEFINE_DISPATCH(ExternLibCuda, memHostAlloc, cuMemHostAlloc, void **, size_t,
+                unsigned int)
+
+DEFINE_DISPATCH(ExternLibCuda, memHostGetDevicePointer,
+                cuMemHostGetDevicePointer, CUdeviceptr *, void *, unsigned int)
+
+DEFINE_DISPATCH(ExternLibCuda, memFreeHost, cuMemFreeHost, void *)
+
+DEFINE_DISPATCH(ExternLibCuda, launchKernel, cuLaunchKernel, CUfunction,
+                unsigned int, unsigned int, unsigned int, unsigned int,
+                unsigned int, unsigned int, unsigned int, CUstream, void **,
+                void **)
 
 Device getDevice(uint64_t index) {
   CUdevice device;

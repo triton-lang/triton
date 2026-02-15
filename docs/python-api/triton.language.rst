@@ -12,6 +12,7 @@ Programming Model
     :nosignatures:
 
     tensor
+    tensor_descriptor
     program_id
     num_programs
 
@@ -71,6 +72,9 @@ Memory/Pointer Ops
 
     load
     store
+    make_tensor_descriptor
+    load_tensor_descriptor
+    store_tensor_descriptor
     make_block_ptr
     advance
 
@@ -146,6 +150,7 @@ Scan/Sort Ops
     cumsum
     histogram
     sort
+    topk
     gather
 
 Atomic Ops

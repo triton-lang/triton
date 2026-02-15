@@ -122,7 +122,7 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   auto type = cast<triton::gpu::MemDescType>(v.getType());
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
   auto rank = shape.size();
-  SmallVector<int64_t> offset(rank, 0);
+  SmallVector<int32_t> offset(rank, 0);
   Type elementType = type.getElementType();
 
   // k => (prefetchWidth, k - prefetchWidth)
@@ -136,22 +136,18 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   if (offsetK)
     offset[kIdx] = *offsetK;
 
-  SmallVector<Value> offsetsVal;
-  for (int64_t off : offset)
-    offsetsVal.push_back(
-        builder.create<arith::ConstantIntOp>(v.getLoc(), off, 32));
-  Value newSmem = builder.create<triton::gpu::MemDescSubviewOp>(
-      v.getLoc(),
+  Value newSmem = triton::gpu::MemDescSubsliceOp::create(
+      builder, v.getLoc(),
       triton::gpu::MemDescType::get(
           shape, elementType, type.getEncoding(), type.getMemorySpace(),
           type.getMutableMemory(), type.getAllocShape()),
-      v, offsetsVal);
+      v, offset);
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
       builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
-  Value prefetchSlice = builder.create<triton::gpu::LocalLoadOp>(
-      v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
-      newSmem);
+  Value prefetchSlice = triton::gpu::LocalLoadOp::create(
+      builder, v.getLoc(),
+      RankedTensorType::get(shape, elementType, dotOperandEnc), newSmem);
 
   return prefetchSlice;
 }
@@ -307,9 +303,9 @@ scf::ForOp Prefetcher::createNewForOp() {
     loopArgs.push_back(operand2headPrefetch[dot.getB()]);
   }
 
-  auto newForOp = builder.create<scf::ForOp>(
-      forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
-      forOp.getStep(), loopArgs);
+  auto newForOp =
+      scf::ForOp::create(builder, forOp.getLoc(), forOp.getLowerBound(),
+                         forOp.getUpperBound(), forOp.getStep(), loopArgs);
 
   builder.setInsertionPointToStart(newForOp.getBody());
   IRMapping mapping;
@@ -421,7 +417,7 @@ scf::ForOp Prefetcher::createNewForOp() {
   // Update ops of yield
   builder.setInsertionPointToEnd(newForOp.getBody());
   if (!yieldValues.empty())
-    builder.create<scf::YieldOp>(yieldOp.getLoc(), yieldValues);
+    scf::YieldOp::create(builder, yieldOp.getLoc(), yieldValues);
   return newForOp;
 }
 

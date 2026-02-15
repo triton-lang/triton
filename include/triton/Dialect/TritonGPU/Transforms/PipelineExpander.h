@@ -57,6 +57,12 @@ struct PipeliningOption {
   /// pipeliner will have to predicate operations in the prologue/epilogue.
   bool supportDynamicLoops = false;
 
+  /// If set, use this function to emit the predicate stage ops instead of the
+  /// default one.
+  using EmitPredicateStageFnType = std::function<Value(
+      RewriterBase &, Value, Value, Value, uint64_t, uint64_t)>;
+  EmitPredicateStageFnType emitPredicateStageFn = nullptr;
+
   // Callback to predicate operations when the prologue or epilogue are not
   // peeled. This takes the original operation, an i1 predicate value and the
   // pattern rewriter. It is expected to replace the given operation with
@@ -94,6 +100,10 @@ struct PipeliningOption {
 FailureOr<scf::ForOp> pipelineForLoop(RewriterBase &rewriter, scf::ForOp forOp,
                                       const PipeliningOption &options,
                                       bool *modifiedIR = nullptr);
+
+Value emitPredicateForStage(RewriterBase &rewriter, Value inductionVar,
+                            Value upperBound, Value step, uint64_t maxStage,
+                            uint64_t stage);
 
 } // namespace triton
 } // namespace mlir

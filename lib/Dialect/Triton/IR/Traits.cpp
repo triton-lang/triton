@@ -10,7 +10,8 @@
 
 using namespace mlir;
 
-LogicalResult OpTrait::impl::verifyEquivalentType(Type typeA, Type typeB) {
+LogicalResult OpTrait::impl::verifyEquivalentTensorType(Type typeA,
+                                                        Type typeB) {
   auto tensorTypeA = dyn_cast<RankedTensorType>(typeA);
   auto tensorTypeB = dyn_cast<RankedTensorType>(typeB);
   if (!(bool(tensorTypeA) && bool(tensorTypeB)))
@@ -26,6 +27,8 @@ LogicalResult OpTrait::impl::verifyEquivalentType(Type typeA, Type typeB) {
   // If there's no encoding or the encodings are the same
   if (encodingA == encodingB)
     return success();
+  if (bool(encodingA) != bool(encodingB))
+    return failure();
 
   return cast<triton::DialectInferLayoutInterface>(&encodingA.getDialect())
       ->verifyLayoutsAreEqual(shapeA, encodingA, encodingB, {});

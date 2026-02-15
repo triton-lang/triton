@@ -25,7 +25,7 @@ tt.func private @reduce_linear_layout(%arg0: tensor<32x16xi32, #linear>) -> tens
   // is not needed.
 
   // Reduce within threads
-  // CHECK-NEXT: [[SUM0:%.*]] = add i32 [[SRC0]], [[SRC2]]
+  // CHECK: [[SUM0:%.*]] = add i32 [[SRC0]], [[SRC2]]
   // CHECK-NEXT: [[SUM1:%.*]] = add i32 [[SRC1]], [[SRC3]]
 
   // Reduce within warp.

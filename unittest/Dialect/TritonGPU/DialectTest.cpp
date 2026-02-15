@@ -1,10 +1,8 @@
 #include <algorithm>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <random>
 
 #include "mlir/AsmParser/AsmParser.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
@@ -37,9 +35,10 @@ createDistributedEncodings(MLIRContext &ctx) {
   // Define a tensor shape
   auto rank = 2;
   SmallVector<SmallVector<unsigned>> orders = {{0, 1}, {1, 0}};
-  SmallVector<triton::gpu::CTALayoutAttr> ctaLayouts = {
-      triton::gpu::CTALayoutAttr::getDefault(&ctx, rank),
-      triton::gpu::CTALayoutAttr::get(&ctx, {4, 2}, {2, 2}, {1, 0}),
+  SmallVector<triton::gpu::CGAEncodingAttr> cgaLayouts = {
+      triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, rank),
+      triton::gpu::CGAEncodingAttr::fromSplitParams(&ctx, {4, 2}, {2, 2},
+                                                    {1, 0}),
   };
   std::vector<DistributedEncodingTrait> distributedEncodings;
 
@@ -49,10 +48,10 @@ createDistributedEncodings(MLIRContext &ctx) {
     SmallVector<unsigned> threadsPerWarp = {4, 8};
     SmallVector<unsigned> warpsPerCTA = {2, 2};
 
-    for (auto ctaLayout : ctaLayouts) {
+    for (auto cgaLayout : cgaLayouts) {
       for (const auto &order : orders) {
         auto blockedEncoding = triton::gpu::BlockedEncodingAttr::get(
-            &ctx, sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
+            &ctx, sizePerThread, threadsPerWarp, warpsPerCTA, order, cgaLayout);
         distributedEncodings.push_back(blockedEncoding);
         distributedEncodings.push_back(
             triton::gpu::SliceEncodingAttr::get(&ctx, 0, blockedEncoding));
@@ -70,7 +69,7 @@ createDistributedEncodings(MLIRContext &ctx) {
       auto instrShape = versionMajor == 2 ? SmallVector<unsigned>{16, 8}
                                           : SmallVector<unsigned>{16, 32, 16};
       auto mma = triton::gpu::NvidiaMmaEncodingAttr::get(
-          &ctx, versionMajor, versionMinor, warpsPerCTA, ctaLayouts[0],
+          &ctx, versionMajor, versionMinor, warpsPerCTA, cgaLayouts[0],
           instrShape);
       distributedEncodings.push_back(mma);
       // Create an opIdx=0 and opIdx=1 encoding
@@ -197,7 +196,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
         << " " << stringifyLLVMType(inferredEnc) << " -> "
         << triton::join(srcTy.getShape(), "x") << "failed:\n"
         << join(diags, "\n");
-    auto srcLinear = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto srcLinear = toLinearLayout(srcTy);
     auto inferredSrcLinear = toLinearLayout(srcTy.getShape(), inferredSrcEnc);
     EXPECT_EQ(inferredSrcLinear, srcLinear)
         << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
@@ -367,6 +366,38 @@ TEST_F(Fp4ToFpOpTest, Fp4ToFpOpLayoutPropagation) {
   }
 }
 
+class ShapePerCTATest : public ::testing::Test {
+public:
+  ShapePerCTATest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
+
+protected:
+  MLIRContext ctx;
+};
+
+TEST_F(ShapePerCTATest, ShapePerCTA) {
+  // Equal length
+  SmallVector<unsigned> CTASplitNum = {2, 4};
+  SmallVector<int64_t> shape = {64, 128};
+  auto shapePerCTA = getShapePerCTA(CTASplitNum, shape);
+  auto expectedShapePerCTA = SmallVector<int64_t>{32, 32};
+  EXPECT_EQ(shapePerCTA.size(), shape.size());
+  EXPECT_EQ(shapePerCTA, expectedShapePerCTA);
+
+  // rank(shape) < rank(CTASplitNum)
+  CTASplitNum = {2, 4, 8};
+  shapePerCTA = getShapePerCTA(CTASplitNum, shape);
+  expectedShapePerCTA = SmallVector<int64_t>{16, 16};
+  EXPECT_EQ(shapePerCTA.size(), shape.size());
+  EXPECT_EQ(shapePerCTA, expectedShapePerCTA);
+
+  // rank(shape) > rank(CTASplitNum)
+  CTASplitNum = {2};
+  shapePerCTA = getShapePerCTA(CTASplitNum, shape);
+  expectedShapePerCTA = SmallVector<int64_t>{64, 64};
+  EXPECT_EQ(shapePerCTA.size(), shape.size());
+  EXPECT_EQ(shapePerCTA, expectedShapePerCTA);
+}
+
 class JoinOpTest : public ::testing::Test {
 public:
   JoinOpTest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
@@ -425,8 +456,8 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       joinShape.push_back(2);
       assert(succeeded(result));
       Attribute transEnc;
-      result = inferLayout->inferTransOpEncoding(joinedEnc, joinShape,
-                                                 transPerm, transEnc);
+      result = inferLayout->inferTransOpEncoding(
+          joinedEnc, joinShape, transPerm, transEnc, /*loc=*/{});
       assert(succeeded(result));
       SmallVector<int64_t> transShape;
       for (auto i : transPerm) {
@@ -448,8 +479,8 @@ class AMDLayoutTest : public ::testing::Test {
 public:
   AMDLayoutTest() {
     ctx.getOrLoadDialect<TritonGPUDialect>();
-    ctaLayout =
-        triton::gpu::CTALayoutAttr::get(&ctx, ctaPerCGA, ctaSplit, ctaOrder);
+    cgaLayout = triton::gpu::CGAEncodingAttr::fromSplitParams(
+        &ctx, ctaPerCGA, ctaSplit, ctaOrder);
     f16Ty = Float16Type::get(&ctx);
   }
 
@@ -463,7 +494,7 @@ protected:
   const SmallVector<unsigned> ctaPerCGA{1, 1, 1};
   const SmallVector<unsigned> ctaSplit{1, 1, 1};
   const SmallVector<unsigned> ctaOrder{2, 1, 0};
-  triton::gpu::CTALayoutAttr ctaLayout;
+  triton::gpu::CGAEncodingAttr cgaLayout;
   Type f16Ty;
 };
 
@@ -471,18 +502,19 @@ class AMDMfmaLayoutTest : public AMDLayoutTest {
 public:
   AMDMfmaLayoutTest() = default;
 
-  triton::gpu::AMDMfmaEncodingAttr createMFMA(int mDim, int nDim,
+  triton::gpu::AMDMfmaEncodingAttr createMFMA(ArrayRef<unsigned> instrShape,
                                               ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
-        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
-        /*isTransposed=*/false, ctaLayout);
+        &ctx, /*version=*/2, warpsPerCTA, instrShape,
+        /*isTransposed=*/false, cgaLayout);
   }
 
   triton::gpu::AMDMfmaEncodingAttr
-  createTransposedMFMA(int mDim, int nDim, ArrayRef<unsigned> warpsPerCTA) {
+  createTransposedMFMA(ArrayRef<unsigned> instrShape,
+                       ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
-        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
-        /*isTransposed=*/true, ctaLayout);
+        &ctx, /*version=*/2, warpsPerCTA, instrShape,
+        /*isTransposed=*/true, cgaLayout);
   }
 };
 
@@ -551,14 +583,17 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       // SliceEncoding is not well-defined for CGAs
       if (!isa<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
         auto baseEncoding = cast<LayoutEncodingTrait>(distributedEncoding);
-        ASSERT_EQ(baseEncoding.getCTASplitNum(),
-                  linearEncoding.getCTASplitNum());
-        ASSERT_EQ(baseEncoding.getCTAsPerCGA(), baseEncoding.getCTAsPerCGA());
+        auto baseCGALayout = baseEncoding.getCGALayout();
+        auto linearCGALayout = linearEncoding.getCGALayout();
+        ASSERT_EQ(baseCGALayout.getCTASplitNum(),
+                  linearCGALayout.getCTASplitNum());
+        ASSERT_EQ(baseCGALayout.getCTAsPerCGA(),
+                  linearCGALayout.getCTAsPerCGA());
         // If we are not using CGAs, the order is meaningless
         auto useCGA =
-            baseEncoding.getCTAsPerCGA() != SmallVector<unsigned>(rank, 1);
+            baseCGALayout.getCTAsPerCGA() != SmallVector<unsigned>(rank, 1);
         if (useCGA && !is_dot_op_with_block_parent(distributedEncoding)) {
-          ASSERT_EQ(baseEncoding.getCTAOrder(), linearEncoding.getCTAOrder());
+          ASSERT_EQ(baseCGALayout.getCTAOrder(), linearCGALayout.getCTAOrder());
         }
       }
     }

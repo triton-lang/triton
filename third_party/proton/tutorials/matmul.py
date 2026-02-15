@@ -24,7 +24,7 @@ def metadata_fn(
     grid_x, grid_y, grid_z = unpack_grid(grid)
     num_warps = metadata.num_warps
     num_stages = metadata.num_stages
-    cluster_x, cluster_y, cluster_z = metadata.cluster_dims
+    cluster_x, cluster_y, cluster_z = unpack_grid((metadata.num_ctas, ))
     shared_memory = metadata.shared
     M, K = args["a_ptr"].shape
     K, N = args["b_ptr"].shape
@@ -308,7 +308,7 @@ def benchmark(M, N, K, provider):
 if args.profile:
     if args.pcsampling:
         # proton-viewer -m num_samples/%,time/s ./matmul.hatchet
-        proton.start("matmul", hook="triton", backend="cupti_pcsampling")
+        proton.start("matmul", hook="triton", backend="cupti", mode="pcsampling")
     else:
         # proton-viewer -m tflop/s,time/s ./matmul.hatchet
         proton.start("matmul", hook="triton")

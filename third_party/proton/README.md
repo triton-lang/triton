@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Proton is a lightweight profiler for Triton, designed to be used for code written in Python and to invoke underlying GPU kernels. Proton provides insightful information about the program context, metadata, and hardware performance metrics of the GPU kernels invoked.
+Proton is a lightweight profiler for Triton that captures rich information about program context, metadata, and GPU kernel performance metrics, while keeping both runtime overhead and profile size minimal.
 
 ## Installation
 
@@ -73,7 +73,7 @@ with proton.scope("test2"):
 proton.finalize()
 ```
 
-The *scope* utility also accepts flexible metrics, provided with a dictionary that maps from a string (metric name) to a value (int or float).
+The *scope* utility also accepts flexible metrics, provided with a dictionary that maps from a string (metric name) to a value (int, float, or a scalar (0-d) tensor).
 Proton will aggregate the metrics for each scope and write them to the profile data.
 It is useful for users to understand the performance of the model at a high level.
 
@@ -84,6 +84,89 @@ with proton.scope("test0", {"bytes": 1000}):
 with proton.scope("test2", {"bytes": 3000}):
     foo[1,](x, y)
 ```
+
+#### NVTX compatibility
+
+Proton scopes coexist with NVTX ranges.
+NVTX pushes and pops (for example, `torch.cuda.nvtx.range_push`) appear as nested scopes in the Proton profile, letting you correlate custom NVTX annotations with Proton's aggregated metrics.
+
+### Backend and mode
+
+Proton supports three profiling backends: `cupti`, `roctracer`, and `instrumentation`.
+
+- **`cupti`**: Used for NVIDIA GPUs. It supports both the default profiling mode and `pcsampling` (instruction sampling).
+- **`roctracer`**: Used for AMD GPUs. It supports only the default profiling mode.
+- **`instrumentation`**: Available on both NVIDIA and AMD GPUs, this backend enables collection of custom metrics and advanced instrumentation.
+
+By default, Proton automatically selects either `cupti` or `roctracer` as the backend based on your GPU driver. The `instrumentation` backend offers a wide range of mode options for fine-grained profiling, as detailed in the `mode.py` file.
+
+#### Instruction sampling
+
+Proton supports instruction sampling on NVIDIA GPUs.
+You may experience ~20x end-to-end overhead when using instruction sampling, although the overhead for each individual GPU kernel is negligible.
+The overhead is mostly caused by data transfer and processing on the CPU.
+Additionally, the proton-viewer options `-i <regex> -d <depth> -t <threshold>` can be helpful for filtering out GPU kernels that are not of interest.
+The following example demonstrates how to use instruction sampling:
+
+```python
+import triton.profiler as proton
+
+proton.start(name="profile_name", context="shadow", backend="cupti", mode="pcsampling")
+```
+
+#### Instrumentation
+
+The instrumentation backend allows for detailed, fine-grained profiling of intra-kernel behavior, generating trace or tree views similar to those produced by coarse-grained profiling.
+By default, if no `mode` is specified, Proton profiles kernel cycles, which may require shared memory or global memory (depends on `buffer-type`). If there is insufficient profiling memory capacity, profiling will abort and a warning will be displayed. Future releases will introduce additional instrumentation modes. See the [tutorial](tutorials/intra_kernel) for more detailed information and examples.
+
+**Host-side usage:**
+
+```python
+import triton.profiler as proton
+
+proton.start(
+    name="profile_name",
+    backend="instrumentation",
+    mode="<mode0>=<option0>:<mode1>=<option1>:..."
+)
+
+# or
+
+import triton.profiler.mode as pmode
+
+proton.start(
+    name="profile_name",
+    backend="instrumentation",
+    mode=pmode.Default() # collect metrics from every warp
+)
+```
+
+**Kernel-side usage:**
+
+**Caution**: For DSL level instrumentation, **only Gluon** semantic is enabled by default.
+Instrumenting kernels written in Triton DSL is disable because Triton's higher-level IR undergoes
+aggressive compiler rewrites (loop pipelining, instruction re-ordering, IR duplication, etc.).
+These transformations can invalidate naïve instrumentation and lead to misleading results.
+To enable instrumentation for Triton DSL, call `pl.enable_semantic("triton")` before `proton.start`.
+
+```python
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
+
+import triton.profiler.language as pl
+
+@gluon.jit
+def kernel(...):
+    pl.enter_scope("scope0")
+    for i in range(iters):
+        gl.load(...)
+    pl.exit_scope("scope0")
+    with pl.scope("scope1"):
+        for i in range(iters):
+            gl.load(...)
+```
+
+Advanced users can instrument either the `ttir` or `ttgir` intermediate representations for even finer-grained measurement. The relevant IR instructions are `proton.record start` and `proton.record end`. This can be combined with the environment variable `TRITON_KERNEL_OVERRIDE=1` for custom kernel overrides. For detailed steps, refer to the Triton [documentation](https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking) under the **Kernel Override Steps** section. We have also assembled a [tutorial](tutorials/intra_kernel) that demonstrates how to use the IR-based instrumentation approach and the proton DSL approach.
 
 ### Hook
 
@@ -108,7 +191,7 @@ def foo(x, y):
 
 The `metadata_fn` function is called before launching the GPU kernel to provide metadata for the GPU kernel, which returns a dictionary that maps from a string (metadata name) to a value (int or float).
 
-Currently, **only the triton hook is supported**. In the dictionary returned by the `metadata_fn` function, we can supply the following keys:
+Currently, **only the launch hook is supported**. In the dictionary returned by the `metadata_fn` function, we can supply the following keys:
 
 ```python
 name: str  # The name of the kernel
@@ -119,10 +202,44 @@ flops64: float  # The number of 64-bit floating-point operations
 bytes: int  # The number of bytes expected to be transferred
 ```
 
+### CUDA graph
+
+Proton supports profiling graph launched kernels on NVIDIA GPUs.
+
+It uniquely offers two features.
+First, it captures and concatenates the call path where the kernel is captured with the call path where it is launched.
+Second, it supports aggregating flexible metrics the same way as individually launched kernels without requiring users to change their code.
+The only requirement is to initialize profiling before capturing a CUDA graph.
+Users can deactivate it after graph capturing if they want to skip some kernels.
+
+For example:
+
+```python
+import triton.profiler as proton
+
+proton.start(name="profile_name", context="shadow")
+# Capture the CUDA graph
+graph = torch.cuda.CUDAGraph()
+with torch.cuda.graph(graph):
+    with proton.scope("graph"):
+        ...
+
+proton.deactivate()
+
+# Launch the CUDA graph
+proton.activate()
+with proton.scope("graph_launch"):
+    graph.replay()
+proton.finalize()
+```
+
+We will see call the call path of the kernels launched by the CUDA graph will be like `graph_launch-><captured_at>->graph->kernel_name`. `<captured_at>` is a special scope added by Proton to indicate the boundary between graph capturing and graph launching.
+
 ### Command line
 
 Proton can be used as a command-line tool to profile Python scripts and Pytest tests.
 The following examples demonstrate how to use Proton command-line.
+Detailed options can be found by running `proton -h`.
 
 ```bash
 proton [options] script.py [script_args] [script_options]
@@ -131,7 +248,8 @@ python -m triton.profiler.proton [options] script.py [script_args] [script_optio
 proton --instrument=[instrumentation pass] script.py
 ```
 
-When profiling in the command line mode, the `proton.start` and `proton.finalize` functions are automatically called before and after the script execution. Any `proton.start` and `proton.finalize` functions in the script are ignored. Also, in the command line mode, only a single *session* is supported. Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivate(session_id=0)` is valid.
+When profiling in the command line mode, the `proton.start` and `proton.finalize` functions are automatically called before and after the script execution. Any `proton.start` and `proton.finalize` functions in the script are ignored. Also, in the command line mode, only a single *session* is supported.
+Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivate(session_id=0)` is valid.
 
 ### Visualizing the profile data
 
@@ -144,7 +262,15 @@ proton-viewer -m time/s <profile.hatchet>
 
 NOTE: `pip install hatchet` does not work because the API is slightly different.
 
-### Visualizing sorted profile data
+If you want to dump the entire trace but not just the aggregated data, you should set the data option to `trace` when starting the profiler.
+
+```python
+import triton.profiler as proton
+
+proton.start(name="profile_name", data="trace")
+```
+
+The dumped trace will be in the chrome trace format and can be visualized using the `chrome://tracing` tool in Chrome or the [perfetto](https://perfetto.dev) tool.
 
 In addition visualizing the profile data on terminal through Hatchet. A sorted list of the kernels by the first metric can be done using the --print-sorted flag with proton-viewer
 
@@ -152,13 +278,19 @@ In addition visualizing the profile data on terminal through Hatchet. A sorted l
 proton-viewer -m time/ns,time/% <profile.hatchet> --print-sorted
 ```
 
-prints the sorted kernels by the time/ns since it is the first listed.
-
 More options can be found by running the following command.
 
 ```bash
 proton-viewer -h
 ```
+
+## Knobs
+
+Triton's runtime has a centralized configuration system called *knobs* that controls various features and behaviors, including the following knobs are defined for Proton:
+
+- `triton.knobs.proton.enable_nvtx` or `TRITON_ENABLE_NVTX` (default: `True`): Whether to enable NVTX ranges in Proton.
+
+- `triton.knobs.proton.cupti_lib_dir` or `TRITON_CUPTI_LIB_DIR` (default: `<triton_root>/backends/nvidia/lib/cupti`): The directory of the CUPTI library.
 
 ## Advanced features and knowledge
 
@@ -232,80 +364,27 @@ with proton.scope("test"):
 
 The call path of `foo1` will be `test->test1->state0`.
 
-### Instrumentation (experimental)
+## Proton *vs* Nsight tools
 
-In addition to profiling, Proton also incorporates MLIR/LLVM based compiler instrumentation passes to get Triton level analysis
-and optimization information. This feature is under active development and the list of available passes is expected to grow.
+| Aspect | Proton | Nsight Systems | Nsight Compute |
+| --- | --- | --- | --- |
+| Runtime overhead | Lower overhead | Higher overhead | Higher overhead |
+| Profile size | Compact profiles and traces | Large traces | Large traces |
+| Portability | Multi vendor | Nvidia only | Nvidia only |
+| Triton insights | Metadata hooks | No hooks | No hooks |
+| Metric depth | Lightweight metrics | Timeline metrics | Detailed metrics |
 
-#### Available passes
+**Runtime overhead.** Proton typically keeps slowdown below roughly 1.5×, even for workloads with many short-lived kernels, because it collects fewer metrics and registers fewer callbacks. Nsight Systems and Nsight Compute both impose higher overhead, though they behave similarly to Proton on purely GPU-bound workloads.
 
-print-mem-spaces: this pass prints the load and store address spaces (e.g. global, flat, shared) chosen by the compiler and attributes back to Triton source information.
+**Profile size.** Proton aggregates kernels that share a calling context, so profile files stay compact—sometimes thousands of times smaller than Nsight traces. Both Nsight tools record each GPU kernel individually, which grows traces quickly during long runs.
 
-Example usage with the Proton matmul tutorial:
+**Portability.** Proton already runs on AMD and NVIDIA GPUs and has a roadmap to extend instruction sampling to AMD hardware. Nsight Systems and Nsight Compute target NVIDIA GPUs exclusively.
 
-```bash
-$ proton --instrument=print-mem-spaces matmul.py
-0     matmul_kernel     matmul.py:180:20     SHARED     STORE
-1     matmul_kernel     matmul.py:181:20     SHARED     STORE
-2     matmul_kernel     matmul.py:180:20     SHARED     LOAD
-3     matmul_kernel     matmul.py:181:20     SHARED     LOAD
-```
+**Triton insights.** Proton can register Triton-specific hooks that surface kernel metadata for richer analysis, at the cost of a small extra overhead. Neither Nsight tool offers comparable Triton integration.
 
-Notes: The instrument functionality is currently only available from the command line. Additionally the instrument and profile command line arguments can not be use simulantously.
-
-### Instruction sampling (experimental)
-
-Proton supports instruction sampling on NVIDIA GPUs.
-Please note that this is an experimental feature and may not work on all GPUs.
-You may experience ~20x end-to-end overhead when using instruction sampling, although the overhead for each individual GPU kernel is negligible.
-The overhead is mostly caused by data transfer and processing on the CPU.
-Additionally, the proton-viewer options `-i <regex> -d <depth> -t <threshold>` can be helpful for filtering out GPU kernels that are not of interest.
-The following example demonstrates how to use instruction sampling:
-
-```python
-import triton.profiler as proton
-
-proton.start(name="profile_name", context="shadow", backend="cupti_pcsampling")
-```
-
-## Proton *vs* nsys
-
-- Runtime overhead (up to 1.5x)
-
-Proton has a lower profiling overhead than nsys. Even for workload with a large number of small GPU kernels, proton triggers less than ~1.5x overhead.
-
-For GPU-bound workload, both proton and nsys has similar overhead, with little impact on the workload.
-
-The lower overhead of proton is due to its less profiling metrics and callbacks compared to nsys.
-
-- Profile size (significantly smaller than nsys)
-
-nsys traces and records every GPU kernel, while proton aggregates the metrics of GPU kernels under the same calling context.
-
-As a result, proton's profile size can be up to thousands of times smaller than nsys's profile size, depending on the running time.
-
-- Portability (support different GPUs)
-
-Proton is designed to be portable and can be used on AMD GPUs. nsys only supports NVIDIA GPUs.
-
-- Insights (more insightful than nsys on triton kernels)
-
-Proton can register hooks to analyze the metadata of triton kernels, while nsys cannot. **Note** that the hooks do add additional overhead to proton.
-
-## Proton *vs* ncu
-
-Similar to the comparison between Proton and Nsight Systems (Nsys), Proton has a lower profiling overhead than Nsight Compute (NCU). We also plan to support instruction sampling on AMD GPUs.
-However, Nsight Compute supports the collection of more detailed metrics than Proton, such as memory access patterns, memory transactions, and other instruction-level metrics.
-In contrast, Proton only supports instruction sampling and is designed to be lightweight and portable.
+**Metric depth.** Proton emphasizes lightweight metrics and instruction sampling for portability and fast iteration. Nsight Systems focuses on timeline-oriented metrics for NVIDIA GPUs, while Nsight Compute dives deeper into instruction-level details such as memory transactions and access patterns.
 
 ## Known issues
-
-- CUDA graph
-
-`hooks` cannot be used to accurately accumulate the number of FLOPs in CUDA graph mode profiling because kernels are captured and launched separately; metrics are not accumulated when kernels are launched in graph mode. This issue can be circumvented by using `scope` to supply FLOPs.
-
-If profiling is initiated after CUDA graph capturing, there may be minor memory leak issues.
-This is because the number of kernels in a graph instance (i.e., `cuGraphExec`) is unknown, preventing the deletion of mappings between the kernel ID and the graph ID.
 
 - Instruction sampling
 
@@ -317,3 +396,29 @@ Continuous sampling can allow for more runtime optimizations, but it makes it mo
 - Visible devices on AMD GPUs
 
 Environment variables such as `HIP_VISIBLE_DEVICES`, and `CUDA_VISIBLE_DEVICES` are not supported on AMD GPUs. Once it's set, we cannot find a valid mapping between the device ID returned by RocTracer and the physical device ID. Instead, `ROCR_VISIBLE_DEVICES` is recommended to be used.
+
+## Experimental features
+
+### Get profile data in memory
+
+Proton provides APIs to get profile data without dumping to files in the `data` module. These APIs are experimental and may change in the future.
+
+```python
+import triton.profiler as proton
+
+session_id = proton.start(name="profile_name")
+...
+
+# data.get_* APIs do not synchronize the device, so make sure all kernels are finished before calling them
+# Usage 1: flush the profile data from the device eagerly and access all data
+proton.deactivate(session_id, flushing=True) # with flushing=False, it's not guaranteed that all kernels are finished
+# Get a json dictionary
+data = proton.data.get_json(session_id)
+# Get a msgpack bytes
+data_msgpack = proton.data.get_msgpack(session_id)
+
+# Usage 2: query the phase completion status and access data in the completed phases
+if proton.data.is_phase_complete(session_id, phase_id):
+    data_phase = proton.data.get_json(session_id, phase_id)
+    proton.data.clear(session_id, phase_id)
+```

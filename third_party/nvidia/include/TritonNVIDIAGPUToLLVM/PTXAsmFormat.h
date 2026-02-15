@@ -32,7 +32,7 @@ struct PTXInstrExecution;
 // "b"(p));
 //
 // PTXBuilder builder;
-// auto& add = builder.create<>();
+// auto& add = ::create(builder, );
 // add.predicate(pVal).o("lo").o("u32"); // add any suffix
 // // predicate here binds %0 to pVal, pVal is a mlir::Value
 //

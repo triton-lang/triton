@@ -1,7 +1,5 @@
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=CF
-// RUN: triton-opt %s -split-input-file                     --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=SCF
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=CF
-// RUN: triton-opt %s -split-input-file                     --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=SCF
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory -test-print-membar | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory -test-tritonamdgpu-membar | FileCheck %s
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #ttg.slice<{dim = 0, parent = #AL}>
@@ -50,7 +48,7 @@ tt.func @raw_single_block(%A : !tt.ptr<f16>) {
   %0 = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
   %1 = tt.load %0, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16>, #AL>
   %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return
@@ -64,10 +62,10 @@ tt.func @war_single_block(%A : !tt.ptr<f16>) {
   %1 = tt.load %0, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16>, #AL>
   %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   // CHECK: ttg.local_alloc
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: %4 = ttg.local_alloc
   %4 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   tt.return
@@ -81,10 +79,10 @@ tt.func @war_single_block_local_store(%A : !tt.ptr<f16>) {
   %1 = tt.load %0, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16>, #AL>
   %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   // CHECK: ttg.local_alloc
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<128x32xf16, #AL>
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_store
   ttg.local_store %1, %2 : tensor<128x32xf16, #AL> -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
@@ -93,9 +91,9 @@ tt.func @war_single_block_local_store(%A : !tt.ptr<f16>) {
 // CHECK-LABEL: scratch
 tt.func @scratch(%arg: tensor<16x16xf16, #AL>) {
   %cst0 = ttg.local_alloc %arg : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK: tt.reduce
   %1 = ttg.local_load %cst0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   %2 = "tt.reduce" (%1) ({
@@ -111,20 +109,9 @@ tt.func @async_wait(%arg: tensor<32x16xf16, #AL>) {
   %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
   // CHECK: ttg.async_wait
   ttg.async_wait {num = 4 : i32}
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %1 = ttg.local_load %cst0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
-  tt.return
-}
-
-// CHECK-LABEL: @async_store_wait
-tt.func @async_store_wait(%arg: tensor<32x16xf16, #AL>) {
-  %alloc = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK: async_tma_store_wait
-  ttng.async_tma_store_wait {pendings = 0 : i32}
-  // CHECK-NEXT: gpu.barrier
-  // CHECK-NEXT: ttg.local_store
-  ttg.local_store %arg, %alloc : tensor<32x16xf16, #AL> -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
 }
 
@@ -132,12 +119,11 @@ tt.func @async_store_wait(%arg: tensor<32x16xf16, #AL>) {
 tt.func @subview() {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<32x16xf16, #AL>
   %a = ttg.local_alloc %cst0 : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
-  %index = arith.constant 0 : i32
-  %0 = ttg.memdesc_subview %a[%index, %index] : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
-  // CHECK: gpu.barrier
+  %0 = ttg.memdesc_subslice %a [0, 0] : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %1 = ttg.local_load %0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_alloc
   %2 = ttg.local_alloc %1 : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   tt.return
@@ -145,7 +131,7 @@ tt.func @subview() {
 
 // CHECK-LABEL: trans
 tt.func @trans(%a: !ttg.memdesc<16x32xf16, #A_SHARED, #ttg.shared_memory>) {
-  // CHECK-NOT: gpu.barrier
+  // CHECK-NOT: ttg.barrier local
   %b = ttg.memdesc_trans %a {order=array<i32: 1,0>} : !ttg.memdesc<16x32xf16, #A_SHARED, #ttg.shared_memory> -> !ttg.memdesc<32x16xf16, #A_SHARED_T, #ttg.shared_memory>
   tt.return
 }
@@ -157,9 +143,9 @@ tt.func @async_copy_global_to_local(%A : !tt.ptr<f16>, %i1 : i1) {
   %mask = tt.splat %i1 : i1 -> tensor<16x16xi1, #AL>
   %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  %subview = ttg.memdesc_subview %alloc[%index, %index, %index] : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %subview = ttg.memdesc_index %alloc[%index] : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %1 = ttg.async_copy_global_to_local %a_ptr, %subview : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %4 = ttg.local_load %subview : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
   tt.return
@@ -170,7 +156,7 @@ tt.func @multi_blocks(%i1 : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   scf.if %i1 {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_load
     %0 = ttg.local_load %cst0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
     scf.yield
@@ -178,7 +164,7 @@ tt.func @multi_blocks(%i1 : i1) {
     %cst1 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
     scf.yield
   }
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %2 = ttg.local_load %cst0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   tt.return
@@ -190,17 +176,17 @@ tt.func @multi_blocks_join_barrier(%i1 : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   scf.if %i1 {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_load
     %0 = ttg.local_load %cst0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
     scf.yield
   } else {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_load
     %1 = ttg.local_load %cst0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
     scf.yield
   }
-  // CHECK-NOT: gpu.barrier
+  // CHECK-NOT: ttg.barrier local
   // CHECK: tt.return
   %a_ = ttg.local_load %cst0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   tt.return
@@ -212,13 +198,13 @@ tt.func @multi_blocks_yield(%i1 : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   %a = scf.if %i1 -> (!ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>) {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_load
     %0 = ttg.local_load %cst0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
     %1 = ttg.local_alloc %0 : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
     scf.yield %1 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   } else {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_load
     %2 = ttg.local_load %cst0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
     %3 = ttg.local_alloc %2 : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
@@ -226,7 +212,7 @@ tt.func @multi_blocks_yield(%i1 : i1) {
   }
   %a_ = ttg.local_load %cst0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   // CHECK: ttg.local_load
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %4 = ttg.local_load %a : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   tt.return
@@ -238,23 +224,23 @@ tt.func @multi_blocks_entry_no_shared(%i1 : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   %a = scf.if %i1 -> (!ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>) {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_alloc
-    // CHECK-NEXT: gpu.barrier
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttg.local_load
-    // CHECK-NEXT: gpu.barrier
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttg.local_alloc
     %cst1 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
     %0 = ttg.local_load %cst1 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
     %1 = ttg.local_alloc %0 : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
     scf.yield %1 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   } else {
-    // CHECK-NOT: gpu.barrier
+    // CHECK-NOT: ttg.barrier local
     // CHECK: ttg.local_alloc
     %cst1 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
     scf.yield %cst1 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   }
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %2 = ttg.local_load %a : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   tt.return
@@ -266,12 +252,12 @@ tt.func @multi_blocks_noelse(%i1 : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   scf.if %i1 {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_load
     %0 = ttg.local_load %cst0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
     scf.yield
   }
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %1 = ttg.local_load %cst0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   tt.return
@@ -284,19 +270,19 @@ tt.func @multi_blocks_nested_scf(%i1 : i1, %i2 : i1) {
   %cst0 = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   scf.if %i1 {
     scf.if %i2 {
-      // CHECK: gpu.barrier
+      // CHECK: ttg.barrier local
       // CHECK-NEXT: ttg.local_load
       %0 = ttg.local_load %cst0 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
       scf.yield
     }
     scf.yield
   } else {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_load
     %1 = ttg.local_load %cst0 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
     scf.yield
   }
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %2 = ttg.local_load %cst0 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return
@@ -309,7 +295,7 @@ tt.func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !t
   %b_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %c_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>) {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_load
     %a0 = ttg.local_load %a_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
     %b0 = ttg.local_load %b_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
@@ -325,20 +311,20 @@ tt.func @for_alias(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %
   %cst = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #AL>
   %a_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %b_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %a0 = ttg.local_load %a_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   %b0 = ttg.local_load %b_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   %0 = ttg.local_alloc %a0 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %c_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>) {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_load
     %a1 = ttg.local_load %a_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
     %b1 = ttg.local_load %b_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
     scf.yield %c_shared, %a_shared, %b_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   }
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %r = ttg.local_load %0 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return
@@ -351,26 +337,26 @@ tt.func @for_reuse(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %
   %cst = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #AL>
   %a_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %b_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %a0 = ttg.local_load %a_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   %b0 = ttg.local_load %b_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   %0 = ttg.local_alloc %a0 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %c_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>) {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_alloc
     %a1 = ttg.local_load %a_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
     %b1 = ttg.local_load %b_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
     %1 = ttg.local_alloc %a1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_alloc
     %a2 = ttg.local_load %a_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
     %b2 = ttg.local_load %b_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
     %2 = ttg.local_alloc %a1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
     scf.yield %c_shared, %a_shared, %b_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   }
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %r = ttg.local_load %0 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return
@@ -381,20 +367,20 @@ tt.func @for_reuse_nested(%lb : index, %ub : index, %step : index, %A : !tt.ptr<
   %cst = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #AL>
   %a_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %b_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %a0 = ttg.local_load %a_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   %b0 = ttg.local_load %b_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   %0 = ttg.local_alloc %a0 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %c_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>) {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_alloc
     %a1 = ttg.local_load %a_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
     %b1 = ttg.local_load %b_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
     %1 = ttg.local_alloc %a1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
     %a_shared_next, %b_shared_next, %c_shared_next = scf.for %ivv = %lb to %ub step %step iter_args(%a_shared_nested = %a_shared_init, %b_shared_nested = %b_shared_init, %c_shared_nested = %c_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>) {
-      // CHECK: gpu.barrier
+      // CHECK: ttg.barrier local
       // CHECK-NEXT:  ttg.local_alloc
       %a2 = ttg.local_load %a_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
       %b2 = ttg.local_load %b_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
@@ -403,7 +389,7 @@ tt.func @for_reuse_nested(%lb : index, %ub : index, %step : index, %A : !tt.ptr<
     }
     scf.yield %c_shared, %a_shared, %b_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   }
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT:  ttg.local_load
   %r = ttg.local_load %0 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return
@@ -419,12 +405,12 @@ tt.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>) {
     %c_shared_next = scf.for %jv = %lb to %ub step %step iter_args(%c_shared_next = %c_shared) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>) {
       %c_shared_next_next = scf.if %i1 -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> {
-        // CHECK: gpu.barrier
+        // CHECK: ttg.barrier local
         // CHECK-NEXT: ttg.local_alloc
         %cst0 = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
         scf.yield %cst0 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
       } else {
-        // CHECK: gpu.barrier
+        // CHECK: ttg.barrier local
         // CHECK-NEXT: ttg.local_alloc
         %cst0 = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
         scf.yield %cst0 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
@@ -443,25 +429,25 @@ tt.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
   %a_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %b_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %c_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   %c_blocked = ttg.local_load %c_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
 
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>) {
     %c_shared_next_next = scf.if %i1 -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> {
-      // CHECK: gpu.barrier
+      // CHECK: ttg.barrier local
       // CHECK-NEXT: ttg.local_alloc
       %cst0 = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
       scf.yield %cst0 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
     } else {
       %c_shared_ = scf.for %jv = %lb to %ub step %step iter_args(%c_shared_next = %c_shared) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>) {
-        // CHECK: gpu.barrier
+        // CHECK: ttg.barrier local
         // CHECK-NEXT: ttg.local_load
         %c_blocked_next = ttg.local_load %c_shared_next : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
         scf.yield %c_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
       }
       scf.yield %c_shared_ : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
     }
-    // CHECK-NOT: gpu.barrier
+    // CHECK-NOT: ttg.barrier local
     %b_blocked_next = ttg.local_load %b_shared: !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
     scf.yield %a_shared, %b_shared, %c_shared_next_next : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   }
@@ -474,12 +460,12 @@ tt.func @cf_if(%i1 : i1) {
   %a = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   cf.cond_br %i1, ^bb1, ^bb2
 ^bb1:  // pred: ^bb0
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %0 = ttg.local_load %a : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   cf.br ^bb2
 ^bb2:  // 2 preds: ^bb0, ^bb1
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %1 = ttg.local_load %a : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   tt.return
@@ -491,13 +477,13 @@ tt.func @cf_if_else(%i1 : i1) {
   %a = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   cf.cond_br %i1, ^bb1, ^bb2
 ^bb1:  // pred: ^bb0
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %0 = ttg.local_load %a : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   %1 = ttg.local_alloc %0 : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   cf.br ^bb3(%1 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>)
 ^bb2:  // pred: ^bb0
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %2 = ttg.local_load %a : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   %3 = ttg.local_alloc %2 : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
@@ -507,7 +493,7 @@ tt.func @cf_if_else(%i1 : i1) {
 ^bb4:  // pred: ^bb3
   // CHECK: ttg.local_load
   %4 = ttg.local_load %a : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %5 = ttg.local_load %arg : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   tt.return
@@ -520,13 +506,13 @@ tt.func @cf_if_else_return(%i1 : i1) {
   %b = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   cf.cond_br %i1, ^bb1, ^bb2
 ^bb1:  // pred: ^bb0
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %0 = ttg.local_load %a : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   %1 = ttg.local_load %b : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   tt.return
 ^bb2:  // pred: ^bb0
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %2 = ttg.local_load %a : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
   %3 = ttg.local_load %b : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
@@ -535,7 +521,7 @@ tt.func @cf_if_else_return(%i1 : i1) {
 
 // CHECK-LABEL: atomic_scalar
 tt.func @atomic_scalar(%arg3: !tt.ptr<i32>) -> i32 {
-  // CHECK-NOT: gpu.barrier
+  // CHECK-NOT: ttg.barrier local
   %c0_i32 = arith.constant 0 : i32
   %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
   %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
@@ -550,7 +536,7 @@ tt.func @atomic_scalar_no_use(%arg3: !tt.ptr<i32>) {
   %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
   %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %4 = tt.atomic_cas acq_rel, gpu, %arg3, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
-  // CHECK: gpu.barrier
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return
@@ -562,7 +548,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 
 // CHECK-LABEL: convert_layout1
 tt.func @convert_layout1(%A : !tt.ptr<f16>) {
-  // CHECK-NOT: gpu.barrier
+  // CHECK-NOT: ttg.barrier local
   %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %1 = ttg.local_load %0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
   tt.return
@@ -574,7 +560,7 @@ tt.func @convert_layout2(%A : !tt.ptr<f16>) {
   %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %1 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   // CHECK: ttg.local_load
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: ttg.barrier local
   // CHECK: ttg.local_load
   %3 = ttg.local_load %0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
   %4 = ttg.local_load %1 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
@@ -586,12 +572,12 @@ tt.func @convert_layout3(%cond : i1) {
   scf.if %cond {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #A_SHARED, #ttg.shared_memory, mutable>
     // CHECK: ttg.local_load
-    // CHECK-NOT: gpu.barrier
+    // CHECK-NOT: ttg.barrier local
     %1 = ttg.local_load %0 : !ttg.memdesc<16x64xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x64xf16, #AL>
   } else {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     // CHECK: ttg.local_load
-    // CHECK-NEXT: gpu.barrier
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttg.local_alloc
     %1 = ttg.local_load %0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
     %2 = ttg.local_alloc %1 : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
@@ -601,7 +587,7 @@ tt.func @convert_layout3(%cond : i1) {
 
 // CHEKC-LABEL: convert_layout4
 tt.func @convert_layout4(%A : !tt.ptr<f16>, %cond : i1) {
-  // CHECK-NOT: gpu.barrier
+  // CHECK-NOT: ttg.barrier local
   scf.if %cond {
     tt.call @convert_layout3(%cond) : (i1) -> ()
   } else {
@@ -616,9 +602,9 @@ tt.func @convert_layout5(%A : !tt.ptr<f16>) {
   %0 = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %1 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   // CHECK: ttg.local_load
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: ttg.barrier local
   // CHECK: ttg.local_load
-  %3 = ttg.local_load %0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
+  %3 = ttg.local_load %0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<32x16xf16, #AL>
   %4 = ttg.local_load %1 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
   tt.return
 }
@@ -627,7 +613,7 @@ tt.func @convert_layout5(%A : !tt.ptr<f16>) {
 tt.func @single_call_sync(%A : !tt.ptr<f16>) {
   %0 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
   // CHECK: tt.call
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: ttg.barrier local
   tt.call @convert_layout1(%A) : (!tt.ptr<f16>) -> ()
   %1 = ttg.convert_layout %0 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   tt.return
@@ -636,7 +622,7 @@ tt.func @single_call_sync(%A : !tt.ptr<f16>) {
 // CHECK-LABEL: single_call_no_sync
 // %1 can reuse %0 in convert_layout2, which has been synced
 tt.func @single_call_no_sync(%A : !tt.ptr<f16>) {
-  // CHECK-NOT: gpu.barrier
+  // CHECK-NOT: ttg.barrier local
   %0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   tt.call @convert_layout5(%A) : (!tt.ptr<f16>) -> ()
   %1 = ttg.convert_layout %0 : tensor<16x16xf16, #AL> -> tensor<16x16xf16, #BL>
@@ -659,15 +645,15 @@ tt.func @if_else_calls(%A : !tt.ptr<f16>, %cond : i1) {
     %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
     %cst_ = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
     %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: tt.call
-    // CHECK-NEXT: gpu.barrier
+    // CHECK-NEXT: ttg.barrier local
     tt.call @convert_layout1(%A) : (!tt.ptr<f16>) -> ()
     %cst1 = ttg.local_alloc %cst_ : (tensor<16x32xf16, #AL>) -> !ttg.memdesc<16x32xf16, #A_SHARED, #ttg.shared_memory>
   } else {
     %cst0 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
     // CHECK: tt.call
-    // CHECK-NOT: gpu.barrier
+    // CHECK-NOT: ttg.barrier local
     tt.call @convert_layout2(%A) : (!tt.ptr<f16>) -> ()
   }
   tt.return
@@ -682,7 +668,7 @@ tt.func @for_calls(%A : !tt.ptr<f16>, %cond : i1) {
   %ub = arith.constant 10 : index
   %step = arith.constant 1 : index
   scf.for %iv = %lb to %ub step %step {
-    // CHECK: gpu.barrier
+    // CHECK: ttg.barrier local
     // CHECK-NEXT: tt.call
     tt.call @convert_layout1(%A) : (!tt.ptr<f16>) -> ()
   }
@@ -692,7 +678,7 @@ tt.func @for_calls(%A : !tt.ptr<f16>, %cond : i1) {
 // CHECK-LABEL: call_graph_1
 tt.func @call_graph_1(%A : !tt.ptr<f16>, %cond : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
-  %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>  // CHECK: gpu.barrier
+  %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>  // CHECK: ttg.barrier local
   // CHECK-NEXT: tt.call
   tt.call @convert_layout3(%cond) : (i1) -> ()
   tt.return
@@ -703,11 +689,32 @@ tt.func @call_graph_2(%A : !tt.ptr<f16>, %cond : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   tt.call @convert_layout4(%A, %cond) : (!tt.ptr<f16>, i1) -> ()
   // CHECK: tt.call
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: ttg.barrier local
   %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   tt.return
 }
 
+}
+
+// -----
+
+#block0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#block1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: @barrier_between_warp_sync_convert_and_read
+  tt.func @barrier_between_warp_sync_convert_and_read(%src: tensor<32x!tt.ptr<f32>, #block0>) {
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    %c = arith.constant dense<0.0> : tensor<16x16xf16>
+    // CHECK: ttg.local_store
+    ttg.local_store %c, %alloc : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    // CHECK-NEXT: ttg.convert_layout
+    %cvt = ttg.convert_layout %src : tensor<32x!tt.ptr<f32>, #block0> -> tensor<32x!tt.ptr<f32>, #block1>
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
+    %ld = ttg.local_load %alloc : !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable> -> tensor<16x16xf16>
+    tt.return
+  }
 }
 
 // -----
@@ -743,112 +750,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
-#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 18944 : i32} {
-// CHECK-LABEL: tma_special_cases
-tt.func @tma_special_cases(%arg1: !tt.ptr<i8, 0>) -> (tensor<256x64xf16, #blocked>){
-  %true = arith.constant 1 : i1
-  %cx = arith.constant dense<1> : tensor<32xi32>
-  %c0 = arith.constant 0 : i32
-  %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  %alloc = ttg.local_alloc : () -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
-  //      CHECK: ttng.init_barrier
-  // CHECK-NEXT: ttng.init_barrier
-  ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-
-  // CHECK-NEXT: gpu.barrier
-  // CHECK-NEXT: ttng.barrier_expect
-  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
-  // CHECK-NEXT: ttng.wait_barrier
-  ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  ttng.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : !tt.ptr<i8, 0>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
-  ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-
-  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
-  // CHECK-NEXT: ttng.barrier_expect
-  // CHECK-NEXT: gpu.barrier
-  // CHECK-NEXT: ttng.wait_barrier
-  ttng.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : !tt.ptr<i8, 0>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
-  ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-
-  // CHECK-NEXT: ttg.local_load
-  %t = ttg.local_load %alloc : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> tensor<256x64xf16, #blocked>
-
-  // CHECK-NEXT: ttng.barrier_expect
-  // CHECK-NEXT: gpu.barrier
-  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
-  // CHECK-NEXT: ttng.wait_barrier
-  ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  ttng.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : !tt.ptr<i8, 0>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
-  ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-
-  // CHECK-NEXT: memdesc_subview
-  // CHECK-NEXT: ttng.barrier_expect
-  // CHECK-NEXT: ttng.async_tma_gather
-  // CHECK-NEXT: gpu.barrier
-  // CHECK-NEXT: ttng.wait_barrier
-  %view = ttg.memdesc_subview %alloc[%c0, %c0] : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable>
-  ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  ttng.async_tma_gather %arg1[%cx, %c0] %view, %barrier, %true : !tt.ptr<i8, 0>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable>, i1
-  ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-
-  // CHECK-NEXT: gpu.barrier
-  // CHECK-NEXT: ttng.inval_barrier
-  // CHECK-NEXT: ttng.inval_barrier
-  ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-
-  tt.return %t : tensor<256x64xf16, #blocked>
-}
-}
-
-// -----
-
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
-#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 18944 : i32} {
-// CHECK-LABEL: tma_special_cases_cf
-tt.func @tma_special_cases_cf(%arg1: !tt.ptr<i8, 0>, %i1 : i1, %arg2: tensor<256x64xf16, #blocked>) -> (tensor<256x64xf16, #blocked>){
-  %true = arith.constant 1 : i1
-  %c0 = arith.constant 0 : i32
-  %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  %alloc = ttg.local_alloc : () -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
-  // CF: cf.cond_br
-  // SCF: scf.if
-  scf.if %i1 {
-    //  CHECK-NOT: gpu.barrier
-    //      CHECK: ttng.async_tma_copy_global_to_local
-    // CHECK-NEXT: ttng.barrier_expect
-    // CHECK-NEXT: ttng.wait_barrier
-    // CF-NEXT: cf.br
-    // SCF-NEXT: } else {
-    ttng.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : !tt.ptr<i8, 0>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
-    ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-    ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  } else {
-    //  CHECK-NOT: gpu.barrier
-    //      CHECK: ttg.local_store
-    // CF-NEXT: cf.br
-    // SCF-NEXT: }
-    ttg.local_store %arg2, %alloc : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
-  }
-  //      CHECK: gpu.barrier
-  // CHECK-NEXT: ttg.local_load
-  %t = ttg.local_load %alloc : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> tensor<256x64xf16, #blocked>
-  tt.return %t : tensor<256x64xf16, #blocked>
-}
-}
-
-// -----
-
-#layout = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#layout = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0]}>
 #smem = #ttg.shared_memory
 
 // CHECK-LABEL: @warp_specialize_isolated_regions
@@ -857,7 +759,7 @@ tt.func @warp_specialize_isolated_regions(%arg0: tensor<1xi64>) {
   %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
   // CHECK-NEXT: local_store
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
-  // CHECK-NEXT: barrier
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: local_load
   ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
 
@@ -873,7 +775,7 @@ tt.func @warp_specialize_isolated_regions(%arg0: tensor<1xi64>) {
     %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
     // CHECK-NEXT: local_store
     ttg.local_store %cst, %1 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
-    // CHECK-NEXT: barrier
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: local_load
     ttg.local_load %1 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
     // CHECK-NEXT: warp_return
@@ -893,11 +795,11 @@ tt.func @warp_specialize_into_default(%arg0: tensor<1xi64>) {
   ttg.warp_specialize()
   // CHECK-NEXT: default
   default {
-    // CHECK-NEXT: barrier
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: local_load
     ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
-    // CHECK-NEXT: barrier
-    gpu.barrier
+    // CHECK-NEXT: ttg.barrier local
+    ttg.barrier local
     // CHECK-NEXT: warp_yield
     ttg.warp_yield
   // CHECK-NEXT: () -> ()
@@ -917,14 +819,14 @@ tt.func @default_region_cfg(%arg0: tensor<1xi64>, %arg1: i1) {
   ttg.warp_specialize()
   // CHECK-NEXT: default
   default {
-    // CHECK-NEXT: barrier
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: local_load
     ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
     cf.cond_br %arg1, ^bb1, ^bb2
   // CHECK: ^bb1:
   ^bb1:
-    // CHECK-NEXT: barrier
-    gpu.barrier
+    // CHECK-NEXT: ttg.barrier local
+    ttg.barrier local
     cf.br ^bb3
   ^bb2:
     cf.br ^bb3
@@ -934,7 +836,7 @@ tt.func @default_region_cfg(%arg0: tensor<1xi64>, %arg1: i1) {
     ttg.warp_yield
   // CHECK-NEXT: () -> ()
   } : () -> ()
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: local_store
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
   tt.return
@@ -954,7 +856,7 @@ tt.func @direct_backedge_within_loop(%arg0: index, %arg1: index, %arg2: index, %
   %cst = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #blocked>
   // CHECK-NEXT: local_alloc
   %0 = ttg.local_alloc %cst : (tensor<128x32xf16, #blocked>) -> !ttg.memdesc<128x32xf16, #shared, #smem>
-  // CHECK-NEXT: barrier
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: local_load
   %1 = ttg.local_load %0 : !ttg.memdesc<128x32xf16, #shared, #smem> -> tensor<128x32xf16, #blocked>
   // CHECK-NEXT: br
@@ -963,14 +865,14 @@ tt.func @direct_backedge_within_loop(%arg0: index, %arg1: index, %arg2: index, %
   cf.cond_br %arg5, ^bb2, ^bb3
 // CHECK: ^bb2:
 ^bb2:
-  // CHECK-NEXT: barrier
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: local_alloc
   %4 = ttg.local_alloc %cst : (tensor<128x32xf16, #blocked>) -> !ttg.memdesc<128x32xf16, #shared, #smem>
   // CHECK-NEXT: br
   cf.br ^bb1(%arg1, %4 : index, !ttg.memdesc<128x32xf16, #shared, #smem>)
 // CHECK: ^bb3
 ^bb3:
-  // CHECK-NEXT: barrier
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: local_load
   %5 = ttg.local_load %3 : !ttg.memdesc<128x32xf16, #shared, #smem> -> tensor<128x32xf16, #blocked>
   // CHECK-NEXT: cond_br
@@ -979,26 +881,6 @@ tt.func @direct_backedge_within_loop(%arg0: index, %arg1: index, %arg2: index, %
   tt.return
 }
 
-}
-
-// -----
-
-// CHECK-LABEL: tmem_copy_after_alloc
-#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#smem = #ttg.shared_memory
-#tmem_scales = #ttng.tensor_memory_scales_encoding<>
-module attributes {"ttg.num-warps" = 4 : i32} {
-  tt.func @tmem_copy_after_alloc(%arg0: tensor<1x2048xf8E4M3FN, #blocked>) {
-    // CHECK: local_alloc
-    %0 = ttg.local_alloc %arg0 {allocation.offset = 53248 : i32} : (tensor<1x2048xf8E4M3FN, #blocked>) -> !ttg.memdesc<1x2048xf8E4M3FN, #shared, #smem>
-    // CHECK: tmem_alloc
-    %1 = ttng.tmem_alloc  {tensor_memory_col_offset = 256 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x16xf8E4M3FN, #tmem_scales, #ttng.tensor_memory, mutable>
-    // gpu.barrier
-    // CHECK: tmem_copy
-    ttng.tmem_copy %0, %1,  : (!ttg.memdesc<1x2048xf8E4M3FN, #shared, #smem>, !ttg.memdesc<128x16xf8E4M3FN, #tmem_scales, #ttng.tensor_memory, mutable>) -> ()
-    tt.return
-  }
 }
 
 // -----
@@ -1017,11 +899,11 @@ tt.func @membar_alias_through_warp_specialize() {
   // CHECK: partition0
   partition0(%arg0: !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>) num_warps(2) {
     %c0 = arith.constant 0 : i32
-    %1 = ttg.memdesc_subview %arg0[%c0, %c0] : !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    %1 = ttg.memdesc_subslice %arg0 [0, 0]  : !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
     %c = arith.constant dense<0.0> : tensor<16x16xf16>
     // CHECK: local_store
     ttg.local_store %c, %1 : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
-    // CHECK-NEXT: gpu.barrier
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: local_store
     ttg.local_store %c, %1 : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
     ttg.warp_return
@@ -1029,11 +911,11 @@ tt.func @membar_alias_through_warp_specialize() {
   // CHECK: partition1
   partition1(%arg0: !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>) num_warps(2) {
     %c0 = arith.constant 0 : i32
-    %1 = ttg.memdesc_subview %arg0[%c0, %c0] : !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    %1 = ttg.memdesc_subslice %arg0 [0, 0]  : !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
     %c = arith.constant dense<0.0> : tensor<16x16xf16>
     // CHECK: local_store
     ttg.local_store %c, %1 : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
-    // CHECK-NEXT: gpu.barrier
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: local_store
     ttg.local_store %c, %1 : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
     ttg.warp_return
@@ -1041,4 +923,351 @@ tt.func @membar_alias_through_warp_specialize() {
   tt.return
 }
 
+}
+
+// -----
+
+#layout = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: @check_barrier_no_duplication
+tt.func @check_barrier_no_duplication(%arg0: tensor<1xi64>) {
+  // CHECK-NEXT: local_alloc
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  // CHECK-NEXT: local_store
+  ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  // CHECK-NEXT: warp_specialize
+  ttg.warp_specialize()
+  // CHECK-NEXT: default
+  default {
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: local_load
+    ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
+    // CHECK-NEXT: ttg.barrier
+    // CHECK-NOT: ttg.barrier
+    ttg.barrier local
+    // CHECK-NEXT: warp_yield
+    ttg.warp_yield
+  // CHECK-NEXT: () -> ()
+  } : () -> ()
+  // CHECK-NEXT: local_store
+  ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  tt.return
+}
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: @subslice_aliasing
+tt.func public @subslice_aliasing(%data: tensor<128x128xf16>) {
+    // CHECK: ttg.local_alloc
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK-NEXT: ttg.memdesc_subslice
+    %view0 = ttg.memdesc_subslice %alloc[0, 0] : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.memdesc_subslice
+    %view1 = ttg.memdesc_subslice %alloc[0, 64] : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.memdesc_subslice
+    %view2 = ttg.memdesc_subslice %alloc[64, 0] : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.memdesc_subslice
+    %view3 = ttg.memdesc_subslice %alloc[64, 64] : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data, %alloc : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // RAW between 128x128 store and %data0 local_load, both access part of %view0
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
+    %data0 = ttg.local_load %view0 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128> -> tensor<64x64xf16>
+    // WAR between %data0 load and the store, both access %view0
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data0, %view0 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.local_load
+    %data1 = ttg.local_load %view1 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128> -> tensor<64x64xf16>
+    // WAR between %data1 load and the store, both access %view1
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data1, %view1 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.local_load
+    %data2 = ttg.local_load %view2 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128> -> tensor<64x64xf16>
+    // WAR between %data2 load and the store, both access %view2
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data2, %view2 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.local_load
+    %data3 = ttg.local_load %view3 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128> -> tensor<64x64xf16>
+    // WAR between %data3 load and the store, both access %view3
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %data3, %view3 : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // RAW between %view3 store and %all_res load, both access part of %view3
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
+    %all_res = ttg.local_load %alloc : !ttg.memdesc<128x128xf16, #shared, #smem, mutable, 128x128> -> tensor<128x128xf16>
+    // CHECK-NEXT: return
+    tt.return
+}
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#sharedT = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: layout_changed_reinterpret
+tt.func @layout_changed_reinterpret() {
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16>
+  %alloc = ttg.local_alloc %cst : (tensor<16x16xf16>) -> !ttg.memdesc<16x16xf16, #shared, #smem>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %0 = ttg.local_load %alloc : !ttg.memdesc<16x16xf16, #shared, #smem> -> tensor<16x16xf16>
+  // CHECK-NEXT: ttg.memdesc_reinterpret
+  %reinterpreted = ttg.memdesc_reinterpret %alloc : !ttg.memdesc<16x16xf16, #shared, #smem> -> !ttg.memdesc<16x16xf16, #sharedT, #smem>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %1 = ttg.local_load %reinterpreted : !ttg.memdesc<16x16xf16, #sharedT, #smem> -> tensor<16x16xf16>
+  tt.return
+}
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#sharedT = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: layout_changed_reinterpret_subslice
+tt.func @layout_changed_reinterpret_subslice() {
+  %cst_alloc = arith.constant dense<0.000000e+00> : tensor<32x16xf16>
+  %cst_store = arith.constant dense<0.000000e+00> : tensor<16x16xf16>
+  %alloc = ttg.local_alloc %cst_alloc : (tensor<32x16xf16>) -> !ttg.memdesc<32x16xf16, #shared, #smem, mutable>
+  %subslice1 = ttg.memdesc_subslice %alloc [0, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %0 = ttg.local_load %subslice1 : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> -> tensor<16x16xf16>
+  %subslice2 = ttg.memdesc_subslice %alloc [16, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  %reinterpreted = ttg.memdesc_reinterpret %subslice2 : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> -> !ttg.memdesc<16x16xf16, #sharedT, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_store
+  ttg.local_store %cst_store, %reinterpreted : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #sharedT, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %1 = ttg.local_load %subslice1 : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> -> tensor<16x16xf16>
+  tt.return
+}
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#sharedT = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: reinterpret_then_multiple_loads
+tt.func @reinterpret_then_multiple_loads() {
+  %cst_f16 = arith.constant dense<0.000000e+00> : tensor<16x16xf16>
+  %cst_f32 = arith.constant dense<0.000000e+00> : tensor<16x8xf32>
+  %alloc = ttg.local_alloc %cst_f16 : (tensor<16x16xf16>) -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+  %reinterpreted = ttg.memdesc_reinterpret %alloc : !ttg.memdesc<16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x8xf32, #sharedT, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %0 = ttg.local_load %reinterpreted : !ttg.memdesc<16x8xf32, #sharedT, #smem, mutable> -> tensor<16x8xf32>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  %1 = ttg.local_load %reinterpreted : !ttg.memdesc<16x8xf32, #sharedT, #smem, mutable> -> tensor<16x8xf32>
+  tt.return
+}
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: loop_with_indexed_memdesc
+// Test that a loop carried memdesc_index is conservatively
+// marked as overlapping.
+tt.func @loop_with_indexed_memdesc(%lb : index, %ub : index) {
+  %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf16>
+  %step = arith.constant 1 : index
+  %c0_i32 = arith.constant 0 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<2x128x128xf16, #shared, #smem, mutable>
+  %view0 = ttg.memdesc_index %alloc[%c0_i32] : !ttg.memdesc<2x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  ttg.local_store %cst, %view0 : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %result = scf.for %iv = %lb to %ub step %step iter_args(%iter_view = %view0) -> (!ttg.memdesc<128x128xf16, #shared, #smem, mutable>) {
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
+    %load = ttg.local_load %iter_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+    %iv_i32 = arith.index_cast %iv : index to i32
+    %next_idx = arith.remui %iv_i32, %c2_i32 : i32
+    %next_view = ttg.memdesc_index %alloc[%next_idx] : !ttg.memdesc<2x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %load, %next_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    scf.yield %next_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  }
+  tt.return
+}
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: loop_subslice_iterarg
+// Test that a loop carried memdesc_subslice is conservatively
+// marked as overlapping.
+tt.func @loop_subslice_iterarg() {
+  %cst = arith.constant dense<0.000000e+00> : tensor<32x16xf16>
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c0_i32 = arith.constant 0 : i32
+  %alloc = ttg.local_alloc %cst : (tensor<32x16xf16>) -> !ttg.memdesc<32x16xf16, #shared, #smem, mutable>
+  %subA = ttg.memdesc_subslice %alloc[0, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  %subB = ttg.memdesc_subslice %alloc[16, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  %result = scf.for %iv = %c0 to %c2 step %c1 iter_args(%cur = %subA) -> (!ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>) {
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
+    %val = ttg.local_load %cur : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> -> tensor<16x16xf16>
+    %iv_i32 = arith.index_cast %iv : index to i32
+    %isZero = arith.cmpi eq, %iv_i32, %c0_i32 : i32
+    %next = scf.if %isZero -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> {
+      scf.yield %subB : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+    } else {
+      scf.yield %subA : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+    }
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %val, %next : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+    scf.yield %next : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  }
+  tt.return
+}
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: two_subslices_with_if
+// Test that a subslice with partly unknown offsets is treated conservatively.
+tt.func @two_subslices_with_if() {
+  %cst_dummy = arith.constant dense<1.000000e+00> : tensor<16x16xf16>
+  %cst_store = arith.constant dense<2.000000e+00> : tensor<8x8xf16>
+  %c1 = arith.constant 1 : i1
+  %alloc = ttg.local_alloc %cst_dummy : (tensor<16x16xf16>) -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  ttg.local_store %cst_dummy, %alloc : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %loaded = ttg.local_load %alloc : !ttg.memdesc<16x16xf16, #shared, #smem, mutable> -> tensor<16x16xf16>
+  %subsliceA = ttg.memdesc_subslice %alloc[8, 8] : !ttg.memdesc<16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<8x8xf16, #shared, #smem, mutable, 16x16>
+  %subsliceA1 = scf.if %c1 -> !ttg.memdesc<8x8xf16, #shared, #smem, mutable, 16x16> {
+    scf.yield %subsliceA : !ttg.memdesc<8x8xf16, #shared, #smem, mutable, 16x16>
+  } else {
+    scf.yield %subsliceA : !ttg.memdesc<8x8xf16, #shared, #smem, mutable, 16x16>
+  }
+  %cst_store_4x4 = arith.constant dense<2.000000e+00> : tensor<4x4xf16>
+  %subsliceA2 = ttg.memdesc_subslice %subsliceA1[0, 0] : !ttg.memdesc<8x8xf16, #shared, #smem, mutable, 16x16> -> !ttg.memdesc<4x4xf16, #shared, #smem, mutable, 16x16>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_store
+  ttg.local_store %cst_store_4x4, %subsliceA2 : tensor<4x4xf16> -> !ttg.memdesc<4x4xf16, #shared, #smem, mutable, 16x16>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_store
+  ttg.local_store %cst_store, %subsliceA : tensor<8x8xf16> -> !ttg.memdesc<8x8xf16, #shared, #smem, mutable, 16x16>
+  tt.return
+}
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: loop_memindex_subslice
+tt.func @loop_memindex_subslice(%arg0: tensor<2x128x128xf16>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  // CHECK: ttg.local_alloc
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<2x128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.memdesc_index
+  %base = ttg.memdesc_index %alloc[%c0_i32] : !ttg.memdesc<2x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %result = scf.for %iv = %c0 to %c2 step %c1 iter_args(%cur = %base) -> (!ttg.memdesc<128x128xf16, #shared, #smem, mutable>) {
+    // CHECK: ttg.memdesc_subslice
+    %top_left = ttg.memdesc_subslice %cur[0, 0] : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK: ttg.memdesc_subslice
+    %bottom_right = ttg.memdesc_subslice %cur[64, 64] : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    // CHECK-NEXT: ttg.local_load
+    %tile = ttg.local_load %top_left : !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128> -> tensor<64x64xf16>
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %tile, %bottom_right : tensor<64x64xf16> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 128x128>
+    %iv_i32 = arith.index_cast %iv : index to i32
+    %next = arith.addi %iv_i32, %c1_i32 : i32
+    // CHECK: ttg.memdesc_index
+    %next_view = ttg.memdesc_index %alloc[%next] : !ttg.memdesc<2x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    scf.yield %next_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  }
+  // CHECK: return
+  tt.return
+}
+
+// -----
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared3 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
+#smem = #ttg.shared_memory
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 32]}>
+
+module attributes {ttg.target = "cuda:90", "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: warp_dot_multi_read
+  tt.func @warp_dot_multi_read(%arg0: !tt.tensordesc<tensor<1x256x128xf8E5M2, #shared1>>, %arg1: tensor<128x128x!tt.ptr<f8E5M2>>, %arg2: i32, %arg3: i1, %arg4: tensor<128x256xf32, #mma>, %arg5: tensor<128x128xi1>) {
+
+    %a_tile = ttg.local_alloc : () -> !ttg.memdesc<128x128xf8E5M2, #shared1, #smem, mutable>
+    %b_tile = ttg.local_alloc : () -> !ttg.memdesc<256x128xf8E5M2, #shared1, #smem, mutable>
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
+
+    %b_trans = ttg.memdesc_trans %b_tile {order = array<i32: 1, 0>} : !ttg.memdesc<256x128xf8E5M2, #shared1, #smem, mutable> -> !ttg.memdesc<128x256xf8E5M2, #shared3, #smem, mutable>
+
+    %dot = ttng.warp_group_dot %a_tile, %b_trans, %arg4 {inputPrecision = 0 : i32, isAsync = true, maxNumImpreciseAcc = 1073741824 : i32} : !ttg.memdesc<128x128xf8E5M2, #shared1, #smem, mutable> * !ttg.memdesc<128x256xf8E5M2, #shared3, #smem, mutable> -> tensor<128x256xf32, #mma>
+    %0:3 = ttng.warp_group_dot_wait %dot, %a_tile, %b_trans {pendings = 1 : i32} : tensor<128x256xf32, #mma>, !ttg.memdesc<128x128xf8E5M2, #shared1, #smem, mutable>, !ttg.memdesc<128x256xf8E5M2, #shared3, #smem, mutable>
+
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.async_copy_global_to_local
+    ttg.async_copy_global_to_local %arg1, %a_tile mask %arg5 {contiguity = 16 : i32} : tensor<128x128x!tt.ptr<f8E5M2>> -> <128x128xf8E5M2, #shared1, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %arg0[%arg2, %arg2, %arg2] %b_tile, %barrier, %arg3 : !tt.tensordesc<tensor<1x256x128xf8E5M2, #shared1>>, !ttg.memdesc<1xi64, #shared2, #smem, mutable> -> !ttg.memdesc<256x128xf8E5M2, #shared1, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blockedLarge = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#sharedLarge = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#blockedCallSrc = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#mmaCall = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#blockedCallDst = #ttg.dot_op<{opIdx = 0, parent = #mmaCall, kWidth = 2}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func private @callee_call_offset_membar() -> tensor<128x32xf16, #blockedCallDst> {
+    %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
+    tt.return %cvt : tensor<128x32xf16, #blockedCallDst>
+  }
+
+  // The call's virtual buffer is offset by the large allocation. The
+  // subsequent scratch op should alias at the same offset and require a membar.
+  // CHECK-LABEL: @caller_call_offset_membar
+  // CHECK: tt.call @callee_call_offset_membar{{.*}}allocation.offset = [[CALL_OFFSET:[1-9][0-9]*]]
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.convert_layout{{.*}}allocation.offset = [[CALL_OFFSET]]
+  tt.func @caller_call_offset_membar() -> tensor<128x32xf16, #blockedCallDst> {
+    %large = arith.constant dense<0> : tensor<65536xi8, #blockedLarge>
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<65536xi8, #sharedLarge, #smem, mutable>
+    ttg.local_store %large, %buf : tensor<65536xi8, #blockedLarge> -> !ttg.memdesc<65536xi8, #sharedLarge, #smem, mutable>
+
+    %call = tt.call @callee_call_offset_membar() : () -> tensor<128x32xf16, #blockedCallDst>
+
+    %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
+    %sum = arith.addf %call, %cvt : tensor<128x32xf16, #blockedCallDst>
+
+    %ld = ttg.local_load %buf : !ttg.memdesc<65536xi8, #sharedLarge, #smem, mutable> -> tensor<65536xi8, #blockedLarge>
+    ttg.local_dealloc %buf : !ttg.memdesc<65536xi8, #sharedLarge, #smem, mutable>
+    tt.return %sum : tensor<128x32xf16, #blockedCallDst>
+  }
 }

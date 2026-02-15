@@ -61,8 +61,9 @@ CUresult {kernel_name}(CUstream stream, {signature}) {{
     unsigned int gY = {gridY};
     unsigned int gZ = {gridZ};
     CUdeviceptr global_scratch = 0;
+    CUdeviceptr profile_scratch = 0;
     void *args[{num_args}] = {{ {arg_pointers} }};
     // TODO: shared memory
     if(gX * gY * gZ > 0)
-      return cuLaunchKernel({kernel_name}_func, gX, gY, gZ, {num_warps} * 32, 1, 1, {shared}, stream, args, NULL);
+      return cuLaunchKernel({kernel_name}_func, gX, gY, gZ, {num_warps} * {warp_size}, 1, 1, {shared}, stream, args, NULL);
 }}

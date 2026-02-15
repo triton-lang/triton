@@ -1,4 +1,5 @@
 #include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/GenericSwizzling.h"
 
 namespace mlir::triton {
 
@@ -34,19 +35,6 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
       ll, dimNames, [](int b, int32_t basis) { return basis == (1 << b); });
 }
 
-bool squareSublayoutIsPermutation(const LinearLayout &ll,
-                                  ArrayRef<StringAttr> dimNames) {
-  int32_t mask = 0;
-  return checkSquareSublayout(ll, dimNames, [&](int b, int32_t basis) {
-    if (!llvm::isPowerOf2_32(basis))
-      return false;
-    if (mask & basis)
-      return false; // check if this bit is already set
-    mask |= basis;
-    return true;
-  });
-}
-
 LinearLayout
 ensureLayoutNotLargerThan(const LinearLayout &layout,
                           const llvm::SmallDenseMap<StringAttr, int64_t> &shape,
@@ -56,61 +44,53 @@ ensureLayoutNotLargerThan(const LinearLayout &layout,
     return layout;
   }
   MLIRContext *ctx = shape.begin()->first.getContext();
-
   auto bases = layout.getBases();
-
   auto kRegister = StringAttr::get(ctx, "register");
-  std::set<int32_t> broadcastedDims;
 
-  for (auto outDim : llvm::enumerate(layout.getOutDimNames())) {
-    auto outDimName = outDim.value();
-    int32_t actualSize = layout.getOutDimSize(outDimName);
-    int32_t desiredSize = shape.lookup(outDimName);
-    if (actualSize <= desiredSize) {
-      continue;
-    }
-    assert(actualSize % desiredSize == 0);
-    // <inDimName, basisIdx, outValue>
-    std::vector<std::tuple<StringAttr, int, int>> sortedBases;
-    for (auto [inDimName, basis] : bases) {
-      for (size_t basisIdx = 0; basisIdx < basis.size(); basisIdx++) {
-        auto outValue = basis[basisIdx][outDim.index()];
-        if (outValue == 0) {
-          continue;
-        }
-        assert(llvm::isPowerOf2_32(outValue));
-        sortedBases.emplace_back(inDimName, basisIdx, outValue);
-      }
-    }
-    // From the largest basis to the smallest.
-    llvm::sort(sortedBases,
-               [](auto a, auto b) { return std::get<2>(a) > std::get<2>(b); });
-    for (auto [inDimName, basisIdx, outValue] : sortedBases) {
-      if (actualSize <= desiredSize) {
-        break;
-      }
-      if (!broadcastRegisters && inDimName == kRegister) {
-        broadcastedDims.insert(basisIdx);
-      } else {
-        bases[inDimName][basisIdx][outDim.index()] = 0;
-      }
-      actualSize >>= 1;
-    }
+  auto outDims = layout.getOutDims();
+  for (auto &[outDim, outDimSize] : outDims) {
+    auto newOutDim = shape.lookup(outDim);
+    // Shape should be a non-zero power of 2
+    assert(llvm::isPowerOf2_32(newOutDim) && newOutDim != 0);
+    outDimSize = std::min<int32_t>(outDimSize, newOutDim);
   }
-  if (!broadcastRegisters) {
-    // Remove broadcasted registers
+
+  // Ensure no base exceeds the resized out-dim sizes.
+  SmallVector<int32_t> outDimSizes;
+  for (auto &pair : outDims) {
+    outDimSizes.push_back(pair.second);
+  }
+  for (auto &[inDimName, inDimBases] : bases) {
+    bool dropBroadcasting = (!broadcastRegisters && inDimName == kRegister);
     std::vector<std::vector<int32_t>> newBasesRegister;
-    for (auto [idx, basis] : llvm::enumerate(bases[kRegister])) {
-      // Remove if it's broadcasted
-      if (broadcastedDims.find(idx) == broadcastedDims.end()) {
-        newBasesRegister.push_back(std::move(basis));
+    for (auto &basis : inDimBases) {
+      bool wasZero = true;
+      bool isZero = true;
+      for (size_t i = 0; i < basis.size(); ++i) {
+        int32_t original = basis[i];
+        if (original != 0) {
+          wasZero = false;
+        }
+        if (original >= outDimSizes[i]) {
+          basis[i] = 0;
+        }
+        if (basis[i] != 0) {
+          isZero = false;
+        }
+      }
+      if (dropBroadcasting) {
+        if (wasZero || !isZero) {
+          newBasesRegister.push_back(std::move(basis));
+        }
       }
     }
-    bases[kRegister] = std::move(newBasesRegister);
+    if (dropBroadcasting) {
+      inDimBases = std::move(newBasesRegister);
+    }
   }
 
-  return LinearLayout(std::move(bases),
-                      llvm::to_vector(layout.getOutDimNames()));
+  return LinearLayout(std::move(bases), std::move(outDims),
+                      /*requireSurjective=*/false);
 }
 
 // For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
@@ -185,6 +165,175 @@ LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
   return ret;
 }
 
+LinearLayout zerosLike(const LinearLayout &layout) {
+  auto bases = layout.getBases();
+  for (auto &basis : bases) {
+    for (auto &vec : basis.second) {
+      for (auto &val : vec) {
+        val = 0;
+      }
+    }
+  }
+
+  return LinearLayout(std::move(bases), layout.getOutDims(),
+                      /*requireSurjective=*/false);
+}
+
+std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
+                                             const LinearLayout &B, bool left) {
+  // We can implement this generically for any dimension, but for now we only do
+  // it for regs to keep the API simpler
+  assert(A.getNumInDims() != 0);
+  auto kReg = *A.getInDimNames().begin();
+  assert(kReg.str() == "register");
+  assert(B.getNumInDims() != 0);
+  assert(kReg == *B.getInDimNames().begin());
+
+  // We broadcast B to have the same number of out dims as A.
+  LinearLayout broadcast;
+  for (StringAttr out : A.getOutDimNames()) {
+    broadcast *= LinearLayout::identity1D(1, kReg, out);
+  }
+  auto BBroadcast = broadcast * B;
+
+  // Retrieve the register bases from A and B.
+  const auto &ARegBases = A.getBases().lookup(kReg);
+  const auto &BRegBases = BBroadcast.getBases().lookup(kReg);
+
+  llvm::DenseMap<StringAttr, unsigned> log2QuotSize;
+  for (StringAttr out : A.getOutDimNames()) {
+    log2QuotSize[out] =
+        A.getOutDimSizeLog2(out) - BBroadcast.getOutDimSizeLog2(out);
+    if (log2QuotSize[out] < 0)
+      return std::nullopt;
+  }
+
+  auto multiplyByTileSize =
+      [&](ArrayRef<int32_t> bBasis) -> std::vector<int32_t> {
+    std::vector<int32_t> result;
+    size_t idx = 0;
+    assert(bBasis.size() == A.getNumOutDims());
+    for (auto [dim, b] : llvm::zip(A.getOutDimNames(), bBasis)) {
+      result.push_back(b << log2QuotSize.lookup(dim));
+    }
+    return result;
+  };
+
+  // Compute the permutation order:
+  // For each basis in B (in order), find its index in A (using each index at
+  // most once). We make sure we use each index at most once in case B
+  // broadcasts (weird case, but better safe than sorry).
+  SmallVector<size_t> bIndices;
+  SmallVector<bool> used(ARegBases.size(), false);
+  for (auto bB : BRegBases) {
+    bool found = false;
+    if (!left)
+      bB = multiplyByTileSize(bB);
+
+    for (size_t j = 0; j < ARegBases.size(); ++j) {
+      found = !used[j] && (ARegBases[j] == bB);
+      if (found) {
+        bIndices.push_back(j);
+        used[j] = true;
+        break;
+      }
+    }
+    if (!found)
+      return std::nullopt; // A basis from B not found in A.
+  }
+  // Append remaining indices from A (preserving their original order).
+  SmallVector<size_t> remainingIndices;
+  for (size_t i = 0; i < ARegBases.size(); ++i) {
+    if (!used[i])
+      remainingIndices.push_back(i);
+  }
+  SmallVector<size_t> permOrder = to_vector(llvm::concat<size_t>(
+      left ? bIndices : remainingIndices, left ? remainingIndices : bIndices));
+  return ColumnAction(permOrder, kReg, ARegBases.size());
+}
+
+ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
+  assert(layout.getNumInDims() != 0);
+  auto kReg = *layout.getInDimNames().begin();
+  assert(kReg.str() == "register");
+
+  // Drop the bases that are zero
+  const auto &bases = layout.getBases().lookup(kReg);
+  SmallVector<size_t> permOrder;
+  for (size_t i = 0; i < bases.size(); ++i) {
+    if (!llvm::all_of(bases[i], [](size_t x) { return x == 0; })) {
+      permOrder.push_back(i);
+    }
+  }
+  return ColumnAction(permOrder, kReg, bases.size());
+}
+std::pair<int64_t, ColumnAction>
+actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
+                      uint64_t maskSpanOffsets) {
+  // General idea:
+  // We wan to swap an xor into an addition when computing the register offsets.
+  // We can do this if the output bits of this register are disjoint from those
+  // from lanes/warps/blocks or any affine offset (i.e., markSpanOffsets).
+
+  // Note this function assumes that if any registers are used in the addrLayout
+  // of the layout (as in ldmatrix/stmatrix) they will be the first non-zero
+  // registers within `layout`
+  assert(layout.getNumInDims() != 0);
+  auto kReg = *layout.getInDimNames().begin();
+  assert(kReg.str() == "register");
+  uint32_t bits = maskSpanOffsets;
+  llvm::SetVector<uint32_t> tileBases;
+  auto addrNamedBases = addrLayout.flattenOuts().getBases();
+  for (auto bases : llvm::make_second_range(addrNamedBases)) {
+    for (auto basis : bases) {
+      bits |= basis[0];
+      tileBases.insert(basis[0]);
+    }
+  }
+  SmallVector<size_t> front, back;
+  auto layoutNamedBases = layout.flattenOuts().getBases();
+  for (auto [idx, basis] : llvm::enumerate(layoutNamedBases.lookup(kReg))) {
+    if ((basis[0] & bits) == 0 || tileBases.contains(basis[0])) {
+      front.push_back(idx);
+    } else {
+      back.push_back(idx);
+    }
+  }
+  auto permOrder = to_vector(llvm::concat<size_t>(front, back));
+  return {1 << front.size(),
+          ColumnAction(permOrder, kReg, layout.getInDimSizeLog2(kReg))};
+}
+
+SmallVector<Value> broadcastAs(const SmallVector<Value> &values,
+                               const LinearLayout &layout) {
+  assert(layout.getNumInDims() != 0);
+  auto kReg = *layout.getInDimNames().begin();
+  assert(kReg.str() == "register");
+  uint32_t broadcastMask = layout.getFreeVariableMasks().lookup(kReg);
+  assert((layout.getInDimSize(kReg) / (1 << llvm::popcount(broadcastMask))) ==
+         values.size());
+
+  std::vector<std::vector<int32_t>> newBases;
+  int i = 0;
+  for (int j = 0; j < layout.getInDimSizeLog2(kReg); j++) {
+    if (broadcastMask & (1 << j)) {
+      newBases.push_back({0});
+    } else {
+      newBases.push_back({1 << i});
+      i++;
+    }
+  }
+  auto newLayout = LinearLayout({{kReg, std::move(newBases)}}, {kReg});
+  SmallVector<Value> ret;
+
+  ret.reserve(newLayout.getInDimSize(kReg));
+  for (int i = 0; i < newLayout.getInDimSize(kReg); i++) {
+    int32_t srcIdx = newLayout.apply({{kReg, i}}).begin()->second;
+    ret.push_back(values[srcIdx]);
+  }
+  return ret;
+}
+
 // Compute the supremum of two lists.
 // If the supremum is not unique, we return the first list first
 // Error out if the supremum does not exist
@@ -246,6 +395,172 @@ SmallVector<StringAttr> supremum(const SmallVector<StringAttr> &x,
     }
   }
   return to_vector(result);
+}
+
+LinearLayout reshapeLayout(MLIRContext *ctx, LinearLayout layout,
+                           ArrayRef<int64_t> shape) {
+  int rank = shape.size();
+  auto srcOutDims = to_vector(layout.getOutDimNames());
+  std::reverse(srcOutDims.begin(), srcOutDims.end());
+  auto newOutDims = standardOutDimPairs(ctx, shape);
+  std::reverse(newOutDims.begin(), newOutDims.end());
+  return layout.transposeOuts(srcOutDims)
+      .reshapeOuts(newOutDims)
+      .transposeOuts(standardOutDimNames(ctx, rank));
+}
+
+LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order) {
+  // Transpose the tile layout.
+  auto namedBases = layout.getBases();
+  // move the most outer dimensions to the inner most position.
+
+  for (auto &bases : llvm::make_second_range(namedBases)) {
+    for (auto &b : bases) {
+      std::vector<int32_t> newB;
+      for (auto i : order) {
+        newB.push_back(b[i]);
+      }
+      b = std::move(newB);
+    }
+  }
+  return LinearLayout(std::move(namedBases),
+                      to_vector(layout.getOutDimNames()));
+}
+
+std::pair<int, ColumnAction>
+largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
+                     std::optional<int> maybeMaxVecElems) {
+  // Find the largest vectorisation we can use:
+  auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
+  StringAttr kReg = S("register");
+  StringAttr kOffset = S("offset");
+  LinearLayout quot;
+  LinearLayout tile;
+  ColumnAction permutation;
+  // If there are restrictions on the vectorisation, we don't allow
+  // permutations.
+  auto allowPerm = !maybeMaxVecElems.has_value();
+  auto maxVecElems = maybeMaxVecElems.value_or(128 / bitwidth);
+  for (int v = maxVecElems; v >= 1; v /= 2) {
+    tile = LinearLayout::identity1D(v, kReg, kOffset);
+    auto maybePerm = regPermForDivide(cvt, tile, /*left=*/true);
+    if (!maybePerm) {
+      continue;
+    }
+    permutation = *maybePerm;
+    if (!allowPerm && !permutation.isIdentity()) {
+      continue;
+    }
+    auto newCvt = permutation.apply(cvt);
+    auto maybeQuot = divideLeft(newCvt, tile);
+    if (!maybeQuot) {
+      continue;
+    }
+    return {v, permutation};
+  }
+  llvm_unreachable("Vectorization < 1 is not valid");
+}
+
+std::optional<LinearLayout> getReps(const LinearLayout &cvt,
+                                    const LinearLayout &tile) {
+
+  // Ensure tile out-dims are subset of cvt out-dims.
+  for (auto od : tile.getOutDimNames())
+    assert(cvt.hasOutDim(od) && "tile out-dims must be contained in cvt");
+
+  // Precompute tile out-dim bit-widths.
+  llvm::SmallDenseMap<StringAttr, int> outBLog2;
+  for (StringAttr od : cvt.getOutDimNames())
+    outBLog2[od] = tile.hasOutDim(od) ? tile.getOutDimSizeLog2(od) : 0;
+
+  // Build a per-out-dimension mask by OR-ing all tile bases that touch it.
+  llvm::SmallDenseMap<StringAttr, int32_t> tileMaskPerOutDim;
+  for (StringAttr od : cvt.getOutDimNames())
+    tileMaskPerOutDim[od] = 0;
+  for (auto &[inDim, inBases] : tile.getBases()) {
+    (void)inDim;
+    for (auto &basis : inBases) {
+      int idx = 0;
+      for (StringAttr od : tile.getOutDimNames()) {
+        tileMaskPerOutDim[od] |= basis[idx++];
+      }
+    }
+  }
+
+  // Build reps with the same in/out dims as cvt, but zeroing out the leading
+  // inB bases (per in-dim) and keeping the remainder bases unchanged from cvt.
+  LinearLayout::BasesT repsBases;
+  for (StringAttr id : cvt.getInDimNames()) {
+    int inA = cvt.getInDimSizeLog2(id);
+    int inB = tile.hasInDim(id) ? tile.getInDimSizeLog2(id) : 0;
+    if (inB > inA) {
+      return std::nullopt;
+    }
+
+    std::vector<std::vector<int32_t>> basesForDim;
+    basesForDim.reserve(inA);
+
+    // 1) Validate the starting bases match exactly.
+    for (int i = 0; i < inB; ++i) {
+      for (StringAttr od : cvt.getOutDimNames()) {
+        int a = cvt.getBasis(id, i, od);
+        int b = tile.getBasis(id, i, od);
+        if (a != b) {
+          return std::nullopt;
+        }
+      }
+    }
+
+    // 2) Validate no overlap: the remaining cvt bases must have zeros in all
+    //    tile-bit positions (computed as OR of all tile bases) for each
+    //    out-dim.
+    for (int i = inB; i < inA; ++i) {
+      for (StringAttr od : cvt.getOutDimNames()) {
+        int32_t mask = tileMaskPerOutDim.lookup(od);
+        if (mask == 0)
+          continue;
+        int v = cvt.getBasis(id, i, od);
+        if ((v & mask) != 0) {
+          return std::nullopt;
+        }
+      }
+    }
+
+    // 3) Emit reps bases: first inB as all-zeros; remainder copied from cvt.
+    for (int i = 0; i < inB; ++i) {
+      std::vector<int32_t> zero(cvt.getNumOutDims(), 0);
+      basesForDim.push_back(std::move(zero));
+    }
+    for (int i = inB; i < inA; ++i) {
+      std::vector<int32_t> keep;
+      keep.reserve(cvt.getNumOutDims());
+      for (StringAttr od : cvt.getOutDimNames())
+        keep.push_back(cvt.getBasis(id, i, od));
+      basesForDim.push_back(std::move(keep));
+    }
+
+    repsBases[id] = std::move(basesForDim);
+  }
+
+  return LinearLayout(std::move(repsBases), cvt.getOutDims(),
+                      /*requireSurjective=*/false);
+}
+
+LinearLayout removeStandardDim(const LinearLayout &layout, int dim) {
+  auto rank = layout.getNumOutDims();
+  assert(rank > 0);
+  assert(dim < rank);
+  auto *ctx = layout.getOutDimNames().begin()->getContext();
+  auto dims = to_vector(layout.getOutDimNames());
+  assert(dims == standardOutDimNames(ctx, rank));
+  dims.erase(dims.begin() + dim);
+  auto newLayout = layout.sublayout(to_vector(layout.getInDimNames()), dims);
+  auto dimSizes = newLayout.getOutDims();
+  auto newDims = standardOutDimNames(ctx, rank - 1);
+  for (auto [i, newDim] : llvm::enumerate(newDims)) {
+    dimSizes[i].first = newDim;
+  }
+  return LinearLayout(newLayout.getBases(), dimSizes, /*isSurjective*/ false);
 }
 
 } // namespace mlir::triton

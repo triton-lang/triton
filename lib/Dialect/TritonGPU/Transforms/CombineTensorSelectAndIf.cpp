@@ -1,3 +1,4 @@
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/Passes.h"
@@ -100,7 +101,7 @@ public:
       SetVector<Operation *> conditionUsers(condition.getUsers().begin(),
                                             condition.getUsers().end());
       // sort the users in topological order.
-      conditionUsers = multiRootTopologicalSort(conditionUsers);
+      conditionUsers = mlir::topologicalSort(conditionUsers);
       // Get condition's users
       for (Operation *user : conditionUsers) {
         auto ifOp = dyn_cast<scf::IfOp>(user);
@@ -124,8 +125,8 @@ public:
       for (arith::SelectOp selectOp : selectOps) {
         newResultTypes.push_back(selectOp.getResult().getType());
       }
-      auto newIfOp = builder.create<scf::IfOp>(
-          loc, newResultTypes, ifOp.getCondition(), /*hasElse*/ true);
+      auto newIfOp = scf::IfOp::create(builder, loc, newResultTypes,
+                                       ifOp.getCondition(), /*hasElse*/ true);
       // Move the existing blocks to the new if.
       newIfOp.getThenRegion().takeBody(ifOp.getThenRegion());
 
@@ -133,7 +134,8 @@ public:
         newIfOp.getElseRegion().takeBody(ifOp.getElseRegion());
       } else {
         // Create an empty yield
-        auto yieldOp = newIfOp.getElseBodyBuilder().create<scf::YieldOp>(loc);
+        auto builder = newIfOp.getElseBodyBuilder();
+        auto yieldOp = scf::YieldOp::create(builder, loc);
       }
 
       SmallVector<Value> ifYieldOperands = newIfOp.thenYield().getOperands();
@@ -147,7 +149,7 @@ public:
       // Update yields
       auto updateYield = [&](scf::YieldOp yield, SmallVector<Value> &operands) {
         builder.setInsertionPoint(yield);
-        builder.create<scf::YieldOp>(loc, operands);
+        scf::YieldOp::create(builder, loc, operands);
         yield.erase();
       };
       updateYield(newIfOp.thenYield(), ifYieldOperands);

@@ -25,30 +25,47 @@ import itertools
 import torch
 import triton
 import triton.language as tl
-import triton.tools.experimental_descriptor
 import triton.profiler as proton
+from triton.tools.tensor_descriptor import TensorDescriptor
 from contextlib import contextmanager
 
 from typing import Optional
-
-if torch.cuda.is_available():
-    from triton._C.libtriton import nvidia
-    cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
-    cublas = nvidia.cublas.CublasLt(cublas_workspace)
-else:
-    cublas = None
 
 
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+if is_cuda():
+    from triton._C.libtriton import nvidia
+    device_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
+    device_blas = nvidia.cublas.CublasLt(device_workspace)
+elif is_hip():
+    from triton._C.libtriton import amd
+    device_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
+    device_blas = amd.hipblas.HipblasLt(device_workspace)
+else:
+    device_blas = None
+
+
+def device_blas_name():
+    return 'cuBLAS' if is_cuda() else 'hipBLAS'
+
+
 def supports_tma():
     return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
 
+def is_hopper():
+    return torch.cuda.get_device_capability()[0] == 9
+
+
 def supports_ws():
-    return is_cuda() and torch.cuda.get_device_capability()[0] >= 10
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
 
 def _matmul_launch_metadata(grid, kernel, args):
@@ -65,59 +82,20 @@ def _matmul_launch_metadata(grid, kernel, args):
     return ret
 
 
-HAS_TMA_DESC = supports_tma() and hasattr(tl, "nv_tma_desc_type")
 HAS_TENSOR_DESC = supports_tma() and hasattr(tl, "make_tensor_descriptor")
+HAS_HOST_TENSOR_DESC = supports_tma() and hasattr(triton.tools.tensor_descriptor, "TensorDescriptor")
 HAS_WARP_SPECIALIZE = supports_ws() and HAS_TENSOR_DESC
 
 
-# TmaAutoTuneHelper used in htyu's PR #5622
-class TmaAutoTuneHelper:
-
-    # duck typing wrapper to implement the same interface as TmaDescKernelParam in Triton PR #4498
-    class KernelParamWrapper:
-
-        def __init__(self, desc):
-            self.desc = desc
-
-        def tma_desc_cpu_ptr(self):
-            return self.desc.data_ptr()
-
-    TMA_SIZE = 128
-
-    def __init__(self):
-        self.fill_1d_tma_descriptor_inner = (triton.runtime.driver.active.utils.fill_1d_tma_descriptor)
-        self.fill_2d_tma_descriptor_inner = (triton.runtime.driver.active.utils.fill_2d_tma_descriptor)
-        self.descriptors = {}
-
-    # Call this method outside of the lambda function for grid size
-    def init_tma_descriptor(self, name):
-        self.descriptors[name] = torch.empty(TmaAutoTuneHelper.TMA_SIZE, device="cpu", dtype=torch.int8)
-
-    # Call this method inside the lambda function for grid size
-    def fill_1d_tma_descriptor(self, name, ptr, dim, block_dim, element_size):
-        desc_x = self.descriptors[name]
-        assert desc_x.data_ptr() % 64 == 0
-        self.fill_1d_tma_descriptor_inner(ptr, dim, block_dim, element_size, desc_x.data_ptr())
-
-    # Call this method inside the lambda function for grid size
-    def fill_2d_tma_descriptor(self, name, ptr, dim1, dim0, block_dim1, block_dim0, element_size):
-        desc_x = self.descriptors[name]
-        assert desc_x.data_ptr() % 64 == 0
-        self.fill_2d_tma_descriptor_inner(ptr, dim1, dim0, block_dim1, block_dim0, element_size, desc_x.data_ptr())
-
-    def get_tma_descriptor_kernel_param(self, name):
-        assert self.descriptors[name] is not None
-        return self.KernelParamWrapper(self.descriptors[name])
-
-
-def matmul_get_configs():
+def matmul_get_configs(pre_hook=None):
     return [
-        triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K" : BK, "GROUP_SIZE_M" : 8}, num_stages=s, num_warps=w) \
-        for BM in [128] \
-        for BN in [128, 256] \
-        for BK in [64,128] \
-        for s in ([3,4]) \
-        for w in [4,8] \
+        triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": 8}, num_stages=s,
+                      num_warps=w, pre_hook=pre_hook)
+        for BM in [128]
+        for BN in [128, 256]
+        for BK in [64, 128]
+        for s in ([2, 3, 4])
+        for w in [4, 8]
     ]
 
 
@@ -202,12 +180,25 @@ def matmul(a, b):
     return c
 
 
+def matmul_tma_set_block_size_hook(nargs):
+    EPILOGUE_SUBTILE = nargs.get("EPILOGUE_SUBTILE", False)
+    BLOCK_M = nargs["BLOCK_SIZE_M"]
+    BLOCK_N = nargs["BLOCK_SIZE_N"]
+    BLOCK_K = nargs["BLOCK_SIZE_K"]
+    nargs["a_desc"].block_shape = [BLOCK_M, BLOCK_K]
+    nargs["b_desc"].block_shape = [BLOCK_N, BLOCK_K]
+    if EPILOGUE_SUBTILE:
+        nargs["c_desc"].block_shape = [BLOCK_M, BLOCK_N // 2]
+    else:
+        nargs["c_desc"].block_shape = [BLOCK_M, BLOCK_N]
+
+
 @triton.autotune(
-    configs=matmul_get_configs(),
+    configs=matmul_get_configs(pre_hook=matmul_tma_set_block_size_hook),
     key=["M", "N", "K", "WARP_SPECIALIZE"],
 )
 @triton.jit(launch_metadata=_matmul_launch_metadata)
-def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
+def matmul_kernel_tma(a_desc, b_desc, c_desc,  #
                       M, N, K,  #
                       BLOCK_SIZE_M: tl.constexpr,  #
                       BLOCK_SIZE_N: tl.constexpr,  #
@@ -237,15 +228,15 @@ def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 
     for k in tl.range(k_tiles, warp_specialize=WARP_SPECIALIZE):
         offs_k = k * BLOCK_SIZE_K
-        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
-        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
+        a = a_desc.load([offs_am, offs_k])
+        b = b_desc.load([offs_bn, offs_k])
         accumulator = tl.dot(a, b.T, accumulator)
 
     c = accumulator.to(dtype)
 
     offs_cm = pid_m * BLOCK_SIZE_M
     offs_cn = pid_n * BLOCK_SIZE_N
-    tl._experimental_descriptor_store(c_desc_ptr, c, [offs_cm, offs_cn])
+    c_desc.store([offs_cm, offs_cn], c)
 
 
 def matmul_tma(a, b, warp_specialize: bool):
@@ -259,53 +250,19 @@ def matmul_tma(a, b, warp_specialize: bool):
 
     c = torch.empty((M, N), device=a.device, dtype=dtype)
 
-    desc_helper = TmaAutoTuneHelper()
-    desc_helper.init_tma_descriptor("a")
-    desc_helper.init_tma_descriptor("b")
-    desc_helper.init_tma_descriptor("c")
+    # A dummy block value that will be overwritten when we have the real block size
+    dummy_block = [1, 1]
+    a_desc = TensorDescriptor.from_tensor(a, dummy_block)
+    b_desc = TensorDescriptor.from_tensor(b, dummy_block)
+    c_desc = TensorDescriptor.from_tensor(c, dummy_block)
 
     def grid(META):
-        nonlocal desc_helper
-        desc_helper.fill_2d_tma_descriptor(
-            "a",
-            a.data_ptr(),
-            M,
-            K,
-            META["BLOCK_SIZE_M"],
-            META["BLOCK_SIZE_K"],
-            a.element_size(),
-        )
-
-        desc_helper.fill_2d_tma_descriptor(
-            "b",
-            b.data_ptr(),
-            N,
-            K,
-            META["BLOCK_SIZE_N"],
-            META["BLOCK_SIZE_K"],
-            b.element_size(),
-        )
-
-        store_block_n = META["BLOCK_SIZE_N"]
-
-        desc_helper.fill_2d_tma_descriptor(
-            "c",
-            c.data_ptr(),
-            M,
-            N,
-            META["BLOCK_SIZE_M"],
-            store_block_n,
-            c.element_size(),
-        )
-
-        return (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
-
-    desc_a = desc_helper.get_tma_descriptor_kernel_param("a")
-    desc_b = desc_helper.get_tma_descriptor_kernel_param("b")
-    desc_c = desc_helper.get_tma_descriptor_kernel_param("c")
+        BLOCK_M = META["BLOCK_SIZE_M"]
+        BLOCK_N = META["BLOCK_SIZE_N"]
+        return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
 
     matmul_kernel_tma[grid](
-        desc_a, desc_b, desc_c,  #
+        a_desc, b_desc, c_desc,  #
         M, N, K,  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         WARP_SPECIALIZE=warp_specialize,  #
@@ -409,13 +366,13 @@ def matmul_persistent(a, b):
     return c
 
 
-def matmul_tma_persistent_get_configs():
+def matmul_tma_persistent_get_configs(pre_hook=None):
     return [
         triton.Config(
             {
                 'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": 8, "EPILOGUE_SUBTILE":
                 SUBTILE
-            }, num_stages=s, num_warps=w)  #
+            }, num_stages=s, num_warps=w, pre_hook=pre_hook)  #
         for BM in [128]  #
         for BN in [128, 256]  #
         for BK in [64, 128]  #
@@ -426,11 +383,11 @@ def matmul_tma_persistent_get_configs():
 
 
 @triton.autotune(
-    configs=matmul_tma_persistent_get_configs(),
+    configs=matmul_tma_persistent_get_configs(pre_hook=matmul_tma_set_block_size_hook),
     key=["M", "N", "K", "WARP_SPECIALIZE"],
 )
 @triton.jit(launch_metadata=_matmul_launch_metadata)
-def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
+def matmul_kernel_tma_persistent(a_desc, b_desc, c_desc,  #
                                  M, N, K,  #
                                  BLOCK_SIZE_M: tl.constexpr,  #
                                  BLOCK_SIZE_N: tl.constexpr,  #
@@ -462,8 +419,8 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
         for ki in range(k_tiles):
             offs_k = ki * BLOCK_SIZE_K
-            a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
-            b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
+            a = a_desc.load([offs_am, offs_k])
+            b = b_desc.load([offs_bn, offs_k])
             accumulator = tl.dot(a, b.T, accumulator)
 
         tile_id_c += NUM_SMS
@@ -480,12 +437,12 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
             acc = tl.permute(acc, (0, 2, 1))
             acc0, acc1 = tl.split(acc)
             c0 = acc0.to(dtype)
-            tl._experimental_descriptor_store(c_desc_ptr, c0, [offs_am_c, offs_bn_c])
+            c_desc.store([offs_am_c, offs_bn_c], c0)
             c1 = acc1.to(dtype)
-            tl._experimental_descriptor_store(c_desc_ptr, c1, [offs_am_c, offs_bn_c + BLOCK_SIZE_N // 2])
+            c_desc.store([offs_am_c, offs_bn_c + BLOCK_SIZE_N // 2], c1)
         else:
             accumulator = accumulator.to(dtype)
-            tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am_c, offs_bn_c])
+            c_desc.store([offs_am_c, offs_bn_c], accumulator)
 
 
 def matmul_tma_persistent(a, b, warp_specialize: bool):
@@ -499,61 +456,25 @@ def matmul_tma_persistent(a, b, warp_specialize: bool):
 
     c = torch.empty((M, N), device=a.device, dtype=dtype)
 
-    desc_helper = TmaAutoTuneHelper()
-    desc_helper.init_tma_descriptor("a")
-    desc_helper.init_tma_descriptor("b")
-    desc_helper.init_tma_descriptor("c")
-
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
 
+    # A dummy block value that will be overwritten when we have the real block size
+    dummy_block = [1, 1]
+    a_desc = TensorDescriptor.from_tensor(a, dummy_block)
+    b_desc = TensorDescriptor.from_tensor(b, dummy_block)
+    c_desc = TensorDescriptor.from_tensor(c, dummy_block)
+
     def grid(META):
-        nonlocal desc_helper
-        desc_helper.fill_2d_tma_descriptor(
-            "a",
-            a.data_ptr(),
-            M,
-            K,
-            META["BLOCK_SIZE_M"],
-            META["BLOCK_SIZE_K"],
-            a.element_size(),
-        )
-
-        desc_helper.fill_2d_tma_descriptor(
-            "b",
-            b.data_ptr(),
-            N,
-            K,
-            META["BLOCK_SIZE_N"],
-            META["BLOCK_SIZE_K"],
-            b.element_size(),
-        )
-
-        store_block_n = META["BLOCK_SIZE_N"]
-
-        if META["EPILOGUE_SUBTILE"]:
-            store_block_n = store_block_n // 2
-
-        desc_helper.fill_2d_tma_descriptor(
-            "c",
-            c.data_ptr(),
-            M,
-            N,
-            META["BLOCK_SIZE_M"],
-            store_block_n,
-            c.element_size(),
-        )
-
+        nonlocal a_desc, b_desc, c_desc
+        BLOCK_M = META["BLOCK_SIZE_M"]
+        BLOCK_N = META["BLOCK_SIZE_N"]
         return (min(
             NUM_SMS,
-            triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
+            triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N),
         ), )
 
-    desc_a = desc_helper.get_tma_descriptor_kernel_param("a")
-    desc_b = desc_helper.get_tma_descriptor_kernel_param("b")
-    desc_c = desc_helper.get_tma_descriptor_kernel_param("c")
-
     matmul_kernel_tma_persistent[grid](
-        desc_a, desc_b, desc_c,  #
+        a_desc, b_desc, c_desc,  #
         M, N, K,  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         NUM_SMS=NUM_SMS,  #
@@ -562,21 +483,31 @@ def matmul_tma_persistent(a, b, warp_specialize: bool):
     return c
 
 
-@triton.autotune(
-    configs=matmul_tma_persistent_get_configs(),
-    key=["M", "N", "K", "WARP_SPECIALIZE"],
-)
+def prune_invalid_configs(configs, named_args, **kwargs):
+    FLATTEN = kwargs["FLATTEN"]
+    # Filter out configs where EPILOGUE_SUBTILE is true and HOPPER is true
+    return [conf for conf in configs if not (conf.kwargs.get("EPILOGUE_SUBTILE", True) and FLATTEN is False)]
+
+
+@triton.autotune(configs=matmul_tma_persistent_get_configs(), key=["M", "N", "K", "WARP_SPECIALIZE", "FLATTEN"],
+                 prune_configs_by={'early_config_prune': prune_invalid_configs})
 @triton.jit(launch_metadata=_matmul_launch_metadata)
-def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
-                                        M, N, K,  #
-                                        BLOCK_SIZE_M: tl.constexpr,  #
-                                        BLOCK_SIZE_N: tl.constexpr,  #
-                                        BLOCK_SIZE_K: tl.constexpr,  #
-                                        GROUP_SIZE_M: tl.constexpr,  #
-                                        EPILOGUE_SUBTILE: tl.constexpr,  #
-                                        NUM_SMS: tl.constexpr,  #
-                                        WARP_SPECIALIZE: tl.constexpr,  #
-                                        ):
+def matmul_kernel_descriptor_persistent(
+    a_ptr,
+    b_ptr,
+    c_ptr,  #
+    M,
+    N,
+    K,  #
+    BLOCK_SIZE_M: tl.constexpr,  #
+    BLOCK_SIZE_N: tl.constexpr,  #
+    BLOCK_SIZE_K: tl.constexpr,  #
+    GROUP_SIZE_M: tl.constexpr,  #
+    EPILOGUE_SUBTILE: tl.constexpr,  #
+    NUM_SMS: tl.constexpr,  #
+    WARP_SPECIALIZE: tl.constexpr,  #
+    FLATTEN: tl.constexpr,
+):
     # Matmul using TMA and device-side descriptor creation
     dtype = c_ptr.dtype.element_ty
     start_pid = tl.program_id(axis=0)
@@ -609,7 +540,7 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
     tile_id_c = start_pid - NUM_SMS
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True, warp_specialize=WARP_SPECIALIZE):
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=FLATTEN, warp_specialize=WARP_SPECIALIZE):
         pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         offs_am = pid_m * BLOCK_SIZE_M
         offs_bn = pid_n * BLOCK_SIZE_N
@@ -657,17 +588,24 @@ def matmul_descriptor_persistent(a, b, warp_specialize: bool):
 
     triton.set_allocator(alloc_fn)
 
+    # Hopper warpspec doesn't work with flatten
+    flatten = False if (warp_specialize and is_hopper()) else True
     grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
     matmul_kernel_descriptor_persistent[grid](
-        a, b, c,  #
-        M, N, K,  #
+        a,
+        b,
+        c,  #
+        M,
+        N,
+        K,  #
         NUM_SMS=NUM_SMS,  #
         WARP_SPECIALIZE=warp_specialize,  #
+        FLATTEN=flatten,
     )
     return c
 
 
-def cublas_matmul(a, b):
+def device_blas_matmul(a, b):
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
     M, K = a.shape
@@ -676,9 +614,10 @@ def cublas_matmul(a, b):
     c = torch.empty((M, N), device=a.device, dtype=dtype)
     bytes_per_elem = a.element_size()
     flops_str = f"flops{bytes_per_elem * 8}"
-    with proton.scope(f"cublas [M={M}, N={N}, K={K}]",
+    blas_name = device_blas_name()
+    with proton.scope(f"{blas_name} [M={M}, N={N}, K={K}]",
                       {"bytes": bytes_per_elem * (M * K + N * K + M * N), flops_str: 2. * M * N * K}):
-        cublas.matmul(a, b, c)
+        device_blas.matmul(a, b, c)
     return c
 
 
@@ -720,8 +659,9 @@ def bench(K, dtype, reps=10000, warmup_reps=10000):
 
     b = b.T.contiguous()
 
-    if cublas is not None:
-        bench_fn("cublas", reps, warmup_reps, cublas_matmul, a, b)
+    if device_blas is not None:
+        blas_name = device_blas_name()
+        bench_fn(blas_name, reps, warmup_reps, device_blas_matmul, a, b)
     if dtype == torch.float16:
         bench_fn("torch", reps, warmup_reps, torch_matmul, a, b)
     bench_fn("naive", reps, warmup_reps, matmul, a, b.T)
@@ -729,7 +669,8 @@ def bench(K, dtype, reps=10000, warmup_reps=10000):
     warp_specialize = [False, True] if HAS_WARP_SPECIALIZE else [False]
     for ws in warp_specialize:
         ws_str = "_ws" if ws else ""
-        if HAS_TMA_DESC:
+        # disable on-host warpspec on Hopper
+        if HAS_HOST_TENSOR_DESC and not (is_hopper() and ws):
             bench_fn(f"tma_persistent{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma_persistent(a, b, ws), a, b)
             bench_fn(f"tma{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma(a, b, ws), a, b)
         if HAS_TENSOR_DESC:
@@ -756,19 +697,21 @@ def validate(M, N, K, dtype):
 
     naive_result = matmul(a, b.T).to(torch.float16)
     run_test(naive_result, torch_matmul, a, b, "Torch", enabled=dtype == torch.float16)
-    run_test(naive_result, cublas_matmul, a, b, "cuBLAS", enabled=cublas is not None)
+    run_test(naive_result, device_blas_matmul, a, b, device_blas_name(), enabled=device_blas is not None)
     run_test(naive_result, matmul_persistent, a, b.T, "Persistent")
 
     kernels = [
-        (matmul_tma, "TMA", HAS_TMA_DESC),
-        (matmul_tma_persistent, "TMA Persistent", HAS_TMA_DESC),
+        (matmul_tma, "TMA", HAS_HOST_TENSOR_DESC),
+        (matmul_tma_persistent, "TMA Persistent", HAS_HOST_TENSOR_DESC),
         (matmul_descriptor_persistent, "Tensor Descriptor Persistent", HAS_TENSOR_DESC),
     ]
     warp_specialize = [False, True] if HAS_WARP_SPECIALIZE else [False]
 
     for (kernel, label, enabled), warp_specialize in itertools.product(kernels, warp_specialize):
         label = f"{label} (warp_specialize={warp_specialize})"
-        enabled = enabled and (not warp_specialize or HAS_TENSOR_DESC)
+        # skip if hopper and warp_specialize and not on-device
+        skipped = is_hopper() and warp_specialize and kernel != matmul_descriptor_persistent
+        enabled = enabled and (not warp_specialize or HAS_TENSOR_DESC) and (not skipped)
         run_test(naive_result, lambda a, b: kernel(a, b, warp_specialize), a, b, label, enabled)
     print()
 
@@ -794,7 +737,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):
-        print("This example requires CUDA with fp8 support.")
+        print("This example requires CUDA/HIP with fp8 support.")
     else:
         dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
 

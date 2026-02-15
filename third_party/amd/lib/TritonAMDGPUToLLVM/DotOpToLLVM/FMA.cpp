@@ -31,15 +31,17 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
     auto dElemTy = dOpTy.getElementType();
     auto mod = op->getParentOfType<ModuleOp>();
     auto arch = getAMDArch(mod);
+    assert(arch.has_value() && "expected arch");
     DotIntrinsic chosenOp;
 
-    bool dotAvailable = AMD::supportsVDot(arch);
+    bool dotAvailable = AMD::supportsVDot(*arch);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     if (dotAvailable) {
-      if (aElemTy.isF16() && dElemTy.isF32()) {
+      if ((aElemTy.isF16() || aElemTy.isBF16()) && dElemTy.isF32()) {
         chosenOp.vectorSize = 2;
         chosenOp.outElemTy = f32_ty;
-        chosenOp.intrinsicName = "llvm.amdgcn.fdot2";
+        chosenOp.intrinsicName = aElemTy.isF16() ? "llvm.amdgcn.fdot2"
+                                                 : "llvm.amdgcn.fdot2.f32.bf16";
         chosenOp.additionalArgs = {b.false_val()};
         return chosenOp;
       }
@@ -58,6 +60,8 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
            dElemTy);
     chosenOp.vectorSize = 1;
     chosenOp.outElemTy = aElemTy;
+    if (aElemTy.isF64())
+      chosenOp.intrinsicName = "llvm.fmuladd.f64";
     if (aElemTy.isF32())
       chosenOp.intrinsicName = "llvm.fmuladd.f32";
     if (aElemTy.isF16())

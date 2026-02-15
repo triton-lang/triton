@@ -24,6 +24,7 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
@@ -38,8 +39,13 @@ struct ClusterArriveOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ClusterArriveOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<triton::nvgpu::ClusterArriveOp>(
-        op, op.getRelaxed());
+    auto ctx = rewriter.getContext();
+    auto unitAttr = UnitAttr::get(ctx);
+    if (op.getRelaxed()) {
+      rewriter.replaceOpWithNewOp<NVVM::ClusterArriveRelaxedOp>(op, unitAttr);
+    } else {
+      rewriter.replaceOpWithNewOp<NVVM::ClusterArriveOp>(op, unitAttr);
+    }
     return success();
   }
 };
@@ -52,7 +58,8 @@ struct ClusterWaitOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ClusterWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<triton::nvgpu::ClusterWaitOp>(op);
+    auto ctx = rewriter.getContext();
+    rewriter.replaceOpWithNewOp<NVVM::ClusterWaitOp>(op, UnitAttr::get(ctx));
     return success();
   }
 };

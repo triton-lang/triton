@@ -1,6 +1,8 @@
 from triton._C.libproton import proton as libproton
-from .flags import get_profiling_on
+from .flags import flags
 from functools import wraps
+
+COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
 
 class state:
@@ -29,13 +31,13 @@ class state:
         self.name = name
 
     def __enter__(self):
-        if not get_profiling_on():
+        if not flags.profiling_on:
             return self
         libproton.enter_state(self.name)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
-        if not get_profiling_on():
+        if not flags.profiling_on:
             return
         libproton.exit_state()
 
@@ -43,14 +45,20 @@ class state:
 
         @wraps(func)
         def wrapper(*args, **kwargs):
-            if get_profiling_on():
+            if flags.profiling_on:
                 libproton.enter_state(self.name)
             ret = func(*args, **kwargs)
-            if get_profiling_on():
+            if flags.profiling_on:
                 libproton.exit_state()
             return ret
 
         return wrapper
+
+
+class metadata_state(state):
+
+    def __init__(self) -> None:
+        super().__init__(COMPUTE_METADATA_SCOPE_NAME)
 
 
 def enter_state(name: str) -> None:

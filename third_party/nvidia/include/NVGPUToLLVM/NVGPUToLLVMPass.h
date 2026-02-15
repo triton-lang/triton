@@ -1,7 +1,6 @@
 #ifndef TRITON_CONVERSION_NVGPU_TO_LLVM_PASS_H
 #define TRITON_CONVERSION_NVGPU_TO_LLVM_PASS_H
 
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -30,8 +29,6 @@ rewriteAsPtxAsm(mlir::Operation *op, mlir::PatternRewriter &rewriter,
                 const Constraints &outputConstraints = {});
 
 } // namespace nvgpu
-
-std::unique_ptr<OperationPass<ModuleOp>> createConvertNVGPUToLLVMPass();
 
 } // namespace triton
 

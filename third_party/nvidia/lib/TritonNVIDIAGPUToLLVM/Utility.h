@@ -1,10 +1,13 @@
 #ifndef TRITON_CONVERSION_TRITONNVIDIAGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONNVIDIAGPU_TO_LLVM_UTILITY_H
 
+#include <cstdint>
+
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+#include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
@@ -20,12 +23,16 @@ using namespace mlir::triton;
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 // Operators
 
+namespace mlir::triton::gpu {
+class MemDescType;
+}
+
 namespace mlir {
 namespace LLVM {
 
 namespace NVIDIA {
+class TargetInfo;
 
-Value getSRegValue(OpBuilder &b, Location loc, StringRef sRegStr);
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
@@ -34,15 +41,28 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
               Value mask);
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
-               int axis);
+               ProgramIDDim axis);
 
 /// Create a predicate with just single active thread.
-Value createElectPredicate(Location loc, RewriterBase &rewriter);
-Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter);
+Value createElectPredicate(Location loc, OpBuilder &rewriter);
+Value createElectPredicateWarp0(Location loc, OpBuilder &rewriter);
 
 // Create bar.warp.sync
 void createSyncWarp(Location loc, OpBuilder &builder);
 
+// Lower ldmatrix and stmatrix
+LogicalResult lowerLdStMatrix(
+    Location loc, LinearLayout cvt, bool transpose,
+    SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix
+    Value smemBase, Value affineOffset, uint64_t maskSpanAffineOffset,
+    Type llvmElemTy, ConversionPatternRewriter &rewriter,
+    const mlir::triton::NVIDIA::TargetInfo &targetInfo);
+
+// Given a broadcast mask and the number of CTAs, create a mask of ones
+// where for ctaId, it sets as 1's the positions that are in the same broadcast
+// group
+Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
+                             uint16_t broadcastBits);
 } // namespace NVIDIA
 } // namespace LLVM
 

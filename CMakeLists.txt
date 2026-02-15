@@ -1,12 +1,10 @@
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.20)
 
 if(POLICY CMP0116)
 # Introduced in cmake 3.20
 # https://cmake.org/cmake/help/latest/policy/CMP0116.html
   cmake_policy(SET CMP0116 OLD)
 endif()
-
-include(ExternalProject)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -22,6 +20,8 @@ option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
+option(LLVM_BUILD_SHARED_LIBS
+  "Build all libraries as shared libraries instead of static" OFF)
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 
 if(TRITON_BUILD_WITH_CCACHE)
@@ -62,16 +62,13 @@ else()
   set(CMAKE_EXE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
   set(CMAKE_MODULE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
   set(CMAKE_SHARED_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+  set(LLVM_BUILD_SHARED_LIBS "0")
 endif()
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
   message(STATUS "Default build type: Release")
   set(CMAKE_BUILD_TYPE "Release")
-endif()
-
-if(NOT WIN32)
-  find_library(TERMINFO_LIBRARY tinfo)
 endif()
 
 if(TRITON_BUILD_UT)
@@ -95,6 +92,10 @@ endif()
 # #########
 if(NOT MLIR_DIR)
   set(MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
+endif()
+
+if(NOT LLD_DIR)
+  set(LLD_DIR ${LLVM_LIBRARY_DIR}/cmake/lld)
 endif()
 
 # MLIR
@@ -130,7 +131,7 @@ set_property(GLOBAL PROPERTY TRITON_LIBS "")
 function(add_triton_library name)
   set_property(GLOBAL APPEND PROPERTY TRITON_LIBS ${name})
   add_triton_object(${name} ${ARGN})
-  llvm_update_compile_flags(${name})
+  target_compile_options(${name} PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 endfunction()
 
 set_property(GLOBAL PROPERTY TRITON_PLUGINS "")
@@ -142,6 +143,7 @@ endfunction()
 
 # Disable warnings that show up in external code (gtest;pybind11)
 if(NOT MSVC)
+  set(TRITON_DISABLE_EH_RTTI_FLAGS "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti>")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4244 /wd4624 /wd4715 /wd4530")
@@ -179,6 +181,17 @@ if(TRITON_BUILD_PYTHON_MODULE)
   find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
   find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
 
+  foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
+    add_subdirectory(third_party/${CODEGEN_BACKEND})
+  endforeach()
+
+  if (TRITON_BUILD_PROTON)
+    add_subdirectory(third_party/proton)
+  endif()
+  # We always build proton dialect
+  list(APPEND TRITON_PLUGIN_NAMES "proton")
+  add_subdirectory(third_party/proton/Dialect)
+
   if (DEFINED TRITON_PLUGIN_DIRS)
     foreach(PLUGIN_DIR ${TRITON_PLUGIN_DIRS})
       # Read the plugin name under dir/backend/name.conf
@@ -195,17 +208,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
       add_subdirectory(${PLUGIN_DIR} ${PLUGIN_DIR_BUILD_OUTPUT})
     endforeach()
   endif()
-
-  foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
-    add_subdirectory(third_party/${CODEGEN_BACKEND})
-  endforeach()
-
-  if (TRITON_BUILD_PROTON)
-    add_subdirectory(third_party/proton)
-  endif()
-  # We always build proton dialect
-  list(APPEND TRITON_PLUGIN_NAMES "proton")
-  add_subdirectory(third_party/proton/dialect)
 
   get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
   get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
@@ -235,6 +237,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRIndexToLLVM
     MLIRGPUToROCDLTransforms
     MLIRUBToLLVM
+    MLIRPluginsLib
 
     # LLVM
     LLVMPasses
@@ -281,9 +284,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
   add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
   add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
                   ${PYTHON_SRC_PATH}/ir.cc
+                  ${PYTHON_SRC_PATH}/gluon_ir.cc
+                  ${PYTHON_SRC_PATH}/linear_layout.cc
                   ${PYTHON_SRC_PATH}/passes.cc
                   ${PYTHON_SRC_PATH}/interpreter.cc
-                  ${PYTHON_SRC_PATH}/llvm.cc)
+                  ${PYTHON_SRC_PATH}/llvm.cc
+                  ${PYTHON_SRC_PATH}/specialize.cc)
 
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
@@ -295,6 +301,20 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton PRIVATE z)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+
+  if (NOT DEFINED LLVM_SYSPATH)
+      message(FATAL_ERROR "LLVM_SYSPATH must be set.")
+  endif()
+
+  if (NOT DEFINED TRITON_WHEEL_DIR)
+      message(FATAL_ERROR "TRITON_WHEEL_DIR must be set.")
+  endif()
+
+  configure_file(
+    "${LLVM_SYSPATH}/bin/FileCheck"
+    "${TRITON_WHEEL_DIR}/FileCheck"
+    COPYONLY)
+
 endif()
 
 if (UNIX AND NOT APPLE)
@@ -316,7 +336,7 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
-  add_subdirectory(third_party/proton/dialect)
+  add_subdirectory(third_party/proton/Dialect)
 endif()
 
 find_package(Threads REQUIRED)
@@ -324,6 +344,7 @@ find_package(Threads REQUIRED)
 add_subdirectory(third_party/f2reduce)
 add_subdirectory(bin)
 add_subdirectory(test)
+add_subdirectory(examples)
 
 if(TRITON_BUILD_UT)
   add_subdirectory(unittest)

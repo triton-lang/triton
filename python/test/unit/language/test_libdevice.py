@@ -24,6 +24,7 @@ def test_bessel(dtype_str, libdevice_fn, torch_special_fn, device):
     SIZE = 128
     dtype = getattr(torch, dtype_str)
 
+    torch.manual_seed(42)
     x = torch.randn((SIZE, ), dtype=dtype, device=device)
     y_exp = torch.empty((SIZE, ), dtype=dtype, device=device)
     y_ref = getattr(torch.special, torch_special_fn)(x)
@@ -55,3 +56,30 @@ def test_libdevice_rename(device):
     out = torch.empty_like(inp)
 
     triton_copy[(1, )](inp, out, BLOCK_SIZE)
+
+
+@pytest.mark.parametrize("dtype_str", ["float32", "float64"])
+def test_isinf(device, dtype_str):
+
+    @triton.jit
+    def triton_isinf(in_ptr, out_ptr, numel, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < numel
+        in_tile = tl.load(in_ptr + offsets, mask=mask)
+        if in_ptr.dtype.element_ty == tl.float32:
+            out_tile = libdevice.finitef(in_tile)
+        else:
+            out_tile = libdevice.isfinited(in_tile)
+        tl.store(out_ptr + offsets, out_tile, mask=mask)
+
+    x = torch.tensor(
+        [float(1), -float(1),
+         float(0), -float(0),
+         float("inf"), -float("inf"),
+         float("nan"), -float("nan")], device=device, dtype=getattr(torch, dtype_str))
+    res = torch.tensor([True, True, True, True, False, False, False, False])
+    numel = x.numel()
+    y = torch.empty_like(x, dtype=torch.bool)
+    BLOCK_SIZE = 256
+    triton_isinf[(triton.cdiv(numel, BLOCK_SIZE), )](x, y, numel, BLOCK_SIZE)
+    assert torch.equal(y.cpu(), res)

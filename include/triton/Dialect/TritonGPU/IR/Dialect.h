@@ -9,6 +9,7 @@
 // TritonGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
 #include <unordered_map>
@@ -44,9 +45,15 @@ constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
+// FIXME: rename to match above
+constexpr static char kPartitionAttrName[] = "ttg.partition";
+constexpr static char kPartitionOutputsAttrName[] = "ttg.partition.outputs";
+constexpr static char kPartitionStagesAttrName[] = "ttg.partition.stages";
+constexpr static char kWarpSpecializeTagAttrName[] = "ttg.warp_specialize.tag";
 
 // Find the contextual number of warps on which this operation is executed.
 int lookupNumWarps(Operation *op);
+int lookupNumWarps(Region *region);
 // Try to find the contextual number of warps on which this operation is
 // executed. Returns nullopt if a warp size cannot be find. This is used for
 // verifiers.
@@ -55,6 +62,8 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 // FIXME: Make this API and that of maybeLookupNumWarps consistent!
 // Utility to find the number of threads per warp
 int lookupThreadsPerWarp(OpBuilder &rewriter);
+int lookupNumCTAs(OpBuilder &rewriter);
+int lookupNumCTAs(Operation *op);
 
 template <typename Key, typename Value> class Cache {
 public:
@@ -92,7 +101,8 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
 
 // Convert a distributed layout to a linear encoding
 LinearEncodingAttr toLinearEncoding(RankedTensorType type);
-LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape);
+LinearEncodingAttr toLinearEncoding(DistributedEncodingTrait layout,
+                                    ArrayRef<int64_t> shape);
 
 unsigned getTotalElemsPerThread(Type type);
 
@@ -200,7 +210,7 @@ inline SmallVector<unsigned> getThreadOrder(RankedTensorType type) {
                         type.getShape());
 }
 
-CTALayoutAttr getCTALayout(Attribute layout);
+CGAEncodingAttr getCGALayout(Attribute layout);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 
@@ -208,23 +218,19 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout);
 
 SmallVector<unsigned> getCTAOrder(Attribute layout);
 
-/* The difference between ShapePerCTATile and ShapePerCTA:
- * (1) ShapePerCTATile is defined by SizePerThread * ThreadsPerWarp *
- *     WarpsPerCTA in each dimension and is independent from the tensor shape.
- * (2) ShapePerCTA is defined by shape / CTASplitNum in each dimension.
- * (3) In the implementation of emitIndices, ShapePerCTATile will
- *     be replicated or wrapped to fit ShapePerCTA.
- */
-// [FIXME LL] Kill this function
-SmallVector<unsigned> getShapePerCTATile(RankedTensorType layout);
-
-// Returns the "logical" shape per CTA
+// Returns the "logical" shape per CTA.
+// When shape and CTASplitNum have different number of dimensions, we assume
+// only the last N between common dimensions are split.
+// Example1: shape = [2, 4, 8], CTASplitNum = [2, 2], ret = [2, 2, 4].
+// It can be caused by pipelining.
+// Example2: shape = [2, 4], CTASplitNum = [2, 2, 2], ret = [1, 2].
+// It can be caused by memory slicing.
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Type type);
 
-// Returns the shape per CTA, which is "physically" allocated
+// Returns the shape per CTA, which is "physically" allocated.
 // Such shapes may be bigger than the logical one due to, for example, padding
 // in shared memory.
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
@@ -266,6 +272,12 @@ void dumpHWLayout(RankedTensorType tensorType);
 // Return a string representation of the layout of the tensor.
 std::string getLayoutStr(RankedTensorType tensorType, bool useHWPointOfView);
 
+// Return a string representation of the shared layout of the tensor.
+std::string getSharedLayoutStr(LinearLayout &ll, bool useHWPointOfView);
+
+// Return a string representation of the distributed layout of the tensor.
+std::string getDistributedLayoutStr(LinearLayout &ll, bool useHWPointOfView);
+
 template <typename T>
 llvm::SmallVector<T> expandMatrixShapeWithBatch(llvm::ArrayRef<T> s);
 
@@ -273,8 +285,57 @@ llvm::SmallVector<unsigned>
 expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
 
 // Return true if the two layouts represent the exact same mapping.
-bool areLayoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
-                          Attribute rhs);
+bool areLayoutsEquivalent(ArrayRef<int64_t> shape, LayoutEncodingTrait lhs,
+                          LayoutEncodingTrait rhs);
+
+// Return true if the innermost numElems are contiguous.
+bool isInnermostContiguous(MemDescType type, unsigned numElems);
+
+LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
+                                      ArrayRef<int64_t> dstShape);
+
+// TMA tensor access modes
+enum class TMAMode {
+  Tiled, // Regular tiled tensor memory access
+  Im2Col // Im2col mode for convolution-friendly access patterns
+};
+
+FailureOr<SmallVector<int64_t>>
+getTMABlockShape(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
+                 int swizzleBytes, bool fp4Padded, bool isTransposed,
+                 bool packedSize, function_ref<InFlightDiagnostic()> emitError,
+                 TMAMode mode);
+SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
+                                      int elementBitWidth, int swizzleBytes,
+                                      bool fp4Padded, bool isTransposed,
+                                      bool packedSize, TMAMode mode);
+
+// Verify the types of operations that operate on memory.
+LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
+                                  ShapedType dstTy);
+// Verify a memory allocation operation.
+LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy);
+
+SetVector<int> getPartitionIds(Operation *op);
+SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op);
+SetVector<int> getPartitionIds(OpOperand *use);
+bool hasPartition(Operation *op);
+bool hasWarpSpecializeTag(Operation *op);
+std::optional<int> getWarpSpecializeTag(Operation *op);
+
+// Extract the PaddedSharedEncodingAttr from an encoding, whether standalone
+// or wrapped inside a PartitionedSharedEncodingAttr. Returns nullptr if the
+// encoding does not involve padding.
+PaddedSharedEncodingAttr getPaddedEncoding(Attribute encoding);
+
+// Returns true if the encoding is a PaddedSharedEncodingAttr, or a
+// PartitionedSharedEncodingAttr wrapping a PaddedSharedEncodingAttr.
+bool isPaddedEncoding(Attribute encoding);
+
+// Returns the minInterval for a padded encoding (standalone or
+// wrapped in partitioned).
+unsigned getMinInterval(Attribute encoding);
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
