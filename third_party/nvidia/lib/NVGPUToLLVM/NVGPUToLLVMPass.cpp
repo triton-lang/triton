@@ -9,6 +9,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
@@ -744,25 +745,24 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
 }
 
 static void lowerTensorMemoryAlloc(ModuleOp mod) {
-  SmallVector<Operation *> baseOps;
-  LLVM::LLVMFuncOp kernel = nullptr;
+  // Tensor memory base ops can be emitted inside noinline helper functions, not
+  // just kernel entry points.
+  DenseMap<Operation *, SmallVector<ttn::TensorMemoryBaseAddress>>
+      baseOpsByFunc;
   mod.walk([&](ttn::TensorMemoryBaseAddress baseOp) {
-    baseOps.push_back(baseOp);
-    if (!kernel)
-      kernel = baseOp->getParentOfType<LLVM::LLVMFuncOp>();
-    assert(kernel == baseOp->getParentOfType<LLVM::LLVMFuncOp>() &&
-           "TODO: add support for function calls using tmem.");
+    auto func = baseOp->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!func)
+      return;
+    baseOpsByFunc[func.getOperation()].push_back(baseOp);
   });
-  if (baseOps.empty())
-    return;
-  // TODO: Handle cases of matmul used in noinline functions.
-  assert(LLVM::isKernel(kernel));
-  Value newBase = initTensorMemory(kernel);
-  if (!newBase)
-    return;
-  for (auto baseOp : baseOps) {
-    baseOp->getResult(0).replaceAllUsesWith(newBase);
-    baseOp->erase();
+  for (auto &it : baseOpsByFunc) {
+    Value newBase = initTensorMemory(cast<LLVM::LLVMFuncOp>(it.first));
+    if (!newBase)
+      continue;
+    for (ttn::TensorMemoryBaseAddress baseOp : it.second) {
+      baseOp.getResult().replaceAllUsesWith(newBase);
+      baseOp->erase();
+    }
   }
 }
 
