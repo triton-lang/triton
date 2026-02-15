@@ -2,15 +2,13 @@ import os
 import subprocess
 import pathlib
 import pytest
+import re
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2
-
-pytestmark = pytest.mark.skipif(is_hip_cdna2(), reason="old AMD GPUs are not supported")
+from triton._internal_testing import is_cuda, is_hip
 
 
+@pytest.mark.skipif(is_hip(), reason="plugin not supported/tested on AMD yet")
 def test_override(tmp_path: pathlib.Path):
-    if os.environ.get('LLVM_BUILD_SHARED_LIBS', '0') == '0':
-        return
     dir_path = os.path.dirname(os.path.realpath(__file__))
 
     # Run once to get the file dumps
@@ -40,9 +38,6 @@ def test_override(tmp_path: pathlib.Path):
         os.remove(ptx_files[0])
         os.remove(cubin_files[0])
 
-    if is_hip():
-        pytest.skip("plugin not supported/tested on AMD yet")
-
     filename = str(list(tmp_path.rglob("*.ttir"))[0])
 
     with open(filename, "r") as infile:
@@ -51,8 +46,10 @@ def test_override(tmp_path: pathlib.Path):
     # # Add ttgir instrumentation
     with open(filename, "w") as outfile:
         for line in file_str:
-            if "tt.get_program_id x" in line:
-                line = '    %pid_base = arith.constant 0 : i32\n    %pid = plugin.magic %pid_base : i32\n'
+            match = re.search(r'(%\w+)\s*=\s*tt\.get_program_id\s+x', line)
+            if match:
+                ssa_name = match.group(1)
+                line = f'    %pid_base = arith.constant 0 : i32\n    {ssa_name} = plugin.magic %pid_base : i32\n'
             outfile.write(line)
 
     # # # Run again with kernel override
