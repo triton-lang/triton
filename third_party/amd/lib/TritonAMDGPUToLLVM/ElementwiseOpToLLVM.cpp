@@ -1922,10 +1922,8 @@ struct FpToFpOpConversion
   int getNumElements(
       Type srcElementType, Type dstElementType,
       std::optional<::mlir::triton::RoundingMode> roundingMode) const {
-    const bool isRTZ =
-        (roundingMode.has_value()) && (*roundingMode == RoundingMode::RTZ);
-    const bool isRTNE =
-        (roundingMode.has_value()) && (*roundingMode == RoundingMode::RTNE);
+    const bool isRTZ = roundingMode == RoundingMode::RTZ;
+    const bool isRTNE = roundingMode == RoundingMode::RTNE;
 
     // numElements = 2 for :
     // fp32 -> fp16 with RTZ
