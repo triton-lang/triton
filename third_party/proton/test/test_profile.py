@@ -149,6 +149,60 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
                 assert child["children"][i]["children"][0]["metrics"]["time (ns)"] > 0
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
+def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    def fn():
+        a = torch.ones((2, 2), device=device)
+        b = torch.ones((2, 2), device=device)
+        c = a + b
+        foo[(1, )](a, b, c)
+
+    # Build/capture graph before profiler starts.
+    fn()
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        fn()
+
+    temp_file = tmp_path / "test_cudagraph_not_captured_by_profiler.hatchet"
+    proton.start(str(temp_file.with_suffix("")), context="shadow")
+    with proton.scope("replay0"):
+        g.replay()
+    with proton.scope("replay1"):
+        g.replay()
+    proton.finalize()
+
+    captured = capfd.readouterr()
+    assert captured.err.count("Cannot find graph for graphExecId:") == 1
+    assert "start profiling before the graph is created" in captured.err
+
+    with temp_file.open() as f:
+        data = json.load(f)
+    replay0_frame = None
+    replay1_frame = None
+    for child in data[0]["children"]:
+        if child["frame"]["name"] == "replay0":
+            replay0_frame = child
+        elif child["frame"]["name"] == "replay1":
+            replay1_frame = child
+    assert replay0_frame is not None
+    assert replay1_frame is not None
+
+    def has_positive_time_metric(node):
+        if node["metrics"].get("time (ns)", 0) > 0:
+            return True
+        return any(has_positive_time_metric(child) for child in node["children"])
+
+    assert has_positive_time_metric(replay0_frame)
+    assert has_positive_time_metric(replay1_frame)
+
+
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph deactivation")
 def test_cudagraph_deactivate(tmp_path, device: str):
     stream = torch.cuda.Stream()
