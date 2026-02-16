@@ -149,6 +149,60 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
                 assert child["children"][i]["children"][0]["metrics"]["time (ns)"] > 0
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
+def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    def fn():
+        a = torch.ones((2, 2), device=device)
+        b = torch.ones((2, 2), device=device)
+        c = a + b
+        foo[(1, )](a, b, c)
+
+    # Build/capture graph before profiler starts.
+    fn()
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        fn()
+
+    temp_file = tmp_path / "test_cudagraph_not_captured_by_profiler.hatchet"
+    proton.start(str(temp_file.with_suffix("")), context="shadow")
+    with proton.scope("replay0"):
+        g.replay()
+    with proton.scope("replay1"):
+        g.replay()
+    proton.finalize()
+
+    captured = capfd.readouterr()
+    assert captured.err.count("Cannot find graph for graphExecId:") == 1
+    assert "start profiling before the graph is created" in captured.err
+
+    with temp_file.open() as f:
+        data = json.load(f)
+    replay0_frame = None
+    replay1_frame = None
+    for child in data[0]["children"]:
+        if child["frame"]["name"] == "replay0":
+            replay0_frame = child
+        elif child["frame"]["name"] == "replay1":
+            replay1_frame = child
+    assert replay0_frame is not None
+    assert replay1_frame is not None
+
+    def has_positive_time_metric(node):
+        if node["metrics"].get("time (ns)", 0) > 0:
+            return True
+        return any(has_positive_time_metric(child) for child in node["children"])
+
+    assert has_positive_time_metric(replay0_frame)
+    assert has_positive_time_metric(replay1_frame)
+
+
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph deactivation")
 def test_cudagraph_deactivate(tmp_path, device: str):
     stream = torch.cuda.Stream()
@@ -680,6 +734,122 @@ def test_multiple_sessions(tmp_path: pathlib.Path, device: str):
     scope0_count = int(data[0]["children"][0]["children"][0]["metrics"]["count"])
     scope1_count = int(data[0]["children"][1]["children"][0]["metrics"]["count"])
     assert scope0_count + scope1_count == 3
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, device: str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    foo_iters = 3
+    bar_iters = 2
+
+    def foo_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        x = args["x"]
+        # Tensor custom metric in graph capture mode launches metric kernels.
+        return {"name": "foo_with_metric", "sum_metric": x.sum()}
+
+    def bar_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        # Name-only metadata (no custom metric).
+        return {"name": "bar_without_metric"}
+
+    @triton.jit(launch_metadata=foo_metadata_fn)
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    @triton.jit(launch_metadata=bar_metadata_fn)
+    def bar(x, y, z):
+        tl.store(z, tl.load(y) - tl.load(x))
+
+    x = torch.ones((2, 2), device=device)
+    y = torch.ones((2, 2), device=device)
+    z = torch.empty_like(x)
+
+    # Compile kernels before profiling starts to reduce unrelated profile noise.
+    foo[(1, )](x, y, z)
+    bar[(1, )](x, y, z)
+
+    temp_file0 = tmp_path / "test_multiple_sessions_cudagraph_metric_kernels0.hatchet"
+    temp_file1 = tmp_path / "test_multiple_sessions_cudagraph_metric_kernels1.hatchet"
+    session_id0 = proton.start(str(temp_file0.with_suffix("")), context="shadow", hook="triton")
+    session_id1 = proton.start(str(temp_file1.with_suffix("")), context="shadow", hook="triton")
+
+    proton.deactivate(session_id1)
+
+    graph_foo = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph_foo):
+        for _ in range(foo_iters):
+            foo[(1, )](x, y, z)
+    with proton.scope("session0_replay"):
+        graph_foo.replay()
+
+    proton.deactivate(session_id0)
+    proton.activate(session_id1)
+
+    graph_bar = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph_bar):
+        for _ in range(bar_iters):
+            bar[(1, )](x, y, z)
+    with proton.scope("session1_replay"):
+        graph_bar.replay()
+
+    proton.finalize(session_id0)
+    proton.finalize(session_id1)
+
+    def get_frame_by_name(node, name: str):
+        queue = [node]
+        while queue:
+            cur = queue.pop(0)
+            if cur["frame"]["name"] == name:
+                return cur
+            queue.extend(cur["children"])
+        return None
+
+    def get_all_names(node):
+        names = set()
+        queue = [node]
+        while queue:
+            cur = queue.pop(0)
+            names.add(cur["frame"]["name"])
+            queue.extend(cur["children"])
+        return names
+
+    with temp_file0.open() as f:
+        data0 = json.load(f)
+    with temp_file1.open() as f:
+        data1 = json.load(f)
+
+    names0 = get_all_names(data0[0])
+    names1 = get_all_names(data1[0])
+    assert "session0_replay" in names0
+    assert "session1_replay" not in names0
+    assert "session1_replay" in names1
+    assert "session0_replay" not in names1
+
+    session0_replay_frame = get_frame_by_name(data0[0], "session0_replay")
+    session1_replay_frame = get_frame_by_name(data1[0], "session1_replay")
+    assert session0_replay_frame is not None
+    assert session1_replay_frame is not None
+
+    capture0 = session0_replay_frame["children"][0]
+    capture1 = session1_replay_frame["children"][0]
+    assert capture0["frame"]["name"] == "<captured_at>"
+    assert capture1["frame"]["name"] == "<captured_at>"
+
+    foo_frame0 = get_frame_by_name(capture0, "foo_with_metric")
+    bar_frame0 = get_frame_by_name(capture0, "bar_without_metric")
+    foo_frame1 = get_frame_by_name(capture1, "foo_with_metric")
+    bar_frame1 = get_frame_by_name(capture1, "bar_without_metric")
+
+    assert foo_frame0 is not None
+    assert bar_frame0 is None
+    assert foo_frame1 is None
+    assert bar_frame1 is not None
+
+    assert foo_frame0["metrics"]["sum_metric"] == float(foo_iters * x.numel())
+    assert int(foo_frame0["metrics"]["count"]) == foo_iters
+    assert "sum_metric" not in bar_frame1["metrics"]
+    assert int(bar_frame1["metrics"]["count"]) == bar_iters
 
 
 def test_trace(tmp_path: pathlib.Path, device: str):
