@@ -663,19 +663,19 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
           return includedVirtualIds;
         }
 
-        std::function<bool(size_t)> markVirtualTree = [&](size_t virtualNodeId) {
+        auto markVirtualTree = [&](auto &&self, size_t virtualNodeId) -> bool {
           bool hasLinkedEntry =
               linkedEntryIds.find(virtualNodeId) != linkedEntryIds.end();
           const auto &virtualNode = virtualTree->getNode(virtualNodeId);
           for (const auto &child : virtualNode.children) {
-            hasLinkedEntry = markVirtualTree(child.id) || hasLinkedEntry;
+            hasLinkedEntry = self(self, child.id) || hasLinkedEntry;
           }
           if (hasLinkedEntry) {
             includedVirtualIds.insert(virtualNodeId);
           }
           return hasLinkedEntry;
         };
-        markVirtualTree(Tree::TreeNode::RootId);
+        markVirtualTree(markVirtualTree, Tree::TreeNode::RootId);
         return includedVirtualIds;
       };
   std::unordered_map<size_t, std::unordered_set<size_t>>
@@ -797,8 +797,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
           }
         }
       };
-  std::function<void(TreeData::Tree::TreeNode &)> packNode =
-      [&](TreeData::Tree::TreeNode &treeNode) {
+  auto packNode = [&](auto &&self, TreeData::Tree::TreeNode &treeNode) -> void {
         writer.packMap(3);
 
         writer.packStr("frame");
@@ -823,8 +822,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         }
         const bool hasLinkedVirtual = includedVirtualRootChildCount > 0;
 
-        std::function<void(size_t)> packVirtualNode =
-            [&](size_t virtualNodeId) {
+        auto packVirtualNode = [&](auto &&virtualSelf,
+                                   size_t virtualNodeId) -> void {
               const auto &virtualNode = virtualTree->getNode(virtualNodeId);
               writer.packMap(3);
 
@@ -872,7 +871,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
                     includedVirtualIds.end()) {
                   continue;
                 }
-                packVirtualNode(child.id);
+                virtualSelf(virtualSelf, child.id);
               }
             };
 
@@ -884,7 +883,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
                          includedVirtualChildCount);
         for (const auto &child : treeNode.children) {
-          packNode(tree->getNode(child.id));
+          self(self, tree->getNode(child.id));
         }
         if (hasLinkedVirtual) {
           for (const auto &virtualChild : virtualRootNode.children) {
@@ -892,7 +891,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
                 includedVirtualIds.end()) {
               continue;
             }
-            packVirtualNode(virtualChild.id);
+            packVirtualNode(packVirtualNode, virtualChild.id);
           }
         }
       };
@@ -907,7 +906,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   // Hatchet format: [tree, device_metadata]. Always emit 2 elements to match
   // the JSON serializer, even if device_metadata is empty.
   writer.packArray(2);
-  packNode(tree->getNode(TreeData::Tree::TreeNode::RootId));
+  packNode(packNode, tree->getNode(TreeData::Tree::TreeNode::RootId));
 
   auto countSetBits = [](uint32_t mask) -> uint32_t {
     uint32_t count = 0;
