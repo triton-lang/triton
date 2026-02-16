@@ -518,8 +518,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       auto &nodeState = graphState.nodeIdToState[nodeId];
       nodeState.nodeId = nodeId;
       for (const auto &[data, entryId] : nodeState.dataToEntryId) {
-        graphState.dataToEntryIdToNodeStates[data][entryId].insert(
-            &nodeState);
+        graphState.dataToEntryIdToNodeStates[data][entryId].insert(&nodeState);
       }
       auto originalMetricNodeIt =
           originalGraphState.metricNodeIdToNumWords.find(originalNodeId);
