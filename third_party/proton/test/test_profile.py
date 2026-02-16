@@ -151,9 +151,7 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
 @pytest.mark.parametrize("data_format", ["hatchet", "hatchet_msgpack"])
-def test_cudagraph_filters_unlinked_virtual_scopes(
-    tmp_path: pathlib.Path, data_format: str, device: str
-):
+def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_format: str, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
