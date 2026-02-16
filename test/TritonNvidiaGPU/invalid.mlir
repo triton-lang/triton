@@ -384,3 +384,15 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#shared_bad = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0], [2], [1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @wait_barrier_invalid_cga_layout(%bar: !ttg.memdesc<2xi64, #shared_bad, #smem, mutable>, %phase: i32) {
+    // expected-error @below {{broadcasted cluster barriers require bases to be the sequence}}
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<4xi64, #shared_bad, #smem, mutable>
+    tt.return
+  }
+}
