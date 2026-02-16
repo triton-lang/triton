@@ -150,6 +150,71 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
+@pytest.mark.parametrize("data_format", ["hatchet", "hatchet_msgpack"])
+def test_cudagraph_filters_unlinked_virtual_scopes(
+    tmp_path: pathlib.Path, data_format: str, device: str
+):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    a = torch.ones((2, 2), device=device)
+    b = torch.ones((2, 2), device=device)
+    c = torch.empty_like(a)
+
+    temp_file = tmp_path / f"test_cudagraph_filters_unlinked_virtual_scopes.{data_format}"
+    proton.start(str(temp_file.with_suffix("")), context="shadow")
+
+    # Warmup to avoid one-time setup effects in replay output.
+    foo[(1, )](a, b, c)
+
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        with proton.scope("iter_with_kernel"):
+            foo[(1, )](a, b, c)
+        with proton.scope("iter_without_kernel"):
+            pass
+
+    with proton.scope("replay"):
+        g.replay()
+
+    proton.finalize(output_format=data_format)
+
+    if data_format == "hatchet_msgpack":
+        import msgpack
+
+        with temp_file.open("rb") as f:
+            data = msgpack.load(f, raw=False, strict_map_key=False)
+    else:
+        with temp_file.open() as f:
+            data = json.load(f)
+
+    replay_frame = next(
+        (child for child in data[0]["children"] if child["frame"]["name"] == "replay"),
+        None,
+    )
+    assert replay_frame is not None
+    capture_frame = replay_frame["children"][0]
+    assert capture_frame["frame"]["name"] == "<captured_at>"
+
+    capture_children = capture_frame["children"]
+    capture_child_names = {child["frame"]["name"] for child in capture_children}
+    assert "iter_with_kernel" in capture_child_names
+    assert "iter_without_kernel" not in capture_child_names
+
+    iter_with_kernel_frame = next(
+        (child for child in capture_children if child["frame"]["name"] == "iter_with_kernel"),
+        None,
+    )
+    assert iter_with_kernel_frame is not None
+    assert len(iter_with_kernel_frame["children"]) > 0
+    assert iter_with_kernel_frame["children"][0]["metrics"]["time (ns)"] > 0
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
 def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
