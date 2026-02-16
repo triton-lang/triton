@@ -323,16 +323,44 @@ struct ArriveBarrierOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto ctx = op->getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto barrierTy = op.getAlloc().getType();
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getAlloc(),
+        typeConverter->convertType(barrierTy.getElementType()), rewriter);
+
+    // Arrive has block-level semantics, so we must synchronize
+    // Technically, this should be MemBar's job but it can include TMEM
+    // accesses which doesn't have a MemBar equivalent :/
+    ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
+
+    auto kBlock = StringAttr::get(ctx, "block");
+    uint32_t maskCGABroadcast =
+        toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
+    bool distributedArrive = maskCGABroadcast != 0;
+
+    Value barrierPtr = smemObj.getBase();
+    if (distributedArrive) {
+      int numCTAs = ttg::lookupNumCTAs(op);
+      uint32_t repMask = (~maskCGABroadcast) & (numCTAs - 1);
+      Value ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+      Value repCtaId = b.and_(ctaId, b.i32_val(repMask));
+      barrierPtr = NVVM::MapaOp::create(rewriter, loc, ptr_ty(ctx, 7),
+                                        barrierPtr, repCtaId);
+    }
     // TODO: Add phase result as needed.
     std::stringstream ptxAsm;
-    ptxAsm << "@$0 mbarrier.arrive.shared::cta.b64 _, [$1]";
+    ptxAsm << "@$0 mbarrier.arrive."
+           << (distributedArrive ? "shared::cluster" : "shared::cta")
+           << ".b64 _, [$1]";
     if (op.getCount() > 1) {
       ptxAsm << ", " << op.getCount();
     }
     ptxAsm << ";";
 
-    TritonLLVMOpBuilder b(op.getLoc(), rewriter);
-    Value id = getThreadId(rewriter, op.getLoc());
+    Value id = getThreadId(rewriter, loc);
     Value pred = b.icmp_eq(id, b.i32_val(0));
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
@@ -340,12 +368,12 @@ struct ArriveBarrierOpConversion
     PTXBuilder ptxBuilder;
     SmallVector<PTXBuilder::Operand *, 2> operands = {
         ptxBuilder.newOperand(pred, "b"),
-        ptxBuilder.newOperand(adaptor.getAlloc(), "r")};
+        ptxBuilder.newOperand(barrierPtr, "r")};
 
     auto arriveOp = *ptxBuilder.create(ptxAsm.str());
     arriveOp(operands, /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(getContext());
-    ptxBuilder.launch(rewriter, op.getLoc(), voidTy);
+    ptxBuilder.launch(rewriter, loc, voidTy);
 
     rewriter.eraseOp(op);
     return success();
