@@ -25,7 +25,6 @@
 #include "TargetInfo.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -324,25 +323,30 @@ struct ArriveBarrierOpConversion
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: Add phase result as needed.
-    std::stringstream ptxAsm;
-    ptxAsm << "@$0 mbarrier.arrive.shared::cta.b64 _, [$1]";
-    if (op.getCount() > 1) {
-      ptxAsm << ", " << op.getCount();
-    }
-    ptxAsm << ";";
-
+    PTXBuilder ptxBuilder;
+    std::string ptxAsm = "mbarrier.arrive.shared::cta.b64 _, [$0]";
+    SmallVector<PTXBuilder::Operand *> operands;
     TritonLLVMOpBuilder b(op.getLoc(), rewriter);
+
     Value id = getThreadId(rewriter, op.getLoc());
+    if (op.getFrequency() == triton::nvidia_gpu::ArriveFrequency::PER_WARP) {
+      LLVM::NVIDIA::createSyncWarp(op.getLoc(), rewriter);
+      id = b.urem(id, b.i32_val(32));
+    }
+
     Value pred = b.icmp_eq(id, b.i32_val(0));
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
 
-    PTXBuilder ptxBuilder;
-    SmallVector<PTXBuilder::Operand *, 2> operands = {
-        ptxBuilder.newOperand(pred, "b"),
-        ptxBuilder.newOperand(adaptor.getAlloc(), "r")};
+    ptxAsm = "@$0 mbarrier.arrive.shared::cta.b64 _, [$1]";
+    operands.push_back(ptxBuilder.newOperand(pred, "b"));
 
-    auto arriveOp = *ptxBuilder.create(ptxAsm.str());
+    if (op.getCount() > 1)
+      ptxAsm += ", " + std::to_string(op.getCount());
+    ptxAsm += ";";
+
+    operands.push_back(ptxBuilder.newOperand(adaptor.getAlloc(), "r"));
+    auto arriveOp = *ptxBuilder.create(ptxAsm);
     arriveOp(operands, /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(getContext());
     ptxBuilder.launch(rewriter, op.getLoc(), voidTy);
