@@ -196,7 +196,7 @@ static triton::gpu::PaddedSharedEncodingAttr
 getPaddedEncoding(mlir::MLIRContext *context, int opIdx,
                   ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
                   triton::gpu::CGAEncodingAttr CGALayout,
-                  unsigned typeWidthInBit) {
+                  unsigned typeBitWidth) {
   // This is the padding strategy for TDM. We need to know here if this is going
   // to be transposed or not. I think NVIDIA has this exposed in the IR, but we
   // have to infer it in different places.
@@ -206,7 +206,7 @@ getPaddedEncoding(mlir::MLIRContext *context, int opIdx,
   auto blockShapePerCTA =
       triton::gpu::getShapePerCTA(CGALayout.getCTASplitNum(), shape);
   int innerDimLength = blockShapePerCTA[order[0]];
-  unsigned maxVecSize = 128 / typeWidthInBit;
+  unsigned maxVecSize = 128 / typeBitWidth;
   // unsigned vecSize = std::min(maxVecSize, kWidth);
   // This is the width loaded in a single instruction from the same LDS row.
   // For transposed loads, this is twice the size, because there are two threads
@@ -551,7 +551,7 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
 
   LoadToStreamOpMap loadToStreamOp;
   for (auto &[l, info] : loadToInfo) {
-    if (!info.hasEncoding())
+    if (!info.sharedEncoding)
       continue;
 
     auto loadOp = dyn_cast<tt::LoadOp>(l);
@@ -564,8 +564,8 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
 
     // Create an allocation that can hold distance number of loadOp shapes.
     auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
-    Value alloc = triton::createAlloc(forOp, ty, op->getLoc(), info.encoding(),
-                                      numBuffers);
+    Value alloc = triton::createAlloc(forOp, ty, op->getLoc(),
+                                      info.sharedEncoding, numBuffers);
     assert(alloc && "Failed to create alloc for the async load.");
     auto arch = getAMDArch(op->getParentOfType<ModuleOp>());
     triton::AMD::TargetInfo targetInfo(arch ? arch->str() : "");

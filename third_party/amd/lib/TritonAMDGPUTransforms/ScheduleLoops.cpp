@@ -547,8 +547,11 @@ void pipelineLoop(scf::ForOp forOp, int numStages) {
   LoadToInfoMap loadToInfo;
   for (const auto &[load, info] : loadOpToIndLevel) {
     auto [distance, use] = info;
-    LoadInfo loadInfo = {
-        .sharedEncoding = nullptr, .distToUse = distance, .use = use};
+    LoadInfo loadInfo;
+    loadInfo.sharedEncoding = nullptr;
+    loadInfo.distToUse = distance;
+    loadInfo.use = use;
+
     auto useTDM = isa<tt::DescriptorLoadOp>(load);
     if (useTDM) {
       loadToInfo[load] = loadInfo;
