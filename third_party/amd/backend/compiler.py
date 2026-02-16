@@ -169,7 +169,7 @@ class HIPBackend(BaseBackend):
     # availability state: 0 - not tested, 1 - torch is present. Anything else -
     # no torch available. First call to is_within_2gb() checks torch availability
     # and caches it.
-    _TORCH_AVAILABLE:int = 0
+    _TORCH_AVAILABLE: int = 0
 
     @staticmethod
     def is_within_2gb(arg):
