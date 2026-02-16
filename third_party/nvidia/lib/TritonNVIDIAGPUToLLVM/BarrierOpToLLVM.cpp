@@ -111,17 +111,28 @@ struct InitBarrierOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto barrierTy = op.getAlloc().getType();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getAlloc(),
-        typeConverter->convertType(op.getAlloc().getType().getElementType()),
-        rewriter);
+        typeConverter->convertType(barrierTy.getElementType()), rewriter);
 
     // We use an elect predicate to tell ptxas that the operation is uniform,
     // which results in better codegen.
     Value pred = getElectWarp0OrThread0(*targetInfo, b);
+
+    if (auto leaderPred =
+            LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
+      pred = b.and_(pred, *leaderPred);
+
+    auto numCTAs = triton::gpu::lookupNumCTAs(op);
+    auto initCount = op.getCount();
+    // The lead barrier accounts for all arrives from CTAs that broadcast into
+    // the same barrier.
+    initCount *= numCTAs / barrierTy.getNumElements();
+
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
-                            std::to_string(op.getCount()) + ";";
+                            std::to_string(initCount) + ";";
     auto &barSyncOp = *ptxBuilder.create(ptx);
     barSyncOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},
@@ -188,31 +199,40 @@ struct BarrierExpectConversion
     auto expectedBytes = op.getSize() * (numCTAs / barrierTy.getNumElements());
 
     auto id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
-    pred = b.and_(pred, adaptor.getPred());
+    Value basePred = b.icmp_eq(id, b.i32_val(0));
+    basePred = b.and_(basePred, adaptor.getPred());
+    auto leaderCTAPred =
+        LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy);
+    bool crossCluster = leaderCTAPred.has_value();
+    Value leaderPred =
+        leaderCTAPred ? b.and_(basePred, *leaderCTAPred) : basePred;
+    Value leaderBarrierPtr = LLVM::NVIDIA::getLeaderAddress(
+        loc, rewriter, smemObj.getBase(), barrierTy);
 
-    auto kBlock = StringAttr::get(op->getContext(), "block");
-    auto maskCGABroadcast =
-        toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    if (maskCGABroadcast) {
-      // If several CTAs cast to the same barrier, as when we do a TMA into a
-      // tcgen05.mma 2CTA, we just register the expect in the lead barrier, as
-      // it is the only one that will receive the mbarrier signals
-      auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
-      auto ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
-      pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
-    }
-
-    ::mlir::triton::PTXBuilder ptxBuilder;
-    const std::string ptx =
+    ::mlir::triton::PTXBuilder expectPtxBuilder;
+    const std::string expectPtx =
         "@$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], " +
         std::to_string(expectedBytes) + ";";
-    auto &barSyncOp = *ptxBuilder.create(ptx);
-    barSyncOp({ptxBuilder.newOperand(pred, "b"),
-               ptxBuilder.newOperand(smemObj.getBase(), "r")},
-              /*onlyAttachMLIRArgs=*/true);
+    auto &expectOp = *expectPtxBuilder.create(expectPtx);
+    expectOp({expectPtxBuilder.newOperand(leaderPred, "b"),
+              expectPtxBuilder.newOperand(leaderBarrierPtr, "r")},
+             /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(op->getContext());
-    ptxBuilder.launch(rewriter, loc, voidTy);
+    expectPtxBuilder.launch(rewriter, loc, voidTy);
+
+    if (crossCluster) {
+      // Non-leader CTAs still contribute one arrival to the lead CTA barrier.
+      auto nonLeaderPred = b.and_(basePred, b.xor_(leaderPred, b.true_val()));
+      ::mlir::triton::PTXBuilder arrivePtxBuilder;
+      const std::string arrivePtx =
+          "@$0 mbarrier.arrive.shared::cluster.b64 _, [$1], 1;";
+      auto &arriveOp = *arrivePtxBuilder.create(arrivePtx);
+      arriveOp({arrivePtxBuilder.newOperand(nonLeaderPred, "b"),
+                arrivePtxBuilder.newOperand(leaderBarrierPtr, "r")},
+               /*onlyAttachMLIRArgs=*/true);
+      arrivePtxBuilder.launch(rewriter, loc, voidTy);
+    }
+
     rewriter.eraseOp(op);
     return success();
   }
@@ -238,19 +258,9 @@ struct WaitBarrierOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto pred = adaptor.getPred();
-
-    auto kBlock = StringAttr::get(ctx, "block");
-    auto maskCGABroadcast =
-        toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    if (maskCGABroadcast) {
-      // If several CTAs cast to the same barrier, as when we do a TMA into a
-      // tcgen05.mma 2CTA, we send all the signals to the lead CTA, so even if
-      // this barrier is waiting for zero bytes, no one will arrive on it. As
-      // such, we predicate it out
-      auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
-      auto ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
-      pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
-    }
+    if (auto leaderPred =
+            LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
+      pred = b.and_(pred, *leaderPred);
 
     bool predicated = pred && !matchPattern(pred, m_NonZero());
     std::string ptx;
@@ -324,7 +334,6 @@ struct ArriveBarrierOpConversion
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto ctx = op->getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto barrierTy = op.getAlloc().getType();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
@@ -336,34 +345,26 @@ struct ArriveBarrierOpConversion
     // accesses which doesn't have a MemBar equivalent :/
     ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
 
-    auto kBlock = StringAttr::get(ctx, "block");
-    uint32_t maskCGABroadcast =
-        toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    bool distributedArrive = maskCGABroadcast != 0;
+    Value id = getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(id, b.i32_val(0));
+    if (op.getPred())
+      pred = b.and_(pred, adaptor.getPred());
 
-    Value barrierPtr = smemObj.getBase();
-    if (distributedArrive) {
-      int numCTAs = ttg::lookupNumCTAs(op);
-      uint32_t repMask = (~maskCGABroadcast) & (numCTAs - 1);
-      Value ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
-      Value repCtaId = b.and_(ctaId, b.i32_val(repMask));
-      barrierPtr = NVVM::MapaOp::create(rewriter, loc, ptr_ty(ctx, 7),
-                                        barrierPtr, repCtaId);
-    }
+    bool isCrossCluster =
+        LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy)
+            .has_value();
+
+    Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
+        loc, rewriter, smemObj.getBase(), barrierTy);
     // TODO: Add phase result as needed.
     std::stringstream ptxAsm;
     ptxAsm << "@$0 mbarrier.arrive."
-           << (distributedArrive ? "shared::cluster" : "shared::cta")
+           << (isCrossCluster ? "shared::cluster" : "shared::cta")
            << ".b64 _, [$1]";
     if (op.getCount() > 1) {
       ptxAsm << ", " << op.getCount();
     }
     ptxAsm << ";";
-
-    Value id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
-    if (op.getPred())
-      pred = b.and_(pred, adaptor.getPred());
 
     PTXBuilder ptxBuilder;
     SmallVector<PTXBuilder::Operand *, 2> operands = {
