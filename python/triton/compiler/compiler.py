@@ -437,6 +437,9 @@ class CompiledKernel:
         self._run = None
 
     def __del__(self):
+        if knobs.runtime.module_unload_hook is not None:
+            knobs.runtime.module_unload_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
+
         if self.module is not None:
             driver.active.utils.unload_module(self.module)
             self.module = None

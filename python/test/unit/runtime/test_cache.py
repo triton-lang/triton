@@ -891,3 +891,18 @@ def test_preload_higher_order_kernels(device, fresh_triton_cache) -> None:
     kernel[(1, )](output, fn_b)
     assert counter == 1
     assert output.item() == 31
+
+
+def test_module_load_unload():
+
+    @triton.jit
+    def kernel(out_ptr, val) -> None:
+        tl.store(out_ptr, val)
+
+    out = torch.randn(1, dtype=torch.float32, device='cuda')
+    pre_compile = kernel.warmup(out, 1, grid=(1, ))
+    pre_compile._init_handles()
+
+    assert pre_compile.module is not None
+    pre_compile.__del__()
+    assert pre_compile.module is None
