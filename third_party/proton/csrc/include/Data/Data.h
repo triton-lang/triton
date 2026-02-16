@@ -79,7 +79,7 @@ struct DataEntry {
 class Data : public ScopeInterface {
 public:
   static constexpr size_t kNoCompletePhase = std::numeric_limits<size_t>::max();
-  // A special phase used for static/captured graph metadata.
+  // A special phase used for virtual/captured graph metadata.
   static constexpr size_t kVirtualPhase =
       std::numeric_limits<size_t>::max() - 1;
   // Sentinel root id used when adding an op from the root.
@@ -189,7 +189,7 @@ protected:
   }
 
   [[nodiscard]] std::unique_lock<std::shared_mutex>
-  lockIfCurrentOrStaticPhase(size_t phase) {
+  lockIfCurrentOrVirtualPhase(size_t phase) {
     std::unique_lock<std::shared_mutex> lock(mutex, std::defer_lock);
     const auto currentPhaseValue = currentPhase.load(std::memory_order_relaxed);
     if (phase == currentPhaseValue || phase == kVirtualPhase) {
