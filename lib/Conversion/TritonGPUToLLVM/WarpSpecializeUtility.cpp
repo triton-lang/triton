@@ -345,15 +345,41 @@ static void disableLICM(LLVM::BrOp latchBr) {
 // lowerWarpSpecializeCommon
 //===----------------------------------------------------------------------===//
 
+/// Insert an optimization fence (inline asm with memory clobber) to prevent
+/// LLVM from optimizing across partition boundaries. This is much simpler than
+/// outlining since partitions stay in the same function and can reference
+/// shared memory directly.
+static void insertOptimizationFence(TritonLLVMIRRewriter &b) {
+  // Empty inline asm with memory clobber prevents LLVM from moving code across.
+  LLVM::InlineAsmOp::create(
+      b, b.getLoc(),
+      /*res=*/LLVM::LLVMVoidType::get(b.getContext()),
+      /*operands=*/ValueRange(),
+      /*asm_string=*/StringAttr::get(b.getContext(), ""),
+      /*constraints=*/StringAttr::get(b.getContext(), "~{memory}"),
+      /*has_side_effects=*/true,
+      /*is_align_stack=*/false,
+      /*tail_call_kind=*/LLVM::TailCallKind::None,
+      /*asm_dialect=*/
+      LLVM::AsmDialectAttr::get(b.getContext(), LLVM::AsmDialect::AD_ATT),
+      /*operand_attrs=*/ArrayAttr());
+}
+
 static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
                                     const TargetInfoBase &targetInfo,
                                     const WarpSpecializeCallbacks &callbacks,
-                                    unsigned switchLoopBarrierIdx) {
+                                    unsigned switchLoopBarrierIdx,
+                                    bool outlinePartitions) {
   TritonLLVMIRRewriter b(ws.getLoc(), ws.getContext());
   for (Region *partition : ws.getPartitionRegions()) {
     // Load the explicit captures from shared memory and replace the block args
     // if there are any.
     b.setInsertionPointToStart(&partition->front());
+
+    // Insert optimization fence at partition entry to prevent cross-partition
+    // optimization by LLVM.
+    if (outlinePartitions)
+      insertOptimizationFence(b);
 
     callbacks.reallocRegisters(b, ws,
                                RegisterReallocPhase::WorkerPartitionStart,
@@ -385,6 +411,9 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
     // Rewrite all warp returns.
     partition->walk([&](WarpReturnOp op) {
       TritonLLVMIRRewriter b(op.getLoc(), op);
+      // Insert optimization fence at partition exit.
+      if (outlinePartitions)
+        insertOptimizationFence(b);
       callbacks.createAllBarrier(b, switchLoopBarrierIdx);
       callbacks.reallocRegisters(b, ws,
                                  RegisterReallocPhase::WorkerPartitionEnd,
@@ -400,6 +429,10 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
     unsigned defaultNumWarps, unsigned totalNumWarps,
     const TargetInfoBase &targetInfo, const WarpSpecializeCallbacks &callbacks,
     unsigned switchLoopBarrierIdx) {
+
+  // Check if partition outlining is enabled via environment variable.
+  bool outlinePartitions =
+      ::getenv("TRITON_OUTLINE_WARP_PARTITIONS") != nullptr;
 
   TritonLLVMIRRewriter b(func.getLoc(), ctx);
   Type int8Type = b.getIntegerType(8);
@@ -437,7 +470,7 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
     WarpSpecializeOp op = wsOps[i];
     auto &stateMap = warpToState[i];
     rewritePartitionRegions(op, switchLoop, targetInfo, callbacks,
-                            switchLoopBarrierIdx);
+                            switchLoopBarrierIdx, outlinePartitions);
     for (auto [partition, partitionNumWarps, startId] :
          llvm::zip(op.getPartitionRegions(), op.getPartitionNumWarps(),
                    *op.getWarpGroupStartIds())) {
