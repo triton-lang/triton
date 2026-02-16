@@ -82,13 +82,6 @@ public:
         dataToEntry.insert_or_assign(data, entry);
       }
 
-      const DataEntry *findEntry(Data *data) const {
-        auto it = dataToEntry.find(data);
-        if (it == dataToEntry.end())
-          return nullptr;
-        return &it->second;
-      }
-
       template <typename FnT> void forEachEntry(FnT &&fn) {
         for (auto &[data, entry] : dataToEntry)
           fn(data, entry);

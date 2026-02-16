@@ -90,8 +90,12 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
       for (auto &[data, entries] : pendingGraph.dataToEntries) {
         auto &dataEntry = entries[i];
-        dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
-                                             dataEntry.id);
+        if (dataEntry.id != Scope::DummyScopeId) {
+          dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
+                                               dataEntry.id);
+        } else {
+          dataEntry.upsertFlexibleMetric(metricName, metricValueVariant);
+        }
       }
     }
   }
