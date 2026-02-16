@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 
@@ -450,6 +451,9 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
   if (!virtualTargetEntryIds.empty()) {
     tracePhases.withPtr(Data::kVirtualPhase, [&](Trace *virtualTrace) {
       for (auto targetEntryId : virtualTargetEntryIds) {
+        if (!virtualTrace->hasEvent(targetEntryId)) {
+          continue;
+        }
         // Linked target ids are event ids, so resolve through the event first.
         auto &targetEvent = virtualTrace->getEvent(targetEntryId);
         auto contexts = virtualTrace->getContexts(targetEvent.contextId);
@@ -497,8 +501,12 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
       processMetricMaps(event.metricSet.metrics, baseContexts);
       for (const auto &[targetEntryId, linkedMetrics] :
            event.metricSet.linkedMetrics) {
+        auto virtualContextsIt = targetIdToVirtualContexts.find(targetEntryId);
+        if (virtualContextsIt == targetIdToVirtualContexts.end()) {
+          continue;
+        }
         auto contexts = baseContexts;
-        auto &virtualContexts = targetIdToVirtualContexts[targetEntryId];
+        auto &virtualContexts = virtualContextsIt->second;
         contexts.insert(contexts.end(), virtualContexts.begin(),
                         virtualContexts.end());
         processMetricMaps(linkedMetrics, contexts);
