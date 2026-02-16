@@ -616,6 +616,14 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   return alloc;
 }
 
+static Value loadTensorMemoryBase(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
+                                  Location loc) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value sharedMem = mlir::LLVM::getStackPointer(rewriter, func);
+  Value address = b.load(i32_ty, sharedMem);
+  return b.inttoptr(ptr_ty(func.getContext(), 6), address);
+}
+
 static void lowerTensorMemoryAlloc(ModuleOp mod) {
   // Tensor memory base ops can be emitted inside noinline helper functions, not
   // just kernel entry points.
@@ -627,27 +635,36 @@ static void lowerTensorMemoryAlloc(ModuleOp mod) {
       return;
     baseOpsByFunc[func.getOperation()].push_back(baseOp);
   });
+  if (baseOpsByFunc.empty())
+    return;
+
+  DenseMap<Operation *, Value> kernelBaseByFunc;
+  mod.walk([&](LLVM::LLVMFuncOp func) {
+    if (!triton::isKernel(func))
+      return;
+    Value base = initTensorMemory(func);
+    if (base)
+      kernelBaseByFunc[func.getOperation()] = base;
+  });
 
   for (auto &it : baseOpsByFunc) {
-    Value newBase = initTensorMemory(cast<LLVM::LLVMFuncOp>(it.first));
-    if (!newBase)
-      continue;
+    auto func = cast<LLVM::LLVMFuncOp>(it.first);
+    Value newBase;
+    if (triton::isKernel(func)) {
+      auto kernelIt = kernelBaseByFunc.find(it.first);
+      if (kernelIt == kernelBaseByFunc.end())
+        continue;
+      newBase = kernelIt->second;
+    }
     for (ttn::TensorMemoryBaseAddress baseOp : it.second) {
+      if (!newBase) {
+        IRRewriter rewriter(baseOp.getContext());
+        rewriter.setInsertionPoint(baseOp);
+        newBase = loadTensorMemoryBase(rewriter, func, baseOp.getLoc());
+      }
       baseOp.getResult().replaceAllUsesWith(newBase);
       baseOp->erase();
     }
-
-  if (baseOps.empty())
-    return;
-  // TODO: Handle cases of matmul used in noinline functions.
-  assert(triton::isKernel(kernel));
-  Value newBase = initTensorMemory(kernel);
-  if (!newBase)
-    return;
-  for (auto baseOp : baseOps) {
-    baseOp->getResult(0).replaceAllUsesWith(newBase);
-    baseOp->erase();
-
   }
 }
 
