@@ -640,7 +640,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     numNodes = std::numeric_limits<size_t>::max();
     auto findGraph = false;
     if (graphStates.contain(graphExecId)) {
-      numNodes = graphStates[graphExecId].numNodes;
+      if (!graphStates[graphExecId].captureStatusChecked)
+        numNodes = graphStates[graphExecId].numNodes;
       findGraph = true;
     }
     if (!findGraph && !graphStates[graphExecId].captureStatusChecked) {

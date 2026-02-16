@@ -193,6 +193,8 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
             replay1_frame = child
     assert replay0_frame is not None
     assert replay1_frame is not None
+    assert len(replay0_frame["children"]) == 3
+    assert len(replay1_frame["children"]) == 3
 
     def has_positive_time_metric(node):
         if node["metrics"].get("time (ns)", 0) > 0:
