@@ -516,6 +516,11 @@ LogicalResult TCGen5MMAOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
+  for (auto barrier : getBarriers()) {
+    auto barrierTy = cast<MemDescType>(barrier.getType());
+    if (failed(verifyBarrierType(*this, barrierTy)))
+      return failure();
+  }
   Type atype = getA().getType().getElementType();
   Type btype = getB().getType().getElementType();
   Type dtype = getD().getType().getElementType();
@@ -705,6 +710,9 @@ LogicalResult TCGen5CommitOp::verify() {
   auto numDescs = getDescs().size();
   if (numDescs > 2)
     return emitOpError("expected 0, 1, or 2 descriptors, got ") << numDescs;
+  auto barrierTy = getBarrier().getType();
+  if (failed(verifyBarrierType(*this, barrierTy)))
+    return failure();
   return success();
 }
 
