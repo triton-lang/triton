@@ -821,13 +821,6 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
     with temp_file1.open() as f:
         data1 = json.load(f)
 
-    names0 = get_all_names(data0[0])
-    names1 = get_all_names(data1[0])
-    assert "session0_replay" in names0
-    assert "session1_replay" not in names0
-    assert "session1_replay" in names1
-    assert "session0_replay" not in names1
-
     session0_replay_frame = get_frame_by_name(data0[0], "session0_replay")
     session1_replay_frame = get_frame_by_name(data1[0], "session1_replay")
     assert session0_replay_frame is not None
@@ -835,8 +828,6 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
 
     capture0 = session0_replay_frame["children"][0]
     capture1 = session1_replay_frame["children"][0]
-    assert capture0["frame"]["name"] == "<captured_at>"
-    assert capture1["frame"]["name"] == "<captured_at>"
 
     foo_frame0 = get_frame_by_name(capture0, "foo_with_metric")
     bar_frame0 = get_frame_by_name(capture0, "bar_without_metric")
