@@ -1379,14 +1379,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     // out)
     bool clusterBarrier = barrierMask & ~maskCGABroadcast;
     if (clusterBarrier) {
-      // This part is to support TMA into tcgen05.mma 2CTA mostly, i.e.,
-      // barrierMask == 1
-      // Mask with ones on the bits where the CTA broadcasts.
-      // This is a trick from cutlass to implement a faster `mapa`.
-      uint32_t fullMask = ~(barrierMask << 24);
-      Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
-      barrierInt = b.and_(barrierInt, b.i32_val(fullMask));
-      barrierPtr = b.inttoptr(barrierPtr.getType(), barrierInt);
+      barrierPtr =
+          LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
     }
 
     // Don't set cta_group::1 as it doesn't exist pre-Blackwell

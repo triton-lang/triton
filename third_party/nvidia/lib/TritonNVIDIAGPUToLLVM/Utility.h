@@ -2,6 +2,7 @@
 #define TRITON_CONVERSION_TRITONNVIDIAGPU_TO_LLVM_UTILITY_H
 
 #include <cstdint>
+#include <optional>
 
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
@@ -63,6 +64,18 @@ LogicalResult lowerLdStMatrix(
 // group
 Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
                              uint16_t broadcastBits);
+
+// Returns the lead CTA predicate for this barrier layout when lowering through
+// cluster scope. Returns std::nullopt for CTA-local lowering.
+std::optional<Value>
+getLeaderCTAPredicate(Location loc, ConversionPatternRewriter &rewriter,
+                      mlir::triton::gpu::MemDescType barrierTy);
+
+// Returns the lead CTA barrier address for this layout. If there is no
+// cross-cluster lowering, returns barrierPtr unchanged.
+Value getLeaderAddress(Location loc, ConversionPatternRewriter &rewriter,
+                       Value barrierPtr,
+                       mlir::triton::gpu::MemDescType barrierTy);
 } // namespace NVIDIA
 } // namespace LLVM
 

@@ -155,6 +155,39 @@ Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
   return b.shl(b.i32_val(pattern), base);
 }
 
+static uint32_t getCGABroadcastMask(mlir::triton::gpu::MemDescType barrierTy) {
+  auto kBlock = StringAttr::get(barrierTy.getContext(), "block");
+  return toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
+}
+
+std::optional<Value>
+getLeaderCTAPredicate(Location loc, ConversionPatternRewriter &rewriter,
+                      mlir::triton::gpu::MemDescType barrierTy) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  uint32_t maskCGABroadcast = getCGABroadcastMask(barrierTy);
+  if (!maskCGABroadcast)
+    return std::nullopt;
+
+  Value ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+  Value ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
+  return std::optional<Value>(b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
+}
+
+Value getLeaderAddress(Location loc, ConversionPatternRewriter &rewriter,
+                       Value barrierPtr,
+                       mlir::triton::gpu::MemDescType barrierTy) {
+  uint32_t barrierMask = getCGABroadcastMask(barrierTy);
+  if (!barrierMask)
+    return barrierPtr;
+
+  // Trick from cutlass to implement a faster `mapa` via a single and
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  uint32_t fullMask = ~(barrierMask << 24);
+  Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
+  barrierInt = b.and_(barrierInt, b.i32_val(fullMask));
+  return b.inttoptr(barrierPtr.getType(), barrierInt);
+}
+
 LogicalResult lowerLdStMatrix(
     Location loc, LinearLayout cvt, bool transpose,
     SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix
