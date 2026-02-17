@@ -61,7 +61,12 @@ class AsyncCompileMode:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        # Finalize any outstanding compiles
-        for future in as_completed(self.raw_futures):
-            self.future_kernels[future._key].result(self.ignore_errors)
-        active_mode.set(None)
+        try:
+            # Finalize any outstanding compiles
+            for future in as_completed(self.raw_futures):
+                self.future_kernels[future._key].result(self.ignore_errors)
+        finally:
+            # Regardless of whether finalization succeeded or raised an error,
+            # we need to clear the active mode so it doesn't affect future
+            # compilations
+            active_mode.set(None)
