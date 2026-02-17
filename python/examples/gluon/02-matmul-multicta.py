@@ -58,12 +58,12 @@ def matmul_get_configs(pre_hook=None):
         )
         for BM in (128, )
         for BN in (64, 128, 256)
-        for BK in (32, 64, 128)
+        for BK in (64, 128)
         for minor_dim in (0, 1)
-        for grid_tile_width in (2, 4, 8, 16)
-        for stages in (2, 3, 4)
+        for grid_tile_width in (1, 4, 8, 16)
+        for stages in (2, 4, 6)
         for acc_stages in (2, 3, 4)
-        for epilogue_size_n in (16, 32, 64)
+        for epilogue_size_n in (32, 64)
         for two_cta in (False, True)
         if not (two_cta and BN > 128)
     ]
@@ -103,12 +103,34 @@ def matmul_tma_set_block_size_hook(nargs):
 
 # From Pallas.
 @gluon.jit
-def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width: gl.constexpr):
-    gl.static_assert(tile_width > 0 and (tile_width & (tile_width - 1)) == 0, "tile_width must be a power of two")
-    major_size = n_tiles if minor_dim == 0 else m_tiles
-    minor_size = m_tiles if minor_dim == 0 else n_tiles
-    gl.device_assert((major_size & (major_size - 1)) == 0, "major_size must be a power of two")
+def _planar_snake_generic(lin_idx, major_size, minor_size, tile_width: gl.constexpr):
+    full_minor_tiles = minor_size // tile_width
+    full_minor_size = full_minor_tiles * tile_width
+    full_elements = full_minor_tiles * tile_width * major_size
 
+    minor_tile_idx = lin_idx // (tile_width * major_size)
+
+    full_minor_within = lin_idx % tile_width
+    full_major_within = (lin_idx // tile_width) % major_size
+    full_minor = minor_tile_idx * tile_width + full_minor_within
+    full_major = gl.where((minor_tile_idx % 2) == 0, full_major_within, major_size - 1 - full_major_within)
+
+    in_full_tile = lin_idx < full_elements
+    if in_full_tile:
+        return full_minor, full_major
+
+    partial_width = minor_size - full_minor_size
+    partial_width = gl.where(partial_width > 0, partial_width, 1)
+    partial_lin = lin_idx - full_elements
+    partial_minor_within = partial_lin % partial_width
+    partial_major_within = (partial_lin // partial_width) % major_size
+    partial_minor = minor_tile_idx * tile_width + partial_minor_within
+    partial_major = gl.where((minor_tile_idx % 2) == 0, partial_major_within, major_size - 1 - partial_major_within)
+    return partial_minor, partial_major
+
+
+@gluon.jit
+def _planar_snake_power_of_2(lin_idx, major_size, minor_size, tile_width: gl.constexpr):
     tile_shift = tile_width.value.bit_length() - 1
     tile_mask = tile_width - 1
     major_mask = major_size - 1
@@ -125,6 +147,10 @@ def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width
     full_minor = minor_tile_idx * tile_width + full_minor_within
     full_major = gl.where((minor_tile_idx & 1) == 0, full_major_within, major_mask - full_major_within)
 
+    in_full_tile = lin_idx < full_elements
+    if in_full_tile:
+        return full_minor, full_major
+
     partial_width = minor_size - full_minor_size
     partial_width = gl.where(partial_width > 0, partial_width, 1)
     partial_lin = lin_idx - full_elements
@@ -132,10 +158,23 @@ def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width
     partial_major_within = (partial_lin // partial_width) & major_mask
     partial_minor = minor_tile_idx * tile_width + partial_minor_within
     partial_major = gl.where((minor_tile_idx & 1) == 0, partial_major_within, major_mask - partial_major_within)
+    return partial_minor, partial_major
 
-    in_full_tile = lin_idx < full_elements
-    minor = gl.where(in_full_tile, full_minor, partial_minor)
-    major = gl.where(in_full_tile, full_major, partial_major)
+
+@gluon.jit
+def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width: gl.constexpr):
+    major_size = n_tiles if minor_dim == 0 else m_tiles
+    minor_size = m_tiles if minor_dim == 0 else n_tiles
+
+    tile_width_is_pow2: gl.constexpr = tile_width > 0 and (tile_width & (tile_width - 1)) == 0
+    if tile_width_is_pow2:
+        major_is_pow2 = (major_size & (major_size - 1)) == 0
+        if major_is_pow2:
+            minor, major = _planar_snake_power_of_2(lin_idx, major_size, minor_size, tile_width)
+        else:
+            minor, major = _planar_snake_generic(lin_idx, major_size, minor_size, tile_width)
+    else:
+        minor, major = _planar_snake_generic(lin_idx, major_size, minor_size, tile_width)
 
     if minor_dim == 0:
         return minor, major
