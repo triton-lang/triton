@@ -772,7 +772,14 @@ def get_benchmark_kernel_config():
     }
 
 
-def make_gluon_runner(a, b, c_triton, cfg):
+def make_gluon_runner(a, b, c_triton, cfg, use_autotuned=False):
+    if use_autotuned:
+
+        def run_gluon():
+            return matmul(a, b)
+
+        return run_gluon
+
     def run_gluon():
         return matmul_with_config(
             a,
@@ -788,7 +795,9 @@ def make_gluon_runner(a, b, c_triton, cfg):
             two_ctas=cfg["collective"],
             epilogue_size_n=cfg["epilogue_tile_n"],
         )
+
     return run_gluon
+
 
 
 def maybe_make_pallas_runner(enabled, a, b, expected, cfg):
@@ -878,7 +887,7 @@ def run_profile(shape, a, b, c_torch, run_gluon, run_pallas_kernel):
     show_profile("matmul")
 
 
-def benchmark(*, profile=True, run_pallas=False):
+def benchmark(*, profile=True, run_pallas=False, use_autotuned=False):
     if not is_blackwell():
         raise RuntimeError("This benchmark requires a Blackwell CUDA GPU.")
 
@@ -886,8 +895,13 @@ def benchmark(*, profile=True, run_pallas=False):
     shape, a, b, c_triton, c_torch, expected = create_benchmark_tensors()
     kernel_cfg = get_benchmark_kernel_config()
 
-    run_gluon = make_gluon_runner(a, b, c_triton, kernel_cfg)
-    torch.testing.assert_close(run_gluon(), expected, atol=1e-1, rtol=1e-2)
+    runner_name = "matmul (autotuned)" if use_autotuned else "matmul_with_config"
+    print(f"Gluon runner: {runner_name}")
+    run_gluon = make_gluon_runner(a, b, c_triton, kernel_cfg, use_autotuned=use_autotuned)
+    actual = run_gluon()
+    torch.testing.assert_close(actual, expected, atol=1e-1, rtol=1e-2)
+    if use_autotuned:
+        print(f"Autotuned best config: {matmul_kernel.best_config}")
 
     run_pallas_kernel = maybe_make_pallas_runner(run_pallas, a, b, expected, kernel_cfg)
 
@@ -923,5 +937,10 @@ if __name__ == "__main__":
         action="store_true",
         help="Run the Pallas benchmark if JAX/Pallas is available.",
     )
+    parser.add_argument(
+        "--use-autotuned",
+        action="store_true",
+        help="Use autotuned matmul() instead of matmul_with_config() for the Gluon runner.",
+    )
     args = parser.parse_args()
-    benchmark(profile=not args.no_profile, run_pallas=args.run_pallas)
+    benchmark(profile=not args.no_profile, run_pallas=args.run_pallas, use_autotuned=args.use_autotuned)
