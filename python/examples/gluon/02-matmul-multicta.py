@@ -824,6 +824,10 @@ def run_profile(shape, a, b, c_torch, run_gluon, run_pallas_kernel):
 
     def bench_fn(label, reps, fn):
         print(f"Benchmarking {label}: ...", end="")
+        proton.deactivate(0)
+        for _ in range(5):
+            fn() # warmup
+            triton.runtime.driver.active.clear_cache(l2_cache)
         try:
             for _ in range(reps):
                 proton.deactivate(0)
