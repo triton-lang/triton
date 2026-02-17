@@ -349,8 +349,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         const auto &linkedFlexibleMetrics =
             treeNode.metricSet.linkedFlexibleMetrics;
 
-        auto markIncludedVirtualNodes =
-            [&](auto &&virtualSelf, size_t virtualNodeId) -> bool {
+        auto markIncludedVirtualNodes = [&](auto &&virtualSelf,
+                                            size_t virtualNodeId) -> bool {
           const auto &virtualNode = virtualTree->getNode(virtualNodeId);
           uint32_t childCount = 0;
           for (const auto &child : virtualNode.children) {
@@ -363,7 +363,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               linkedFlexibleMetrics.find(virtualNodeId) !=
                   linkedFlexibleMetrics.end();
           const bool includeNode = hasLinkedAtNode || (childCount > 0);
-          includedVirtualNode[virtualNodeId] = static_cast<uint8_t>(includeNode);
+          includedVirtualNode[virtualNodeId] =
+              static_cast<uint8_t>(includeNode);
           includedVirtualChildCount[virtualNodeId] = childCount;
           return includeNode;
         };
@@ -385,42 +386,39 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         }
         auto appendVirtualNode = [&](auto &&virtualSelf, size_t virtualNodeId,
                                      json &outNode) -> void {
-              const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-              const auto metricsIt =
-                  treeNode.metricSet.linkedMetrics.find(virtualNodeId);
-              const auto flexibleIt =
-                  treeNode.metricSet.linkedFlexibleMetrics.find(virtualNodeId);
-              outNode = json::object();
-              outNode["frame"] = {{"name", virtualNode.name},
-                                  {"type", "function"}};
-              outNode["metrics"] = json::object();
-              if (metricsIt != treeNode.metricSet.linkedMetrics.end() ||
-                  flexibleIt !=
-                      treeNode.metricSet.linkedFlexibleMetrics.end()) {
-                const auto &linkedMetrics =
-                    (metricsIt != treeNode.metricSet.linkedMetrics.end())
-                        ? metricsIt->second
-                        : emptyMetrics;
-                const auto &linkedFlexibleMetrics =
-                    (flexibleIt !=
-                     treeNode.metricSet.linkedFlexibleMetrics.end())
-                        ? flexibleIt->second
-                        : emptyFlexibleMetrics;
-                appendMetrics(outNode["metrics"], linkedMetrics,
-                              linkedFlexibleMetrics);
-              }
-              outNode["children"] = json::array();
-              auto &virtualChildren = outNode["children"];
-              virtualChildren.get_ref<json::array_t &>().reserve(
-                  includedVirtualChildCount[virtualNodeId]);
-              for (const auto &child : virtualNode.children) {
-                if (!includedVirtualNode[child.id]) {
-                  continue;
-                }
-                virtualChildren.push_back(json::object());
-                virtualSelf(virtualSelf, child.id, virtualChildren.back());
-              }
-            };
+          const auto &virtualNode = virtualTree->getNode(virtualNodeId);
+          const auto metricsIt =
+              treeNode.metricSet.linkedMetrics.find(virtualNodeId);
+          const auto flexibleIt =
+              treeNode.metricSet.linkedFlexibleMetrics.find(virtualNodeId);
+          outNode = json::object();
+          outNode["frame"] = {{"name", virtualNode.name}, {"type", "function"}};
+          outNode["metrics"] = json::object();
+          if (metricsIt != treeNode.metricSet.linkedMetrics.end() ||
+              flexibleIt != treeNode.metricSet.linkedFlexibleMetrics.end()) {
+            const auto &linkedMetrics =
+                (metricsIt != treeNode.metricSet.linkedMetrics.end())
+                    ? metricsIt->second
+                    : emptyMetrics;
+            const auto &linkedFlexibleMetrics =
+                (flexibleIt != treeNode.metricSet.linkedFlexibleMetrics.end())
+                    ? flexibleIt->second
+                    : emptyFlexibleMetrics;
+            appendMetrics(outNode["metrics"], linkedMetrics,
+                          linkedFlexibleMetrics);
+          }
+          outNode["children"] = json::array();
+          auto &virtualChildren = outNode["children"];
+          virtualChildren.get_ref<json::array_t &>().reserve(
+              includedVirtualChildCount[virtualNodeId]);
+          for (const auto &child : virtualNode.children) {
+            if (!includedVirtualNode[child.id]) {
+              continue;
+            }
+            virtualChildren.push_back(json::object());
+            virtualSelf(virtualSelf, child.id, virtualChildren.back());
+          }
+        };
 
         for (const auto &child : virtualRootNode.children) {
           if (!includedVirtualNode[child.id]) {
@@ -737,8 +735,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     }
     auto &includedVirtualNode = includedVirtualNodeByDepth[depth];
     auto &includedVirtualChildCount = includedVirtualChildCountByDepth[depth];
-    auto markIncludedVirtualNodes =
-        [&](auto &&virtualSelf, size_t virtualNodeId) -> bool {
+    auto markIncludedVirtualNodes = [&](auto &&virtualSelf,
+                                        size_t virtualNodeId) -> bool {
       const auto &virtualNode = virtualTree->getNode(virtualNodeId);
       uint32_t childCount = 0;
       for (const auto &child : virtualNode.children) {
