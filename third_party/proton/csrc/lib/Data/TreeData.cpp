@@ -361,7 +361,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
             if (virtualNodeId == Tree::TreeNode::RootId) {
               break;
             }
-            const size_t parentId = virtualTree->getNode(virtualNodeId).parentId;
+            const size_t parentId =
+                virtualTree->getNode(virtualNodeId).parentId;
             if (parentId == Tree::TreeNode::DummyId ||
                 parentId >= virtualNodeCount || parentId == virtualNodeId) {
               break;
