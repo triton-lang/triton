@@ -57,12 +57,12 @@ def matmul_get_configs(pre_hook=None):
             pre_hook=pre_hook,
         )
         for BM in (128, )
-        for BN in (128, 256)
-        for BK in (64, )
+        for BN in (64, 128, 256)
+        for BK in (32, 64, 128)
         for minor_dim in (0, 1)
-        for grid_tile_width in (1, 4, 8, 12, 16)
+        for grid_tile_width in (1, 2, 4, 8, 12, 16)
         for stages in (2, 4, 6)
-        for acc_stages in (2, )
+        for acc_stages in (2, 4)
         for two_cta in (False, True)
         if not (two_cta and BN > 128)
     ]
