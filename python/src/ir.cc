@@ -1840,6 +1840,24 @@ void init_triton_ir(py::module &&m) {
       .def("create_gather",
            [](TritonOpBuilder &self, Value src, Value indices, int axis)
                -> Value { return self.create<GatherOp>(src, indices, axis); })
+      .def("create_scatter",
+           [](TritonOpBuilder &self, Value dst, Value indices, Value src,
+              int axis, bool includeSelf,
+              std::optional<std::string> reduceKind) -> OpState {
+             auto reduceKindAttr =
+                 reduceKind ? StringAttr::get(self.getContext(), *reduceKind)
+                            : StringAttr();
+             return self.create<ScatterOp>(dst, indices, src, axis, includeSelf,
+                                           reduceKindAttr);
+           })
+      .def("create_scatter_ret",
+           [](TritonOpBuilder &self, py::args args) -> OpState {
+             llvm::SmallVector<Value> return_values;
+             for (const auto &arg : args) {
+               return_values.push_back(py::cast<Value>(arg));
+             }
+             return self.create<ScatterReturnOp>(return_values);
+           })
       // Force GPU barrier
       .def("create_barrier",
            [](TritonOpBuilder &self) {

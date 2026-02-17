@@ -99,6 +99,10 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     GatherLoweringHelper helper(gatherOp);
     return helper.getScratchSizeInBytes();
   }
+  if (auto scatterOp = dyn_cast<ScatterOp>(op)) {
+    ScatterLoweringHelper helper(scatterOp);
+    return helper.getScratchSizeInBytes();
+  }
   if (auto histogram = dyn_cast<HistogramOp>(op)) {
     auto dstTy = histogram.getType();
     int threadsPerWarp = gpu::TritonGPUDialect::getThreadsPerWarp(

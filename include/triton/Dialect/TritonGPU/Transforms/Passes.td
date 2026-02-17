@@ -268,7 +268,7 @@ def TritonGPUOptimizeThreadLocality : Pass<"tritongpu-optimize-thread-locality",
 
   let description = [{
     The aim of this pass is to reduce cross-thread communication for certain
-    operations, like reductions, reshapes, and gathers.
+    operations, like reductions, reshapes, gathers, and scatters.
 
     For reduction operations, this pass attempts to adjust the reduction size
     (or layout) to avoid splitting the reduction operation between multiple
@@ -281,6 +281,10 @@ def TritonGPUOptimizeThreadLocality : Pass<"tritongpu-optimize-thread-locality",
     heuristics to determine when it is appropriate to assign specific layouts
     and trigger their respective codegen paths. For now, the pass only attempts
     to apply layouts that result in warp-synchronous gathers.
+
+    For scatters, this pass applies the same strategy and attempts to assign
+    layouts that keep source/index updates warp-synchronous with their
+    destination columns.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",

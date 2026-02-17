@@ -671,6 +671,28 @@ tt.func @set_warp_shuffle_layout_square_axis_0(%arg0: tensor<64x64xf32, #blocked
 
 #blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [16, 2], warpsPerCTA = [2, 2], order = [1, 0]}>
 
+// CHECK: [[LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+
+// CHECK: set_warp_shuffle_layout_scatter_axis_0
+tt.func @set_warp_shuffle_layout_scatter_axis_0(%arg0: tensor<64x64xf32, #blocked>, %arg1: tensor<32x64xi32, #blocked>, %arg2: tensor<32x64xf32, #blocked>) -> tensor<64x64xf32, #blocked> {
+  // CHECK-NEXT: [[DST:%.*]] = ttg.convert_layout %arg0 : tensor<64x64xf32, #blocked> -> tensor<64x64xf32, [[LAYOUT]]>
+  // CHECK-NEXT: [[SRC:%.*]] = ttg.convert_layout %arg2 : tensor<32x64xf32, #blocked> -> tensor<32x64xf32, [[LAYOUT]]>
+  // CHECK-NEXT: [[IDX:%.*]] = ttg.convert_layout %arg1 : tensor<32x64xi32, #blocked> -> tensor<32x64xi32, [[LAYOUT]]>
+  // CHECK-NEXT: [[OUT:%.*]] = tt.scatter [[DST]][[[IDX]]] = [[SRC]] {axis = 0 : i32, efficient_layout} : (tensor<64x64xf32, [[LAYOUT]]>, tensor<32x64xi32, [[LAYOUT]]>, tensor<32x64xf32, [[LAYOUT]]>) -> tensor<64x64xf32, [[LAYOUT]]>
+  %0 = tt.scatter %arg0[%arg1] = %arg2 {axis = 0 : i32} : (tensor<64x64xf32, #blocked>, tensor<32x64xi32, #blocked>, tensor<32x64xf32, #blocked>) -> tensor<64x64xf32, #blocked>
+  // CHECK-NEXT: [[RES:%.*]] = ttg.convert_layout [[OUT]] : tensor<64x64xf32, [[LAYOUT]]> -> tensor<64x64xf32, #blocked>
+  // CHECK-NEXT: return [[RES]] : tensor<64x64xf32, #blocked>
+  tt.return %0 : tensor<64x64xf32, #blocked>
+}
+
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [16, 2], warpsPerCTA = [2, 2], order = [1, 0]}>
+
 // CHECK: [[LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {

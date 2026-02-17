@@ -128,6 +128,87 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
   return ROCDL::BallotOp::create(rewriter, loc, type, cmp);
 }
 
+Value TargetInfo::matchAny(RewriterBase &rewriter, Location loc, Type maskType,
+                           Value value, Value activeMask) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  // Compare by bit pattern; convert non-integer scalars to integers.
+  Value compareValue = value;
+  Type valueTy = value.getType();
+  unsigned valueBits = 0;
+  if (isa<LLVM::LLVMPointerType>(valueTy)) {
+    valueBits = 64;
+    compareValue = b.ptrtoint(i64_ty, value);
+  } else {
+    valueBits = valueTy.getIntOrFloatBitWidth();
+    if (!valueTy.isIntOrIndex())
+      compareValue = b.bitcast(value, int_ty(valueBits));
+  }
+
+  // shuffleIdx lowering in this backend only handles <=64b scalar payloads.
+  if (valueBits > 64) {
+    unsigned bitsToCompare = valueBits;
+    Value zeroValue = b.int_val(valueBits, 0);
+    Value oneValue = b.int_val(valueBits, 1);
+    Value groupMask = activeMask;
+    for (unsigned bit = 0; bit < bitsToCompare; ++bit) {
+      Value shifted = b.lshr(compareValue, b.int_val(valueBits, bit));
+      Value bitVal = b.and_(shifted, oneValue);
+      Value bitSet = b.icmp_ne(bitVal, zeroValue);
+      Value bitMask = ballot(rewriter, loc, maskType, bitSet);
+      Value eqMask = b.select(bitSet, bitMask, b.xor_(activeMask, bitMask));
+      groupMask = b.and_(groupMask, eqMask);
+    }
+    return groupMask;
+  }
+
+  // Group-iteration algorithm (HIP-like):
+  // Repeatedly pick one leader from remaining lanes, form its equality group
+  // with ballot(compare == leaderValue), and remove that group.
+  // Return the first group that contains the current lane.
+  unsigned maskBits = maskType.getIntOrFloatBitWidth();
+  Value zeroMask = b.int_val(maskBits, 0);
+  Value oneMask = b.int_val(maskBits, 1);
+  Value allOnesMask = b.int_val(maskBits, -1);
+  Value laneId = getLaneAndWarpId(rewriter, loc).first;
+  Value laneShift = laneId;
+  if (maskBits > 32)
+    laneShift = b.zext(maskType, laneId);
+  Value laneBit = b.shl(oneMask, laneShift);
+
+  unsigned maxIters = triton::gpu::lookupThreadsPerWarp(rewriter);
+
+  Value remainingMask = activeMask;
+  Value resultMask = zeroMask;
+  Value foundGroup = b.false_val();
+  for (unsigned iter = 0; iter < maxIters; ++iter) {
+    Value hasRemaining = b.icmp_ne(remainingMask, zeroMask);
+    // Avoid cttz(0) in inactive iterations.
+    Value safeRemaining = b.select(hasRemaining, remainingMask, oneMask);
+    Value lane =
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.cttz", {maskType},
+                                        {safeRemaining, b.false_val()})
+            .getResult(0);
+    Value laneI32 = lane;
+    unsigned laneWidth = lane.getType().getIntOrFloatBitWidth();
+    if (laneWidth > 32)
+      laneI32 = b.trunc(i32_ty, lane);
+    else if (laneWidth < 32)
+      laneI32 = b.zext(i32_ty, lane);
+    Value leaderValue = shuffleIdx(rewriter, loc, compareValue, laneI32);
+    Value isEqual = b.icmp_eq(compareValue, leaderValue);
+    Value eqMask = ballot(rewriter, loc, maskType, isEqual);
+    Value groupMask = b.and_(eqMask, remainingMask);
+    Value laneInGroup = b.icmp_ne(b.and_(laneBit, groupMask), zeroMask);
+    Value shouldSet = b.and_(
+        hasRemaining, b.and_(laneInGroup, b.xor_(foundGroup, b.true_val())));
+    resultMask = b.select(shouldSet, groupMask, resultMask);
+    foundGroup = b.or_(foundGroup, b.and_(hasRemaining, laneInGroup));
+    remainingMask = b.and_(remainingMask, b.xor_(groupMask, allOnesMask));
+  }
+  return resultMask;
+}
+
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);

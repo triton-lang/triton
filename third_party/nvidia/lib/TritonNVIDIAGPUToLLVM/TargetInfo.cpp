@@ -146,6 +146,95 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                                   NVVM::VoteSyncKind::ballot);
 }
 
+Value TargetInfo::matchAny(RewriterBase &rewriter, Location loc, Type maskType,
+                           Value value, Value activeMask) const {
+  auto emulatedMatchAny = [&]() -> Value {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // Compare by bit pattern; convert non-integer scalars to integers.
+    Value compareValue = value;
+    Type valueTy = value.getType();
+    unsigned valueBits = 0;
+    if (isa<LLVM::LLVMPointerType>(valueTy)) {
+      valueBits = 64;
+      compareValue = b.ptrtoint(i64_ty, value);
+    } else {
+      valueBits = valueTy.getIntOrFloatBitWidth();
+      if (!valueTy.isIntOrIndex())
+        compareValue = b.bitcast(value, int_ty(valueBits));
+    }
+
+    unsigned bitsToCompare = valueBits;
+
+    Value zeroValue = b.int_val(valueBits, 0);
+    Value oneValue = b.int_val(valueBits, 1);
+    Value groupMask = activeMask;
+    for (unsigned bit = 0; bit < bitsToCompare; ++bit) {
+      Value shifted = b.lshr(compareValue, b.int_val(valueBits, bit));
+      Value bitVal = b.and_(shifted, oneValue);
+      Value bitSet = b.icmp_ne(bitVal, zeroValue);
+      Value bitMask = ballot(rewriter, loc, maskType, bitSet);
+      Value eqMask = b.select(bitSet, bitMask, b.xor_(activeMask, bitMask));
+      groupMask = b.and_(groupMask, eqMask);
+    }
+    return groupMask;
+  };
+
+  // Native match.sync(any) is available on Volta+.
+  if (computeCapability < 70)
+    return emulatedMatchAny();
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned maskBits = maskType.getIntOrFloatBitWidth();
+  Value threadMask = activeMask;
+  if (maskBits > 32) {
+    threadMask = b.trunc(i32_ty, threadMask);
+  } else if (maskBits < 32) {
+    threadMask = b.zext(i32_ty, threadMask);
+  }
+
+  Value matchVal = value;
+  Type matchValTy = value.getType();
+  unsigned matchValBits = 0;
+  if (isa<LLVM::LLVMPointerType>(matchValTy)) {
+    matchVal = b.ptrtoint(i64_ty, value);
+    matchValBits = 64;
+  } else {
+    matchValBits = matchValTy.getIntOrFloatBitWidth();
+  }
+  if (isa<FloatType>(matchValTy)) {
+    if (matchValBits == 32) {
+      matchVal = b.bitcast(value, i32_ty);
+    } else if (matchValBits == 64) {
+      matchVal = b.bitcast(value, i64_ty);
+    } else {
+      return emulatedMatchAny();
+    }
+  } else if (matchValTy.isIntOrIndex()) {
+    if (matchValBits < 32) {
+      matchVal = b.zext(i32_ty, value);
+      matchValBits = 32;
+    } else if (matchValBits > 32 && matchValBits < 64) {
+      matchVal = b.zext(i64_ty, value);
+      matchValBits = 64;
+    } else if (matchValBits > 64) {
+      return emulatedMatchAny();
+    }
+  } else {
+    return emulatedMatchAny();
+  }
+
+  Value nativeMask = NVVM::MatchSyncOp::create(
+      rewriter, loc, i32_ty, threadMask, matchVal, NVVM::MatchSyncKind::any);
+  if (maskBits > 32) {
+    return b.zext(maskType, nativeMask);
+  }
+  if (maskBits < 32) {
+    return b.trunc(maskType, nativeMask);
+  }
+  return nativeMask;
+}
+
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
