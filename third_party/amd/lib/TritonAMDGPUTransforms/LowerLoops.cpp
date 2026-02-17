@@ -41,7 +41,6 @@ struct AsyncCopyChainOps {
 
 struct TDMCopyChainOps {
   triton::amdgpu::AsyncTDMCopyGlobalToLocalOp copyOp;
-  triton::amdgpu::TDMPrefetchOp prefetchOp;
   ttg::AsyncCommitGroupOp commitOp;
   triton::amdgpu::AsyncTDMWait waitOp;
   ttg::LocalLoadOp maybeLocalLoadOp;
@@ -52,7 +51,7 @@ using StreamOpVariant =
 using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 
 TDMCopyChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
-                                   Value extractIdx, int globalPrefetch) {
+                                   Value extractIdx) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
@@ -61,12 +60,6 @@ TDMCopyChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
   // Extract local subview from shared allocation
   auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
                       .getDefiningOp<ttg::MemDescIndexOp>();
-
-  triton::amdgpu::TDMPrefetchOp prefetchOp;
-  if (globalPrefetch > 0)
-    prefetchOp = triton::amdgpu::TDMPrefetchOp::create(
-        builder, loc, loadOp.getDesc(), loadOp.getIndices(), pred,
-        /*speculative=*/false, /*returnOffsets=*/nullptr);
 
   auto copyOp = triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(
       builder, loc, loadOp.getDesc(), loadOp.getIndices(), viewLoad, pred);
@@ -79,7 +72,7 @@ TDMCopyChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
   auto maybeSharedLoad = tt::replaceUsesWithLocalLoad(
       builder, loadOp->getResult(0), viewLoad, waitOp);
 
-  return {copyOp, prefetchOp, commitOp, waitOp, maybeSharedLoad};
+  return {copyOp, commitOp, waitOp, maybeSharedLoad};
 }
 
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
@@ -144,33 +137,9 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // and |vecSize| with which dot operand |inputValue| is fed into if possible.
-ttg::AMDMfmaEncodingAttr getDotEncodingMfma(Value inputValue, unsigned *opIdx,
-                                            unsigned *vecSize) {
-  if (!inputValue.hasOneUse())
-    return nullptr;
-
-  Operation *user = *inputValue.getUsers().begin();
-  if (user->getNumResults() != 1 ||
-      user->getBlock() != inputValue.getParentBlock())
-    return nullptr;
-
-  LDBG("getDotEncodingMfma user: " << *user);
-  if (auto dotOp = dyn_cast<tt::DotOpInterface>(user)) {
-    OpOperand &use = *inputValue.getUses().begin();
-    *opIdx = use.getOperandNumber();
-    auto operandType = cast<RankedTensorType>(inputValue.getType());
-    *vecSize = ttg::toLinearLayout(operandType).getNumConsecutiveInOut();
-    auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
-    return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
-  }
-
-  return getDotEncodingMfma(user->getResult(0), opIdx, vecSize);
-}
-
-// Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
-// with which dot operand |inputValue| is fed into if possible.
-static ttg::AMDWmmaEncodingAttr
-getDotEncodingWmma(Value inputValue, unsigned *opIdx, unsigned *vecSize) {
+template <class T>
+T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize,
+                 T *dummy = nullptr) {
   if (!llvm::hasSingleElement(inputValue.getUses()))
     return nullptr;
 
@@ -185,9 +154,9 @@ getDotEncodingWmma(Value inputValue, unsigned *opIdx, unsigned *vecSize) {
     auto operandType = cast<RankedTensorType>(inputValue.getType());
     *vecSize = ttg::toLinearLayout(operandType).getNumConsecutiveInOut();
     auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
-    return dyn_cast<ttg::AMDWmmaEncodingAttr>(dotType.getEncoding());
+    return dyn_cast<T>(dotType.getEncoding());
   }
-  return getDotEncodingWmma(user->getResult(0), opIdx, vecSize);
+  return getDotEncoding<T>(user->getResult(0), opIdx, vecSize);
 }
 
 // Get a padded encoding instead of going through the classical swizzled one.
@@ -332,7 +301,8 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         // op for the mfma layout to deduce operand index and other information.
         unsigned opIdx;
         unsigned vecSize;
-        if (auto mfmaEnc = getDotEncodingMfma(userResult, &opIdx, &vecSize)) {
+        if (auto mfmaEnc = getDotEncoding<ttg::AMDMfmaEncodingAttr>(
+                userResult, &opIdx, &vecSize)) {
           LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
           tempAttr = mfmaEnc.composeSharedLayoutForOperand(
               cgaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
@@ -340,8 +310,8 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
           LDBG("Deduced shared encoding candidate from mfma layout: "
                << tempAttr);
           sharedEncs.push_back(tempAttr);
-        } else if (auto dotEnc =
-                       getDotEncodingWmma(userResult, &opIdx, &vecSize)) {
+        } else if (auto dotEnc = getDotEncoding<ttg::AMDWmmaEncodingAttr>(
+                       userResult, &opIdx, &vecSize)) {
           LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
           tempAttr = dotEnc.composeSharedLayoutForOperand(
               cgaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
@@ -447,19 +417,20 @@ getSharedEncIfAllUsersAreDotEncPadded(Value loadedValue) {
       auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
       if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
         // For async descriptor loads, enable padding.
-        tempAttr = getPaddedEncoding(loadedValue.getContext(),
-                                     dotOpEnc.getOpIdx(), srcTy.getShape(),
-                                     sharedOrder, cgaLayout, bitWidth);
+        tempAttr = getPaddedEncodingForDotOp(
+            loadedValue.getContext(), dotOpEnc.getOpIdx(), srcTy.getShape(),
+            sharedOrder, cgaLayout, bitWidth);
       } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
         // We use linear layout directly for scaled dot fp8 operands. For such
         // cases, we need to look further down the def-use chain to find the dot
         // op for the mfma layout to deduce operand index and other information.
         unsigned opIdx;
         unsigned vecSize;
-        if (auto dotEnc = getDotEncodingWmma(userResult, &opIdx, &vecSize)) {
-          tempAttr =
-              getPaddedEncoding(loadedValue.getContext(), opIdx,
-                                srcTy.getShape(), order, cgaLayout, bitWidth);
+        if (auto dotEnc = getDotEncoding<ttg::AMDWmmaEncodingAttr>(
+                userResult, &opIdx, &vecSize)) {
+          tempAttr = getPaddedEncodingForDotOp(loadedValue.getContext(), opIdx,
+                                               srcTy.getShape(), order,
+                                               cgaLayout, bitWidth);
         }
       }
     }
@@ -572,8 +543,8 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
 
     // Replace the old load with multi-buffered loads
     if (useAsyncCopy && descLoadOp) {
-      loadToStreamOp[descLoadOp] = createTDMAsyncCopy(
-          descLoadOp, alloc, extractIdx, info.globalPrefetch);
+      loadToStreamOp[descLoadOp] =
+          createTDMAsyncCopy(descLoadOp, alloc, extractIdx);
     } else if (useAsyncCopy && canBeConvertedToAsyncLoad(
                                    numBuffers, loadOp, info.sharedEncoding,
                                    axisInfoAnalysis, targetInfo)) {
@@ -748,10 +719,8 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
 void scheduleTDMCopy(const TDMCopyChainOps &asyncOps,
                      tt::DescriptorLoadOp loadOp, tt::CoarseSchedule &schedule,
                      const Stages &stages, const Clusters &clusters) {
-  auto [copyOp, prefetchOp, commitOp, waitOp, maybeLocalLoadOp] = asyncOps;
+  auto [copyOp, commitOp, waitOp, maybeLocalLoadOp] = asyncOps;
   auto [loadStage, loadCluster] = schedule[loadOp];
-  if (prefetchOp)
-    schedule.insert(prefetchOp, loadStage + 1, loadCluster);
   schedule.insert(copyOp, loadStage, loadCluster);
   // Place ttg.async_commit_group op following AsyncCopyGlobalToLocal so the
   // later UpdateAsyncWaitCount pass can deduce better waitcnts
@@ -975,6 +944,8 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
                                          useAsyncCopy, axisInfoAnalysis);
   scheduleStreamOps(loadToStreamOps, schedule, clusters);
 
+  // Now that the original load is replaced by a sequence of new Ops. It become
+  // dead, and hence should be removed from the schedule and can be erased.
   for (auto [l, _] : loadToStreamOps) {
     schedule.erase(l);
     l->erase();
@@ -1015,7 +986,6 @@ void lowerLoop(scf::ForOp forOp,
   triton::AMD::TargetInfo targetInfo(arch ? arch->str() : "");
 
   LoadToInfoMap loadToInfo;
-  int globalPrefetch = 0;
   for (const auto &[load, info] : loadOpToIndLevel) {
     auto [distance, use] = info;
     if (load->hasAttrOfType<BoolAttr>(AttrBypassLDS)) {
@@ -1027,7 +997,11 @@ void lowerLoop(scf::ForOp forOp,
         auto paddedEncoding =
             getSharedEncIfAllUsersAreDotEncPadded(load->getResult(0))
                 .value_or(nullptr);
-        loadToInfo[load] = {paddedEncoding, distance, use, globalPrefetch};
+        LoadInfo ldInfo;
+        ldInfo.sharedEncoding = paddedEncoding;
+        ldInfo.distToUse = distance;
+        ldInfo.use = use;
+        loadToInfo[load] = ldInfo;
       } else {
         LDBG("Deduce shared encoding for: " << *load);
         auto sharedEncoding =

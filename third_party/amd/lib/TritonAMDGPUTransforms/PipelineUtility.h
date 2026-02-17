@@ -44,7 +44,6 @@ struct LoadInfo {
   triton::gpu::SharedEncodingTrait sharedEncoding = nullptr;
   int distToUse = 0;
   Operation *use = nullptr;
-  int globalPrefetch = 0;
 };
 
 using LoadToInfoMap = llvm::MapVector<Operation *, LoadInfo>;

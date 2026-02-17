@@ -1,5 +1,6 @@
 #include "Utility.h"
 
+#include "amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -302,6 +303,32 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
 
   return ttg::PaddedSharedEncodingAttr::get(ctx, {{paddingInterval, padding}},
                                             std::move(linearComponent));
+}
+
+// Get a padded encoding instead of going through the classical swizzled one.
+// Please note that padding here is in terms of elements and not bytes or dwords
+triton::gpu::PaddedSharedEncodingAttr
+getPaddedEncodingForDotOp(mlir::MLIRContext *context, int opIdx,
+                          ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
+                          triton::gpu::CGAEncodingAttr CGALayout,
+                          unsigned typeWidthInBit) {
+  // LDS padding strategy to reduce bank conflicts for dot operand loads.
+  //
+  // Both ds_load_tr (transposed) and ds_load (non-transposed) use 128-bit
+  // loads where 16 lanes cooperatively access 16 different rows. The bank
+  // conflict pattern is identical for both instructions since each lane
+  // reads contiguously within its row.
+  //
+  // Always pad by maxVecSize (128 bits / element size) to spread accesses
+  // across different banks.
+  auto blockShapePerCTA =
+      triton::gpu::getShapePerCTA(CGALayout.getCTASplitNum(), shape);
+  int innerDimLength = blockShapePerCTA[order[0]];
+  unsigned maxVecSize = 128 / typeWidthInBit;
+  unsigned padAmount = maxVecSize;
+  unsigned padInterval = innerDimLength;
+  return triton::gpu::PaddedSharedEncodingAttr::get(
+      context, {{padInterval, padAmount}}, order, shape, CGALayout);
 }
 
 ttg::PaddedSharedEncodingAttr
