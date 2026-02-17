@@ -649,17 +649,6 @@ static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
   return parseBoolAttrValue(parser, attr.getValue(), value, desc);
 };
 
-static LogicalResult parseType(AsmParser &parser, const NamedAttribute &attr,
-                               Type &value, StringRef desc) {
-  auto typeAttr = mlir::dyn_cast<TypeAttr>(attr.getValue());
-  if (!typeAttr) {
-    parser.emitError(parser.getNameLoc(), "expected a Type in ") << desc;
-    return failure();
-  }
-  value = typeAttr.getValue();
-  return success();
-}
-
 std::optional<LinearLayout> parseLinearLayout(const DictionaryAttr &dict,
                                               AsmParser &parser,
                                               ArrayRef<std::string> inDimNames,
