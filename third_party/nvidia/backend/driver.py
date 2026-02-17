@@ -2,13 +2,12 @@ import functools
 import os
 import subprocess
 import triton
-import re
 from pathlib import Path
 from triton import knobs
 from triton.runtime.build import compile_module_from_src
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver
+from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
@@ -121,60 +120,6 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def expand_signature(signature, tensordesc_meta):
-    output = []
-    tensordesc_idx = 0
-    # Expand tensor descriptor arguments into either nvTmaDesc, shape and
-    # strides, or base pointer, shape and strides depending on whether the
-    # kernel was lowered to use the nvTmaDesc or not.
-    for sig in signature:
-        if isinstance(sig, str) and sig.startswith("tensordesc"):
-            meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
-            tensordesc_idx += 1
-
-            # Parse tensordesc signature with optional input_rank for im2col mode
-            # Format: tensordesc<dtype[block_shape],...> or tensordesc_im2col<dtype[block_shape],input_rank=N,...>
-            is_im2col = sig.startswith("tensordesc_im2col")
-            match = re.match(r"tensordesc(?:_im2col)?<([^[>]*)\[([^\]]*)\]", sig)
-            dtype = match.group(1)
-            block_shape = match.group(2)
-            block_ndim = block_shape.count(",") + 1
-
-            # For im2col, look for input_rank=N in the type string
-            tensor_rank = None
-            if is_im2col:
-                rank_match = re.search(r",input_rank=(\d+)", sig)
-                assert rank_match, "Expected tensordesc_im2col to have input_rank"
-                tensor_rank = int(rank_match.group(1))
-
-            # For im2col with input_rank, use tensor's rank; otherwise use block_shape ndim
-            ndim = tensor_rank if tensor_rank else block_ndim
-
-            if meta is None:
-                output.append("*" + dtype)
-                # Currently the host side tensor descriptors get passed in as a
-                # tensor desc, shape, and strides. We have no way to use these
-                # shape and strides when processing tensor descriptors which is
-                # why we provide our own decomposition above. Sadly this means
-                # we have to pass the shape and strides twice.
-                for _ in range(2 * ndim):
-                    output.append("i64")
-                output.append("i1")
-                output.append("i1")
-            else:
-                output.append("nvTmaDesc")
-
-            for _ in range(ndim):
-                output.append("i32")
-            for _ in range(ndim):
-                output.append("i64")
-        else:
-            output.append(sig)
-
-    assert not tensordesc_meta or tensordesc_idx == len(tensordesc_meta)
-    return output
-
-
 def make_kernel_signature(signature):
     """
     Creates a kernel signature in C to be able to efficiently extract
@@ -221,23 +166,9 @@ TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 TMA_TF32 = 11
 
 
-def make_tensordesc_arg(arg, metadata):
+def make_tensordesc_arg(arg, metadata, _):
     if metadata is None:
-        # Currently the host side tensor descriptors get decomposed in
-        # the frontend to tensor desc, shape, and strides. We have no
-        # way to use these shape and strides when processing tensor
-        # descriptors which is why we provide our own decomposition
-        # above. Sadly this means we have to pass the shape and strides
-        # twice.
-        return [
-            arg.base,
-            *arg.shape,
-            *arg.strides,
-            arg.padding == "nan",
-            arg.round_f32_to_tf32,
-            *arg.shape,
-            *arg.strides,
-        ]
+        return decompose_descriptor(arg)
 
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]
@@ -294,32 +225,7 @@ def make_tensordesc_arg(arg, metadata):
 
 
 def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
-    has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
-    if not has_tensor_desc_arg:
-        return launcher
-
-    tensordesc_indices = set(
-        [i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
-    assert not tensordesc_meta or len(tensordesc_meta) == len(tensordesc_indices)
-    if not tensordesc_meta:
-        tensordesc_meta = [None] * len(tensordesc_indices)
-
-    def inner(*args):
-        base_args = args[:-1]
-        kernel_args = args[-1]
-
-        final_kernel_args = []
-        tensordesc_idx = 0
-        for i, arg in enumerate(kernel_args):
-            if i in tensordesc_indices:
-                final_kernel_args.extend(make_tensordesc_arg(arg, tensordesc_meta[tensordesc_idx]))
-                tensordesc_idx += 1
-            else:
-                final_kernel_args.append(arg)
-
-        return launcher(*base_args, final_kernel_args)
-
-    return inner
+    return wrap_handle_tensordesc_impl(launcher, signature, tensordesc_meta, make_tensordesc_arg)
 
 
 class CudaLauncher(object):
@@ -332,7 +238,7 @@ class CudaLauncher(object):
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
 
         launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta)
+        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "nvTmaDesc")
         self.arg_annotations = annotate_arguments(expanded_signature)
         self.kernel_signature = make_kernel_signature(expanded_signature)
         self.num_ctas = getattr(metadata, "num_ctas", 1)
