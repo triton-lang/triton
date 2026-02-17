@@ -385,7 +385,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         auto getIncludedVirtualChildCount =
             [&](size_t virtualNodeId) -> uint32_t {
           if (includedVirtualChildCountStamp[virtualNodeId] !=
-                  currentTraversalStamp) {
+              currentTraversalStamp) {
             return 0;
           }
           return includedVirtualChildCount[virtualNodeId];
