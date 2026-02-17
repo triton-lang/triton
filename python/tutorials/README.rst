@@ -8,4 +8,4 @@ To install the dependencies for the tutorials:
 .. code-block:: bash
 
     cd triton
-    pip install -e python/tutorials/requirements.txt
+    pip install -r python/tutorials/requirements.txt
