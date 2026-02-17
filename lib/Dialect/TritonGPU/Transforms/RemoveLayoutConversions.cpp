@@ -99,8 +99,6 @@ public:
   // Return the mapped value in the given encoding. This will insert a convert
   // if the encoding is different than the encoding decided at resolve time.
   Value getValueAs(Value value, Attribute encoding);
-  // Return the original value mapped to the new desired encoding.
-  Value getRewrittenValue(Value value);
   // Dump the current stage of layout information.
   void dump();
 
@@ -109,8 +107,6 @@ private:
   llvm::MapVector<Value, LayoutInfo> layouts;
   // original encodings of tensor values rewritten in place.
   DenseMap<Value, Attribute> originalEncodings;
-  // map of the values rewrite based on their encoding.
-  DenseMap<std::pair<Value, Attribute>, Value> rewriteMapping;
   FuncOp funcOp;
 };
 
@@ -438,33 +434,15 @@ void LayoutPropagation::rewriteRegion(Region &region) {
   }
 }
 
-Value LayoutPropagation::getRewrittenValue(Value value) {
-  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorType)
-    return value;
-  auto layoutIt = layouts.find(value);
-  if (layoutIt == layouts.end()) {
-    return value;
-  }
-  assert(layoutIt->second.encodings.size() == 1 &&
-         "we should have resolved to a single encoding");
-  Attribute encodingPicked = *(layoutIt->second.encodings.begin());
-  if (encodingPicked == tensorType.getEncoding())
-    return value;
-  return rewriteMapping.at({value, encodingPicked});
-}
-
 Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
   if (auto tensorType = dyn_cast<RankedTensorType>(value.getType())) {
-    Value rewrittenValue = getRewrittenValue(value);
-    if (cast<RankedTensorType>(rewrittenValue.getType()).getEncoding() ==
-        encoding)
-      return rewrittenValue;
+    if (cast<RankedTensorType>(value.getType()).getEncoding() == encoding)
+      return value;
     OpBuilder rewriter(value.getContext());
-    rewriter.setInsertionPointAfterValue(rewrittenValue);
+    rewriter.setInsertionPointAfterValue(value);
     auto tmpType = tensorType.cloneWithEncoding(encoding);
-    Value converted = ConvertLayoutOp::create(rewriter, value.getLoc(), tmpType,
-                                              rewrittenValue);
+    Value converted =
+        ConvertLayoutOp::create(rewriter, value.getLoc(), tmpType, value);
     // TODO: we could cache the conversion.
     return converted;
   }
