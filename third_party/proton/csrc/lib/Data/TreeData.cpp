@@ -382,14 +382,9 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         for (const auto &[linkedEntryId, _] : linkedFlexibleMetrics) {
           markVirtualPathToRoot(linkedEntryId);
         }
-        auto isIncludedVirtualNode = [&](size_t virtualNodeId) -> bool {
-          return virtualNodeId < virtualNodeCount &&
-                 includedVirtualStamp[virtualNodeId] == currentTraversalStamp;
-        };
         auto getIncludedVirtualChildCount =
             [&](size_t virtualNodeId) -> uint32_t {
-          if (virtualNodeId >= virtualNodeCount ||
-              includedVirtualChildCountStamp[virtualNodeId] !=
+          if (includedVirtualChildCountStamp[virtualNodeId] !=
                   currentTraversalStamp) {
             return 0;
           }
@@ -437,7 +432,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
           virtualChildren.get_ref<json::array_t &>().reserve(
               getIncludedVirtualChildCount(virtualNodeId));
           for (const auto &child : virtualNode.children) {
-            if (!isIncludedVirtualNode(child.id)) {
+            if (includedVirtualStamp[child.id] != currentTraversalStamp) {
               continue;
             }
             virtualChildren.push_back(json::object());
@@ -446,7 +441,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         };
 
         for (const auto &child : virtualRootNode.children) {
-          if (!isIncludedVirtualNode(child.id)) {
+          if (includedVirtualStamp[child.id] != currentTraversalStamp) {
             continue;
           }
           json virtualRootChild;
@@ -753,10 +748,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
           break;
         }
         const size_t parentId = virtualTree->getNode(virtualNodeId).parentId;
-        if (parentId == Tree::TreeNode::DummyId ||
-            parentId >= virtualNodeCount || parentId == virtualNodeId) {
-          break;
-        }
         if (includedVirtualChildCountStamp[parentId] != currentTraversalStamp) {
           includedVirtualChildCountStamp[parentId] = currentTraversalStamp;
           includedVirtualChildCount[parentId] = 0;
@@ -773,18 +764,10 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     }
     return currentTraversalStamp;
   };
-  auto isIncludedVirtualNode = [&](size_t virtualNodeId,
-                                   uint64_t currentTraversalStamp) -> bool {
-    return virtualNodeId < virtualNodeCount &&
-           includedVirtualStamp[virtualNodeId] == currentTraversalStamp;
-  };
   auto getIncludedVirtualChildCount =
       [&](size_t virtualNodeId, uint64_t currentTraversalStamp) -> uint32_t {
-    if (virtualNodeId >= virtualNodeCount ||
-        includedVirtualChildCountStamp[virtualNodeId] !=
-            currentTraversalStamp) {
+    if (includedVirtualChildCountStamp[virtualNodeId] != currentTraversalStamp)
       return 0;
-    }
     return includedVirtualChildCount[virtualNodeId];
   };
   auto packNode = [&](auto &&self, TreeData::Tree::TreeNode &treeNode) -> void {
@@ -814,9 +797,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     for (const auto &child : treeNode.children) {
       self(self, tree->getNode(child.id));
     }
-    if (includedVirtualRootChildCount == 0) {
+    if (includedVirtualRootChildCount == 0)
       return;
-    }
 
     const uint64_t emitTraversalStamp =
         treeNode.children.empty()
@@ -859,17 +841,15 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       writer.packArray(
           getIncludedVirtualChildCount(virtualNodeId, emitTraversalStamp));
       for (const auto &child : virtualNode.children) {
-        if (!isIncludedVirtualNode(child.id, emitTraversalStamp)) {
+        if (includedVirtualStamp[child.id] != emitTraversalStamp)
           continue;
-        }
         virtualSelf(virtualSelf, child.id);
       }
     };
 
     for (const auto &virtualChild : virtualRootNode.children) {
-      if (!isIncludedVirtualNode(virtualChild.id, emitTraversalStamp)) {
+      if (includedVirtualStamp[virtualChild.id] != emitTraversalStamp)
         continue;
-      }
       packVirtualNode(packVirtualNode, virtualChild.id);
     }
   };
