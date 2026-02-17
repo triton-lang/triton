@@ -60,9 +60,9 @@ def matmul_get_configs(pre_hook=None):
         for BN in (64, 128, 256)
         for BK in (32, 64, 128)
         for minor_dim in (0, 1)
-        for grid_tile_width in (1, 2, 4, 8, 12, 16)
-        for stages in (2, 4, 6)
-        for acc_stages in (2, 4)
+        for grid_tile_width in (2, 4, 8, 16, 32)
+        for stages in (2, 3, 4)
+        for acc_stages in (2, 3, 4)
         for two_cta in (False, True)
         if not (two_cta and BN > 128)
     ]
@@ -765,7 +765,7 @@ def get_benchmark_kernel_config():
         "tile_k": 64,
         "grid_minor_dim": 0,
         "grid_tile_width": 16,
-        "max_concurrent_steps": 6,
+        "stages": 6,
         "acc_stages": 2,
         "collective": True,
         "epilogue_tile_n": 32,
@@ -790,7 +790,7 @@ def make_gluon_runner(a, b, c_triton, cfg, use_autotuned=False):
             block_size_k=cfg["tile_k"],
             grid_minor_dim=cfg["grid_minor_dim"],
             grid_tile_width=cfg["grid_tile_width"],
-            stages=cfg["max_concurrent_steps"],
+            stages=cfg["stages"],
             acc_stages=cfg["acc_stages"],
             two_ctas=cfg["collective"],
             epilogue_size_n=cfg["epilogue_tile_n"],
@@ -816,7 +816,7 @@ def maybe_make_pallas_runner(enabled, a, b, expected, cfg):
                 tile_m=cfg["tile_m"],
                 tile_n=cfg["tile_n"],
                 tile_k=cfg["tile_k"],
-                max_concurrent_steps=cfg["max_concurrent_steps"],
+                max_concurrent_steps=cfg["stages"],
                 collective=cfg["collective"],
                 epilogue_tile_n=cfg["epilogue_tile_n"],
                 grid_minor_dim=pallas_mod.MatmulDimension(cfg["grid_minor_dim"]),
