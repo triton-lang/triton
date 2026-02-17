@@ -361,14 +361,16 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         std::unordered_set<size_t> linkedEntryIds;
         linkedEntryIds.reserve(treeNode.metricSet.linkedMetrics.size() +
                                treeNode.metricSet.linkedFlexibleMetrics.size());
-        for (const auto &[linkedEntryId, _] : treeNode.metricSet.linkedMetrics) {
+        for (const auto &[linkedEntryId, _] :
+             treeNode.metricSet.linkedMetrics) {
           linkedEntryIds.insert(linkedEntryId);
         }
         for (const auto &[linkedEntryId, _] :
              treeNode.metricSet.linkedFlexibleMetrics) {
           linkedEntryIds.insert(linkedEntryId);
         }
-        auto hasLinkedEntryInVirtualSubtree = [&](size_t virtualNodeId) -> bool {
+        auto hasLinkedEntryInVirtualSubtree =
+            [&](size_t virtualNodeId) -> bool {
           if (linkedEntryIds.empty()) {
             return false;
           }
