@@ -738,6 +738,113 @@ def test_multiple_sessions(tmp_path: pathlib.Path, device: str):
     assert scope0_count + scope1_count == 3
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, device: str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    foo_iters = 3
+    bar_iters = 2
+
+    def foo_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        x = args["x"]
+        # Tensor custom metric in graph capture mode launches metric kernels.
+        return {"name": "foo_with_metric", "sum_metric": x.sum()}
+
+    def bar_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        # Name-only metadata (no custom metric).
+        return {"name": "bar_without_metric"}
+
+    @triton.jit(launch_metadata=foo_metadata_fn)
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    @triton.jit(launch_metadata=bar_metadata_fn)
+    def bar(x, y, z):
+        tl.store(z, tl.load(y) - tl.load(x))
+
+    x = torch.ones((2, 2), device=device)
+    y = torch.ones((2, 2), device=device)
+    z = torch.empty_like(x)
+
+    # Compile kernels before profiling starts to reduce unrelated profile noise.
+    foo[(1, )](x, y, z)
+    bar[(1, )](x, y, z)
+
+    temp_file0 = tmp_path / "test_multiple_sessions_cudagraph_metric_kernels0.hatchet"
+    temp_file1 = tmp_path / "test_multiple_sessions_cudagraph_metric_kernels1.hatchet"
+    session_id0 = proton.start(str(temp_file0.with_suffix("")), context="shadow", hook="triton")
+    session_id1 = proton.start(str(temp_file1.with_suffix("")), context="shadow", hook="triton")
+
+    proton.deactivate(session_id1)
+
+    graph_foo = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph_foo):
+        for _ in range(foo_iters):
+            foo[(1, )](x, y, z)
+    with proton.scope("session0_replay"):
+        graph_foo.replay()
+
+    proton.deactivate(session_id0)
+    proton.activate(session_id1)
+
+    graph_bar = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph_bar):
+        for _ in range(bar_iters):
+            bar[(1, )](x, y, z)
+    with proton.scope("session1_replay"):
+        graph_bar.replay()
+
+    proton.finalize(session_id0)
+    proton.finalize(session_id1)
+
+    def get_frame_by_name(node, name: str):
+        queue = [node]
+        while queue:
+            cur = queue.pop(0)
+            if cur["frame"]["name"] == name:
+                return cur
+            queue.extend(cur["children"])
+        return None
+
+    def get_all_names(node):
+        names = set()
+        queue = [node]
+        while queue:
+            cur = queue.pop(0)
+            names.add(cur["frame"]["name"])
+            queue.extend(cur["children"])
+        return names
+
+    with temp_file0.open() as f:
+        data0 = json.load(f)
+    with temp_file1.open() as f:
+        data1 = json.load(f)
+
+    session0_replay_frame = get_frame_by_name(data0[0], "session0_replay")
+    session1_replay_frame = get_frame_by_name(data1[0], "session1_replay")
+    assert session0_replay_frame is not None
+    assert session1_replay_frame is not None
+
+    capture0 = session0_replay_frame["children"][0]
+    capture1 = session1_replay_frame["children"][0]
+
+    foo_frame0 = get_frame_by_name(capture0, "foo_with_metric")
+    bar_frame0 = get_frame_by_name(capture0, "bar_without_metric")
+    foo_frame1 = get_frame_by_name(capture1, "foo_with_metric")
+    bar_frame1 = get_frame_by_name(capture1, "bar_without_metric")
+
+    assert foo_frame0 is not None
+    assert bar_frame0 is None
+    assert foo_frame1 is None
+    assert bar_frame1 is not None
+
+    assert foo_frame0["metrics"]["sum_metric"] == float(foo_iters * x.numel())
+    assert int(foo_frame0["metrics"]["count"]) == foo_iters
+    assert "sum_metric" not in bar_frame1["metrics"]
+    assert int(bar_frame1["metrics"]["count"]) == bar_iters
+
+
 def test_trace(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_trace.chrome_trace"
     proton.start(str(temp_file.with_suffix("")), data="trace")
