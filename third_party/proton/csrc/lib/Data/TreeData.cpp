@@ -5,17 +5,14 @@
 #include "Utility/MsgPackWriter.h"
 #include <array>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <map>
 #include <mutex>
 #include <ostream>
-#include <set>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace proton {
@@ -332,19 +329,9 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               flexibleMetric.getValues()[0]);
         }
       };
-  std::unordered_map<size_t, std::unordered_set<size_t>>
-      virtualSubtreeIdsByNode;
-  virtualSubtreeIdsByNode.reserve(virtualTree->size());
-  virtualTree->template walk<TreeData::Tree::WalkPolicy::PostOrder>(
-      [&](TreeData::Tree::TreeNode &virtualNode) {
-        std::unordered_set<size_t> subtreeIds;
-        subtreeIds.insert(virtualNode.id);
-        for (const auto &child : virtualNode.children) {
-          const auto &childSubtreeIds = virtualSubtreeIdsByNode.at(child.id);
-          subtreeIds.insert(childSubtreeIds.begin(), childSubtreeIds.end());
-        }
-        virtualSubtreeIdsByNode.emplace(virtualNode.id, std::move(subtreeIds));
-      });
+  const size_t virtualNodeCount = virtualTree->size();
+  std::vector<uint8_t> includedVirtualNode(virtualNodeCount, 0);
+  std::vector<uint32_t> includedVirtualChildCount(virtualNodeCount, 0);
 
   tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
       [&](TreeData::Tree::TreeNode &treeNode) {
@@ -361,61 +348,34 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         const auto &linkedMetrics = treeNode.metricSet.linkedMetrics;
         const auto &linkedFlexibleMetrics =
             treeNode.metricSet.linkedFlexibleMetrics;
-        const size_t linkedEntryCount =
-            linkedMetrics.size() + linkedFlexibleMetrics.size();
-        auto hasLinkedEntryId = [&](size_t entryId) -> bool {
-          return linkedMetrics.find(entryId) != linkedMetrics.end() ||
-                 linkedFlexibleMetrics.find(entryId) !=
-                     linkedFlexibleMetrics.end();
-        };
-        auto forEachLinkedEntryId = [&](auto &&fn) -> bool {
-          for (const auto &[linkedEntryId, _] : linkedMetrics) {
-            if (!fn(linkedEntryId)) {
-              return false;
+
+        auto markIncludedVirtualNodes =
+            [&](auto &&virtualSelf, size_t virtualNodeId) -> bool {
+          const auto &virtualNode = virtualTree->getNode(virtualNodeId);
+          uint32_t childCount = 0;
+          for (const auto &child : virtualNode.children) {
+            if (virtualSelf(virtualSelf, child.id)) {
+              ++childCount;
             }
           }
-          for (const auto &[linkedEntryId, _] : linkedFlexibleMetrics) {
-            if (!fn(linkedEntryId)) {
-              return false;
-            }
-          }
-          return true;
+          const bool hasLinkedAtNode =
+              linkedMetrics.find(virtualNodeId) != linkedMetrics.end() ||
+              linkedFlexibleMetrics.find(virtualNodeId) !=
+                  linkedFlexibleMetrics.end();
+          const bool includeNode = hasLinkedAtNode || (childCount > 0);
+          includedVirtualNode[virtualNodeId] = static_cast<uint8_t>(includeNode);
+          includedVirtualChildCount[virtualNodeId] = childCount;
+          return includeNode;
         };
-        auto hasLinkedEntryInVirtualSubtree =
-            [&](size_t virtualNodeId) -> bool {
-          if (linkedEntryCount == 0) {
-            return false;
-          }
-          const auto &subtreeIds = virtualSubtreeIdsByNode.at(virtualNodeId);
-          if (linkedEntryCount <= subtreeIds.size()) {
-            bool found = false;
-            forEachLinkedEntryId([&](size_t linkedEntryId) {
-              if (subtreeIds.find(linkedEntryId) != subtreeIds.end()) {
-                found = true;
-                return false;
-              }
-              return true;
-            });
-            return found;
-          }
-          for (const auto subtreeId : subtreeIds) {
-            if (hasLinkedEntryId(subtreeId)) {
-              return true;
-            }
-          }
-          return false;
-        };
-        std::vector<size_t> includedVirtualRootChildIds;
-        includedVirtualRootChildIds.reserve(virtualRootNode.children.size());
-        for (const auto &virtualChild : virtualRootNode.children) {
-          if (hasLinkedEntryInVirtualSubtree(virtualChild.id)) {
-            includedVirtualRootChildIds.push_back(virtualChild.id);
-          }
-        }
-        const bool hasLinkedVirtual = !includedVirtualRootChildIds.empty();
+        markIncludedVirtualNodes(markIncludedVirtualNodes,
+                                 Tree::TreeNode::RootId);
+        const uint32_t includedVirtualRootChildCount =
+            includedVirtualChildCount[Tree::TreeNode::RootId];
+        const bool hasLinkedVirtual = includedVirtualRootChildCount > 0;
+
         childrenArray.get_ref<json::array_t &>().reserve(
             treeNode.children.size() +
-            (hasLinkedVirtual ? includedVirtualRootChildIds.size() : 0));
+            (hasLinkedVirtual ? includedVirtualRootChildCount : 0));
         for (const auto &child : treeNode.children) {
           childrenArray.push_back(json::object());
           jsonNodes[child.id] = &childrenArray.back();
@@ -423,8 +383,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         if (!hasLinkedVirtual) {
           return;
         }
-        std::function<void(size_t, json &)> appendVirtualNode =
-            [&](size_t virtualNodeId, json &outNode) {
+        auto appendVirtualNode = [&](auto &&virtualSelf, size_t virtualNodeId,
+                                     json &outNode) -> void {
               const auto &virtualNode = virtualTree->getNode(virtualNodeId);
               const auto metricsIt =
                   treeNode.metricSet.linkedMetrics.find(virtualNodeId);
@@ -451,24 +411,23 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               }
               outNode["children"] = json::array();
               auto &virtualChildren = outNode["children"];
-              std::vector<size_t> includedVirtualChildIds;
-              includedVirtualChildIds.reserve(virtualNode.children.size());
-              for (const auto &child : virtualNode.children) {
-                if (hasLinkedEntryInVirtualSubtree(child.id)) {
-                  includedVirtualChildIds.push_back(child.id);
-                }
-              }
               virtualChildren.get_ref<json::array_t &>().reserve(
-                  includedVirtualChildIds.size());
-              for (const auto childId : includedVirtualChildIds) {
+                  includedVirtualChildCount[virtualNodeId]);
+              for (const auto &child : virtualNode.children) {
+                if (!includedVirtualNode[child.id]) {
+                  continue;
+                }
                 virtualChildren.push_back(json::object());
-                appendVirtualNode(childId, virtualChildren.back());
+                virtualSelf(virtualSelf, child.id, virtualChildren.back());
               }
             };
 
-        for (const auto childId : includedVirtualRootChildIds) {
+        for (const auto &child : virtualRootNode.children) {
+          if (!includedVirtualNode[child.id]) {
+            continue;
+          }
           json virtualRootChild;
-          appendVirtualNode(childId, virtualRootChild);
+          appendVirtualNode(appendVirtualNode, child.id, virtualRootChild);
           childrenArray.push_back(std::move(virtualRootChild));
         }
       });
@@ -567,22 +526,10 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       cycleMetric.getValueName(CycleMetric::DeviceId);
   auto &cycleMetricDeviceTypeName =
       cycleMetric.getValueName(CycleMetric::DeviceType);
-  std::set<std::string> kernelInclusiveValueNames = {
-      kernelMetricDurationName, kernelMetricInvocationsName};
-  std::set<std::string> kernelExclusiveValueNames = {
-      kernelMetricDeviceIdName, kernelMetricDeviceTypeName};
-  std::set<std::string> cycleInclusiveValueNames = {
-      cycleMetricDurationName, cycleMetricNormalizedDurationName};
-  std::set<std::string> cycleExclusiveValueNames = {cycleMetricDeviceIdName,
-                                                    cycleMetricDeviceTypeName};
-  const auto kernelInclusiveCount =
-      static_cast<uint32_t>(kernelInclusiveValueNames.size());
-  const auto kernelTotalCount = static_cast<uint32_t>(
-      kernelInclusiveValueNames.size() + kernelExclusiveValueNames.size());
-  const auto cycleInclusiveCount =
-      static_cast<uint32_t>(cycleInclusiveValueNames.size());
-  const auto cycleTotalCount = static_cast<uint32_t>(
-      cycleInclusiveValueNames.size() + cycleExclusiveValueNames.size());
+  constexpr uint32_t kernelInclusiveCount = 2;
+  constexpr uint32_t kernelTotalCount = 4;
+  constexpr uint32_t cycleInclusiveCount = 2;
+  constexpr uint32_t cycleTotalCount = 4;
 
   auto packFlexibleMetricValue = [&](const MetricValueType &value) {
     std::visit(
@@ -653,19 +600,9 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     return metricEntries;
   };
 
-  std::unordered_map<size_t, std::unordered_set<size_t>>
-      virtualSubtreeIdsByNode;
-  virtualSubtreeIdsByNode.reserve(virtualTree->size());
-  virtualTree->template walk<TreeData::Tree::WalkPolicy::PostOrder>(
-      [&](TreeData::Tree::TreeNode &virtualNode) {
-        std::unordered_set<size_t> subtreeIds;
-        subtreeIds.insert(virtualNode.id);
-        for (const auto &child : virtualNode.children) {
-          const auto &childSubtreeIds = virtualSubtreeIdsByNode.at(child.id);
-          subtreeIds.insert(childSubtreeIds.begin(), childSubtreeIds.end());
-        }
-        virtualSubtreeIdsByNode.emplace(virtualNode.id, std::move(subtreeIds));
-      });
+  const size_t virtualNodeCount = virtualTree->size();
+  std::vector<std::vector<uint8_t>> includedVirtualNodeByDepth;
+  std::vector<std::vector<uint32_t>> includedVirtualChildCountByDepth;
 
   auto packMetrics =
       [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
@@ -777,7 +714,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
           }
         }
       };
-  auto packNode = [&](auto &&self, TreeData::Tree::TreeNode &treeNode) -> void {
+  auto packNode = [&](auto &&self, TreeData::Tree::TreeNode &treeNode,
+                      size_t depth) -> void {
     writer.packMap(3);
 
     writer.packStr("frame");
@@ -793,56 +731,35 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     const auto &linkedMetrics = treeNode.metricSet.linkedMetrics;
     const auto &linkedFlexibleMetrics =
         treeNode.metricSet.linkedFlexibleMetrics;
-    const size_t linkedEntryCount =
-        linkedMetrics.size() + linkedFlexibleMetrics.size();
-    auto hasLinkedEntryId = [&](size_t entryId) -> bool {
-      return linkedMetrics.find(entryId) != linkedMetrics.end() ||
-             linkedFlexibleMetrics.find(entryId) != linkedFlexibleMetrics.end();
-    };
-    auto forEachLinkedEntryId = [&](auto &&fn) -> bool {
-      for (const auto &[linkedEntryId, _] : linkedMetrics) {
-        if (!fn(linkedEntryId)) {
-          return false;
-        }
-      }
-      for (const auto &[linkedEntryId, _] : linkedFlexibleMetrics) {
-        if (!fn(linkedEntryId)) {
-          return false;
-        }
-      }
-      return true;
-    };
-    auto hasLinkedEntryInVirtualSubtree = [&](size_t virtualNodeId) -> bool {
-      if (linkedEntryCount == 0) {
-        return false;
-      }
-      const auto &subtreeIds = virtualSubtreeIdsByNode.at(virtualNodeId);
-      if (linkedEntryCount <= subtreeIds.size()) {
-        bool found = false;
-        forEachLinkedEntryId([&](size_t linkedEntryId) {
-          if (subtreeIds.find(linkedEntryId) != subtreeIds.end()) {
-            found = true;
-            return false;
-          }
-          return true;
-        });
-        return found;
-      }
-      for (const auto subtreeId : subtreeIds) {
-        if (hasLinkedEntryId(subtreeId)) {
-          return true;
-        }
-      }
-      return false;
-    };
-    std::vector<size_t> includedVirtualRootChildIds;
-    includedVirtualRootChildIds.reserve(virtualRootNode.children.size());
-    for (const auto &virtualChild : virtualRootNode.children) {
-      if (hasLinkedEntryInVirtualSubtree(virtualChild.id)) {
-        includedVirtualRootChildIds.push_back(virtualChild.id);
-      }
+    while (includedVirtualNodeByDepth.size() <= depth) {
+      includedVirtualNodeByDepth.emplace_back(virtualNodeCount, 0);
+      includedVirtualChildCountByDepth.emplace_back(virtualNodeCount, 0);
     }
-    const bool hasLinkedVirtual = !includedVirtualRootChildIds.empty();
+    auto &includedVirtualNode = includedVirtualNodeByDepth[depth];
+    auto &includedVirtualChildCount = includedVirtualChildCountByDepth[depth];
+    auto markIncludedVirtualNodes =
+        [&](auto &&virtualSelf, size_t virtualNodeId) -> bool {
+      const auto &virtualNode = virtualTree->getNode(virtualNodeId);
+      uint32_t childCount = 0;
+      for (const auto &child : virtualNode.children) {
+        if (virtualSelf(virtualSelf, child.id)) {
+          ++childCount;
+        }
+      }
+      const bool hasLinkedAtNode =
+          linkedMetrics.find(virtualNodeId) != linkedMetrics.end() ||
+          linkedFlexibleMetrics.find(virtualNodeId) !=
+              linkedFlexibleMetrics.end();
+      const bool includeNode = hasLinkedAtNode || (childCount > 0);
+      includedVirtualNode[virtualNodeId] = static_cast<uint8_t>(includeNode);
+      includedVirtualChildCount[virtualNodeId] = childCount;
+      return includeNode;
+    };
+    markIncludedVirtualNodes(markIncludedVirtualNodes, Tree::TreeNode::RootId);
+
+    const uint32_t includedVirtualRootChildCount =
+        includedVirtualChildCount[Tree::TreeNode::RootId];
+    const bool hasLinkedVirtual = includedVirtualRootChildCount > 0;
 
     auto packVirtualNode = [&](auto &&virtualSelf,
                                size_t virtualNodeId) -> void {
@@ -878,32 +795,27 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       }
 
       writer.packStr("children");
-      std::vector<size_t> includedVirtualChildIds;
-      includedVirtualChildIds.reserve(virtualNode.children.size());
+      writer.packArray(includedVirtualChildCount[virtualNodeId]);
       for (const auto &child : virtualNode.children) {
-        if (hasLinkedEntryInVirtualSubtree(child.id)) {
-          includedVirtualChildIds.push_back(child.id);
+        if (!includedVirtualNode[child.id]) {
+          continue;
         }
-      }
-      writer.packArray(static_cast<uint32_t>(includedVirtualChildIds.size()));
-      for (const auto childId : includedVirtualChildIds) {
-        virtualSelf(virtualSelf, childId);
+        virtualSelf(virtualSelf, child.id);
       }
     };
 
-    uint32_t includedVirtualChildCount =
-        hasLinkedVirtual
-            ? static_cast<uint32_t>(includedVirtualRootChildIds.size())
-            : 0;
     writer.packStr("children");
     writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
-                     includedVirtualChildCount);
+                     includedVirtualRootChildCount);
     for (const auto &child : treeNode.children) {
-      self(self, tree->getNode(child.id));
+      self(self, tree->getNode(child.id), depth + 1);
     }
     if (hasLinkedVirtual) {
-      for (const auto childId : includedVirtualRootChildIds) {
-        packVirtualNode(packVirtualNode, childId);
+      for (const auto &virtualChild : virtualRootNode.children) {
+        if (!includedVirtualNode[virtualChild.id]) {
+          continue;
+        }
+        packVirtualNode(packVirtualNode, virtualChild.id);
       }
     }
   };
@@ -918,7 +830,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   // Hatchet format: [tree, device_metadata]. Always emit 2 elements to match
   // the JSON serializer, even if device_metadata is empty.
   writer.packArray(2);
-  packNode(packNode, tree->getNode(TreeData::Tree::TreeNode::RootId));
+  packNode(packNode, tree->getNode(TreeData::Tree::TreeNode::RootId), 0);
 
   auto countSetBits = [](uint32_t mask) -> uint32_t {
     uint32_t count = 0;
