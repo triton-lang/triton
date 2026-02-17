@@ -7,6 +7,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <unistd.h>
 
 // #define GSAN_LOG_ALLOCATIONS
 #ifdef GSAN_LOG_ALLOCATIONS
@@ -20,6 +21,10 @@ void *gsanMalloc(ssize_t size, int device, void *stream);
 void gsanFree(void *ptr, ssize_t size, int device, void *stream);
 void *gsanGetReservePointer();
 size_t gsanGetReserveSize();
+int gsanExportAllocationHandles(void *ptr, int *realFd, int *shadowFd,
+                                size_t *allocSize);
+void *gsanImportAllocationHandles(int realFd, int shadowFd, size_t allocSize,
+                                  int device);
 }
 
 namespace {
@@ -260,6 +265,51 @@ CUresult ensureContext(int device) {
   return cuCtxSetCurrent(ctx);
 }
 
+CUresult mapNodeHandles(AllocNode *node,
+                        CUmemGenericAllocationHandle realHandle,
+                        CUmemGenericAllocationHandle shadowHandle, int device,
+                        bool *realMapped, bool *shadowMapped) {
+  assert(node != nullptr);
+  assert(realMapped != nullptr);
+  assert(shadowMapped != nullptr);
+
+  const auto shadowAddress = getShadowAddress(node->virtualAddress);
+  const auto shadowSize = getShadowSize(node->size);
+
+  CUresult err = cuMemMap(node->virtualAddress, node->size, /*offset*/ 0,
+                          realHandle, /*flags*/ 0);
+  if (err != CUDA_SUCCESS)
+    return err;
+  *realMapped = true;
+
+  err = cuMemMap(shadowAddress, shadowSize, /*offset*/ 0, shadowHandle,
+                 /*flags*/ 0);
+  if (err != CUDA_SUCCESS)
+    return err;
+  *shadowMapped = true;
+
+  CUmemAccessDesc accessDesc = {};
+  accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+  accessDesc.location.id = device;
+  accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+
+  err = cuMemSetAccess(node->virtualAddress, node->size, &accessDesc, 1);
+  if (err != CUDA_SUCCESS)
+    return err;
+
+  return cuMemSetAccess(shadowAddress, shadowSize, &accessDesc, 1);
+}
+
+void unmapNodeHandles(AllocNode *node, bool realMapped, bool shadowMapped) {
+  assert(node != nullptr);
+  const auto shadowAddress = getShadowAddress(node->virtualAddress);
+  const auto shadowSize = getShadowSize(node->size);
+  if (shadowMapped)
+    cuMemUnmap(shadowAddress, shadowSize);
+  if (realMapped)
+    cuMemUnmap(node->virtualAddress, node->size);
+}
+
 } // namespace
 
 // TODO: Handle streams?
@@ -283,6 +333,7 @@ void *gsanMalloc(ssize_t size, int device, [[maybe_unused]] void *stream) {
   prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
   prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
   prop.location.id = device;
+  prop.requestedHandleTypes = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
 
   size_t granularity = 0;
   CUresult err = cuMemGetAllocationGranularity(
@@ -295,45 +346,25 @@ void *gsanMalloc(ssize_t size, int device, [[maybe_unused]] void *stream) {
   AllocNode *node = allocateNode(&alloc->treeRoot, allocSize);
   if (node == nullptr)
     return nullptr;
-  auto shadowSize = getShadowSize(node->size);
 
   CUmemGenericAllocationHandle realHandle = 0;
   CUmemGenericAllocationHandle shadowHandle = 0;
   bool realMapped = false;
   bool shadowMapped = false;
-  CUmemAccessDesc accessDesc = {};
   auto cuStream = reinterpret_cast<CUstream>(stream);
-
-  CUdeviceptr shadowAddress = getShadowAddress(node->virtualAddress);
+  auto shadowAddress = getShadowAddress(node->virtualAddress);
+  auto shadowSize = getShadowSize(allocSize);
 
   err = cuMemCreate(&realHandle, node->size, &prop, 0);
   if (err != CUDA_SUCCESS)
     goto error;
 
-  err = cuMemCreate(&shadowHandle, getShadowSize(node->size), &prop, 0);
+  err = cuMemCreate(&shadowHandle, shadowSize, &prop, 0);
   if (err != CUDA_SUCCESS)
     goto error;
 
-  err = cuMemMap(node->virtualAddress, node->size, /*offset*/ 0, realHandle,
-                 /*flags*/ 0);
-  if (err != CUDA_SUCCESS)
-    goto error;
-  realMapped = true;
-
-  err = cuMemMap(shadowAddress, shadowSize, /*offset*/ 0, shadowHandle,
-                 /*flags*/ 0);
-  if (err != CUDA_SUCCESS)
-    goto error;
-  shadowMapped = true;
-
-  accessDesc.location = prop.location;
-  accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-
-  err = cuMemSetAccess(node->virtualAddress, node->size, &accessDesc, 1);
-  if (err != CUDA_SUCCESS)
-    goto error;
-
-  err = cuMemSetAccess(shadowAddress, shadowSize, &accessDesc, 1);
+  err = mapNodeHandles(node, realHandle, shadowHandle, device, &realMapped,
+                       &shadowMapped);
   if (err != CUDA_SUCCESS)
     goto error;
 
@@ -350,10 +381,7 @@ void *gsanMalloc(ssize_t size, int device, [[maybe_unused]] void *stream) {
 
 error:
   printCUDAError(err);
-  if (shadowMapped)
-    cuMemUnmap(shadowAddress, shadowSize);
-  if (realMapped)
-    cuMemUnmap(node->virtualAddress, node->size);
+  unmapNodeHandles(node, realMapped, shadowMapped);
   if (shadowHandle != 0)
     cuMemRelease(shadowHandle);
   if (realHandle != 0)
@@ -411,3 +439,108 @@ extern "C" void *gsanGetReservePointer() {
 }
 
 extern "C" size_t gsanGetReserveSize() { return kReserveSize; }
+
+extern "C" int gsanExportAllocationHandles(void *void_ptr, int *realFd,
+                                           int *shadowFd, size_t *allocSize) {
+  if (realFd == nullptr || shadowFd == nullptr || allocSize == nullptr)
+    return -1;
+  *realFd = -1;
+  *shadowFd = -1;
+  *allocSize = 0;
+
+  const auto ptr = reinterpret_cast<CUdeviceptr>(void_ptr);
+  if (ptr == 0)
+    return -1;
+
+  std::lock_guard lg(mut);
+  if (alloc == nullptr)
+    return -1;
+
+  AllocNode *node = findNodeByAddress(&alloc->treeRoot, ptr);
+  if (node == nullptr || node->maxFreeBlockSize != 0 ||
+      node->virtualAddress != ptr) {
+    fprintf(stderr,
+            "gsanExportAllocationHandles called with invalid pointer\n");
+    return -1;
+  }
+
+  int realFdLocal = -1;
+  int shadowFdLocal = -1;
+  CUresult err =
+      cuMemExportToShareableHandle(&realFdLocal, node->realHandle,
+                                   CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    return -1;
+  }
+
+  err =
+      cuMemExportToShareableHandle(&shadowFdLocal, node->shadowHandle,
+                                   CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    close(realFdLocal);
+    return -1;
+  }
+
+  *realFd = realFdLocal;
+  *shadowFd = shadowFdLocal;
+  *allocSize = node->size;
+  return 0;
+}
+
+extern "C" void *gsanImportAllocationHandles(int realFd, int shadowFd,
+                                             size_t allocSize, int device) {
+  if (realFd < 0 || shadowFd < 0 || allocSize == 0)
+    return nullptr;
+
+  std::lock_guard lg(mut);
+  if (gsanEnsureInit() != 0)
+    return nullptr;
+
+  AllocNode *node = allocateNode(&alloc->treeRoot, allocSize);
+  if (node == nullptr)
+    return nullptr;
+
+  if (node->size != allocSize) {
+    freeNode(node);
+    fprintf(stderr, "gsanImportAllocationHandles requires power-of-two size\n");
+    return nullptr;
+  }
+
+  CUmemGenericAllocationHandle realHandle = 0;
+  CUmemGenericAllocationHandle shadowHandle = 0;
+  bool realMapped = false;
+  bool shadowMapped = false;
+
+  CUresult err = cuMemImportFromShareableHandle(
+      &realHandle, reinterpret_cast<void *>(static_cast<uintptr_t>(realFd)),
+      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR);
+  if (err != CUDA_SUCCESS)
+    goto error;
+
+  err = cuMemImportFromShareableHandle(
+      &shadowHandle, reinterpret_cast<void *>(static_cast<uintptr_t>(shadowFd)),
+      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR);
+  if (err != CUDA_SUCCESS)
+    goto error;
+
+  err = mapNodeHandles(node, realHandle, shadowHandle, device, &realMapped,
+                       &shadowMapped);
+  if (err != CUDA_SUCCESS)
+    goto error;
+
+  node->realHandle = realHandle;
+  node->shadowHandle = shadowHandle;
+  return reinterpret_cast<void *>(node->virtualAddress);
+
+error:
+  printCUDAError(err);
+  unmapNodeHandles(node, realMapped, shadowMapped);
+  if (shadowHandle != 0)
+    cuMemRelease(shadowHandle);
+  if (realHandle != 0)
+    cuMemRelease(realHandle);
+  freeNode(node);
+  return nullptr;
+}
