@@ -141,6 +141,19 @@ uint32_t processActivityKernel(
           }
         });
       }
+    } else if (!nodeState) {
+      // This can happen when graph creation is not captured, or the node is
+      // skipped during capture. In both cases we don't have per-node info, so
+      // we just attach the kernel metric to the graph launch entry without
+      // creating a child entry for the node.
+      for (auto &[data, entry] : externState.dataToEntry) {
+        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+          auto childEntry =
+              data->addOp(entry.phase, entry.id, {Context(kernel->name)});
+          childEntry.upsertMetric(std::move(kernelMetric));
+          detail::updateDataPhases(dataPhases, data, childEntry.phase);
+        }
+      }
     }
     // Decrease the expected kernel count
     if (externState.numNodes > 0) {
@@ -627,7 +640,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     numNodes = std::numeric_limits<size_t>::max();
     auto findGraph = false;
     if (graphStates.contain(graphExecId)) {
-      numNodes = graphStates[graphExecId].numNodes;
+      if (!graphStates[graphExecId].captureStatusChecked)
+        numNodes = graphStates[graphExecId].numNodes;
       findGraph = true;
     }
     if (!findGraph && !graphStates[graphExecId].captureStatusChecked) {
@@ -636,7 +650,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 << ", and t may cause memory leak. To avoid this problem, "
                    "please start profiling before the graph is created."
                 << std::endl;
-    } else if (findGraph) {
+    } else if (findGraph && !graphStates[graphExecId].captureStatusChecked) {
       auto &graphState = graphStates[graphExecId];
 
       // For each unique call path, we generate an entry per data object.

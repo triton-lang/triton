@@ -150,7 +150,7 @@ void TraceData::exitScope(const Scope &scope) {
 
 DataEntry TraceData::addOp(size_t phase, size_t eventId,
                            const std::vector<Context> &contexts) {
-  auto lock = lockIfCurrentOrStaticPhase(phase);
+  auto lock = lockIfCurrentOrVirtualPhase(phase);
   auto *trace = phasePtrAs<Trace>(phase);
   auto parentContextId = 0;
   if (eventId == Data::kRootEntryId) {
@@ -433,28 +433,28 @@ void dumpKernelMetricTrace(
 } // namespace
 
 void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
-  std::set<size_t> staticTargetEntryIds;
+  std::set<size_t> virtualTargetEntryIds;
   tracePhases.withPtr(phase, [&](Trace *trace) {
     for (const auto &[_, event] : trace->getEvents()) {
       for (const auto &[targetEntryId, _] : event.metricSet.linkedMetrics) {
-        staticTargetEntryIds.insert(targetEntryId);
+        virtualTargetEntryIds.insert(targetEntryId);
       }
       for (const auto &[targetEntryId, _] :
            event.metricSet.linkedFlexibleMetrics) {
-        staticTargetEntryIds.insert(targetEntryId);
+        virtualTargetEntryIds.insert(targetEntryId);
       }
     }
   });
 
-  std::map<size_t, std::vector<Context>> targetIdToStaticContexts;
-  if (!staticTargetEntryIds.empty()) {
-    tracePhases.withPtr(Data::kVirtualPhase, [&](Trace *staticTrace) {
-      for (auto targetEntryId : staticTargetEntryIds) {
+  std::map<size_t, std::vector<Context>> targetIdToVirtualContexts;
+  if (!virtualTargetEntryIds.empty()) {
+    tracePhases.withPtr(Data::kVirtualPhase, [&](Trace *virtualTrace) {
+      for (auto targetEntryId : virtualTargetEntryIds) {
         // Linked target ids are event ids, so resolve through the event first.
-        auto &targetEvent = staticTrace->getEvent(targetEntryId);
-        auto contexts = staticTrace->getContexts(targetEvent.contextId);
+        auto &targetEvent = virtualTrace->getEvent(targetEntryId);
+        auto contexts = virtualTrace->getContexts(targetEvent.contextId);
         contexts.erase(contexts.begin());
-        targetIdToStaticContexts.emplace(targetEntryId, std::move(contexts));
+        targetIdToVirtualContexts.emplace(targetEntryId, std::move(contexts));
       }
     });
   }
@@ -498,9 +498,9 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
       for (const auto &[targetEntryId, linkedMetrics] :
            event.metricSet.linkedMetrics) {
         auto contexts = baseContexts;
-        auto &staticContexts = targetIdToStaticContexts[targetEntryId];
-        contexts.insert(contexts.end(), staticContexts.begin(),
-                        staticContexts.end());
+        auto &virtualContexts = targetIdToVirtualContexts[targetEntryId];
+        contexts.insert(contexts.end(), virtualContexts.begin(),
+                        virtualContexts.end());
         processMetricMaps(linkedMetrics, contexts);
       }
 
