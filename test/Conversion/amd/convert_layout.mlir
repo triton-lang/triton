@@ -102,3 +102,126 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Case of in-thread convert with a small tensor with only 2 values per thread but with some broadcasted values
+#linear1 = #ttg.linear<{register = [[0, 0], [1, 0]], lane = [[0, 1], [0, 2], [0, 4], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+#linear2 = #ttg.linear<{register = [[1, 0], [0, 0]], lane = [[0, 1], [0, 2], [0, 4], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: v_perm_small_convert_layout_with_broadcasting_4in_4out
+  tt.func @v_perm_small_convert_layout_with_broadcasting_4in_4out(%arg0: tensor<16x8xi8, #linear1>, %arg1: tensor<16x8x!tt.ptr<i8>, #linear2>) {
+    // CHECK: llvm.amdgcn.perm
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<16x8xi8, #linear1> -> tensor<16x8xi8, #linear2>
+    tt.store %arg1, %0 : tensor<16x8x!tt.ptr<i8>, #linear2>
+    tt.return
+  }
+}
+
+// -----
+
+// small conversion with 4 input and 2 output values
+
+// Case of in-thread convert with a small tensor with only 2 values per thread but with some broadcasted values
+#linear1 = #ttg.linear<{register = [[0, 0], [1, 0]], lane = [[0, 1], [0, 2], [0, 4], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+#linear2 = #ttg.linear<{register = [[1, 0]], lane = [[0, 1], [0, 2], [0, 4], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: v_perm_small_convert_layout_with_broadcasting_4in_2out
+  tt.func @v_perm_small_convert_layout_with_broadcasting_4in_2out(%arg0: tensor<16x8xi8, #linear1>, %arg1: tensor<16x8x!tt.ptr<i8>, #linear2>) {
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<16x8xi8, #linear1> -> tensor<16x8xi8, #linear2>
+    tt.store %arg1, %0 : tensor<16x8x!tt.ptr<i8>, #linear2>
+    tt.return
+  }
+}
+
+// -----
+
+// small conversion with 2 input and 4 output values
+
+// Case of in-thread convert with a small tensor with only 2 values per thread but with some broadcasted values
+#linear1 = #ttg.linear<{register = [[1, 0]], lane = [[0, 1], [0, 2], [0, 4], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 0], [1, 0]], lane = [[0, 1], [0, 2], [0, 4], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: v_perm_small_convert_layout_with_broadcasting_2in_4out
+  tt.func @v_perm_small_convert_layout_with_broadcasting_2in_4out(%arg0: tensor<16x8xi8, #linear1>, %arg1: tensor<16x8x!tt.ptr<i8>, #linear2>) {
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<16x8xi8, #linear1> -> tensor<16x8xi8, #linear2>
+    tt.store %arg1, %0 : tensor<16x8x!tt.ptr<i8>, #linear2>
+    tt.return
+  }
+}
+
+// -----
+
+#linear1 = #ttg.linear<{register = [[0, 0], [0, 0], [1, 0], [2, 0], [0, 1], [0, 2]], lane = [[0, 4], [0, 8], [0, 16], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1], [0, 0], [0, 2], [1, 0], [2, 0]], lane = [[0, 4], [0, 8], [0, 16], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: v_perm_fully_broadcasted_in_reg
+  tt.func @v_perm_fully_broadcasted_in_reg(%arg0: tensor<32x32xi8, #linear1>, %arg1: tensor<32x32x!tt.ptr<i8>, #linear2>) {
+    // CHECK-COUNT-8: llvm.amdgcn.perm
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi8, #linear1> -> tensor<32x32xi8, #linear2>
+    tt.store %arg1, %0 : tensor<32x32x!tt.ptr<i8>, #linear2>
+    tt.return
+  }
+}
+
+// -----
+
+#linear1 = #ttg.linear<{register = [[1, 0], [2, 0], [0, 1], [0, 2]], lane = [[0, 4], [0, 8], [0, 16], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 0], [0, 0], [0, 1], [0, 2], [1, 0], [2, 0]], lane = [[0, 4], [0, 8], [0, 16], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: v_perm_fully_broadcasted_out_reg
+  tt.func @v_perm_fully_broadcasted_out_reg(%arg0: tensor<32x32xi8, #linear1>, %arg1: tensor<32x32x!tt.ptr<i8>, #linear2>) {
+    // CHECK-COUNT-16: llvm.amdgcn.perm
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi8, #linear1> -> tensor<32x32xi8, #linear2>
+    tt.store %arg1, %0 : tensor<32x32x!tt.ptr<i8>, #linear2>
+    tt.return
+  }
+}
+
+// -----
+
+#linear1 = #ttg.linear<{register = [[0, 0], [1, 0], [2, 0], [0, 1], [0, 2]], lane = [[0, 4], [0, 8], [0, 16], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1], [0, 2], [1, 0], [2, 0]], lane = [[0, 4], [0, 8], [0, 16], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: v_perm_partial_broadcasting_in_reg
+  tt.func @v_perm_partial_broadcasting_in_reg(%arg0: tensor<32x32xi8, #linear1>, %arg1: tensor<32x32x!tt.ptr<i8>, #linear2>) {
+    // CHECK-COUNT-8: llvm.amdgcn.perm
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi8, #linear1> -> tensor<32x32xi8, #linear2>
+    tt.store %arg1, %0 : tensor<32x32x!tt.ptr<i8>, #linear2>
+    tt.return
+  }
+}
+
+// -----
+
+#linear1 = #ttg.linear<{register = [[1, 0], [2, 0], [0, 1], [0, 2]], lane = [[0, 4], [0, 8], [0, 16], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1], [0, 0], [0, 2], [0, 0], [1, 0], [2, 0]], lane = [[0, 4], [0, 8], [0, 16], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: v_perm_partial_broadcasting_out_reg
+  tt.func @v_perm_partial_broadcasting_out_reg(%arg0: tensor<32x32xi8, #linear1>, %arg1: tensor<32x32x!tt.ptr<i8>, #linear2>) {
+    // CHECK-COUNT-16: llvm.amdgcn.perm
+    // CHECK-NOT: llvm.amdgcn.perm
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi8, #linear1> -> tensor<32x32xi8, #linear2>
+    tt.store %arg1, %0 : tensor<32x32x!tt.ptr<i8>, #linear2>
+    tt.return
+  }
+}
+
+// -----
+
+// Regression test: convert_layout on tensor of pointers must not crash.
+#blocked4x4 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#linear4x4 = #ttg.linear<{register = [[1, 0], [2, 0], [0, 1], [0, 2]], lane = [[0, 4], [0, 8], [0, 16], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: convert_layout_pointer_element_no_crash
+  tt.func @convert_layout_pointer_element_no_crash(%arg0: tensor<32x32x!tt.ptr<i8>, #blocked4x4>) {
+    %0 = ttg.convert_layout %arg0 : tensor<32x32x!tt.ptr<i8>, #blocked4x4> -> tensor<32x32x!tt.ptr<i8>, #linear4x4>
+    tt.return
+  }
+}
