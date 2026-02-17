@@ -156,21 +156,6 @@ setupTritonDiagnosticHandler(MLIRContext *context) {
   return TritonSourceMgrDiagnosticHandler(context, minSeverity);
 }
 
-std::string locationToString(Location loc) {
-  std::string str;
-  llvm::raw_string_ostream os(str);
-  loc.print(os);
-  os.flush(); // Make sure all the content is dumped into the 'str' string
-  return str;
-}
-
-void outputWarning(Location loc, const std::string &msg) {
-  std::string locStr = locationToString(loc);
-
-  PyErr_WarnEx(PyExc_UserWarning, (locStr + ": " + msg).c_str(),
-               /*stack_level=*/2);
-}
-
 // Allow dump a reproducer in the console on crash.
 struct ConsoleReproducerStream : public mlir::ReproducerStream {
   ~ConsoleReproducerStream() override {}

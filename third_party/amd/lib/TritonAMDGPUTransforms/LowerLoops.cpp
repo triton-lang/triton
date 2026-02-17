@@ -159,35 +159,6 @@ T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize,
   return getDotEncoding<T>(user->getResult(0), opIdx, vecSize);
 }
 
-// Get a padded encoding instead of going through the classical swizzled one.
-// Please note that padding here is in terms of elements and not bytes or dwords
-static triton::gpu::PaddedSharedEncodingAttr
-getPaddedEncoding(mlir::MLIRContext *context, int opIdx,
-                  ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
-                  triton::gpu::CGAEncodingAttr CGALayout,
-                  unsigned typeBitWidth) {
-  // This is the padding strategy for TDM. We need to know here if this is going
-  // to be transposed or not. I think NVIDIA has this exposed in the IR, but we
-  // have to infer it in different places.
-  bool loadTransposed = (order[0] != (1 - opIdx));
-  const int bankBitWidth = 32;
-  const int numBanks = 64;
-  auto blockShapePerCTA =
-      triton::gpu::getShapePerCTA(CGALayout.getCTASplitNum(), shape);
-  int innerDimLength = blockShapePerCTA[order[0]];
-  unsigned maxVecSize = 128 / typeBitWidth;
-  // unsigned vecSize = std::min(maxVecSize, kWidth);
-  // This is the width loaded in a single instruction from the same LDS row.
-  // For transposed loads, this is twice the size, because there are two threads
-  // loading from the same LDS row.
-  unsigned padAmount = (loadTransposed ? 2 * maxVecSize : maxVecSize);
-
-  // This is the row we are reading from
-  unsigned padInterval = innerDimLength;
-  return triton::gpu::PaddedSharedEncodingAttr::get(
-      context, {{padInterval, padAmount}}, order, shape, CGALayout);
-}
-
 // Adapted from
 // lib/Dialect/TritonGPU/Transforms/Utility.cpp::getSharedEncIfAllUsersAreDotEnc
 // to support AMDMfmaEncodingAttr.
