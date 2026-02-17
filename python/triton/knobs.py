@@ -470,6 +470,9 @@ class runtime_knobs(base_knobs):
     kernel_load_start_hook: HookChain[InitHandleHook] = HookChain()
     kernel_load_end_hook: HookChain[InitHandleHook] = HookChain(reversed=True)
 
+    # hook to unload module when kernel is freed
+    module_unload_hook: HookChain[InitHandleHook] = HookChain()
+
     # Hook for inspecting compiled functions and modules
     jit_cache_hook: Optional[JITHook] = None
     # Hook to signal that a kernel is done compiling and inspect compiled function.
