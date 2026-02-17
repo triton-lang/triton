@@ -361,31 +361,45 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         const auto &linkedMetrics = treeNode.metricSet.linkedMetrics;
         const auto &linkedFlexibleMetrics =
             treeNode.metricSet.linkedFlexibleMetrics;
+        const size_t linkedEntryCount =
+            linkedMetrics.size() + linkedFlexibleMetrics.size();
+        auto hasLinkedEntryId = [&](size_t entryId) -> bool {
+          return linkedMetrics.find(entryId) != linkedMetrics.end() ||
+                 linkedFlexibleMetrics.find(entryId) !=
+                     linkedFlexibleMetrics.end();
+        };
+        auto forEachLinkedEntryId = [&](auto &&fn) -> bool {
+          for (const auto &[linkedEntryId, _] : linkedMetrics) {
+            if (!fn(linkedEntryId)) {
+              return false;
+            }
+          }
+          for (const auto &[linkedEntryId, _] : linkedFlexibleMetrics) {
+            if (!fn(linkedEntryId)) {
+              return false;
+            }
+          }
+          return true;
+        };
         auto hasLinkedEntryInVirtualSubtree =
             [&](size_t virtualNodeId) -> bool {
-          const size_t linkedEntryCount =
-              linkedMetrics.size() + linkedFlexibleMetrics.size();
           if (linkedEntryCount == 0) {
             return false;
           }
           const auto &subtreeIds = virtualSubtreeIdsByNode.at(virtualNodeId);
           if (linkedEntryCount <= subtreeIds.size()) {
-            for (const auto &[linkedEntryId, _] : linkedMetrics) {
+            bool found = false;
+            forEachLinkedEntryId([&](size_t linkedEntryId) {
               if (subtreeIds.find(linkedEntryId) != subtreeIds.end()) {
-                return true;
+                found = true;
+                return false;
               }
-            }
-            for (const auto &[linkedEntryId, _] : linkedFlexibleMetrics) {
-              if (subtreeIds.find(linkedEntryId) != subtreeIds.end()) {
-                return true;
-              }
-            }
-            return false;
+              return true;
+            });
+            return found;
           }
           for (const auto subtreeId : subtreeIds) {
-            if (linkedMetrics.find(subtreeId) != linkedMetrics.end() ||
-                linkedFlexibleMetrics.find(subtreeId) !=
-                    linkedFlexibleMetrics.end()) {
+            if (hasLinkedEntryId(subtreeId)) {
               return true;
             }
           }
@@ -778,30 +792,43 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
                 treeNode.id == TreeData::Tree::TreeNode::RootId);
     const auto &linkedMetrics = treeNode.metricSet.linkedMetrics;
     const auto &linkedFlexibleMetrics = treeNode.metricSet.linkedFlexibleMetrics;
+    const size_t linkedEntryCount =
+        linkedMetrics.size() + linkedFlexibleMetrics.size();
+    auto hasLinkedEntryId = [&](size_t entryId) -> bool {
+      return linkedMetrics.find(entryId) != linkedMetrics.end() ||
+             linkedFlexibleMetrics.find(entryId) != linkedFlexibleMetrics.end();
+    };
+    auto forEachLinkedEntryId = [&](auto &&fn) -> bool {
+      for (const auto &[linkedEntryId, _] : linkedMetrics) {
+        if (!fn(linkedEntryId)) {
+          return false;
+        }
+      }
+      for (const auto &[linkedEntryId, _] : linkedFlexibleMetrics) {
+        if (!fn(linkedEntryId)) {
+          return false;
+        }
+      }
+      return true;
+    };
     auto hasLinkedEntryInVirtualSubtree = [&](size_t virtualNodeId) -> bool {
-      const size_t linkedEntryCount =
-          linkedMetrics.size() + linkedFlexibleMetrics.size();
       if (linkedEntryCount == 0) {
         return false;
       }
       const auto &subtreeIds = virtualSubtreeIdsByNode.at(virtualNodeId);
       if (linkedEntryCount <= subtreeIds.size()) {
-        for (const auto &[linkedEntryId, _] : linkedMetrics) {
+        bool found = false;
+        forEachLinkedEntryId([&](size_t linkedEntryId) {
           if (subtreeIds.find(linkedEntryId) != subtreeIds.end()) {
-            return true;
+            found = true;
+            return false;
           }
-        }
-        for (const auto &[linkedEntryId, _] : linkedFlexibleMetrics) {
-          if (subtreeIds.find(linkedEntryId) != subtreeIds.end()) {
-            return true;
-          }
-        }
-        return false;
+          return true;
+        });
+        return found;
       }
       for (const auto subtreeId : subtreeIds) {
-        if (linkedMetrics.find(subtreeId) != linkedMetrics.end() ||
-            linkedFlexibleMetrics.find(subtreeId) !=
-                linkedFlexibleMetrics.end()) {
+        if (hasLinkedEntryId(subtreeId)) {
           return true;
         }
       }
