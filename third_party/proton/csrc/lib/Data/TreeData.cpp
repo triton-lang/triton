@@ -330,24 +330,6 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         }
       };
   const size_t virtualNodeCount = virtualTree->size();
-  std::vector<size_t> virtualParent(virtualNodeCount, Tree::TreeNode::DummyId);
-  if (virtualNodeCount > Tree::TreeNode::RootId) {
-    virtualParent[Tree::TreeNode::RootId] = Tree::TreeNode::RootId;
-  }
-  auto buildVirtualParent = [&](auto &&self, size_t virtualNodeId) -> void {
-    if (virtualNodeId >= virtualNodeCount) {
-      return;
-    }
-    const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-    for (const auto &child : virtualNode.children) {
-      if (child.id >= virtualNodeCount) {
-        continue;
-      }
-      virtualParent[child.id] = virtualNodeId;
-      self(self, child.id);
-    }
-  };
-  buildVirtualParent(buildVirtualParent, Tree::TreeNode::RootId);
   std::vector<uint64_t> includedVirtualStamp(virtualNodeCount, 0);
   std::vector<uint64_t> includedVirtualChildCountStamp(virtualNodeCount, 0);
   std::vector<uint32_t> includedVirtualChildCount(virtualNodeCount, 0);
@@ -379,8 +361,9 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
             if (virtualNodeId == Tree::TreeNode::RootId) {
               break;
             }
-            const size_t parentId = virtualParent[virtualNodeId];
-            if (parentId >= virtualNodeCount) {
+            const size_t parentId = virtualTree->getNode(virtualNodeId).parentId;
+            if (parentId == Tree::TreeNode::DummyId ||
+                parentId >= virtualNodeCount || parentId == virtualNodeId) {
               break;
             }
             if (includedVirtualChildCountStamp[parentId] !=
@@ -640,24 +623,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   };
 
   const size_t virtualNodeCount = virtualTree->size();
-  std::vector<size_t> virtualParent(virtualNodeCount, Tree::TreeNode::DummyId);
-  if (virtualNodeCount > Tree::TreeNode::RootId) {
-    virtualParent[Tree::TreeNode::RootId] = Tree::TreeNode::RootId;
-  }
-  auto buildVirtualParent = [&](auto &&self, size_t virtualNodeId) -> void {
-    if (virtualNodeId >= virtualNodeCount) {
-      return;
-    }
-    const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-    for (const auto &child : virtualNode.children) {
-      if (child.id >= virtualNodeCount) {
-        continue;
-      }
-      virtualParent[child.id] = virtualNodeId;
-      self(self, child.id);
-    }
-  };
-  buildVirtualParent(buildVirtualParent, Tree::TreeNode::RootId);
   std::vector<uint64_t> includedVirtualStamp(virtualNodeCount, 0);
   std::vector<uint64_t> includedVirtualChildCountStamp(virtualNodeCount, 0);
   std::vector<uint32_t> includedVirtualChildCount(virtualNodeCount, 0);
@@ -786,8 +751,9 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         if (virtualNodeId == Tree::TreeNode::RootId) {
           break;
         }
-        const size_t parentId = virtualParent[virtualNodeId];
-        if (parentId >= virtualNodeCount) {
+        const size_t parentId = virtualTree->getNode(virtualNodeId).parentId;
+        if (parentId == Tree::TreeNode::DummyId ||
+            parentId >= virtualNodeCount || parentId == virtualNodeId) {
           break;
         }
         if (includedVirtualChildCountStamp[parentId] != currentTraversalStamp) {
