@@ -28,7 +28,7 @@ def is_blackwell():
     return target.backend == "cuda" and torch.cuda.get_device_capability()[0] == 10
 
 
-def _as_gl_dtype(torch_dtype):
+def as_gl_dtype(torch_dtype):
     if torch_dtype == torch.float16:
         return gl.float16
     if torch_dtype == torch.bfloat16:
@@ -90,14 +90,14 @@ def matmul_tma_set_block_size_hook(nargs):
         for desc, cga_layout in zip(("a_desc", "b_desc", "c_desc"), cga_layouts):
             nargs[desc].layout = gl.NVMMASharedLayout.get_default_for(
                 nargs[desc].block_shape,
-                _as_gl_dtype(nargs[desc].base.dtype),
+                as_gl_dtype(nargs[desc].base.dtype),
                 cga_layout=cga_layout,
             )
     else:
         for desc in ("a_desc", "b_desc", "c_desc"):
             nargs[desc].layout = gl.NVMMASharedLayout.get_default_for(
                 nargs[desc].block_shape,
-                _as_gl_dtype(nargs[desc].base.dtype),
+                as_gl_dtype(nargs[desc].base.dtype),
             )
 
 
