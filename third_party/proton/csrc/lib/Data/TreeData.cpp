@@ -330,8 +330,28 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         }
       };
   const size_t virtualNodeCount = virtualTree->size();
-  std::vector<uint8_t> includedVirtualNode(virtualNodeCount, 0);
+  std::vector<size_t> virtualParent(virtualNodeCount, Tree::TreeNode::DummyId);
+  if (virtualNodeCount > Tree::TreeNode::RootId) {
+    virtualParent[Tree::TreeNode::RootId] = Tree::TreeNode::RootId;
+  }
+  auto buildVirtualParent = [&](auto &&self, size_t virtualNodeId) -> void {
+    if (virtualNodeId >= virtualNodeCount) {
+      return;
+    }
+    const auto &virtualNode = virtualTree->getNode(virtualNodeId);
+    for (const auto &child : virtualNode.children) {
+      if (child.id >= virtualNodeCount) {
+        continue;
+      }
+      virtualParent[child.id] = virtualNodeId;
+      self(self, child.id);
+    }
+  };
+  buildVirtualParent(buildVirtualParent, Tree::TreeNode::RootId);
+  std::vector<uint64_t> includedVirtualStamp(virtualNodeCount, 0);
+  std::vector<uint64_t> includedVirtualChildCountStamp(virtualNodeCount, 0);
   std::vector<uint32_t> includedVirtualChildCount(virtualNodeCount, 0);
+  uint64_t traversalStamp = 0;
 
   tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
       [&](TreeData::Tree::TreeNode &treeNode) {
@@ -349,29 +369,50 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         const auto &linkedFlexibleMetrics =
             treeNode.metricSet.linkedFlexibleMetrics;
 
-        auto markIncludedVirtualNodes = [&](auto &&virtualSelf,
-                                            size_t virtualNodeId) -> bool {
-          const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-          uint32_t childCount = 0;
-          for (const auto &child : virtualNode.children) {
-            if (virtualSelf(virtualSelf, child.id)) {
-              ++childCount;
+        const uint64_t currentTraversalStamp = ++traversalStamp;
+        auto markVirtualPathToRoot = [&](size_t virtualNodeId) {
+          while (virtualNodeId < virtualNodeCount) {
+            if (includedVirtualStamp[virtualNodeId] == currentTraversalStamp) {
+              break;
             }
+            includedVirtualStamp[virtualNodeId] = currentTraversalStamp;
+            if (virtualNodeId == Tree::TreeNode::RootId) {
+              break;
+            }
+            const size_t parentId = virtualParent[virtualNodeId];
+            if (parentId >= virtualNodeCount) {
+              break;
+            }
+            if (includedVirtualChildCountStamp[parentId] !=
+                currentTraversalStamp) {
+              includedVirtualChildCountStamp[parentId] = currentTraversalStamp;
+              includedVirtualChildCount[parentId] = 0;
+            }
+            ++includedVirtualChildCount[parentId];
+            virtualNodeId = parentId;
           }
-          const bool hasLinkedAtNode =
-              linkedMetrics.find(virtualNodeId) != linkedMetrics.end() ||
-              linkedFlexibleMetrics.find(virtualNodeId) !=
-                  linkedFlexibleMetrics.end();
-          const bool includeNode = hasLinkedAtNode || (childCount > 0);
-          includedVirtualNode[virtualNodeId] =
-              static_cast<uint8_t>(includeNode);
-          includedVirtualChildCount[virtualNodeId] = childCount;
-          return includeNode;
         };
-        markIncludedVirtualNodes(markIncludedVirtualNodes,
-                                 Tree::TreeNode::RootId);
+        for (const auto &[linkedEntryId, _] : linkedMetrics) {
+          markVirtualPathToRoot(linkedEntryId);
+        }
+        for (const auto &[linkedEntryId, _] : linkedFlexibleMetrics) {
+          markVirtualPathToRoot(linkedEntryId);
+        }
+        auto isIncludedVirtualNode = [&](size_t virtualNodeId) -> bool {
+          return virtualNodeId < virtualNodeCount &&
+                 includedVirtualStamp[virtualNodeId] == currentTraversalStamp;
+        };
+        auto getIncludedVirtualChildCount =
+            [&](size_t virtualNodeId) -> uint32_t {
+          if (virtualNodeId >= virtualNodeCount ||
+              includedVirtualChildCountStamp[virtualNodeId] !=
+                  currentTraversalStamp) {
+            return 0;
+          }
+          return includedVirtualChildCount[virtualNodeId];
+        };
         const uint32_t includedVirtualRootChildCount =
-            includedVirtualChildCount[Tree::TreeNode::RootId];
+            getIncludedVirtualChildCount(Tree::TreeNode::RootId);
         const bool hasLinkedVirtual = includedVirtualRootChildCount > 0;
 
         childrenArray.get_ref<json::array_t &>().reserve(
@@ -410,9 +451,9 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
           outNode["children"] = json::array();
           auto &virtualChildren = outNode["children"];
           virtualChildren.get_ref<json::array_t &>().reserve(
-              includedVirtualChildCount[virtualNodeId]);
+              getIncludedVirtualChildCount(virtualNodeId));
           for (const auto &child : virtualNode.children) {
-            if (!includedVirtualNode[child.id]) {
+            if (!isIncludedVirtualNode(child.id)) {
               continue;
             }
             virtualChildren.push_back(json::object());
@@ -421,7 +462,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         };
 
         for (const auto &child : virtualRootNode.children) {
-          if (!includedVirtualNode[child.id]) {
+          if (!isIncludedVirtualNode(child.id)) {
             continue;
           }
           json virtualRootChild;
@@ -599,8 +640,28 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   };
 
   const size_t virtualNodeCount = virtualTree->size();
-  std::vector<std::vector<uint8_t>> includedVirtualNodeByDepth;
-  std::vector<std::vector<uint32_t>> includedVirtualChildCountByDepth;
+  std::vector<size_t> virtualParent(virtualNodeCount, Tree::TreeNode::DummyId);
+  if (virtualNodeCount > Tree::TreeNode::RootId) {
+    virtualParent[Tree::TreeNode::RootId] = Tree::TreeNode::RootId;
+  }
+  auto buildVirtualParent = [&](auto &&self, size_t virtualNodeId) -> void {
+    if (virtualNodeId >= virtualNodeCount) {
+      return;
+    }
+    const auto &virtualNode = virtualTree->getNode(virtualNodeId);
+    for (const auto &child : virtualNode.children) {
+      if (child.id >= virtualNodeCount) {
+        continue;
+      }
+      virtualParent[child.id] = virtualNodeId;
+      self(self, child.id);
+    }
+  };
+  buildVirtualParent(buildVirtualParent, Tree::TreeNode::RootId);
+  std::vector<uint64_t> includedVirtualStamp(virtualNodeCount, 0);
+  std::vector<uint64_t> includedVirtualChildCountStamp(virtualNodeCount, 0);
+  std::vector<uint32_t> includedVirtualChildCount(virtualNodeCount, 0);
+  uint64_t traversalStamp = 0;
 
   auto packMetrics =
       [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
@@ -712,8 +773,54 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
           }
         }
       };
-  auto packNode = [&](auto &&self, TreeData::Tree::TreeNode &treeNode,
-                      size_t depth) -> void {
+  auto buildVirtualInclusion =
+      [&](const auto &linkedMetrics,
+          const auto &linkedFlexibleMetrics) -> uint64_t {
+    const uint64_t currentTraversalStamp = ++traversalStamp;
+    auto markVirtualPathToRoot = [&](size_t virtualNodeId) {
+      while (virtualNodeId < virtualNodeCount) {
+        if (includedVirtualStamp[virtualNodeId] == currentTraversalStamp) {
+          break;
+        }
+        includedVirtualStamp[virtualNodeId] = currentTraversalStamp;
+        if (virtualNodeId == Tree::TreeNode::RootId) {
+          break;
+        }
+        const size_t parentId = virtualParent[virtualNodeId];
+        if (parentId >= virtualNodeCount) {
+          break;
+        }
+        if (includedVirtualChildCountStamp[parentId] != currentTraversalStamp) {
+          includedVirtualChildCountStamp[parentId] = currentTraversalStamp;
+          includedVirtualChildCount[parentId] = 0;
+        }
+        ++includedVirtualChildCount[parentId];
+        virtualNodeId = parentId;
+      }
+    };
+    for (const auto &[linkedEntryId, _] : linkedMetrics) {
+      markVirtualPathToRoot(linkedEntryId);
+    }
+    for (const auto &[linkedEntryId, _] : linkedFlexibleMetrics) {
+      markVirtualPathToRoot(linkedEntryId);
+    }
+    return currentTraversalStamp;
+  };
+  auto isIncludedVirtualNode = [&](size_t virtualNodeId,
+                                   uint64_t currentTraversalStamp) -> bool {
+    return virtualNodeId < virtualNodeCount &&
+           includedVirtualStamp[virtualNodeId] == currentTraversalStamp;
+  };
+  auto getIncludedVirtualChildCount =
+      [&](size_t virtualNodeId, uint64_t currentTraversalStamp) -> uint32_t {
+    if (virtualNodeId >= virtualNodeCount ||
+        includedVirtualChildCountStamp[virtualNodeId] !=
+            currentTraversalStamp) {
+      return 0;
+    }
+    return includedVirtualChildCount[virtualNodeId];
+  };
+  auto packNode = [&](auto &&self, TreeData::Tree::TreeNode &treeNode) -> void {
     writer.packMap(3);
 
     writer.packStr("frame");
@@ -729,38 +836,26 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     const auto &linkedMetrics = treeNode.metricSet.linkedMetrics;
     const auto &linkedFlexibleMetrics =
         treeNode.metricSet.linkedFlexibleMetrics;
-    while (includedVirtualNodeByDepth.size() <= depth) {
-      includedVirtualNodeByDepth.emplace_back(virtualNodeCount, 0);
-      includedVirtualChildCountByDepth.emplace_back(virtualNodeCount, 0);
+    const uint64_t countTraversalStamp =
+        buildVirtualInclusion(linkedMetrics, linkedFlexibleMetrics);
+    const uint32_t includedVirtualRootChildCount = getIncludedVirtualChildCount(
+        Tree::TreeNode::RootId, countTraversalStamp);
+
+    writer.packStr("children");
+    writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
+                     includedVirtualRootChildCount);
+    for (const auto &child : treeNode.children) {
+      self(self, tree->getNode(child.id));
     }
-    auto &includedVirtualNode = includedVirtualNodeByDepth[depth];
-    auto &includedVirtualChildCount = includedVirtualChildCountByDepth[depth];
-    auto markIncludedVirtualNodes = [&](auto &&virtualSelf,
-                                        size_t virtualNodeId) -> bool {
-      const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-      uint32_t childCount = 0;
-      for (const auto &child : virtualNode.children) {
-        if (virtualSelf(virtualSelf, child.id)) {
-          ++childCount;
-        }
-      }
-      const bool hasLinkedAtNode =
-          linkedMetrics.find(virtualNodeId) != linkedMetrics.end() ||
-          linkedFlexibleMetrics.find(virtualNodeId) !=
-              linkedFlexibleMetrics.end();
-      const bool includeNode = hasLinkedAtNode || (childCount > 0);
-      includedVirtualNode[virtualNodeId] = static_cast<uint8_t>(includeNode);
-      includedVirtualChildCount[virtualNodeId] = childCount;
-      return includeNode;
-    };
-    markIncludedVirtualNodes(markIncludedVirtualNodes, Tree::TreeNode::RootId);
+    if (includedVirtualRootChildCount == 0) {
+      return;
+    }
 
-    const uint32_t includedVirtualRootChildCount =
-        includedVirtualChildCount[Tree::TreeNode::RootId];
-    const bool hasLinkedVirtual = includedVirtualRootChildCount > 0;
-
-    auto packVirtualNode = [&](auto &&virtualSelf,
-                               size_t virtualNodeId) -> void {
+    const uint64_t emitTraversalStamp =
+        treeNode.children.empty()
+            ? countTraversalStamp
+            : buildVirtualInclusion(linkedMetrics, linkedFlexibleMetrics);
+    auto packVirtualNode = [&](auto &&virtualSelf, size_t virtualNodeId) -> void {
       const auto &virtualNode = virtualTree->getNode(virtualNodeId);
       writer.packMap(3);
 
@@ -793,28 +888,21 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       }
 
       writer.packStr("children");
-      writer.packArray(includedVirtualChildCount[virtualNodeId]);
+      writer.packArray(
+          getIncludedVirtualChildCount(virtualNodeId, emitTraversalStamp));
       for (const auto &child : virtualNode.children) {
-        if (!includedVirtualNode[child.id]) {
+        if (!isIncludedVirtualNode(child.id, emitTraversalStamp)) {
           continue;
         }
         virtualSelf(virtualSelf, child.id);
       }
     };
 
-    writer.packStr("children");
-    writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
-                     includedVirtualRootChildCount);
-    for (const auto &child : treeNode.children) {
-      self(self, tree->getNode(child.id), depth + 1);
-    }
-    if (hasLinkedVirtual) {
-      for (const auto &virtualChild : virtualRootNode.children) {
-        if (!includedVirtualNode[virtualChild.id]) {
-          continue;
-        }
-        packVirtualNode(packVirtualNode, virtualChild.id);
+    for (const auto &virtualChild : virtualRootNode.children) {
+      if (!isIncludedVirtualNode(virtualChild.id, emitTraversalStamp)) {
+        continue;
       }
+      packVirtualNode(packVirtualNode, virtualChild.id);
     }
   };
 
@@ -828,7 +916,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   // Hatchet format: [tree, device_metadata]. Always emit 2 elements to match
   // the JSON serializer, even if device_metadata is empty.
   writer.packArray(2);
-  packNode(packNode, tree->getNode(TreeData::Tree::TreeNode::RootId), 0);
+  packNode(packNode, tree->getNode(TreeData::Tree::TreeNode::RootId));
 
   auto countSetBits = [](uint32_t mask) -> uint32_t {
     uint32_t count = 0;
