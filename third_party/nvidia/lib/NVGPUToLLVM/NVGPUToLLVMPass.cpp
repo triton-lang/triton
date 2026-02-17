@@ -10,6 +10,7 @@
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace ttn = mlir::triton::nvgpu;
@@ -616,56 +617,39 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   return alloc;
 }
 
-static Value loadTensorMemoryBase(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
-                                  Location loc) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value sharedMem = mlir::LLVM::getStackPointer(rewriter, func);
-  Value address = b.load(i32_ty, sharedMem);
-  return b.inttoptr(ptr_ty(func.getContext(), 6), address);
-}
+static LogicalResult lowerTensorMemoryAlloc(ModuleOp mod) {
+  llvm::MapVector<Operation *, SmallVector<ttn::TensorMemoryBaseAddress>>
+      baseOpsByKernel;
+  ttn::TensorMemoryBaseAddress invalidBaseOp = nullptr;
 
-static void lowerTensorMemoryAlloc(ModuleOp mod) {
-  // Tensor memory base ops can be emitted inside noinline helper functions, not
-  // just kernel entry points.
-  DenseMap<Operation *, SmallVector<ttn::TensorMemoryBaseAddress>>
-      baseOpsByFunc;
-  mod.walk([&](ttn::TensorMemoryBaseAddress baseOp) {
+  mod.walk([&](ttn::TensorMemoryBaseAddress baseOp) -> WalkResult {
     auto func = baseOp->getParentOfType<LLVM::LLVMFuncOp>();
-    if (!func)
-      return;
-    baseOpsByFunc[func.getOperation()].push_back(baseOp);
-  });
-  if (baseOpsByFunc.empty())
-    return;
-
-  DenseMap<Operation *, Value> kernelBaseByFunc;
-  mod.walk([&](LLVM::LLVMFuncOp func) {
-    if (!triton::isKernel(func))
-      return;
-    Value base = initTensorMemory(func);
-    if (base)
-      kernelBaseByFunc[func.getOperation()] = base;
-  });
-
-  for (auto &it : baseOpsByFunc) {
-    auto func = cast<LLVM::LLVMFuncOp>(it.first);
-    Value newBase;
-    if (triton::isKernel(func)) {
-      auto kernelIt = kernelBaseByFunc.find(it.first);
-      if (kernelIt == kernelBaseByFunc.end())
-        continue;
-      newBase = kernelIt->second;
+    if (!func || !triton::isKernel(func)) {
+      invalidBaseOp = baseOp;
+      return WalkResult::interrupt();
     }
+    baseOpsByKernel[func.getOperation()].push_back(baseOp);
+    return WalkResult::advance();
+  });
+
+  if (invalidBaseOp) {
+    invalidBaseOp.emitOpError(
+        "tensor memory base in non-kernel functions is not supported; TMEM "
+        "requires inlined usage within a kernel function");
+    return failure();
+  }
+
+  for (auto &it : baseOpsByKernel) {
+    auto kernel = cast<LLVM::LLVMFuncOp>(it.first);
+    Value newBase = initTensorMemory(kernel);
+    if (!newBase)
+      continue;
     for (ttn::TensorMemoryBaseAddress baseOp : it.second) {
-      if (!newBase) {
-        IRRewriter rewriter(baseOp.getContext());
-        rewriter.setInsertionPoint(baseOp);
-        newBase = loadTensorMemoryBase(rewriter, func, baseOp.getLoc());
-      }
       baseOp.getResult().replaceAllUsesWith(newBase);
       baseOp->erase();
     }
   }
+  return success();
 }
 
 } // anonymous namespace
@@ -687,7 +671,8 @@ public:
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
 
-    lowerTensorMemoryAlloc(mod);
+    if (failed(lowerTensorMemoryAlloc(mod)))
+      return signalPassFailure();
     makeAllWarpGroupsIsolatedFromAbove(mod);
   }
 };
