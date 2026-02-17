@@ -48,6 +48,7 @@ def matmul_get_configs(pre_hook=None):
                 "GRID_MINOR_DIM": minor_dim,
                 "GRID_TILE_WIDTH": grid_tile_width,
                 "STAGES": stages,
+                "ACC_STAGES": acc_stages,
                 "TWO_CTAS": two_cta,
                 "EPILOGUE_SIZE_N": 32,
             },
@@ -61,6 +62,7 @@ def matmul_get_configs(pre_hook=None):
         for minor_dim in (0, 1)
         for grid_tile_width in (1, 4, 8, 12, 16)
         for stages in (2, 4, 6)
+        for acc_stages in (2, )
         for two_cta in (False, True)
         if not (two_cta and BN > 128)
     ]
@@ -317,10 +319,11 @@ def matmul_clc_partition(p):
     has_work = gl.to_tensor(True)
     state = Counter.create(0, p.clc_barriers.shape[0])
     consumed_state = Counter.create(1, p.clc_barriers.shape[0])
+    acc_stages: gl.constexpr = p.clc_barriers.shape[0]
     i = 0
     while has_work:
         # Reuse the slot only after all consumer partitions signaled consumed.
-        mbarrier.wait(p.clc_consumed_bars.index(consumed_state.index), consumed_state.phase, pred=(i > 1))
+        mbarrier.wait(p.clc_consumed_bars.index(consumed_state.index), consumed_state.phase, pred=(i >= acc_stages))
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
         mbarrier.expect(barrier, 16)
@@ -360,15 +363,16 @@ def matmul_load_partition(p):
 def matmul_mma_partition(p):
     BLOCK_K: gl.constexpr = p.a_desc.block_shape[1]
     K = p.a_desc.shape[1]
+    acc_stages: gl.constexpr = p.acc_empty_bars.shape[0]
 
     load_state = Counter.create(0, p.load_empty_bars.shape[0])
-    acc_state = Counter.create(1, p.acc_empty_bars.shape[0])
+    acc_state = Counter.create(1, acc_stages)
     scheduler = p.get_clc_consumer()
 
     i = 0
     while scheduler.has_work:
         acc_buf = p.acc_bufs.index(acc_state.index)
-        mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase, pred=(i > 1))
+        mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase, pred=(i >= acc_stages))
         use_acc = False
         for k in range(0, K, BLOCK_K):
             mbarrier.wait(p.load_ready_bars.index(load_state.index), load_state.phase)
@@ -388,11 +392,12 @@ def matmul_epilogue_partition(p):
     TILE_N: gl.constexpr = p.b_desc.block_shape[1]
     SPLIT_TILE_N: gl.constexpr = p.c_desc.block_shape[1]
     SUBTILE_FACTOR: gl.constexpr = TILE_N // SPLIT_TILE_N
+    acc_stages: gl.constexpr = p.acc_empty_bars.shape[0]
     dtype: gl.constexpr = p.c_desc.dtype
 
-    acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
-    acc_smems = gl.allocate_shared_memory(dtype, [2, TILE_M, SPLIT_TILE_N], p.c_desc.layout)
-    sub_acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
+    acc_state = Counter.create(0, acc_stages)
+    acc_smems = gl.allocate_shared_memory(dtype, [acc_stages, TILE_M, SPLIT_TILE_N], p.c_desc.layout)
+    sub_acc_state = Counter.create(0, acc_stages)
     scheduler = p.get_clc_consumer()
 
     i = 0
@@ -442,6 +447,7 @@ def _matmul_kernel(
     GRID_MINOR_DIM: gl.constexpr,
     GRID_TILE_WIDTH: gl.constexpr,
     STAGES: gl.constexpr,
+    ACC_STAGES: gl.constexpr,
     TWO_CTAS: gl.constexpr,
     EPILOGUE_SIZE_N: gl.constexpr,
 ):
@@ -467,19 +473,19 @@ def _matmul_kernel(
         cta_split_num=(2, 1) if TWO_CTAS else None,
         two_ctas=TWO_CTAS,
     )
-    acc_bufs = allocate_tensor_memory(gl.float32, [2, BLOCK_M, BLOCK_N], tmem_layout)
+    acc_bufs = allocate_tensor_memory(gl.float32, [ACC_STAGES, BLOCK_M, BLOCK_N], tmem_layout)
     # Equiv. store_done_barrier. Barrier Store TMA -> TCGEN05 MMA
-    acc_empty_bars = mbarrier.allocate_mbarrier(batch=2, two_ctas=TWO_CTAS)
+    acc_empty_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=TWO_CTAS)
     # Equiv. mma_done_barrier. Barrier TCGEN05 MMA -> Store TMA
-    acc_ready_bars = mbarrier.allocate_mbarrier(batch=2)
-    for i in gl.static_range(2):
+    acc_ready_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
+    for i in gl.static_range(ACC_STAGES):
         mbarrier.init(acc_empty_bars.index(i), count=1)
         # For multicast we could use tcgen05_mma_barrier_count
         mbarrier.init(acc_ready_bars.index(i), count=1)
 
-    clc_barriers = mbarrier.allocate_mbarrier(batch=2)
-    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=2, two_ctas=TWO_CTAS)
-    for i in gl.static_range(2):
+    clc_barriers = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
+    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=TWO_CTAS)
+    for i in gl.static_range(ACC_STAGES):
         mbarrier.init(clc_barriers.index(i), count=1)
         mbarrier.init(clc_consumed_bars.index(i), count=3)
 
@@ -532,6 +538,7 @@ def matmul_with_config(
     grid_minor_dim=0,
     grid_tile_width=1,
     stages=4,
+    acc_stages=2,
     two_ctas=False,
     epilogue_size_n=32,
 ):
@@ -573,6 +580,7 @@ def matmul_with_config(
         "GRID_MINOR_DIM": grid_minor_dim,
         "GRID_TILE_WIDTH": grid_tile_width,
         "STAGES": stages,
+        "ACC_STAGES": acc_stages,
         "TWO_CTAS": two_ctas,
         "EPILOGUE_SIZE_N": epilogue_size_n,
     })
@@ -599,6 +607,7 @@ def matmul_with_config(
         grid_minor_dim,
         grid_tile_width,
         stages,
+        acc_stages,
         two_ctas,
         epilogue_size_n,
         num_warps=4,
@@ -757,6 +766,7 @@ def get_benchmark_kernel_config():
         "grid_minor_dim": 0,
         "grid_tile_width": 16,
         "max_concurrent_steps": 6,
+        "acc_stages": 2,
         "collective": True,
         "epilogue_tile_n": 32,
     }
@@ -774,6 +784,7 @@ def make_gluon_runner(a, b, c_triton, cfg):
             grid_minor_dim=cfg["grid_minor_dim"],
             grid_tile_width=cfg["grid_tile_width"],
             stages=cfg["max_concurrent_steps"],
+            acc_stages=cfg["acc_stages"],
             two_ctas=cfg["collective"],
             epilogue_size_n=cfg["epilogue_tile_n"],
         )
