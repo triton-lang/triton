@@ -84,20 +84,18 @@ public:
   // Rewrite the IR for a region.
   void rewriteRegion(Region &R);
   // Rewrite an op based on the layout picked by the analysis.
-  Operation *rewriteOp(Operation *op);
+  void rewriteOp(Operation *op);
   // Rewrite a for op based on the layout picked by the analysis.
-  Operation *rewriteForOp(scf::ForOp forOp);
-  Operation *rewriteWhileOp(scf::WhileOp whileOp);
-  Operation *rewriteIfOp(scf::IfOp ifOp);
+  void rewriteForOp(scf::ForOp forOp);
+  void rewriteWhileOp(scf::WhileOp whileOp);
+  void rewriteIfOp(scf::IfOp ifOp);
   void rewriteYieldOp(scf::YieldOp yieldOp);
   void rewriteConditionOp(scf::ConditionOp conditionOp);
   void rewriteReduceToScalar(Operation *reduceOp);
   void rewriteAssertOp(AssertOp assertOp);
   Attribute getEncodingBeforeRewrite(Value value) const;
   void setEncodingInPlace(Value value, Attribute encoding);
-  Operation *rewriteElementwiseInPlace(Operation *op, Attribute encoding);
-  // Map the original value to the rewritten one.
-  void map(Value old, Value newV);
+  void rewriteGenericOpInPlace(Operation *op, Attribute encoding);
   // Return the mapped value in the given encoding. This will insert a convert
   // if the encoding is different than the encoding decided at resolve time.
   Value getValueAs(Value value, Attribute encoding);
@@ -411,8 +409,8 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         needRewrite = true;
       }
       if (needRewrite) {
-        Operation *newOp = rewriteOp(&op);
-        for (Region &R : newOp->getRegions())
+        rewriteOp(&op);
+        for (Region &R : op.getRegions())
           queue.push_back(&R);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(&op)) {
         rewriteYieldOp(yieldOp);
@@ -430,8 +428,6 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           if (it == layouts.end())
             continue;
           Attribute encoding = getEncodingBeforeRewrite(operand.get());
-          if (!encoding)
-            continue;
           Value newOperand = getValueAs(operand.get(), encoding);
           op.setOperand(operand.getOperandNumber(), newOperand);
         }
@@ -440,11 +436,6 @@ void LayoutPropagation::rewriteRegion(Region &region) {
       }
     }
   }
-}
-
-void LayoutPropagation::map(Value old, Value newV) {
-  rewriteMapping[{old, cast<RankedTensorType>(newV.getType()).getEncoding()}] =
-      newV;
 }
 
 Value LayoutPropagation::getRewrittenValue(Value value) {
@@ -490,22 +481,21 @@ Attribute LayoutPropagation::getEncodingBeforeRewrite(Value value) const {
 }
 
 void LayoutPropagation::setEncodingInPlace(Value value, Attribute encoding) {
-  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorType)
-    return;
+  auto tensorType = cast<RankedTensorType>(value.getType());
   if (!originalEncodings.count(value))
     originalEncodings[value] = tensorType.getEncoding();
   value.setType(tensorType.cloneWithEncoding(encoding));
 }
 
-Operation *LayoutPropagation::rewriteElementwiseInPlace(Operation *op,
-                                                        Attribute encoding) {
+void LayoutPropagation::rewriteGenericOpInPlace(Operation *op,
+                                                Attribute encoding) {
   Attribute operandEnc;
   if (op->getNumOperands() > 0) {
     for (Value operand : op->getOperands()) {
-      Attribute enc = getEncodingBeforeRewrite(operand);
-      if (!enc)
+      auto it = layouts.find(operand);
+      if (it == layouts.end())
         continue;
+      Attribute enc = it->second.encodings[0];
       if (inferDstEncoding(op, enc) == encoding) {
         operandEnc = enc;
         break;
@@ -525,28 +515,27 @@ Operation *LayoutPropagation::rewriteElementwiseInPlace(Operation *op,
       continue;
     setEncodingInPlace(result, encoding);
   }
-  return op;
 }
 
-Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
+void LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
   for (auto [i, operand, result, regionArg] :
        llvm::enumerate(forOp.getInitArgs(), forOp.getResults(),
                        forOp.getRegionIterArgs())) {
     auto resultTy = dyn_cast<RankedTensorType>(result.getType());
     if (!resultTy)
       continue;
-    Attribute encoding = resultTy.getEncoding();
-    if (auto it = layouts.find(result); it != layouts.end())
-      encoding = *it->second.encodings.begin();
+    auto it = layouts.find(result);
+    if (it == layouts.end())
+      continue;
+    Attribute encoding = it->second.encodings[0];
     Value convertedOperand = getValueAs(operand, encoding);
     forOp.getInitArgsMutable()[i].assign(convertedOperand);
     setEncodingInPlace(result, encoding);
     setEncodingInPlace(regionArg, encoding);
   }
-  return forOp.getOperation();
 }
 
-Operation *LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
+void LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
   for (auto [i, operand, beforeArg] :
        llvm::enumerate(whileOp->getOperands(), whileOp.getBeforeArguments())) {
     auto it = layouts.find(beforeArg);
@@ -567,11 +556,9 @@ Operation *LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
     setEncodingInPlace(result, encoding);
     setEncodingInPlace(afterArg, encoding);
   }
-
-  return whileOp.getOperation();
 }
 
-Operation *LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
+void LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
   for (unsigned i = 0, e = ifOp->getNumResults(); i < e; ++i) {
     auto it = layouts.find(ifOp.getResult(i));
     if (it == layouts.end())
@@ -579,7 +566,6 @@ Operation *LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
     Attribute encoding = *(it->second.encodings.begin());
     setEncodingInPlace(ifOp.getResult(i), encoding);
   }
-  return ifOp.getOperation();
 }
 
 void LayoutPropagation::rewriteYieldOp(scf::YieldOp yieldOp) {
@@ -644,26 +630,27 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
   assertOp->setOperand(0, newOperand);
 }
 
-Operation *LayoutPropagation::rewriteOp(Operation *op) {
+void LayoutPropagation::rewriteOp(Operation *op) {
   if (auto forOp = dyn_cast<scf::ForOp>(op))
-    return rewriteForOp(forOp);
-  if (auto whileOp = dyn_cast<scf::WhileOp>(op))
-    return rewriteWhileOp(whileOp);
-  if (auto ifOp = dyn_cast<scf::IfOp>(op))
-    return rewriteIfOp(ifOp);
-  Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
-  if (canUseResultEncoding(op, encoding)) {
-    setEncodingInPlace(op->getResult(0), encoding);
-    return op;
+    rewriteForOp(forOp);
+  else if (auto whileOp = dyn_cast<scf::WhileOp>(op))
+    rewriteWhileOp(whileOp);
+  else if (auto ifOp = dyn_cast<scf::IfOp>(op))
+    rewriteIfOp(ifOp);
+  else {
+    Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
+    if (canUseResultEncoding(op, encoding)) {
+      setEncodingInPlace(op->getResult(0), encoding);
+    } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+               op->hasTrait<OpTrait::Elementwise>() ||
+               isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
+                   GatherOp, ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(
+                   op)) {
+      rewriteGenericOpInPlace(op, encoding);
+    } else {
+      llvm::report_fatal_error("unexpected op in rewrite");
+    }
   }
-  if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
-      op->hasTrait<OpTrait::Elementwise>() ||
-      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
-          ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
-    return rewriteElementwiseInPlace(op, encoding);
-  }
-  llvm::report_fatal_error("unexpected op in rewrite");
-  return nullptr;
 }
 
 bool canBeRemat(Operation *op) {
