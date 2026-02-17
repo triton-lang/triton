@@ -693,7 +693,7 @@ def test_function_arguments(device):
     kernel[(1, )](y[2], func3, (3, ))
     kernel[(1, )](y[3], func4, (3, 4))
     kernel[(1, )](y[4], func1, tuple())
-    assert len(kernel.device_caches[0][0]) == 4
+    assert len(kernel.device_caches[device][0]) == 4
     assert y.tolist() == [1, 2, 3, 7, 1]
 
 
@@ -748,18 +748,18 @@ def test_async_compile_mock(device, fresh_triton_cache):
         kernel.warmup(b, 1, grid=(1, ))
 
         # Nothing has actually compiled yet
-        assert len(kernel.device_caches[0][0]) == 4
+        assert len(kernel.device_caches[device][0]) == 4
         assert len(pool.work_queue) == 4
 
         # Duplicates are only submitted once
         kernel.warmup(a, 0, grid=(1, ))
         kernel.warmup(a, 1, grid=(1, ))
-        assert len(kernel.device_caches[0][0]) == 4
+        assert len(kernel.device_caches[device][0]) == 4
         assert len(pool.work_queue) == 4
 
         pool.run_one()
         kernel[(1, )](a, 0)
-        assert len(kernel.device_caches[0][0]) == 4
+        assert len(kernel.device_caches[device][0]) == 4
         assert a[0, 0] == 0.0
 
         pool.run_all()
@@ -782,7 +782,7 @@ def test_async_compile(device, fresh_triton_cache):
         kernel.warmup(b, 0, grid=(1, ))
         kernel.warmup(b, 1, grid=(1, ))
 
-        assert len(kernel.device_caches[0][0]) == 4
+        assert len(kernel.device_caches[device][0]) == 4
 
         kernel[(1, )](b, 1)
         assert b[0, 0] == 1
