@@ -358,25 +358,24 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
                       treeNode.metricSet.flexibleMetrics);
         auto &childrenArray = (*jsonNode)["children"];
         childrenArray = json::array();
-        std::unordered_set<size_t> linkedEntryIds;
-        linkedEntryIds.reserve(treeNode.metricSet.linkedMetrics.size() +
-                               treeNode.metricSet.linkedFlexibleMetrics.size());
-        for (const auto &[linkedEntryId, _] :
-             treeNode.metricSet.linkedMetrics) {
-          linkedEntryIds.insert(linkedEntryId);
-        }
-        for (const auto &[linkedEntryId, _] :
-             treeNode.metricSet.linkedFlexibleMetrics) {
-          linkedEntryIds.insert(linkedEntryId);
-        }
+        const auto &linkedMetrics = treeNode.metricSet.linkedMetrics;
+        const auto &linkedFlexibleMetrics =
+            treeNode.metricSet.linkedFlexibleMetrics;
         auto hasLinkedEntryInVirtualSubtree =
             [&](size_t virtualNodeId) -> bool {
-          if (linkedEntryIds.empty()) {
+          const size_t linkedEntryCount =
+              linkedMetrics.size() + linkedFlexibleMetrics.size();
+          if (linkedEntryCount == 0) {
             return false;
           }
           const auto &subtreeIds = virtualSubtreeIdsByNode.at(virtualNodeId);
-          if (linkedEntryIds.size() <= subtreeIds.size()) {
-            for (const auto linkedEntryId : linkedEntryIds) {
+          if (linkedEntryCount <= subtreeIds.size()) {
+            for (const auto &[linkedEntryId, _] : linkedMetrics) {
+              if (subtreeIds.find(linkedEntryId) != subtreeIds.end()) {
+                return true;
+              }
+            }
+            for (const auto &[linkedEntryId, _] : linkedFlexibleMetrics) {
               if (subtreeIds.find(linkedEntryId) != subtreeIds.end()) {
                 return true;
               }
@@ -384,22 +383,25 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
             return false;
           }
           for (const auto subtreeId : subtreeIds) {
-            if (linkedEntryIds.find(subtreeId) != linkedEntryIds.end()) {
+            if (linkedMetrics.find(subtreeId) != linkedMetrics.end() ||
+                linkedFlexibleMetrics.find(subtreeId) !=
+                    linkedFlexibleMetrics.end()) {
               return true;
             }
           }
           return false;
         };
-        size_t includedVirtualRootChildCount = 0;
+        std::vector<size_t> includedVirtualRootChildIds;
+        includedVirtualRootChildIds.reserve(virtualRootNode.children.size());
         for (const auto &virtualChild : virtualRootNode.children) {
           if (hasLinkedEntryInVirtualSubtree(virtualChild.id)) {
-            ++includedVirtualRootChildCount;
+            includedVirtualRootChildIds.push_back(virtualChild.id);
           }
         }
-        const bool hasLinkedVirtual = includedVirtualRootChildCount > 0;
+        const bool hasLinkedVirtual = !includedVirtualRootChildIds.empty();
         childrenArray.get_ref<json::array_t &>().reserve(
             treeNode.children.size() +
-            (hasLinkedVirtual ? includedVirtualRootChildCount : 0));
+            (hasLinkedVirtual ? includedVirtualRootChildIds.size() : 0));
         for (const auto &child : treeNode.children) {
           childrenArray.push_back(json::object());
           jsonNodes[child.id] = &childrenArray.back();
@@ -435,29 +437,24 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               }
               outNode["children"] = json::array();
               auto &virtualChildren = outNode["children"];
-              size_t includedVirtualChildCount = 0;
+              std::vector<size_t> includedVirtualChildIds;
+              includedVirtualChildIds.reserve(virtualNode.children.size());
               for (const auto &child : virtualNode.children) {
                 if (hasLinkedEntryInVirtualSubtree(child.id)) {
-                  ++includedVirtualChildCount;
+                  includedVirtualChildIds.push_back(child.id);
                 }
               }
               virtualChildren.get_ref<json::array_t &>().reserve(
-                  includedVirtualChildCount);
-              for (const auto &child : virtualNode.children) {
-                if (!hasLinkedEntryInVirtualSubtree(child.id)) {
-                  continue;
-                }
+                  includedVirtualChildIds.size());
+              for (const auto childId : includedVirtualChildIds) {
                 virtualChildren.push_back(json::object());
-                appendVirtualNode(child.id, virtualChildren.back());
+                appendVirtualNode(childId, virtualChildren.back());
               }
             };
 
-        for (const auto &virtualChild : virtualRootNode.children) {
-          if (!hasLinkedEntryInVirtualSubtree(virtualChild.id)) {
-            continue;
-          }
+        for (const auto childId : includedVirtualRootChildIds) {
           json virtualRootChild;
-          appendVirtualNode(virtualChild.id, virtualRootChild);
+          appendVirtualNode(childId, virtualRootChild);
           childrenArray.push_back(std::move(virtualRootChild));
         }
       });
@@ -779,23 +776,22 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     writer.packStr("metrics");
     packMetrics(treeNode.metricSet.metrics, treeNode.metricSet.flexibleMetrics,
                 treeNode.id == TreeData::Tree::TreeNode::RootId);
-    std::unordered_set<size_t> linkedEntryIds;
-    linkedEntryIds.reserve(treeNode.metricSet.linkedMetrics.size() +
-                           treeNode.metricSet.linkedFlexibleMetrics.size());
-    for (const auto &[linkedEntryId, _] : treeNode.metricSet.linkedMetrics) {
-      linkedEntryIds.insert(linkedEntryId);
-    }
-    for (const auto &[linkedEntryId, _] :
-         treeNode.metricSet.linkedFlexibleMetrics) {
-      linkedEntryIds.insert(linkedEntryId);
-    }
+    const auto &linkedMetrics = treeNode.metricSet.linkedMetrics;
+    const auto &linkedFlexibleMetrics = treeNode.metricSet.linkedFlexibleMetrics;
     auto hasLinkedEntryInVirtualSubtree = [&](size_t virtualNodeId) -> bool {
-      if (linkedEntryIds.empty()) {
+      const size_t linkedEntryCount =
+          linkedMetrics.size() + linkedFlexibleMetrics.size();
+      if (linkedEntryCount == 0) {
         return false;
       }
       const auto &subtreeIds = virtualSubtreeIdsByNode.at(virtualNodeId);
-      if (linkedEntryIds.size() <= subtreeIds.size()) {
-        for (const auto linkedEntryId : linkedEntryIds) {
+      if (linkedEntryCount <= subtreeIds.size()) {
+        for (const auto &[linkedEntryId, _] : linkedMetrics) {
+          if (subtreeIds.find(linkedEntryId) != subtreeIds.end()) {
+            return true;
+          }
+        }
+        for (const auto &[linkedEntryId, _] : linkedFlexibleMetrics) {
           if (subtreeIds.find(linkedEntryId) != subtreeIds.end()) {
             return true;
           }
@@ -803,19 +799,22 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         return false;
       }
       for (const auto subtreeId : subtreeIds) {
-        if (linkedEntryIds.find(subtreeId) != linkedEntryIds.end()) {
+        if (linkedMetrics.find(subtreeId) != linkedMetrics.end() ||
+            linkedFlexibleMetrics.find(subtreeId) !=
+                linkedFlexibleMetrics.end()) {
           return true;
         }
       }
       return false;
     };
-    size_t includedVirtualRootChildCount = 0;
+    std::vector<size_t> includedVirtualRootChildIds;
+    includedVirtualRootChildIds.reserve(virtualRootNode.children.size());
     for (const auto &virtualChild : virtualRootNode.children) {
       if (hasLinkedEntryInVirtualSubtree(virtualChild.id)) {
-        ++includedVirtualRootChildCount;
+        includedVirtualRootChildIds.push_back(virtualChild.id);
       }
     }
-    const bool hasLinkedVirtual = includedVirtualRootChildCount > 0;
+    const bool hasLinkedVirtual = !includedVirtualRootChildIds.empty();
 
     auto packVirtualNode = [&](auto &&virtualSelf,
                                size_t virtualNodeId) -> void {
@@ -851,23 +850,23 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       }
 
       writer.packStr("children");
-      size_t includedVirtualChildCount = 0;
+      std::vector<size_t> includedVirtualChildIds;
+      includedVirtualChildIds.reserve(virtualNode.children.size());
       for (const auto &child : virtualNode.children) {
         if (hasLinkedEntryInVirtualSubtree(child.id)) {
-          ++includedVirtualChildCount;
+          includedVirtualChildIds.push_back(child.id);
         }
       }
-      writer.packArray(static_cast<uint32_t>(includedVirtualChildCount));
-      for (const auto &child : virtualNode.children) {
-        if (!hasLinkedEntryInVirtualSubtree(child.id)) {
-          continue;
-        }
-        virtualSelf(virtualSelf, child.id);
+      writer.packArray(
+          static_cast<uint32_t>(includedVirtualChildIds.size()));
+      for (const auto childId : includedVirtualChildIds) {
+        virtualSelf(virtualSelf, childId);
       }
     };
 
     uint32_t includedVirtualChildCount =
-        hasLinkedVirtual ? static_cast<uint32_t>(includedVirtualRootChildCount)
+        hasLinkedVirtual
+            ? static_cast<uint32_t>(includedVirtualRootChildIds.size())
                          : 0;
     writer.packStr("children");
     writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
@@ -876,11 +875,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       self(self, tree->getNode(child.id));
     }
     if (hasLinkedVirtual) {
-      for (const auto &virtualChild : virtualRootNode.children) {
-        if (!hasLinkedEntryInVirtualSubtree(virtualChild.id)) {
-          continue;
-        }
-        packVirtualNode(packVirtualNode, virtualChild.id);
+      for (const auto childId : includedVirtualRootChildIds) {
+        packVirtualNode(packVirtualNode, childId);
       }
     }
   };
