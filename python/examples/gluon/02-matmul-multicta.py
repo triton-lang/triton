@@ -50,7 +50,7 @@ def matmul_get_configs(pre_hook=None):
                 "STAGES": stages,
                 "ACC_STAGES": acc_stages,
                 "TWO_CTAS": two_cta,
-                "EPILOGUE_SIZE_N": 32,
+                "EPILOGUE_SIZE_N": epilogue_size_n,
             },
             num_warps=4,
             num_ctas=2 if two_cta else 1,
@@ -60,9 +60,10 @@ def matmul_get_configs(pre_hook=None):
         for BN in (64, 128, 256)
         for BK in (32, 64, 128)
         for minor_dim in (0, 1)
-        for grid_tile_width in (2, 4, 8, 16, 32)
+        for grid_tile_width in (2, 4, 8, 16)
         for stages in (2, 3, 4)
         for acc_stages in (2, 3, 4)
+        for epilogue_size_n in (16, 32, 64)
         for two_cta in (False, True)
         if not (two_cta and BN > 128)
     ]
