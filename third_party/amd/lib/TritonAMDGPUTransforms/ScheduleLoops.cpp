@@ -322,10 +322,14 @@ LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
 
   // Put the root uses of the loads in the last stage.
   for (auto &[loadOp, info] : loadToInfo) {
-    // Non-LoadOp(s) are the (final) root uses of all LoadOp(s).
-    // FIXME: Do we need to check desc-load? Is it possible that desc-load
-    // a direct in indirect use of a load?
-    if (!isa<tt::LoadOp>(info.use) && !isa<tt::DescriptorLoadOp>(info.use)) {
+    // Hint: Basically, this condition is to check if the "use" is tt.dot.
+    // Consider the DU chains consisting only of load and dot : ld2->ld1->dot
+    // ld2's "use" is ld1 whose "use" is dot. We need to rule out internal node
+    // in the DU chain. Note that DescriptorLoadOp could be an internal node
+    // as its "indices" operands could come from a load. So, we need to check
+    // all load variants that could be pipelined.
+    if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
+            info.use)) {
       schedule.insert(info.use, stages[SCHED_COMPUTE], clusters[SCHED_COMPUTE]);
     }
   }

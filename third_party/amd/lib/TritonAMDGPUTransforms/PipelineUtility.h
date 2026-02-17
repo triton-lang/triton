@@ -21,10 +21,27 @@ constexpr char AttrBypassLDS[] = "amdg.bypass_lds_load";
 // - serialize schedule to IR for the next expandLoops function.
 void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong);
 
+// LoadInfo encapsulates a load's key aspects wrt scheduling. The `distToUse`
+// and `use` fields grab values from getIndirectLevel() which is a thin wrapper
+// of triton::gpu::loadOpsToIndirectionLevel(). Consider the DU chain,
+// consisting only of load and dot, as following where ld2 feeds to ld1 which
+// in turn feeds to dot:
+//    ld2 -> ld1 -> dot
+//
+// The "distToUse" describe how far away (in terms of hops, starting from 0)
+// the load is away from the dot. Yes to the final use, not the immediate use.
+// I think it's better named "distance" as with loadOpsToIndirectionLevel().
+//
+// The `use` refers to the immediate use in the DU chain (ignoring operations
+// other than load and dot).
+//
+// So, for ld1, its "use" is dot, the "distToUse" is 0 (because ld1 is 1 hop
+// away from dot); likewise, for ld2, its "use" is "ld1" and the "distToUse" is
+// 1 (because it is 2 hops away from the dot.
+//
 struct LoadInfo {
   // Shared layout is used for loads feeding into dot ops.
   triton::gpu::SharedEncodingTrait sharedEncoding = nullptr;
-  // The distance of this load's stage to its use' stage.
   int distToUse = 0;
   Operation *use = nullptr;
   int globalPrefetch = 0;
