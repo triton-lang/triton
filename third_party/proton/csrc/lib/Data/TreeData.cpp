@@ -791,7 +791,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     packMetrics(treeNode.metricSet.metrics, treeNode.metricSet.flexibleMetrics,
                 treeNode.id == TreeData::Tree::TreeNode::RootId);
     const auto &linkedMetrics = treeNode.metricSet.linkedMetrics;
-    const auto &linkedFlexibleMetrics = treeNode.metricSet.linkedFlexibleMetrics;
+    const auto &linkedFlexibleMetrics =
+        treeNode.metricSet.linkedFlexibleMetrics;
     const size_t linkedEntryCount =
         linkedMetrics.size() + linkedFlexibleMetrics.size();
     auto hasLinkedEntryId = [&](size_t entryId) -> bool {
@@ -884,8 +885,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
           includedVirtualChildIds.push_back(child.id);
         }
       }
-      writer.packArray(
-          static_cast<uint32_t>(includedVirtualChildIds.size()));
+      writer.packArray(static_cast<uint32_t>(includedVirtualChildIds.size()));
       for (const auto childId : includedVirtualChildIds) {
         virtualSelf(virtualSelf, childId);
       }
@@ -894,7 +894,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     uint32_t includedVirtualChildCount =
         hasLinkedVirtual
             ? static_cast<uint32_t>(includedVirtualRootChildIds.size())
-                         : 0;
+            : 0;
     writer.packStr("children");
     writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
                      includedVirtualChildCount);
