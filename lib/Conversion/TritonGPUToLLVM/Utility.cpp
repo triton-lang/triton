@@ -1271,7 +1271,7 @@ Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
   ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
   auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
       "ttg.global_scratch_memory_size");
-  if (!allocSizeAttr) {
+  if (!allocSizeAttr || allocSizeAttr.getValue().isZero()) {
     return gmemBase;
   }
 
