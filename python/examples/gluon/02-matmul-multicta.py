@@ -104,29 +104,32 @@ def matmul_tma_set_block_size_hook(nargs):
 # From Pallas.
 @gluon.jit
 def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width: gl.constexpr):
+    gl.static_assert(tile_width > 0 and (tile_width & (tile_width - 1)) == 0, "tile_width must be power-of-2")
+
     major_size = n_tiles if minor_dim == 0 else m_tiles
     minor_size = m_tiles if minor_dim == 0 else n_tiles
 
     full_minor_tiles = minor_size // tile_width
     full_minor_size = full_minor_tiles * tile_width
-    full_elements = full_minor_tiles * tile_width * major_size
+    full_elements = full_minor_size * major_size
 
-    minor_tile_idx = lin_idx // (tile_width * major_size)
+    lin_div_tile = lin_idx // tile_width
+    minor_tile_idx = lin_div_tile // major_size
 
-    full_minor_within = lin_idx % tile_width
-    full_major_within = (lin_idx // tile_width) % major_size
+    full_minor_within = lin_idx & (tile_width - 1)
+    full_major_within = lin_div_tile - minor_tile_idx * major_size
     full_minor = minor_tile_idx * tile_width + full_minor_within
-    full_major = gl.where((minor_tile_idx % 2) == 0, full_major_within, major_size - 1 - full_major_within)
-
-    partial_width = minor_size - full_minor_size
-    partial_width = gl.where(partial_width > 0, partial_width, 1)
-    partial_lin = lin_idx - full_elements
-    partial_minor_within = partial_lin % partial_width
-    partial_major_within = (partial_lin // partial_width) % major_size
-    partial_minor = minor_tile_idx * tile_width + partial_minor_within
-    partial_major = gl.where((minor_tile_idx % 2) == 0, partial_major_within, major_size - 1 - partial_major_within)
+    full_major = gl.where((minor_tile_idx & 1) == 0, full_major_within, major_size - 1 - full_major_within)
 
     in_full_tile = lin_idx < full_elements
+    partial_width = minor_size - full_minor_size
+    partial_width = gl.where(partial_width > 0, partial_width, 1)
+    partial_lin = gl.where(in_full_tile, 0, lin_idx - full_elements)
+    partial_major_within = partial_lin // partial_width
+    partial_minor_within = partial_lin - partial_major_within * partial_width
+    partial_minor = full_minor_size + partial_minor_within
+    partial_major = gl.where((minor_tile_idx & 1) == 0, partial_major_within, major_size - 1 - partial_major_within)
+
     minor = gl.where(in_full_tile, full_minor, partial_minor)
     major = gl.where(in_full_tile, full_major, partial_major)
 
