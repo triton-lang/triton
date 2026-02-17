@@ -855,7 +855,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         treeNode.children.empty()
             ? countTraversalStamp
             : buildVirtualInclusion(linkedMetrics, linkedFlexibleMetrics);
-    auto packVirtualNode = [&](auto &&virtualSelf, size_t virtualNodeId) -> void {
+    auto packVirtualNode = [&](auto &&virtualSelf,
+                               size_t virtualNodeId) -> void {
       const auto &virtualNode = virtualTree->getNode(virtualNodeId);
       writer.packMap(3);
 
