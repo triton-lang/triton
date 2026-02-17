@@ -4,6 +4,7 @@
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [32, 32, 16], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: pipeline_padded_layout_gfx950
+  // CHECK-NOT: ttg.padded_shared
   tt.func @pipeline_padded_layout_gfx950(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     // CHECK: ttg.async_wait %{{.*}}
     %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma>

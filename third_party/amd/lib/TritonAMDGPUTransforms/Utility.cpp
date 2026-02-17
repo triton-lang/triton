@@ -215,12 +215,12 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   constexpr unsigned vecSize = 8; // in favor of dwordX4
   unsigned contigLanes = contigDim / vecSize;
   unsigned wrap = std::min(contigDim, 128u) / padding;
-  unsigned requiredDim = warpSize / contigLanes * wrap;
-  if (nonContigDim < requiredDim) {
-    return {};
-  }
   // wrap == 0 means padding > contigDim, which is not a valid configuration
   if (wrap == 0) {
+    return {};
+  }
+  unsigned requiredDim = warpSize / contigLanes * wrap;
+  if (nonContigDim < requiredDim) {
     return {};
   }
 
