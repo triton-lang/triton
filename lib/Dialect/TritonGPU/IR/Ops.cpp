@@ -1011,10 +1011,9 @@ LogicalResult MemDescSubsliceOp::verify() {
   auto kBlock = mlir::StringAttr::get(ctx, "block");
   if (auto it = ll.getBases().find(kBlock); it != ll.getBases().end()) {
     for (auto dim : splitDims) {
-      if (llvm::any_of(it->second,
-                       [dim](ArrayRef<int32_t> basis) {
-                         return basis[dim] != 0;
-                       })) {
+      if (llvm::any_of(it->second, [dim](ArrayRef<int32_t> basis) {
+            return basis[dim] != 0;
+          })) {
         return emitError(
             "slicing non-broadcast CGA dimensions is not supported");
       }
