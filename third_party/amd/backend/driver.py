@@ -368,7 +368,7 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_metadata):
 
     def inner(*args):
         base_args = args[:-1]
-        kernel_metadata = base_args[7]
+        kernel_metadata = base_args[8]
         kernel_args = args[-1]
 
         final_kernel_args = []
