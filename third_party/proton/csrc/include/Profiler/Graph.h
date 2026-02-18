@@ -73,8 +73,6 @@ struct GraphState {
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};
-  // Total number of GPU kernels launched by this graph
-  size_t numNodes{0};
   // Total number of uint64 words written by all metric nodes in this graph.
   size_t numMetricWords{};
 };

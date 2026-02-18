@@ -458,6 +458,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
 void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     CUpti_GraphData *graphData) {
+      
   uint32_t graphId = 0;
   uint32_t graphExecId = 0;
   if (graphData->graph)
@@ -469,42 +470,39 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
     if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED) {
-      // When `cuGraphClone` or `cuGraphInstantiate` is called, CUPTI triggers
-      // both CREATED and CLONED callbacks for each node. So we only increase
-      // the numNodes in CREATED callback.
-      if (!graphStates.contain(graphId))
-        graphStates[graphId] = GraphState();
-      graphStates[graphId].numNodes++;
       if (profiler.isOpInProgress()) {
-        auto &graphState = graphStates[graphId];
-        auto &nodeState = graphState.nodeIdToState[nodeId];
-        nodeState.nodeId = nodeId;
-        const auto &name = threadState.scopeStack.back().name;
-        if (name.empty() || (threadState.isApiExternOp &&
-                             threadState.isMetricKernelLaunching)) {
-          nodeState.status.setMissingName();
-        }
-        if (threadState.isMetricKernelLaunching) {
-          nodeState.status.setMetricNode();
-          auto metricKernelNumWords =
-              threadState.metricKernelNumWordsQueue.front();
-          threadState.metricKernelNumWordsQueue.pop_front();
-          graphState.metricNodeIdToNumWords.insert_or_assign(
-              nodeId, metricKernelNumWords);
-          graphState.numMetricWords += metricKernelNumWords;
-        }
-        for (auto *data : profiler.dataSet) {
-          auto contexts = data->getContexts();
-          if (!threadState.isApiExternOp ||
-              !threadState.isMetricKernelLaunching)
-            contexts.push_back(name);
-          auto staticEntry =
-              data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
-          nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
-          graphState.dataToEntryIdToNodeStates[data][staticEntry.id].insert(
-              &nodeState);
-        }
-      } // else no op in progress; creation triggered by graph clone/instantiate
+        // else no op in progress; creation triggered by graph
+        // clone/instantiate, we don't increase the numNodes because the
+        // original graph has already accounted for it
+        return;
+      }
+      auto &graphState = graphStates[graphId];
+      auto &nodeState = graphState.nodeIdToState[nodeId];
+      nodeState.nodeId = nodeId;
+      const auto &name = threadState.scopeStack.back().name;
+      if (name.empty() ||
+          (threadState.isApiExternOp && threadState.isMetricKernelLaunching)) {
+        nodeState.status.setMissingName();
+      }
+      if (threadState.isMetricKernelLaunching) {
+        nodeState.status.setMetricNode();
+        auto metricKernelNumWords =
+            threadState.metricKernelNumWordsQueue.front();
+        threadState.metricKernelNumWordsQueue.pop_front();
+        graphState.metricNodeIdToNumWords.insert_or_assign(
+            nodeId, metricKernelNumWords);
+        graphState.numMetricWords += metricKernelNumWords;
+      }
+      for (auto *data : profiler.dataSet) {
+        auto contexts = data->getContexts();
+        if (!threadState.isApiExternOp || !threadState.isMetricKernelLaunching)
+          contexts.push_back(name);
+        auto staticEntry =
+            data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
+        nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
+        graphState.dataToEntryIdToNodeStates[data][staticEntry.id].insert(
+            &nodeState);
+      }
     } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
       uint32_t originalGraphId = 0;
       uint64_t originalNodeId = 0;
@@ -531,7 +529,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     }
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
     auto &graphState = graphStates[graphId];
-    graphState.numNodes--;
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
     graphState.numMetricWords -= graphState.metricNodeIdToNumWords[nodeId];
@@ -573,7 +570,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleResourceCallbacks(
   } else {
     auto *graphData =
         static_cast<CUpti_GraphData *>(resourceData->resourceDescriptor);
-    handleGraphResourceCallbacks(profiler, cbId, graphData);
+    if (graphData->nodeType == CU_GRAPH_NODE_TYPE_KERNEL)
+      handleGraphResourceCallbacks(profiler, cbId, graphData);
   }
 }
 
@@ -637,7 +635,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     auto findGraph = false;
     if (graphStates.contain(graphExecId)) {
       if (!graphStates[graphExecId].captureStatusChecked)
-        numNodes = graphStates[graphExecId].numNodes;
+        numNodes = graphStates[graphExecId].nodeIdToState.size();
       findGraph = true;
     }
     if (!findGraph && !graphStates[graphExecId].captureStatusChecked) {
