@@ -137,6 +137,9 @@ static void initProton(pybind11::module &&m) {
               functionId, functionName, scopeIdNames, scopeIdParents,
               metadataPath);
         });
+  m.def("uninit_function_metadata", [](uint64_t functionId) {
+    SessionManager::instance().uninitFunctionMetadata(functionId);
+  });
 
   m.def("enter_instrumented_op", [](uint64_t streamId, uint64_t functionId,
                                     uint64_t buffer, size_t size) {

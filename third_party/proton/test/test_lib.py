@@ -78,6 +78,7 @@ def test_init_function_metadata(tmp_path: pathlib.Path):
         [],
         str(metadata_file),
     )
+    libproton.uninit_function_metadata(0)
 
 
 def test_instrumented_op_entry_exit():

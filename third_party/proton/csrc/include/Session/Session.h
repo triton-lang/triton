@@ -116,6 +116,7 @@ public:
       const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
       const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
       const std::string &metadataPath);
+  void uninitFunctionMetadata(uint64_t functionId);
 
   void enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
                            uint8_t *buffer, size_t size);

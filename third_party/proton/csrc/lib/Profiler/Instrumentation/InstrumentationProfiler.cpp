@@ -169,6 +169,13 @@ void InstrumentationProfiler::initFunctionMetadata(
   functionMetadata.emplace(functionId, InstrumentationMetadata(metadataPath));
 }
 
+void InstrumentationProfiler::uninitFunctionMetadata(uint64_t functionId) {
+  functionScopeIdNames.erase(functionId);
+  functionScopeIdContexts.erase(functionId);
+  functionNames.erase(functionId);
+  functionMetadata.erase(functionId);
+}
+
 void InstrumentationProfiler::enterInstrumentedOp(uint64_t streamId,
                                                   uint64_t functionId,
                                                   uint8_t *buffer,

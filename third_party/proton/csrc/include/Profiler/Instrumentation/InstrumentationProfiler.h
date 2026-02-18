@@ -37,6 +37,7 @@ protected:
       const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
       const std::vector<std::pair<size_t, size_t>> &scopeIdParentIds,
       const std::string &metadataPath) override;
+  void uninitFunctionMetadata(uint64_t functionId) override;
   void enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
                            uint8_t *buffer, size_t size) override;
   void exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
