@@ -1670,6 +1670,11 @@ def _aggregate(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
             if name != "__init__":
                 setattr(aggregate_value, name, member)
+
+            # Exclude the members with names from hash:
+            #  * __init__ - added above.
+            #  * __annotate__ - isn't user facing.
+            if member.__name__ not in {"__init__", "__annotate__"}:
                 hash_attrs.append(member)
 
     aggregate_value.hash_attrs = hash_attrs
