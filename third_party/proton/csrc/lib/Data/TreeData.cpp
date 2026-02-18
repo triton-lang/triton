@@ -218,7 +218,7 @@ private:
 };
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree,
-                                TreeData::Tree *staticTree) const {
+                                TreeData::Tree *virtualTree) const {
   std::vector<json *> jsonNodes(tree->size(), nullptr);
   json output = json::array();
   output.push_back(json::object());
@@ -226,7 +226,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
   MetricSummary metricSummary;
   const std::map<MetricKind, std::unique_ptr<Metric>> emptyMetrics;
   const std::map<std::string, FlexibleMetric> emptyFlexibleMetrics;
-  const auto &staticRootNode = staticTree->getNode(Tree::TreeNode::RootId);
+  const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
   auto appendMetrics =
       [&](json &metricsJson,
           const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
@@ -342,7 +342,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
             !treeNode.metricSet.linkedFlexibleMetrics.empty();
         childrenArray.get_ref<json::array_t &>().reserve(
             treeNode.children.size() +
-            (hasLinkedTargets ? staticRootNode.children.size() : 0));
+            (hasLinkedTargets ? virtualRootNode.children.size() : 0));
         for (const auto &child : treeNode.children) {
           childrenArray.push_back(json::object());
           jsonNodes[child.id] = &childrenArray.back();
@@ -350,15 +350,15 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         if (!hasLinkedTargets) {
           return;
         }
-        std::function<void(size_t, json &)> appendLinkedStaticNode =
-            [&](size_t staticNodeId, json &outNode) {
-              const auto &staticNode = staticTree->getNode(staticNodeId);
+        std::function<void(size_t, json &)> appendLinkedVirtualNode =
+            [&](size_t virtualNodeId, json &outNode) {
+              const auto &virtualNode = virtualTree->getNode(virtualNodeId);
               const auto metricsIt =
-                  treeNode.metricSet.linkedMetrics.find(staticNodeId);
+                  treeNode.metricSet.linkedMetrics.find(virtualNodeId);
               const auto flexibleIt =
-                  treeNode.metricSet.linkedFlexibleMetrics.find(staticNodeId);
+                  treeNode.metricSet.linkedFlexibleMetrics.find(virtualNodeId);
               outNode = json::object();
-              outNode["frame"] = {{"name", staticNode.name},
+              outNode["frame"] = {{"name", virtualNode.name},
                                   {"type", "function"}};
               outNode["metrics"] = json::object();
               if (metricsIt != treeNode.metricSet.linkedMetrics.end() ||
@@ -379,16 +379,16 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               outNode["children"] = json::array();
               auto &linkedChildren = outNode["children"];
               linkedChildren.get_ref<json::array_t &>().reserve(
-                  staticNode.children.size());
-              for (const auto &child : staticNode.children) {
+                  virtualNode.children.size());
+              for (const auto &child : virtualNode.children) {
                 linkedChildren.push_back(json::object());
-                appendLinkedStaticNode(child.id, linkedChildren.back());
+                appendLinkedVirtualNode(child.id, linkedChildren.back());
               }
             };
 
-        for (const auto &staticChild : staticRootNode.children) {
+        for (const auto &virtualChild : virtualRootNode.children) {
           json linkedRootChildNode;
-          appendLinkedStaticNode(staticChild.id, linkedRootChildNode);
+          appendLinkedVirtualNode(virtualChild.id, linkedRootChildNode);
           childrenArray.push_back(std::move(linkedRootChildNode));
         }
       });
@@ -450,14 +450,14 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
 
 std::vector<uint8_t>
 TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
-                              TreeData::Tree *staticTree) const {
+                              TreeData::Tree *virtualTree) const {
   MsgPackWriter writer;
   writer.reserve(16 * 1024 * 1024); // 16 MB
 
   MetricSummary metricSummary;
   const std::map<MetricKind, std::unique_ptr<Metric>> emptyMetrics;
   const std::map<std::string, FlexibleMetric> emptyFlexibleMetrics;
-  const auto &staticRootNode = staticTree->getNode(Tree::TreeNode::RootId);
+  const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
 
   tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
       [&](TreeData::Tree::TreeNode &treeNode) {
@@ -702,23 +702,23 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
             !treeNode.metricSet.linkedMetrics.empty() ||
             !treeNode.metricSet.linkedFlexibleMetrics.empty();
 
-        std::function<void(size_t)> packLinkedStaticNode =
-            [&](size_t staticNodeId) {
-              const auto &staticNode = staticTree->getNode(staticNodeId);
+        std::function<void(size_t)> packLinkedVirtualNode =
+            [&](size_t virtualNodeId) {
+              const auto &virtualNode = virtualTree->getNode(virtualNodeId);
               writer.packMap(3);
 
               writer.packStr("frame");
               writer.packMap(2);
               writer.packStr("name");
-              writer.packStr(staticNode.name);
+              writer.packStr(virtualNode.name);
               writer.packStr("type");
               writer.packStr("function");
 
               writer.packStr("metrics");
               const auto metricsIt =
-                  treeNode.metricSet.linkedMetrics.find(staticNodeId);
+                  treeNode.metricSet.linkedMetrics.find(virtualNodeId);
               const auto flexibleIt =
-                  treeNode.metricSet.linkedFlexibleMetrics.find(staticNodeId);
+                  treeNode.metricSet.linkedFlexibleMetrics.find(virtualNodeId);
               if (metricsIt != treeNode.metricSet.linkedMetrics.end() ||
                   flexibleIt !=
                       treeNode.metricSet.linkedFlexibleMetrics.end()) {
@@ -739,15 +739,15 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
 
               writer.packStr("children");
               writer.packArray(
-                  static_cast<uint32_t>(staticNode.children.size()));
-              for (const auto &child : staticNode.children) {
-                packLinkedStaticNode(child.id);
+                  static_cast<uint32_t>(virtualNode.children.size()));
+              for (const auto &child : virtualNode.children) {
+                packLinkedVirtualNode(child.id);
               }
             };
 
         uint32_t linkedChildCount =
             hasLinkedTargets
-                ? static_cast<uint32_t>(staticRootNode.children.size())
+                ? static_cast<uint32_t>(virtualRootNode.children.size())
                 : 0;
         writer.packStr("children");
         writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
@@ -756,8 +756,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
           packNode(tree->getNode(child.id));
         }
         if (hasLinkedTargets) {
-          for (const auto &staticChild : staticRootNode.children) {
-            packLinkedStaticNode(staticChild.id);
+          for (const auto &virtualChild : virtualRootNode.children) {
+            packLinkedVirtualNode(virtualChild.id);
           }
         }
       };
@@ -839,7 +839,7 @@ void TreeData::exitScope(const Scope &scope) {
 
 DataEntry TreeData::addOp(size_t phase, size_t contextId,
                           const std::vector<Context> &contexts) {
-  auto lock = lockIfCurrentOrStaticPhase(phase);
+  auto lock = lockIfCurrentOrVirtualPhase(phase);
   if (contextId == Data::kRootEntryId) {
     contextId = Tree::TreeNode::RootId;
   }
@@ -862,8 +862,8 @@ void TreeData::addMetrics(
 
 void TreeData::dumpHatchet(std::ostream &os, size_t phase) const {
   treePhases.withPtr(phase, [&](Tree *tree) {
-    treePhases.withPtr(Data::kVirtualPhase, [&](Tree *staticTree) {
-      auto output = buildHatchetJson(tree, staticTree);
+    treePhases.withPtr(Data::kVirtualPhase, [&](Tree *virtualTree) {
+      auto output = buildHatchetJson(tree, virtualTree);
       os << std::endl << output.dump(4) << std::endl;
     });
   });
@@ -871,8 +871,8 @@ void TreeData::dumpHatchet(std::ostream &os, size_t phase) const {
 
 void TreeData::dumpHatchetMsgPack(std::ostream &os, size_t phase) const {
   treePhases.withPtr(phase, [&](Tree *tree) {
-    treePhases.withPtr(Data::kVirtualPhase, [&](Tree *staticTree) {
-      auto msgPack = buildHatchetMsgPack(tree, staticTree);
+    treePhases.withPtr(Data::kVirtualPhase, [&](Tree *virtualTree) {
+      auto msgPack = buildHatchetMsgPack(tree, virtualTree);
       os.write(reinterpret_cast<const char *>(msgPack.data()),
                static_cast<std::streamsize>(msgPack.size()));
     });
@@ -881,16 +881,16 @@ void TreeData::dumpHatchetMsgPack(std::ostream &os, size_t phase) const {
 
 std::string TreeData::toJsonString(size_t phase) const {
   return treePhases.withPtr(phase, [&](Tree *tree) {
-    return treePhases.withPtr(Data::kVirtualPhase, [&](Tree *staticTree) {
-      return buildHatchetJson(tree, staticTree).dump();
+    return treePhases.withPtr(Data::kVirtualPhase, [&](Tree *virtualTree) {
+      return buildHatchetJson(tree, virtualTree).dump();
     });
   });
 }
 
 std::vector<uint8_t> TreeData::toMsgPack(size_t phase) const {
   return treePhases.withPtr(phase, [&](Tree *tree) {
-    return treePhases.withPtr(Data::kVirtualPhase, [&](Tree *staticTree) {
-      return buildHatchetMsgPack(tree, staticTree);
+    return treePhases.withPtr(Data::kVirtualPhase, [&](Tree *virtualTree) {
+      return buildHatchetMsgPack(tree, virtualTree);
     });
   });
 }

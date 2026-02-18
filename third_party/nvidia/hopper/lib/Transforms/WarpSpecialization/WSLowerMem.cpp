@@ -145,23 +145,6 @@ createLocalCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
   return {copy, sharedLoad};
 }
 
-static Value createBufferView(OpBuilderWithAsyncTaskIds &builder, Value alloc,
-                              Value idx) {
-  assert(isa<triton::gpu::MemDescType>(alloc.getType()) &&
-         "Expected MemDescType");
-  auto allocDescType = cast<triton::gpu::MemDescType>(alloc.getType());
-  SmallVector<int64_t> shape;
-  assert(allocDescType.getShape().size() > 1 &&
-         "Expected multi-dimensional memdesc (e.g., Nx...) for subview");
-  shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
-               allocDescType.getShape().end());
-  auto viewDescType = triton::gpu::MemDescType::get(
-      shape, allocDescType.getElementType(), allocDescType.getEncoding(),
-      allocDescType.getMemorySpace(), allocDescType.getMutableMemory());
-  return triton::gpu::MemDescIndexOp::create(builder, alloc.getLoc(),
-                                             viewDescType, alloc, idx);
-}
-
 static int getTMALoadSize(tt::DescriptorLoadOp &tmaLoad) {
   auto tensorTy = cast<RankedTensorType>(tmaLoad->getResult(0).getType());
   int loadSize = product(tensorTy.getShape());

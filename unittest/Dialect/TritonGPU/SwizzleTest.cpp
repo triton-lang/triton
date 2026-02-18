@@ -30,16 +30,6 @@ static std::string attrStr(Attribute a) {
   a.print(os);
   return s;
 }
-
-SmallVector<int32_t> flatten(const LinearLayout &ll, StringAttr dim) {
-  assert(ll.hasInDim(dim) && "in dim must exist");
-  SmallVector<int32_t> vec;
-  for (const auto &basis : ll.getBases().lookup(dim)) {
-    assert(basis.size() == 1 && "basis must be a single int32_t");
-    vec.push_back(basis[0]);
-  }
-  return vec;
-}
 class SwizzleTest : public ::testing::Test {
 public:
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }

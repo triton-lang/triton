@@ -732,3 +732,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
         tt.return
     }
 }
+
+// -----
+
+// Make sure there is no rocdl.grid.dim.* generated when global_scratch_memory_size is 0.
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, ttg.global_scratch_memory_size = 0 : i32, ttg.global_scratch_memory_alignment = 1 : i32} {
+  // CHECK-LABEL: @test_call_zero_scratch_no_grid_ops
+  // CHECK-NOT: rocdl.grid.dim
+  // CHECK: llvm.call @callee_zero_scratch
+  tt.func public @test_call_zero_scratch_no_grid_ops() attributes {noinline = false} {
+    tt.call @callee_zero_scratch() : () -> ()
+    tt.return
+  }
+  tt.func private @callee_zero_scratch() attributes {noinline = true} {
+    tt.return
+  }
+}

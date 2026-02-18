@@ -891,3 +891,30 @@ def test_preload_higher_order_kernels(device, fresh_triton_cache) -> None:
     kernel[(1, )](output, fn_b)
     assert counter == 1
     assert output.item() == 31
+
+
+def test_module_load_unload():
+
+    @triton.jit
+    def kernel(out_ptr, val) -> None:
+        tl.store(out_ptr, val)
+
+    # we should hit the module unload call to decrese the counter from 1 to 0
+    counter = 1
+
+    def module_unload(*args, **kwargs):
+        nonlocal counter
+        counter -= 1
+
+    triton.knobs.runtime.module_unload_hook.add(module_unload)
+
+    out = torch.randn(1, dtype=torch.float32, device='cuda')
+    pre_compile = kernel.warmup(out, 1, grid=(1, ))
+    pre_compile._init_handles()
+
+    assert counter == 1
+    assert pre_compile.module is not None
+    pre_compile.__del__()
+
+    assert counter == 0
+    assert pre_compile.module is None
