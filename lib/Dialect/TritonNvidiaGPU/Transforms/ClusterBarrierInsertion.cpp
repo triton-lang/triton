@@ -76,7 +76,6 @@ static bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
 
 class ClusterBarrierAnalysis : public MembarOrFenceAnalysis {
 public:
-  ClusterBarrierAnalysis() = default;
   explicit ClusterBarrierAnalysis(Allocation *allocation, MembarFilterFn filter)
       : MembarOrFenceAnalysis(allocation, filter) {}
 

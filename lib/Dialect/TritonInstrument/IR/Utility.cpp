@@ -155,21 +155,6 @@ bool hasCrossBufferAliasing(ArrayRef<BufferRegion> regions) {
   return false;
 }
 
-Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
-                                     TypedValue<RankedTensorType> tensor) {
-  Type elType = tensor.getType().getElementType();
-  int elSize = elType.getIntOrFloatBitWidth() / 8;
-  int numEls = product(tensor.getType().getShape());
-  int64_t sizeInBytes = numEls * elSize;
-  Type ptrType = triton::getPointerType(elType);
-  // Allocate scratch buffers with 16-byte alignment so global loads and stores
-  // can be vectorized if possible.
-  auto alloc =
-      GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, /*alignment=*/16);
-  createStoreScratchMemory(b, b.getLoc(), alloc, tensor, tensor.getType());
-  return alloc;
-}
-
 Value createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
                                 int bitWidth, FunctionBuilder &funcBuilder) {
   SmallVector<int64_t> shape = {m};
