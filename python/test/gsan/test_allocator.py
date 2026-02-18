@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 import os
 
 import pytest
@@ -8,8 +7,9 @@ import torch
 
 from triton._internal_testing import is_cuda
 from triton.experimental.gsan import create_mem_pool
-from triton.experimental.gsan._allocator import (_load_gsan_library, export_allocation_handles, free_allocation,
-                                                 get_reserve_pointer, get_reserve_size, import_allocation_handles)
+from triton.experimental.gsan._allocator import (export_allocation_handles, free_allocation, get_reserve_pointer,
+                                                 get_reserve_size, gsan_free, gsan_malloc,
+                                                 import_allocation_handles)
 from triton.experimental.gsan._testing_utils import shadow_region, uint8_cuda_tensor_from_ptr
 
 
@@ -22,22 +22,20 @@ def _shadow_tensor_for(real: torch.Tensor) -> torch.Tensor:
 
 @pytest.fixture
 def _direct_allocator():
-    lib = _load_gsan_library()
     device = torch.cuda.current_device()
-    stream = ctypes.c_void_p(0)
+    stream = 0
     reserve_ptr = get_reserve_pointer()
     reserve_size = get_reserve_size()
     allocated = set()
 
     def malloc(size: int) -> int:
-        ptr = lib.gsanMalloc(int(size), device, stream)
-        ptr_int = 0 if ptr is None else int(ptr)
+        ptr_int = gsan_malloc(size, device, stream)
         if ptr_int != 0:
             allocated.add(ptr_int)
         return ptr_int
 
     def free(ptr: int, size: int = 0) -> None:
-        lib.gsanFree(ctypes.c_void_p(ptr), int(size), device, stream)
+        gsan_free(ptr, device, size, stream)
         if ptr in allocated:
             allocated.remove(ptr)
 
@@ -46,7 +44,7 @@ def _direct_allocator():
     finally:
         # Cleanup any allocated pointers
         for ptr in list(allocated):
-            lib.gsanFree(ctypes.c_void_p(ptr), 0, device, stream)
+            gsan_free(ptr, device, 0, stream)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")

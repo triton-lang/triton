@@ -1,3 +1,4 @@
+#include <Python.h>
 #include <cuda.h>
 
 #include <algorithm>
@@ -5,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <unistd.h>
@@ -313,7 +315,8 @@ void unmapNodeHandles(AllocNode *node, bool realMapped, bool shadowMapped) {
 } // namespace
 
 // TODO: Handle streams?
-void *gsanMalloc(ssize_t size, int device, [[maybe_unused]] void *stream) {
+extern "C" void *gsanMalloc(ssize_t size, int device,
+                            [[maybe_unused]] void *stream) {
   if (size <= 0)
     return nullptr;
 
@@ -543,4 +546,198 @@ error:
     cuMemRelease(realHandle);
   freeNode(node);
   return nullptr;
+}
+
+namespace {
+
+constexpr const char *kModuleName = "gsan_allocator";
+
+bool parseIntArg(PyObject *obj, const char *name, int *out) {
+  long value = PyLong_AsLong(obj);
+  if (value == -1 && PyErr_Occurred())
+    return false;
+  if (value < std::numeric_limits<int>::min() ||
+      value > std::numeric_limits<int>::max()) {
+    PyErr_Format(PyExc_OverflowError, "%s is out of range for int", name);
+    return false;
+  }
+  *out = static_cast<int>(value);
+  return true;
+}
+
+bool parseVoidPtrArg(PyObject *obj, void **out) {
+  *out = PyLong_AsVoidPtr(obj);
+  return !(*out == nullptr && PyErr_Occurred());
+}
+
+PyObject *pyMalloc(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 2 && nargs != 3) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.malloc expected 2 or 3 positional arguments, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  Py_ssize_t size = PyLong_AsSsize_t(args[0]);
+  if (size == -1 && PyErr_Occurred())
+    return nullptr;
+
+  int device = 0;
+  if (!parseIntArg(args[1], "device", &device))
+    return nullptr;
+
+  void *stream = nullptr;
+  if (nargs == 3 && !parseVoidPtrArg(args[2], &stream))
+    return nullptr;
+
+  return PyLong_FromVoidPtr(gsanMalloc(size, device, stream));
+}
+
+PyObject *pyFree(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+  (void)self;
+  if (nargs < 2 || nargs > 4) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.free expected between 2 and 4 positional arguments, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  void *ptr = nullptr;
+  if (!parseVoidPtrArg(args[0], &ptr))
+    return nullptr;
+
+  int device = 0;
+  if (!parseIntArg(args[1], "device", &device))
+    return nullptr;
+
+  Py_ssize_t size = 0;
+  if (nargs >= 3) {
+    size = PyLong_AsSsize_t(args[2]);
+    if (size == -1 && PyErr_Occurred())
+      return nullptr;
+  }
+
+  void *stream = nullptr;
+  if (nargs == 4 && !parseVoidPtrArg(args[3], &stream))
+    return nullptr;
+
+  gsanFree(ptr, size, device, stream);
+  Py_RETURN_NONE;
+}
+
+PyObject *pyGetReservePointer(PyObject *self, PyObject *const *args,
+                              Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 0) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.get_reserve_pointer expected 0 positional arguments, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+  return PyLong_FromVoidPtr(gsanGetReservePointer());
+}
+
+PyObject *pyGetReserveSize(PyObject *self, PyObject *const *args,
+                           Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 0) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.get_reserve_size expected 0 positional arguments, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+  return PyLong_FromUnsignedLongLong(
+      static_cast<unsigned long long>(gsanGetReserveSize()));
+}
+
+PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
+                                    Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 1) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.export_allocation_handles expected 1 positional argument, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  void *ptr = nullptr;
+  if (!parseVoidPtrArg(args[0], &ptr))
+    return nullptr;
+
+  int realFd = -1;
+  int shadowFd = -1;
+  size_t allocSize = 0;
+  int rc = gsanExportAllocationHandles(ptr, &realFd, &shadowFd, &allocSize);
+  if (rc != 0) {
+    PyErr_SetString(PyExc_RuntimeError, "gsanExportAllocationHandles failed.");
+    return nullptr;
+  }
+
+  return Py_BuildValue("(iiK)", realFd, shadowFd,
+                       static_cast<unsigned long long>(allocSize));
+}
+
+PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
+                                    Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 4) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.import_allocation_handles expected 4 positional arguments, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  int realFd = 0;
+  int shadowFd = 0;
+  int device = 0;
+  if (!parseIntArg(args[0], "real_fd", &realFd) ||
+      !parseIntArg(args[1], "shadow_fd", &shadowFd) ||
+      !parseIntArg(args[3], "device", &device)) {
+    return nullptr;
+  }
+
+  size_t allocSize = PyLong_AsSize_t(args[2]);
+  if (allocSize == static_cast<size_t>(-1) && PyErr_Occurred())
+    return nullptr;
+
+  void *ptr = gsanImportAllocationHandles(realFd, shadowFd, allocSize, device);
+  if (ptr == nullptr) {
+    PyErr_SetString(PyExc_RuntimeError, "gsanImportAllocationHandles failed.");
+    return nullptr;
+  }
+
+  return PyLong_FromVoidPtr(ptr);
+}
+
+PyMethodDef kGSanAllocatorMethods[] = {
+    {"malloc", reinterpret_cast<PyCFunction>(pyMalloc), METH_FASTCALL,
+     "Allocate GSan memory. Returns a CUDA pointer as an integer."},
+    {"free", reinterpret_cast<PyCFunction>(pyFree), METH_FASTCALL,
+     "Free GSan memory by pointer."},
+    {"get_reserve_pointer", reinterpret_cast<PyCFunction>(pyGetReservePointer),
+     METH_FASTCALL, "Return the reserve base pointer as an integer."},
+    {"get_reserve_size", reinterpret_cast<PyCFunction>(pyGetReserveSize),
+     METH_FASTCALL, "Return the reserve size in bytes."},
+    {"export_allocation_handles",
+     reinterpret_cast<PyCFunction>(pyExportAllocationHandles), METH_FASTCALL,
+     "Export allocation handles for an existing allocation pointer."},
+    {"import_allocation_handles",
+     reinterpret_cast<PyCFunction>(pyImportAllocationHandles), METH_FASTCALL,
+     "Import allocation handles and map into this process's VA space."},
+    {nullptr, nullptr, 0, nullptr},
+};
+
+PyModuleDef kGSanAllocatorModuleDef = {
+    PyModuleDef_HEAD_INIT,
+    "gsan_allocator",
+    nullptr,
+    -1,
+    kGSanAllocatorMethods,
+};
+
+} // namespace
+
+PyMODINIT_FUNC PyInit_gsan_allocator(void) {
+  return PyModule_Create(&kGSanAllocatorModuleDef);
 }
