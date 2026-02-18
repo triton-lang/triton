@@ -470,7 +470,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
     if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED) {
-      if (profiler.isOpInProgress()) {
+      if (!profiler.isOpInProgress()) {
         // else no op in progress; creation triggered by graph
         // clone/instantiate, we don't increase the numNodes because the
         // original graph has already accounted for it
