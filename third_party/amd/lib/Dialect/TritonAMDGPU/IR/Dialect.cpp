@@ -29,6 +29,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -45,6 +46,15 @@
 using namespace mlir;
 using namespace mlir::triton::amdgpu;
 
+struct TensorDescSharedMemModel
+    : public triton::gpu::QueryNeededSharedMemorySize::ExternalModel<
+          TensorDescSharedMemModel, triton::TensorDescType> {
+  size_t getSharedMemorySize(Type type) const {
+    auto descType = cast<triton::TensorDescType>(type);
+    return getTensorDescNumDwords(descType) * 4;
+  }
+};
+
 void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
   addAttributes<
 #define GET_ATTRDEF_LIST
@@ -57,6 +67,8 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
       >();
 
   addInterfaces<TritonInlinerInterface>();
+  triton::TensorDescType::attachInterface<TensorDescSharedMemModel>(
+      *getContext());
 }
 
 #include "Dialect/TritonAMDGPU/IR/TritonAMDGPUEnums.cpp.inc"

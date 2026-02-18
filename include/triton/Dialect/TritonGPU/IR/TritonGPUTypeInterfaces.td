@@ -20,4 +20,19 @@ def TTG_TensorOrMemDesc : TypeInterface<"TensorOrMemDesc"> {
   ];
 }
 
+def TTG_QueryNeededSharedMemorySize : TypeInterface<"QueryNeededSharedMemorySize"> {
+  let cppNamespace = "::mlir::triton::gpu";
+  let description = [{
+    Interface for custom types that need to specify their shared memory
+    allocation requirements.
+  }];
+
+  let methods = [
+    InterfaceMethod<
+      "Returns the size in bytes needed when storing this type in shared memory",
+      "size_t", "getSharedMemorySize", (ins)
+    >,
+  ];
+}
+
 #endif // TRITON_GPU_TYPE_INTERFACES

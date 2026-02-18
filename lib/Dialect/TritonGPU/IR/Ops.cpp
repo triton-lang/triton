@@ -1336,6 +1336,10 @@ LogicalResult WarpYieldOp::verify() {
 // Get the size of a scalar type when stored in shared memory.
 // TODO: Generalize this as needed.
 static size_t getSharedMemorySize(Type type) {
+  // Check if type implements QueryNeededSharedMemorySize interface
+  if (auto smsType = dyn_cast<gpu::QueryNeededSharedMemorySize>(type))
+    return smsType.getSharedMemorySize();
+
   if (isa<IntegerType, FloatType>(type))
     return llvm::divideCeil(type.getIntOrFloatBitWidth(), 8);
   if (isa<PointerType, TensorDescInterface>(type))
