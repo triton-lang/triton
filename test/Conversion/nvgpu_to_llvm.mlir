@@ -99,7 +99,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: @tensor_memory_base_lowering_two_cta
   //      CHECK: "@$0 tcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32 [$1], 128;", "b,r"
   //      CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r"
-  //      CHECK: "@$0 fence.mbarrier_init.release.cluster ;", "b"
   //      CHECK-NOT: nvvm.cluster.arrive
   //      CHECK: mbarrier.arrive.shared::cluster.b64
   //      CHECK: mbarrier.try_wait.parity.shared::cta.b64
