@@ -549,11 +549,6 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
 
 static constexpr const char *kTMAllocSharedScratchOffsetAttrName =
     "ttng.tensor_memory_scratch_offset";
-// Shared memory layout used by tensor memory allocation in 2CTA kernels:
-// - [0..3] uses the existing tcgen05.alloc return-address scratch
-// - [ttng.tensor_memory_scratch_offset .. +7] dealloc synchronization mbarrier
-static constexpr int kTMAllocSharedMBarrierPhase = 0;
-static constexpr int kTMAllocSharedMBarrierArriveCount = 1;
 
 static int getTMAllocSharedScratchOffset(ModuleOp mod) {
   if (auto offsetAttr =
@@ -576,9 +571,7 @@ static void mbarrierInit(IRRewriter &rewriter, Location loc, Value barrier) {
   Value predSingleThread =
       LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
   PTXBuilder ptxBuilder;
-  std::string ptxString = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
-                          std::to_string(kTMAllocSharedMBarrierArriveCount) +
-                          ";";
+  std::string ptxString = "@$0 mbarrier.init.shared::cta.b64 [$1], 1;";
   auto &init = *ptxBuilder.create(ptxString);
   init({ptxBuilder.newOperand(predSingleThread, "b"),
         ptxBuilder.newOperand(barrier, "r")},
@@ -612,18 +605,15 @@ static void mbarrierArrive(OpBuilder &builder, Location loc, Value barrier) {
   ptxBuilder.launch(builder, loc, void_ty(ctx));
 }
 
-static void mbarrierWait(OpBuilder &builder, Location loc, Value barrier) {
+static void mbarrierWait(OpBuilder &builder, Location loc, Value barrier,
+                         Value pred) {
   auto b = TritonLLVMOpBuilder(loc, builder);
-  Value phase = b.i32_val(kTMAllocSharedMBarrierPhase);
-  Value threadId =
-      NVVM::ThreadIdXOp::create(builder, loc, builder.getI32Type());
-  Value pred = b.icmp_ult(threadId, b.i32_val(32));
   std::string ptxString = R"(
 {
-	@!$2 bra.uni skipWait;
+	@!$1 bra.uni skipWait;
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
+	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], 0;
 	@!complete bra.uni waitLoop;
 	skipWait:
 }
@@ -631,10 +621,9 @@ static void mbarrierWait(OpBuilder &builder, Location loc, Value barrier) {
 
   PTXBuilder ptxBuilder;
   auto &waitLoop = *ptxBuilder.create(ptxString);
-  waitLoop({ptxBuilder.newOperand(barrier, "r"),
-            ptxBuilder.newOperand(phase, "r"),
-            ptxBuilder.newOperand(pred, "b")},
-           /*onlyAttachMLIRArgs=*/true);
+  waitLoop(
+      {ptxBuilder.newOperand(barrier, "r"), ptxBuilder.newOperand(pred, "b")},
+      /*onlyAttachMLIRArgs=*/true);
   ptxBuilder.launch(builder, loc, void_ty(builder.getContext()));
 }
 
@@ -647,11 +636,8 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     if (twoCTAs) {
       assert(syncBarrier &&
              "missing mbarrier setup data for 2CTA TMEM teardown");
-      // Match ArriveBarrierOp conversion predication style.
       mbarrierArrive(b, loc, syncBarrier);
-      // Match WaitBarrierOp conversion predication shape (predicated wait
-      // loop).
-      mbarrierWait(b, loc, syncBarrier);
+      mbarrierWait(b, loc, syncBarrier, pred);
     } else {
       NVVM::Barrier0Op::create(b, loc);
     }
