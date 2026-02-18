@@ -625,7 +625,7 @@ bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
   return false;
 }
 
-bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
+bool canUseResultEncoding(Operation *op, Attribute targetEncoding) {
   if (isa<triton::CatOp>(op))
     return !triton::gpu::isExpensiveCat(cast<triton::CatOp>(op),
                                         targetEncoding);
@@ -929,7 +929,7 @@ LogicalResult getConvertBackwardSlice(
         enqueue(definingOp->getOpOperand(0), encoding);
         continue;
       }
-      if (canFoldIntoConversion(definingOp, encoding))
+      if (canUseResultEncoding(definingOp, encoding))
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
