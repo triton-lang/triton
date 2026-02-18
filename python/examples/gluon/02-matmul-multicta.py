@@ -392,6 +392,8 @@ def matmul_epilogue_partition(p):
     TILE_M: gl.constexpr = p.a_desc.block_shape[0]
     TILE_N: gl.constexpr = p.b_desc.block_shape[1]
     SPLIT_TILE_N: gl.constexpr = p.c_desc.block_shape[1]
+    HALF_SPLIT_TILE_N: gl.constexpr = SPLIT_TILE_N // 2
+    gl.static_assert((SPLIT_TILE_N % 2) == 0, "SPLIT_TILE_N must be even")
     SUBTILE_FACTOR: gl.constexpr = TILE_N // SPLIT_TILE_N
     acc_stages: gl.constexpr = p.acc_empty_bars.shape[0]
     dtype: gl.constexpr = p.c_desc.dtype
@@ -413,15 +415,28 @@ def matmul_epilogue_partition(p):
         for s in gl.static_range(SUBTILE_FACTOR):
             acc_sub = acc_buf.slice(SPLIT_TILE_N * s, SPLIT_TILE_N)
             acc_smem = acc_smems.index(sub_acc_state.index)
-            acc_smem.store(
-                acc_sub.load(
-                    get_tmem_reg_layout(
-                        gl.float32,
-                        (TILE_M, SPLIT_TILE_N),
-                        acc_sub.type.layout,
-                        gl.num_warps(),
-                        cga_layout=p.c_desc.layout.cga_layout,
-                    )).to(dtype))
+            acc_sub0 = acc_sub.slice(0, HALF_SPLIT_TILE_N)
+            acc_sub1 = acc_sub.slice(HALF_SPLIT_TILE_N, HALF_SPLIT_TILE_N)
+            acc0 = acc_sub0.load(
+                get_tmem_reg_layout(
+                    gl.float32,
+                    (TILE_M, HALF_SPLIT_TILE_N),
+                    acc_sub0.type.layout,
+                    gl.num_warps(),
+                    cga_layout=p.c_desc.layout.cga_layout,
+                )).to(dtype)
+            acc_smem0 = acc_smem.slice(0, HALF_SPLIT_TILE_N, dim=1)
+            acc_smem0.store(acc0)
+            acc1 = acc_sub1.load(
+                get_tmem_reg_layout(
+                    gl.float32,
+                    (TILE_M, HALF_SPLIT_TILE_N),
+                    acc_sub1.type.layout,
+                    gl.num_warps(),
+                    cga_layout=p.c_desc.layout.cga_layout,
+                )).to(dtype)
+            acc_smem1 = acc_smem.slice(HALF_SPLIT_TILE_N, HALF_SPLIT_TILE_N, dim=1)
+            acc_smem1.store(acc1)
             fence_async_shared()
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_TILE_N * s], acc_smem)
             # TODO: we are not emitting read=True
