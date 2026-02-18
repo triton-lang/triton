@@ -572,14 +572,15 @@ static Value getTMAllocSharedMBarrierPtr(IRRewriter &rewriter,
                LLVM::GEPNoWrapFlags::inbounds);
 }
 
-static void initTMAllocSharedMBarrier(IRRewriter &rewriter, Location loc,
-                                      Value barrier, Value predThread0) {
+static void mbarrierInit(IRRewriter &rewriter, Location loc, Value barrier) {
+  Value predSingleThread =
+      LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
   PTXBuilder ptxBuilder;
   std::string ptxString = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
                           std::to_string(kTMAllocSharedMBarrierArriveCount) +
                           ";";
   auto &init = *ptxBuilder.create(ptxString);
-  init({ptxBuilder.newOperand(predThread0, "b"),
+  init({ptxBuilder.newOperand(predSingleThread, "b"),
         ptxBuilder.newOperand(barrier, "r")},
        /*onlyAttachMLIRArgs=*/true);
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
@@ -595,33 +596,29 @@ static void createRelinquishAlloc(IRRewriter &rewriter, Location loc,
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
-                 bool twoCTAs, Value syncBarrier) {
-  func.walk([&](LLVM::ReturnOp ret) {
-    OpBuilder b(ret);
-    auto ctx = ret->getContext();
-    auto loc = ret.getLoc();
-    if (twoCTAs) {
-      assert(syncBarrier && "missing mbarrier for 2CTA TMEM teardown");
-      auto builder = TritonLLVMOpBuilder(loc, b);
-      Value ctaId = NVVM::ClusterId::create(b, loc, b.getI32Type());
-      Value peerCTA = builder.xor_(ctaId, builder.i32_val(1));
+static void mbarrierArrive(OpBuilder &builder, Location loc, Value barrier) {
+  auto b = TritonLLVMOpBuilder(loc, builder);
+  Value ctaId = NVVM::ClusterId::create(builder, loc, builder.getI32Type());
+  Value peerCTA = b.xor_(ctaId, b.i32_val(1));
+  Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, builder);
+  auto ctx = builder.getContext();
+  PTXBuilder ptxBuilder;
+  const std::string ptxString =
+      "@$0 mbarrier.arrive.shared::cluster.b64 _, [$1], $2;";
+  auto &arrive = *ptxBuilder.create(ptxString);
+  arrive({ptxBuilder.newOperand(pred, "b"), ptxBuilder.newOperand(barrier, "r"),
+          ptxBuilder.newOperand(peerCTA, "r")},
+         /*onlyAttachMLIRArgs=*/true);
+  ptxBuilder.launch(builder, loc, void_ty(ctx));
+}
 
-      {
-        PTXBuilder ptxBuilder;
-        std::string ptxString =
-            "@$0 mbarrier.arrive.shared::cluster.b64 _, [$1], $2;";
-        auto &arrive = *ptxBuilder.create(ptxString);
-        arrive({ptxBuilder.newOperand(pred, "b"),
-                ptxBuilder.newOperand(syncBarrier, "r"),
-                ptxBuilder.newOperand(peerCTA, "r")},
-               /*onlyAttachMLIRArgs=*/true);
-        ptxBuilder.launch(b, loc, void_ty(ctx));
-      }
-
-      {
-        PTXBuilder ptxBuilder;
-        std::string ptxString = R"(
+static void mbarrierWait(OpBuilder &builder, Location loc, Value barrier) {
+  auto b = TritonLLVMOpBuilder(loc, builder);
+  Value phase = b.i32_val(kTMAllocSharedMBarrierPhase);
+  Value threadId =
+      NVVM::ThreadIdXOp::create(builder, loc, builder.getI32Type());
+  Value pred = b.icmp_ult(threadId, b.i32_val(32));
+  std::string ptxString = R"(
 {
 	@!$2 bra.uni skipWait;
 	.reg .pred complete;
@@ -631,14 +628,30 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
 	skipWait:
 }
 )";
-        auto &wait = *ptxBuilder.create(ptxString);
-        wait({ptxBuilder.newOperand(syncBarrier, "r"),
-              ptxBuilder.newOperand(
-                  builder.i32_val(kTMAllocSharedMBarrierPhase), "r"),
-              ptxBuilder.newOperand(pred, "b")},
-             /*onlyAttachMLIRArgs=*/true);
-        ptxBuilder.launch(b, loc, void_ty(ctx));
-      }
+
+  PTXBuilder ptxBuilder;
+  auto &waitLoop = *ptxBuilder.create(ptxString);
+  waitLoop({ptxBuilder.newOperand(barrier, "r"),
+            ptxBuilder.newOperand(phase, "r"),
+            ptxBuilder.newOperand(pred, "b")},
+           /*onlyAttachMLIRArgs=*/true);
+  ptxBuilder.launch(builder, loc, void_ty(builder.getContext()));
+}
+
+void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
+                 bool twoCTAs, Value syncBarrier) {
+  func.walk([&](LLVM::ReturnOp ret) {
+    OpBuilder b(ret);
+    auto ctx = ret->getContext();
+    auto loc = ret.getLoc();
+    if (twoCTAs) {
+      assert(syncBarrier &&
+             "missing mbarrier setup data for 2CTA TMEM teardown");
+      // Match ArriveBarrierOp conversion predication style.
+      mbarrierArrive(b, loc, syncBarrier);
+      // Match WaitBarrierOp conversion predication shape (predicated wait
+      // loop).
+      mbarrierWait(b, loc, syncBarrier);
     } else {
       NVVM::Barrier0Op::create(b, loc);
     }
@@ -684,10 +697,9 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   Value alloc = createTMAlloc(rewriter, func, size, pred, useTwoCTAs);
   Value syncBarrier;
   if (useTwoCTAs) {
-    Value predThread0 = b.icmp_eq(threadId, b.i32_val(0));
     syncBarrier =
         getTMAllocSharedMBarrierPtr(rewriter, func, tmAllocSharedScratchOffset);
-    initTMAllocSharedMBarrier(rewriter, loc, syncBarrier, predThread0);
+    mbarrierInit(rewriter, loc, syncBarrier);
   }
   createRelinquishAlloc(rewriter, loc, pred, useTwoCTAs);
   // TODO: pred will have a long liverange, we need to check if this is a
