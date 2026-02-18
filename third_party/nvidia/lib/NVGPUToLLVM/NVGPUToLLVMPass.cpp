@@ -9,8 +9,6 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/MapVector.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace ttn = mlir::triton::nvgpu;
@@ -618,36 +616,48 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
 }
 
 static LogicalResult lowerTensorMemoryAlloc(ModuleOp mod) {
-  llvm::MapVector<Operation *, SmallVector<ttn::TensorMemoryBaseAddress>>
-      baseOpsByKernel;
+  SmallVector<ttn::TensorMemoryBaseAddress> baseOps;
+  LLVM::LLVMFuncOp kernel = nullptr;
   ttn::TensorMemoryBaseAddress invalidBaseOp = nullptr;
+  const char *invalidReason = nullptr;
 
   mod.walk([&](ttn::TensorMemoryBaseAddress baseOp) -> WalkResult {
     auto func = baseOp->getParentOfType<LLVM::LLVMFuncOp>();
     if (!func || !triton::isKernel(func)) {
       invalidBaseOp = baseOp;
+      invalidReason =
+          "tensor memory base in non-kernel functions is not supported; TMEM "
+          "requires inlined usage within a kernel function";
       return WalkResult::interrupt();
     }
-    baseOpsByKernel[func.getOperation()].push_back(baseOp);
+    if (!kernel)
+      kernel = func;
+    if (kernel != func) {
+      invalidBaseOp = baseOp;
+      invalidReason =
+          "tensor memory base across multiple kernel functions is not "
+          "supported";
+      return WalkResult::interrupt();
+    }
+    baseOps.push_back(baseOp);
     return WalkResult::advance();
   });
 
   if (invalidBaseOp) {
-    invalidBaseOp.emitOpError(
-        "tensor memory base in non-kernel functions is not supported; TMEM "
-        "requires inlined usage within a kernel function");
+    invalidBaseOp.emitOpError(invalidReason);
     return failure();
   }
 
-  for (auto &it : baseOpsByKernel) {
-    auto kernel = cast<LLVM::LLVMFuncOp>(it.first);
-    Value newBase = initTensorMemory(kernel);
-    if (!newBase)
-      continue;
-    for (ttn::TensorMemoryBaseAddress baseOp : it.second) {
-      baseOp.getResult().replaceAllUsesWith(newBase);
-      baseOp->erase();
-    }
+  if (baseOps.empty())
+    return success();
+
+  Value newBase = initTensorMemory(kernel);
+  if (!newBase)
+    return success();
+
+  for (ttn::TensorMemoryBaseAddress baseOp : baseOps) {
+    baseOp.getResult().replaceAllUsesWith(newBase);
+    baseOp->erase();
   }
   return success();
 }
