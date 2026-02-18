@@ -74,10 +74,10 @@ llvm.func @wgmma_wait(%in: !struct) {
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tensor_memory_base_lowering
-  //      CHECK:    %[[TID:.+]] = nvvm.read.ptx.sreg.tid.x : i32
-  //      CHECK:    %[[C32:.+]] = llvm.mlir.constant(32 : i32) : i32
-  //      CHECK:    %[[PRED:.+]] = llvm.icmp "ult" %[[TID]], %[[C32]] : i32
   //      CHECK:    %[[SHMEM:.+]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+  //      CHECK:    %[[C32:.+]] = llvm.mlir.constant(32 : i32) : i32
+  //      CHECK:    %[[TID:.+]] = nvvm.read.ptx.sreg.tid.x : i32
+  //      CHECK:    %[[PRED:.+]] = llvm.icmp "ult" %[[TID]], %[[C32]] : i32
   //      CHECK:    %[[A:.+]] = llvm.inline_asm has_side_effects
   // CHECK-SAME:    "@$0 tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [$1], 128;", "b,r" %[[PRED]], %[[SHMEM]] : (i1, !llvm.ptr<3>) -> !llvm.void
   //      CHECK:    %[[AR:.+]] = llvm.load %[[SHMEM]] : !llvm.ptr<3> -> i32
@@ -90,6 +90,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %263 = nvg.tensor_memory_base
     %264 = llvm.ptrtoint %263 : !llvm.ptr<6> to i32
     llvm.return %264 : i32
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttng.two-ctas" = true} {
+  // CHECK-LABEL: @tensor_memory_base_lowering_two_cta
+  //      CHECK: "@$0 tcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32 [$1], 128;", "b,r"
+  //      CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r"
+  //      CHECK: "@$0 fence.mbarrier_init.release.cluster ;", "b"
+  //      CHECK-NOT: nvvm.cluster.arrive
+  //      CHECK: mbarrier.arrive.shared::cluster.b64
+  //      CHECK: mbarrier.try_wait.parity.shared::cta.b64
+  //      CHECK: "@$0 tcgen05.dealloc.cta_group::2.sync.aligned.b32 $1, 128;", "b,r"
+  llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+  llvm.func @tensor_memory_base_lowering_two_cta() -> i32 attributes {nvvm.kernel = 1 : ui1, nvvm.maxntid = array<i32: 128>} {
+    %0 = nvg.tensor_memory_base
+    %1 = llvm.ptrtoint %0 : !llvm.ptr<6> to i32
+    llvm.return %1 : i32
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 48 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttng.two-ctas" = true, "ttng.tensor_memory_scratch_offset" = 32 : i32} {
+  // CHECK-LABEL: @tensor_memory_base_lowering_two_cta_shared_offset
+  //      CHECK: %[[SHMEM:.+]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+  //      CHECK: "@$0 tcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32 [$1], 128;", "b,r"{{.*}}%[[SHMEM]]
+  //      CHECK: %[[MBAR:.+]] = llvm.getelementptr inbounds %[[SHMEM]][32] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i8
+  //      CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r"{{.*}}%[[MBAR]]
+  //      CHECK: "@$0 mbarrier.arrive.shared::cluster.b64 _, [$1], $2;", "b,r,r"{{.*}}%[[MBAR]]
+  //      CHECK: mbarrier.try_wait.parity.shared::cta.b64
+  llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+  llvm.func @tensor_memory_base_lowering_two_cta_shared_offset() -> i32 attributes {nvvm.kernel = 1 : ui1, nvvm.maxntid = array<i32: 128>} {
+    %0 = nvg.tensor_memory_base
+    %1 = llvm.ptrtoint %0 : !llvm.ptr<6> to i32
+    llvm.return %1 : i32
   }
 }
 

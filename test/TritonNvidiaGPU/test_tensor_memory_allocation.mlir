@@ -400,3 +400,17 @@ tt.func @mma_lhs_tmem(
 }
 
 }
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.shared = 20 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: module attributes {{.*}}ttg.shared = 32 : i32
+  // CHECK-SAME: ttng.tensor_memory_scratch_offset = 24 : i32
+  // CHECK-LABEL: @reserve_tmem_shared_offset_two_cta
+  tt.func @reserve_tmem_shared_offset_two_cta() {
+    %0 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    "use"(%0) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    tt.return
+  }
+}

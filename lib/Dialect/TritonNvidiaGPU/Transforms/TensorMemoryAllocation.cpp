@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/Support/MathExtras.h"
 
 namespace mlir {
 namespace triton {
@@ -26,6 +27,7 @@ namespace {
 
 // Granularity of row allocations.
 static constexpr int allocGranularity = 64;
+
 struct TMemChunk {
   int startRow;
   int startCol;
@@ -417,15 +419,33 @@ public:
       }
     }
     if (totalMemorySize > 0) {
-      // We use a small smem allocation to get the tensor memory base address
-      // from tcgen05.alloc, ensure the block has at least 4 bytes of smem
+      // Shared-memory scratch space used by tensor memory allocation.
+      // tcgen05.alloc needs a temporary 4-byte slot to exchange the TMEM base.
+      constexpr int kTMAllocScratchBytes = 4;
+      // For two-CTA kernels, reserve one persistent mbarrier slot (u64).
+      constexpr int kTMAllocTwoCTAReservedBytes = 8;
+      constexpr int kTMAllocTwoCTAAlignment = 8;
+      constexpr const char *kTMAllocSharedScratchOffsetAttrName =
+          "ttng.tensor_memory_scratch_offset";
+
+      // Ensure enough shared memory for tcgen05.alloc scratch and, for two-CTA
+      // kernels, reserve a persistent slot for teardown mbarrier.
       int shared = 0;
-      if (auto sharedAttr = mod->getAttr("ttg.shared")) {
-        shared = cast<IntegerAttr>(sharedAttr).getInt();
+      if (auto sharedAttr = mod->getAttrOfType<IntegerAttr>("ttg.shared"))
+        shared = sharedAttr.getInt();
+
+      int requiredShared = std::max(shared, kTMAllocScratchBytes);
+      bool twoCTAs = getModuleTwoCTAs(mod);
+      if (twoCTAs) {
+        int scratchOffset = llvm::alignTo(shared, kTMAllocTwoCTAAlignment);
+        requiredShared = std::max(requiredShared,
+                                  scratchOffset + kTMAllocTwoCTAReservedBytes);
+        mod->setAttr(kTMAllocSharedScratchOffsetAttrName,
+                     getI32Attr(scratchOffset));
       }
-      if (shared < 4) {
-        mod->setAttr("ttg.shared", getI32Attr(4));
-      }
+
+      if (shared < requiredShared)
+        mod->setAttr("ttg.shared", getI32Attr(requiredShared));
     }
     mod->setAttr("ttg.tensor_memory_size", getI32Attr(totalMemorySize));
   }
