@@ -1007,10 +1007,18 @@ LogicalResult MemDescSubsliceOp::verify() {
   } else {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
-  // NYI: We don't support non-trivial block dimension for now.
-  auto kBlock = mlir::StringAttr::get(getContext(), "block");
-  if (ll.getInDimSize(kBlock) != 1) {
-    return emitError("non-trivial block dimension not supported");
+
+  auto kBlock = mlir::StringAttr::get(ctx, "block");
+  if (auto it = ll.getBases().find(kBlock); it != ll.getBases().end()) {
+    for (auto dim : splitDims) {
+      if (llvm::any_of(it->second,
+                       [dim](ArrayRef<int32_t> basis) {
+                         return basis[dim] != 0;
+                       })) {
+        return emitError(
+            "slicing non-broadcast CGA dimensions is not supported");
+      }
+    }
   }
 
   auto llInv = ll.invert();
