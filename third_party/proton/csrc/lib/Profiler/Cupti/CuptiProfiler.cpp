@@ -474,8 +474,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       // the numNodes in CREATED callback.
       if (!graphStates.contain(graphId))
         graphStates[graphId] = GraphState();
-      else
-        graphStates[graphId].numNodes++;
+      graphStates[graphId].numNodes++;
       if (profiler.isOpInProgress()) {
         auto &graphState = graphStates[graphId];
         auto &nodeState = graphState.nodeIdToState[nodeId];
