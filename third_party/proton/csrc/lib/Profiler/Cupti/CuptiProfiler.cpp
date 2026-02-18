@@ -458,7 +458,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
 void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     CUpti_GraphData *graphData) {
-      
+
   uint32_t graphId = 0;
   uint32_t graphExecId = 0;
   if (graphData->graph)
