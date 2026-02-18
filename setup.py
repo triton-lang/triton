@@ -584,6 +584,13 @@ setup(
     package_dir=dict(get_package_dirs()),
     entry_points=get_entry_points(),
     include_package_data=True,
+    exclude_package_data={
+        "": [
+            "__pycache__",
+            "__pycache__/*",
+            "*.py[cod]",
+        ]
+    },
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={
         "bdist_wheel": plugin_bdist_wheel,
