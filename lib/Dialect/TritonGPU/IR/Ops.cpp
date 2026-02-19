@@ -1013,7 +1013,7 @@ LogicalResult MemDescSubsliceOp::verify() {
 
   // If any block basis is fully broadcasted, multiple CTAs can alias the same
   // output tile region. Subslice on such layouts is unsupported.
-  if (llvm::any_of(ll.getBases()[kBlock]->second, [](ArrayRef<int32_t> basis) {
+  if (llvm::any_of(ll.getBases().at(kBlock), [](ArrayRef<int32_t> basis) {
         return llvm::all_of(basis, [](int32_t b) { return b == 0; });
       })) {
     return emitError("We don't support splitting with broadcasted CTA outputs");
