@@ -970,7 +970,7 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
     Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
-    Optional<TTG_MemDescType>:$barrier
+    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
   );
 
   let assemblyFormat = [{$src `,` $dst (`,` $barrier^)? attr-dict `:` qualified(type(operands))}];
