@@ -24,17 +24,11 @@ public:
 
   std::vector<uint8_t> toMsgPack(size_t phase) const override;
 
-  DataEntry addOp(const std::string &name) override;
-
   DataEntry addOp(size_t phase, size_t contextId,
                   const std::vector<Context> &contexts) override;
 
   void
   addMetrics(size_t scopeId,
-             const std::map<std::string, MetricValueType> &metrics) override;
-
-  void
-  addMetrics(size_t phase, size_t entryId,
              const std::map<std::string, MetricValueType> &metrics) override;
 
 protected:
@@ -48,8 +42,10 @@ private:
   // the background threads concurrently, so methods that access them should be
   // protected by a (shared) mutex.
   class Tree;
-  json buildHatchetJson(TreeData::Tree *tree) const;
-  std::vector<uint8_t> buildHatchetMsgPack(TreeData::Tree *tree) const;
+  json buildHatchetJson(TreeData::Tree *tree,
+                        TreeData::Tree *virtualTree) const;
+  std::vector<uint8_t> buildHatchetMsgPack(TreeData::Tree *tree,
+                                           TreeData::Tree *virtualTree) const;
 
   // Data
   void doDump(std::ostream &os, OutputFormat outputFormat,

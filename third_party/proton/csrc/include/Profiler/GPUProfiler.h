@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <stdexcept>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -70,19 +71,15 @@ public:
     size_t numNodes{1};
 
     struct GraphNodeState {
-      // If the node is launched as a metric kernel, ignore it's timing data.
-      bool isMetricNode{false};
-      bool isMissingName{true};
+      // Per-node launch status bits (missing-name / metric-node).
+      NodeStatus status{};
+
+      // If the node is launched as a metric kernel, ignore its timing data.
+      bool isMetricNode() const { return status.isMetricNode(); }
+      bool isMissingName() const { return status.isMissingName(); }
 
       void setEntry(Data *data, const DataEntry &entry) {
         dataToEntry.insert_or_assign(data, entry);
-      }
-
-      const DataEntry *findEntry(Data *data) const {
-        auto it = dataToEntry.find(data);
-        if (it == dataToEntry.end())
-          return nullptr;
-        return &it->second;
       }
 
       template <typename FnT> void forEachEntry(FnT &&fn) {
@@ -95,7 +92,7 @@ public:
 
     using GraphNodeStateTable = RangeTable<GraphNodeState>;
 
-    // graphNodeId -> (per-Data entry)
+    // graphNodeId -> per-node entries across active data sinks
     GraphNodeStateTable graphNodeIdToState;
   };
 
@@ -148,6 +145,7 @@ protected:
     bool isApiExternOp{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
+    std::deque<size_t> metricKernelNumWordsQueue;
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
@@ -249,9 +247,17 @@ protected:
                  const std::map<std::string, TensorMetric> &tensorMetrics) {
       if (threadState.isStreamCapturing) { // Graph capture mode
         threadState.isMetricKernelLaunching = true;
+        for (const auto &[_, metric] : tensorMetrics) {
+          threadState.metricKernelNumWordsQueue.push_back(
+              /*metric_id=*/1 + metric.size); // metric_id + num_values
+        }
+        for (const auto &[_, metric] : scalarMetrics) {
+          threadState.metricKernelNumWordsQueue.push_back(
+              /*metric_id=*/1 + 1); // scalar metric has 1 value
+        }
         // Launch metric kernels
         profiler.metricBuffer->receive(
-            scalarMetrics, tensorMetrics, profiler.tensorMetricKernel,
+            tensorMetrics, scalarMetrics, profiler.tensorMetricKernel,
             profiler.scalarMetricKernel, profiler.metricKernelStream);
         threadState.isMetricKernelLaunching = false;
       } else { // Eager mode, directly copy
@@ -268,9 +274,10 @@ protected:
           }
         } else {
           // Add metrics to the current op
-          for (auto [data, entry] : dataToEntry) {
-            data->addMetrics(entry.phase, entry.id, scalarMetrics);
-            data->addMetrics(entry.phase, entry.id, tensorMetricsHost);
+          for (const auto &entryIt : dataToEntry) {
+            const auto &entry = entryIt.second;
+            entry.upsertFlexibleMetrics(scalarMetrics);
+            entry.upsertFlexibleMetrics(tensorMetricsHost);
           }
         }
       }

@@ -10,6 +10,22 @@
 namespace mlir {
 namespace OpTrait {
 
+namespace impl {
+LogicalResult verifyEquivalentMemDescType(Type typeA, Type typeB);
+LogicalResult verifyMemDescLayouts(Operation *op);
+} // namespace impl
+
+// Trait applied to all Triton GPU MLIR ops.  Checks that the layouts of
+// MemDescs are valid.
+template <class ConcreteType>
+class VerifyMemDescLayoutsTrait
+    : public TraitBase<ConcreteType, VerifyMemDescLayoutsTrait> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifyMemDescLayouts(op);
+  }
+};
+
 template <typename ConcreteType>
 class MemDescViewTrait
     : public mlir::OpTrait::TraitBase<ConcreteType, MemDescViewTrait> {

@@ -19,7 +19,9 @@ namespace proton {
 
 enum class MetricKind { Flexible, Kernel, PCSampling, Cycle, Count };
 
-using MetricValueType = std::variant<uint64_t, int64_t, double, std::string>;
+using MetricValueType =
+    std::variant<uint64_t, int64_t, double, std::string, std::vector<uint64_t>,
+                 std::vector<int64_t>, std::vector<double>>;
 
 inline const char *getTypeNameForIndex(std::size_t idx) {
   switch (idx) {
@@ -31,23 +33,14 @@ inline const char *getTypeNameForIndex(std::size_t idx) {
     return "double";
   case 3:
     return "std::string";
+  case 4:
+    return "std::vector<uint64_t>";
+  case 5:
+    return "std::vector<int64_t>";
+  case 6:
+    return "std::vector<double>";
   default:
     return "<unknown>";
-  }
-}
-
-inline const size_t getMetricValueSize(size_t index) {
-  switch (index) {
-  case 0:
-    return sizeof(uint64_t);
-  case 1:
-    return sizeof(int64_t);
-  case 2:
-    return sizeof(double);
-  case 3:
-    throw std::runtime_error("[PROTON] MetricValueType string size is unknown");
-  default:
-    throw std::runtime_error("[PROTON] Unknown MetricValueType index");
   }
 }
 
@@ -100,8 +93,28 @@ public:
             if constexpr (std::is_same_v<ValueType, CurrentType>) {
               if (isProperty(valueId)) {
                 currentValue = otherValue;
-              } else {
+              } else if constexpr (std::is_arithmetic_v<CurrentType>) {
                 currentValue += otherValue;
+              } else if constexpr (is_std_vector_v<CurrentType> &&
+                                   std::is_arithmetic_v<
+                                       typename CurrentType::value_type>) {
+                if (currentValue.size() != otherValue.size()) {
+                  throw std::runtime_error(
+                      std::string("[PROTON] Vector metric size mismatch for "
+                                  "valueId ") +
+                      std::to_string(valueId) + " (" + getValueName(valueId) +
+                      "): current=" + std::to_string(currentValue.size()) +
+                      ", new=" + std::to_string(otherValue.size()));
+                }
+                for (size_t i = 0; i < currentValue.size(); ++i) {
+                  currentValue[i] += otherValue[i];
+                }
+              } else {
+                throw std::runtime_error(
+                    std::string("[PROTON] Metric aggregation not supported for "
+                                "valueId ") +
+                    std::to_string(valueId) + " (" + getValueName(valueId) +
+                    "): type=" + getTypeNameForIndex(values[valueId].index()));
               }
             }
           },
@@ -363,10 +376,11 @@ private:
   const static inline std::string name = "CycleMetric";
 };
 
-/// Each TensorMetric represents a scalar metric stored in a device buffer.
+/// Each TensorMetric represents a metric stored in a device buffer.
 struct TensorMetric {
-  uint8_t *ptr{}; // device pointer
-  size_t index{}; // MetricValueType index
+  uint8_t *ptr{};     // device pointer
+  size_t typeIndex{}; // MetricValueType variant index
+  uint64_t size{1};   // number of uint64 words stored at ptr
 };
 
 /// Collect tensor metrics from device to host.
@@ -395,6 +409,7 @@ public:
   struct MetricDescriptor {
     size_t id{};
     size_t typeIndex{};
+    size_t size{};
     std::string name{};
   };
 
@@ -405,8 +420,8 @@ public:
 
   ~MetricBuffer();
 
-  void receive(const std::map<std::string, MetricValueType> &scalarMetrics,
-               const std::map<std::string, TensorMetric> &tensorMetrics,
+  void receive(const std::map<std::string, TensorMetric> &tensorMetrics,
+               const std::map<std::string, MetricValueType> &scalarMetrics,
                void *tensorMetricKernel, void *scalarMetricKernel,
                void *stream);
 
@@ -472,29 +487,43 @@ private:
   void synchronize(DeviceBuffer &buffer);
 
   template <typename MetricT>
-  size_t getMetricIndex(const MetricT &metric) const {
+  size_t getMetricTypeIndex(const MetricT &metric) const {
     using MetricType = std::decay_t<MetricT>;
     if constexpr (std::is_same_v<MetricValueType, MetricType>) {
       return metric.index();
     } else if constexpr (std::is_same_v<TensorMetric, MetricType>) {
-      return metric.index;
+      return metric.typeIndex;
     } else {
       static_assert(always_false<MetricType>::value,
-                    "Unsupported metric type for getMetricIndex");
+                    "Unsupported metric type for getMetricTypeIndex");
+    }
+  }
+
+  template <typename MetricT>
+  size_t getMetricSize(const MetricT &metric) const {
+    using MetricType = std::decay_t<MetricT>;
+    if constexpr (std::is_same_v<MetricValueType, MetricType>) {
+      return 1; // FIXME: We don't queue a scalar metric with vector type yet
+    } else if constexpr (std::is_same_v<TensorMetric, MetricType>) {
+      return metric.size;
+    } else {
+      static_assert(always_false<MetricType>::value,
+                    "Unsupported metric type for getMetricSize");
     }
   }
 
   template <typename MetricsT>
   void queueMetrics(const MetricsT &metrics, void *kernel, void *stream) {
     for (const auto &[name, metric] : metrics) {
-      size_t index = getMetricIndex(metric);
-      auto descriptor = getOrCreateMetricDescriptor(name, index);
+      size_t typeIndex = getMetricTypeIndex(metric);
+      size_t size = getMetricSize(metric);
+      auto descriptor = getOrCreateMetricDescriptor(name, typeIndex, size);
       queue(descriptor.id, metric, kernel, stream);
     }
   }
 
   MetricDescriptor getOrCreateMetricDescriptor(const std::string &name,
-                                               size_t typeIndex);
+                                               size_t typeIndex, size_t size);
 
 protected:
   static std::atomic<size_t> metricId;

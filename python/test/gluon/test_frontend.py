@@ -447,10 +447,6 @@ class Pair:
     first: tl.tensor
     second: tl.tensor
 
-    def __init__(self, first, second):
-        self.first = first
-        self.second = second
-
 
 @gluon.jit
 def anchor(x):
@@ -2447,8 +2443,8 @@ def buffer_load_store_kernel(x, y):
     layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 64], warps_per_cta=[4, 1],
                                                 order=[1, 0])
 
-    offsets = ttgl.arange(0, 64 * 64).reshape(64, 64)
-    offsets = ttgl.convert_layout(offsets, layout=layout)
+    auto_layout_offsets = ttgl.arange(0, 64 * 64).reshape(64, 64)
+    offsets = ttgl.convert_layout(auto_layout_offsets, layout=layout)
     mask = ttgl.full((64, 64), 1, tl.int1, layout=layout)
     other = ttgl.full((64, 64), 1.0, tl.float32, layout=layout)
     a = ttgl.amd.cdna3.buffer_load(ptr=x, offsets=offsets, mask=mask, other=other, cache='.ca')
@@ -2456,6 +2452,12 @@ def buffer_load_store_kernel(x, y):
 
     a = ttgl.amd.cdna4.buffer_load(ptr=x, offsets=offsets, mask=mask, other=other, cache='.ca')
     ttgl.amd.cdna4.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.cs')
+
+    # Test auto layout support
+    auto_layout_mask = ttgl.full((64, 64), 1, tl.int1)
+    auto_layout_other = ttgl.full((64, 64), 1.0, tl.float32)
+    a = ttgl.amd.cdna4.buffer_load(ptr=x, offsets=offsets, mask=auto_layout_mask, other=auto_layout_other)
+    ttgl.amd.cdna4.buffer_store(stored_value=a, ptr=y, offsets=auto_layout_offsets, mask=auto_layout_mask)
 
 
 def test_buffer_load_store():
@@ -2479,6 +2481,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     amdg.buffer_store %3, %arg1[%2], %cst cacheModifier = cs : tensor<64x64xf32, #blocked>
     %4 = amdg.buffer_load %arg0[%2], %cst, %cst_1 cacheModifier = ca : tensor<64x64xf32, #blocked>
     amdg.buffer_store %4, %arg1[%2], %cst cacheModifier = cs : tensor<64x64xf32, #blocked>
+    %true_2 = arith.constant true
+    %cst_3 = arith.constant dense<true> : tensor<64x64xi1, #gluon.auto_encoding>
+    %cst_4 = arith.constant 1.000000e+00 : f32
+    %cst_5 = arith.constant dense<1.000000e+00> : tensor<64x64xf32, #gluon.auto_encoding>
+    %5 = gluon.set_auto_layout %cst_3 : tensor<64x64xi1, #gluon.auto_encoding> -> tensor<64x64xi1, #blocked>
+    %6 = gluon.set_auto_layout %cst_5 : tensor<64x64xf32, #gluon.auto_encoding> -> tensor<64x64xf32, #blocked>
+    %7 = amdg.buffer_load %arg0[%2], %5, %6 : tensor<64x64xf32, #blocked>
+    %8 = gluon.set_auto_layout %1 : tensor<64x64xi32, #gluon.auto_encoding> -> tensor<64x64xi32, #blocked>
+    %9 = gluon.set_auto_layout %cst_3 : tensor<64x64xi1, #gluon.auto_encoding> -> tensor<64x64xi1, #blocked>
+    amdg.buffer_store %7, %arg1[%8], %9 : tensor<64x64xf32, #blocked>
     tt.return
   }
 }
@@ -2901,6 +2913,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     %cst_4 = arith.constant dense<1> : tensor<16x4xi8, #linear>
     %cst_5 = arith.constant 0.000000e+00 : f32
     %0 = tt.dot_scaled %cst scale %cst_3, %cst_0 scale %cst_4, %cst_2 lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> * tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> -> tensor<16x16xf32, #mma1>
+    tt.return
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
+def test_amd_wmma_scale_layout_for_multicta(target):
+
+    @gluon.jit
+    def kernel():
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(
+            operand_index=0,  #
+            parent=ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
+                                          instr_shape=[16, 16, 64], cga_layout=[[0, 0], [1, 0]]),  #
+            k_width=16)
+        a_scale_layout: ttgl.constexpr = ttgl.amd.gfx1250.get_wmma_scale_layout(a_layout, [64, 4])
+        ttgl.full([64, 4], 0x02, ttgl.uint8, a_scale_layout)
+
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(
+            operand_index=1,  #
+            parent=ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
+                                          instr_shape=[16, 16, 64], cga_layout=[[1, 0], [0, 0]]),  #
+            k_width=16,
+        )
+        b_scale_layout: ttgl.constexpr = ttgl.amd.gfx1250.get_wmma_scale_layout(b_layout, [64, 4])
+        ttgl.full([64, 4], 0x01, ttgl.uint8, b_scale_layout)
+
+    module = run_parser(kernel, *make_args(num_warps=4, num_ctas=4), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[0, 0], [16, 0]], block = [[0, 0], [32, 0]]}>
+#linear1 = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[16, 0], [0, 0]], block = [[32, 0], [0, 0]]}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %c2_i8 = arith.constant 2 : i8
+    %cst = arith.constant dense<2> : tensor<64x4xi8, #linear>
+    %c1_i8 = arith.constant 1 : i8
+    %cst_0 = arith.constant dense<1> : tensor<64x4xi8, #linear1>
     tt.return
   }
 }

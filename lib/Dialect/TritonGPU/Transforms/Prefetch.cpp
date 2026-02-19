@@ -69,8 +69,6 @@ class Prefetcher {
   /// operand => defining
   DenseMap<Value, Value> operand2headPrefetch;
 
-  LogicalResult isForOpOperand(Value v);
-
   Value generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                          Attribute dotEncoding, OpBuilder &builder,
                          std::optional<int64_t> offsetK = std::nullopt,

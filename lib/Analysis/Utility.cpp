@@ -4,6 +4,8 @@
 
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
@@ -22,33 +24,6 @@ namespace mlir {
 
 using namespace triton;
 using namespace triton::gpu;
-
-SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
-  auto order = toLinearEncoding(srcTy).getOrder();
-  auto it = std::find(order.begin(), order.end(), axis);
-  // delete the axis from order
-  order.erase(it);
-  // insert axis at the beginning of order
-  order.insert(order.begin(), axis);
-  return order;
-}
-
-// Thread offset is the thread index offset of two adjacent threads on the
-// reduction axis within the warp.
-unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
-  auto *ctx = srcEncoding.getContext();
-  auto linearLayout = toLinearLayout(srcTy);
-  auto kLane = mlir::StringAttr::get(ctx, "lane");
-  const auto &bases = linearLayout.getBases();
-  const auto &lanes = bases.find(kLane)->second;
-  auto offset = 1;
-  for (const auto &lane : lanes) {
-    if (lane[axis] != 0)
-      break;
-    offset *= 2;
-  }
-  return offset;
-}
 
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
@@ -103,33 +78,6 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
   return getThreadsPerWarp(srcEncoding, srcShape)[axis];
 }
 
-bool ReduceOpHelper::isWarpSynchronous() {
-  return getWarpsPerCTA(srcEncoding, srcShape)[axis] == 1;
-}
-
-SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
-  SmallVector<unsigned> smemShape;
-  // This case doesn't need inter-warp communication
-  if (isWarpSynchronous())
-    return {0, 0};
-
-  smemShape = convertType<unsigned>(srcShape);
-  smemShape[axis] = getInterWarpSizeWithUniqueData();
-
-  return smemShape;
-}
-
-unsigned ReduceOpHelper::getScratchSizeInBytes() {
-  auto smemShape = getScratchRepShape();
-  auto elems = product<unsigned>(smemShape);
-
-  unsigned bytesPerElem = 0;
-  for (const auto &ty : srcElementTypes) {
-    bytesPerElem += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
-  }
-  return bytesPerElem * elems;
-}
-
 bool ReduceOpHelper::isReduceWithinCTA() {
   // TODO: Support reduce across CTAS
   // Layout optimization passes such as PlanCTAPass and
@@ -155,6 +103,327 @@ bool ReduceOpHelper::isAssociative() {
     return WalkResult::advance();
   });
   return !hasNoAssociativeOp;
+}
+
+unsigned ReduceOpHelper::getScratchSizeInBytes() {
+  auto kLane = StringAttr::get(op.getContext(), "lane");
+
+  auto isReduced = [axis = axis](const LinearLayout &layout) {
+    return layout.getOutDimSizes().begin()[axis] == 1;
+  };
+  auto regLl = reducedRegLaneLayout(srcTy, axis);
+
+  // All the inputs have the same layout so, since we order them from largest
+  // bitsize to smallest, and the first one is aligned, by induction, they are
+  // all aligned, so we don't need to align the byte numbers returned here.
+  unsigned bytesRegToTmp = 0;
+  while (!isReduced(regLl)) {
+    auto tmpLl = getInterLayout(regLl, axis);
+    // We take the maximum of the elements and multiply by the total bitwidth.
+    // We do this as otherwise it's quite tricky to find the correct
+    // BaseOffsets in the lowering.
+    int bytes = 0;
+    for (auto inputTy : op.getInputTypes()) {
+      auto nelem =
+          getNumScratchElemsSwizzledCvt(regLl, tmpLl, getBitwidth(inputTy));
+      bytes += nelem * (getBitwidth(inputTy) / 8);
+    }
+    bytesRegToTmp = std::max<unsigned>(bytesRegToTmp, bytes);
+    regLl = zeroBasesAlongDimAndReorder(tmpLl, axis, kLane);
+  }
+  return bytesRegToTmp;
+}
+
+ReduceOpHelper::InThreadVectorizeOpKind
+ReduceOpHelper::getInThreadVectorizeOpKind(unsigned axisPack,
+                                           bool supportBitwidth16Elementwise,
+                                           bool supportBitwidth32Elementwise) {
+  Operation *reduceOperation = op.getOperation();
+  if (axisPack < 4 || reduceOperation->getNumOperands() != 1 ||
+      reduceOperation->getNumResults() != 1)
+    return InThreadVectorizeOpKind::None;
+
+  assert(reduceOperation->getNumRegions() == 1 &&
+         "expected a single combine region");
+  Region &combineRegion = reduceOperation->getRegion(0);
+  Block &block = combineRegion.front();
+  if (block.getOperations().size() != 2)
+    return InThreadVectorizeOpKind::None;
+  Operation &combiner = block.front();
+
+  Type elemTy = srcElementTypes.front();
+  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+  if (bitwidth == 16 && !supportBitwidth16Elementwise)
+    return InThreadVectorizeOpKind::None;
+  if (bitwidth == 32 && !supportBitwidth32Elementwise)
+    return InThreadVectorizeOpKind::None;
+
+  bool is16Bit = bitwidth == 16;
+  bool isF32 = elemTy.isF32();
+  if (!is16Bit && !isF32)
+    return InThreadVectorizeOpKind::None;
+
+  if (isa<arith::AddFOp>(combiner)) {
+    return (is16Bit || isF32) ? InThreadVectorizeOpKind::AddF
+                              : InThreadVectorizeOpKind::None;
+  }
+  if (isa<arith::MulFOp>(combiner)) {
+    return (is16Bit || isF32) ? InThreadVectorizeOpKind::MulF
+                              : InThreadVectorizeOpKind::None;
+  }
+  if (isa<arith::MinNumFOp>(combiner)) {
+    return is16Bit ? InThreadVectorizeOpKind::MinNumF
+                   : InThreadVectorizeOpKind::None;
+  }
+  if (isa<arith::MaxNumFOp>(combiner)) {
+    return is16Bit ? InThreadVectorizeOpKind::MaxNumF
+                   : InThreadVectorizeOpKind::None;
+  }
+  if (isa<arith::MinimumFOp>(combiner)) {
+    return is16Bit ? InThreadVectorizeOpKind::MinimumF
+                   : InThreadVectorizeOpKind::None;
+  }
+  if (isa<arith::MaximumFOp>(combiner)) {
+    return is16Bit ? InThreadVectorizeOpKind::MaximumF
+                   : InThreadVectorizeOpKind::None;
+  }
+
+  if (!elemTy.isInteger(16))
+    return InThreadVectorizeOpKind::None;
+
+  if (isa<arith::AddIOp>(combiner)) {
+    return InThreadVectorizeOpKind::AddI;
+  }
+  if (isa<arith::MulIOp>(combiner)) {
+    return InThreadVectorizeOpKind::MulI;
+  }
+  if (isa<arith::MinSIOp>(combiner)) {
+    return InThreadVectorizeOpKind::MinSI;
+  }
+  if (isa<arith::MaxSIOp>(combiner)) {
+    return InThreadVectorizeOpKind::MaxSI;
+  }
+  if (isa<arith::MinUIOp>(combiner)) {
+    return InThreadVectorizeOpKind::MinUI;
+  }
+  if (isa<arith::MaxUIOp>(combiner)) {
+    return InThreadVectorizeOpKind::MaxUI;
+  }
+
+  return InThreadVectorizeOpKind::None;
+}
+
+Value ReduceOpHelper::createInThreadVectorizedCombineOp(
+    OpBuilder &builder, Location loc, InThreadVectorizeOpKind kind, Value lhs,
+    Value rhs) {
+  auto vecTy = lhs.getType();
+  Value result;
+  switch (kind) {
+  case InThreadVectorizeOpKind::AddF:
+    result = LLVM::FAddOp::create(builder, loc, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MulF:
+    result = LLVM::FMulOp::create(builder, loc, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MinNumF:
+    result = LLVM::MinNumOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MaxNumF:
+    result = LLVM::MaxNumOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MinimumF:
+    result = LLVM::MinimumOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MaximumF:
+    result = LLVM::MaximumOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::AddI:
+    result = LLVM::AddOp::create(builder, loc, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MulI:
+    result = LLVM::MulOp::create(builder, loc, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MinSI:
+    result = LLVM::SMinOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MaxSI:
+    result = LLVM::SMaxOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MinUI:
+    result = LLVM::UMinOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::MaxUI:
+    result = LLVM::UMaxOp::create(builder, loc, vecTy, lhs, rhs);
+    break;
+  case InThreadVectorizeOpKind::None:
+  default:
+    llvm::report_fatal_error("Unsupported in-thread vectorize op kind");
+  }
+  return result;
+}
+
+ColumnAction ReduceOpHelper::moveAxisBasesToFront(const LinearLayout &layout,
+                                                  int axis, bool isVectorized) {
+  auto *ctx = layout.getOutDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  const auto &bases = layout.getBases().lookup(kReg);
+  if (bases.empty())
+    return ColumnAction::identity(kReg, bases.size());
+
+  // We keep the first basis where it is if it's vectorized to pack it without
+  // PRMT/MOV, and then we move the rest of the bases that don't move the axis
+  // to the front after it
+  SmallVector<size_t> perm;
+  if (isVectorized)
+    perm.push_back(0);
+  SmallVector<size_t> back;
+  for (size_t i = isVectorized ? 1 : 0; i < bases.size(); ++i) {
+    if (bases[i][axis] != 0)
+      perm.push_back(i);
+    else
+      back.push_back(i);
+  }
+  perm.append(back.begin(), back.end());
+  return ColumnAction(perm, kReg, bases.size());
+}
+
+LinearLayout
+ReduceOpHelper::zeroBasesAlongDimAndReorder(const LinearLayout &layout,
+                                            unsigned axis, StringAttr dim) {
+  // Zeros out the basis along the specified axis in the given hardware
+  // dimension, and reindexes the remaining bases along axis so that each
+  // element is in linearly increasing order from the hardware's perspective.
+  // Note that for this reordering we need the operator to be commutative, but
+  // it's the only way to have a performant lowering.
+  LinearLayout::BasesT newBases;
+  for (auto [inDim, bases] : layout.getBases()) {
+    std::vector<std::vector<int32_t>> newInBases = bases;
+    if (inDim == dim) {
+      for (auto &basis : newInBases)
+        basis[axis] = 0;
+    }
+    newBases[inDim] = std::move(newInBases);
+  }
+
+  int32_t nextAxisBase = 1;
+  for (auto &[inDim, inDimBases] : newBases) {
+    for (auto &basis : inDimBases) {
+      if (basis[axis] == 0)
+        continue;
+      basis[axis] = nextAxisBase;
+      nextAxisBase *= 2;
+    }
+  }
+
+  return LinearLayout(std::move(newBases), to_vector(layout.getOutDimNames()));
+}
+
+LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
+                                            unsigned axis) {
+  auto *ctx = layout.getOutDimNames().begin()->getContext();
+  auto kLane = mlir::StringAttr::get(ctx, "lane");
+  auto kWarp = mlir::StringAttr::get(ctx, "warp");
+  auto kBlock = mlir::StringAttr::get(ctx, "block");
+  auto bases = layout.getBases();
+  auto &laneBases = bases[kLane];
+  auto &warpBases = bases[kWarp];
+  auto &blockBases = bases[kBlock];
+
+  auto collectAxisBases = [&](ArrayRef<std::vector<int32_t>> bases) {
+    SmallVector<unsigned> out;
+    for (unsigned i = 0; i < bases.size(); ++i) {
+      if (bases[i][axis] != 0)
+        out.push_back(i);
+    }
+    return out;
+  };
+
+  SmallVector<unsigned> warpAxisBases = collectAxisBases(warpBases);
+  SmallVector<unsigned> blockAxisBases = collectAxisBases(blockBases);
+
+  SmallVector<unsigned> zeroLaneBases;
+  for (unsigned i = 0; i < laneBases.size(); ++i) {
+    if (llvm::all_of(laneBases[i], [](int32_t v) { return v == 0; }))
+      zeroLaneBases.push_back(i);
+  }
+
+  auto axisSize = to_vector(layout.getOutDimSizes())[axis];
+  auto totalAxisBases = warpAxisBases.size() + blockAxisBases.size();
+
+  // First try to place all warp/block axis bases into lane bases that are
+  // currently zero. If we can do this we will be able to perform the full
+  // reduction with just one convert_layout
+  if (zeroLaneBases.size() >= totalAxisBases) {
+    unsigned laneIdx = 0;
+    for (unsigned idx : warpAxisBases) {
+      std::swap(laneBases[zeroLaneBases[laneIdx]], warpBases[idx]);
+      ++laneIdx;
+    }
+    for (unsigned idx : blockAxisBases) {
+      std::swap(laneBases[zeroLaneBases[laneIdx]], blockBases[idx]);
+      ++laneIdx;
+    }
+    return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
+  }
+
+  // If we can fit all the bases inside the lane dimension, we can perform the
+  // reduction with two convert_layouts
+  // The first cvt to move the relevant bases to the lane dimension
+  // The second to move all the bases we moved out of the lane dimension back to
+  // their original positions
+  if (warpAxisBases.size() + blockAxisBases.size() <= laneBases.size()) {
+    assert(totalAxisBases <= laneBases.size() &&
+           "unexpected lane base count for axis layout");
+    unsigned laneIdx = 0;
+    for (unsigned idx : warpAxisBases) {
+      std::swap(laneBases[laneIdx], warpBases[idx]);
+      ++laneIdx;
+    }
+    for (unsigned idx : blockAxisBases) {
+      std::swap(laneBases[laneIdx], blockBases[idx]);
+      ++laneIdx;
+    }
+    return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
+  }
+
+  // Assumptions (easily relaxed if AMD needs it)
+  // We assume that
+  // max number of warps * max number of blocks <= (max number of lanes)^2
+  // We check this in logarithmic space (number of bases)
+  // This is true in nvidia as the max numbers are warps=64 ctas=16 so that
+  // 64 * 16 = 1024 = 32 * 32 = laneBases.size() * laneBases.size()
+  // This implies that, even if we have to perform 3 cvt_layouts, we can perform
+  // first one that does not cross CTAs, and then two that may cross CTAs
+  assert(blockBases.size() <= laneBases.size());
+  assert(warpBases.size() + blockBases.size() <= 2 * laneBases.size());
+
+  // Otherwise, fit as many warp bases as possible into the lane dimension
+  unsigned laneIdx = 0;
+  for (unsigned idx : warpAxisBases) {
+    std::swap(laneBases[laneIdx], warpBases[idx]);
+    ++laneIdx;
+    if (laneIdx >= laneBases.size())
+      break;
+  }
+
+  return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
+}
+
+LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
+                                                  unsigned axis) {
+  auto *ctx = srcTy.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
+
+  auto reduced = toLinearLayout(srcTy);
+  reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);
+
+  reduced = moveAxisBasesToFront(reduced, axis).apply(reduced);
+  reduced = zeroBasesAlongDimAndReorder(reduced, axis, kReg);
+  reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);
+  reduced = zeroBasesAlongDimAndReorder(reduced, axis, kLane);
+  return reduced;
 }
 
 ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {
@@ -1036,115 +1305,6 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
          !cvtNeedsWarpShuffle(srcTy, dstTy);
 }
 
-namespace {
-
-/// A data structure similar to SetVector but maintains
-/// a deque instead of a vector to allow for efficient
-/// push_back and pop_front operations.
-/// Using SetVector doesn't suffice our needs because
-/// it only pushes and pops from the back.
-/// For example, if we have a queue like this:
-/// 0->4 1->2->3
-///    ^--------
-/// where 3 depends on 4, once we pop 3, we found
-/// 4 is not ready, so we check 2 and push 3 back
-/// to the queue.
-struct DFSSubgraphState {
-  DFSSubgraphState() : set(), deque() {}
-  DenseSet<Operation *> set;
-  std::deque<Operation *> deque;
-
-  bool push_back(Operation *op) {
-    if (set.insert(op).second) {
-      deque.push_back(op);
-      return true;
-    }
-    return false;
-  }
-
-  Operation *pop_front() {
-    Operation *op = deque.front();
-    deque.pop_front();
-    set.erase(op);
-    return op;
-  }
-
-  bool empty() { return deque.empty(); }
-};
-
-/// DFS post-order implementation that maintains a global count to work across
-/// multiple invocations, to help implement topological sort on multi-root DAGs.
-/// We traverse all operations but only record the ones that appear in
-/// `toSort` for the final result.
-struct DFSState {
-  DFSState(const SetVector<Operation *> &set) : toSort(set), seen() {}
-  const SetVector<Operation *> &toSort;
-  SmallVector<Operation *, 16> topologicalCounts;
-  DenseSet<Operation *> seen;
-
-  /// We mark each op as ready if all its operands and parents ops are seen. If
-  /// an op is ready, we add it to the queue. Otherwise, we keep adding its
-  /// operands to the ancestors set.
-  /// We always want an op to be scheduled after all its parents to handle
-  /// correctly cases with scf operations.
-  void addToReadyQueue(Operation *op, DFSSubgraphState &subGraph,
-                       SmallVector<Operation *, 4> &readyQueue) {
-    bool ready = true;
-    for (Value operand : op->getOperands()) {
-      auto def = operand.getDefiningOp();
-      if (def && !seen.count(def)) {
-        subGraph.push_back(def);
-        ready = false;
-      }
-    }
-    Operation *parent = op->getParentOp();
-    while (parent) {
-      if (!seen.count(parent)) {
-        subGraph.push_back(parent);
-        ready = false;
-      }
-      parent = parent->getParentOp();
-    }
-    if (ready)
-      readyQueue.push_back(op);
-  }
-};
-
-void dfsPostorder(Operation *root, DFSState *state) {
-  DFSSubgraphState subGraph;
-  subGraph.push_back(root);
-  SmallVector<Operation *> ops;
-  while (!subGraph.empty()) {
-    // Nodes in the ready queue are ready to be processed.
-    // Meaning that either their operands are all seen or they have null
-    // operands.
-    SmallVector<Operation *, 4> readyQueue;
-    auto *current = subGraph.pop_front();
-    state->addToReadyQueue(current, subGraph, readyQueue);
-    while (!readyQueue.empty()) {
-      Operation *current = readyQueue.pop_back_val();
-      if (!state->seen.insert(current).second)
-        continue;
-      ops.push_back(current);
-      for (Value result : current->getResults()) {
-        for (Operation *op : result.getUsers())
-          state->addToReadyQueue(op, subGraph, readyQueue);
-      }
-      for (Region &region : current->getRegions()) {
-        for (Operation &op : region.getOps())
-          state->addToReadyQueue(&op, subGraph, readyQueue);
-      }
-    }
-  }
-
-  for (Operation *op : llvm::reverse(ops)) {
-    if (state->toSort.count(op) > 0)
-      state->topologicalCounts.push_back(op);
-  }
-}
-
-} // namespace
-
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
   auto solver = std::make_unique<DataFlowSolver>();
   solver->load<dataflow::DeadCodeAnalysis>();
@@ -1152,17 +1312,23 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
   return solver;
 }
 
-bool isCvtWarpSync(const triton::LinearLayout &srcLayout,
-                   const triton::LinearLayout &dstLayout) {
-  // We can use warp.sync when the warp dimension in the convert is trival
-  // and there is no broadcasting at a warp level (otherwise reads may be
-  // wrong)
+bool isCvtDimSync(const triton::LinearLayout &srcLayout,
+                  const triton::LinearLayout &dstLayout, StringAttr dim) {
+  // We can use a dimension-level sync when the conversion is trivial over that
+  // dimension and there is no broadcasting over it.
   auto *ctx = srcLayout.getInDimNames().begin()->getContext();
-  auto comp = dstLayout.invertAndCompose(srcLayout);
   auto kWarp = StringAttr::get(ctx, "warp");
-  return comp.isTrivialOver(kWarp) &&
-         srcLayout.getFreeVariableMasks()[kWarp] == 0 &&
-         dstLayout.getFreeVariableMasks()[kWarp] == 0;
+  auto kBlock = StringAttr::get(ctx, "block");
+  assert((dim == kWarp || dim == kBlock) && "expected dim to be warp or block");
+  assert(srcLayout.hasInDim(dim) && dstLayout.hasInDim(dim) &&
+         "expected dim to be present in both layouts");
+  auto parentTrivial = true;
+  if (dim == kWarp) {
+    parentTrivial = isCvtDimSync(srcLayout, dstLayout, kBlock);
+  }
+  auto comp = dstLayout.invertAndCompose(srcLayout);
+  return parentTrivial && comp.isTrivialOver(dim) &&
+         srcLayout.getFreeVariableMasks()[dim] == 0 &&
+         dstLayout.getFreeVariableMasks()[dim] == 0;
 }
-
 } // namespace mlir

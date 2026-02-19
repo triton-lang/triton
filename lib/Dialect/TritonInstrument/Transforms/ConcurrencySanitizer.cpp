@@ -158,18 +158,19 @@ public:
   void runOnOperation() override {
     module = getOperation();
 
-    auxData.populateAndPassToWarpSpecialize(module);
+    tti::FunctionBuilder funcBuilder(module, auxData);
+    auxData.populateAndPassToWarpSpecialize(module, funcBuilder);
 
     tt::FuncOp entryPoint = tti::getEntryPoint(module);
 
     ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
     b.setInsertionPointToStart(&entryPoint.getBody().front());
-    instrumentMemoryOperations(b);
+    instrumentMemoryOperations(b, funcBuilder);
   }
 
 private:
-  void instrumentMemoryOperations(ImplicitLocOpBuilder &b) {
-    tti::FunctionBuilder funcBuilder(module, auxData);
+  void instrumentMemoryOperations(ImplicitLocOpBuilder &b,
+                                  tti::FunctionBuilder &funcBuilder) {
     module.walk([&](Operation *op) {
       CriticalSectionListener listener;
       b.setListener(&listener);

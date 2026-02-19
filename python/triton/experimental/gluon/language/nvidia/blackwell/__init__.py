@@ -8,6 +8,7 @@ from triton.experimental.gluon.language._core import builtin, base_type, base_va
 from triton.experimental.gluon.language._semantic import _check, _compute_tmem_reg_layout
 
 from . import tma
+from . import clc
 from ..hopper import fence_async_shared, mbarrier
 from ..ampere import async_copy, mma_v2
 
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 __all__ = [
     "allocate_tensor_memory",
     "async_copy",
+    "clc",
     "fence_async_shared",
     "get_tmem_reg_layout",
     "mbarrier",
@@ -212,6 +214,9 @@ class tensor_memory_descriptor(base_value):
     def __init__(self, handle, element_ty, shape, layout, alloc_shape):
         self.handle = handle
         self.type = tensor_memory_descriptor_type(element_ty, shape, layout, alloc_shape)
+
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)

@@ -125,7 +125,10 @@ class PrecisionConfig:
 # TODO: merge in opt_flags
 def get_swap_xw(precision_config, opt_flags):
     if target_info.cuda_capability_geq(10, 0):
-        return precision_config.b_mx_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
+        if precision_config.b_mx_scale is not None:
+            return opt_flags.block_m <= 64 and opt_flags.is_persistent
+        else:
+            return opt_flags.block_m < 64 and opt_flags.is_persistent
     elif target_info.cuda_capability_geq(9, 0):
         b_scale_layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
         return isinstance(b_scale_layout, HopperMXScaleLayout)

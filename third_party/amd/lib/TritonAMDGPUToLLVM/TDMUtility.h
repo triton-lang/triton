@@ -44,7 +44,8 @@ void fillTDMDescriptor(
     std::optional<std::reference_wrapper<SmallVector<Value>>> group2,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group3,
     SmallVector<Value> offset, Value dstPtr, Value pred, Value multicastMask,
-    Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId);
+    Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId,
+    bool isStore);
 
 // Fill TDM descriptor for gather/scatter operations (2D only).
 // Gather reads from non-contiguous rows in global memory to LDS.
@@ -57,10 +58,10 @@ void fillTDMDescriptor(
 void fillTDMDescriptorForGatherScatter(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> blockShape, SmallVector<Value> &group0,
-    SmallVector<Value> &group1, SmallVector<Value> &group2,
-    SmallVector<Value> &group3, Value ldsRowOffset, Value globalColOffset,
-    Value ldsPtr, Value pred, Value barrierPtr,
+    SmallVector<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
+    SmallVector<Value> &group0, SmallVector<Value> &group1,
+    SmallVector<Value> &group2, SmallVector<Value> &group3, Value ldsRowOffset,
+    Value globalColOffset, Value ldsPtr, Value pred, Value barrierPtr,
     const triton::LinearLayout &cgaLayout, Value ctaId,
     ArrayRef<Value> rowIndices, bool use32BitIndices);
 
@@ -78,6 +79,14 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       bool isLoad, const triton::LinearLayout &cgaLayout,
                       Value ctaId);
 
+// Calculate the number of TDM gather/scatter instructions needed.
+// - numIndices: number of row indices
+// - use32BitIndices: true for 32-bit indices (max 8 rows/instr), false for
+//   16-bit (max 16 rows/instr)
+// Returns: the number of TDM instructions that will be emitted
+size_t getTDMGatherScatterInstrinsicCount(size_t numIndices,
+                                          bool use32BitIndices);
+
 // Emit a TDM gather or scatter operation for non-contiguous row access.
 // Gather: reads from non-contiguous global rows into LDS
 // Scatter: writes from LDS to non-contiguous global rows
@@ -92,6 +101,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                           const LLVMTypeConverter *typeConverter,
                           ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
+                          unsigned padInterval, unsigned padAmount,
                           Value ldsPtr, Value pred, Type elementType,
                           Value barrierPtr,
                           const triton::LinearLayout &cgaLayout, Value ctaId,

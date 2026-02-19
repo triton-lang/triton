@@ -34,6 +34,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -515,6 +516,11 @@ LogicalResult TCGen5MMAOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
+  for (auto barrier : getBarriers()) {
+    auto barrierTy = cast<MemDescType>(barrier.getType());
+    if (failed(verifyBarrierType(*this, barrierTy)))
+      return failure();
+  }
   Type atype = getA().getType().getElementType();
   Type btype = getB().getType().getElementType();
   Type dtype = getD().getType().getElementType();
@@ -704,6 +710,9 @@ LogicalResult TCGen5CommitOp::verify() {
   auto numDescs = getDescs().size();
   if (numDescs > 2)
     return emitOpError("expected 0, 1, or 2 descriptors, got ") << numDescs;
+  auto barrierTy = getBarrier().getType();
+  if (failed(verifyBarrierType(*this, barrierTy)))
+    return failure();
   return success();
 }
 
@@ -1150,6 +1159,30 @@ LogicalResult TensormapCreateOp::verify() {
            << getElementStride().size() << " but expected " << rank;
   }
   return success();
+}
+
+// -- CLCTryCancelOp --
+static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
+  auto int_ty = dyn_cast<IntegerType>(desc.getElementType());
+  if (!int_ty || int_ty.getWidth() != 64) {
+    return emitError(loc)
+           << "Expected CLC result buffer to have type int64, but got"
+           << desc.getElementType();
+  }
+  if (desc.getShape().size() != 1 || desc.getShape()[0] != 2) {
+    return emitError(loc)
+           << "Expected CLC result buffer to have shape [2], but got ["
+           << triton::join(desc.getShape(), ", ") << "]";
+  }
+  return success();
+}
+
+LogicalResult CLCTryCancelOp::verify() {
+  return verifyCLCResultMemdesc(getLoc(), getResult().getType());
+}
+
+LogicalResult CLCLoadResultOp::verify() {
+  return verifyCLCResultMemdesc(getLoc(), getSrc().getType());
 }
 
 } // namespace nvidia_gpu

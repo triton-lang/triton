@@ -235,9 +235,9 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
               auto normalizedDuration = static_cast<double>(duration) /
                                         (circularLayoutConfig->totalUnits *
                                          circularLayoutConfig->numBlocks);
-              for (auto [data, entry] : dataToEntryMap) {
-                auto kernelId = entry.id;
-                entry = data->addOp(entry.phase, kernelId, contexts);
+              for (const auto &[data, baseEntry] : dataToEntryMap) {
+                auto kernelId = baseEntry.id;
+                auto entry = data->addOp(baseEntry.phase, kernelId, contexts);
                 entry.upsertMetric(std::make_unique<CycleMetric>(
                     event.first->cycle, event.second->cycle, duration,
                     normalizedDuration, kernelId, functionName,
@@ -263,8 +263,9 @@ void InstrumentationProfiler::doAddMetrics(
       data->addMetrics(scopeId, scalarMetrics);
     }
   } else {
-    for (auto [data, entry] : dataToEntryMap) {
-      data->addMetrics(entry.phase, entry.id, scalarMetrics);
+    for (const auto &entryIt : dataToEntryMap) {
+      const auto &entry = entryIt.second;
+      entry.upsertFlexibleMetrics(scalarMetrics);
     }
   }
   // TODO(Keren): handle tensor metrics by making metricBuffer a member of the
