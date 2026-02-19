@@ -19,19 +19,10 @@ void populateClusterOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit);
 
-void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                           const TargetInfo &targetInfo,
-                                           RewritePatternSet &patterns,
-                                           PatternBenefit benefit);
-
 void populateMemoryOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     const TargetInfo &targetInfo,
                                     RewritePatternSet &patterns,
                                     PatternBenefit benefit);
-
-void populateConvertLayoutOpToLLVMOptimizedPatterns(
-    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,

@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+#include <algorithm>
 #include <optional>
 
 #include "triton/Analysis/Allocation.h"
@@ -106,10 +107,34 @@ struct ConvertLayoutOpConversion
     return success();
   }
 
+  void emitLocalStore(Location loc, ConversionPatternRewriter &rewriter,
+                      ArrayRef<Value> tileInVals, RankedTensorType storeRegTy,
+                      Value localAlloc) const {
+    Value packedStore = packLLElements(loc, getTypeConverter(), tileInVals,
+                                       rewriter, storeRegTy);
+    Value storeTensor = UnrealizedConversionCastOp::create(
+                            rewriter, loc, storeRegTy, packedStore)
+                            .getResult(0);
+    LocalStoreOp::create(rewriter, loc, storeTensor, localAlloc);
+  }
+
+  SmallVector<Value> emitLocalLoad(Location loc,
+                                   ConversionPatternRewriter &rewriter,
+                                   RankedTensorType loadRegTy,
+                                   Value localAlloc) const {
+    auto localLoad = LocalLoadOp::create(rewriter, loc, loadRegTy, localAlloc);
+    Type packedLoadTy = getTypeConverter()->convertType(loadRegTy);
+    Value packedLoad = UnrealizedConversionCastOp::create(
+                           rewriter, loc, packedLoadTy, localLoad.getResult())
+                           .getResult(0);
+    return unpackLLElements(loc, packedLoad, rewriter);
+  }
+
   SmallVector<Value> transferSwizzlingLocalMemImpl(
       Location loc, ConversionPatternRewriter &rewriter,
       const LinearLayout &srcLayout, const LinearLayout &dstLayout,
-      ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase) const {
+      ArrayRef<Value> inVals, Type llvmElemTy,
+      Attribute allocationOffsetAttr) const {
     auto *ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     // We handle transformations recursively as they all need a preprocessing
@@ -121,9 +146,9 @@ struct ConvertLayoutOpConversion
       auto newInVals = llvm::to_vector(llvm::map_range(inVals, [&](Value v) {
         return b.ptrtoint(llvmElemTyPtr, v).getResult();
       }));
-      auto outVals =
-          transferSwizzlingLocalMemImpl(loc, rewriter, srcLayout, dstLayout,
-                                        newInVals, llvmElemTyPtr, smemBase);
+      auto outVals = transferSwizzlingLocalMemImpl(
+          loc, rewriter, srcLayout, dstLayout, newInVals, llvmElemTyPtr,
+          allocationOffsetAttr);
       for (auto &v : outVals) {
         v = b.inttoptr(llvmElemTy, v);
       }
@@ -137,7 +162,8 @@ struct ConvertLayoutOpConversion
       auto newInVals = llvm::to_vector(llvm::map_range(
           inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
       auto outVals = transferSwizzlingLocalMemImpl(
-          loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase);
+          loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy,
+          allocationOffsetAttr);
       for (auto &v : outVals) {
         v = b.trunc(llvmElemTy, v);
       }
@@ -150,22 +176,29 @@ struct ConvertLayoutOpConversion
       auto prmtSrc = removeBroadcastSrc.apply(srcLayout);
       auto newInVals = removeBroadcastSrc.apply(inVals);
       return transferSwizzlingLocalMemImpl(loc, rewriter, prmtSrc, dstLayout,
-                                           newInVals, llvmElemTy, smemBase);
+                                           newInVals, llvmElemTy,
+                                           allocationOffsetAttr);
     }
 
     // Remove broadcasting in dst
     auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
     if (!removeBroadcastDst.isIdentity()) {
       auto prmtDst = removeBroadcastDst.apply(dstLayout);
-      auto outVals = transferSwizzlingLocalMemImpl(
-          loc, rewriter, srcLayout, prmtDst, inVals, llvmElemTy, smemBase);
+      auto outVals = transferSwizzlingLocalMemImpl(loc, rewriter, srcLayout,
+                                                   prmtDst, inVals, llvmElemTy,
+                                                   allocationOffsetAttr);
       return broadcastAs(outVals, dstLayout);
     }
 
     // At this point we have a type that's at least 8-bit
     // and we don't have broadcasting in the registers
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    auto smem = optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth);
+    auto crossCTA = !dstLayout.invertAndCompose(srcLayout).isTrivialOver(
+        {str_attr("block")});
+    auto [srcTiles, dstTiles] = getSrcDstTiles(targetInfo, bitwidth, crossCTA);
+    auto [smem, instr] =
+        optimalSwizzling(srcLayout, dstLayout, srcTiles, dstTiles, bitwidth);
+    (void)instr;
 
     // Extract reps from smem
     auto kReg = str_attr("register");
@@ -198,12 +231,39 @@ struct ConvertLayoutOpConversion
     loadCvt = loadCvt.reshapeOuts(
         {{kOffset, loadCvt.getTotalOutDimSize() / nBlock}, {kBlock, nBlock}});
 
+    auto offsetSize = storeCvt.getOutDimSize(kOffset);
+    auto blockSize = storeCvt.getOutDimSize(kBlock);
+    SmallVector<int64_t> tileShape = {offsetSize, blockSize};
+    auto dim0 = str_attr("dim0");
+    auto dim1 = str_attr("dim1");
+    auto sharedLayout = LinearLayout::identity1D(offsetSize, kOffset, dim0) *
+                        LinearLayout::identity1D(blockSize, kBlock, dim1);
+    unsigned alignment =
+        std::max<unsigned>(1, getIntOrFloatOrPtrBitWidth(llvmElemTy) / 8);
+    auto sharedEncoding =
+        SharedLinearEncodingAttr::get(ctx, sharedLayout, alignment);
+    auto memDescTy = MemDescType::get(tileShape, llvmElemTy, sharedEncoding,
+                                      SharedMemorySpaceAttr::get(ctx),
+                                      /*mutableMemory=*/true);
+    // Creating a LinearEncodingAttr from this swizzled LinearLayout is not
+    // kosher, as the bases may not be powers of two. Interestingly enough, the
+    // LinearEncodingAttr verifier is incorrect and does not check for this. In
+    // the future, we could have a GenericDistributedLinearEncodingAttr that is
+    // not restricted to powers of two. and rename LinearEncodingAttr to
+    // DistrtibutedLinearEncodingAttr.
+    auto storeRegTy = RankedTensorType::get(
+        tileShape, llvmElemTy,
+        LinearEncodingAttr::get(ctx, storeCvt.compose(sharedLayout)));
+    auto loadRegTy = RankedTensorType::get(
+        tileShape, llvmElemTy,
+        LinearEncodingAttr::get(ctx, loadCvt.compose(sharedLayout)));
+    auto localAlloc = LocalAllocOp::create(rewriter, loc, memDescTy, Value{});
+    localAlloc->setAttr("allocation.offset", allocationOffsetAttr);
+
     auto tileSize = storeCvt.getInDimSize(kReg);
 
     assert(permutedInVals.size() == tileSize * nReps);
     SmallVector<Value> outVals;
-    auto affineOffset = b.i32_val(0);
-    auto maskSpanAffineOffset = 0;
 
     bool isWarpSync = mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
     bool isBlockSync = mlir::isCvtDimSync(srcLayout, dstLayout, kBlock);
@@ -222,15 +282,9 @@ struct ConvertLayoutOpConversion
         emitBarrier();
       auto tileInVals =
           ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
-      // Store
-      lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-                      /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
-                      rewriter, targetInfo);
+      emitLocalStore(loc, rewriter, tileInVals, storeRegTy, localAlloc);
       emitBarrier();
-      // Load
-      auto tileOutVals = lowerLdStShared(
-          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
-          affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
+      auto tileOutVals = emitLocalLoad(loc, rewriter, loadRegTy, localAlloc);
       llvm::append_range(outVals, tileOutVals);
     }
 
@@ -242,7 +296,6 @@ struct ConvertLayoutOpConversion
   void transferSwizzlingLocalMem(ConvertLayoutOp op, Value src,
                                  ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto *ctx = op.getContext();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
@@ -250,11 +303,13 @@ struct ConvertLayoutOpConversion
     auto dstLayout = toLinearLayout(dstTy);
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto inVals = unpackLLElements(loc, src, rewriter);
-    auto outVals = transferSwizzlingLocalMemImpl(
-        loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase);
+    auto allocationOffsetAttr = op->getAttr("allocation.offset");
+    assert(allocationOffsetAttr &&
+           "expected allocation.offset for convert_layout");
+    auto outVals =
+        transferSwizzlingLocalMemImpl(loc, rewriter, srcLayout, dstLayout,
+                                      inVals, llvmElemTy, allocationOffsetAttr);
 
     Value result =
         packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);
