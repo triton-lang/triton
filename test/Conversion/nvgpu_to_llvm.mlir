@@ -119,7 +119,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   //      CHECK: "@$0 tcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32 [$1], 128;", "b,r"{{.*}}%[[SHMEM]]
   //      CHECK: %[[MBAR:.+]] = llvm.getelementptr inbounds %[[SHMEM]][32] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i8
   //      CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r"{{.*}}%[[MBAR]]
-  //      CHECK: "@$0 mbarrier.arrive.shared::cluster.b64 _, [$1], $2;", "b,r,r"{{.*}}%[[MBAR]]
+  //      CHECK: %[[MBAR_I32:.+]] = llvm.ptrtoint %[[MBAR]] : !llvm.ptr<3> to i32
+  //      CHECK: %[[PEER_MBAR_I32:.+]] = llvm.xor %[[MBAR_I32]], %{{.+}} : i32
+  //      CHECK: %[[PEER_MBAR:.+]] = llvm.inttoptr %[[PEER_MBAR_I32]] : i32 to !llvm.ptr<3>
+  //      CHECK: "@$0 mbarrier.arrive.shared::cluster.b64 _, [$1], 1;", "b,r"{{.*}}%[[PEER_MBAR]]
   //      CHECK: mbarrier.try_wait.parity.shared::cta.b64
   llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
   llvm.func @tensor_memory_base_lowering_two_cta_shared_offset() -> i32 attributes {nvvm.kernel = 1 : ui1, nvvm.maxntid = array<i32: 128>} {
