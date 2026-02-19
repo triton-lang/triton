@@ -1034,6 +1034,24 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
       auto *user = use.getOwner();
       if (user == convertOp || sliceOps.contains(user))
         continue;
+      // For region branch ops, check whether the values they flow into are in
+      // the slice or unused instead.
+      if (isa<RegionBranchTerminatorOpInterface>(user))
+        user = user->getParentOp();
+      if (auto rbi = dyn_cast<RegionBranchOpInterface>(user)) {
+        RegionBranchSuccessorMapping mapping;
+        rbi.getSuccessorOperandInputMapping(mapping);
+        auto it = mapping.find(&use);
+        if (it != mapping.end()) {
+          // We have found the values this use flows into, check if they are
+          // used outside the slice.
+          bool isSliceOnly = llvm::all_of(it->second, [&](Value v) {
+            return slice.contains(v) || v.use_empty();
+          });
+          if (isSliceOnly)
+            continue;
+        }
+      }
       nonSliceOnlyValues.insert(v);
       break;
     }
@@ -1042,12 +1060,26 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
   // Expand the set to all transitive operands in the slice.
   for (size_t i = 0; i < nonSliceOnlyValues.size(); ++i) {
     Value v = nonSliceOnlyValues[i];
-    if (auto *op = v.getDefiningOp()) {
-      for (auto operand : op->getOperands())
-        if (slice.contains(operand))
-          nonSliceOnlyValues.insert(operand);
+    auto *op = v.getDefiningOp();
+    // If the operand is a block argument, get the enclosing op.
+    op = op ? op : v.getParentBlock()->getParentOp();
+    if (auto rbi = dyn_cast<RegionBranchOpInterface>(op)) {
+      // Try to determine the operands that flow into this value, and mark them
+      // as being used outside the slice.
+      RegionBranchInverseSuccessorMapping mapping;
+      rbi.getSuccessorInputOperandMapping(mapping);
+      auto it = mapping.find(v);
+      if (it != mapping.end()) {
+        for (auto tiedOperand : it->second)
+          if (slice.contains(tiedOperand->get()))
+            nonSliceOnlyValues.insert(tiedOperand->get());
+        continue;
+      }
     }
-    // TODO: Handle block arguments.
+    // In the general case, propagate to all operands of the op.
+    for (auto operand : op->getOperands())
+      if (slice.contains(operand))
+        nonSliceOnlyValues.insert(operand);
   }
 
   int64_t convertLayoutCost = getConvertCost(convertOp.getSrc());
