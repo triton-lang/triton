@@ -135,7 +135,8 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 
 bool isExpensiveLoadOrStore(Operation *op);
 
-bool canFoldIntoConversion(Operation *op, Attribute targetEncoding);
+// Return true if the op can use the target encoding for its result.
+bool canUseResultEncoding(Operation *op, Attribute targetEncoding);
 
 // Replace ForOp with a new ForOp with extra operands. The YieldOp is not
 // updated and needs to be updated separately for the loop to be correct.

@@ -6,11 +6,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <shared_mutex>
 #include <unordered_map>
 #include <utility>
@@ -55,12 +55,15 @@ struct GraphState {
     // Whether the node has missing name or is a metric node, which is
     // determined at capture time and won't change for the same node id.
     NodeStatus status{};
+
+    bool operator<(const NodeState &other) const {
+      return nodeId < other.nodeId;
+    }
   };
-  using NodeStateRef = std::reference_wrapper<NodeState>;
   // Precomputed per-Data launch links maintained on graph node
   // create/clone/destroy callbacks.
-  // data -> (static_entry_id -> graph-node metadata refs)
-  std::map<Data *, std::unordered_map<size_t, std::vector<NodeStateRef>>>
+  // data -> (static_entry_id -> graph-node metadata pointers)
+  std::map<Data *, std::unordered_map<size_t, std::set<NodeState *>>>
       dataToEntryIdToNodeStates;
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation.
@@ -70,10 +73,6 @@ struct GraphState {
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};
-  // A unique id for the graph and graphExec instances; they don't overlap
-  uint32_t graphId{};
-  // Total number of GPU kernels launched by this graph
-  size_t numNodes{1};
   // Total number of uint64 words written by all metric nodes in this graph.
   size_t numMetricWords{};
 };
