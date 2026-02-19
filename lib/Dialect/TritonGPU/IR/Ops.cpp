@@ -1013,13 +1013,10 @@ LogicalResult MemDescSubsliceOp::verify() {
 
   // If any block basis is fully broadcasted, multiple CTAs can alias the same
   // output tile region. Subslice on such layouts is unsupported.
-  if (auto it = ll.getBases().find(kBlock); it != ll.getBases().end()) {
-    if (llvm::any_of(it->second, [](ArrayRef<int32_t> basis) {
-          return llvm::all_of(basis, [](int32_t b) { return b == 0; });
-        })) {
-      return emitError(
-          "We don't support splitting with broadcasted CTA outputs");
-    }
+  if (llvm::any_of(ll.getBases()[kBlock]->second, [](ArrayRef<int32_t> basis) {
+        return llvm::all_of(basis, [](int32_t b) { return b == 0; });
+      })) {
+    return emitError("We don't support splitting with broadcasted CTA outputs");
   }
 
   auto llInv = ll.invert();
@@ -1029,24 +1026,16 @@ LogicalResult MemDescSubsliceOp::verify() {
     for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {
       namedOffsets.push_back({d, 0});
     }
-    // Check representative offsets in the destination tile stay within the
-    // same CTA.
-    for (int splitOffset = 0; splitOffset < dstTy.getDimSize(dim);
-         splitOffset = splitOffset == 0 ? 1 : splitOffset * 2) {
-      namedOffsets[dim] = {kDim, splitOffset};
-      for (auto [inDim, val] : llInv.apply(namedOffsets)) {
-        if (inDim == kBlock && val != 0) {
-          return emitError("We don't support splitting along CTA dimensions");
-        }
-      }
-    }
     for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
          dimSize *= 2) {
       namedOffsets[dim] = {kDim, dimSize};
-      auto val = llInv.apply(namedOffsets)[0].second;
-      if (!(llvm::isPowerOf2_32(val) && val != 0)) {
+      auto [offset, block] = llInv.apply(namedOffsets);
+      if (!llvm::isPowerOf2_32(offset.second) || offset.second == 0) {
         return emitError(
             "We don't support splitting along the swizzling pattern");
+      }
+      if (block.second == 0) {
+        return emitError("We don't support splitting along CTA dimensions");
       }
     }
   }
