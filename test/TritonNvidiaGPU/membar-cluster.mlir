@@ -513,10 +513,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_arrive {relaxed = true}
-  // CHECK-NEXT: ttng.cluster_wait
+  // CHECK-NOT: ttng.cluster_wait
   // CHECK-NEXT: ttng.init_barrier
   // CHECK: ttng.tmem_alloc
-  // CHECK: scf.for
+  // CHECK: ttng.cluster_wait
+  // CHECK-NEXT: scf.for
   // CHECK: ttng.barrier_expect
   // CHECK-NOT: nvg.cluster_barrier {relaxed = false}
   // CHECK: ttg.barrier local
@@ -591,8 +592,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_arrive {relaxed = true}
-  // CHECK-NEXT: ttng.cluster_wait
   // CHECK: ttg.local_alloc
+  // CHECK-NEXT: ttng.cluster_wait
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK: ttng.wait_barrier
   // CHECK: ttg.local_dealloc

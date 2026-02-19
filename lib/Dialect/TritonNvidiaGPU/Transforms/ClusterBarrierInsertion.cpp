@@ -12,6 +12,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
+#include <algorithm>
 
 namespace mlir {
 namespace triton {
@@ -262,9 +263,9 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
     return status;
 
   bool hasFenceInWindow = false;
-  bool hasClusterBarrierInWindow = false;
   Operation *lastFenceInWindow = nullptr;
-  DenseSet<Operation *> pairedClusterWaits;
+  SmallVector<unsigned> clusterArriveIndices;
+  SmallVector<unsigned> clusterWaitIndices;
   for (unsigned idx = lastCrossCTAInitIdx + 1; idx < windowEndIdx; ++idx) {
     Operation *op = topLevelOps[idx];
 
@@ -273,40 +274,66 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
       lastFenceInWindow = op;
     }
 
-    if (auto arriveOp = dyn_cast<ttng::ClusterArriveOp>(op)) {
-      if (idx + 1 < windowEndIdx &&
-          isa<ttng::ClusterWaitOp>(topLevelOps[idx + 1])) {
-        hasClusterBarrierInWindow = true;
-        pairedClusterWaits.insert(topLevelOps[idx + 1]);
-        ++idx;
-        continue;
-      }
-      return arriveOp.emitOpError(
-          "cluster_arrive in cross-CTA mbarrier init sync window must be "
-          "immediately followed by ttng.cluster_wait");
-    }
+    if (isa<ttng::ClusterArriveOp>(op))
+      clusterArriveIndices.push_back(idx);
+    if (isa<ttng::ClusterWaitOp>(op))
+      clusterWaitIndices.push_back(idx);
+  }
 
-    if (isa<ttng::ClusterWaitOp>(op) && !pairedClusterWaits.contains(op)) {
-      return op->emitOpError(
-          "cluster_wait in cross-CTA mbarrier init sync window must be "
-          "immediately preceded by ttng.cluster_arrive");
+  bool hasClusterBarrierInWindow = false;
+  if (!clusterArriveIndices.empty() && !clusterWaitIndices.empty()) {
+    unsigned firstArriveIdx = clusterArriveIndices.front();
+    for (unsigned waitIdx : clusterWaitIndices) {
+      if (waitIdx > firstArriveIdx) {
+        hasClusterBarrierInWindow = true;
+        break;
+      }
     }
+  }
+  if ((!clusterArriveIndices.empty() || !clusterWaitIndices.empty()) &&
+      !hasClusterBarrierInWindow) {
+    unsigned firstArriveIdx = clusterArriveIndices.empty()
+                                  ? windowEndIdx
+                                  : clusterArriveIndices.front();
+    unsigned firstWaitIdx =
+        clusterWaitIndices.empty() ? windowEndIdx : clusterWaitIndices.front();
+    Operation *badClusterOp =
+        topLevelOps[std::min(firstArriveIdx, firstWaitIdx)];
+    return badClusterOp->emitOpError(
+        "cross-CTA mbarrier init sync requires a top-level ttng.cluster_arrive "
+        "before a ttng.cluster_wait in the valid insertion window");
   }
 
   if (hasFenceInWindow && hasClusterBarrierInWindow)
     return success();
 
   OpBuilder::InsertionGuard guard(builder);
-  Operation *insertAfter = lastCrossCTAInit;
-  if (hasFenceInWindow && !hasClusterBarrierInWindow)
-    insertAfter = lastFenceInWindow;
-  builder.setInsertionPointAfter(insertAfter);
-  Location loc = lastCrossCTAInit->getLoc();
-  if (!hasFenceInWindow)
-    ttng::FenceMBarrierInitReleaseClusterOp::create(builder, loc);
+  Location earlyLoc = lastCrossCTAInit->getLoc();
+  Operation *fenceInsertAfter = lastCrossCTAInit;
+
+  if (!hasFenceInWindow) {
+    builder.setInsertionPointAfter(lastCrossCTAInit);
+    auto fenceOp =
+        ttng::FenceMBarrierInitReleaseClusterOp::create(builder, earlyLoc);
+    fenceInsertAfter = fenceOp.getOperation();
+  } else {
+    fenceInsertAfter = lastFenceInWindow;
+  }
+
   if (!hasClusterBarrierInWindow) {
-    ttng::ClusterArriveOp::create(builder, loc, /*relaxed=*/true);
-    ttng::ClusterWaitOp::create(builder, loc);
+    builder.setInsertionPointAfter(fenceInsertAfter);
+    ttng::ClusterArriveOp::create(builder, earlyLoc, /*relaxed=*/true);
+
+    Location waitLoc =
+        firstTrackedUseAnchor ? firstTrackedUseAnchor->getLoc() : earlyLoc;
+    if (firstTrackedUseAnchor) {
+      builder.setInsertionPoint(firstTrackedUseAnchor);
+    } else if (Operation *terminator = topLevelBlock->getTerminator()) {
+      builder.setInsertionPoint(terminator);
+    } else {
+      builder.setInsertionPointToEnd(topLevelBlock);
+    }
+    ttng::ClusterWaitOp::create(builder, waitLoc);
   }
 
   return success();

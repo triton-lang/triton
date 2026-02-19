@@ -217,9 +217,6 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
 
     bar = mbarrier.allocate_mbarrier()
     mbarrier.init(bar, count=1)
-    # Need to synchronise all the CTAs after the mbarrier initialisation
-    # so that they all see it before tma.async_copy_global_to_shared(multicast=True)
-    mbarrier.sync_cluster_init()
 
     mbarrier.expect(bar, in_desc.nbytes_per_cta)
     tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem, multicast=True)
@@ -276,10 +273,6 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
     mbarrier.init(tma_bar, count=1)
     mma_bar = mbarrier.allocate_mbarrier()
     mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True))
-
-    # Need to synchronise all the CTAs after the mbarrier initialisation
-    # so that they all see it before tma.async_copy_global_to_shared(multicast=True)
-    mbarrier.sync_cluster_init()
 
     mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
     tma.async_copy_global_to_shared(a_desc, [0, 0], tma_bar, smem_a, multicast=True)
@@ -531,10 +524,6 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
         fence_async_shared(cluster=two_ctas)
         mma_barrier = mbarrier.allocate_mbarrier()
         mbarrier.init(mma_barrier, count=1)
-        # Need to synchronise all the CTAs after the mbarrier initialisation
-        # so that they all see it
-        if two_ctas:
-            mbarrier.sync_cluster_init()
 
         acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_layout)
 
@@ -626,11 +615,6 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, BLOCK_M: ttgl.constexp
         )
     else:
         acc = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=acc_layout)
-
-    # Need to synchronise all the CTAs after the mbarrier initialisation before we do
-    # cross-CTA ops
-    if (multicast and ttgl.num_ctas() > 1) or two_ctas:
-        mbarrier.sync_cluster_init()
 
     for k in range(NUM_K_TILES):
         mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
