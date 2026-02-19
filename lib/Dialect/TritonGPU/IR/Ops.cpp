@@ -1011,6 +1011,18 @@ LogicalResult MemDescSubsliceOp::verify() {
   auto llInv = ll.invert();
   auto kOffset = mlir::StringAttr::get(ctx, "offset");
   auto kBlock = mlir::StringAttr::get(ctx, "block");
+
+  // If any block basis is fully broadcasted, multiple CTAs can alias the same
+  // output tile region. Subslice on such layouts is unsupported.
+  if (auto it = ll.getBases().find(kBlock); it != ll.getBases().end()) {
+    if (llvm::any_of(it->second, [](ArrayRef<int32_t> basis) {
+          return llvm::all_of(basis, [](int32_t b) { return b == 0; });
+        })) {
+      return emitError(
+          "We don't support splitting with broadcasted CTA outputs");
+    }
+  }
+
   for (auto dim : splitDims) {
     auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
     llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;

@@ -12,6 +12,18 @@ module attributes {"ttg.num-ctas" = 2 : i32} {
 
 // -----
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32} {
+  tt.func public @subslice_broadcasted_cga_output(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+      // expected-error @+1 {{broadcasted CTA outputs}}
+      %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<4x16xf32, #shared, #smem>
+      tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 tt.func public @miss_encoding(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
