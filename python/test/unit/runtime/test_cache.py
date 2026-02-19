@@ -893,7 +893,7 @@ def test_preload_higher_order_kernels(device, fresh_triton_cache) -> None:
     assert output.item() == 31
 
 
-def test_module_load_unload():
+def test_module_load_unload(fresh_knobs):
 
     @triton.jit
     def kernel(out_ptr, val) -> None:
