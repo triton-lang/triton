@@ -742,7 +742,7 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
 }
 
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
-                                    bool toFp16, Value packedVec,
+                                    Type elemType, Value packedVec,
                                     ISAFamily isaFamily, Value scale) {
   assert((isa<triton::amdgpu::UpcastMXFPOp, triton::gpu::Fp4ToFpOp>(op)) &&
          "Expected UpcastMXFPOp or Fp4ToFpOp");
@@ -758,7 +758,8 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
   Value input = b.bitcast(packedVec, i32_ty);
 
   // fp4 to bf16 for cdna3: fp4->fp8->fp32
-  if (isaFamily == ISAFamily::CDNA3 && !toFp16) {
+  if (isaFamily == ISAFamily::CDNA3 &&
+      (elemType == bf16_ty || elemType == f32_ty)) {
     // Step 1: extract EM bits for elements 0,2,4,6 and 1,3,5,7 respectively.
     // e2m1_6420_idx = | 0[0e6EM] | 0[0e4EM] | 0[0e2EM] | 0[0e0EM] |
     Value e2m1_6420_idx = b.and_(input, b.i32_val(0x07070707));
@@ -822,6 +823,14 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
     Value e6 = b.extract_element(pkVals[1], b.i32_val(1));
     Value e7 = b.extract_element(pkVals[3], b.i32_val(1));
     SmallVector<Value, 8> f32Vals{e0, e1, e2, e3, e4, e5, e6, e7};
+    if (elemType.isF32()) {
+      SmallVector<Value> results;
+      // bitcast to f32
+      for (unsigned i = 0; i < 8; i++) {
+        results.push_back(b.bitcast(f32Vals[i], f32_ty));
+      }
+      return results;
+    }
     Value sel = b.i32_val(0x07060302);
     SmallVector<Value> results;
     for (unsigned i = 0; i < 8; i += 2) {
@@ -836,6 +845,8 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
     }
     return results;
   }
+
+  bool toFp16 = elemType == f16_ty;
 
   // MXFP4 has 4 bits, S.EE.M, for Sign, Exponent, and Mantissa respectively.
   // For a specific S, we have a total of 8 bit patterns. We can encode all
@@ -961,13 +972,24 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
 
   SmallVector<Value, 4> pkVals{res_10, res_32, res_54, res_76};
   SmallVector<Value> results;
-  Type elmTy = toFp16 ? f16_ty : bf16_ty;
-  for (int j = 0; j < 4; j++) {
-    Value elements = b.bitcast(pkVals[j], vec_ty(elmTy, 2));
-    results.push_back(b.extract_element(elements, b.i32_val(0)));
-    results.push_back(b.extract_element(elements, b.i32_val(1)));
+  if (elemType == f32_ty) {
+    for (int j = 0; j < 4; j++) {
+      // Extract 16-bit(bf16) elements and cast to f32
+      Value result = b.shl(pkVals[j], b.i32_val(16));
+      results.push_back(b.bitcast(result, f32_ty));
+      result = b.and_(pkVals[j], b.i32_val(0xFFFF0000));
+      results.push_back(b.bitcast(result, f32_ty));
+    }
+    return results;
+  } else {
+    Type elmTy = toFp16 ? f16_ty : bf16_ty;
+    for (int j = 0; j < 4; j++) {
+      Value elements = b.bitcast(pkVals[j], vec_ty(elmTy, 2));
+      results.push_back(b.extract_element(elements, b.i32_val(0)));
+      results.push_back(b.extract_element(elements, b.i32_val(1)));
+    }
+    return results;
   }
-  return results;
 }
 
 } // namespace mlir::LLVM::AMD
