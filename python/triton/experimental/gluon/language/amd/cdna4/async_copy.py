@@ -1,6 +1,6 @@
 from ..._core import ir, builtin, _unwrap_if_constexpr
 from ..._semantic import _check
-from ..._layouts import BlockedLayout, SliceLayout
+from ..._layouts import DistributedLayout
 from ..cdna3 import _verify_buffer_ops
 
 __all__ = [
@@ -46,8 +46,8 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
     _check(ptr.type.is_block(), lambda: "expected ptr to be a tensor")
-    _check(isinstance(ptr.type.layout, (BlockedLayout, SliceLayout)),
-           lambda: "expected ptr type layout to be BlockedLayout or SliceLayout")
+    _check(isinstance(ptr.type.layout, (DistributedLayout)),
+           lambda: "expected ptr type layout to be a DistributedLayout")
     _check(
         dest.shape == ptr.shape, lambda:
         f"expected dest shape to match pointer shape but got dest.shape = {dest.shape}, pointer.shape = {ptr.shape}")
@@ -102,8 +102,8 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
         other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
-    _check(isinstance(offsets.type.layout, (BlockedLayout, SliceLayout)),
-           lambda: "expected offsets type layout to be BlockedLayout or SliceLayout")
+    _check(isinstance(offsets.type.layout, (DistributedLayout)),
+           lambda: "expected ptr type layout to be a DistributedLayout")
     _verify_buffer_ops(ptr, offsets, mask, other)
 
     mask = _unwrap_if_constexpr(mask)
