@@ -1008,11 +1008,9 @@ LogicalResult MemDescSubsliceOp::verify() {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  auto kOffset = mlir::StringAttr::get(ctx, "offset");
-  auto kBlock = mlir::StringAttr::get(ctx, "block");
-
   // If any block basis is fully broadcasted, multiple CTAs can alias the same
   // output tile region. Subslice on such layouts is unsupported.
+  auto kBlock = mlir::StringAttr::get(ctx, "block");
   if (llvm::any_of(ll.getBases().at(kBlock), [](ArrayRef<int32_t> basis) {
         return llvm::all_of(basis, [](int32_t b) { return b == 0; });
       })) {
