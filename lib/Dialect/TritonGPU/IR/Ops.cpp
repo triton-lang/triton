@@ -1020,7 +1020,7 @@ LogicalResult MemDescSubsliceOp::verify() {
     // Splitting at `dimSize` is valid as long as all points in [0, dimSize)
     // stay within the same CTA.
     for (int splitOffset = 0; splitOffset < dstTy.getDimSize(dim);
-         ++splitOffset) {
+         splitOffset *= 2) {
       namedOffsets[dim] = {kDim, splitOffset};
       for (auto [inDim, val] : llInv.apply(namedOffsets)) {
         if (inDim == kBlock && val != 0) {
