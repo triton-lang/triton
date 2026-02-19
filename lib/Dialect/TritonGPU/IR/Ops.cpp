@@ -1008,7 +1008,6 @@ LogicalResult MemDescSubsliceOp::verify() {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  auto llInv = ll.invert();
   auto kOffset = mlir::StringAttr::get(ctx, "offset");
   auto kBlock = mlir::StringAttr::get(ctx, "block");
 
@@ -1023,14 +1022,15 @@ LogicalResult MemDescSubsliceOp::verify() {
     }
   }
 
+  auto llInv = ll.invert();
   for (auto dim : splitDims) {
     auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
     llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
     for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {
       namedOffsets.push_back({d, 0});
     }
-    // Splitting at `dimSize` is valid as long as all points in [0, dimSize)
-    // stay within the same CTA.
+    // Check representative offsets in the destination tile stay within the
+    // same CTA.
     for (int splitOffset = 0; splitOffset < dstTy.getDimSize(dim);
          splitOffset = splitOffset == 0 ? 1 : splitOffset * 2) {
       namedOffsets[dim] = {kDim, splitOffset};
