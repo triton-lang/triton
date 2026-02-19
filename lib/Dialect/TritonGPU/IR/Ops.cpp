@@ -1011,9 +1011,7 @@ LogicalResult MemDescSubsliceOp::verify() {
   // If any block basis is fully broadcasted, multiple CTAs can alias the same
   // output tile region. Subslice on such layouts is unsupported.
   auto kBlock = mlir::StringAttr::get(ctx, "block");
-  if (llvm::any_of(ll.getBases().at(kBlock), [](ArrayRef<int32_t> basis) {
-        return llvm::all_of(basis, [](int32_t b) { return b == 0; });
-      })) {
+  if (ll.getFreeVariableMasks()[kBlock] != 0) {
     return emitError("We don't support splitting with broadcasted CTA outputs");
   }
 
@@ -1028,11 +1026,11 @@ LogicalResult MemDescSubsliceOp::verify() {
          dimSize *= 2) {
       namedOffsets[dim] = {kDim, dimSize};
       auto [offset, block] = llInv.apply(namedOffsets);
-      if (!llvm::isPowerOf2_32(offset.second) || offset.second == 0) {
+      if (!llvm::isPowerOf2_32(offset.second) || offset.second != 0) {
         return emitError(
             "We don't support splitting along the swizzling pattern");
       }
-      if (block.second == 0) {
+      if (block.second != 0) {
         return emitError("We don't support splitting along CTA dimensions");
       }
     }
