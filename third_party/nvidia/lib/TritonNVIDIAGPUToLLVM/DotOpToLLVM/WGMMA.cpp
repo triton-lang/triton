@@ -295,6 +295,12 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
           llvm::SmallVector<Value> regA =
               loadReg(rewriter, loc, structA, (m * numRepK + k) * regASize,
                       regASize, startSequence);
+          // Emit "dummy" mov instructions for the register operand. The
+          // expectation is that there is a wait_group op before this WGMMA op
+          // which waits for the same WGMMA op issued in the previous iteration
+          // to finish. By inserting a mov instruction between such wait and the
+          // WGMMA, we can safely overlap transformations on the A operand with
+          // the previous-iteration WGMMA still in flight.
           for (Value &regAVal : regA) {
             Type regTy = regAVal.getType();
             if (!regTy.isIntOrFloat() || regTy.getIntOrFloatBitWidth() != 32) {
