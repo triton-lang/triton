@@ -1374,10 +1374,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     uint32_t barrierMask =
         toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    // We emit a cluster-level barrier if we change the barrier and we don't
-    // multicast over that dimension (in which case that CTA would be predicated
-    // out)
-    bool clusterBarrier = barrierMask & ~maskCGABroadcast;
+    // We emit a cluster-level barrier when the barrier mask is set.
+    bool clusterBarrier = barrierMask != 0;
     if (clusterBarrier) {
       barrierPtr =
           LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
