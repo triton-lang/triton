@@ -591,16 +591,19 @@ static void createRelinquishAlloc(IRRewriter &rewriter, Location loc,
 
 static void mbarrierArrive(OpBuilder &builder, Location loc, Value barrier) {
   auto b = TritonLLVMOpBuilder(loc, builder);
-  Value ctaId = NVVM::ClusterId::create(builder, loc, builder.getI32Type());
-  Value peerCTA = b.xor_(ctaId, b.i32_val(1));
+  // `shared::cluster` encodes the CTA id in the upper address bits. Flip the
+  // low CTA-group bit so each CTA signals the peer CTA's local barrier.
+  Value barrierInt = b.ptrtoint(builder.getI32Type(), barrier);
+  barrierInt = b.xor_(barrierInt, b.i32_val(1u << 24));
+  Value peerBarrier = b.inttoptr(barrier.getType(), barrierInt);
   Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, builder);
   auto ctx = builder.getContext();
   PTXBuilder ptxBuilder;
   const std::string ptxString =
-      "@$0 mbarrier.arrive.shared::cluster.b64 _, [$1], $2;";
+      "@$0 mbarrier.arrive.shared::cluster.b64 _, [$1], 1;";
   auto &arrive = *ptxBuilder.create(ptxString);
-  arrive({ptxBuilder.newOperand(pred, "b"), ptxBuilder.newOperand(barrier, "r"),
-          ptxBuilder.newOperand(peerCTA, "r")},
+  arrive({ptxBuilder.newOperand(pred, "b"),
+          ptxBuilder.newOperand(peerBarrier, "r")},
          /*onlyAttachMLIRArgs=*/true);
   ptxBuilder.launch(builder, loc, void_ty(ctx));
 }
