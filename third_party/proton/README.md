@@ -118,7 +118,7 @@ proton.start(name="profile_name", context="shadow", backend="cupti", mode="pcsam
 
 The instrumentation backend allows for detailed, fine-grained profiling of intra-kernel behavior, generating trace or tree views similar to those produced by coarse-grained profiling.
 By default, if no `mode` is specified, Proton profiles kernel cycles, which may require shared memory or global memory (depends on `buffer-type`). If there is insufficient profiling memory capacity, profiling will abort and a warning will be displayed. Future releases will introduce additional instrumentation modes. See the [tutorial](tutorials/intra_kernel) for more detailed information and examples. A video demo of the Tutorials from the 2025 Triton conference can be found here: 
-https://youtu.be/PGUw2P55ZYM?si=erHkGDBhuvAFcHkX&t=985
+https://youtu.be/PGUw2P55ZYM?si=EgsYeGzb9suBZSX5&t=984
 
 **Host-side usage:**
 
