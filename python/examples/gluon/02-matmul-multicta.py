@@ -452,14 +452,20 @@ def _matmul_kernel(
     a_bufs = gl.allocate_shared_memory(dtype, [STAGES] + a_desc.block_shape, a_desc.layout)
     b_bufs = gl.allocate_shared_memory(dtype, [STAGES] + b_desc.block_shape, b_desc.layout)
 
-    # Equiv. consumed_barrier. Barrier TCGEN05 MMA -> Load TMA
-    load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
-    # Equiv. ab_tma_barrier. Barrier Load TMA -> TCGEN05 MMA
     load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=TWO_CTAS)
+    for i in gl.static_range(STAGES):
+        mbarrier.init(load_ready_bars.index(i), count=1)
+    acc_empty_bars = mbarrier.allocate_mbarrier(batch=2, two_ctas=TWO_CTAS)
+    for i in gl.static_range(2):
+        mbarrier.init(acc_empty_bars.index(i), count=1)
+    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=2, two_ctas=TWO_CTAS)
+    for i in gl.static_range(2):
+        mbarrier.init(clc_consumed_bars.index(i), count=3)
+
+    load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
     for i in gl.static_range(STAGES):
         # For multicast we could use tcgen05_mma_barrier_count
         mbarrier.init(load_empty_bars.index(i), count=1)
-        mbarrier.init(load_ready_bars.index(i), count=1)
 
     tmem_layout: gl.constexpr = TensorMemoryLayout(
         [BLOCK_SIZE_M, BLOCK_N],
@@ -468,26 +474,19 @@ def _matmul_kernel(
         two_ctas=TWO_CTAS,
     )
     acc_bufs = allocate_tensor_memory(gl.float32, [2, BLOCK_M, BLOCK_N], tmem_layout)
-    # Equiv. store_done_barrier. Barrier Store TMA -> TCGEN05 MMA
-    acc_empty_bars = mbarrier.allocate_mbarrier(batch=2, two_ctas=TWO_CTAS)
     # Equiv. mma_done_barrier. Barrier TCGEN05 MMA -> Store TMA
     acc_ready_bars = mbarrier.allocate_mbarrier(batch=2)
     for i in gl.static_range(2):
-        mbarrier.init(acc_empty_bars.index(i), count=1)
         # For multicast we could use tcgen05_mma_barrier_count
         mbarrier.init(acc_ready_bars.index(i), count=1)
 
     clc_barriers = mbarrier.allocate_mbarrier(batch=2)
-    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=2, two_ctas=TWO_CTAS)
     for i in gl.static_range(2):
         mbarrier.init(clc_barriers.index(i), count=1)
-        mbarrier.init(clc_consumed_bars.index(i), count=3)
 
     clc_result_shape: gl.constexpr = [clc_barriers.shape[0], 2 * clc_barriers.shape[1]]
     clc_result_buffers = gl.allocate_shared_memory(gl.int64, clc_result_shape, clc_barriers.layout)
 
-    if TWO_CTAS:
-        mbarrier.sync_cluster_init()
     p = PartitionArgs(
         a_desc,
         b_desc,
