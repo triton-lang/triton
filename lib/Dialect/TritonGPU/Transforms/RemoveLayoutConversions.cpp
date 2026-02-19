@@ -1034,6 +1034,24 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
       auto *user = use.getOwner();
       if (user == convertOp || sliceOps.contains(user))
         continue;
+      // For region branch ops, check whether the values they flow into are in
+      // the slice or unused instead.
+      if (isa<RegionBranchTerminatorOpInterface, RegionBranchOpInterface>(
+              user)) {
+        auto rbi = cast<RegionBranchOpInterface>(
+            isa<RegionBranchOpInterface>(user) ? user : user->getParentOp());
+
+        RegionBranchSuccessorMapping mapping;
+        rbi.getSuccessorOperandInputMapping(mapping);
+        auto it = mapping.find(&use);
+        if (it != mapping.end()) {
+          bool isSliceOnly = llvm::all_of(it->second, [&](Value v) {
+            return slice.contains(v) || v.use_empty();
+          });
+          if (isSliceOnly)
+            continue;
+        }
+      }
       nonSliceOnlyValues.insert(v);
       break;
     }
@@ -1043,11 +1061,36 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
   for (size_t i = 0; i < nonSliceOnlyValues.size(); ++i) {
     Value v = nonSliceOnlyValues[i];
     if (auto *op = v.getDefiningOp()) {
+      if (auto rbi = dyn_cast<RegionBranchOpInterface>(op)) {
+        RegionBranchInverseSuccessorMapping mapping;
+        rbi.getSuccessorInputOperandMapping(mapping);
+        auto it = mapping.find(v);
+        if (it != mapping.end()) {
+          for (auto tiedOperand : it->second)
+            if (slice.contains(tiedOperand->get()))
+              nonSliceOnlyValues.insert(tiedOperand->get());
+          continue;
+        }
+      }
       for (auto operand : op->getOperands())
         if (slice.contains(operand))
           nonSliceOnlyValues.insert(operand);
+      continue;
     }
-    // TODO: Handle block arguments.
+
+    // For iter args of for loops, find the operands that flow into this
+    // argument.
+    auto arg = cast<BlockArgument>(v);
+    auto *parentOp = arg.getOwner()->getParentOp();
+    auto rbi = cast<RegionBranchOpInterface>(parentOp);
+    RegionBranchInverseSuccessorMapping mapping;
+    rbi.getSuccessorInputOperandMapping(mapping);
+    auto it = mapping.find(v);
+    if (it != mapping.end()) {
+      for (auto tiedOperand : it->second)
+        if (slice.contains(tiedOperand->get()))
+          nonSliceOnlyValues.insert(tiedOperand->get());
+    }
   }
 
   int64_t convertLayoutCost = getConvertCost(convertOp.getSrc());
