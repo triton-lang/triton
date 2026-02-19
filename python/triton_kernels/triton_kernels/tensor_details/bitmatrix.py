@@ -17,6 +17,7 @@ class BitmatrixMetadata:
     `col_sorted_indx` = cat([5], [3 6], [0 7], [], [9 1 10], [2 4], [8])
     `row_sorted_indx` = cat([3 6 8], [1 9], [0 2 4 10], [5 7])
     """
+
     # the number of entries equal to 1 in each column
     col_sum: torch.Tensor
     # indices of nonzero values numbered row-major, grouped by cols, concatenated
@@ -32,7 +33,7 @@ class BitmatrixMetadata:
 @triton.jit
 def _keyed_add(x, y):
     # we keep the key in the upper 16 bits of a uint32:
-    key_mask: tl.constexpr = 0xffff0000
+    key_mask: tl.constexpr = 0xFFFF0000
 
     kx = x & key_mask
     ky = y & key_mask
@@ -41,8 +42,18 @@ def _keyed_add(x, y):
 
 
 @triton.jit
-def _bitmatrix_metadata_compute_stage2(ColSortedIndx, RowSortedIndx, NonzeroIndx, n_tokens, ColPartialSum, stride_pm,
-                                       stride_pn, ColOffs, TOKS_PER_ROW: tl.constexpr, BLOCK_PER_TOK: tl.constexpr):
+def _bitmatrix_metadata_compute_stage2(
+    ColSortedIndx,
+    RowSortedIndx,
+    NonzeroIndx,
+    n_tokens,
+    ColPartialSum,
+    stride_pm,
+    stride_pn,
+    ColOffs,
+    TOKS_PER_ROW: tl.constexpr,
+    BLOCK_PER_TOK: tl.constexpr,
+):
     BLOCK_SIZE: tl.constexpr = BLOCK_PER_TOK * TOKS_PER_ROW
     tl.static_assert(BLOCK_SIZE <= 32768)
     if isinstance(n_tokens, tl.tensor) and n_tokens.dtype.is_ptr():
@@ -58,12 +69,12 @@ def _bitmatrix_metadata_compute_stage2(ColSortedIndx, RowSortedIndx, NonzeroIndx
     kv_pairs = ((col_indx << 16) | offs_local).to(tl.uint32)
     kv_pairs = tl.sort(kv_pairs, 0)
     col_indx = kv_pairs >> 16
-    offs_global = pid_m * BLOCK_SIZE + (kv_pairs & 0xffff)
-    mask = col_indx != 0xffff
+    offs_global = pid_m * BLOCK_SIZE + (kv_pairs & 0xFFFF)
+    mask = col_indx != 0xFFFF
     # compute run lengths in column-sorted order:
-    x = (kv_pairs & 0xffff0000 | 0x00000001)
+    x = kv_pairs & 0xFFFF0000 | 0x00000001
     cols_and_inclusive_run_lengths = tl.associative_scan(x, 0, _keyed_add)
-    exclusive_run_lengths = (cols_and_inclusive_run_lengths - 1) & 0xffff
+    exclusive_run_lengths = (cols_and_inclusive_run_lengths - 1) & 0xFFFF
     # compute output
     row_sorted_indx = tl.load(ColPartialSum + pid_m * stride_pm + col_indx * stride_pn, mask=mask)
     row_sorted_indx += tl.load(ColOffs + col_indx, mask=mask)
@@ -74,9 +85,21 @@ def _bitmatrix_metadata_compute_stage2(ColSortedIndx, RowSortedIndx, NonzeroIndx
 
 
 @triton.jit
-def _bitmatrix_metadata_compute_stage1(CombinedIndx, n_combined_indx, sentinel, BLOCK: tl.constexpr, ColSum, ColOffs,
-                                       n_cols, PartialColSum, shape_pm, stride_pm, stride_pn, BLOCK_M: tl.constexpr,
-                                       BLOCK_N: tl.constexpr):
+def _bitmatrix_metadata_compute_stage1(
+    CombinedIndx,
+    n_combined_indx,
+    sentinel,
+    BLOCK: tl.constexpr,
+    ColSum,
+    ColOffs,
+    n_cols,
+    PartialColSum,
+    shape_pm,
+    stride_pm,
+    stride_pn,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
     pid = tl.program_id(0)
     # compute col_partial_sums
     if pid < n_cols:
@@ -112,7 +135,7 @@ def make_bitmatrix_metadata(nonzero_indx, bitmatrix):
     PARTIAL_BLOCK_M = 32
     col_sum, col_partial_sum = sum_bitmatrix_rows(bitmatrix, partials_block_size=PARTIAL_BLOCK_M)
     # allocate memory
-    device = bitmatrix.device
+    device = bitmatrix.storage.data.device
     n_indx = nonzero_indx.numel()
     n_cols = bitmatrix.shape[1]
     col_offs = torch.empty(n_cols, dtype=torch.int32, device=device)
@@ -135,7 +158,7 @@ def make_bitmatrix_metadata(nonzero_indx, bitmatrix):
     # using `col_offs` and `col_partial_sums`
     n_indx = nonzero_indx.numel()
     toks_per_row = nonzero_indx.shape[-1]
-    compute_grid = (cdiv(bitmatrix.shape_max[0], PARTIAL_BLOCK_M), )
+    compute_grid = (cdiv(bitmatrix.local_shape_max[0], PARTIAL_BLOCK_M), )
     _bitmatrix_metadata_compute_stage2[compute_grid](
         col_sorted_indx, row_sorted_indx,  # outputs
         nonzero_indx, bitmatrix.shape[0], col_partial_sum, col_partial_sum.stride(0),

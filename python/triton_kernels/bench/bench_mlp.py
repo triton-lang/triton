@@ -13,7 +13,7 @@ from triton_kernels.tensor_details import layout
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata  # ragged tensor
-from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_assignment, SymmetricMemoryPool
+from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_assignment, symmetric_memory_pool
 # quantization
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4
 from triton_kernels.numerics import InFlexData
@@ -97,81 +97,81 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     assert EP == n_ranks, f"{EP=}, {n_ranks=}"
 
     #-- init memory pool --
-    symm_mem_pool = SymmetricMemoryPool()
-    symm_mem_pool.initialize_matmul(
-        n_tokens_global=batch_per_expt * n_expts_tot // n_expts_act,
-        d_input=dim1,
-        d_model=dim2,
-        n_expts_act=n_expts_act,
-        n_expts_tot=n_expts_tot,
-        n_ranks=world_size,
-        dtype=x_dtype,
-        group=torch.distributed.group.WORLD,
-        device=torch.cuda.current_device(),
-    )
+    with symmetric_memory_pool() as symm_mem_pool:
+        symm_mem_pool.initialize_matmul(
+            n_tokens_global=batch_per_expt * n_expts_tot // n_expts_act,
+            d_input=dim1,
+            d_model=dim2,
+            n_expts_act=n_expts_act,
+            n_expts_tot=n_expts_tot,
+            n_ranks=world_size,
+            dtype=x_dtype,
+            group=torch.distributed.group.WORLD,
+            device=torch.cuda.current_device(),
+        )
 
-    # -- init prameters --
-    # weights
-    wg_global = torch.randn((dim1, n_expts_tot), device=dev)
-    torch.distributed.broadcast(wg_global, src=0)
-    w1_ep_local = torch.randn((n_expts_tot // EP, dim1, dim2), device=dev)
-    w2_ep_local = torch.randn((n_expts_tot // EP, dim2 // 2, dim1), device=dev)
-    # biases
-    bg_global = torch.randn((n_expts_tot, ), device=dev)
-    torch.distributed.broadcast(bg_global, src=0)
-    b1_ep_local = torch.randn((n_expts_tot // EP, dim2), device=dev)
-    b2_ep_local = torch.randn((n_expts_tot // EP, dim1), device=dev)
-    torch.distributed.barrier()
-    # quantize
-    opt1 = dict()
-    opt2 = dict()
-    if w_dtype == FP4:
-        num_warps = 4 if batch <= 512 else 8
-        value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
-        scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
-            mx_axis=1, num_warps=num_warps)
-        opt1 = {
-            "value_layout": value_layout,
-            "value_layout_opts": value_layout_opts,
-            "scale_layout": scale_layout,
-            "scale_layout_opts": scale_layout_opts,
-        }
-        opt2 = deepcopy(opt1)
-    wg_global, wg_flex, wg_scale = quantize_weight(wg_global, torch.bfloat16)
-    w1_ep_local, w1_flex, w1_scale = quantize_weight(w1_ep_local, w_dtype, **opt1)
-    w2_ep_local, w2_flex, w2_scale = quantize_weight(w2_ep_local, w_dtype, **opt2)
-    pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), b_mx_scale=wg_scale)
-    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), b_mx_scale=w1_scale)
-    pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), b_mx_scale=w2_scale)
+        # -- init prameters --
+        # weights
+        wg_global = torch.randn((dim1, n_expts_tot), device=dev)
+        torch.distributed.broadcast(wg_global, src=0)
+        w1_ep_local = torch.randn((n_expts_tot // EP, dim1, dim2), device=dev)
+        w2_ep_local = torch.randn((n_expts_tot // EP, dim2 // 2, dim1), device=dev)
+        # biases
+        bg_global = torch.randn((n_expts_tot, ), device=dev)
+        torch.distributed.broadcast(bg_global, src=0)
+        b1_ep_local = torch.randn((n_expts_tot // EP, dim2), device=dev)
+        b2_ep_local = torch.randn((n_expts_tot // EP, dim1), device=dev)
+        torch.distributed.barrier()
+        # quantize
+        opt1 = dict()
+        opt2 = dict()
+        if w_dtype == FP4:
+            num_warps = 4 if batch <= 512 else 8
+            value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
+            scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
+                mx_axis=1, num_warps=num_warps)
+            opt1 = {
+                "value_layout": value_layout,
+                "value_layout_opts": value_layout_opts,
+                "scale_layout": scale_layout,
+                "scale_layout_opts": scale_layout_opts,
+            }
+            opt2 = deepcopy(opt1)
+        wg_global, wg_flex, wg_scale = quantize_weight(wg_global, torch.bfloat16)
+        w1_ep_local, w1_flex, w1_scale = quantize_weight(w1_ep_local, w_dtype, **opt1)
+        w2_ep_local, w2_flex, w2_scale = quantize_weight(w2_ep_local, w_dtype, **opt2)
+        pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), b_mx_scale=wg_scale)
+        pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), b_mx_scale=w1_scale)
+        pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), b_mx_scale=w2_scale)
 
-    # -- init activation --
-    x_dp_local_fp8 = torch.randn((batch // n_ranks, dim1), device=dev).to(x_dtype)
-    x_dp_local_bf16 = x_dp_local_fp8.to(torch.bfloat16)
+        # -- init activation --
+        x_dp_local_fp8 = torch.randn((batch // n_ranks, dim1), device=dev).to(x_dtype)
+        x_dp_local_bf16 = x_dp_local_fp8.to(torch.bfloat16)
 
-    # -- matmul fusion options --
-    act1 = FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2), (1.0, 1.0))
+        # -- matmul fusion options --
+        act1 = FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2), (1.0, 1.0))
 
-    # -- run benchmark --
-    expt_dict = make_expt_dict_uniform(EP, n_expts_tot)
-    expt_assignment = make_expt_assignment(EP, n_expts_tot, expt_dict, torch.device(dev))
-    fpath = Path(f"profile_{rank}")
-    proton.start(str(fpath), hook="triton")
-    g = torch.cuda.CUDAGraph()
-    stream = torch.cuda.Stream()
-    with torch.cuda.stream(stream):
-        with torch.cuda.graph(g):
-            run_mlp(x_dp_local_bf16, x_dp_local_fp8,  #
-                    wg_global, bg_global, pcg,  #
-                    w1_ep_local, b1_ep_local, pc1, act1,  #
-                    w2_ep_local, b2_ep_local, pc2,  #
-                    n_expts_act, expt_assignment, rank, symm_mem_pool)
-    for i in range(100):
-        g.replay()
-    torch.cuda.synchronize()
-    torch.distributed.barrier()
-    proton.finalize()
-    symm_mem_pool.release()
-    return roofline.parse_profile(fpath.with_suffix(".hatchet"), useful_op_regex=".*matmul.*")
+        # -- run benchmark --
+        expt_dict = make_expt_dict_uniform(EP, n_expts_tot)
+        expt_assignment = make_expt_assignment(EP, n_expts_tot, expt_dict, torch.device(dev))
+        fpath = Path(f"profile_{rank}")
+        proton.start(str(fpath), hook="triton")
+        g = torch.cuda.CUDAGraph()
+        stream = torch.cuda.Stream()
+        with torch.cuda.stream(stream):
+            with torch.cuda.graph(g):
+                run_mlp(x_dp_local_bf16, x_dp_local_fp8,  #
+                        wg_global, bg_global, pcg,  #
+                        w1_ep_local, b1_ep_local, pc1, act1,  #
+                        w2_ep_local, b2_ep_local, pc2,  #
+                        n_expts_act, expt_assignment, rank, symm_mem_pool)
+        for i in range(100):
+            g.replay()
+        torch.cuda.synchronize()
+        torch.distributed.barrier()
+        proton.finalize()
+        symm_mem_pool.release()
+        return roofline.parse_profile(fpath.with_suffix(".hatchet"), useful_op_regex=".*matmul.*")
 
 
 def roofline_mlp(batch_sizes, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, EP, \
