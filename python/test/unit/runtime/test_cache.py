@@ -898,7 +898,7 @@ def test_module_load_unload(fresh_knobs):
 
     @triton.jit
     def kernel(out_ptr, val) -> None:
-        tl.store(out_ptr, val * 123)
+        tl.store(out_ptr, val)
 
     # we should hit the module unload call to decrese the counter from 1 to 0
     counter = 1
