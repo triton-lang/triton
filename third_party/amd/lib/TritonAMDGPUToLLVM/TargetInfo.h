@@ -98,6 +98,9 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
+  bool supportBitwidth16Elementwise() const override;
+  bool supportBitwidth32Elementwise() const override;
+
   // Returns true if the target supports per lane addresses into LDS for
   // direct-to-lds loads. Some architectures (e.g. GFX9) do not support
   // scattering and instead have to write warp coalesced into LDS
