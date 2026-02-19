@@ -1025,7 +1025,9 @@ LogicalResult MemDescSubsliceOp::verify() {
     for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
          dimSize *= 2) {
       namedOffsets[dim] = {kDim, dimSize};
-      auto [offset, block] = llInv.apply(namedOffsets);
+      auto offsetAndBlock = llInv.apply(namedOffsets);
+      auto offset = offsetAndBlock[0];
+      auto block = offsetAndBlock[1];
       if (!llvm::isPowerOf2_32(offset.second) || offset.second != 0) {
         return emitError(
             "We don't support splitting along the swizzling pattern");
