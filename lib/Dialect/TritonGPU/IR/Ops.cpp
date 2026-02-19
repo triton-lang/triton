@@ -1335,11 +1335,7 @@ LogicalResult WarpYieldOp::verify() {
 
 // Get the size of a scalar type when stored in shared memory.
 // TODO: Generalize this as needed.
-static size_t getSharedMemorySize(Type type) {
-  // Check if type implements QueryNeededSharedMemorySize interface
-  if (auto smsType = dyn_cast<gpu::QueryNeededSharedMemorySize>(type))
-    return smsType.getSharedMemorySize();
-
+size_t getSharedMemorySize(Type type) {
   if (isa<IntegerType, FloatType>(type))
     return llvm::divideCeil(type.getIntOrFloatBitWidth(), 8);
   if (isa<PointerType, TensorDescInterface>(type))
@@ -1354,14 +1350,18 @@ static size_t getSharedMemorySize(Type type) {
       mlir::debugString(type));
 }
 
-std::pair<uint64_t, uint64_t> WarpSpecializeOp::getCaptureSizeAlign() {
+uint64_t WarpSpecializeOp::getCaptureSize() {
   uint64_t captureSize = 0;
   // Tightly pack the captures in memory.
   for (Type type : getPartitionOp().getOperandTypes()) {
     captureSize += getSharedMemorySize(type);
   }
+  return captureSize;
+}
+
+uint64_t WarpSpecializeOp::getCaptureAlign() {
   // Align the captures to 8 bytes.
-  return {captureSize, 8};
+  return 8;
 }
 
 unsigned WarpSpecializeOp::getTotalPartitionWarps() {

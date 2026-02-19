@@ -128,6 +128,9 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     constexpr int32_t kTMASize = 128;
     return kTMASize;
   }
+  if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
+    return ws.getCaptureSize();
+  }
   return 0;
 }
 
@@ -250,7 +253,8 @@ private:
     if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
       // `ttg.warp_specialize` needs memory to pass its explicit captures. Pack
       // the captures like a struct.
-      auto [captureSize, captureAlign] = ws.getCaptureSizeAlign();
+      auto captureSize = scratchSizeGetter(op);
+      auto captureAlign = ws.getCaptureAlign();
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, captureSize,
                                                           captureAlign);
       return;

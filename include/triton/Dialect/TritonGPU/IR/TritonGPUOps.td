@@ -594,8 +594,10 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
     RegionRange getPartitionRegions();
     WarpSpecializePartitionsOp getPartitionOp();
 
-    // Get the size and alignment of the capture list.
-    std::pair<uint64_t, uint64_t> getCaptureSizeAlign();
+    // Get the size of the capture list.
+    uint64_t getCaptureSize();
+    // Get the alignment of the capture list.
+    uint64_t getCaptureAlign();
     // Get the total number of extra warps required.
     unsigned getTotalPartitionWarps();
   }];
