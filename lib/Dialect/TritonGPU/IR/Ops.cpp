@@ -1017,17 +1017,23 @@ LogicalResult MemDescSubsliceOp::verify() {
     for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {
       namedOffsets.push_back({d, 0});
     }
-    for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
-         dimSize *= 2) {
-      namedOffsets[dim] = {kDim, dimSize};
+    // Splitting at `dimSize` is valid as long as all points in [0, dimSize)
+    // stay within the same CTA.
+    for (int splitOffset = 0; splitOffset < dstTy.getDimSize(dim);
+         ++splitOffset) {
+      namedOffsets[dim] = {kDim, splitOffset};
       for (auto [inDim, val] : llInv.apply(namedOffsets)) {
-        if (inDim == kOffset && !llvm::isPowerOf2_32(val)) {
-          return emitError(
-              "We don't support splitting along the swizzling pattern");
-        }
         if (inDim == kBlock && val != 0) {
           return emitError("We don't support splitting along CTA dimensions");
         }
+      }
+    }
+    for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
+         dimSize *= 2) {
+      namedOffsets[dim] = {kDim, dimSize};
+      if (!llvm::isPowerOf2_32(llInv.apply(namedOffsets)[0].second)) {
+        return emitError(
+            "We don't support splitting along the swizzling pattern");
       }
     }
   }

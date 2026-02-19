@@ -4,7 +4,7 @@
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32} {
   tt.func public @subslice_non_broadcast_cga_dim(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-      // expected-error @+1 {{non-broadcast CGA dimensions}}
+      // expected-error @+1 {{CTA dimensions}}
       %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x8xf32, #shared, #smem>
       tt.return
   }
@@ -98,7 +98,7 @@ tt.func public @result_1d_to_1d(%arg0: !ttg.memdesc<8xf32, #shared, #smem>) {
 
 // -----
 
-#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = [[4, 0]]}, alignment = 16>
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [4, 0]], block = [[2, 0]]}, alignment = 16>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32} {
   tt.func public @subview_split_on_cta_dim(%arg0: !ttg.memdesc<8x4xf32, #shared, #smem>) {
