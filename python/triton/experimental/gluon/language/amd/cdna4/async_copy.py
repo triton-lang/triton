@@ -103,7 +103,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
     _check(isinstance(offsets.type.layout, (DistributedLayout)),
-           lambda: "expected ptr type layout to be a DistributedLayout")
+           lambda: "expected offsets type layout to be a DistributedLayout")
     _verify_buffer_ops(ptr, offsets, mask, other)
 
     mask = _unwrap_if_constexpr(mask)
