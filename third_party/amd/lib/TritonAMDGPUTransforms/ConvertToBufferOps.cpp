@@ -604,8 +604,7 @@ struct TritonAMDGPUConvertToBufferOpsPass
                                                   axisInfoAnalysis, solver,
                                                   this->analyzeSmallTensorOfst);
     // BufferLoadToLds is only supported on CDNA3 and CDNA4
-    if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
-                           targetInfo.getISAFamily())) {
+    if (targetInfo.supportsBufferLoadToLocal()) {
       patterns
           .add<ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>>(
               context, assumptions, axisInfoAnalysis, solver,
