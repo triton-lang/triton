@@ -1008,19 +1008,9 @@ LogicalResult MemDescSubsliceOp::verify() {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  auto kBlock = mlir::StringAttr::get(ctx, "block");
-  if (auto it = ll.getBases().find(kBlock); it != ll.getBases().end()) {
-    for (auto dim : splitDims) {
-      if (llvm::any_of(it->second, [dim](ArrayRef<int32_t> basis) {
-            return basis[dim] != 0;
-          })) {
-        return emitError(
-            "slicing non-broadcast CGA dimensions is not supported");
-      }
-    }
-  }
-
   auto llInv = ll.invert();
+  auto kOffset = mlir::StringAttr::get(ctx, "offset");
+  auto kBlock = mlir::StringAttr::get(ctx, "block");
   for (auto dim : splitDims) {
     auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
     llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
@@ -1030,9 +1020,14 @@ LogicalResult MemDescSubsliceOp::verify() {
     for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
          dimSize *= 2) {
       namedOffsets[dim] = {kDim, dimSize};
-      if (!llvm::isPowerOf2_32(llInv.apply(namedOffsets)[0].second)) {
-        return emitError(
-            "We don't support splitting along the swizzling pattern");
+      for (auto [inDim, val] : llInv.apply(namedOffsets)) {
+        if (inDim == kOffset && !llvm::isPowerOf2_32(val)) {
+          return emitError(
+              "We don't support splitting along the swizzling pattern");
+        }
+        if (inDim == kBlock && val != 0) {
+          return emitError("We don't support splitting along CTA dimensions");
+        }
       }
     }
   }
