@@ -30,7 +30,6 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::NVIDIA;
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::MemDescType;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
