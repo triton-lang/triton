@@ -85,6 +85,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 #shared_cga_01 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
 #shared_cga_10 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [4, 0]], block = [[2, 0]]}, alignment = 16>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @subslice_non_trivial_block_cga_01
@@ -99,6 +100,14 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 2 : i32, "ttg.num-w
     // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
     %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared_cga_10, #smem> -> !ttg.memdesc<8x8xf32, #shared_cga_10, #smem>
     tt.return
+  }
+
+  module attributes {"ttg.num-ctas" = 2 : i32} {
+    tt.func public @subview_split_on_cta_dim(%arg0: !ttg.memdesc<8x4xf32, #shared, #smem>) {
+      // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
+      %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x4xf32, #shared, #smem> -> !ttg.memdesc<4x4xf32, #shared, #smem, 8x4>
+      tt.return
+    }
   }
 }
 
