@@ -897,24 +897,29 @@ def test_module_load_unload():
 
     @triton.jit
     def kernel(out_ptr, val) -> None:
-        tl.store(out_ptr, val)
+        tl.store(out_ptr, val * 123)
 
     # we should hit the module unload call to decrese the counter from 1 to 0
     counter = 1
 
-    def module_unload(*args, **kwargs):
-        nonlocal counter
-        counter -= 1
-
-    triton.knobs.runtime.module_unload_hook.add(module_unload)
-
     out = torch.randn(1, dtype=torch.float32, device='cuda')
     pre_compile = kernel.warmup(out, 1, grid=(1, ))
     pre_compile._init_handles()
+    target_hash = pre_compile.hash
+
+    def module_unload(module, function, name, metadata_group, hash):
+        nonlocal counter
+        if hash == target_hash:
+            counter -= 1
+
+    triton.knobs.runtime.module_unload_hook.add(module_unload)
 
     assert counter == 1
-    assert pre_compile.module is not None
-    pre_compile.__del__()
+    try:
+        assert pre_compile.module is not None
+        pre_compile.__del__()
 
-    assert counter == 0
-    assert pre_compile.module is None
+        assert counter == 0
+        assert pre_compile.module is None
+    finally:
+        triton.knobs.runtime.module_unload_hook.remove(module_unload)
