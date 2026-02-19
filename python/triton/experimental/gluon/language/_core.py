@@ -638,16 +638,11 @@ def dot_fma(a, b, acc, _semantic=None):
     assert len(acc.shape) == 2 or len(acc.shape) == 3
     assert len(acc.shape) == len(a.shape) == len(b.shape)
 
-    if len(acc.shape) == 3:
-        B, M, N = acc.shape
-        K = a.shape[2]
-        if B * M * N * K > 2**19:
-            warnings.warn(f"Large batched dot FMA instruction size {B}x{M}x{N}x{K} may have slow compile times")
-    else:
-        M, N = acc.shape
-        K = a.shape[1]
-        if M * N * K > 2**19:
-            warnings.warn(f"Large dot FMA instruction size {M}x{N}x{K} may have slow compile times")
+    unified_dot_shape = acc.shape + a.shape[-1:]  # join batch/M/N and K in one list
+    if math.prod(unified_dot_shape) > 2**19:
+        dot_name = "batched dot" if len(acc.shape) == 3 else "dot"
+        shape_str = "x".join([str(x) for x in unified_dot_shape])
+        warnings.warn(f"Large {dot_name} FMA instruction size {shape_str} may have slow compile times")
 
     handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
     return tensor(handle, acc.type)
