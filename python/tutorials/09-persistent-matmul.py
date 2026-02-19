@@ -119,10 +119,11 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
     group_id = pid // num_pid_in_group
+    group_iter = pid % num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
-    pid_n = (pid % num_pid_in_group) // group_size_m
+    pid_m = first_pid_m + (group_iter % group_size_m)
+    pid_n = group_iter // group_size_m
 
     start_m = pid_m * BLOCK_SIZE_M
     start_n = pid_n * BLOCK_SIZE_N
@@ -214,10 +215,11 @@ def matmul_kernel_tma(a_desc, b_desc, c_desc,  #
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
     group_id = pid // num_pid_in_group
+    group_iter = pid % num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
-    pid_n = (pid % num_pid_in_group) // group_size_m
+    pid_m = first_pid_m + (group_iter % group_size_m)
+    pid_n = group_iter // group_size_m
 
     k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
 
@@ -273,10 +275,11 @@ def matmul_tma(a, b, warp_specialize: bool):
 @triton.jit
 def _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS):
     group_id = tile_id // num_pid_in_group
+    group_iter = tile_id % num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (tile_id % group_size_m)
-    pid_n = (tile_id % num_pid_in_group) // group_size_m
+    pid_m = first_pid_m + (group_iter % group_size_m)
+    pid_n = group_iter // group_size_m
     return pid_m, pid_n
 
 
