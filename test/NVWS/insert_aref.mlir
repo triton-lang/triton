@@ -680,3 +680,27 @@ tt.func @cycle_in_partition(%lb: i32, %ub: i32, %step: i32) {
 }
 
 }
+
+// -----
+
+// Test that the pass doesn't crash on nested loops without partition outputs
+// inside a warp-specialized loop.
+#blocked_np = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @nested_loop_no_partition_outputs
+  tt.func @nested_loop_no_partition_outputs(%arg0: tensor<128x64xf16, #blocked_np>, %arg1: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #blocked_np>
+    scf.for %i = %c0_i32 to %arg1 step %c1_i32  : i32 {
+      %0 = "producer"(%arg0, %i) {loop.cluster = 1 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 0>} : (tensor<128x64xf16, #blocked_np>, i32) -> tensor<128x64xf16, #blocked_np>
+      // Inner loop has ttg.partition but no ttg.partition.outputs
+      %1 = scf.for %j = %c0_i32 to %arg1 step %c1_i32 iter_args(%acc = %cst) -> (tensor<128x64xf16, #blocked_np>)  : i32 {
+        %2 = arith.addf %acc, %0 {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 0>} : tensor<128x64xf16, #blocked_np>
+        scf.yield {ttg.partition = array<i32: 0>} %2 : tensor<128x64xf16, #blocked_np>
+      } {ttg.partition = array<i32: 0>}
+      "use"(%1) {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 0>} : (tensor<128x64xf16, #blocked_np>) -> ()
+    } {ttg.partition = array<i32: 0, 1>, tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32}
+    tt.return
+  }
+}

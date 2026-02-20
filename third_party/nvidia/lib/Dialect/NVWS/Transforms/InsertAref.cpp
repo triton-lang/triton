@@ -44,7 +44,10 @@ SmallVector<ProducedValueInfo> getProducedValues(Operation *op,
   if (!hasPartition(op))
     return {};
 
-  // For ops without regions, all results share the same partition IDs
+  // For ops without regions, all results share the same partition IDs.
+  // For ops with regions, partition outputs are required.
+  if (op->getNumRegions() > 0 && !op->hasAttr(kPartitionOutputsAttrName))
+    return {};
   auto partitionOutputs = op->getNumRegions() == 0
                               ? SmallVector<SetVector<int>, 4>(
                                     op->getNumResults(), getPartitionIds(op))
@@ -471,6 +474,9 @@ bool insertArefs(OpBuilder &builder, scf::ForOp loop, Block *block,
         continue;
       auto userPartitions = getPartitionIds(user);
       if (isa<scf::YieldOp>(user)) {
+        auto parentOp = user->getParentOp();
+        if (!parentOp || !parentOp->hasAttr(kPartitionOutputsAttrName))
+          continue;
         userPartitions = getPartitionIds(&use);
       }
       for (auto id : producedValue.partitions) {
@@ -535,6 +541,8 @@ public:
 
     for (scf::ForOp loop : loops) {
       loop.walk([&](scf::ForOp forOp) {
+        if (!forOp->hasAttr(kPartitionOutputsAttrName))
+          return;
         // Communicate tensor arguments in iter_args from producer partition in
         // current iteration to consumer partition in previous iteration or
         // initial value
