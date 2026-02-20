@@ -56,16 +56,21 @@ public:
       return failure();
     }
     const unsigned colStride = 1;
+    unsigned blockN = lhs.getType().getShape()[1];
+    if (blockN > 512)
+      return failure();
     auto aTMemEncoding = TensorMemoryEncodingAttr::get(
-        context, accTMemEncoding.getBlockM(), lhs.getType().getShape()[1],
+        context, accTMemEncoding.getBlockM(), blockN,
         colStride, CTASplitNum[0], CTASplitNum[1],
         accTMemEncoding.getTwoCTAs());
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
-    ttg::MemDescType lhsMemDescType = ttg::MemDescType::get(
-        lhs.getType().getShape(), lhs.getType().getElementType(), aTMemEncoding,
-        tensorMemorySpace,
+    ttg::MemDescType lhsMemDescType = ttg::MemDescType::getChecked(
+        loc, lhs.getType().getShape(), lhs.getType().getElementType(),
+        aTMemEncoding, tensorMemorySpace,
         /*mutableMemory=*/false);
+    if (!lhsMemDescType)
+      return failure();
     bool layoutTmemCompatible =
         isDistributedLayoutTMemCompatible(tcGen5MMAOp, srcType, lhsMemDescType);
     Attribute newLayout = srcLayout;
