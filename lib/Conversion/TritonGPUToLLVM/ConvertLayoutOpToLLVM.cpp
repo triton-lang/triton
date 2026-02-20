@@ -24,6 +24,7 @@ using namespace mlir::triton::gpu;
 using TranspositionInfo = DecomposedWarpConversion::TranspositionInfo;
 
 constexpr int kPtrBitWidth = 64;
+
 struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   const TargetInfoBase &targetInfo;
@@ -58,6 +59,12 @@ struct ConvertLayoutOpConversion
            to_vector(conversion.getOutDimNames()));
     if (llvm::is_contained(dims, kBlock) || llvm::is_contained(dims, kWarp)) {
       assert(!alwaysUseWarpShuffle);
+      if (!disjointBases(srcLayout) || !disjointBases(dstLayout)) {
+        return op.emitError()
+               << "convert_layout through shared memory is not supported "
+                  "for swizzled layouts. Use explicit shared memory "
+                  "operations (local_alloc/local_load/local_store) instead.";
+      }
       // Transfer between values in the same CTA, or across CTAs. We move values
       // through (distributed) shared memory.
       transferSwizzlingLocalMem(op, adaptor.getSrc(), rewriter);
@@ -69,6 +76,12 @@ struct ConvertLayoutOpConversion
       if (cvtNeedsWarpShuffle(srcTy, dstTy) || alwaysUseWarpShuffle)
         return transferWithinWarp(op, adaptor, rewriter);
 
+      if (!disjointBases(srcLayout) || !disjointBases(dstLayout)) {
+        return op.emitError()
+               << "convert_layout through shared memory is not supported "
+                  "for swizzled layouts. Use explicit shared memory "
+                  "operations (local_alloc/local_load/local_store) instead.";
+      }
       transferSwizzlingLocalMem(op, adaptor.getSrc(), rewriter);
       return success();
     } else if (llvm::is_contained(dims, kRegister)) {
