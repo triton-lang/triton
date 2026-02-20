@@ -78,7 +78,7 @@ def TTNG_FenceMBarrierInitReleaseClusterOp : TTNG_Op<
 }
 
 def TTNG_ClusterArriveOp : TTNG_Op<"cluster_arrive", []> {
-  let arguments = (ins I1Attr:$relaxed);
+  let arguments = (ins DefaultValuedAttr<BoolAttr, "false">:$relaxed);
   let assemblyFormat = "attr-dict";
   let hasVerifier = 1;
 }
@@ -89,7 +89,7 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
 }
 
 def TTNG_ClusterBarrierOp : TTNG_Op<"cluster_barrier", []> {
-  let arguments = (ins I1Attr:$relaxed);
+  let arguments = (ins DefaultValuedAttr<BoolAttr, "false">:$relaxed);
   let summary = "Synchronize all warps at cluster scope";
   let description = [{
     Lowers to a cluster arrive/wait pair.

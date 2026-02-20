@@ -567,8 +567,7 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
   if (numCTAs == 1) {
     b.barrier(ttg::AddrSpace::Local);
   } else {
-    triton::nvidia_gpu::ClusterBarrierOp::create(rewriter, loc,
-                                                 /*relaxed=*/false);
+    triton::nvidia_gpu::ClusterBarrierOp::create(rewriter, loc);
   }
 }
 

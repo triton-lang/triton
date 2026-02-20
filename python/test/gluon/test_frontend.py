@@ -1610,7 +1610,7 @@ def test_cluster_barrier_multi_cta():
         anonymize_ir(mod.str_nodebug()), """\
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @cluster_barrier_multi_cta_kernel() attributes {noinline = false} {
-    ttng.cluster_barrier {relaxed = false}
+    ttng.cluster_barrier
     tt.return
   }
 }
@@ -1629,7 +1629,7 @@ def test_cluster_arrive_wait_ops():
         anonymize_ir(mod.str_nodebug()), """\
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @cluster_arrive_wait_ops_kernel() attributes {noinline = false} {
-    ttng.cluster_arrive {relaxed = false}
+    ttng.cluster_arrive
     ttng.cluster_wait
     tt.return
   }

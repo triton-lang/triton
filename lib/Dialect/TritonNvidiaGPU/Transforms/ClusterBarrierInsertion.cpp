@@ -106,8 +106,7 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
     if (isKernel(funcOp) && hasUnresolvedCrossClusterDependency(*blockInfo) &&
         !getModuleTwoCTAs(funcOp)) {
       builder->setInsertionPoint(op);
-      ttng::ClusterBarrierOp::create(*builder, op->getLoc(),
-                                     /*relaxed=*/false);
+      ttng::ClusterBarrierOp::create(*builder, op->getLoc());
       blockInfo->sync();
     }
     return;
@@ -169,8 +168,7 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
         curBlockInfo, filter, allocation, isPreAllocAliasSliceFilter);
     if (insertClusterBarrierNeeded) {
       builder->setInsertionPoint(op);
-      ttng::ClusterBarrierOp::create(*builder, op->getLoc(),
-                                     /*relaxed=*/false);
+      ttng::ClusterBarrierOp::create(*builder, op->getLoc());
     }
 
     // Clear prior distributed dependencies if we have inserted a cluster
@@ -183,8 +181,7 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
   } else if (blockInfo->isIntersected(curBlockInfo, filter, allocation,
                                       isPreAllocAliasSliceFilter)) {
     builder->setInsertionPoint(op);
-    ttng::ClusterBarrierOp::create(*builder, op->getLoc(),
-                                   /*relaxed=*/false);
+    ttng::ClusterBarrierOp::create(*builder, op->getLoc());
     blockInfo->sync();
   }
 

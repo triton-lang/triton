@@ -427,7 +427,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
   llvm.func @cluster_arrive_not_warp_specialized() {
     // CHECK-NOT: ttg.warp_specialize
     // CHECK: nvvm.cluster.arrive
-    ttng.cluster_arrive {relaxed = false}
+    ttng.cluster_arrive
     llvm.return
   }
 }
@@ -486,7 +486,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
     // CHECK-NOT: ttg.warp_specialize
     // CHECK: nvvm.cluster.arrive
     // CHECK-NEXT: nvvm.cluster.wait
-    ttng.cluster_barrier {relaxed = false}
+    ttng.cluster_barrier
     llvm.return
   }
 }
