@@ -1163,10 +1163,6 @@ $inputs must be the tensors corresponding to the async dot ops that we're
 waiting on.  For example, if there are N pending async dot ops and we call
 `warp_group_dot_wait 1`, then $inputs must be the result of the first dot op.
 
-The `warpGroupLocal` attribute specifies that we only wait for the local
-warp group, and if num_warps > 4 then shared memory inputs may still be in
-use by other warp groups.
-
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`
@@ -1176,7 +1172,6 @@ Interfaces: `InferTypeOpInterface`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>pendings</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
-<tr><td><code>warpGroupLocal</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 
 #### Operands:

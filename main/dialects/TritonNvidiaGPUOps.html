@@ -1701,9 +1701,6 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-
 <p>$inputs must be the tensors corresponding to the async dot ops that we’re
 waiting on.  For example, if there are N pending async dot ops and we call
 <code class="docutils literal notranslate"><span class="pre">warp_group_dot_wait</span> <span class="pre">1</span></code>, then $inputs must be the result of the first dot op.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">warpGroupLocal</span></code> attribute specifies that we only wait for the local
-warp group, and if num_warps &gt; 4 then shared memory inputs may still be in
-use by other warp groups.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id53">
@@ -1711,7 +1708,6 @@ use by other warp groups.</p>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>pendings</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
-<tr><td><code>warpGroupLocal</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 </section>
 <section id="id54">
