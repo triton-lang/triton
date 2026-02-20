@@ -5,6 +5,7 @@ import pytest
 import torch
 
 import triton
+import triton.profiler.language as pl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.blackwell import (
@@ -317,6 +318,7 @@ class PartitionArgs:
 
 @gluon.jit
 def matmul_clc_partition(p):
+    pl.enter_scope("clc_partition")
     has_work = gl.to_tensor(True)
     state = Counter.create(0, p.clc_barriers.shape[0])
     consumed_state = Counter.create(1, p.clc_barriers.shape[0])
@@ -334,10 +336,12 @@ def matmul_clc_partition(p):
         state = state.next()
         consumed_state = consumed_state.next()
         i += 1
+    pl.exit_scope()
 
 
 @gluon.jit
 def matmul_load_partition(p):
+    pl.enter_scope("load_partition")
     BLOCK_K: gl.constexpr = p.a_desc.block_shape[1]
     K = p.a_desc.shape[1]
 
@@ -358,10 +362,12 @@ def matmul_load_partition(p):
             state = state.next()
         scheduler = scheduler.step(i)
         i += 1
+    pl.exit_scope()
 
 
 @gluon.jit
 def matmul_mma_partition(p):
+    pl.enter_scope("mma_partition")
     BLOCK_K: gl.constexpr = p.a_desc.block_shape[1]
     K = p.a_desc.shape[1]
     acc_stages: gl.constexpr = p.acc_empty_bars.shape[0]
@@ -385,10 +391,12 @@ def matmul_mma_partition(p):
         acc_state = acc_state.next()
         scheduler = scheduler.step(i)
         i += 1
+    pl.exit_scope()
 
 
 @gluon.jit
 def matmul_epilogue_partition(p):
+    pl.enter_scope("epilogue_partition")
     TILE_M: gl.constexpr = p.a_desc.block_shape[0]
     TILE_N: gl.constexpr = p.b_desc.block_shape[1]
     SPLIT_TILE_N: gl.constexpr = p.c_desc.block_shape[1]
@@ -446,6 +454,7 @@ def matmul_epilogue_partition(p):
         acc_state = acc_state.next()
         scheduler = scheduler.step(i)
         i += 1
+    pl.exit_scope()
 
 
 @gluon.jit
@@ -848,12 +857,14 @@ def maybe_make_pallas_runner(enabled, a, b, expected, cfg):
         return None
 
 
-def run_profile(shape, a, b, c_torch, run_gluon, run_pallas_kernel):
+def run_profile(shape, a, b, c_torch, run_gluon, run_pallas_kernel, enable_instrumentation_trace=False):
     import triton.profiler as proton
 
     M, N, K = shape
 
     proton.start("matmul", hook="triton")
+    if enable_instrumentation_trace:
+        proton.start("matmul", data="trace", backend="instrumentation")
     proton.deactivate(0)
     l2_cache = triton.runtime.driver.active.get_empty_cache_for_benchmark()
 
@@ -902,7 +913,7 @@ def run_profile(shape, a, b, c_torch, run_gluon, run_pallas_kernel):
     show_profile("matmul")
 
 
-def benchmark(*, profile=True, run_pallas=False, use_autotuned=False):
+def benchmark(*, profile=True, run_pallas=False, use_autotuned=False, enable_instrumentation_trace=False):
     if not is_blackwell():
         raise RuntimeError("This benchmark requires a Blackwell CUDA GPU.")
 
@@ -924,7 +935,15 @@ def benchmark(*, profile=True, run_pallas=False, use_autotuned=False):
         print("Skipping profiling (--no-profile).")
         return
 
-    run_profile(shape, a, b, c_torch, run_gluon, run_pallas_kernel)
+    run_profile(
+        shape,
+        a,
+        b,
+        c_torch,
+        run_gluon,
+        run_pallas_kernel,
+        enable_instrumentation_trace=enable_instrumentation_trace,
+    )
 
 
 if __name__ == "__main__":
@@ -957,5 +976,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Use autotuned matmul() instead of matmul_with_config() for the Gluon runner.",
     )
+    parser.add_argument(
+        "--enable-instrumentation-trace",
+        action="store_true",
+        help="Enable Proton instrumentation backend trace collection.",
+    )
     args = parser.parse_args()
-    benchmark(profile=not args.no_profile, run_pallas=args.run_pallas, use_autotuned=args.use_autotuned)
+    benchmark(
+        profile=not args.no_profile,
+        run_pallas=args.run_pallas,
+        use_autotuned=args.use_autotuned,
+        enable_instrumentation_trace=args.enable_instrumentation_trace,
+    )
