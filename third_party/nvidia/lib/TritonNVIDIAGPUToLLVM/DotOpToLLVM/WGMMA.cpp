@@ -302,6 +302,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
           // WGMMA, we can safely overlap transformations on the A operand with
           // the previous-iteration WGMMA still in flight.
           for (Value &regAVal : regA) {
+            OpBuilder::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPoint(startSequence);
             Type regTy = regAVal.getType();
             if (!regTy.isIntOrFloat() || regTy.getIntOrFloatBitWidth() != 32) {
               return mlir::emitError(loc, "unsupported WGMMA A register type ")
