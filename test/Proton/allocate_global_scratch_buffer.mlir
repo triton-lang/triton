@@ -1,4 +1,4 @@
-// RUN: triton-opt --split-input-file -allocate-proton-global-scratch-buffer %s | FileCheck %s
+// RUN: triton-opt --split-input-file -tritongpu-global-scratch-memory-allocation %s | FileCheck %s
 
 // CHECK: module attributes {{.*}}ttg.global_scratch_memory_alignment = 1 : i32{{.*}}ttg.global_scratch_memory_size = 0 : i32{{.*}}ttg.profile_scratch_memory_alignment = 128 : i32{{.*}}ttg.profile_scratch_memory_size = 768 : i32{{.*}}{
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
