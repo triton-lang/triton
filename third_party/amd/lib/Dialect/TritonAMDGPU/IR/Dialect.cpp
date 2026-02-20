@@ -184,7 +184,7 @@ LogicalResult ExtractSliceOp::verify() {
 // operations. When extract_slice is used to extract a portion that exactly
 // matches one of the original tensors concatenated by a concat operation, we
 // can eliminate extract_slice op and use the original tensor directly.
-struct CononicalizeExtractSliceAndConcat
+struct CanonicalizeExtractSliceAndConcat
     : public mlir::OpRewritePattern<amdgpu::ExtractSliceOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -237,7 +237,7 @@ struct CononicalizeExtractSliceAndConcat
 
 void ExtractSliceOp::getCanonicalizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::MLIRContext *context) {
-  patterns.add<CononicalizeExtractSliceAndConcat>(context);
+  patterns.add<CanonicalizeExtractSliceAndConcat>(context);
 }
 
 LogicalResult UpcastMXFPOp::verify() {
@@ -618,6 +618,17 @@ LogicalResult ConcatOp::verify() {
   }
 
   return success();
+}
+
+LogicalResult BufferLoadToLocalOp::verify() {
+  auto mod = getOperation()->getParentOfType<ModuleOp>();
+  if (!mod)
+    return success();
+
+  auto arch = mlir::getAMDArch(mod);
+  if (!arch || AMD::TargetInfo(arch->str()).supportsBufferLoadToLocal())
+    return success();
+  return emitError() << "BufferLoadToLocal unsupported on target architecture";
 }
 
 LogicalResult LocalLoadPackedTransposedOp::verify() {

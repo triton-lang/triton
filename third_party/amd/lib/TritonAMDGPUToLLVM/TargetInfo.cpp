@@ -741,6 +741,11 @@ bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
   return false;
 }
 
+bool TargetInfo::supportsBufferLoadToLocal() const {
+  return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                            getISAFamily());
+}
+
 bool TargetInfo::supportsWaveId() const {
   return getISAFamily() == ISAFamily::RDNA4 ||
          getISAFamily() == ISAFamily::GFX1250;
