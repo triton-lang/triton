@@ -413,10 +413,99 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @mbarrier_sync_cluster_init() {
     // CHECK: fence.mbarrier_init.release.cluster
     // CHECK: nvvm.cluster.arrive.relaxed
-    // CHECK: nvvm.cluster.wait
+    // CHECK-NEXT: nvvm.cluster.wait
     ttng.fence_mbarrier_init_release_cluster
-    ttng.cluster_arrive {relaxed = 1 : i1}
-    ttng.cluster_wait
+    ttng.cluster_barrier {relaxed = 1 : i1}
     tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @cluster_arrive_not_warp_specialized
+  llvm.func @cluster_arrive_not_warp_specialized() {
+    // CHECK-NOT: ttg.warp_specialize
+    // CHECK: nvvm.cluster.arrive
+    ttng.cluster_arrive
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // CHECK-LABEL: @cluster_arrive_warp_specialized
+  llvm.func @cluster_arrive_warp_specialized() {
+    // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
+    // CHECK: default {
+    // CHECK-NEXT: nvvm.cluster.arrive.relaxed
+    // CHECK-NEXT: ttg.warp_yield
+    // CHECK: partition0() num_warps(4) {
+    // CHECK-NEXT: nvvm.cluster.arrive.relaxed
+    // CHECK-NEXT: ttg.warp_return
+    ttng.cluster_arrive {relaxed = true}
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @cluster_wait_not_warp_specialized
+  llvm.func @cluster_wait_not_warp_specialized() {
+    // CHECK-NOT: ttg.warp_specialize
+    // CHECK: nvvm.cluster.wait
+    ttng.cluster_wait
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // CHECK-LABEL: @cluster_wait_warp_specialized
+  llvm.func @cluster_wait_warp_specialized() {
+    // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
+    // CHECK: default {
+    // CHECK-NEXT: nvvm.cluster.wait
+    // CHECK-NEXT: ttg.warp_yield
+    // CHECK: partition0() num_warps(4) {
+    // CHECK-NEXT: nvvm.cluster.wait
+    // CHECK-NEXT: ttg.warp_return
+    ttng.cluster_wait
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @cluster_barrier_not_warp_specialized
+  llvm.func @cluster_barrier_not_warp_specialized() {
+    // CHECK-NOT: ttg.warp_specialize
+    // CHECK: nvvm.cluster.arrive
+    // CHECK-NEXT: nvvm.cluster.wait
+    ttng.cluster_barrier
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // CHECK-LABEL: @cluster_barrier_warp_specialized
+  llvm.func @cluster_barrier_warp_specialized() {
+    // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
+    // CHECK: default {
+    // CHECK-NEXT: nvvm.cluster.arrive.relaxed
+    // CHECK-NEXT: nvvm.cluster.wait
+    // CHECK-NEXT: ttg.warp_yield
+    // CHECK: partition0() num_warps(4) {
+    // CHECK-NEXT: nvvm.cluster.arrive.relaxed
+    // CHECK-NEXT: nvvm.cluster.wait
+    // CHECK-NEXT: ttg.warp_return
+    ttng.cluster_barrier {relaxed = true}
+    llvm.return
   }
 }

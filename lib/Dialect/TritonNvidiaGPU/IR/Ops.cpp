@@ -212,20 +212,28 @@ LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
   return success();
 }
 
+static LogicalResult verifyClusterSyncOp(Operation *op) {
+  int numCTAs = triton::gpu::lookupNumCTAs(op);
+  if (numCTAs <= 1)
+    return op->emitOpError("requires ttg.num-ctas > 1");
+  if (op->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
+    return op->emitOpError("cannot be used inside `ttg.warp_specialize`");
+  return success();
+}
+
 // -- ClusterArriveOp --
 LogicalResult ClusterArriveOp::verify() {
-  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
-  if (numCTAs <= 1)
-    return emitOpError("requires ttg.num-ctas > 1");
-  return success();
+  return verifyClusterSyncOp(getOperation());
 }
 
 // -- ClusterWaitOp --
 LogicalResult ClusterWaitOp::verify() {
-  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
-  if (numCTAs <= 1)
-    return emitOpError("requires ttg.num-ctas > 1");
-  return success();
+  return verifyClusterSyncOp(getOperation());
+}
+
+// -- ClusterBarrierOp --
+LogicalResult ClusterBarrierOp::verify() {
+  return verifyClusterSyncOp(getOperation());
 }
 
 // -- TMA operation verifiers --

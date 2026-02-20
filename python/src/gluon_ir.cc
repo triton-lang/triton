@@ -856,12 +856,18 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self) {
              self.create<ttng::FenceMBarrierInitReleaseClusterOp>();
            })
-      .def("create_cluster_arrive",
-           [](GluonOpBuilder &self, bool relaxed) {
-             self.create<ttng::ClusterArriveOp>(relaxed);
-           })
+      .def(
+          "create_cluster_arrive",
+          [](GluonOpBuilder &self,
+             bool relaxed) { self.create<ttng::ClusterArriveOp>(relaxed); },
+          py::arg("relaxed") = false)
       .def("create_cluster_wait",
            [](GluonOpBuilder &self) { self.create<ttng::ClusterWaitOp>(); })
+      .def(
+          "create_cluster_barrier",
+          [](GluonOpBuilder &self,
+             bool relaxed) { self.create<ttng::ClusterBarrierOp>(relaxed); },
+          py::arg("relaxed") = false)
       // CLC (Cluster Launch Control) ops - SM100+
       .def("create_clc_try_cancel",
            [](GluonOpBuilder &self, Value result, Value mbarrier,
@@ -952,11 +958,6 @@ void init_gluon_ir(py::module &&m) {
       .def("create_fence_async_shared",
            [](GluonOpBuilder &self, bool bCluster) -> OpState {
              return self.create<ttng::FenceAsyncSharedOp>(bCluster);
-           })
-      .def("create_cluster_sync",
-           [](GluonOpBuilder &self) {
-             self.create<ttng::ClusterArriveOp>(/*relaxed=*/false);
-             self.create<ttng::ClusterWaitOp>();
            })
 
       .def("create_broadcast",
