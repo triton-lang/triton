@@ -269,7 +269,7 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
 }
 std::pair<int64_t, ColumnAction>
 actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
-                      uint64_t maskSpanOffsets) {
+                      uint64_t maskSpanOffsets, bool allowSameBasis) {
   // General idea:
   // We wan to swap an xor into an addition when computing the register offsets.
   // We can do this if the output bits of this register are disjoint from those
@@ -293,7 +293,8 @@ actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
   SmallVector<size_t> front, back;
   auto layoutNamedBases = layout.flattenOuts().getBases();
   for (auto [idx, basis] : llvm::enumerate(layoutNamedBases.lookup(kReg))) {
-    if ((basis[0] & bits) == 0 || tileBases.contains(basis[0])) {
+    if ((basis[0] & bits) == 0 ||
+        (allowSameBasis && tileBases.contains(basis[0]))) {
       front.push_back(idx);
     } else {
       back.push_back(idx);
@@ -561,6 +562,19 @@ LinearLayout removeStandardDim(const LinearLayout &layout, int dim) {
     dimSizes[i].first = newDim;
   }
   return LinearLayout(newLayout.getBases(), dimSizes, /*isSurjective*/ false);
+}
+
+bool disjointBases(const LinearLayout &layout) {
+  auto flat = layout.flattenOuts();
+  int32_t seen = 0;
+  for (const auto &[dim, bases] : flat.getBases()) {
+    for (const auto &basis : bases) {
+      if (seen & basis[0])
+        return false;
+      seen |= basis[0];
+    }
+  }
+  return true;
 }
 
 } // namespace mlir::triton

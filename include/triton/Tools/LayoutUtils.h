@@ -119,7 +119,7 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
 
 std::pair<int64_t, ColumnAction>
 actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
-                      uint64_t maskSpanOffsets);
+                      uint64_t maskSpanOffsets, bool allowSameBasis = true);
 
 // For a layout A with A.hasInDim(kReg), repeat the values so that they have
 // the same broadcasting as layout
@@ -185,6 +185,10 @@ std::optional<LinearLayout> getReps(const LinearLayout &cvt,
 // Given a layout mapping onto dim0..dimn, remove a dimension `dim`
 // and rename the rest as dim0..dimn-1
 LinearLayout removeStandardDim(const LinearLayout &layout, int dim);
+
+// Returns true if all basis vectors across all input dimensions have pairwise
+// disjoint output bits (after flattening outputs to a single dimension).
+bool disjointBases(const LinearLayout &layout);
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LAYOUTUTILS_H

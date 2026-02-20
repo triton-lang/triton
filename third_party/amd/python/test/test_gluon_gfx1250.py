@@ -17,7 +17,7 @@ from triton._internal_testing import is_hip_gfx1250, str_to_triton_dtype, numpy_
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
-from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout
+from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout, PartitionedSharedLayout
 
 
 @gluon.jit
@@ -3709,3 +3709,73 @@ def test_runtime_tdm_gather_partial_column_block(N, num_warps, index_dtype):
             ref_out[dst_row] = inp[src_row]
 
     torch.testing.assert_close(out_result, ref_out)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("M, N, K", [(64, 32, 32), (64, 64, 64), (128, 128, 64), (64, 32, 64), (64, 64, 32)])
+def test_wmma_swizzled_warp(M, N, K):
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr,  #
+               stride_am, stride_ak,  #
+               stride_bk, stride_bn,  #
+               stride_cm, stride_cn,  #
+               BLOCK_SIZE_M: ttgl.constexpr,  #
+               BLOCK_SIZE_N: ttgl.constexpr,  #
+               BLOCK_SIZE_K: ttgl.constexpr,  #
+               BLOCKED_LAYOUT: ttgl.constexpr,  #
+               WMMA_LAYOUT: ttgl.constexpr,  #
+               SHARED_LAYOUT_A: ttgl.constexpr,  #
+               SHARED_LAYOUT_B: ttgl.constexpr,  #
+               K_WIDTH: ttgl.constexpr):
+        dot_a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, WMMA_LAYOUT, K_WIDTH)
+        dot_b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, WMMA_LAYOUT, K_WIDTH)
+
+        offs_am = ttgl.arange(0, BLOCK_SIZE_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+        offs_ak = ttgl.arange(0, BLOCK_SIZE_K, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+        offs_a = offs_am[:, None] * stride_am + offs_ak[None, :] * stride_ak
+        a = ttgl.load(a_ptr + offs_a)
+
+        offs_bk = ttgl.arange(0, BLOCK_SIZE_K, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+        offs_bn = ttgl.arange(0, BLOCK_SIZE_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+        offs_b = offs_bk[:, None] * stride_bk + offs_bn[None, :] * stride_bn
+        b = ttgl.load(b_ptr + offs_b)
+
+        # Convert to dot operand layouts via shared memory (no convert_layout)
+        shared_a = ttgl.allocate_shared_memory(a.dtype, (BLOCK_SIZE_M, BLOCK_SIZE_K), SHARED_LAYOUT_A, value=a)
+        a = shared_a.load(dot_a_layout)
+
+        shared_b = ttgl.allocate_shared_memory(b.dtype, (BLOCK_SIZE_K, BLOCK_SIZE_N), SHARED_LAYOUT_B, value=b)
+        b = shared_b.load(dot_b_layout)
+
+        acc = ttgl.zeros([BLOCK_SIZE_M, BLOCK_SIZE_N], ttgl.float32, WMMA_LAYOUT)
+        c = ttgl.amd.gfx1250.wmma(a, b, acc)
+
+        offs_cm = ttgl.arange(0, BLOCK_SIZE_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
+        offs_cn = ttgl.arange(0, BLOCK_SIZE_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
+        offs_c = offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
+        ttgl.store(c_ptr + offs_c, c)
+
+    a = torch.randn((M, K), device='cuda', dtype=torch.float16)
+    b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+    c = torch.empty((M, N), device=a.device, dtype=torch.float32)
+
+    blocked = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    wmma = ttgl.amd.AMDWMMALayout(3, True, [[2, 1], [1, 0]], [[2, 0]], [16, 16, 32])
+
+    num_groups_a = M // 64
+    padded_a = ttgl.PaddedSharedLayout.with_identity_for([[K, 8]], [num_groups_a * 32, K], [1, 0])
+    shared_a = PartitionedSharedLayout(num_partitions=2, num_groups=num_groups_a, partition_dim=0,
+                                       partition_layout=padded_a)
+
+    num_groups_b = N // 32
+    padded_b = ttgl.PaddedSharedLayout.with_identity_for([[N, 16]], [K, num_groups_b * 16], [1, 0])
+    shared_b = PartitionedSharedLayout(num_partitions=2, num_groups=num_groups_b, partition_dim=1,
+                                       partition_layout=padded_b)
+
+    kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
+                 BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, BLOCKED_LAYOUT=blocked, WMMA_LAYOUT=wmma, SHARED_LAYOUT_A=shared_a,
+                 SHARED_LAYOUT_B=shared_b, K_WIDTH=8, num_warps=4)
+
+    ref = torch.matmul(a.float(), b.float())
+    torch.testing.assert_close(ref, c)

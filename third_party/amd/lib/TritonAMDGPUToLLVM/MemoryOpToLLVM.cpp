@@ -35,6 +35,11 @@ public:
     if (isa<triton::gpu::PartitionedSharedEncodingAttr>(srcTy.getEncoding())) {
       return failure();
     }
+
+    if (!disjointBases(triton::gpu::toLinearLayout(dstTy))) {
+      return failure();
+    }
+
     auto typeConverter = this->getTypeConverter();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     unsigned bitWidth = llvmElemTy.getIntOrFloatBitWidth();
