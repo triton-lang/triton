@@ -38,7 +38,7 @@ public:
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addDynamicallyLegalOp<triton::gpu::GlobalScratchAllocOp>(
         [](triton::gpu::GlobalScratchAllocOp op) {
-          return !op->hasAttr("3p_allocation");
+          return !op->hasAttr("third_party_allocation");
         });
   }
 };

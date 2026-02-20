@@ -73,8 +73,9 @@ static void allocateGMem(Operation *parentOp,
   // TODO: Use a real algorithm
   parentOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
     if (auto alloc = dyn_cast<triton::gpu::GlobalScratchAllocOp>(op)) {
+      bool isThirdPartyAlloc = alloc->hasAttr("third_party_allocation");
       ScratchMemoryInfo &memInfo =
-          alloc->hasAttr("3p_allocation") ? profileMemInfo : globalMemInfo;
+          isThirdPartyAlloc ? profileMemInfo : globalMemInfo;
       assignOffset(op, builder, memInfo, alloc.getNbytes(),
                    alloc.getAlignment(), "ttg.global_scratch_memory_offset");
     } else if (auto callOp = dyn_cast<triton::CallOp>(op)) {
