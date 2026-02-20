@@ -128,6 +128,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// TMA copy with barrier mask zero: barrier has no CGALayout -> shared::cta
+#shared0_cta = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: tma_copy_barrier_mask_zero
+  // CHECK: cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes
+  // CHECK-NOT: cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier
+  tt.func @tma_copy_barrier_mask_zero(%tma: !tt.tensordesc<tensor<128x128xf32, #shared1>>, %alloc: !ttg.memdesc<128x128xf32, #shared1, #smem, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0_cta, #smem>, %pred: i1) {
+    ttng.async_tma_copy_global_to_local %tma[%x, %x] %alloc, %barrier, %pred : !tt.tensordesc<tensor<128x128xf32, #shared1>>, !ttg.memdesc<1xi64, #shared0_cta, #smem> -> !ttg.memdesc<128x128xf32, #shared1, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// TMA copy with barrier mask non-zero: barrier has CGALayout
+#shared0_cluster = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#shared1_cga = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: tma_copy_barrier_mask_nonzero
+  // Barrier pointer is modified when barrier mask != 0
+  // CHECK: llvm.ptrtoint
+  // CHECK: llvm.and
+  // CHECK: llvm.inttoptr
+  // TMA uses shared::cluster when barrier mask is non-zero
+  // CHECK: cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes
+  // CHECK-NOT: cp.async.bulk.tensor.2d.shared::cta.global.mbarrier
+  tt.func @tma_copy_barrier_mask_nonzero(%tma: !tt.tensordesc<tensor<128x128xf32, #shared1_cga>>, %alloc: !ttg.memdesc<128x128xf32, #shared1_cga, #smem, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0_cluster, #smem>, %pred: i1) {
+    ttng.async_tma_copy_global_to_local %tma[%x, %x] %alloc, %barrier, %pred : !tt.tensordesc<tensor<128x128xf32, #shared1_cga>>, !ttg.memdesc<1xi64, #shared0_cluster, #smem> -> !ttg.memdesc<128x128xf32, #shared1_cga, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory

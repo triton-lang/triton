@@ -675,6 +675,12 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
+bool TargetInfo::supportBitwidth16Elementwise() const { return true; }
+
+bool TargetInfo::supportBitwidth32Elementwise() const {
+  return getISAFamily() == ISAFamily::GFX1250;
+}
+
 bool TargetInfo::supportsDirectToLDSScattering() const {
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
