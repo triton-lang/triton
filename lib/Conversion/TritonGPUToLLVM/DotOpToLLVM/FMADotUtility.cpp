@@ -103,7 +103,7 @@ LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
   Value llA = adaptor.getA();
   Value llB = adaptor.getB();
 
-  auto sizePerThread = dLayout.getSizePerThread();
+  llvm::SmallVector<unsigned> sizePerThread{dLayout.getSizePerThread()};
   auto numElemsPerThread = product(sizePerThread);
   SmallVector<unsigned> shapePerCTATile;
   for (auto [reg, thread, warp] :
