@@ -899,7 +899,7 @@ def test_preload_higher_order_kernels(device, fresh_triton_cache) -> None:
     assert output.item() == 31
 
 
-def test_module_load_unload(fresh_knobs):
+def test_module_load_unload(device, fresh_knobs):
 
     @triton.jit
     def kernel(out_ptr, val) -> None:
@@ -917,7 +917,7 @@ def test_module_load_unload(fresh_knobs):
     gc.disable()
     triton.knobs.runtime.module_unload_hook.add(module_unload)
 
-    out = torch.randn(1, dtype=torch.float32, device='cuda')
+    out = torch.randn(1, dtype=torch.float32, device=device)
     pre_compile = kernel.warmup(out, 1, grid=(1, ))
     pre_compile._init_handles()
 
