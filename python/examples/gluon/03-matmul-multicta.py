@@ -864,7 +864,7 @@ def run_profile(shape, a, b, c_torch, run_gluon, run_pallas_kernel, enable_instr
 
     proton.start("matmul", hook="triton")
     if enable_instrumentation_trace:
-        proton.start("matmul", data="trace", backend="instrumentation")
+        proton.start("matmul_trace", data="trace", backend="instrumentation", mode=proton.mode.Default(buffer_size=1024))
     proton.deactivate(0)
     l2_cache = triton.runtime.driver.active.get_empty_cache_for_benchmark()
 
