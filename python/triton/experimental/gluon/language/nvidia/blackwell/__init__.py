@@ -511,7 +511,8 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     a_type = _semantic._str_to_fp_type(a_type.value)
     b_type = _semantic._str_to_fp_type(b_type.value)
     _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
-                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds)
+                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
+                                                acc.layout.two_ctas)
 
 
 @constexpr_function
