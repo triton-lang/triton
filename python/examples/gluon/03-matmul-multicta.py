@@ -433,6 +433,8 @@ def matmul_epilogue_partition(p):
                     cga_layout=p.c_desc.layout.cga_layout,
                 )).to(dtype)
             acc_smem0 = acc_smem.slice(0, HALF_SPLIT_TILE_N, dim=1)
+            tma.store_wait(pendings=1)
+            acc_smem0.store(acc0)
             acc1 = acc_sub1.load(
                 get_tmem_reg_layout(
                     gl.float32,
@@ -442,8 +444,6 @@ def matmul_epilogue_partition(p):
                     cga_layout=p.c_desc.layout.cga_layout,
                 )).to(dtype)
             acc_smem1 = acc_smem.slice(HALF_SPLIT_TILE_N, HALF_SPLIT_TILE_N, dim=1)
-            tma.store_wait(pendings=1)
-            acc_smem0.store(acc0)
             acc_smem1.store(acc1)
             fence_async_shared()
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_TILE_N * s], acc_smem)
