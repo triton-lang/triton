@@ -693,6 +693,8 @@ def test_function_arguments(device):
     kernel[(1, )](y[2], func3, (3, ))
     kernel[(1, )](y[3], func4, (3, 4))
     kernel[(1, )](y[4], func1, tuple())
+
+    device = getattr(torch, device).current_device()
     assert len(kernel.device_caches[device][0]) == 4
     assert y.tolist() == [1, 2, 3, 7, 1]
 
@@ -747,6 +749,8 @@ def test_async_compile_mock(device, fresh_triton_cache):
         kernel.warmup(b, 0, grid=(1, ))
         kernel.warmup(b, 1, grid=(1, ))
 
+        device = getattr(torch, device).current_device()
+
         # Nothing has actually compiled yet
         assert len(kernel.device_caches[device][0]) == 4
         assert len(pool.work_queue) == 4
@@ -782,6 +786,7 @@ def test_async_compile(device, fresh_triton_cache):
         kernel.warmup(b, 0, grid=(1, ))
         kernel.warmup(b, 1, grid=(1, ))
 
+        device = getattr(torch, device).current_device()
         assert len(kernel.device_caches[device][0]) == 4
 
         kernel[(1, )](b, 1)
