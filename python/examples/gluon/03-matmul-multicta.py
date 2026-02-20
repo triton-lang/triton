@@ -336,7 +336,7 @@ def matmul_clc_partition(p):
         state = state.next()
         consumed_state = consumed_state.next()
         i += 1
-    pl.exit_scope()
+    pl.exit_scope("clc_partition")
 
 
 @gluon.jit
@@ -362,7 +362,7 @@ def matmul_load_partition(p):
             state = state.next()
         scheduler = scheduler.step(i)
         i += 1
-    pl.exit_scope()
+    pl.exit_scope("load_partition")
 
 
 @gluon.jit
@@ -391,7 +391,7 @@ def matmul_mma_partition(p):
         acc_state = acc_state.next()
         scheduler = scheduler.step(i)
         i += 1
-    pl.exit_scope()
+    pl.exit_scope("mma_partition")
 
 
 @gluon.jit
@@ -454,7 +454,7 @@ def matmul_epilogue_partition(p):
         acc_state = acc_state.next()
         scheduler = scheduler.step(i)
         i += 1
-    pl.exit_scope()
+    pl.exit_scope("epilogue_partition")
 
 
 @gluon.jit
