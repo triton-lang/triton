@@ -89,7 +89,7 @@ def make_default_opt_flags_amd(
     elif get_rdna_version() in (3, 4) and m >= 512:
         block_m = 64
     else:
-        block_m = max(32, min(triton.next_power_of_2(slice_size), 64))
+        block_m = max(16, min(triton.next_power_of_2(slice_size), 64))
 
     if ragged_metadata is not None:
         grid_m = ragged_metadata.n_blocks(ragged_metadata.n_slices, m, block_m)
