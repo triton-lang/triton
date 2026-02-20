@@ -12,6 +12,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 project(triton CXX C)
 include(CTest)
+include(GNUInstallDirs)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -256,7 +257,6 @@ function(add_triton_plugin name)
   add_triton_object(${name} ${ARGN})
 endfunction()
 
-
 # Disable warnings that show up in external code (gtest;pybind11)
 if(NOT MSVC)
   set(TRITON_DISABLE_EH_RTTI_FLAGS "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti>")
@@ -283,7 +283,6 @@ add_subdirectory(lib)
 if (NOT WIN32 AND NOT APPLE AND NOT BSD)
   link_libraries(stdc++fs)
 endif()
-
 
 # -----
 
@@ -418,6 +417,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 
+  install(TARGETS triton
+    COMPONENT libraries
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  )
+
   if (NOT DEFINED LLVM_SYSPATH)
       message(FATAL_ERROR "LLVM_SYSPATH must be set.")
   endif()
@@ -471,3 +476,15 @@ if(TRITON_BUILD_UT)
     USES_TERMINAL
   )
 endif()
+
+# Header installation
+
+install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
+  COMPONENT headers
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  FILES_MATCHING PATTERN "*.h")
+
+install(DIRECTORY ${PROJECT_BINARY_DIR}/include/
+  COMPONENT headers
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  FILES_MATCHING PATTERN "*.h.inc")
