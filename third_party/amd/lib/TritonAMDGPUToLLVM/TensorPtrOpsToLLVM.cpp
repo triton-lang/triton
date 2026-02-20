@@ -12,6 +12,46 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
 namespace {
+// Validates that the tensor descriptor's strides and shared layout are
+// compatible with TDM. The shared order must be [rank-1, rank-2, ..., 0],
+// and all stride-1 dimensions are consecutive at the end (trailing dims).
+// TODO: this is too strict but the lowering doesn't support reordering
+// dimensions yet; once it does we can relax these checks.
+LogicalResult validateStridesAndSharedOrder(triton::MakeTensorDescOp op,
+                                            Attribute sharedEnc,
+                                            ArrayRef<int64_t> shape,
+                                            ValueRange strides) {
+  int rank = shape.size();
+  auto sharedOrder = triton::gpu::getOrder(
+      cast<triton::gpu::SharedEncodingTrait>(sharedEnc), shape);
+
+  for (int i = 0; i < rank; ++i) {
+    if (sharedOrder[i] != rank - 1 - i)
+      return op.emitError() << "requires shared order [rank-1, rank-2, ..., 0]";
+  }
+
+  SmallVector<unsigned> strideOneDims;
+  for (auto [dim, strideVal] : llvm::enumerate(strides)) {
+    auto cst = getConstantIntValue(getAsOpFoldResult(strideVal));
+    if (cst.value_or(0) == 1) {
+      strideOneDims.push_back(dim);
+    }
+  }
+
+  if (strideOneDims.empty())
+    return op.emitError() << "requires at least one dimension to have stride 1";
+
+  int expectedDim = rank - 1;
+  for (auto it = strideOneDims.rbegin(); it != strideOneDims.rend(); ++it) {
+    if (*it != expectedDim--) {
+      return op.emitError() << "requires all stride 1 dimensions to be "
+                               "consecutive starting from the last dimension";
+    }
+  }
+
+  return success();
+}
+
 // Collects all users of the value beyond the basic block boundaries
 // defining a given value.
 void collectUsers(Value value, llvm::SetVector<Operation *> &users) {
@@ -108,6 +148,11 @@ struct MakeTensorDescOpConversion
     SmallVector<int64_t> blockShape = to_vector(blockTy.getShape());
     int numWarps = lookupNumWarps(op);
     auto shapePerCTA = triton::gpu::getShapePerCTA(sharedEnc, blockShape);
+
+    if (failed(validateStridesAndSharedOrder(op, sharedEnc, shapePerCTA,
+                                             tensorStride))) {
+      return failure();
+    }
 
     // Create TDM descriptor for 2D-5D tensors
     auto tdmDesc = LLVM::AMD::createTDMDescriptor(

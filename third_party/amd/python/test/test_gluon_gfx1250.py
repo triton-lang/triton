@@ -1704,6 +1704,7 @@ def test_compile_tensor_descriptor_prefetch_nd(dtype, ndim, INNER_BLOCK, SPECULA
                                               order=[ndim - 1 - i for i in range(ndim)])
 
     BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
+    STRIDES = (1, 2, 4, 8, 16)[:ndim][::-1]
     shape_str = ", ".join(str(s) for s in BLOCK_SHAPE)
 
     if TDM_TYPE == "DEVICE_TDM":
@@ -1711,13 +1712,15 @@ def test_compile_tensor_descriptor_prefetch_nd(dtype, ndim, INNER_BLOCK, SPECULA
         signature = {
             "a_ptr": f"*{dtype}",
             "shape": tuple("i32" for _ in range(ndim)),
-            "strides": tuple("i32" for _ in range(ndim)),
+            "strides": tuple("constexpr" for _ in range(ndim)),
             "BLOCK_SHAPE": tuple("constexpr" for _ in range(ndim)),
             "SHARED_LAYOUT": "constexpr",
             "PREFETCH_SPECULATIVE": "constexpr",
         }
         constexprs = {
-            # For tuples we need to specifiy the parameter index (BLOCK_SHAPE is the 3rd argument)
+            # For tuples we need to specifiy the parameter index
+            **{(2, i): STRIDES[i]
+               for i in range(ndim)},
             **{(3, i): BLOCK_SHAPE[i]
                for i in range(ndim)},
             "SHARED_LAYOUT": SHARED_LAYOUT,
