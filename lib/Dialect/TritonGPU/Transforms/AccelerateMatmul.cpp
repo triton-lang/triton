@@ -551,15 +551,8 @@ public:
     auto oldAType = dotOp.getA().getType();
     auto oldBType = dotOp.getB().getType();
     bool useTwoCTAs = canUseTwoCTAs(dotOp);
-    if (useTwoCTAs) {
-      b = splitBOperand(b, rewriter);
-    }
-    // TF32 transpose is only supported with 128 swizzle mode with 32B
-    // atomicity. As we currently don't support this layout we disallow
-    // transpose for TF32 inputs.
-    bool allowTranspose = !dotOp.getA().getType().getElementType().isF32();
-    a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
-    b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose);
+
+    // Compute TMem encoding and verify validity before modifying the IR.
     MLIRContext *context = dotOp->getContext();
     auto instrShape = mmaVersionToInstrShape(
         versionMajor, retShapePerCTA, oldAType.getElementType(), numWarps);
@@ -571,10 +564,22 @@ public:
         CTASplitNum[1], useTwoCTAs);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
-    MemDescType accMemDescType =
-        MemDescType::get(oldRetType.getShape(), oldRetType.getElementType(),
-                         accEncoding, tensorMemorySpace,
-                         /*mutableMemory=*/true);
+    MemDescType accMemDescType = MemDescType::getChecked(
+        loc, oldRetType.getShape(), oldRetType.getElementType(), accEncoding,
+        tensorMemorySpace,
+        /*mutableMemory=*/true);
+    if (!accMemDescType)
+      return failure();
+
+    if (useTwoCTAs) {
+      b = splitBOperand(b, rewriter);
+    }
+    // TF32 transpose is only supported with 128 swizzle mode with 32B
+    // atomicity. As we currently don't support this layout we disallow
+    // transpose for TF32 inputs.
+    bool allowTranspose = !dotOp.getA().getType().getElementType().isF32();
+    a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
+    b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose);
     auto newDistributedEncoding = nvidia_gpu::getDefaultLayoutForTmemLdSt(
         accMemDescType, numWarps, CTALayout);
     auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
@@ -825,10 +830,12 @@ public:
         context, m, n, colStride, CTASplitNum[0], CTASplitNum[1], false);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
-    MemDescType accMemDescType =
-        MemDescType::get(oldRetType.getShape(), oldRetType.getElementType(),
-                         accEncoding, tensorMemorySpace,
-                         /*mutableMemory=*/true);
+    MemDescType accMemDescType = MemDescType::getChecked(
+        loc, oldRetType.getShape(), oldRetType.getElementType(), accEncoding,
+        tensorMemorySpace,
+        /*mutableMemory=*/true);
+    if (!accMemDescType)
+      return failure();
     auto newDistributedEncoding = nvidia_gpu::getDefaultLayoutForTmemLdSt(
         accMemDescType, numWarps, CTALayout);
     auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);

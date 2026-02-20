@@ -743,3 +743,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %d : tensor<128x128xf32, #blocked3>
   }
 }
+
+// -----
+
+// Test that MMAv5 gracefully falls back when the output tile is too large for TMem.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: mmav5_fallback_large_tile
+  tt.func public @mmav5_fallback_large_tile(
+      %a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+      %b: tensor<32x512xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+      %c: tensor<256x512xf32, #blocked>) -> tensor<256x512xf32, #blocked> {
+    // CHECK: tt.dot
+    // CHECK-NOT: tc_gen5_mma
+    %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x512xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x512xf32, #blocked>
+    tt.return %d : tensor<256x512xf32, #blocked>
+  }
+}
