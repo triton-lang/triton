@@ -103,13 +103,12 @@ LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
   Value llA = adaptor.getA();
   Value llB = adaptor.getB();
 
-  auto sizePerThread = expandMatrixShapeWithBatch(dLayout.getSizePerThread());
-  auto threadsPerWarp = expandMatrixShapeWithBatch(dLayout.getThreadsPerWarp());
-  auto warpsPerCTA = expandMatrixShapeWithBatch(dLayout.getWarpsPerCTA());
+  auto sizePerThread = dLayout.getSizePerThread();
   auto numElemsPerThread = product(sizePerThread);
   SmallVector<unsigned> shapePerCTATile;
   for (auto [reg, thread, warp] :
-       llvm::zip(sizePerThread, threadsPerWarp, warpsPerCTA)) {
+       llvm::zip(sizePerThread, dLayout.getThreadsPerWarp(),
+                 dLayout.getWarpsPerCTA())) {
     shapePerCTATile.push_back(reg * thread * warp);
   }
   shapePerCTATile = expandMatrixShapeWithBatch(ArrayRef(shapePerCTATile));
