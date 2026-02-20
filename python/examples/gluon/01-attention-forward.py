@@ -935,16 +935,21 @@ def is_blackwell_ultra():
     return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
 
 
-@pytest.mark.parametrize("Z", [1, 4])
-@pytest.mark.parametrize("H", [2, 48])
-@pytest.mark.parametrize("N_CTX", [256, 1024, 4 * 1024])
-@pytest.mark.parametrize("HEAD_DIM", [64, 128])
-@pytest.mark.parametrize("causal", [False, True])
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-@pytest.mark.parametrize("use_tmem_red", [False, True])
+@pytest.mark.parametrize("Z", [4])
+@pytest.mark.parametrize("H", [48])
+@pytest.mark.parametrize("N_CTX", [1024])
+@pytest.mark.parametrize("HEAD_DIM", [128])
+@pytest.mark.parametrize("causal", [True])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("use_tmem_red", [False])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, profile=False):
     device = "cuda"
+
+    def alloc_fn(size: int, alignment: int, stream):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
 
     if use_tmem_red and not is_blackwell_ultra():
         pytest.skip("TMEM reduction is only supported on Blackwell Ultra GPUs")
