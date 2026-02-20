@@ -467,7 +467,6 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
   funcBlocks.insert(std::next(switchLoop->getIterator()), defaultBlock);
   b.setInsertionPointToStart(defaultBlock);
   callbacks.createAllBarrier(b, switchLoopBarrierIdx);
-  callbacks.createAllBarrier(b, switchLoopBarrierIdx);
   auto latchBr = LLVM::BrOp::create(b, b.getLoc(), switchLoop);
   disableLICM(latchBr);
 
