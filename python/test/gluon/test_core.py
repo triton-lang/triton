@@ -1952,7 +1952,7 @@ def test_dot_fma():
         ttgl.store(out_ptr + offs, out)
 
     a = torch.rand((B, B), dtype=torch.float32, device="cuda")
-    b = torch.ones((B, B), dtype=torch.float32, device="cuda")
+    b = torch.rand((B, B), dtype=torch.float32, device="cuda")
     c = torch.rand((B, B), dtype=torch.float32, device="cuda")
     out = torch.empty((B, B), dtype=torch.float32, device="cuda")
     kernel[(1, )](a, b, c, out)
@@ -1983,7 +1983,7 @@ def test_dot3d_fma():
         ttgl.store(out_ptr + offs, out)
 
     a = torch.rand((BATCH, B, B), dtype=torch.float32, device="cuda")
-    b = torch.ones((BATCH, B, B), dtype=torch.float32, device="cuda")
+    b = torch.rand((BATCH, B, B), dtype=torch.float32, device="cuda")
     c = torch.rand((BATCH, B, B), dtype=torch.float32, device="cuda")
     out = torch.empty((BATCH, B, B), dtype=torch.float32, device="cuda")
     kernel[(1, )](a, b, c, out)
