@@ -30,7 +30,6 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::NVIDIA;
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::MemDescType;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
@@ -296,6 +295,32 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
           llvm::SmallVector<Value> regA =
               loadReg(rewriter, loc, structA, (m * numRepK + k) * regASize,
                       regASize, startSequence);
+          // Emit "dummy" mov instructions for the register operand. The
+          // expectation is that there is a wait_group op before this WGMMA op
+          // which waits for the same WGMMA op issued in the previous iteration
+          // to finish. By inserting a mov instruction between such wait and the
+          // WGMMA, we can safely overlap transformations on the A operand with
+          // the previous-iteration WGMMA still in flight.
+          for (Value &regAVal : regA) {
+            Type regTy = regAVal.getType();
+            if (!regTy.isIntOrFloat() || regTy.getIntOrFloatBitWidth() != 32) {
+              return mlir::emitError(loc, "unsupported WGMMA A register type ")
+                     << regTy;
+            }
+
+            Value movIn = regTy.isInteger(32)
+                              ? regAVal
+                              : tb.bitcast(regAVal, rewriter.getI32Type());
+
+            PTXBuilder ptxBuilder;
+            auto *dstOpr = ptxBuilder.newOperand("=r");
+            auto *srcOpr = ptxBuilder.newOperand(movIn, "r");
+            ptxBuilder.create("mov")->o("b32")(dstOpr, srcOpr);
+            Value movedReg =
+                ptxBuilder.launch(rewriter, loc, rewriter.getI32Type());
+            regAVal =
+                regTy.isInteger(32) ? movedReg : tb.bitcast(movedReg, regTy);
+          }
           auto regATy = LLVM::LLVMStructType::getLiteral(
               rewriter.getContext(),
               SmallVector<Type>(regA.size(), regA[0].getType()));

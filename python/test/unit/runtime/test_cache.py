@@ -3,6 +3,7 @@ import importlib.util
 import itertools
 import os
 import re
+import gc
 import shutil
 import pathlib
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
@@ -893,7 +894,7 @@ def test_preload_higher_order_kernels(device, fresh_triton_cache) -> None:
     assert output.item() == 31
 
 
-def test_module_load_unload():
+def test_module_load_unload(fresh_knobs):
 
     @triton.jit
     def kernel(out_ptr, val) -> None:
@@ -906,6 +907,9 @@ def test_module_load_unload():
         nonlocal counter
         counter -= 1
 
+    # turn off python garbage collector, so the callback is not called
+    # in the garbage collector
+    gc.disable()
     triton.knobs.runtime.module_unload_hook.add(module_unload)
 
     out = torch.randn(1, dtype=torch.float32, device='cuda')
@@ -918,3 +922,5 @@ def test_module_load_unload():
 
     assert counter == 0
     assert pre_compile.module is None
+    # turn on garbage collector
+    gc.enable()
