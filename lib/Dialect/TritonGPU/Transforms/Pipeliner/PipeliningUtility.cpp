@@ -698,7 +698,7 @@ allocTMABuffers(scf::ForOp forOp,
     auto loc = op.getLoc();
     Value alloc = triton::gpu::GlobalScratchAllocOp::create(
         rewriter, loc, triton::getPointerType(rewriter.getI8Type()),
-        maxStage * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN);
+        maxStage * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN, UnitAttr());
     tmaBufferMapping[op.getOperation()] = alloc;
   });
 }

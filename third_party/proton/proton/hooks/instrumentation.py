@@ -174,7 +174,6 @@ class InstrumentationHook(Hook):
                 triton_proton.add_sched_barriers(pm)
 
         def to_llvm_passes(pm):
-            triton_proton.add_allocate_proton_global_scratch_buffer(pm)
             if backend_name == "nvidia":
                 triton_proton.add_convert_proton_nvidia_gpu_to_llvm(pm)
             elif backend_name == "amd":

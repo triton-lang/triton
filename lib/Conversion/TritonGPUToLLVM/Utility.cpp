@@ -1247,74 +1247,81 @@ Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp) {
   return LLVM::AddressOfOp::create(rewriter, funcOp.getLoc(), globalBase);
 }
 
-Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
-                          const TargetInfoBase &targetInfo,
-                          FunctionOpInterface funcOp, Value allocOffset = {}) {
+static Value getScratchPtrWithOffset(Location loc, RewriterBase &rewriter,
+                                     Value gmemBase, Value allocOffset) {
+  if (!allocOffset)
+    return gmemBase;
+
+  auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return b.gep(ptrTy, i8_ty, gmemBase, allocOffset);
+}
+
+static Value getScratchPtrImpl(Location loc, RewriterBase &rewriter,
+                               const TargetInfoBase &targetInfo,
+                               FunctionOpInterface funcOp, Value allocOffset,
+                               int32_t bufferArgOffset, StringRef allocSizeAttr,
+                               bool addOffsetIfNoAllocSizeAttr) {
   // See NOTE: [Additional Function Arguments]
-  if (!isKernel(funcOp)) {
-    // Base for this function
-    auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() +
-                                       kGlobalScratchBufferOffset);
-    if (!allocOffset) {
-      return gmemBase;
-    }
-
-    auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    return b.gep(ptrTy, i8_ty, gmemBase, allocOffset);
-  }
-
-  // Base for entire kernel
   auto gmemBase =
-      funcOp.getArgument(funcOp.getNumArguments() + kGlobalScratchBufferOffset);
+      funcOp.getArgument(funcOp.getNumArguments() + bufferArgOffset);
+
+  if (!isKernel(funcOp))
+    return getScratchPtrWithOffset(loc, rewriter, gmemBase, allocOffset);
 
   ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
-  auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
-      "ttg.global_scratch_memory_size");
-  if (!allocSizeAttr || allocSizeAttr.getValue().isZero()) {
-    return gmemBase;
+  auto allocSizeAttrVal =
+      mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(allocSizeAttr);
+  if (!allocSizeAttrVal || allocSizeAttrVal.getValue().isZero()) {
+    return addOffsetIfNoAllocSizeAttr
+               ? getScratchPtrWithOffset(loc, rewriter, gmemBase, allocOffset)
+               : gmemBase;
   }
 
   Value gridIdx[3];
   Value gridDim[2];
-  for (int k = 0; k < 3; ++k) {
+  for (int k = 0; k < 3; ++k)
     gridIdx[k] = GetProgramIdOp::create(rewriter, loc, k);
-  }
-  for (int k = 0; k < 2; ++k) {
+  for (int k = 0; k < 2; ++k)
     gridDim[k] = GetNumProgramsOp::create(rewriter, loc, k);
-  }
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value linearId = gridIdx[2];
-  for (int k = 0; k < 2; ++k) {
+  for (int k = 0; k < 2; ++k)
     linearId = b.add(gridIdx[1 - k], b.mul(linearId, gridDim[1 - k]));
-  }
+
   auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
   if (numCTAs > 1) {
     linearId = b.mul(linearId, b.i32_val(numCTAs));
     linearId = b.add(linearId, targetInfo.getClusterCTAId(rewriter, loc));
   }
 
-  auto allocSize = allocSizeAttr.getValue().getZExtValue();
-
+  auto allocSize = allocSizeAttrVal.getValue().getZExtValue();
   Value offset = b.mul(linearId, b.i32_val(allocSize));
-  if (allocOffset) {
+  if (allocOffset)
     offset = b.add(offset, allocOffset);
-  }
 
   auto *ctx = rewriter.getContext();
-  auto res =
-      b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);
-  return res;
+  return b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase,
+               offset);
+}
+
+Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
+                          const TargetInfoBase &targetInfo,
+                          FunctionOpInterface funcOp, Value allocOffset) {
+  return getScratchPtrImpl(loc, rewriter, targetInfo, funcOp, allocOffset,
+                           kGlobalScratchBufferOffset,
+                           "ttg.global_scratch_memory_size",
+                           /*addOffsetIfNoAllocSizeAttr=*/false);
 }
 
 Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
-                           FunctionOpInterface funcOp) {
-  // See NOTE: [Additional Function Arguments]
-  // FIXME(Keren): This is broken when we have device functions, we
-  // need to implement proper calling convention
-  return funcOp.getArgument(funcOp.getNumArguments() +
-                            kProfileScratchBufferOffset);
+                           const TargetInfoBase &targetInfo,
+                           FunctionOpInterface funcOp, Value allocOffset) {
+  return getScratchPtrImpl(loc, rewriter, targetInfo, funcOp, allocOffset,
+                           kProfileScratchBufferOffset,
+                           "ttg.profile_scratch_memory_size",
+                           /*addOffsetIfNoAllocSizeAttr=*/true);
 }
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,

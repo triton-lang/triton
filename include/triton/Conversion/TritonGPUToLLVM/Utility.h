@@ -490,10 +490,11 @@ Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp);
 
 Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &targetInfo,
-                          FunctionOpInterface funcOp, Value allocOffset);
+                          FunctionOpInterface funcOp, Value allocOffset = {});
 
 Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
-                           FunctionOpInterface funcOp);
+                           const TargetInfoBase &targetInfo,
+                           FunctionOpInterface funcOp, Value allocOffset = {});
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &target, Operation *op);

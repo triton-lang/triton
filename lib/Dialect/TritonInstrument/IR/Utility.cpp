@@ -155,6 +155,18 @@ bool hasCrossBufferAliasing(ArrayRef<BufferRegion> regions) {
   return false;
 }
 
+Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
+                                     TypedValue<RankedTensorType> tensor) {
+  Type elType = tensor.getType().getElementType();
+  int elSize = elType.getIntOrFloatBitWidth() / 8;
+  int numEls = product(tensor.getType().getShape());
+  int64_t sizeInBytes = numEls * elSize;
+  Type ptrType = triton::getPointerType(elType);
+  auto alloc = GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, elSize,
+                                            UnitAttr());
+  createStoreScratchMemory(b, b.getLoc(), alloc, tensor, tensor.getType());
+  return alloc;
+}
 Value createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
                                 int bitWidth, FunctionBuilder &funcBuilder) {
   SmallVector<int64_t> shape = {m};
@@ -171,7 +183,8 @@ Value createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
   // Allocate scratch buffers with 16-byte alignment so global loads and stores
   // can be vectorized if possible.
   auto alloc =
-      GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, /*alignment=*/16);
+      GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, /*alignment=*/16,
+                                   UnitAttr());
   Value cstZero = arith::ConstantIntOp::create(b, 0, bitWidth);
   funcBuilder.createFillGlobalTensorCall(b, alloc, type, cstZero);
   return alloc;
@@ -233,7 +246,7 @@ bool hasTMAStore(ModuleOp module) {
 
 Value createLockVariable(ImplicitLocOpBuilder &b) {
   Type ptrType = triton::getPointerType(b.getI32Type());
-  auto alloc = GlobalScratchAllocOp::create(b, ptrType, 4, 4);
+  auto alloc = GlobalScratchAllocOp::create(b, ptrType, 4, 4, UnitAttr());
   Value zero = arith::ConstantOp::create(b, b.getLoc(), b.getI32Type(),
                                          b.getI32IntegerAttr(0));
   triton::AtomicRMWOp::create(b, b.getI32Type(), RMWOp::XCHG, alloc, zero,
