@@ -615,27 +615,51 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   return alloc;
 }
 
-static void lowerTensorMemoryAlloc(ModuleOp mod) {
-  SmallVector<Operation *> baseOps;
+static LogicalResult lowerTensorMemoryAlloc(ModuleOp mod) {
+  SmallVector<ttn::TensorMemoryBaseAddress> baseOps;
   LLVM::LLVMFuncOp kernel = nullptr;
-  mod.walk([&](ttn::TensorMemoryBaseAddress baseOp) {
-    baseOps.push_back(baseOp);
+  ttn::TensorMemoryBaseAddress invalidBaseOp = nullptr;
+  const char *invalidReason = nullptr;
+
+  mod.walk([&](ttn::TensorMemoryBaseAddress baseOp) -> WalkResult {
+    auto func = baseOp->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!func || !triton::isKernel(func)) {
+      invalidBaseOp = baseOp;
+      invalidReason =
+          "tensor memory base in non-kernel functions is not supported; TMEM "
+          "requires inlined usage within a kernel function";
+      return WalkResult::interrupt();
+    }
     if (!kernel)
-      kernel = baseOp->getParentOfType<LLVM::LLVMFuncOp>();
-    assert(kernel == baseOp->getParentOfType<LLVM::LLVMFuncOp>() &&
-           "TODO: add support for function calls using tmem.");
+      kernel = func;
+    if (kernel != func) {
+      invalidBaseOp = baseOp;
+      invalidReason =
+          "tensor memory base across multiple kernel functions is not "
+          "supported";
+      return WalkResult::interrupt();
+    }
+    baseOps.push_back(baseOp);
+    return WalkResult::advance();
   });
+
+  if (invalidBaseOp) {
+    invalidBaseOp.emitOpError(invalidReason);
+    return failure();
+  }
+
   if (baseOps.empty())
-    return;
-  // TODO: Handle cases of matmul used in noinline functions.
-  assert(triton::isKernel(kernel));
+    return success();
+
   Value newBase = initTensorMemory(kernel);
   if (!newBase)
-    return;
-  for (auto baseOp : baseOps) {
-    baseOp->getResult(0).replaceAllUsesWith(newBase);
+    return success();
+
+  for (ttn::TensorMemoryBaseAddress baseOp : baseOps) {
+    baseOp.getResult().replaceAllUsesWith(newBase);
     baseOp->erase();
   }
+  return success();
 }
 
 } // anonymous namespace
@@ -657,7 +681,8 @@ public:
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
 
-    lowerTensorMemoryAlloc(mod);
+    if (failed(lowerTensorMemoryAlloc(mod)))
+      return signalPassFailure();
     makeAllWarpGroupsIsolatedFromAbove(mod);
   }
 };
