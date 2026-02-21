@@ -500,7 +500,11 @@ class CUDABackend(BaseBackend):
 
             # Use -Ofc mid to compile ConSan code, if nothing else is specified.
             if any(mode in knobs.compilation.instrumentation_mode for mode in ["consan", "fpsan"]):
-                ptx_extra_options += ["-Ofc", "mid"]
+                ptxas_version_str = get_ptxas(self.target.arch).version
+                ptxas_version = tuple(map(int, ptxas_version_str.split('.')[:2]))
+                if ptxas_version >= (12, 9):
+                    # 12.9+ / 13.x fully supports the 'mid' optimization profile
+                    ptx_extra_options += ["-Ofc", "mid"]
 
             # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
             reg_alloc = ['--regAllocOptLevel=2']
