@@ -3,11 +3,18 @@ import torch
 from dataclasses import dataclass
 import triton
 import triton.language as tl
-from .base import Layout, LayoutTransformation
+from .base import Layout, LayoutTransformation, LayoutFingerprint
 from .torch_utils import repack
 
 
 # ------------------- CDNA4 MX Scale Layout -------------------
+@dataclass(frozen=True)
+class CDNA4MXScaleLayoutFingerprint(LayoutFingerprint):
+
+    def to_layout(self):
+        return CDNA4MXScaleLayout()
+
+
 @dataclass(frozen=True)
 class CDNA4MXScaleLayout(Layout):
 
@@ -22,6 +29,9 @@ class CDNA4MXScaleLayout(Layout):
         SCALE_K = block_shape[-2]
         N = block_shape[-1]
         return block_shape[:-2] + [N // 32, SCALE_K * 32]
+
+    def to_layout_fingerprint(self):
+        return CDNA4MXScaleLayoutFingerprint()
 
 
 # ------------------- CDNA4 MX Scale Layout Transformation -------------------

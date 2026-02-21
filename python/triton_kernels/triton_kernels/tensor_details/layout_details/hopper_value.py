@@ -2,13 +2,22 @@ import torch
 import triton
 import triton.language as tl
 from dataclasses import dataclass
-from .base import Layout, LayoutTransformation
+from .base import Layout, LayoutTransformation, LayoutFingerprint
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
 from .torch_utils import repack
 
 
 # ------------------- Hopper MX Value Layout -------------------
+@dataclass(frozen=True)
+class HopperMXValueLayoutFingerprint(LayoutFingerprint):
+    mx_axis: int
+    mma_version: int
+
+    def to_layout(self):
+        return HopperMXValueLayout(mx_axis=self.mx_axis, mma_version=self.mma_version)
+
+
 @dataclass(frozen=True)
 class HopperMXValueLayout(Layout):
     mx_axis: int
@@ -35,6 +44,9 @@ class HopperMXValueLayout(Layout):
 
     def make_transformation(self, shape: list[int], is_fp4) -> LayoutTransformation:
         return HopperMXValueLayoutTransformation(shape, is_fp4, self.mx_axis, self.mma_version)
+
+    def to_layout_fingerprint(self):
+        return HopperMXValueLayoutFingerprint(mx_axis=self.mx_axis, mma_version=self.mma_version)
 
 
 # ------------------- Hopper MX Value Layout Transformation -------------------

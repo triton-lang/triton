@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 import triton
 import torch
 import triton.language as tl
@@ -87,6 +88,76 @@ class RaggedTensorMetadata:
     @staticmethod
     def block_sizes():
         return [2**x for x in RaggedTensorMetadata.block_sizes_log2()]
+
+
+@dataclass(frozen=True)
+class RaggedMetadataTensorFingerprint:
+    shape: tuple[int, ...]
+    values: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class RaggedTensorMetadataFingerprint:
+    slice_sizes: RaggedMetadataTensorFingerprint | None
+    slice_offs: RaggedMetadataTensorFingerprint | None
+    block_offs_data: RaggedMetadataTensorFingerprint
+    block_schedule_data: RaggedMetadataTensorFingerprint
+    expected_slice_size: int | None = None
+    slice_sizes_divisibility: int | None = None
+
+
+def _shape_numel(shape: tuple[int, ...]) -> int:
+    return math.prod(shape)
+
+
+def torch_tensor_to_tensor_fingerprint(tensor: torch.Tensor | None, ) -> RaggedMetadataTensorFingerprint | None:
+    if tensor is None:
+        return None
+    assert tensor.layout == torch.strided, f"Unsupported tensor layout for serialization: {tensor.layout}"
+    tensor_cpu = tensor.detach().cpu()
+    assert tensor_cpu.dtype == torch.int32, f"Expected int32 ragged metadata tensor, got {tensor_cpu.dtype}"
+    shape = tuple(tensor_cpu.shape)
+    values = tuple(int(v) for v in tensor_cpu.reshape(-1).tolist())
+    return RaggedMetadataTensorFingerprint(
+        shape=shape,
+        values=values,
+    )
+
+
+def tensor_fingerprint_to_torch_tensor(
+    tensor_fingerprint: RaggedMetadataTensorFingerprint | None, ) -> torch.Tensor | None:
+    if tensor_fingerprint is None:
+        return None
+    shape = tensor_fingerprint.shape
+    expected_numel = _shape_numel(shape)
+    assert expected_numel == len(
+        tensor_fingerprint.values), ("RaggedMetadataTensorFingerprint values length does not match shape product: "
+                                     f"{len(tensor_fingerprint.values)} != {expected_numel}")
+    return torch.tensor(tensor_fingerprint.values, dtype=torch.int32).reshape(shape)
+
+
+def ragged_tensor_metadata_to_fingerprint(
+    metadata: RaggedTensorMetadata | None, ) -> RaggedTensorMetadataFingerprint | None:
+    return RaggedTensorMetadataFingerprint(
+        slice_sizes=torch_tensor_to_tensor_fingerprint(metadata.slice_sizes),
+        slice_offs=torch_tensor_to_tensor_fingerprint(metadata.slice_offs),
+        block_offs_data=torch_tensor_to_tensor_fingerprint(metadata.block_offs_data),
+        block_schedule_data=torch_tensor_to_tensor_fingerprint(metadata.block_schedule_data),
+        expected_slice_size=metadata.expected_slice_size,
+        slice_sizes_divisibility=metadata.slice_sizes_divisibility,
+    ) if metadata is not None else None
+
+
+def ragged_tensor_metadata_fingerprint_to_metadata(
+    metadata_fingerprint: RaggedTensorMetadataFingerprint | None, ) -> RaggedTensorMetadata | None:
+    return RaggedTensorMetadata(
+        slice_sizes=tensor_fingerprint_to_torch_tensor(metadata_fingerprint.slice_sizes),
+        slice_offs=tensor_fingerprint_to_torch_tensor(metadata_fingerprint.slice_offs),
+        block_offs_data=tensor_fingerprint_to_torch_tensor(metadata_fingerprint.block_offs_data),
+        block_schedule_data=tensor_fingerprint_to_torch_tensor(metadata_fingerprint.block_schedule_data),
+        expected_slice_size=metadata_fingerprint.expected_slice_size,
+        slice_sizes_divisibility=metadata_fingerprint.slice_sizes_divisibility,
+    ) if metadata_fingerprint is not None else None
 
 
 def ragged_metadata_fields(metadata, block_size):

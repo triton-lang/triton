@@ -1,10 +1,18 @@
 from dataclasses import dataclass
-from .base import Layout, LayoutTransformation
+from .base import Layout, LayoutTransformation, LayoutFingerprint
 from .torch_utils import repack
 import torch
 
 
 # ------------------- Layout Definition -------------------
+@dataclass(frozen=True)
+class StridedLayoutFingerprint(LayoutFingerprint):
+    major_dim: int = -1
+
+    def to_layout(self):
+        return StridedLayout(major_dim=self.major_dim)
+
+
 @dataclass(frozen=True)
 class StridedLayout(Layout):
 
@@ -34,6 +42,9 @@ class StridedLayout(Layout):
 
     def swizzle_block_shape(self, block_shape):
         return block_shape
+
+    def to_layout_fingerprint(self):
+        return StridedLayoutFingerprint(major_dim=self.major_dim)
 
     def order(self, rank: int) -> list[int]:
         """

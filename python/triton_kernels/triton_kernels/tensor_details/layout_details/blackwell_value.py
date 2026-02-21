@@ -1,10 +1,17 @@
 from dataclasses import dataclass
 import torch
-from .base import Layout, LayoutTransformation
+from .base import Layout, LayoutTransformation, LayoutFingerprint
 from .torch_utils import repack
 
 
 # ------------------- Blackwell MX Value Layout -------------------
+@dataclass(frozen=True)
+class BlackwellMXValueLayoutFingerprint(LayoutFingerprint):
+
+    def to_layout(self):
+        return BlackwellMXValueLayout()
+
+
 @dataclass(frozen=True)
 class BlackwellMXValueLayout(Layout):
 
@@ -17,6 +24,9 @@ class BlackwellMXValueLayout(Layout):
 
     def swizzle_block_shape(self, block_shape):
         return block_shape
+
+    def to_layout_fingerprint(self):
+        return BlackwellMXValueLayoutFingerprint()
 
 
 def strides_major_dim_m2(shape):

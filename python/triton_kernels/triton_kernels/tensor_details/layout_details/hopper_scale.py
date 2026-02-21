@@ -2,9 +2,18 @@ from dataclasses import dataclass
 import torch
 import triton
 import triton.language as tl
-from .base import Layout, LayoutTransformation
+from .base import Layout, LayoutTransformation, LayoutFingerprint
 
 # ------------------- Hopper MX Scale Layout -------------------
+
+
+@dataclass(frozen=True)
+class HopperMXScaleLayoutFingerprint(LayoutFingerprint):
+    mx_axis: int
+    num_warps: int
+
+    def to_layout(self):
+        return HopperMXScaleLayout(mx_axis=self.mx_axis, num_warps=self.num_warps)
 
 
 @dataclass(frozen=True)
@@ -33,6 +42,9 @@ class HopperMXScaleLayout(Layout):
             *head, K, N = block_shape
             assert N % 32 == 0, N
             return [*head, K * 32, N // 32]
+
+    def to_layout_fingerprint(self):
+        return HopperMXScaleLayoutFingerprint(mx_axis=self.mx_axis, num_warps=self.num_warps)
 
 
 # ------------------- Hopper MX Scale Layout Transformation -------------------

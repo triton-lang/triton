@@ -6,10 +6,29 @@ import triton
 import triton.language as tl
 
 from triton_kernels.tensor_details.ragged_tensor import RaggedTensorMetadata
-from .base import Layout, LayoutTransformation
+from triton_kernels.tensor_details.ragged_tensor import RaggedTensorMetadataFingerprint
+from triton_kernels.tensor_details.ragged_tensor import ragged_tensor_metadata_fingerprint_to_metadata
+from triton_kernels.tensor_details.ragged_tensor import ragged_tensor_metadata_to_fingerprint
+from .base import Layout, LayoutTransformation, LayoutFingerprint
 from triton_kernels import target_info
 
 # ------------------- Blackwell MX Scale Layout -------------------
+
+
+@dataclass(frozen=True)
+class BlackwellMXScaleLayoutFingerprint(LayoutFingerprint):
+
+    def to_layout(self):
+        return BlackwellMXScaleLayout()
+
+
+@dataclass(frozen=True)
+class BlackwellActMXScaleLayoutFingerprint(LayoutFingerprint):
+    ragged_metadata: RaggedTensorMetadataFingerprint | None
+
+    def to_layout(self):
+        return BlackwellActMXScaleLayout(
+            ragged_metadata=ragged_tensor_metadata_fingerprint_to_metadata(self.ragged_metadata))
 
 
 @dataclass(frozen=True)
@@ -27,6 +46,9 @@ class BlackwellMXScaleLayout(Layout):
         assert N >= 128, f"{block_shape[1]=} must be >= 128"
         return [1, N // 128, K // 4, 2, 256]
 
+    def to_layout_fingerprint(self):
+        return BlackwellMXScaleLayoutFingerprint()
+
 
 @dataclass(frozen=True)
 class BlackwellActMXScaleLayout(Layout):
@@ -43,6 +65,10 @@ class BlackwellActMXScaleLayout(Layout):
 
     def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
         return BlackwellActMXScaleLayoutTransformation(shape, is_fp4, self.ragged_metadata)
+
+    def to_layout_fingerprint(self):
+        return BlackwellActMXScaleLayoutFingerprint(
+            ragged_metadata=ragged_tensor_metadata_to_fingerprint(self.ragged_metadata))
 
 
 # ------------------- Blackwell MX Scale Layout Transformation -------------------

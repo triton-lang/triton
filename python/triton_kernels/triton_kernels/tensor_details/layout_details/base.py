@@ -27,3 +27,14 @@ class Layout(ABC):
     @abstractmethod
     def swizzle_block_shape(self, block_shape):
         pass
+
+    @abstractmethod
+    def to_layout_fingerprint(self):
+        pass
+
+
+class LayoutFingerprint(ABC):
+
+    @abstractmethod
+    def to_layout(self) -> Layout:
+        pass
