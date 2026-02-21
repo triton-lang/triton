@@ -2693,7 +2693,7 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
                           dtype_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
-        docstr = """
+        docstr = f"""
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
     The reduction operation should be associative and commutative.
@@ -2817,7 +2817,7 @@ def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _semantic=Non
 def _add_scan_docstr(name: str, dtype_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
-        docstr = """
+        docstr = f"""
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
     :param input: the input values
