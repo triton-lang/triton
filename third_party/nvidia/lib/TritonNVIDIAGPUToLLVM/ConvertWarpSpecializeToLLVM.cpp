@@ -7,7 +7,6 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -82,6 +81,30 @@ public:
 private:
   unsigned numThreadsPerWarp;
 };
+
+static void rewriteWarpSpecializeWarpIdsOnce(ModuleOp mod) {
+  SmallVector<mlir::triton::gpu::WarpIdOp> wsWarpIds;
+  mod.walk([&](mlir::triton::gpu::WarpIdOp op) {
+    if (getWarpGroupStartWarpId(op->getBlock()))
+      wsWarpIds.push_back(op);
+  });
+
+  for (mlir::triton::gpu::WarpIdOp op : wsWarpIds) {
+    std::optional<int> startWarpId = getWarpGroupStartWarpId(op->getBlock());
+    assert(startWarpId &&
+           "expected warp-specialize warp_id to have a start warp ID");
+
+    auto loc = op.getLoc();
+    TritonLLVMIRRewriter b(loc, op);
+
+    // Keep `ttg.warp_id` for NVGPUToLLVM and only make it relative here.
+    Value absWarpId =
+        mlir::triton::gpu::WarpIdOp::create(b, loc, op.getOmitUniformHint());
+    Value relWarpId =
+        LLVM::SubOp::create(b, loc, absWarpId, b.i32_val(*startWarpId));
+    b.replaceOp(op, relWarpId);
+  }
+}
 
 //===----------------------------------------------------------------------===//
 // lowerWarpSpecialize
@@ -248,6 +271,8 @@ struct ConvertWarpSpecializeToLLVM
     pm.addPass(createReconcileUnrealizedCastsPass());
     if (failed(runPipeline(pm, mod)))
       return signalPassFailure();
+
+    rewriteWarpSpecializeWarpIdsOnce(mod);
 
     unsigned threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
     NVIDIAWarpSpecializeBarrierHelper barrierHelper(threadsPerWarp);
