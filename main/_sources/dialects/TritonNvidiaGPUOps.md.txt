@@ -429,7 +429,33 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>relaxed</code></td><td>::mlir::IntegerAttr</td><td>1-bit signless integer attribute</td></tr>
+<tr><td><code>relaxed</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+</table>
+
+
+### `ttng.cluster_barrier` (triton::nvidia_gpu::ClusterBarrierOp)
+
+_Synchronize all warps at cluster scope_
+
+Syntax:
+
+```
+operation ::= `ttng.cluster_barrier` attr-dict
+```
+
+Lowers to a cluster arrive/wait pair.
+
+In warp-specialized kernels, lowering wraps the barrier in a synthetic
+`ttg.warp_specialize` region so worker warps also execute the barrier.
+This op cannot be placed inside an existing `ttg.warp_specialize`.
+
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>relaxed</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 
 
