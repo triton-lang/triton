@@ -264,13 +264,12 @@ void SessionManager::initFunctionMetadata(
                    });
 }
 
-void SessionManager::uninitFunctionMetadata(uint64_t functionId) {
+void SessionManager::destroyFunctionMetadata(uint64_t functionId) {
   std::lock_guard<std::mutex> lock(mutex);
-  executeInterface(instrumentationInterfaceCounts,
-                   [&](auto *instrumentationInterface) {
-                     instrumentationInterface->uninitFunctionMetadata(
-                         functionId);
-                   });
+  executeInterface(
+      instrumentationInterfaceCounts, [&](auto *instrumentationInterface) {
+        instrumentationInterface->destroyFunctionMetadata(functionId);
+      });
 }
 
 void SessionManager::enterInstrumentedOp(uint64_t streamId, uint64_t functionId,

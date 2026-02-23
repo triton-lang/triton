@@ -13,9 +13,7 @@ class Hook:
                     hash: str) -> None:  # noqa: D401
         raise NotImplementedError
 
-    def uninit_handle(
-        self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str
-    ) -> None:
+    def uninit_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
         pass
 
     @abstractmethod
@@ -47,9 +45,7 @@ class HookManager:
             hook.init_handle(module, function, name, metadata_group, hash)
 
     @staticmethod
-    def uninit_handle(
-        module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str
-    ) -> None:
+    def uninit_handle(module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
         for hook in reversed(HookManager.active_hooks):
             hook.uninit_handle(module, function, name, metadata_group, hash)
 

@@ -247,13 +247,11 @@ class InstrumentationHook(Hook):
         else:
             raise RuntimeError(f"IR path not found in metadata for function {function}")
 
-    def uninit_handle(
-        self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str
-    ) -> None:
+    def uninit_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
         if not function:
             return
         self.metadata_path.pop(function, None)
-        libproton.uninit_function_metadata(function)
+        libproton.destroy_function_metadata(function)
 
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()

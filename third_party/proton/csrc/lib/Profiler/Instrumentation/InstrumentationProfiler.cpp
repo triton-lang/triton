@@ -169,7 +169,7 @@ void InstrumentationProfiler::initFunctionMetadata(
   functionMetadata.emplace(functionId, InstrumentationMetadata(metadataPath));
 }
 
-void InstrumentationProfiler::uninitFunctionMetadata(uint64_t functionId) {
+void InstrumentationProfiler::destroyFunctionMetadata(uint64_t functionId) {
   functionScopeIdNames.erase(functionId);
   functionScopeIdContexts.erase(functionId);
   functionNames.erase(functionId);
