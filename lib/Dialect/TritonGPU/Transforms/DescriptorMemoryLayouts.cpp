@@ -94,6 +94,24 @@ SharedEncodingTrait updateEncodingForShape(Operation *op,
         ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
         order, newCgaEnc);
   }
+  if (auto paddedEnc = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
+    auto existingCga = paddedEnc.getCGALayout();
+    if (!existingCga)
+      return paddedEnc;
+
+    auto newCgaEnc =
+        ttg::updateCGALayoutForShape(cgaLayout, tensorType.getShape());
+    auto rank = tensorType.getRank();
+    SmallVector<unsigned> order(rank);
+    std::iota(order.rbegin(), order.rend(), 0);
+    auto shape = tensorType.getShape();
+    SmallVector<std::pair<unsigned, unsigned>> intervalPads;
+    for (auto [interval, padding] :
+         llvm::zip(paddedEnc.getIntervals(), paddedEnc.getPaddings()))
+      intervalPads.push_back({interval, padding});
+    return ttg::PaddedSharedEncodingAttr::get(ctx, intervalPads, order, shape,
+                                              newCgaEnc);
+  }
 
   constexpr auto msg = "Internal Error: Unhandled tensor descriptor encoding";
   if (op)

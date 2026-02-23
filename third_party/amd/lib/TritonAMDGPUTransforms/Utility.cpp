@@ -3,6 +3,8 @@
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
 #include "triton/Tools/LayoutUtils.h"
 
 #include <limits>
@@ -458,6 +460,18 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
   auto *context = srcTy.getContext();
   return triton::gpu::PaddedSharedEncodingAttr::get(
       context, {{padInterval, padAmount}}, order, shape, CGALayout);
+}
+
+ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
+                                                   RankedTensorType tensorType,
+                                                   Value desc) {
+  auto descBlockType = cast<tt::TensorDescType>(desc.getType()).getBlockType();
+  auto encoding = cast<ttg::SharedEncodingTrait>(descBlockType.getEncoding());
+  if (!encoding) {
+    emitError(op->getLoc()) << "Missing encoding on the tensor descriptor";
+    return {};
+  }
+  return ttg::updateEncodingForShape(op, encoding, tensorType);
 }
 
 ttg::PaddedSharedEncodingAttr
