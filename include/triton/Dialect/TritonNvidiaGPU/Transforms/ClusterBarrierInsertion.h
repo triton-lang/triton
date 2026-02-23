@@ -7,7 +7,7 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-/// Inserts cluster barriers (cluster_arrive + cluster_wait) using the provided
+/// Inserts cluster barriers (cluster_barrier) using the provided
 /// shared-memory allocation analysis.
 void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
                                 int computeCapability);

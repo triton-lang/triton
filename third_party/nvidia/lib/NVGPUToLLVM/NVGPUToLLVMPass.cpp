@@ -210,13 +210,7 @@ public:
       return success();
     }
 
-    // If this is inside a warp specialize op, compute the relative thread ID
-    // within the warp group.
     Value tid = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
-    if (std::optional<int> startId =
-            getWarpGroupStartThreadId(rewriter.getInsertionBlock()))
-      tid = LLVM::SubOp::create(rewriter, loc, tid, b.i32_val(*startId));
-
     Value warpId = b.udiv(tid, b.i32_val(32));
     if (!op.getOmitUniformHint()) {
       // This indicates to PTXAS that the result and its derived values are

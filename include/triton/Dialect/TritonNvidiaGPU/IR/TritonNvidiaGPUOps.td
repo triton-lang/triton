@@ -78,12 +78,26 @@ def TTNG_FenceMBarrierInitReleaseClusterOp : TTNG_Op<
 }
 
 def TTNG_ClusterArriveOp : TTNG_Op<"cluster_arrive", []> {
-  let arguments = (ins I1Attr:$relaxed);
+  let arguments = (ins DefaultValuedAttr<BoolAttr, "false">:$relaxed);
   let assemblyFormat = "attr-dict";
   let hasVerifier = 1;
 }
 
 def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
+  let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
+}
+
+def TTNG_ClusterBarrierOp : TTNG_Op<"cluster_barrier", []> {
+  let arguments = (ins DefaultValuedAttr<BoolAttr, "false">:$relaxed);
+  let summary = "Synchronize all warps at cluster scope";
+  let description = [{
+    Lowers to a cluster arrive/wait pair.
+
+    In warp-specialized kernels, lowering wraps the barrier in a synthetic
+    `ttg.warp_specialize` region so worker warps also execute the barrier.
+    This op cannot be placed inside an existing `ttg.warp_specialize`.
+  }];
   let assemblyFormat = "attr-dict";
   let hasVerifier = 1;
 }
@@ -223,7 +237,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
 def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                                               AllTypesMatch<["inputs", "outputs"]>]> {
   let summary = "warp group dot wait";
-  let arguments = (ins Variadic<TTG_TensorOrMemDesc>:$inputs, I32Attr:$pendings, UnitAttr:$warpGroupLocal);
+  let arguments = (ins Variadic<TTG_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
   let results = (outs Variadic<TTG_TensorOrMemDesc>:$outputs);
   let description = [{
     Waits until there are $pendings or fewer outstanding async dot operations.
@@ -231,10 +245,6 @@ def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterface
     $inputs must be the tensors corresponding to the async dot ops that we're
     waiting on.  For example, if there are N pending async dot ops and we call
     `warp_group_dot_wait 1`, then $inputs must be the result of the first dot op.
-
-    The `warpGroupLocal` attribute specifies that we only wait for the local
-    warp group, and if num_warps > 4 then shared memory inputs may still be in
-    use by other warp groups.
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";

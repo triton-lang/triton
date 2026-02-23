@@ -255,7 +255,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
   tt.func @cluster_arrive_invalid() {
     // expected-error @below {{requires ttg.num-ctas > 1}}
-    ttng.cluster_arrive {relaxed = false}
+    ttng.cluster_arrive
     tt.return
   }
 }
@@ -266,6 +266,84 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func @cluster_wait_invalid() {
     // expected-error @below {{requires ttg.num-ctas > 1}}
     ttng.cluster_wait
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  tt.func @cluster_arrive_in_default_region_invalid() {
+    ttg.warp_specialize()
+    default {
+      // expected-error @below {{cannot be used inside `ttg.warp_specialize`}}
+      ttng.cluster_arrive
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  tt.func @cluster_wait_in_partition_invalid() {
+    ttg.warp_specialize()
+    default {
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      // expected-error @below {{cannot be used inside `ttg.warp_specialize`}}
+      ttng.cluster_wait
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  tt.func @cluster_barrier_invalid() {
+    // expected-error @below {{requires ttg.num-ctas > 1}}
+    ttng.cluster_barrier
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  tt.func @cluster_barrier_in_default_region_invalid() {
+    ttg.warp_specialize()
+    default {
+      // expected-error @below {{cannot be used inside `ttg.warp_specialize`}}
+      ttng.cluster_barrier
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  tt.func @cluster_barrier_in_partition_invalid() {
+    ttg.warp_specialize()
+    default {
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      // expected-error @below {{cannot be used inside `ttg.warp_specialize`}}
+      ttng.cluster_barrier
+      ttg.warp_return
+    } : () -> ()
     tt.return
   }
 }
