@@ -888,6 +888,89 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type):
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("B", [4])
+@pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
+@pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
+def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type):
+
+    @gluon.constexpr_function
+    def _slice_layout(layout, indices):
+        for i in reversed(indices):
+            layout = ttgl.SliceLayout(i, layout)
+        return layout
+
+    @gluon.jit
+    def _offsets(dim0, dim1, dim2, layout):
+        return ttgl.arange(0, dim0, layout=_slice_layout(layout, [1, 2]))[:, None, None] * (dim1 * dim2) + \
+               ttgl.arange(0, dim1, layout=_slice_layout(layout, [0, 2]))[None, :, None] * dim2 + \
+               ttgl.arange(0, dim2, layout=_slice_layout(layout, [0, 1]))[None, None, :]
+
+    @gluon.jit
+    def kernel(c_ptr, a_ptr, a_scale_ptr, b_ptr, b_scale_ptr,  #
+               a_type: ttgl.constexpr, b_type: ttgl.constexpr,  #
+               BLOCK_B: ttgl.constexpr, BLOCK_M: ttgl.constexpr,  #
+               BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
+        DIV_FACTOR_A: ttgl.constexpr = 2 if a_type == "e2m1" else 1
+        DIV_FACTOR_B: ttgl.constexpr = 2 if b_type == "e2m1" else 1
+
+        warp_bases: ttgl.constexpr = [[1, 0, 0], [2, 0, 0]]
+        wmma_layout: ttgl.constexpr = \
+            ttgl.amd.AMDWMMALayout(3, True, warp_bases, instr_shape=[16, 16, 128], rank=3)
+        wmma_layout_packed: ttgl.constexpr = \
+            ttgl.amd.AMDWMMALayout(3, True, warp_bases, instr_shape=[16, 16, 64], rank=3)
+        a_layout: ttgl.constexpr = \
+            ttgl.DotOperandLayout(0, wmma_layout_packed if a_type == "e2m1" else wmma_layout, 16)
+        b_layout: ttgl.constexpr = \
+            ttgl.DotOperandLayout(1, wmma_layout_packed if b_type == "e2m1" else wmma_layout, 16)
+        a_scale_layout: ttgl.constexpr = \
+            get_wmma_scale_layout(a_layout, [BLOCK_B, BLOCK_M, BLOCK_K // 32])
+        b_scale_layout: ttgl.constexpr = \
+            get_wmma_scale_layout(b_layout, [BLOCK_B, BLOCK_N, BLOCK_K // 32])
+
+        a_offs = _offsets(BLOCK_B, BLOCK_M, BLOCK_K // DIV_FACTOR_A, a_layout)
+        a = ttgl.load(a_ptr + a_offs)
+        b_offs = _offsets(BLOCK_B, BLOCK_K // DIV_FACTOR_B, BLOCK_N, b_layout)
+        b = ttgl.load(b_ptr + b_offs)
+
+        a_scale_offs = _offsets(BLOCK_B, BLOCK_M, BLOCK_K // 32, a_scale_layout)
+        a_scale = ttgl.load(a_scale_ptr + a_scale_offs)
+        b_scale_offs = _offsets(BLOCK_B, BLOCK_N, BLOCK_K // 32, b_scale_layout)
+        b_scale = ttgl.load(b_scale_ptr + b_scale_offs)
+
+        zero = ttgl.zeros([BLOCK_B, BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=wmma_layout)
+        c = ttgl.amd.gfx1250.wmma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero)
+        c = c.to(c_ptr.dtype.element_ty)
+
+        c_offs = _offsets(BLOCK_B, BLOCK_M, BLOCK_N, wmma_layout)
+        ttgl.store(c_ptr + c_offs, c)
+
+    torch.manual_seed(42)
+    a, a_ref = zip(*[create_mxfp_operand(0, M, K, a_type) for _ in range(B)])
+    b, b_ref = zip(*[create_mxfp_operand(1, K, N, b_type) for _ in range(B)])
+    a_scale, a_scale_ref = zip(*[create_mxfp_scale(0, M, K) for _ in range(B)])
+    b_scale, b_scale_ref = zip(*[create_mxfp_scale(1, K, N) for _ in range(B)])
+
+    a = torch.stack(a, dim=0)
+    b = torch.stack(b, dim=0)
+    a_scale = torch.stack(a_scale, dim=0)
+    b_scale = torch.stack(b_scale, dim=0).permute(0, 2, 1).contiguous()
+
+    a_ref = torch.stack(a_ref, dim=0)
+    b_ref = torch.stack(b_ref, dim=0)
+    a_scale_ref = torch.stack(a_scale_ref, dim=0)
+    b_scale_ref = torch.stack(b_scale_ref, dim=0)
+
+    a, a_scale = a.cuda(), a_scale.cuda()
+    b, b_scale = b.cuda(), b_scale.cuda()
+
+    c = torch.zeros((B, M, N), dtype=torch.float32).cuda()
+    kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, B, M, N, K, num_warps=4)
+
+    c_torch = (a_ref * a_scale_ref) @ (b_ref * b_scale_ref)
+    torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
 @pytest.mark.parametrize("M, N, K", [(16, 16, 128), (32, 32, 128), (32, 32, 256), (32, 32, 512), (64, 64, 128),
                                      (128, 128, 256)])
 @pytest.mark.parametrize("mxfp_type", ["e2m1"])

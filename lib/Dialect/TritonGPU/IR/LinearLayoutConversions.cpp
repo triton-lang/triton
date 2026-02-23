@@ -1414,12 +1414,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          CGAEncodingAttr cgaLayout) {
   using basisT = std::vector<std::vector<int32_t>>;
   unsigned rank = dotOperandShape.size();
-  SmallVector<int32_t> order;
-  if (rank == 3) {
-    order = {1, 0, 2};
-  } else {
-    order = {1, 0};
-  }
+  bool hasBatchDim = rank == 3;
   auto outDimNames = standardOutDimNames(ctx, rank);
 
   StringAttr kRegister = StringAttr::get(ctx, "register");
@@ -1433,8 +1428,8 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   // - B: [K, N]
   // - aScale: [M, K / 32 or 16]
   // - bScale: [N, K / 32 or 16]
-  auto dimK = outDimNames[order[0]];
-  auto dimNonK = outDimNames[order[1]];
+  auto dimK = outDimNames[rank - 1];
+  auto dimNonK = outDimNames[rank - 2];
 
   // Each lane holds kWidth=4 consecutive values along the K dim.
   // The first 16 lanes are distributed along the nonK dim.
@@ -1445,13 +1440,23 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
       LinearLayout::identity1D(16, kLane, dimNonK) *
       LinearLayout::zeros1D(2, kLane, dimNonK);
 
-  unsigned mnDim = dotOperandIdx == 0 ? rank - 2 : rank - 1;
-
   // If the shape along the K dim is larger than kWidth, repeat this
   // pattern to fill the K dim.
   tileLayout *= LinearLayout::identity1D(kSize / scaleKWidth, kRegister, dimK);
 
+  if (hasBatchDim) {
+    tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[0]);
+    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[0]);
+  }
+
   if (dotOperandIdx == 1) {
+    // ctaLayout comes from the dot operand. For B in scaled dot,
+    // - the operand is ordered as [K, N]
+    // - the scale is ordered as [N, K / 32 or 16].
+    // Swap the last two dims of ctaLayout to match the tileLayout
+    SmallVector<int32_t> order = {1, 0};
+    if (hasBatchDim)
+      order = {0, 2, 1};
     ctaLayout = transposeLinearLayout(ctaLayout, order);
   }
 
