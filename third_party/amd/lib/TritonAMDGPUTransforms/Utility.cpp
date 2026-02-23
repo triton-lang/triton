@@ -169,8 +169,6 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   unsigned bitWidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
   unsigned elemByteWidth = std::max(bitWidth / 8u, 1u);
 
-  // NYI: dtypes != 16bit
-  // TODO: how to bail out of mxfp4, maybe with linear encoding?
   if (!llvm::is_contained({1, 2}, elemByteWidth)) {
     return {};
   }
@@ -192,6 +190,16 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     return {};
   }
 
+  if (!llvm::is_contained({4, 8, 16}, kWidth)) {
+    return {};
+  }
+
+  unsigned kWidthBytes = kWidth * elemByteWidth;
+  // TODO: if the actual vecSize is smaller than 16 bytes we can do better by
+  // using smaller padding intervals
+  unsigned vecSize = 16 / elemByteWidth;
+  unsigned elemsPer8Bytes = 8 / elemByteWidth;
+
   // Determine row(contig) size
   unsigned contigDim = isKContig ? kDim : nonKDim;
   unsigned nonContigDim = isKContig ? nonKDim : kDim;
@@ -205,10 +213,16 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   // 2) ds_read_b64_tr (and ds_read_b64): Uses 64 banks and lanes are split into
   // 2 groups which access LDS one after another.
   // 3) Others: Use only 32 banks and lanes are split into groups each loading
-  // 32 banks. are used.
+  // 32 banks.
 
-  bool useDsReadB128 = isKContig && kWidth * elemByteWidth == 16;
-  bool useDsReadB64Tr = !isKContig && kWidth * elemByteWidth >= 8;
+  bool useDsReadB128 = isKContig && kWidthBytes == 16;
+  bool useDsReadB64Tr = !isKContig && kWidthBytes >= 8;
+
+  // Note for isKContig && kWidthBytes == 8 we do use ds_read2_b64 which uses 32
+  // banks
+  unsigned numberOfBanks = (useDsReadB128 || useDsReadB64Tr) ? 64 : 32;
+  unsigned bytesPerBank = 4;
+  unsigned elemPerBankRow = (numberOfBanks * bytesPerBank) / elemByteWidth;
 
   unsigned padding = 0;
   if (useDsReadB128) {
@@ -216,38 +230,38 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   } else if (useDsReadB64Tr) {
     padding = mfmaNonKDim == 16 ? 16 : 32;
   } else {
-    padding = 8 / elemByteWidth;
+    padding = elemsPer8Bytes;
   }
 
-  unsigned numberOfBanks = (useDsReadB128 || useDsReadB64Tr) ? 64 : 32;
-
-  // TODO if contig only allows for dword wide loads we can do better by
-  // decreasing the padding interval
-  unsigned vecSize = 16 / elemByteWidth; // in favor of dwordX4
   unsigned contigLanes = contigDim / vecSize;
-  unsigned wrap =
-      std::min(contigDim, (numberOfBanks * 4) / elemByteWidth) / padding;
+  unsigned wrap = std::min(contigDim, elemPerBankRow) / padding;
   // wrap == 0 means padding > contigDim, which is not a valid configuration
   if (wrap == 0) {
     return {};
   }
-  unsigned requiredDim = warpSize / contigLanes * wrap;
 
-  // We get x-way bank conflicts where x is log2(requiredDim / nonContigDim) + 1
-  unsigned wayConflicts = (nonContigDim >= requiredDim)
-                              ? 1
-                              : (llvm::Log2_32(requiredDim / nonContigDim) + 1);
+  // The staggering of rows only works if we have enough (wrap) rows to stagger.
+  // If we have less rows we get bank conflicts. For each pow2 too small we will
+  // get 2 times more conflicts.
+  unsigned requiredRows = warpSize / contigLanes * wrap;
+  unsigned xWayConflicts =
+      (nonContigDim >= requiredRows)
+          ? 1
+          : (llvm::Log2_32(requiredRows / nonContigDim) + 1);
   // Heuristic, for ds_read_b128 we do not tolerate any conflicts but for
   // ds_read_b64(_tr) we tolerate 2-way because swizzling will produce the same
   // number of conflicts.
-  if ((useDsReadB128 && wayConflicts > 1) || wayConflicts > 2) {
+  if ((useDsReadB128 && xWayConflicts > 1) || xWayConflicts > 2) {
     return {};
   }
 
-  if (wayConflicts > 1) {
+  if (xWayConflicts > 1) {
     // We need to adjust the warp to allow for bank conflicts and to produce a
     // valid layout
-    wrap /= (1 << (wayConflicts - 1));
+    wrap /= (1 << (xWayConflicts - 1));
+    if (wrap == 0) {
+      return {};
+    }
   }
 
   // Use 16 rows wrap if block large enough
@@ -281,20 +295,21 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   for (; rowBase < llvm::Log2_32(nonContigDim); rowBase++)
     bases.push_back({0, 1 << rowBase});
 
-  // Fixup for nonKContig and mfma16
-  if (useDsReadB64Tr && mfmaNonKDim == 16 && (kWidth * elemByteWidth) > 8) {
-    unsigned row4 = 0;
-    unsigned row8 = 0;
+  // Fixup: One ds_read_tr loads 8 bytes so kWidthBytes > 8 will load strided.
+  // To account for this we swap rows which are accessed by the rows 16-31
+  if (useDsReadB64Tr && mfmaNonKDim == 16 && kWidthBytes == 16) {
+    // lane groups wrap at 16 bytes, so we have to exchange
+    // rows representing 16 and 8 bytes to avoid bank conflict
+    unsigned baseIdxGroup0 = 0;
+    unsigned baseIdxGroup1 = 0;
     for (unsigned i = 0; i < bases.size(); i++) {
       if (bases[i][1] == 16 / elemByteWidth)
-        row8 = i;
+        baseIdxGroup1 = i;
       if (bases[i][1] == 8 / elemByteWidth)
-        row4 = i;
+        baseIdxGroup0 = i;
     }
-    assert(row4 != 0 && row8 != 0);
-    // lane groups wrap at row8, so we have to exchange
-    // row4 and row8 to avoid bank conflict
-    std::swap(bases[row4], bases[row8]);
+    assert(baseIdxGroup0 != 0 && baseIdxGroup1 != 0);
+    std::swap(bases[baseIdxGroup0], bases[baseIdxGroup1]);
   }
 
   // Fixup for KContig and mfma32 when reordered rows can not fit in 64banks
