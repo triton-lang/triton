@@ -972,7 +972,7 @@ def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type):
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
 @pytest.mark.parametrize("M, N, K", [(16, 16, 128), (32, 32, 128), (32, 32, 256), (32, 32, 512), (64, 64, 128),
-                                      (128, 128, 256)])
+                                     (128, 128, 256)])
 @pytest.mark.parametrize("mxfp_type", ["e2m1"])
 @pytest.mark.parametrize("hasScale", [True, False])
 def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale):
