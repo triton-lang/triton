@@ -1,6 +1,5 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -33,7 +32,8 @@ namespace {
 
 bool isAsyncProxyWrite(Operation *op) {
   return isa<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
-             triton::nvidia_gpu::AsyncTMAGatherOp>(op);
+             triton::nvidia_gpu::AsyncTMAGatherOp,
+             triton::nvidia_gpu::CLCTryCancelOp>(op);
 }
 
 Value getSmemDest(Operation *op) {
@@ -44,6 +44,9 @@ Value getSmemDest(Operation *op) {
   if (auto asyncTMAGatherOp =
           dyn_cast<triton::nvidia_gpu::AsyncTMAGatherOp>(op)) {
     return asyncTMAGatherOp.getResult();
+  }
+  if (auto clcTryCancelOp = dyn_cast<triton::nvidia_gpu::CLCTryCancelOp>(op)) {
+    return clcTryCancelOp.getResult();
   }
   return Value();
 }
@@ -65,7 +68,8 @@ bool ignoreOpForProxyFence(Operation *op) {
              triton::nvidia_gpu::InvalBarrierOp>(op);
 }
 
-bool filterFn(Operation *op, Operation *other, Allocation *allocation) {
+bool filterFn(Operation *op, Operation *other, bool /*opIsRead*/,
+              bool /*otherIsRead*/, Allocation *allocation) {
   return ignoreOpForProxyFence(other);
 }
 
@@ -75,7 +79,6 @@ bool filterFn(Operation *op, Operation *other, Allocation *allocation) {
 class ProxyFenceAnalysis : public MembarOrFenceAnalysis {
 
 public:
-  ProxyFenceAnalysis() = default;
   explicit ProxyFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
       : MembarOrFenceAnalysis(allocation, filter) {}
 
@@ -120,13 +123,13 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
       memoryEffectOpInterface.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getBufferIds(value)) {
+          for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               // TODO: handle proxy read cases. Those are currently handled in
               // FenceInsertionPass where it can generate better placement for
               // the fence. But we should support a safe fallback here.
               auto interval = allocation->getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval);
+              auto slice = AllocationSlice(value, interval, bufferId);
 
               if (isAsyncProxyWrite(op)) {
                 if (value == getSmemDest(op)) {

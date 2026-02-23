@@ -34,6 +34,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -211,20 +212,28 @@ LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
   return success();
 }
 
+static LogicalResult verifyClusterSyncOp(Operation *op) {
+  int numCTAs = triton::gpu::lookupNumCTAs(op);
+  if (numCTAs <= 1)
+    return op->emitOpError("requires ttg.num-ctas > 1");
+  if (op->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
+    return op->emitOpError("cannot be used inside `ttg.warp_specialize`");
+  return success();
+}
+
 // -- ClusterArriveOp --
 LogicalResult ClusterArriveOp::verify() {
-  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
-  if (numCTAs <= 1)
-    return emitOpError("requires ttg.num-ctas > 1");
-  return success();
+  return verifyClusterSyncOp(getOperation());
 }
 
 // -- ClusterWaitOp --
 LogicalResult ClusterWaitOp::verify() {
-  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
-  if (numCTAs <= 1)
-    return emitOpError("requires ttg.num-ctas > 1");
-  return success();
+  return verifyClusterSyncOp(getOperation());
+}
+
+// -- ClusterBarrierOp --
+LogicalResult ClusterBarrierOp::verify() {
+  return verifyClusterSyncOp(getOperation());
 }
 
 // -- TMA operation verifiers --
@@ -515,6 +524,11 @@ LogicalResult TCGen5MMAOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
+  for (auto barrier : getBarriers()) {
+    auto barrierTy = cast<MemDescType>(barrier.getType());
+    if (failed(verifyBarrierType(*this, barrierTy)))
+      return failure();
+  }
   Type atype = getA().getType().getElementType();
   Type btype = getB().getType().getElementType();
   Type dtype = getD().getType().getElementType();
@@ -704,6 +718,9 @@ LogicalResult TCGen5CommitOp::verify() {
   auto numDescs = getDescs().size();
   if (numDescs > 2)
     return emitOpError("expected 0, 1, or 2 descriptors, got ") << numDescs;
+  auto barrierTy = getBarrier().getType();
+  if (failed(verifyBarrierType(*this, barrierTy)))
+    return failure();
   return success();
 }
 
@@ -877,7 +894,8 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
                               Value accDep, Value aScale, Value bScale,
                               ScaleDotElemType aType, ScaleDotElemType bType,
                               Value useD, Value pred, ValueRange barriers,
-                              ValueRange barrierPreds, bool isAsync) {
+                              ValueRange barrierPreds, bool twoCTAs,
+                              bool isAsync) {
   MLIRContext *ctx = builder.getContext();
   if (!barriers.empty()) {
     isAsync = true;
@@ -885,7 +903,8 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
-        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr());
+        barrierPreds, twoCTAs ? builder.getUnitAttr() : UnitAttr(),
+        isAsync ? builder.getUnitAttr() : UnitAttr());
 }
 
 bool TCGen5MMAScaledOp::isAsync() { return getIsAsync(); }
@@ -1048,11 +1067,6 @@ LogicalResult TMEMCopyOp::verify() {
                        "representable in a matrix descriptor.");
   }
 
-  auto mod = getOperation()->getParentOfType<ModuleOp>();
-  unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-  if (numCTAs != 1)
-    return emitOpError("NYI: Only one CTA is supported for now.");
-
   // Fp4 we could lift if we needed
   auto nvmmaEnc =
       dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
@@ -1150,6 +1164,30 @@ LogicalResult TensormapCreateOp::verify() {
            << getElementStride().size() << " but expected " << rank;
   }
   return success();
+}
+
+// -- CLCTryCancelOp --
+static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
+  auto int_ty = dyn_cast<IntegerType>(desc.getElementType());
+  if (!int_ty || int_ty.getWidth() != 64) {
+    return emitError(loc)
+           << "Expected CLC result buffer to have type int64, but got"
+           << desc.getElementType();
+  }
+  if (desc.getShape().size() != 1 || desc.getShape()[0] != 2) {
+    return emitError(loc)
+           << "Expected CLC result buffer to have shape [2], but got ["
+           << triton::join(desc.getShape(), ", ") << "]";
+  }
+  return success();
+}
+
+LogicalResult CLCTryCancelOp::verify() {
+  return verifyCLCResultMemdesc(getLoc(), getResult().getType());
+}
+
+LogicalResult CLCLoadResultOp::verify() {
+  return verifyCLCResultMemdesc(getLoc(), getSrc().getType());
 }
 
 } // namespace nvidia_gpu

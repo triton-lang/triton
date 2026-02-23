@@ -8,6 +8,7 @@ from triton.experimental.gluon.language._core import builtin, base_type, base_va
 from triton.experimental.gluon.language._semantic import _check, _compute_tmem_reg_layout
 
 from . import tma
+from . import clc
 from ..hopper import fence_async_shared, mbarrier
 from ..ampere import async_copy, mma_v2
 
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 __all__ = [
     "allocate_tensor_memory",
     "async_copy",
+    "clc",
     "fence_async_shared",
     "get_tmem_reg_layout",
     "mbarrier",
@@ -212,6 +214,9 @@ class tensor_memory_descriptor(base_value):
     def __init__(self, handle, element_ty, shape, layout, alloc_shape):
         self.handle = handle
         self.type = tensor_memory_descriptor_type(element_ty, shape, layout, alloc_shape)
+
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -506,7 +511,8 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     a_type = _semantic._str_to_fp_type(a_type.value)
     b_type = _semantic._str_to_fp_type(b_type.value)
     _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
-                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds)
+                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
+                                                acc.layout.two_ctas)
 
 
 @constexpr_function

@@ -1250,11 +1250,13 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
     acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
     acc_idx = 0
 
-    mma_bars = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], mbarrier.MBarrierLayout())
-    for i in gl.static_range(num_acc_buffers):
+    # We double buffer the mma barriers so we can have 2 in flight simultaneously
+    num_mma_bars: gl.constexpr = 2
+    mma_bars = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())
+    for i in gl.static_range(num_mma_bars):
         mbarrier.init(mma_bars.index(i), count=1)
-    mma_producer = t8.Counter.create(0, num_acc_buffers)
-    mma_consumer = t8.Counter.create(0, num_acc_buffers)
+    mma_producer = t8.Counter.create(0, num_mma_bars)
+    mma_consumer = t8.Counter.create(0, num_mma_bars)
 
     scheduler = SchedulerImpl.initialize(c_desc.shape[0], c_desc.shape[1], BLOCK_M, BLOCK_N)
     num_tiles = scheduler.get_num_tiles()
@@ -1320,6 +1322,8 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
         mma_consumer = mma_consumer.next()
         acc = cur_acc_buf.load(acc_reg_layout)
         if num_acc_buffers == 1:
+            # Wait for all threads to finish loading from accumulator
+            gl.barrier()
             load_consumer, mma_producer = issue_mma(load_consumer, load_bars, a_bufs, b_bufs,
                                                     a_scale_bufs, b_scale_bufs, mma_producer, mma_bars,
                                                     acc_bufs.index(acc_idx), use_acc=False, pred=has_next_tile)
@@ -1335,7 +1339,7 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
     tma.store_wait(0)
     for i in gl.static_range(num_buffers):
         mbarrier.invalidate(load_bars.index(i))
-    for i in gl.static_range(num_acc_buffers):
+    for i in gl.static_range(num_mma_bars):
         mbarrier.invalidate(mma_bars.index(i))
 
 
@@ -1368,32 +1372,6 @@ class PartitionArgs:
     M: gl.tensor
     N: gl.tensor
     K: gl.tensor
-
-    @gluon.constexpr_function
-    def __init__(self, a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs,
-                 load_empty_bars, load_ready_bars, acc_bufs, acc_empty_bars, acc_ready_bars, SchedulerImpl, BLOCK_M,
-                 BLOCK_N, BLOCK_K, M, N, K):
-        self.a_desc = a_desc
-        self.b_desc = b_desc
-        self.c_desc = c_desc
-        self.a_scale_desc = a_scale_desc
-        self.b_scale_desc = b_scale_desc
-        self.a_bufs = a_bufs
-        self.b_bufs = b_bufs
-        self.a_scale_bufs = a_scale_bufs
-        self.b_scale_bufs = b_scale_bufs
-        self.load_empty_bars = load_empty_bars
-        self.load_ready_bars = load_ready_bars
-        self.acc_bufs = acc_bufs
-        self.acc_empty_bars = acc_empty_bars
-        self.acc_ready_bars = acc_ready_bars
-        self.SchedulerImpl = gl.constexpr(SchedulerImpl)
-        self.BLOCK_M = gl.constexpr(BLOCK_M)
-        self.BLOCK_N = gl.constexpr(BLOCK_N)
-        self.BLOCK_K = gl.constexpr(BLOCK_K)
-        self.M = M
-        self.N = N
-        self.K = K
 
 
 @gluon.jit

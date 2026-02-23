@@ -69,7 +69,7 @@ private:
   std::map<uint64_t, std::string> functionNames;
   // functionId -> metadata
   std::map<uint64_t, InstrumentationMetadata> functionMetadata;
-  // data -> scopeId
+  // Active per-data entries for the current op.
   DataToEntryMap dataToEntryMap;
 };
 

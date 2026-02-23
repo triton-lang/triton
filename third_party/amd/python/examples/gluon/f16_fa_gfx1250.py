@@ -36,7 +36,7 @@ class AttentionConfig:
     p_layout: gl.constexpr
 
     @gluon.constexpr_function
-    def __init__(self, SEQLEN_Q, SEQLEN_K, HEAD_SZ, BLOCK_M, BLOCK_N, NUM_BUFFERS):
+    def __init__(self, SEQLEN_Q, SEQLEN_K, HEAD_SZ, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS):
 
         # constants
         self.SEQLEN_Q = gl.constexpr(SEQLEN_Q)
@@ -46,11 +46,17 @@ class AttentionConfig:
         self.BLOCK_N = gl.constexpr(BLOCK_N)
         self.NUM_BUFFERS = gl.constexpr(NUM_BUFFERS)
 
+        assert NUM_WARPS == 4 or NUM_WARPS == 8
+        if NUM_WARPS == 4:
+            warp_bases = [[1, 0], [2, 0]]
+        else:
+            warp_bases = [[1, 0], [2, 0], [4, 0]]
+
         # operator layouts
         self.qk_layout = gl.constexpr(
-            gl.amd.AMDWMMALayout(3, transposed=True, warp_bases=[[1, 0], [2, 0]], instr_shape=[16, 16, 32]))
+            gl.amd.AMDWMMALayout(3, transposed=True, warp_bases=warp_bases, instr_shape=[16, 16, 32]))
         self.pv_layout = gl.constexpr(
-            gl.amd.AMDWMMALayout(3, transposed=True, warp_bases=[[1, 0], [2, 0]], instr_shape=[16, 16, 32]))
+            gl.amd.AMDWMMALayout(3, transposed=True, warp_bases=warp_bases, instr_shape=[16, 16, 32]))
 
         # tensor layouts
         self.k_smem_layout = gl.constexpr(
@@ -258,7 +264,8 @@ def attn_fwd_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
                     ):
 
     NUM_BUFFERS: gl.constexpr = 1
-    cfg = AttentionConfig(SEQLEN_Q, SEQLEN_K, HEAD_SZ, BLOCK_M, BLOCK_N, NUM_BUFFERS)
+    NUM_WARPS: gl.constexpr = 4
+    cfg = AttentionConfig(SEQLEN_Q, SEQLEN_K, HEAD_SZ, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS)
     pgm = AttentionProgram.initialize(  #
         cfg, q_ptr, k_ptr, v_ptr, out_ptr,  #
         stride_qz, stride_qh, stride_qm, stride_qk,  #
@@ -307,7 +314,8 @@ def attn_fwd_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
                               HEAD_SZ: gl.constexpr,  #
                               ):
     NUM_BUFFERS: gl.constexpr = 2
-    cfg = AttentionConfig(SEQLEN_Q, SEQLEN_K, HEAD_SZ, BLOCK_M, BLOCK_N, NUM_BUFFERS)
+    NUM_WARPS: gl.constexpr = 4
+    cfg = AttentionConfig(SEQLEN_Q, SEQLEN_K, HEAD_SZ, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS)
     pgm = AttentionProgram.initialize(  #
         cfg, q_ptr, k_ptr, v_ptr, out_ptr,  #
         stride_qz, stride_qh, stride_qm, stride_qk,  #
@@ -502,45 +510,277 @@ def attn_fwd_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
     pgm.store_output(acc)
 
 
+@gluon.jit
+def attn_fwd_pingpong_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
+                                       stride_qz, stride_qh, stride_qm, stride_qk,  #
+                                       stride_kz, stride_kh, stride_kn, stride_kk,  #
+                                       stride_vz, stride_vh, stride_vn, stride_vk,  #
+                                       stride_oz, stride_oh, stride_om, stride_on,  #
+                                       SM_SCALE: gl.constexpr,  #
+                                       SEQLEN_Q: gl.constexpr,  #
+                                       SEQLEN_K: gl.constexpr,  #
+                                       BLOCK_M: gl.constexpr,  #
+                                       BLOCK_N: gl.constexpr,  #
+                                       HEAD_SZ: gl.constexpr,  #
+                                       ):
+    NUM_BUFFERS: gl.constexpr = 2
+    NUM_WARPS: gl.constexpr = 8
+    cfg = AttentionConfig(SEQLEN_Q, SEQLEN_K, HEAD_SZ, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS)
+    pgm = AttentionProgram.initialize(  #
+        cfg, q_ptr, k_ptr, v_ptr, out_ptr,  #
+        stride_qz, stride_qh, stride_qm, stride_qk,  #
+        stride_kz, stride_kh, stride_kn, stride_kk,  #
+        stride_vz, stride_vh, stride_vn, stride_vk,  #
+        stride_oz, stride_oh, stride_om, stride_on,  #
+        SM_SCALE)
+
+    ITERS_IN_PROLOGUE_EPILOGUE: gl.constexpr = 3
+    n_blocks_n = max((SEQLEN_K + BLOCK_N - 1) // BLOCK_N - ITERS_IN_PROLOGUE_EPILOGUE, 1)
+
+    # Since QK from the final iteration is already peeled into the epilogue,
+    # we only need to handle case where SEQLEN_K < ITERS_IN_PROLOGUE_EPILOGUE * BLOCK_N.
+    has_remainder: gl.constexpr = SEQLEN_K < (ITERS_IN_PROLOGUE_EPILOGUE) * BLOCK_N
+    REMAINDER_PEELED_ITERS = 1
+    if has_remainder:
+        n_blocks_n = n_blocks_n - REMAINDER_PEELED_ITERS
+
+    m_i = gl.full([BLOCK_M], float("-inf"), dtype=gl.float32, layout=gl.SliceLayout(1, cfg.pv_layout))
+    l_i = gl.full([BLOCK_M], 1.0, dtype=gl.float32, layout=gl.SliceLayout(1, cfg.pv_layout))
+    acc = gl.zeros([BLOCK_M, HEAD_SZ], dtype=gl.float32, layout=cfg.pv_layout)
+
+    block_min = 0
+    block_max = n_blocks_n * BLOCK_N
+    """
+    Prologue:
+    t = i           t = i+1          t = i+2
+    [GLDS_K]
+    [LR_K, GLDS_V], [GLDS_K]
+    [QK, SM0],      [LR_K, GLDS_V],  [GLDS_K]
+    """
+    # GLDS_K_t0, GLDS_K_t1, GLDS_V_t0
+    pgm.tdm_load_global_to_shared_k([0, 0], buffer_index=0)
+    pgm.tdm_load_global_to_shared_k([BLOCK_N, 0], buffer_index=1)
+    pgm.tdm_load_global_to_shared_v([0, 0], buffer_index=0)
+
+    # LR_K_t0
+    k = pgm.tdm_shared_load_k(0, wait_count=2)
+
+    # QK_t0
+    qk = pgm.compute_qk(k, 0)
+
+    # SM0_t0
+    p, alpha, m_i = pgm.softmax_part0(qk, m_i)
+
+    # GLDS_V_t1, GLDS_K_t2
+    pgm.tdm_load_global_to_shared_v([BLOCK_N, 0], buffer_index=1)
+    pgm.tdm_load_global_to_shared_k([2 * BLOCK_N, 0], buffer_index=0)
+
+    # LR_K_t1
+    k = pgm.tdm_shared_load_k(1, wait_count=3)
+    iter_id = 0
+    for block_id in range(block_min, block_max, BLOCK_N):
+        """
+        Steady State (Hot Loop - No Masking):
+        t = i              t = i+1         t = i+2         t = i+3
+        [SM1, LR_V, PV],   [QK, SM0],    [LR_K, GLDS_V]     [GLDS_K]
+
+        unroll_factor=2 to save computation wrt iter_id and arithmetic computation
+        for rotating registers.
+        """
+        """
+        1/2 of unrolled loop
+        """
+
+        # QK, SM1, LR_V (no mask needed - all blocks in hot loop are full)
+        with gl.amd.warp_pipeline_stage("stage0", priority=0):
+            t_1 = block_id + BLOCK_N
+            t_2 = block_id + 2 * BLOCK_N
+            t_3 = block_id + 3 * BLOCK_N
+            qk = pgm.compute_qk_no_mask(k)
+
+        gl.amd.gfx1250.tdm.async_wait(2)
+        with gl.amd.warp_pipeline_stage("stage1", priority=1):
+            # v = pgm.tdm_shared_load_v(iter_id % NUM_BUFFERS, wait_count=2)
+            p, l_i, acc = pgm.softmax_part1(p, l_i, acc, alpha)
+            v = pgm.v_buffer.index(iter_id % NUM_BUFFERS).load(layout=pgm.cfg.v_layout)
+            pgm.tdm_load_global_to_shared_k([t_3, 0], (iter_id + 1) % NUM_BUFFERS)
+
+        # PV, SM0, LR_K
+        with gl.amd.warp_pipeline_stage("stage2", priority=0):
+            acc = pgm.compute_pv(p, v, acc)
+
+        gl.amd.gfx1250.tdm.async_wait(2)
+        with gl.amd.warp_pipeline_stage("stage3", priority=1):
+            # k = pgm.tdm_shared_load_k(iter_id % NUM_BUFFERS, wait_count=2)
+            p, alpha, m_i = pgm.softmax_part0(qk, m_i)
+            k = pgm.k_buffer.index(iter_id % NUM_BUFFERS).permute([1, 0]).load(layout=pgm.cfg.k_layout)
+            pgm.tdm_load_global_to_shared_v([t_2, 0], iter_id % NUM_BUFFERS)
+            iter_id += 1
+    """
+    Final iteration of steady state that requires masking.(if masking is required)
+    """
+    if has_remainder:
+        t_1 = iter_id * BLOCK_N + BLOCK_N
+        t_2 = iter_id * BLOCK_N + 2 * BLOCK_N
+        t_3 = iter_id * BLOCK_N + 3 * BLOCK_N
+
+        # Process the remainder block with masking
+        qk = pgm.compute_qk(k, t_1)
+
+        p, l_i, acc = pgm.softmax_part1(p, l_i, acc, alpha)
+
+        v = pgm.tdm_shared_load_v(iter_id % NUM_BUFFERS, wait_count=2)
+
+        # GLDS_K
+        pgm.tdm_load_global_to_shared_k([t_3, 0], (iter_id + 1) % NUM_BUFFERS)
+
+        # PV, SM0, LR_K
+        acc = pgm.compute_pv(p, v, acc)
+
+        p, alpha, m_i = pgm.softmax_part0(qk, m_i)
+
+        k = pgm.tdm_shared_load_k(iter_id % NUM_BUFFERS, wait_count=2)
+
+        # GLDS_V
+        pgm.tdm_load_global_to_shared_v([t_2, 0], iter_id % NUM_BUFFERS)
+        iter_id += 1
+    """
+    Epilogue:
+    t = i+1              t = i+2              t = i+3
+    [SM1, LR_V, PV],    [QK, SM0],          [LR_K, GLDS_V]
+                        [SM1, LR_V, PV],    [QK, SM0]
+                                            [SM1, LR_V, PV]
+    """
+    epilogue_offset = (iter_id - 1) * BLOCK_N
+    t_2 = epilogue_offset + 2 * BLOCK_N
+    t_3 = epilogue_offset + 3 * BLOCK_N
+    # SM1_t1, LR_V_t1, PV_t1
+    p, l_i, acc = pgm.softmax_part1(p, l_i, acc, alpha)
+
+    v = pgm.tdm_shared_load_v(iter_id % NUM_BUFFERS, wait_count=2)
+
+    acc = pgm.compute_pv(p, v, acc)
+
+    # QK_t2, SM0_t2
+    qk = pgm.compute_qk(k, t_2)
+    p, alpha, m_i = pgm.softmax_part0(qk, m_i)
+
+    # LR_K_t3, GLDS_V_t3
+    k = pgm.tdm_shared_load_k(iter_id % NUM_BUFFERS, wait_count=1)
+
+    pgm.tdm_load_global_to_shared_v([t_3, 0], iter_id % NUM_BUFFERS)
+
+    # QK_t3, SM1_t2, LR_V_t2
+    qk = pgm.compute_qk(k, t_3)
+
+    p, l_i, acc = pgm.softmax_part1(p, l_i, acc, alpha)
+
+    v = pgm.tdm_shared_load_v((iter_id + 1) % NUM_BUFFERS, wait_count=1)
+
+    # PV_t_2, SM0_t_3, SM1_t_3, LR_V_t3
+    acc = pgm.compute_pv(p, v, acc)
+
+    p, alpha, m_i = pgm.softmax_part0(qk, m_i)
+    p, l_i, acc = pgm.softmax_part1(p, l_i, acc, alpha)
+
+    v = pgm.tdm_shared_load_v(iter_id % NUM_BUFFERS, wait_count=0)
+
+    # PV_t_3
+    acc = pgm.compute_pv(p, v, acc)
+
+    # Post loop scaling and output
+
+    l_recip = 1 / l_i[:, None]
+    acc = acc * l_recip
+    pgm.store_output(acc)
+
+
 def generate_configs():
     base_configs = [
         # Tests for pipelined attention fwd kernel
         pytest.param({
             "BATCH": 8, "SEQLEN_Q": 512, "SEQLEN_K": 512, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 128, "BLOCK_M":
-            128, "BLOCK_N": 64, "ATTN_FN": attn_fwd_pipelined_kernel
+            128, "BLOCK_N": 64, "ATTN_FN": "pipeline"
         }),
         pytest.param({
             "BATCH": 8, "SEQLEN_Q": 1024, "SEQLEN_K": 1024, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 64,
-            "BLOCK_M": 128, "BLOCK_N": 128, "ATTN_FN": attn_fwd_pipelined_kernel
+            "BLOCK_M": 128, "BLOCK_N": 128, "ATTN_FN": "pipeline"
         }),
         pytest.param({
             "BATCH": 4, "SEQLEN_Q": 2000, "SEQLEN_K": 2000, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 64,
-            "BLOCK_M": 128, "BLOCK_N": 128, "ATTN_FN": attn_fwd_pipelined_kernel
+            "BLOCK_M": 128, "BLOCK_N": 128, "ATTN_FN": "pipeline"
         }),
         pytest.param({
             "BATCH": 1, "SEQLEN_Q": 3, "SEQLEN_K": 32, "NUM_Q_HEADS": 4, "NUM_K_HEADS": 4, "HEAD_SZ": 128, "BLOCK_M":
-            128, "BLOCK_N": 32, "ATTN_FN": attn_fwd_pipelined_kernel
+            128, "BLOCK_N": 32, "ATTN_FN": "pipeline"
         }),
         pytest.param({
             "BATCH": 4, "SEQLEN_Q": 1, "SEQLEN_K": 100, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 32, "BLOCK_M":
-            128, "BLOCK_N": 32, "ATTN_FN": attn_fwd_pipelined_kernel
+            128, "BLOCK_N": 32, "ATTN_FN": "pipeline"
         }),
         pytest.param({
             "BATCH": 1, "SEQLEN_Q": 1, "SEQLEN_K": 30, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 32, "BLOCK_M":
-            128, "BLOCK_N": 32, "ATTN_FN": attn_fwd_pipelined_kernel
+            128, "BLOCK_N": 32, "ATTN_FN": "pipeline"
+        }),
+        # Tests for pingpong pipelined attention fwd kernel
+        pytest.param({
+            "BATCH": 8, "SEQLEN_Q": 1024, "SEQLEN_K": 1024, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 128,
+            "BLOCK_M": 256, "BLOCK_N": 64, "ATTN_FN": "pingpong"
+        }),
+        pytest.param({
+            "BATCH": 1, "SEQLEN_Q": 300, "SEQLEN_K": 300, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 64, "BLOCK_M":
+            256, "BLOCK_N": 32, "ATTN_FN": "pingpong"
         }),
 
         # Tests for non-pipelined attention fwd kernel
         pytest.param({
             "BATCH": 8, "SEQLEN_Q": 512, "SEQLEN_K": 512, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 128, "BLOCK_M":
-            128, "BLOCK_N": 32, "ATTN_FN": attn_fwd_kernel
+            128, "BLOCK_N": 32, "ATTN_FN": "default"
         }),
         pytest.param({
             "BATCH": 1, "SEQLEN_Q": 1, "SEQLEN_K": 30, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 32, "BLOCK_M":
-            128, "BLOCK_N": 32, "ATTN_FN": attn_fwd_kernel
+            128, "BLOCK_N": 32, "ATTN_FN": "default"
         }),
     ]
     return base_configs
+
+
+_KERNEL_NUM_WARPS = {attn_fwd_kernel: 4, attn_fwd_pipelined_kernel: 4, attn_fwd_pingpong_pipelined_kernel: 8}
+
+_ATTN_TYPE_TO_KERNEL_FN = {
+    "default": attn_fwd_kernel,
+    "pipeline": attn_fwd_pipelined_kernel,
+    "pingpong": attn_fwd_pingpong_pipelined_kernel,
+}
+
+
+def run_prefill_attention(config, q, k, v, o, sm_scale):
+    BATCH = config["BATCH"]
+    SEQLEN_Q = config["SEQLEN_Q"]
+    SEQLEN_K = config["SEQLEN_K"]
+    NUM_Q_HEADS = config["NUM_Q_HEADS"]
+    HEAD_SZ = config["HEAD_SZ"]
+    BLOCK_M = config["BLOCK_M"]
+    BLOCK_N = config["BLOCK_N"]
+    attn_fn = _ATTN_TYPE_TO_KERNEL_FN[config["ATTN_FN"]]
+
+    num_warps = _KERNEL_NUM_WARPS[attn_fn]
+
+    grid = (
+        BATCH,
+        NUM_Q_HEADS,
+        ((SEQLEN_Q + BLOCK_M - 1) // BLOCK_M),
+    )
+    attn_kernel = attn_fn[grid](
+        q, k, v, o,  #
+        q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+        k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+        v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+        o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+        sm_scale, SEQLEN_Q, SEQLEN_K,  #
+        BLOCK_M, BLOCK_N,  #
+        HEAD_SZ, num_warps=num_warps, waves_per_eu=1)
+    return (attn_kernel, )
 
 
 def run_attention(config, check=True):
@@ -550,9 +790,6 @@ def run_attention(config, check=True):
     NUM_Q_HEADS = config["NUM_Q_HEADS"]
     NUM_K_HEADS = config["NUM_K_HEADS"]
     HEAD_SZ = config["HEAD_SZ"]
-    BLOCK_M = config["BLOCK_M"]
-    BLOCK_N = config["BLOCK_N"]
-    attn_fn = config["ATTN_FN"]
 
     dtype = torch.bfloat16
     torch.random.manual_seed(0)
@@ -570,21 +807,8 @@ def run_attention(config, check=True):
     v = v.cuda()
     o = o.cuda()
 
-    grid = (
-        BATCH,
-        NUM_Q_HEADS,
-        ((SEQLEN_Q + BLOCK_M - 1) // BLOCK_M),
-    )
+    attn_kernel = run_prefill_attention(config, q, k, v, o, sm_scale)
 
-    attn_kernel = attn_fn[grid](
-        q, k, v, o,  #
-        q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
-        k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
-        v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
-        o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
-        sm_scale, SEQLEN_Q, SEQLEN_K,  #
-        BLOCK_M, BLOCK_N,  #
-        HEAD_SZ, num_warps=4, waves_per_eu=1)
     torch.cuda.synchronize()
     o = o.cpu()
     rtol = 0.004
@@ -611,7 +835,13 @@ if __name__ == "__main__":
     parser.add_argument("--head-size", type=int, default=128, help='Q/K/V head size')
     parser.add_argument("--block-m", type=int, default=128, help='BLOCK_M size')
     parser.add_argument("--block-n", type=int, default=128, help='BLOCK_N size')
-    parser.add_argument("--pipeline", action="store_true", help="Use pipelined variant")
+    parser.add_argument(
+        "--attention-type",
+        type=str,
+        choices=["default", "pipeline", "pingpong"],
+        default="default",
+        help="Attention Kernel Type",
+    )
     args = parser.parse_args()
     config = {
         "BATCH": args.b,  #
@@ -619,7 +849,7 @@ if __name__ == "__main__":
         "NUM_Q_HEADS": args.num_heads_q, "NUM_K_HEADS": args.num_heads_k,  #
         "HEAD_SZ": args.head_size,  #
         "BLOCK_M": args.block_m, "BLOCK_N": args.block_n,  #
-        "ATTN_FN": attn_fwd_pipelined_kernel if args.pipeline else attn_fwd_kernel
+        "ATTN_FN": args.attention_type,  #
     }
     print(config)
     run_attention(config)

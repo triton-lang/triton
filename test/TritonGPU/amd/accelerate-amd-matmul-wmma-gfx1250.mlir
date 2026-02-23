@@ -351,3 +351,53 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0] }>
+#op0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#op1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+
+// CHECK{LITERAL}: #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_f16_f32_smallk(
+      %arg0: tensor<32x8x!tt.ptr<f16>, #op0>,
+      %arg1: tensor<8x32x!tt.ptr<f16>, #op1>,
+      %arg2: tensor<32x32x!tt.ptr<f32>, #blocked>
+      ) {
+    %a = tt.load %arg0 : tensor<32x8x!tt.ptr<f16>, #op0>
+    %b = tt.load %arg1 : tensor<8x32x!tt.ptr<f16>, #op1>
+    %c = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    // CHECK: %[[OPND0:.*]] = ttg.convert_layout {{.*}} : tensor<32x8xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<32x8xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+    // CHECK: %[[OPND1:.*]] = ttg.convert_layout {{.*}} : tensor<8x32xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<8x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    // CHECK: tt.dot %[[OPND0]], %[[OPND1]], %{{.*}} : tensor<32x8xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<8x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<32x32xf32, #mma>
+    %res = tt.dot %a, %b, %c : tensor<32x8xf16, #op0> * tensor<8x32xf16, #op1> -> tensor<32x32xf32, #blocked>
+    tt.store %arg2, %res : tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// NOTE: A/B/C/D's CGA-layout are not necessarilly equal when num-ctas > 1
+//  - D and C's should have the same CGA-layout, in this case [[0, 1], [1, 0]]
+//  - A and B's CGA-layout is derived from D-CGA-layout by clearing the elements,
+//    corresponding to the K dim, in the bases to zero. Hence, one have layout
+//    [[0, 0] [1, ]], the other one has layout [[0, 1], [0, 0]]
+//
+// CHECK-DAG: #mma{{[0-9]}} = #ttg.amd_wmma<{version = 3, isTranspose = true, {{.*}} CGALayout = {{\[\[0, 0\], \[1, 0\]\]}}
+// CHECK-DAG: #mma{{[0-9]}} = #ttg.amd_wmma<{version = 3, isTranspose = true, {{.*}} CGALayout = {{\[\[0, 1\], \[0, 0\]\]}}
+// CHECK-LABEL: test_multi_ctas
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @test_multi_ctas(
+    %0: tensor<32x64xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+    %1: tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+    %2: tensor<32x32x!tt.ptr<i32>, #blocked>) {
+    %3 = arith.constant dense<0> : tensor<32x32xi32, #blocked>
+    %4 = tt.dot %0, %1, %3 : tensor<32x64xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x32xi32, #blocked>
+    tt.store %2, %4 : tensor<32x32x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}

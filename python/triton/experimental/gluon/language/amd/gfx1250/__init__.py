@@ -5,6 +5,7 @@ from ..._core import builtin
 from .._ops import _wmma, _verify_wmma, _mma_scaled
 from .._layouts import AMDWMMALayout
 from ..cdna3 import buffer_load, buffer_store
+from ._layouts import PartitionedSharedLayout
 from . import tdm
 from . import async_copy
 from . import mbarrier
@@ -12,7 +13,7 @@ from . import cluster
 
 __all__ = [
     "async_copy", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "buffer_load", "buffer_store",
-    "get_wmma_scale_layout"
+    "get_wmma_scale_layout", "PartitionedSharedLayout"
 ]
 
 
@@ -91,8 +92,9 @@ def get_wmma_scale_layout(dot_operand_layout, shape):
     """
     op_idx = dot_operand_layout.operand_index
     parent = dot_operand_layout.parent
-    assert isinstance(parent, AMDWMMALayout), "Expected parent to be an instance of AMDMFMALayout"
+    assert isinstance(parent, AMDWMMALayout), "Expected parent to be an instance of AMDWMMALayout"
     mdim = parent.instr_shape[0]
     reg_bases = parent.reg_bases
     warp_bases = parent.warp_bases
-    return _get_wmma_scale_layout_impl(op_idx, shape, mdim, reg_bases, warp_bases)
+    cga_bases = parent.cga_layout
+    return _get_wmma_scale_layout_impl(op_idx, shape, mdim, reg_bases, warp_bases, cga_bases)

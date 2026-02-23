@@ -15,7 +15,6 @@ constexpr size_t bytesForWords(size_t numWords) {
 
 void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
                        const PendingGraphQueue &queue) {
-  const size_t phase = queue.phase;
   const auto &pendingGraphs = queue.pendingGraphs;
   const size_t capacityWords = metricBuffer.getCapacity() / sizeof(uint64_t);
   size_t wordOffset = queue.startBufferOffset / sizeof(uint64_t);
@@ -89,9 +88,14 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
       wordOffset = (wordOffset + metricDesc.size) % capacityWords;
 
-      for (auto &[data, entryIds] : pendingGraph.dataToEntryIds) {
-        const auto entryId = entryIds[i];
-        data->addMetrics(phase, entryId, {{metricName, metricValueVariant}});
+      for (auto &[data, entries] : pendingGraph.dataToEntries) {
+        auto &dataEntry = entries[i];
+        if (dataEntry.id != Scope::DummyScopeId) {
+          dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
+                                               dataEntry.id);
+        } else {
+          dataEntry.upsertFlexibleMetric(metricName, metricValueVariant);
+        }
       }
     }
   }
@@ -99,7 +103,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 } // namespace
 
 void PendingGraphPool::push(
-    size_t phase, const std::map<Data *, std::vector<size_t>> &dataToEntryIds,
+    size_t phase, const std::map<Data *, std::vector<DataEntry>> &dataToEntries,
     size_t numNodes, size_t numWords) {
   const size_t requiredBytes = bytesForWords(numWords);
   void *device = runtime->getDevice();
@@ -119,7 +123,7 @@ void PendingGraphPool::push(
     if (slot->queue == std::nullopt) {
       slot->queue = PendingGraphQueue(startBufferOffset, phase, device);
     }
-    slot->queue->push(numNodes, numWords, dataToEntryIds);
+    slot->queue->push(numNodes, numWords, dataToEntries);
   }
   {
     std::lock_guard<std::mutex> lock(mutex);

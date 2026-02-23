@@ -179,6 +179,7 @@ class HIPUtils(object):
         src = src.replace('/*py_libhip_search_path*/', libhip_path, 1)
         mod = compile_module_from_src(src=src, name="hip_utils", include_dirs=include_dirs)
         self.load_binary = mod.load_binary
+        self.unload_module = mod.unload_module
         self.get_device_properties = mod.get_device_properties
         self.create_tdm_descriptor = mod.create_tdm_descriptor
         self.launch = mod.launch
@@ -367,7 +368,7 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_metadata):
 
     def inner(*args):
         base_args = args[:-1]
-        kernel_metadata = base_args[7]
+        kernel_metadata = base_args[8]
         kernel_args = args[-1]
 
         final_kernel_args = []
@@ -407,6 +408,8 @@ class HIPLauncher(object):
             device_properties = driver.utils.get_device_properties(device)
             assert device_properties['cooperativeLaunch'], \
                 "Cooperative launch requested but not supported by device"
+        self.global_scratch_size = metadata.global_scratch_size
+        self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
 
@@ -421,12 +424,13 @@ class HIPLauncher(object):
                 return alloc_fn(alloc_size, align, stream)
             return None
 
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
         profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
                                            _allocation._profile_allocator)
 
-        self.launch(self.launch_cooperative_grid, gridX, gridY, gridZ, stream, function, profile_scratch,
-                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, self.warp_size,
-                    self.arg_annotations, self.kernel_signature, args)
+        self.launch(self.launch_cooperative_grid, gridX, gridY, gridZ, stream, function, global_scratch,
+                    profile_scratch, kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook,
+                    self.warp_size, self.arg_annotations, self.kernel_signature, args)
 
 
 class HIPDriver(GPUDriver):

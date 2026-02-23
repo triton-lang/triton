@@ -71,19 +71,15 @@ public:
     size_t numNodes{1};
 
     struct GraphNodeState {
-      // If the node is launched as a metric kernel, ignore it's timing data.
-      bool isMetricNode{false};
-      bool isMissingName{true};
+      // Per-node launch status bits (missing-name / metric-node).
+      NodeStatus status{};
+
+      // If the node is launched as a metric kernel, ignore its timing data.
+      bool isMetricNode() const { return status.isMetricNode(); }
+      bool isMissingName() const { return status.isMissingName(); }
 
       void setEntry(Data *data, const DataEntry &entry) {
         dataToEntry.insert_or_assign(data, entry);
-      }
-
-      const DataEntry *findEntry(Data *data) const {
-        auto it = dataToEntry.find(data);
-        if (it == dataToEntry.end())
-          return nullptr;
-        return &it->second;
       }
 
       template <typename FnT> void forEachEntry(FnT &&fn) {
@@ -96,7 +92,7 @@ public:
 
     using GraphNodeStateTable = RangeTable<GraphNodeState>;
 
-    // graphNodeId -> (per-Data entry)
+    // graphNodeId -> per-node entries across active data sinks
     GraphNodeStateTable graphNodeIdToState;
   };
 
@@ -278,9 +274,10 @@ protected:
           }
         } else {
           // Add metrics to the current op
-          for (auto [data, entry] : dataToEntry) {
-            data->addMetrics(entry.phase, entry.id, scalarMetrics);
-            data->addMetrics(entry.phase, entry.id, tensorMetricsHost);
+          for (const auto &entryIt : dataToEntry) {
+            const auto &entry = entryIt.second;
+            entry.upsertFlexibleMetrics(scalarMetrics);
+            entry.upsertFlexibleMetrics(tensorMetricsHost);
           }
         }
       }

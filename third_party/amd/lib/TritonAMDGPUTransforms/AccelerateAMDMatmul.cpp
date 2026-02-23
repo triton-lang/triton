@@ -1384,8 +1384,9 @@ public:
         shape = llvm::to_vector(scale.getType().getShape());
       }
 
-      LinearLayout newLL =
-          ttg::chooseScaledWmmaScaleLayout(ctx, idx, shape, mDim, ctaLayout);
+      LinearLayout newLL = ttg::chooseScaledWmmaScaleLayout(
+          ctx, idx, shape, mDim, ctaLayout,
+          triton::gpu::CGAEncodingAttr::get1CTALayout(ctx, /*rank=*/2));
       Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
       // Scale's data type is always i8
       auto newScaleType = RankedTensorType::get(shape, i8_ty, newScaleEncoding);
@@ -1549,6 +1550,11 @@ public:
     if (operandTypes.empty())
       return failure();
 
+    auto kDimTensor = aShape.back();
+    if (kDimTensor == 1) {
+      return rewriter.notifyMatchFailure(dotOp,
+                                         "Skipping WMMA for dot op with K=1");
+    }
     // check shape
     FailureOr<WmmaIntrinsic> wmmaInstr =
         chooseWmmaInstruction(dotOp, operandTypes, wmmaVersion);
@@ -1565,12 +1571,14 @@ public:
     // get WMMA encoding for the given number of warps
     int numWarps = ttg::lookupNumWarps(dotOp);
 
-    ttg::AMDWmmaEncodingAttr wmmaEnc;
+    ttg::AMDWmmaEncodingAttr wmmaEnc, wmmaEncA, wmmaEncB;
 
     auto warpsPerTile =
         warpsPerTileWMMA(dotOp, retShape, numWarps, {mDim, nDim});
 
     auto CGALayout = ttg::getCGALayout(oldRetEncoding);
+    auto CGALayoutA = ttg::getCGALayout(oldAType.getEncoding());
+    auto CGALayoutB = ttg::getCGALayout(oldBType.getEncoding());
 
     // Use transposed wmma layout to enable larger vectorization for global
     // store instructions.
@@ -1582,6 +1590,12 @@ public:
     wmmaEnc =
         ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, ctaLayout, isTransposed,
                                       CGALayout, {mDim, nDim, kDim});
+    wmmaEncA =
+        ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, ctaLayout, isTransposed,
+                                      CGALayoutA, {mDim, nDim, kDim});
+    wmmaEncB =
+        ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, ctaLayout, isTransposed,
+                                      CGALayoutB, {mDim, nDim, kDim});
 
     auto newRetType = RankedTensorType::get(retShape, operandTypes[3], wmmaEnc);
 
@@ -1590,14 +1604,20 @@ public:
     auto newAcc =
         convertAndCastTensor(rewriter, oldAcc, wmmaEnc, operandTypes[2]);
 
-    // kWidth is always 8 for WMMA v3, and equals to kBase for WMMA v1/2
-    auto kWidth = wmmaVersion == 3 ? 8 : kBase;
+    auto kWidth = 0;
+    // Adjust kWidth=kDimTensor/2 when kDimTensor < kDim
+    if (kDimTensor < kDim) {
+      kWidth = kDimTensor / 2;
+    } else {
+      // kWidth is always 8 for WMMA v3, and equals to kBase for WMMA v1/2
+      kWidth = wmmaVersion == 3 ? 8 : kBase;
+    }
     auto newAType = RankedTensorType::get(
         aShape, operandTypes[0],
-        ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEnc, kWidth));
+        ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEncA, kWidth));
     auto newBType = RankedTensorType::get(
         bShape, operandTypes[1],
-        ttg::DotOperandEncodingAttr::get(ctx, 1, wmmaEnc, kWidth));
+        ttg::DotOperandEncodingAttr::get(ctx, 1, wmmaEncB, kWidth));
 
     Value castedA = convertAndCastTensor(rewriter, a, newAType.getEncoding(),
                                          operandTypes[0]);

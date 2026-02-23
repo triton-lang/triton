@@ -93,11 +93,11 @@ struct ArithConstantSplatOpConversion
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto value = op.getValue();
-    if (!mlir::dyn_cast<SplatElementsAttr>(value))
+    auto values = dyn_cast<SplatElementsAttr>(op.getValue());
+    if (!values)
       return failure();
     auto loc = op->getLoc();
     LLVM::ConstantOp arithConstantOp;
-    auto values = mlir::dyn_cast<SplatElementsAttr>(op.getValue());
     auto elemType = values.getElementType();
     Attribute val;
     if (type::isFloat(elemType)) {
@@ -118,43 +118,6 @@ struct ArithConstantSplatOpConversion
     auto llStruct = SplatOpConversion::convertSplatLikeOp(
         elemType, op.getType(), constOp, typeConverter, rewriter, loc);
     rewriter.replaceOp(op, llStruct);
-    return success();
-  }
-};
-
-// Convert arith::ConstantOp with an array DenseElementsAttr to a
-// LLVM::StructType value.
-struct ArithConstantArrayOpConversion
-    : public ConvertOpToLLVMPattern<arith::ConstantOp> {
-  using ConvertOpToLLVMPattern<arith::ConstantOp>::ConvertOpToLLVMPattern;
-  LogicalResult
-  matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto value = op.getValue();
-    if (!mlir::dyn_cast<DenseElementsAttr>(value))
-      return failure();
-    if (mlir::isa<SplatElementsAttr>(value))
-      return failure();
-    auto tensorTy = cast<RankedTensorType>(op.getType());
-    auto loc = op->getLoc();
-    auto values = mlir::dyn_cast<DenseElementsAttr>(op.getValue());
-    auto elemType = values.getElementType();
-    SmallVector<Value> llVals;
-    for (auto v : values.getValues<APInt>()) {
-      auto ll = LLVM::ConstantOp::create(rewriter, loc, elemType, v);
-      llVals.push_back(ll);
-    }
-    size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
-
-    if (elemsPerThread != llVals.size()) {
-      op->emitError(
-          "Right now we only support constant arrays with the same number of "
-          "elements as the number of threads per warp");
-      return failure();
-    }
-    auto llStruct =
-        packLLElements(loc, getTypeConverter(), llVals, rewriter, op.getType());
-    rewriter.replaceOp(op, {llStruct});
     return success();
   }
 };
@@ -408,7 +371,7 @@ struct MemDescTransOpConversion
     auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                       llvmElemTy, rewriter);
     auto dstSmemObj = SharedMemoryObject(
-        srcSmemObj.getBase(), srcSmemObj.getBaseElemType(),
+        srcSmemObj.getBases(), srcSmemObj.getBaseElemType(),
         /*offsets=*/applyPermutation(srcSmemObj.getOffsets(), op.getOrder()));
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
@@ -441,8 +404,9 @@ struct MemDescReshapeOpConversion
     SmallVector<Value> delinearizedOffset =
         LLVM::delinearize(rewriter, loc, linearOffset, dstShape);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto dstSmemObj = SharedMemoryObject(
-        srcSmemObj.getBase(), srcSmemObj.getBaseElemType(), delinearizedOffset);
+    auto dstSmemObj =
+        SharedMemoryObject(srcSmemObj.getBases(), srcSmemObj.getBaseElemType(),
+                           delinearizedOffset);
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -529,6 +493,15 @@ struct MemDescIndexOpConversion
     auto dstTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
+    if (auto partitionedEnc =
+            dyn_cast<PartitionedSharedEncodingAttr>(srcTy.getEncoding())) {
+      if (partitionedEnc.getPartitionDim() == 0) {
+        return rewriter.notifyMatchFailure(
+            op, "memdesc_index into partitioned dimension (partitionDim=0) "
+                "is not yet supported");
+      }
+    }
+
     // getAllocationShapePerCTA returns the correct number fp4 elements that we
     // need to skip when we have fp4Padded=True. getShapePerCTA does not account
     // for this
@@ -537,24 +510,31 @@ struct MemDescIndexOpConversion
     Value offset = b.mul(op.getIndex(), b.i32_val(stride));
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
-    auto base = smemObj.getBase();
-    auto elemPtrTy = base.getType();
     auto prevOffsets = smemObj.getOffsets();
     SmallVector<Value> offsetVals(prevOffsets.end() - dstTy.getRank(),
                                   prevOffsets.end());
 
     // Apply padding based on the amount we move the base ptr
-    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstTy.getEncoding())) {
+    if (isPaddedEncoding(dstTy.getEncoding())) {
       auto bitwidth = dstTy.getElementTypeBitWidth();
-      auto paddingShifts = getPaddedSharedShifts(padEnc, bitwidth,
+      auto paddingShifts = getPaddedSharedShifts(dstTy.getEncoding(), bitwidth,
                                                  /*offsetInBytes=*/false);
       offset = applyPadding(loc, rewriter, offset, paddingShifts);
     }
 
-    // Advance the pointer and keep the opOffsets as the new shape
-    smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
-                                 llvmElemTy, offsetVals);
-    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
+    // For partitioned tensors (when partitionDim > 0), all partitions have the
+    // same layout structure. Each partition contains portions of every "buffer"
+    // along dimension 0. When we select buffer i, we advance all partition
+    // bases by the same offset.
+    SmallVector<Value> newBases;
+    for (Value base : smemObj.getBases()) {
+      auto elemPtrTy = base.getType();
+      newBases.push_back(b.gep(elemPtrTy, llvmElemTy, base, offset));
+    }
+
+    // Create new smemObj with advanced base pointers
+    auto newSmemObj = SharedMemoryObject(newBases, llvmElemTy, offsetVals);
+    auto retVal = getStructFromSharedMemoryObject(loc, newSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
   }
@@ -576,6 +556,13 @@ struct MemDescSubsliceOpConversion
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto layoutOrder = getOrder(srcTy);
     auto enc = srcTy.getEncoding();
+
+    // PartitionedSharedEncoding is not yet supported for memdesc_subslice
+    if (isa<PartitionedSharedEncodingAttr>(srcTy.getEncoding())) {
+      return rewriter.notifyMatchFailure(
+          op,
+          "PartitionedSharedEncoding not yet supported in memdesc_subslice");
+    }
 
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
@@ -608,6 +595,13 @@ struct MemDescReinterpretOpConversion
     Type srcElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     Type dstElemTy = getTypeConverter()->convertType(dstTy.getElementType());
 
+    // PartitionedSharedEncoding is not yet supported for memdesc_reinterpret
+    if (isa<PartitionedSharedEncodingAttr>(srcTy.getEncoding())) {
+      return b.notifyMatchFailure(
+          op,
+          "PartitionedSharedEncoding not yet supported in memdesc_reinterpret");
+    }
+
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), srcElemTy, b);
     Value newBase = smemObj.getShmemAffineBase(loc, b, srcTy);
@@ -627,7 +621,6 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
-  patterns.add<ArithConstantArrayOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
   patterns.add<SplitOpConversion>(typeConverter, benefit);

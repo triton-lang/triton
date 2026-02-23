@@ -93,9 +93,11 @@ getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
   if (arch)
     isaFamily = triton::AMD::deduceISAFamily(*arch);
 
+  bool filterSmallVectors = isaFamily != triton::AMD::ISAFamily::CDNA4 &&
+                            !isRDNA(isaFamily) &&
+                            isaFamily != triton::AMD::ISAFamily::GFX1250;
+
   bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
-  bool filterSmallVectors =
-      isaFamily != triton::AMD::ISAFamily::CDNA4 && !isRDNA(isaFamily);
   llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
       triton::gpu::loadOpsToIndirectionLevel(forOp, pipelineWithoutDot,
                                              axisInfoAnalysis, numStages,
@@ -320,9 +322,16 @@ LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
 
   // Put the root uses of the loads in the last stage.
   for (auto &[loadOp, info] : loadToInfo) {
-    // Non-LoadOp(s) are the (final) root uses of all LoadOp(s).
-    if (!isa<tt::LoadOp>(info.use))
+    // Hint: Basically, this condition is to check if the "use" is tt.dot.
+    // Consider the DU chains consisting only of load and dot : ld2->ld1->dot
+    // ld2's "use" is ld1 whose "use" is dot. We need to rule out internal node
+    // in the DU chain. Note that DescriptorLoadOp could be an internal node
+    // as its "indices" operands could come from a load. So, we need to check
+    // all load variants that could be pipelined.
+    if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
+            info.use)) {
       schedule.insert(info.use, stages[SCHED_COMPUTE], clusters[SCHED_COMPUTE]);
+    }
   }
 
   // Assign stages to the loads.
@@ -542,11 +551,22 @@ void pipelineLoop(scf::ForOp forOp, int numStages) {
   LoadToInfoMap loadToInfo;
   for (const auto &[load, info] : loadOpToIndLevel) {
     auto [distance, use] = info;
+    LoadInfo loadInfo;
+    loadInfo.sharedEncoding = nullptr;
+    loadInfo.distToUse = distance;
+    loadInfo.use = use;
+
+    auto useTDM = isa<tt::DescriptorLoadOp>(load);
+    if (useTDM) {
+      loadToInfo[load] = loadInfo;
+      continue;
+    }
+
     auto newLoad = bypassLDS(load, use);
     if (newLoad) {
-      loadToInfo[newLoad] = {nullptr, distance, use};
+      loadToInfo[newLoad] = loadInfo;
     } else {
-      loadToInfo[load] = {nullptr, distance, use};
+      loadToInfo[load] = loadInfo;
     }
   }
 
