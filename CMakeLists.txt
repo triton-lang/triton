@@ -235,46 +235,47 @@ add_subdirectory(third_party/f2reduce)
   get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
   set(TRITON_LIBRARIES
     # mlir
-    MLIRAMDGPUDialect
-    MLIRNVVMDialect
+    # MLIRAMDGPUDialect
+    # MLIRNVVMDialect
     MLIRNVVMToLLVMIRTranslation
     MLIRGPUToNVVMTransforms
-    MLIRGPUToGPURuntimeTransforms
+    # MLIRGPUToGPURuntimeTransforms
     MLIRGPUTransforms
     MLIRIR
-    MLIRControlFlowToLLVM
-    MLIRBytecodeWriter
+    # MLIRControlFlowToLLVM
+    # MLIRBytecodeWriter
     MLIRPass
     MLIRTransforms
     MLIRLLVMDialect
     MLIRSupport
     MLIRTargetLLVMIRExport
-    MLIRMathToLLVM
+    # MLIRMathToLLVM
     MLIRROCDLToLLVMIRTranslation
     MLIRGPUDialect
     MLIRSCFToControlFlow
     MLIRIndexToLLVM
     MLIRGPUToROCDLTransforms
     MLIRUBToLLVM
-    MLIRPluginsLib
+    # MLIRPluginsLib
 
     MLIRReconcileUnrealizedCasts
-    MLIRRegisterAllDialects
+    # MLIRRegisterAllDialects
     MLIROptLib
-    MLIRRegisterAllPasses
+    # MLIRRegisterAllPasses
     MLIRAnalysis
     MLIRArithDialect
     MLIRMathDialect
-    MLIRParser
+    # MLIRParser
     MLIRTransformUtils
     MLIRArithToLLVM
     MLIRBuiltinToLLVMIRTranslation
     MLIRNVVMToLLVM
     MLIRLLVMToLLVMIRTranslation
-    MLIRLLVMIRTransforms
-    MLIRSCFDialect
+    # MLIRLLVMIRTransforms
+    # MLIRSCFDialect
 
     # LLVM
+    # LLVMCore
     LLVMPasses
     LLVMNVPTXCodeGen
     LLVMSupport

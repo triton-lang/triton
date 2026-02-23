@@ -1,80 +1,147 @@
-# When TRITON_BUILD_PYTHON_MODULE=ON, libtriton.so contains pybind11 binding
-# code whose static constructors reference Python C API symbols (e.g.
-# _Py_NoneStruct). Standalone tools must link against libpython so the dynamic
-# linker can resolve these symbols at runtime.
-if(TRITON_BUILD_PYTHON_MODULE AND TARGET Python3::Python)
-  set(TRITON_TOOLS_PYTHON_LIBS Python3::Python)
-endif()
+set(TRITON_STATIC_LIBRARIES
+    # mlir
+    MLIRAMDGPUDialect
+    MLIRNVVMDialect
+    MLIRNVVMToLLVMIRTranslation
+    MLIRGPUToNVVMTransforms
+    MLIRGPUToGPURuntimeTransforms
+    MLIRGPUTransforms
+    MLIRIR
+    MLIRControlFlowToLLVM
+    MLIRBytecodeWriter
+    MLIRPass
+    MLIRTransforms
+    MLIRLLVMDialect
+    MLIRSupport
+    MLIRTargetLLVMIRExport
+    MLIRMathToLLVM
+    MLIRROCDLToLLVMIRTranslation
+    MLIRGPUDialect
+    MLIRSCFToControlFlow
+    MLIRIndexToLLVM
+    MLIRGPUToROCDLTransforms
+    MLIRUBToLLVM
+    MLIRPluginsLib
+
+    MLIRReconcileUnrealizedCasts
+    MLIRRegisterAllDialects
+    MLIROptLib
+    MLIRRegisterAllPasses
+    MLIRAnalysis
+    MLIRArithDialect
+    MLIRMathDialect
+    MLIRParser
+    MLIRTransformUtils
+    MLIRArithToLLVM
+    MLIRBuiltinToLLVMIRTranslation
+    MLIRNVVMToLLVM
+    MLIRLLVMToLLVMIRTranslation
+    MLIRLLVMIRTransforms
+    MLIRSCFDialect
+
+    # LLVM
+    LLVMPasses
+    LLVMNVPTXCodeGen
+    LLVMSupport
+
+    # LLVMNVPTXAsmPrinter
+    LLVMAMDGPUCodeGen
+    LLVMAMDGPUAsmParser
+
+  )
+
+get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 
 add_executable(triton-opt triton-opt.cpp)
 
-add_dependencies(triton-opt triton)
 target_compile_options(triton-opt PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-opt PRIVATE
+  ${TRITON_STATIC_LIBRARIES}
   # tests
   TritonTestAnalysis
   TritonTestDialect
   TritonAMDGPUTestAnalysis
   TritonTestProton
-  triton
-  ${TRITON_TOOLS_PYTHON_LIBS}
+  # MLIR core
+  MLIROptLib
+  MLIRPass
+  MLIRRegisterAllDialects
+  MLIRRegisterAllPasses
+  MLIRTransforms
 )
 
+mlir_check_all_link_libraries(triton-opt)
 
 add_executable(triton-reduce triton-reduce.cpp)
-add_dependencies(triton-reduce triton)
+mlir_check_all_link_libraries(triton-reduce)
 target_compile_options(triton-reduce PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 
 target_link_libraries(triton-reduce PRIVATE
+  ${TRITON_STATIC_LIBRARIES}
   # tests
   TritonTestAnalysis
   TritonTestDialect
   TritonAMDGPUTestAnalysis
   TritonTestProton
-  # MLIR core (not in libtriton.so)
+  # MLIR core
   MLIRReduceLib
-  triton
-  ${TRITON_TOOLS_PYTHON_LIBS}
+  MLIRPass
+  MLIRRegisterAllDialects
+  MLIRRegisterAllPasses
+  MLIRTransforms
 )
 
+mlir_check_all_link_libraries(triton-reduce)
 
 add_executable(triton-lsp triton-lsp.cpp)
 
-add_dependencies(triton-lsp triton)
 target_compile_options(triton-lsp PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-lsp PRIVATE
+  ${TRITON_STATIC_LIBRARIES}
   # tests
   TritonTestAnalysis
   TritonTestDialect
   TritonAMDGPUTestAnalysis
   TritonTestProton
-  # MLIR core (not in libtriton.so)
+  # MLIR core
   MLIRLspServerLib
-  triton
-  ${TRITON_TOOLS_PYTHON_LIBS}
+  MLIRPass
+  MLIRRegisterAllDialects
+  MLIRRegisterAllPasses
+  MLIRTransforms
 )
 
+mlir_check_all_link_libraries(triton-lsp)
 
 
 add_executable(triton-llvm-opt triton-llvm-opt.cpp)
-add_dependencies(triton-llvm-opt triton intrinsics_gen)
+add_dependencies(triton-llvm-opt intrinsics_gen)
 target_compile_options(triton-llvm-opt PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-llvm-opt PRIVATE
+  ${TRITON_STATIC_LIBRARIES}
+  TritonLLVMIR
+
+  LLVMAnalysis
+  LLVMCore
+  LLVMSupport
   LLVMOption
-  triton
-  ${TRITON_TOOLS_PYTHON_LIBS}
+  LLVMCodeGen
+
+
+
   )
 export_executable_symbols_for_plugins(triton-llvm-opt)
 
 
 add_executable(triton-tensor-layout triton-tensor-layout.cpp)
-add_dependencies(triton-tensor-layout triton)
 target_compile_options(triton-tensor-layout PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-tensor-layout PRIVATE
+  ${triton_libs}
   TritonTestAnalysis
   TritonTestDialect
   TritonTestProton
   TritonAMDGPUTestAnalysis
-  triton
-  ${TRITON_TOOLS_PYTHON_LIBS}
+  MLIRRegisterAllDialects
+  MLIRRegisterAllPasses
+  MLIRTransforms
   )
