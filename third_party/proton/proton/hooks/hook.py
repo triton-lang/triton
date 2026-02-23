@@ -107,7 +107,7 @@ class HookManager:
 
         # Register the heads
         knobs.runtime.kernel_load_end_hook.add(HookManager.init_handle)
-        knobs.runtime.module_unload_hook.add(HookManager.destroy_handle)
+        knobs.runtime.kernel_unload_hook.add(HookManager.destroy_handle)
         knobs.runtime.launch_enter_hook.add(HookManager.enter)
         knobs.runtime.launch_exit_hook.add(HookManager.exit)
 
@@ -133,6 +133,6 @@ class HookManager:
         # Unregister the heads
         if not HookManager.active_hooks:
             knobs.runtime.kernel_load_end_hook.remove(HookManager.init_handle)
-            knobs.runtime.module_unload_hook.remove(HookManager.destroy_handle)
+            knobs.runtime.kernel_unload_hook.remove(HookManager.destroy_handle)
             knobs.runtime.launch_enter_hook.remove(HookManager.enter)
             knobs.runtime.launch_exit_hook.remove(HookManager.exit)
