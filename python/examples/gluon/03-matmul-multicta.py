@@ -418,7 +418,7 @@ def matmul_epilogue_partition(p):
                         gl.num_warps(),
                         cga_layout=p.c_desc.layout.cga_layout,
                     )).to(dtype)
-            tma.store_wait(pendings=ACC_STAGES - 1)
+            tma.store_wait(pendings=1)
             acc_smem.store(acc)
             fence_async_shared()
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_TILE_N * s], acc_smem)
