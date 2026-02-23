@@ -46,7 +46,7 @@ public:
     auto srcLayout = srcType.getEncoding();
     auto accTMemEncoding = dyn_cast<TensorMemoryEncodingAttr>(
         tcGen5MMAOp.getD().getType().getEncoding());
-    auto CTASplitNum = triton::gpu::getCGALayout(srcLayout).getCTASplitNum();
+    auto cgaLayout = triton::gpu::getCGALayout(srcLayout);
     // TMem encoding for A operand is the same as for D (Acc), but packed for
     // bitwidth=16
     unsigned elemBitWidth =
@@ -58,8 +58,7 @@ public:
     const unsigned colStride = 1;
     auto aTMemEncoding = TensorMemoryEncodingAttr::get(
         context, accTMemEncoding.getBlockM(), lhs.getType().getShape()[1],
-        colStride, CTASplitNum[0], CTASplitNum[1],
-        accTMemEncoding.getTwoCTAs());
+        colStride, cgaLayout, accTMemEncoding.getTwoCTAs());
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     ttg::MemDescType lhsMemDescType = ttg::MemDescType::get(

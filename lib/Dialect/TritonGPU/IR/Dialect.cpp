@@ -247,6 +247,13 @@ SmallVector<unsigned> getWarpOrder(DistributedEncodingTrait layout,
 CGAEncodingAttr getCGALayout(Attribute layout) {
   if (auto ttgLayout = mlir::dyn_cast<LayoutEncodingTrait>(layout))
     return ttgLayout.getCGALayout();
+  if (auto tmemLayout =
+          mlir::dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(layout))
+    return tmemLayout.getCGALayout();
+  if (auto tmemScaleLayout =
+          mlir::dyn_cast<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+              layout))
+    return tmemScaleLayout.getCGALayout();
   llvm::report_fatal_error("Unimplemented usage of getCGALayout");
   return {};
 }
@@ -259,6 +266,13 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
         StringAttr::get(layout.getContext(), "block"), /*skipBroadcast=*/false);
   } else if (auto ttgLayout = mlir::dyn_cast<LayoutEncodingTrait>(layout)) {
     return ttgLayout.getCGALayout().getCTAsPerCGA();
+  } else if (auto tmemLayout =
+                 mlir::dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+                     layout)) {
+    return tmemLayout.getCGALayout().getCTAsPerCGA();
+  } else if (auto tmemScaleLayout = mlir::dyn_cast<
+                 triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(layout)) {
+    return tmemScaleLayout.getCGALayout().getCTAsPerCGA();
   }
   llvm::report_fatal_error("Unimplemented usage of getCTAsPerCGA");
 }
@@ -276,14 +290,10 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   if (auto tmemLayout =
           mlir::dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
               layout)) {
-    res.resize(2);
-    res[0] = tmemLayout.getCTASplitM();
-    res[1] = tmemLayout.getCTASplitN();
+    res = tmemLayout.getCGALayout().getCTASplitNum();
   } else if (auto tmemScaleLayout = mlir::dyn_cast<
                  triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(layout)) {
-    res.resize(2);
-    res[0] = tmemScaleLayout.getCTASplitM();
-    res[1] = tmemScaleLayout.getCTASplitN();
+    res = tmemScaleLayout.getCGALayout().getCTASplitNum();
   } else {
     assert(false && "Unimplemented usage of getCTASplitNum");
   }
@@ -294,6 +304,13 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
   SmallVector<unsigned> res;
   if (auto ttgLayout = mlir::dyn_cast<LayoutEncodingTrait>(layout)) {
     res = ttgLayout.getCGALayout().getCTAOrder();
+  } else if (auto tmemLayout =
+                 mlir::dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+                     layout)) {
+    res = tmemLayout.getCGALayout().getCTAOrder();
+  } else if (auto tmemScaleLayout = mlir::dyn_cast<
+                 triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(layout)) {
+    res = tmemScaleLayout.getCGALayout().getCTAOrder();
   } else {
     llvm::report_fatal_error("Unimplemented usage of getCTAOrder");
   }
@@ -759,29 +776,31 @@ static void printLinearLayout(AsmPrinter &printer, const LinearLayout &ll,
   });
 }
 
-// Print the CGA encoding as `CGALayout = [[...]]` when the layout is
-// non-trivial.
-static void maybePrintCGALayout(mlir::MLIRContext *context,
-                                mlir::AsmPrinter &printer,
-                                CGAEncodingAttr layout) {
-  if (layout.getLinearLayout().getTotalInDimSize() == 1)
-    return;
-
-  auto kBlock = StringAttr::get(context, "block");
+void mlir::triton::gpu::printCGAAttr(mlir::AsmPrinter &printer,
+                                     CGAEncodingAttr layout) {
+  auto kBlock = StringAttr::get(layout.getContext(), "block");
   const auto &basesMap = layout.getLinearLayout().getBases();
   auto it = basesMap.find(kBlock);
   assert(it != basesMap.end());
   const auto &bases = it->second;
-  // This is the default layout
-  assert(!bases.empty());
-
-  printer << ", CGALayout = [";
+  printer << "[";
   llvm::interleaveComma(bases, printer, [&](const std::vector<int32_t> &vec) {
     printer << "[";
     llvm::interleaveComma(vec, printer);
     printer << "]";
   });
   printer << "]";
+}
+
+// Print the CGA encoding as `CGALayout = [[...]]` when the layout is
+// non-trivial.
+static void maybePrintCGALayout(mlir::MLIRContext * /*context*/,
+                                mlir::AsmPrinter &printer,
+                                CGAEncodingAttr layout) {
+  if (layout.getLinearLayout().getTotalInDimSize() == 1)
+    return;
+  printer << ", CGALayout = ";
+  printCGAAttr(printer, layout);
 }
 
 //===----------------------------------------------------------------------===//
@@ -798,10 +817,14 @@ static void maybePrintCGALayout(mlir::MLIRContext *context,
 // Blocked Encoding
 //===----------------------------------------------------------------------===//
 
-std::optional<CGAEncodingAttr> parseCGAAttr(AsmParser &parser, Attribute attr,
-                                            unsigned rank) {
+std::optional<CGAEncodingAttr>
+mlir::triton::gpu::parseCGAAttr(AsmParser &parser, Attribute attr,
+                                unsigned rank) {
   if (!attr)
     return CGAEncodingAttr::get1CTALayout(parser.getContext(), rank);
+
+  if (auto cgaAttr = dyn_cast<CGAEncodingAttr>(attr))
+    return cgaAttr;
 
   auto array = llvm::dyn_cast<ArrayAttr>(attr);
   if (!array) {
@@ -2216,7 +2239,8 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
   bool transposed = false;
   bool fp4Padded = false;
   unsigned elementBitWidth;
-  unsigned layoutRank = 2;
+  unsigned layoutRank;
+  bool hasExplicitRank = false;
   Attribute cgaAttr = nullptr;
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "swizzlingByteWidth") {
@@ -2237,11 +2261,27 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
     } else if (attr.getName() == "rank") {
       if (parseUInt(parser, attr, layoutRank, "rank").failed())
         return {};
+      hasExplicitRank = true;
     } else {
       parser.emitError(parser.getNameLoc(), "unexpected key: ")
           << attr.getName().strref();
       return {};
     }
+  }
+
+  // Infer rank from an explicit CGALayout when possible.
+  if (!hasExplicitRank && cgaAttr) {
+    if (auto cgaArray = dyn_cast<ArrayAttr>(cgaAttr);
+        cgaArray && !cgaArray.empty()) {
+      if (auto firstBasis = dyn_cast<ArrayAttr>(cgaArray[0])) {
+        layoutRank = firstBasis.size();
+        hasExplicitRank = true;
+      }
+    }
+  }
+  // If we couldn't infer or the user didn't specify, default to 2
+  if (!hasExplicitRank) {
+    layoutRank = 2;
   }
 
   std::optional<CGAEncodingAttr> CGALayout =

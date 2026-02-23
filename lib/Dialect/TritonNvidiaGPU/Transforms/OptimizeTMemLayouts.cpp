@@ -276,12 +276,9 @@ public:
     int N = tmemEnc.getBlockN();
     int numWarps = ttg::lookupNumWarps(tmemStoreOp);
     // Compute the alternative layout.
-    auto cgaLayout =
-        ttg::getCGALayout(tmemStoreOp.getSrc().getType().getEncoding());
     std::optional<LinearLayout> ll =
         nvidia_gpu::getDistributedLayoutForTmemLdSt(
-            tmemStoreOp.getDst().getType(), TMemAccessAtom::I16x256b, numWarps,
-            cgaLayout);
+            tmemStoreOp.getDst().getType(), TMemAccessAtom::I16x256b, numWarps);
     if (!ll)
       return failure();
     Attribute newEncoding =
@@ -346,11 +343,10 @@ public:
     int N = tmemEnc.getBlockN();
     int numWarps = ttg::lookupNumWarps(tmemLoadOp);
     auto oldType = tmemLoadOp.getType();
-    auto cgaLayout = ttg::getCGALayout(oldType.getEncoding());
     auto memType = cast<gpu::MemDescType>(tmemLoadOp.getSrc().getType());
     // Compute the alternative layout.
     auto ll = nvidia_gpu::getDistributedLayoutForTmemLdSt(
-        memType, TMemAccessAtom::I16x256b, numWarps, cgaLayout);
+        memType, TMemAccessAtom::I16x256b, numWarps);
     if (!ll)
       return failure();
     Attribute newEncoding =

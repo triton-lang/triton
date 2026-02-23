@@ -277,11 +277,17 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
                             std::function<InFlightDiagnostic()> emitError) {
   auto memLayout = toLinearLayout(memTy);
   auto regLayout = toLinearLayout(regTy);
-  auto cvt = regLayout.invertAndCompose(memLayout);
   auto *ctx = regTy.getContext();
   auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
+  auto kBlock = S("block");
   auto kWarp = S("warp");
   auto kRow = S("row");
+  auto cvt = regLayout.invertAndCompose(memLayout);
+  auto maybeSublayout = cvt.quotient({kBlock});
+  if (!maybeSublayout) {
+    return failure();
+  }
+  cvt = maybeSublayout.value();
   // Warps 0-3 must map to row=32 and row=64 whether with broadcasting or not
   if (!(regLayout.getBasis(kWarp, 0) == memLayout.getBasis(kRow, 5) &&
         regLayout.getBasis(kWarp, 1) == memLayout.getBasis(kRow, 6))) {
