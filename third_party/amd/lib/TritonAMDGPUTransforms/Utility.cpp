@@ -219,11 +219,15 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   } else {
     padding = 8 / elemByteWidth;
   }
+
+  unsigned numberOfBanks = (useDsReadB128 || useDsReadB64Tr) ? 64 : 32;
+
   // TODO if contig only allows for dword wide loads we can do better by
   // decreasing the padding interval
   unsigned vecSize = 16 / elemByteWidth; // in favor of dwordX4
   unsigned contigLanes = contigDim / vecSize;
-  unsigned wrap = std::min(contigDim, 128u) / padding;
+  unsigned wrap =
+      std::min(contigDim, (numberOfBanks * 4) / elemByteWidth) / padding;
   // wrap == 0 means padding > contigDim, which is not a valid configuration
   if (wrap == 0) {
     return {};
