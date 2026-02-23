@@ -236,6 +236,7 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
   FOR_EACH_ERR_FN(hipModuleLoadDataEx, hipModule_t *module, const void *image, \
                   unsigned int numOptions, hipJitOption *options,              \
                   void **optionValues)                                         \
+  FOR_EACH_ERR_FN(hipModuleUnload, hipModule_t module)                         \
   FOR_EACH_ERR_FN(hipModuleGetFunction, hipFunction_t *function,               \
                   hipModule_t module, const char *kname)                       \
   FOR_EACH_ERR_FN(hipFuncGetAttribute, int *, hipFunction_attribute attr,      \
@@ -476,7 +477,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       hipSymbolTable.hipModuleLoadDataEx(&mod, data, 5, opt, optval))
   HIP_CHECK_AND_RETURN_NULL(
       hipSymbolTable.hipModuleGetFunction(&fun, mod, name));
-
   // get allocated registers and spilled registers from the function
   int n_regs = 0;
   int n_spills = 0;
@@ -492,6 +492,17 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   }
   return Py_BuildValue("(KKiii)", (uint64_t)mod, (uint64_t)fun, n_regs,
                        n_spills, n_max_threads);
+}
+
+static PyObject *unloadModule(PyObject *self, PyObject *args) {
+  hipModule_t mod;
+  if (!PyArg_ParseTuple(args, "K", &mod)) {
+    return NULL;
+  }
+
+  HIP_CHECK_AND_RETURN_NULL(hipSymbolTable.hipModuleUnload(mod))
+
+  return Py_None;
 }
 
 static PyObject *createTDMDescriptor(PyObject *self, PyObject *args) {
@@ -1002,6 +1013,7 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
   uint64_t _stream;
   uint64_t _function;
   int launch_cooperative_grid;
+  PyObject *global_scratch_obj = NULL;
   PyObject *profile_scratch_obj = NULL;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
@@ -1011,12 +1023,12 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
   PyObject *arg_annotations = NULL;
   Py_buffer signature;
   PyObject *kernel_args = NULL;
-  if (!PyArg_ParseTuple(args, "piiiKKO(iii)OOOiOy*O", &launch_cooperative_grid,
+  if (!PyArg_ParseTuple(args, "piiiKKOO(iii)OOOiOy*O", &launch_cooperative_grid,
                         &gridX, &gridY, &gridZ, &_stream, &_function,
-                        &profile_scratch_obj, &num_warps, &num_ctas,
-                        &shared_memory, &launch_metadata, &launch_enter_hook,
-                        &launch_exit_hook, &warp_size, &arg_annotations,
-                        &signature, &kernel_args)) {
+                        &global_scratch_obj, &profile_scratch_obj, &num_warps,
+                        &num_ctas, &shared_memory, &launch_metadata,
+                        &launch_enter_hook, &launch_exit_hook, &warp_size,
+                        &arg_annotations, &signature, &kernel_args)) {
     return NULL;
   }
 
@@ -1058,9 +1070,9 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
       goto cleanup;
     }
   }
-  // Add global scratch object (nullptr).
+  // Add global scratch object.
   params[params_idx] = alloca(sizeof(void *));
-  if (!extractPointer(params[params_idx++], Py_None)) {
+  if (!extractPointer(params[params_idx++], global_scratch_obj)) {
     goto cleanup;
   }
   // Add profile scratch object.
@@ -1091,6 +1103,8 @@ cleanup:
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided hsaco into HIP driver"},
+    {"unload_module", unloadModule, METH_VARARGS,
+     "unload provided module to free memory"},
     {"get_device_properties", getDeviceProperties, METH_VARARGS,
      "Get the properties for a given device"},
     {"create_tdm_descriptor", createTDMDescriptor, METH_VARARGS,

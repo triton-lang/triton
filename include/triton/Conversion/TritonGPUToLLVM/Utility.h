@@ -692,7 +692,7 @@ SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
 // }
 // #thenBlock
 std::tuple</*prevBlock=*/Block *, /*ifBlock=*/Block *, /*thenBlock=*/Block *>
-createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd);
+createIfBlock(RewriterBase &b, Location loc, Value cnd);
 
 void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                                  ConversionPatternRewriter &rewriter,

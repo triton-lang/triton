@@ -40,10 +40,7 @@ static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(op)) {
     return mma.getTwoCtas();
   } else if (auto mmaScaled = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-    // TODO: Change when we support scaled MMA with 2CTAs
-    assert(!ttng::getModuleTwoCTAs(op->getParentOfType<ModuleOp>()) &&
-           "Scaled MMA with 2CTAs not supported");
-    return false;
+    return mmaScaled.getTwoCtas();
   } else if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
     return tma.getMulticast();
   }
@@ -76,47 +73,37 @@ static bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
 
 class ClusterBarrierAnalysis : public MembarOrFenceAnalysis {
 public:
-  ClusterBarrierAnalysis() = default;
   explicit ClusterBarrierAnalysis(Allocation *allocation, MembarFilterFn filter)
       : MembarOrFenceAnalysis(allocation, filter) {}
 
 private:
   void update(Operation *op, BlockInfo *blockInfo,
               FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder) override;
-
-  void insertClusterBarrier(Operation *op, OpBuilder *builder);
 };
-
-void ClusterBarrierAnalysis::insertClusterBarrier(Operation *op,
-                                                  OpBuilder *builder) {
-  OpBuilder::InsertionGuard guard(*builder);
-  ttng::ClusterArriveOp::create(*builder, op->getLoc(), /*relaxed=*/false);
-  ttng::ClusterWaitOp::create(*builder, op->getLoc());
-}
 
 void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
                                     FuncBlockInfoMapT *funcBlockInfoMap,
                                     OpBuilder *builder) {
-  if (isa<ttng::ClusterWaitOp>(op)) {
+  if (isa<ttng::ClusterBarrierOp, ttng::ClusterWaitOp>(op)) {
     blockInfo->sync();
     return;
   }
 
   // Any path from distributed shared memory use to kernel exit must include a
-  // cluster arrive/wait pair
+  // cluster barrier.
   if (op->hasTrait<OpTrait::ReturnLike>() &&
       isa<FunctionOpInterface>(op->getParentOp())) {
-    // In `freeTMAlloc` we emit a cluster sync during lowering for 2CTA kernels,
-    // as we need to sync before the TMA deallocation
+    // During TMEM deallocation lowering we emit a cluster sync for 2CTA
+    // kernels, as we need to sync before the TMA deallocation.
     // Note that 2CTA kernels must have a tcgen05_mma instruction and thus must
     // use TensorMemory
     // According to NVIDIA this is enough, so we don't need an extra
     // end-of-kernel barrier
-    auto funcOp = dyn_cast<FunctionOpInterface>(op->getParentOp());
+    auto funcOp = cast<FunctionOpInterface>(op->getParentOp());
     if (isKernel(funcOp) && hasUnresolvedCrossClusterDependency(*blockInfo) &&
         !getModuleTwoCTAs(funcOp)) {
       builder->setInsertionPoint(op);
-      insertClusterBarrier(op, builder);
+      ttng::ClusterBarrierOp::create(*builder, op->getLoc());
       blockInfo->sync();
     }
     return;
@@ -178,7 +165,7 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
         curBlockInfo, filter, allocation, isPreAllocAliasSliceFilter);
     if (insertClusterBarrierNeeded) {
       builder->setInsertionPoint(op);
-      insertClusterBarrier(op, builder);
+      ttng::ClusterBarrierOp::create(*builder, op->getLoc());
     }
 
     // Clear prior distributed dependencies if we have inserted a cluster
@@ -191,7 +178,7 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
   } else if (blockInfo->isIntersected(curBlockInfo, filter, allocation,
                                       isPreAllocAliasSliceFilter)) {
     builder->setInsertionPoint(op);
-    insertClusterBarrier(op, builder);
+    ttng::ClusterBarrierOp::create(*builder, op->getLoc());
     blockInfo->sync();
   }
 
@@ -214,9 +201,7 @@ void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
     // aliasing was already present in TTGIR is handled per-allocation slice.
     bool lhsDist = isDistributedMultiCTAOp(lhs, lhsIsRead);
     bool rhsDist = isDistributedMultiCTAOp(rhs, rhsIsRead);
-    if (!lhsDist && !rhsDist)
-      return true;
-    return false;
+    return !lhsDist && !rhsDist;
   };
 
   ModuleMembarOrFenceAnalysis<ClusterBarrierAnalysis> analysis(

@@ -567,8 +567,7 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
   if (numCTAs == 1) {
     b.barrier(ttg::AddrSpace::Local);
   } else {
-    triton::nvidia_gpu::ClusterArriveOp::create(rewriter, loc, false);
-    triton::nvidia_gpu::ClusterWaitOp::create(rewriter, loc);
+    triton::nvidia_gpu::ClusterBarrierOp::create(rewriter, loc);
   }
 }
 
@@ -1374,19 +1373,11 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     uint32_t barrierMask =
         toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    // We emit a cluster-level barrier if we change the barrier and we don't
-    // multicast over that dimension (in which case that CTA would be predicated
-    // out)
-    bool clusterBarrier = barrierMask & ~maskCGABroadcast;
+    // We emit a cluster-level barrier when the barrier mask is set.
+    bool clusterBarrier = barrierMask != 0;
     if (clusterBarrier) {
-      // This part is to support TMA into tcgen05.mma 2CTA mostly, i.e.,
-      // barrierMask == 1
-      // Mask with ones on the bits where the CTA broadcasts.
-      // This is a trick from cutlass to implement a faster `mapa`.
-      uint32_t fullMask = ~(barrierMask << 24);
-      Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
-      barrierInt = b.and_(barrierInt, b.i32_val(fullMask));
-      barrierPtr = b.inttoptr(barrierPtr.getType(), barrierInt);
+      barrierPtr =
+          LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
     }
 
     // Don't set cta_group::1 as it doesn't exist pre-Blackwell

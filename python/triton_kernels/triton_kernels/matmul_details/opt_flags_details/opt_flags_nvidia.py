@@ -2,7 +2,7 @@ import torch
 import triton
 from triton_kernels import target_info
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
-from triton_kernels.tensor import FP4, Tensor, FP16, BF16
+from triton_kernels.tensor import FP4, FP16, FP32, BF16, Tensor
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
 
@@ -148,7 +148,15 @@ def compute_num_stages(
         if x_transpose:
             smem_capacity -= block_m * block_k * (max(8, lhs_dtype.bitwidth) // 8)
 
+    # Persistent fp32 kernels need extra smem headroom (metadata/barriers/TMA state)
+    # that is not fully captured by the simple stage_size model above.
+    if is_persistent and (lhs_dtype == FP32 or rhs_dtype == FP32):
+        smem_capacity -= 32 * 1024
+    smem_capacity = max(smem_capacity, 0)
     num_stages = min(smem_capacity // int(stage_size), 4)
+    # Keep one stage of headroom for persistent fp32 to avoid launch-time OOR.
+    if is_persistent and (lhs_dtype == FP32 or rhs_dtype == FP32):
+        num_stages = min(num_stages, 3)
     if num_stages == 0:
         num_stages = 1
     return num_stages

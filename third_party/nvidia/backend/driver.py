@@ -81,6 +81,7 @@ class CudaUtils(object):
         ARG_KERNEL = mod.ARG_KERNEL
         ARG_TUPLE = mod.ARG_TUPLE
         self.load_binary = mod.load_binary
+        self.unload_module = mod.unload_module
         self.get_device_properties = mod.get_device_properties
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = mod.set_printf_fifo_size

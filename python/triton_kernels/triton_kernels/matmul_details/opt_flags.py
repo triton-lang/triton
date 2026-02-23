@@ -248,7 +248,7 @@ def make_default_opt_flags_nvidia(
         is_persistent = True
     else:
         has_simple_epilogue = precision_config.max_num_imprecise_acc is None
-        is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.bitwidth <= 8) and out_dtype.bitwidth < 32
+        is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.bitwidth <= 8) and (out_dtype.bitwidth < 32 or lhs_dtype.bitwidth == 32 or rhs_dtype.bitwidth == 32)
         # TMA is slower for batched matmuls with small m/n/k.
         if m * n * k < 131072:
             is_persistent = False

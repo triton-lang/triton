@@ -10,7 +10,7 @@
 
 typedef struct {
   PyObject_HEAD;
-  _Alignas(128) CUtensorMap tensorMap;
+  _Alignas(alignof(CUtensorMap)) CUtensorMap tensorMap;
 } PyCUtensorMapObject;
 
 typedef enum { ARG_CONSTEXPR = 0, ARG_KERNEL = 1, ARG_TUPLE = 2 } ArgType;
@@ -215,6 +215,19 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   }
   return Py_BuildValue("(KKiii)", (uint64_t)mod, (uint64_t)fun, n_regs,
                        n_spills, n_max_threads);
+}
+
+static PyObject *unloadModule(PyObject *self, PyObject *args) {
+  CUmodule mod;
+  if (!PyArg_ParseTuple(args, "K", &mod)) {
+    return NULL;
+  }
+
+  Py_BEGIN_ALLOW_THREADS;
+  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuModuleUnload(mod));
+  Py_END_ALLOW_THREADS;
+
+  return Py_None;
 }
 
 typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
@@ -1044,12 +1057,14 @@ bool extractTmaDesc(void *ptr, PyObject *obj) {
     return false;
   }
   *((CUtensorMap *)ptr) = ((PyCUtensorMapObject *)obj)->tensorMap;
-  uintptr_t align_128 = (uintptr_t)ptr & (128 - 1);
-  if (align_128 != 0) {
+  // Depending on the cuda version, alignof(CUtensorMap) may be 64 or 128.
+  size_t alignment = alignof(CUtensorMap);
+  uintptr_t remainder = (uintptr_t)ptr & (alignment - 1);
+  if (remainder != 0) {
     PyErr_Format(
         PyExc_ValueError,
-        "CUtensorMap must be aligned to 128B, but got (&map) mod 128 = %ld",
-        align_128);
+        "CUtensorMap must be aligned to %ld, but got (&map) mod %ld = %ld",
+        alignment, alignment, remainder);
     return false;
   }
   return true;
@@ -1395,6 +1410,8 @@ cleanup:
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided cubin into CUDA driver"},
+    {"unload_module", unloadModule, METH_VARARGS,
+     "Unload provided module to free memory"},
     {"get_device_properties", getDeviceProperties, METH_VARARGS,
      "Get the properties for a given device"},
     {"cuOccupancyMaxActiveClusters", occupancyMaxActiveClusters, METH_VARARGS,

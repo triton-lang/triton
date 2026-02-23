@@ -10,52 +10,12 @@
 namespace mlir::LLVM::AMD {
 namespace {
 
-// Helper to encode a 48-bit value: 32 bits in first word, 16 bits in second
-// word
-static void encode48BitValue(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
-                             Value value, SmallVector<Value> &group,
-                             int startIdx) {
-  // Lower 32 bits go into the first word
-  group[startIdx] = b.trunc(i32_ty, value);
-  // Upper 16 bits go into the lower 16 bits of the second word
-  Value upperBits = b.trunc(i32_ty, b.lshr(value, b.i32_val(32)));
-  group[startIdx + 1] =
-      b.or_(group[startIdx + 1], b.and_(upperBits, b.i32_val(0xFFFF)));
-}
-
 // Helper to decode a value spanning two 32-bit words
 static Value decode48BitValue(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
                               ArrayRef<Value> group, int startIdx) {
   Value low = b.lshr(group[startIdx], b.i32_val(16));
   Value high = b.shl(group[startIdx + 1], b.i32_val(16));
   return b.or_(low, high);
-}
-
-// Decode a TDM descriptor from group vectors into
-// (base, [shape0, shape1], [stride0, stride1]).
-std::tuple<Value, SmallVector<Value>, SmallVector<Value>>
-decodeTDMDescriptor(RewriterBase &rewriter, Location loc,
-                    ArrayRef<Value> group0, ArrayRef<Value> group1) {
-  auto ctx = rewriter.getContext();
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Type globalPtrTy = ptr_ty(ctx, 1);
-
-  Value globalAddrLow = group0[2];
-  Value globalAddrHigh = b.and_(group0[3], b.i32_val(0x7FFFFFFF));
-  globalAddrLow = b.zext(i64_ty, globalAddrLow);
-  globalAddrHigh = b.shl(b.zext(i64_ty, globalAddrHigh), b.i64_val(32));
-  Value globalAddr = b.or_(globalAddrLow, globalAddrHigh);
-  Value srcPtr = b.inttoptr(globalPtrTy, globalAddr);
-
-  Value tensorStride0 = group1[5];
-  Value tensorStride1 = b.i32_val(1);
-  SmallVector<Value> tensorStride = {tensorStride0, tensorStride1};
-
-  Value tensorShape1 = decode48BitValue(rewriter, b, group1, 1);
-  Value tensorShape0 = decode48BitValue(rewriter, b, group1, 2);
-  SmallVector<Value> tensorShape = {tensorShape0, tensorShape1};
-
-  return {srcPtr, tensorShape, tensorStride};
 }
 
 // C++ wrapper for the shared tdmGetWarpDistribution function
