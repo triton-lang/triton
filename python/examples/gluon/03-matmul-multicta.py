@@ -412,13 +412,13 @@ def matmul_epilogue_partition(p):
             acc_sub = acc_buf.slice(SPLIT_TILE_N * s, SPLIT_TILE_N)
             acc_smem = acc_smems.index(sub_acc_state.index)
             acc = acc_sub.load(
-                    get_tmem_reg_layout(
-                        gl.float32,
-                        (TILE_M, SPLIT_TILE_N),
-                        acc_sub.type.layout,
-                        gl.num_warps(),
-                        cga_layout=p.c_desc.layout.cga_layout,
-                    )).to(dtype)
+                get_tmem_reg_layout(
+                    gl.float32,
+                    (TILE_M, SPLIT_TILE_N),
+                    acc_sub.type.layout,
+                    gl.num_warps(),
+                    cga_layout=p.c_desc.layout.cga_layout,
+                )).to(dtype)
             tma.store_wait(pendings=1)
             acc_smem.store(acc)
             fence_async_shared()
