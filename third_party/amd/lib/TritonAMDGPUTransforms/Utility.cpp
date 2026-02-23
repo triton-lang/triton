@@ -170,7 +170,8 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   unsigned elemByteWidth = std::max(bitWidth / 8u, 1u);
 
   // NYI: dtypes != 16bit
-  if (elemByteWidth != 2) {
+  // TODO: how to bail out of mxfp4, maybe with linear encoding?
+  if (!llvm::is_contained({1, 2}, elemByteWidth)) {
     return {};
   }
 
@@ -191,29 +192,36 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     return {};
   }
 
-  if (!llvm::is_contained({4, 8}, kWidth)) {
-    return {};
-  }
-
   // Determine row(contig) size
   unsigned contigDim = isKContig ? kDim : nonKDim;
   unsigned nonContigDim = isKContig ? nonKDim : kDim;
 
   // padding to avoid bank conflict
-  // For ds_read_b128. Lanes access LDS in 4 pairs of 16 lanes. we have 64 banks
-  // and each lane loads 4 banks. These lane groups are:
-  //  1: 0-3, 12-15, 20-23, 24-27
-  //  2: 4-7, 8-11, 16-19, 28-31
+  // The bank conflict pattern depends on the ds_load instruction:
+  // 1) ds_read_b128: Uses 64 banks and lanes are grouped into 4 pairs:
+  //  Group1: 0-3, 12-15, 20-23, 24-27
+  //  Group2: 4-7, 8-11, 16-19, 28-31
   // The upper half of the lanes follow the same pattern.
-  // For ds_read_b64, it splits conseuctive lanes into 2 groups which access LDS
-  // one after another
+  // 2) ds_read_b64_tr (and ds_read_b64): Uses 64 banks and lanes are split into
+  // 2 groups which access LDS one after another.
+  // 3) Others: Use only 32 banks and lanes are split into groups each loading
+  // 32 banks. are used.
+
+  llvm::outs() << "Kwidth :" << kWidth << "\n";
+  bool useDsReadB128 = isKContig && kWidth * elemByteWidth == 16;
+  bool useDsReadB64Tr = !isKContig && kWidth * elemByteWidth >= 8;
+
   unsigned padding = 0;
-  if (isKContig) {
+  if (useDsReadB128) {
     padding = mfmaNonKDim == 16 ? (kWidth * 2) : kWidth;
-  } else {
+  } else if (useDsReadB64Tr) {
     padding = mfmaNonKDim == 16 ? 16 : 32;
+  } else {
+    padding = 8 / elemByteWidth;
   }
-  constexpr unsigned vecSize = 8; // in favor of dwordX4
+  // TODO if contig only allows for dword wide loads we can do better by
+  // decreasing the padding interval
+  unsigned vecSize = 16 / elemByteWidth; // in favor of dwordX4
   unsigned contigLanes = contigDim / vecSize;
   unsigned wrap = std::min(contigDim, 128u) / padding;
   // wrap == 0 means padding > contigDim, which is not a valid configuration
@@ -236,7 +244,7 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   // We create linear bases mapping from [contigDim, nonContigDim] -> offset,
   std::vector<std::vector<int>> bases;
 
-  // Keep contigSize numbers of elments contiguous in shared memory
+  // Keep contigSize numbers of elements contiguous in shared memory
   for (int elemLog2 = 0; elemLog2 < llvm::Log2_32(contigDim); elemLog2++)
     bases.push_back({1 << elemLog2, 0});
 
@@ -257,13 +265,13 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     bases.push_back({0, 1 << rowBase});
 
   // Fixup for nonKContig and mfma16
-  if (!isKContig && mfmaNonKDim == 16) {
+  if (useDsReadB64Tr && mfmaNonKDim == 16 && (kWidth * elemByteWidth) > 8) {
     unsigned row4 = 0;
     unsigned row8 = 0;
     for (unsigned i = 0; i < bases.size(); i++) {
-      if (bases[i][1] == 8)
+      if (bases[i][1] == 16 / elemByteWidth)
         row8 = i;
-      if (bases[i][1] == 4)
+      if (bases[i][1] == 8 / elemByteWidth)
         row4 = i;
     }
     assert(row4 != 0 && row8 != 0);
@@ -273,8 +281,9 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   }
 
   // Fixup for KContig and mfma32 when reordered rows can not fit in 64banks
-  if (isKContig && mfmaNonKDim == 32 && useBestWrap && kDim < 128) {
-    bool useWideLayout = kWidth == 8;
+  if (useDsReadB128 && mfmaNonKDim == 32 && useBestWrap &&
+      kDim < (256 / elemByteWidth)) {
+    bool useWideLayout = kWidth == (16 / elemByteWidth);
 
     // For narrow layouts we need to shift every 16th row to the other half of
     // shared memory banks to read from all banks. For the wide layout we need
