@@ -13,7 +13,7 @@ class Hook:
                     hash: str) -> None:  # noqa: D401
         raise NotImplementedError
 
-    def uninit_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
+    def destroy_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
         pass
 
     @abstractmethod
@@ -45,9 +45,9 @@ class HookManager:
             hook.init_handle(module, function, name, metadata_group, hash)
 
     @staticmethod
-    def uninit_handle(module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
+    def destroy_handle(module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
         for hook in reversed(HookManager.active_hooks):
-            hook.uninit_handle(module, function, name, metadata_group, hash)
+            hook.destroy_handle(module, function, name, metadata_group, hash)
 
     @staticmethod
     def enter(metadata: LazyDict) -> None:
@@ -107,7 +107,7 @@ class HookManager:
 
         # Register the heads
         knobs.runtime.kernel_load_end_hook.add(HookManager.init_handle)
-        knobs.runtime.module_unload_hook.add(HookManager.uninit_handle)
+        knobs.runtime.module_unload_hook.add(HookManager.destroy_handle)
         knobs.runtime.launch_enter_hook.add(HookManager.enter)
         knobs.runtime.launch_exit_hook.add(HookManager.exit)
 
@@ -133,6 +133,6 @@ class HookManager:
         # Unregister the heads
         if not HookManager.active_hooks:
             knobs.runtime.kernel_load_end_hook.remove(HookManager.init_handle)
-            knobs.runtime.module_unload_hook.remove(HookManager.uninit_handle)
+            knobs.runtime.module_unload_hook.remove(HookManager.destroy_handle)
             knobs.runtime.launch_enter_hook.remove(HookManager.enter)
             knobs.runtime.launch_exit_hook.remove(HookManager.exit)
