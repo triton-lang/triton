@@ -207,7 +207,6 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   // 3) Others: Use only 32 banks and lanes are split into groups each loading
   // 32 banks. are used.
 
-  llvm::outs() << "Kwidth :" << kWidth << "\n";
   bool useDsReadB128 = isKContig && kWidth * elemByteWidth == 16;
   bool useDsReadB64Tr = !isKContig && kWidth * elemByteWidth >= 8;
 
@@ -233,8 +232,22 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     return {};
   }
   unsigned requiredDim = warpSize / contigLanes * wrap;
-  if (nonContigDim < requiredDim) {
+
+  // We get x-way bank conflicts where x is log2(requiredDim / nonContigDim) + 1
+  unsigned wayConflicts = (nonContigDim >= requiredDim)
+                              ? 1
+                              : (llvm::Log2_32(requiredDim / nonContigDim) + 1);
+  // Heuristic, for ds_read_b128 we do not tolerate any conflicts but for
+  // ds_read_b64(_tr) we tolerate 2-way because swizzling will produce the same
+  // number of conflicts.
+  if ((useDsReadB128 && wayConflicts > 1) || wayConflicts > 2) {
     return {};
+  }
+
+  if (wayConflicts > 1) {
+    // We need to adjust the warp to allow for bank conflicts and to produce a
+    // valid layout
+    wrap /= (1 << (wayConflicts - 1));
   }
 
   // Use 16 rows wrap if block large enough
