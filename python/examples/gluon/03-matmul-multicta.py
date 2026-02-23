@@ -1,5 +1,4 @@
 import argparse
-import importlib
 
 import pytest
 import torch
@@ -28,7 +27,7 @@ def is_blackwell():
     return target.backend == "cuda" and torch.cuda.get_device_capability()[0] == 10
 
 
-def _as_gl_dtype(torch_dtype):
+def as_gl_dtype(torch_dtype):
     if torch_dtype == torch.float16:
         return gl.float16
     if torch_dtype == torch.bfloat16:
@@ -87,14 +86,14 @@ def matmul_tma_set_block_size_hook(nargs):
         for desc, cga_layout in zip(("a_desc", "b_desc", "c_desc"), cga_layouts):
             nargs[desc].layout = gl.NVMMASharedLayout.get_default_for(
                 nargs[desc].block_shape,
-                _as_gl_dtype(nargs[desc].base.dtype),
+                as_gl_dtype(nargs[desc].base.dtype),
                 cga_layout=cga_layout,
             )
     else:
         for desc in ("a_desc", "b_desc", "c_desc"):
             nargs[desc].layout = gl.NVMMASharedLayout.get_default_for(
                 nargs[desc].block_shape,
-                _as_gl_dtype(nargs[desc].base.dtype),
+                as_gl_dtype(nargs[desc].base.dtype),
             )
 
 
@@ -730,98 +729,87 @@ def show_profile(profile_name):
     proton_viewer.print_tree(tree, metrics)
 
 
-def benchmark(*, profile=True):
-    if not is_blackwell():
-        raise RuntimeError("This benchmark requires a Blackwell CUDA GPU.")
-
+def print_benchmark_header():
     print("=" * 60)
     print("Gluon Matmul Benchmark")
     print("=" * 60)
     props = torch.cuda.get_device_properties(0)
     print(f"Device: {props.name}, SMs: {props.multi_processor_count}")
 
+
+def create_benchmark_tensors():
     M, N, K = 4096, 8192, 4096
     print(f"Matrix: M={M}, N={N}, K={K}")
-
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
     c_triton = torch.empty((M, N), device="cuda", dtype=torch.float16)
     c_torch = torch.empty((M, N), device="cuda", dtype=torch.float16)
     expected = torch.matmul(a, b)
+    return (M, N, K), a, b, c_triton, c_torch, expected
 
-    tile_m = 128
-    tile_n = 128
-    tile_k = 64
-    grid_minor_dim = 0
-    grid_tile_width = 16
-    max_concurrent_steps = 6
-    collective = True
-    epilogue_tile_n = 32
+
+def get_benchmark_kernel_config():
+    return {
+        "tile_m": 128,
+        "tile_n": 128,
+        "tile_k": 64,
+        "grid_minor_dim": 0,
+        "grid_tile_width": 16,
+        "stages": 6,
+        "collective": True,
+        "epilogue_tile_n": 32,
+    }
+
+
+def make_gluon_runner(a, b, c_triton, cfg, use_autotuned=False):
+    if use_autotuned:
+
+        def run_gluon():
+            return matmul(a, b)
+
+        return run_gluon
 
     def run_gluon():
         return matmul_with_config(
             a,
             b,
             out=c_triton,
-            block_size_m=tile_m,
-            block_size_n=tile_n,
-            block_size_k=tile_k,
-            grid_minor_dim=grid_minor_dim,
-            grid_tile_width=grid_tile_width,
-            stages=max_concurrent_steps,
-            two_ctas=collective,
-            epilogue_size_n=epilogue_tile_n,
+            block_size_m=cfg["tile_m"],
+            block_size_n=cfg["tile_n"],
+            block_size_k=cfg["tile_k"],
+            grid_minor_dim=cfg["grid_minor_dim"],
+            grid_tile_width=cfg["grid_tile_width"],
+            stages=cfg["stages"],
+            two_ctas=cfg["collective"],
+            epilogue_size_n=cfg["epilogue_tile_n"],
         )
 
-    torch.testing.assert_close(run_gluon(), expected, atol=1e-1, rtol=1e-2)
+    return run_gluon
 
-    pallas_available = False
-    try:
-        raise RuntimeError("Pallas is not available")
-        import jax
-        import jax.numpy as jnp
-        pallas_mod = importlib.import_module("jax.experimental.pallas.ops.gpu.blackwell_matmul_mgpu")
-        pallas_device = jax.devices("gpu")[0]
-        a_jax = jax.device_put(jnp.asarray(a.detach().cpu().numpy()), pallas_device)
-        b_jax = jax.device_put(jnp.asarray(b.detach().cpu().numpy()), pallas_device)
 
-        def run_pallas():
-            pallas_cfg = pallas_mod.TuningConfig(
-                tile_m=tile_m,
-                tile_n=tile_n,
-                tile_k=tile_k,
-                max_concurrent_steps=max_concurrent_steps,
-                collective=collective,
-                epilogue_tile_n=epilogue_tile_n,
-                grid_minor_dim=pallas_mod.MatmulDimension(grid_minor_dim),
-                grid_tile_width=grid_tile_width,
-            )
-            return pallas_mod.matmul_kernel(a_jax, b_jax, config=pallas_cfg)
-
-        pallas_out = torch.from_numpy(jax.device_get(run_pallas()).copy()).to(device=expected.device,
-                                                                              dtype=expected.dtype)
-        torch.testing.assert_close(pallas_out, expected, atol=1e-1, rtol=1e-2)
-        pallas_available = True
-    except Exception as exc:
-        run_pallas = None
-        print(f"Skipping Pallas benchmark: {exc}")
-
-    if not profile:
-        print("Skipping profiling (--no-profile).")
-        return
-
+def run_profile(shape, a, b, c_torch, run_gluon):
     import triton.profiler as proton
+
+    M, N, K = shape
+
+    proton.start("matmul", hook="triton")
+    proton.deactivate(0)
+    l2_cache = triton.runtime.driver.active.get_empty_cache_for_benchmark()
 
     def bench_fn(label, reps, fn):
         print(f"Benchmarking {label}: ...", end="")
+        proton.deactivate()
+        for _ in range(5):
+            fn()  # warmup
+            triton.runtime.driver.active.clear_cache(l2_cache)
         try:
             for _ in range(reps):
-                proton.deactivate(0)
+                proton.deactivate()
                 triton.runtime.driver.active.clear_cache(l2_cache)
-                proton.activate(0)
+                proton.activate()
                 fn()
         finally:
-            proton.deactivate(0)
+            proton.deactivate()
         print(f"\rBenchmarking {label}: done")
 
     bytes_per_elem = a.element_size()
@@ -829,10 +817,6 @@ def benchmark(*, profile=True):
         "bytes": bytes_per_elem * (M * K + N * K + M * N),
         f"flops{bytes_per_elem * 8}": 2.0 * M * N * K,
     }
-
-    proton.start("matmul", hook="triton")
-    proton.deactivate(0)
-    l2_cache = triton.runtime.driver.active.get_empty_cache_for_benchmark()
 
     def torch_profiled():
         with proton.scope(f"torch [M={M}, N={N}, K={K}]", scope_metrics):
@@ -844,17 +828,33 @@ def benchmark(*, profile=True):
 
     bench_fn("torch", reps=100, fn=torch_profiled)
     bench_fn("gluon", reps=100, fn=gluon_profiled)
-    if pallas_available and run_pallas is not None:
-
-        def pallas_profiled():
-            with proton.scope(f"pallas [M={M}, N={N}, K={K}]", scope_metrics):
-                run_pallas()
-
-        bench_fn("pallas", reps=100, fn=pallas_profiled)
 
     proton.finalize()
     print("Proton profile written to `matmul.hatchet`")
     show_profile("matmul")
+
+
+def benchmark(*, profile=True, use_autotuned=False):
+    if not is_blackwell():
+        raise RuntimeError("This benchmark requires a Blackwell CUDA GPU.")
+
+    print_benchmark_header()
+    shape, a, b, c_triton, c_torch, expected = create_benchmark_tensors()
+    kernel_cfg = get_benchmark_kernel_config()
+
+    runner_name = "matmul (autotuned)" if use_autotuned else "matmul_with_config"
+    print(f"Gluon runner: {runner_name}")
+    run_gluon = make_gluon_runner(a, b, c_triton, kernel_cfg, use_autotuned=use_autotuned)
+    actual = run_gluon()
+    torch.testing.assert_close(actual, expected, atol=1e-1, rtol=1e-2)
+    if use_autotuned:
+        print(f"Autotuned best config: {matmul_kernel.best_config}")
+
+    if not profile:
+        print("Skipping profiling (--no-profile).")
+        return
+
+    run_profile(shape, a, b, c_torch, run_gluon)
 
 
 if __name__ == "__main__":
@@ -877,5 +877,10 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip Proton profiling and exit after validation.",
     )
+    parser.add_argument(
+        "--use-autotuned",
+        action="store_true",
+        help="Use autotuned matmul() instead of matmul_with_config() for the Gluon runner.",
+    )
     args = parser.parse_args()
-    benchmark(profile=not args.no_profile)
+    benchmark(profile=not args.no_profile, use_autotuned=args.use_autotuned)
