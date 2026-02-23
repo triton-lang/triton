@@ -326,6 +326,7 @@ def matmul_clc_partition(p):
         mbarrier.wait(p.clc_consumed_bars.index(consumed_state.index), consumed_state.phase, pred=(i >= ACC_STAGES))
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
+        # 16: clc.try_cancel has a `.b128` modifier
         mbarrier.expect(barrier, 16)
         clc.try_cancel(result, barrier, multicast=True)
         mbarrier.wait(barrier, state.phase)
