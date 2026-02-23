@@ -319,11 +319,11 @@ def matmul_clc_partition(p):
     has_work = gl.to_tensor(True)
     state = Counter.create(0, p.clc_barriers.shape[0])
     consumed_state = Counter.create(1, p.clc_barriers.shape[0])
-    acc_stages: gl.constexpr = p.clc_barriers.shape[0]
+    ACC_STAGES: gl.constexpr = p.clc_barriers.shape[0]
     i = 0
     while has_work:
         # Reuse the slot only after all consumer partitions signaled consumed.
-        mbarrier.wait(p.clc_consumed_bars.index(consumed_state.index), consumed_state.phase, pred=(i >= acc_stages))
+        mbarrier.wait(p.clc_consumed_bars.index(consumed_state.index), consumed_state.phase, pred=(i >= ACC_STAGES))
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
         mbarrier.expect(barrier, 16)
@@ -363,16 +363,16 @@ def matmul_load_partition(p):
 def matmul_mma_partition(p):
     BLOCK_K: gl.constexpr = p.a_desc.block_shape[1]
     K = p.a_desc.shape[1]
-    acc_stages: gl.constexpr = p.acc_empty_bars.shape[0]
+    ACC_STAGES: gl.constexpr = p.acc_empty_bars.shape[0]
 
     load_state = Counter.create(0, p.load_empty_bars.shape[0])
-    acc_state = Counter.create(1, acc_stages)
+    acc_state = Counter.create(1, ACC_STAGES)
     scheduler = p.get_clc_consumer()
 
     i = 0
     while scheduler.has_work:
         acc_buf = p.acc_bufs.index(acc_state.index)
-        mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase, pred=(i >= acc_stages))
+        mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase, pred=(i >= ACC_STAGES))
         use_acc = False
         for k in range(0, K, BLOCK_K):
             mbarrier.wait(p.load_ready_bars.index(load_state.index), load_state.phase)
@@ -392,39 +392,36 @@ def matmul_epilogue_partition(p):
     TILE_N: gl.constexpr = p.b_desc.block_shape[1]
     SPLIT_TILE_N: gl.constexpr = p.c_desc.block_shape[1]
     SUBTILE_FACTOR: gl.constexpr = TILE_N // SPLIT_TILE_N
-    acc_stages: gl.constexpr = p.acc_empty_bars.shape[0]
+    ACC_STAGES: gl.constexpr = p.acc_empty_bars.shape[0]
     dtype: gl.constexpr = p.c_desc.dtype
 
-    acc_state = Counter.create(0, acc_stages)
-    acc_smems = gl.allocate_shared_memory(dtype, [acc_stages, TILE_M, SPLIT_TILE_N], p.c_desc.layout)
-    sub_acc_state = Counter.create(0, acc_stages)
+    acc_state = Counter.create(0, ACC_STAGES)
+    acc_smems = gl.allocate_shared_memory(dtype, [ACC_STAGES, TILE_M, SPLIT_TILE_N], p.c_desc.layout)
+    sub_acc_state = Counter.create(0, ACC_STAGES)
     scheduler = p.get_clc_consumer()
 
     i = 0
     while scheduler.has_work:
         off_m, off_n = scheduler.get_offsets()
 
-        # TODO: we are not emitting read=True
-        tma.store_wait(pendings=0)
         mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
         acc_buf = p.acc_bufs.index(acc_state.index)
 
         for s in gl.static_range(SUBTILE_FACTOR):
             acc_sub = acc_buf.slice(SPLIT_TILE_N * s, SPLIT_TILE_N)
             acc_smem = acc_smems.index(sub_acc_state.index)
-            acc_smem.store(
-                acc_sub.load(
+            acc = acc_sub.load(
                     get_tmem_reg_layout(
                         gl.float32,
                         (TILE_M, SPLIT_TILE_N),
                         acc_sub.type.layout,
                         gl.num_warps(),
                         cga_layout=p.c_desc.layout.cga_layout,
-                    )).to(dtype))
+                    )).to(dtype)
+            tma.store_wait(pendings=ACC_STAGES - 1)
+            acc_smem.store(acc)
             fence_async_shared()
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_TILE_N * s], acc_smem)
-            # TODO: we are not emitting read=True
-            tma.store_wait(pendings=1)
             sub_acc_state = sub_acc_state.next()
         # Signal that the accumulator slot can be reused only after all stores are done.
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index))
