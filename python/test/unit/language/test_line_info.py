@@ -487,7 +487,7 @@ def test_line_and_column_numbers(fresh_triton_cache):
 
     @triton.jit
     def kernel_basic(src, N, BLOCK_SIZE: tl.constexpr):
-        # CHECK: #loc = loc("{{.*}}":450:5)
+        # CHECK: #loc = loc("{{.*}}":489:5)
         # CHECK: #loc10 = loc("src"(#loc))
         # CHECK: #loc11 = loc("N"(#loc))
         # CHECK-LABEL:  tt.func public @kernel_basic(
@@ -510,15 +510,15 @@ def test_line_and_column_numbers(fresh_triton_cache):
         # CHECK:          } loc(#loc)
         # CHECK:         } loc(#loc)
 
-        # CHECK: #loc1 = loc({{.*}}:496:20)
+        # CHECK: #loc1 = loc({{.*}}:535:20)
         # CHECK: #loc2 = loc(unknown)
-        # CHECK: #loc3 = loc({{.*}}:491:15)
-        # CHECK: #loc4 = loc({{.*}}:492:18)
-        # CHECK: #loc5 = loc({{.*}}:493:28)
-        # CHECK: #loc6 = loc({{.*}}:493:19)
-        # CHECK: #loc7 = loc({{.*}}:494:30)
-        # CHECK: #loc8 = loc({{.*}}:495:16)
-        # CHECK: #loc9 = loc({{.*}}:497:9)
+        # CHECK: #loc3 = loc({{.*}}:530:15)
+        # CHECK: #loc4 = loc({{.*}}:531:18)
+        # CHECK: #loc5 = loc({{.*}}:532:28)
+        # CHECK: #loc6 = loc({{.*}}:532:19)
+        # CHECK: #loc7 = loc({{.*}}:533:30)
+        # CHECK: #loc8 = loc({{.*}}:534:16)
+        # CHECK: #loc9 = loc({{.*}}:536:9)
         # CHECK: #loc12 = loc("x_plus_1"(#loc1))
         # CHECK: #loc13 = loc("pid"(#loc3))
         # CHECK: #loc14 = loc("offset"(#loc4))
