@@ -431,11 +431,11 @@ void init_triton_ir(py::module &&m) {
              mlir::NameLoc nameLoc = mlir::NameLoc::get(nameAttr, self);
              self = dyn_cast<Location>(nameLoc);
            })
-      .def("get_name", [](Location &self) -> std::string {
+      .def("get_name", [](Location &self) -> std::optional<std::string> {
         if (auto nameLoc = dyn_cast<NameLoc>(self)) {
           return nameLoc.getName().str();
         }
-        return "";
+        return std::nullopt;
       });
 
   py::class_<Value>(m, "value", py::module_local())

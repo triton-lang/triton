@@ -1563,7 +1563,7 @@ class CodeGenerator(ast.NodeVisitor):
         # Reset the location to the last one before the visit
         if last_loc:
             # If last_loc doesn't already have a name, set its name.
-            if self.name_loc_as_prefix is not None and last_loc.get_name() == "":
+            if self.name_loc_as_prefix is not None and last_loc.get_name() is None:
                 last_loc.set_name(self.name_loc_as_prefix)
             self.cur_node = last_node
             self.builder.set_loc(last_loc)
