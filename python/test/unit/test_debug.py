@@ -9,7 +9,7 @@ import triton
 @pytest.mark.parametrize('opt_flag', [True, False, None])
 @pytest.mark.parametrize('env_var', [True, False])
 @pytest.mark.parametrize('jit_flag', [True, False])
-@pytest.mark.forked
+@pytest.mark.spawned
 def test_device_assert(monkeypatch, cond, mask, opt_flag, env_var, jit_flag, device):
     monkeypatch.setenv("TRITON_DEBUG", str(int(env_var)))
     triton.knobs.refresh_knobs()
@@ -94,7 +94,7 @@ def _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, tri_func, ref
     (-2**15, -1, 'int16', 'int16', True, True),
     (2**15 - 1, 1, 'int16', 'int16', True, True),
 ])
-@pytest.mark.forked
+@pytest.mark.spawned
 def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
 
     @triton.jit
@@ -115,7 +115,7 @@ def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
     (-2**31, 1, 'int32', 'int32', True, False),
     (-2**30, 2, 'int32', 'int32', True, False),
 ])
-@pytest.mark.forked
+@pytest.mark.spawned
 def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
 
     @triton.jit
@@ -135,7 +135,7 @@ def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
     (2**31 - 1, 1, 'int32', 'int32', True, False),
     (-2**31, -1, 'int32', 'int32', True, False),
 ])
-@pytest.mark.forked
+@pytest.mark.spawned
 def test_sanitize_int_sub_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
 
     @triton.jit

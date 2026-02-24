@@ -32,9 +32,8 @@ test-cpp:
 .PHONY: test-unit
 test-unit: all
 	cd python/test/unit && $(PYTEST) --tb=short -s -n $(NUM_PROCS) --ignore=language/test_line_info.py \
-		--ignore=language/test_subprocess.py --ignore=test_debug.py --ignore=plugins/test_dialect_plugin.py --ignore=plugins/test_plugin.py
+		--ignore=language/test_subprocess.py --ignore=plugins/test_dialect_plugin.py --ignore=plugins/test_plugin.py
 	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/unit/language/test_subprocess.py
-	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/unit/test_debug.py --forked
 	$(PYTEST) --tb=short -s -n 6 python/triton_kernels/tests/
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) --tb=short -s python/test/unit/language/test_line_info.py
 	# Run attention separately to avoid out of gpu memory

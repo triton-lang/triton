@@ -1,8 +1,26 @@
-import pytest
+import importlib.util
 import tempfile
+from pathlib import Path
+
+import pytest
+
+
+def _load_spawned_plugin():
+    plugin_path = Path(__file__).with_name("_spawned_plugin.py")
+    spec = importlib.util.spec_from_file_location("triton_test_spawned_plugin", plugin_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load spawned pytest plugin from {plugin_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+triton_spawned = _load_spawned_plugin()
 
 
 def pytest_configure(config):
+    if not config.pluginmanager.hasplugin("triton_spawned"):
+        config.pluginmanager.register(triton_spawned, "triton_spawned")
     config.addinivalue_line("markers", "interpreter: indicate whether interpreter supports the test")
 
 
