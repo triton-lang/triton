@@ -1673,8 +1673,8 @@ def _aggregate(cls):
 
             # Exclude the members with names from hash:
             #  * __init__ - added above.
-            #  * __annotate__ - isn't user facing.
-            if member.__name__ not in {"__init__", "__annotate__"}:
+            #  * __annotate_func__ - isn't user facing.
+            if name not in {"__init__", "__annotate_func__"}:
                 hash_attrs.append(member)
 
     aggregate_value.hash_attrs = hash_attrs
