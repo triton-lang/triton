@@ -4,7 +4,7 @@ from triton_kernels import target_info
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.tensor import FP4, FP16, FP32, BF16, Tensor
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
-from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
+from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
 
 
 def is_x_scale_swizzled(precision_config):
@@ -29,11 +29,16 @@ def compute_block_n(n: int, arch, precision_config):
         # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/matmul_details/_matmul.py#L265
         block_n = 2 * layout.num_warps * 2 * 8
         return block_n, block_n
-    elif precision_config.max_num_imprecise_acc is None and n > 128:
-        return 256, 256
+    if precision_config.max_num_imprecise_acc is None and n > 128:
+        block_n, block_n_tma = 256, 256
     else:
         target = min(128, triton.next_power_of_2(n))
-        return max(8, target), max(16, target)
+        block_n, block_n_tma = max(8, target), max(16, target)
+    if isinstance(layout, BlackwellMXScaleLayout):
+        # Blackwell scale swizzle requires BLOCK_N to be a multiple of 128.
+        block_n = max(128, block_n)
+        block_n_tma = max(128, block_n_tma)
+    return block_n, block_n_tma
 
 
 def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in):
