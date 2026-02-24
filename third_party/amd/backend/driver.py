@@ -1,12 +1,11 @@
 import functools
 import os
 import subprocess
-import re
 import triton
 from pathlib import Path
 from triton import knobs
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver
+from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
 from triton.runtime import _allocation
 from triton.runtime.build import compile_module_from_src
 
@@ -221,39 +220,6 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def expand_signature(signature, tensordesc_meta):
-    output = []
-    tensordesc_idx = 0
-    for sig in signature:
-        if isinstance(sig, str) and sig.startswith("tensordesc"):
-            meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
-            tensordesc_idx += 1
-
-            match = re.match("tensordesc<([^[>]*)\\[([^]]*)\\]", sig)
-            dtype = match.group(1)
-            shape = match.group(2)
-            ndim = shape.count(",") + 1
-
-            # If there is no descriptor's metadata, the descriptor has been decomposed to base pointer, shape and strides
-            if meta is None:
-                output.append("*" + dtype)
-                for _ in range(2 * ndim):
-                    output.append("i64")
-                output.append("i1")
-                output.append("i1")
-            else:
-                output.append("tensordesc")
-
-            for _ in range(ndim):
-                output.append("i32")
-            for _ in range(ndim):
-                output.append("i64")
-        else:
-            output.append(sig)
-
-    return output
-
-
 def make_kernel_signature(signature):
     """
     Creates a kernel signature in C to be able to efficiently extract
@@ -292,7 +258,7 @@ def annotate_arguments(signature):
     return annotated_arguments
 
 
-def make_tensordesc_arg(arg, kernel_metadata, tensordesc_metadata):
+def make_tensordesc_arg(arg, tensordesc_metadata, base_args):
     """
     Translate a tensor descriptor argument into the appropriate list of kernel
     arguments. If `tensordesc_metadata` is provided, we will create a
@@ -302,22 +268,9 @@ def make_tensordesc_arg(arg, kernel_metadata, tensordesc_metadata):
     """
 
     if tensordesc_metadata is None:
-        # Currently the host side tensor descriptors get decomposed in
-        # the frontend to tensor desc, shape, and strides. We have no
-        # way to use these shape and strides when processing tensor
-        # descriptors which is why we provide our own decomposition
-        # above. Sadly this means we have to pass the shape and strides
-        # twice.
-        return [
-            arg.base,
-            *arg.shape,
-            *arg.strides,
-            arg.padding == "nan",
-            arg.round_f32_to_tf32,
-            *arg.shape,
-            *arg.strides,
-        ]
+        return decompose_descriptor(arg)
 
+    kernel_metadata = base_args[8]
     shape = arg.shape
     strides = arg.strides
     base = arg.base.data_ptr()
@@ -341,7 +294,7 @@ def make_tensordesc_arg(arg, kernel_metadata, tensordesc_metadata):
     return [desc, *shape, *strides]
 
 
-def wrap_handle_tensordesc(launcher, signature, tensordesc_metadata):
+def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
     """
     Wrap a kernel launcher function to handle tensor descriptor arguments.
     Use the provided `tensordesc_metadata` to determine whether to create
@@ -356,33 +309,7 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_metadata):
         launcher (callable): The wrapped kernel launcher function.
     """
 
-    has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
-    if not has_tensor_desc_arg:
-        return launcher
-
-    tensordesc_indices = set(
-        [i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
-    assert not tensordesc_metadata or len(tensordesc_metadata) == len(tensordesc_indices)
-    if not tensordesc_metadata:
-        tensordesc_metadata = [None] * len(tensordesc_indices)
-
-    def inner(*args):
-        base_args = args[:-1]
-        kernel_metadata = base_args[8]
-        kernel_args = args[-1]
-
-        final_kernel_args = []
-        tensordesc_idx = 0
-        for i, arg in enumerate(kernel_args):
-            if i in tensordesc_indices:
-                final_kernel_args.extend(make_tensordesc_arg(arg, kernel_metadata, tensordesc_metadata[tensordesc_idx]))
-                tensordesc_idx += 1
-            else:
-                final_kernel_args.append(arg)
-
-        return launcher(*base_args, final_kernel_args)
-
-    return inner
+    return wrap_handle_tensordesc_impl(launcher, signature, tensordesc_meta, make_tensordesc_arg)
 
 
 class HIPLauncher(object):
@@ -394,7 +321,7 @@ class HIPLauncher(object):
         signature = {idx: value for idx, value in src.signature.items()}
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
         launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta)
+        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "tensordesc")
         self.arg_annotations = annotate_arguments(expanded_signature)
         self.kernel_signature = make_kernel_signature(expanded_signature)
         self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta)
