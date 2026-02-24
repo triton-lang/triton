@@ -905,17 +905,17 @@ def test_module_load_unload(device, fresh_knobs):
     def kernel(out_ptr, val) -> None:
         tl.store(out_ptr, val)
 
-    # we should hit the module unload call to decrese the counter from 1 to 0
+    # we should hit the kernel unload call to decrese the counter from 1 to 0
     counter = 1
 
-    def module_unload(*args, **kwargs):
+    def kernel_unload(*args, **kwargs):
         nonlocal counter
         counter -= 1
 
     # turn off python garbage collector, so the callback is not called
     # in the garbage collector
     gc.disable()
-    triton.knobs.runtime.module_unload_hook.add(module_unload)
+    triton.knobs.runtime.kernel_unload_hook.add(kernel_unload)
 
     out = torch.randn(1, dtype=torch.float32, device=device)
     pre_compile = kernel.warmup(out, 1, grid=(1, ))
