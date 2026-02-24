@@ -961,7 +961,7 @@ def test_threaded_kernel_call(tmp_path: pathlib.Path):
         ("trace", ".chrome_trace"),
     ],
 )
-def test_gluon_clc_vector_add_profile(tmp_path: pathlib.Path, profile_data: str, file_suffix: str):
+def test_gluon_clc_profile(tmp_path: pathlib.Path, profile_data: str, file_suffix: str):
 
     @gluon.jit
     def gluon_clc_vector_add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: gl.constexpr):
