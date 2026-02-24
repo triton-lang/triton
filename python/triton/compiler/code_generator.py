@@ -16,7 +16,7 @@ from .._C.libtriton import ir, gluon_ir
 from ..language import constexpr, str_to_ty, tensor, tuple as tl_tuple
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 # ideally we wouldn't need any runtime component
-from ..runtime.jit import get_jit_fn_file_line, get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction
+from ..runtime.jit import get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction
 from .._utils import apply_with_path, set_iterable_path, is_namedtuple
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
@@ -1325,11 +1325,10 @@ class CodeGenerator(ast.NodeVisitor):
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             # If the callee is not set, we use the same debug setting as the caller
-            file_name, begin_line = get_jit_fn_file_line(fn)
             prototype = ASTFunction([], arg_types, dict())
             generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
-                                      noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
+                                      noinline=fn.noinline, file_name=fn.file_name, begin_line=fn.begin_line,
                                       begin_col=fn.begin_col, options=self.builder.options,
                                       codegen_fns=self.builder.codegen_fns, module_map=self.builder.module_map,
                                       caller_context=caller_context, is_gluon=self.is_gluon)
@@ -1639,7 +1638,6 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
         apply_constexpr_types(arg_types, list(path)[::-1], value)
 
     prototype = ASTFunction([], arg_types, src.attrs)
-    file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation
     from collections import namedtuple
     leaves = filter(lambda v: len(v) == 1, src.constants)
@@ -1647,7 +1645,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     signature = src.signature
     proxy = namedtuple("SpecializationProxy", ["constants", "signature"])(constants, signature)
     generator = CodeGenerator(context, prototype, gscope=fn.get_capture_scope(), function_name=fn.repr(proxy),
-                              jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line,
+                              jit_fn=fn, is_kernel=True, file_name=fn.file_name, begin_line=fn.begin_line,
                               begin_col=fn.begin_col, options=options, codegen_fns=codegen_fns, module_map=module_map,
                               module=module, is_gluon=fn.is_gluon())
     generator.visit(fn.parse())

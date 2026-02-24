@@ -483,6 +483,8 @@ class JITCallable:
         # function source code (without decorators)
         raw_src_str = "".join(self.raw_src)
 
+        # get file name and starting row
+        self.file_name, self.begin_row = get_jit_fn_file_line(fn)
         # get starting column number
         self.begin_col = get_begin_col_number(raw_src_str)
 
