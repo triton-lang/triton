@@ -13,6 +13,7 @@ from triton.backends import backends
 
 from .hook import Hook
 from ..flags import flags
+from ..profile import deactivate, activate
 from .. import mode
 
 # TODO(fywkevin): add support for major.minor
@@ -37,7 +38,9 @@ class CudaAllocator:
 
         # Create the buffer
         import torch
+        deactivate()
         buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device="cuda")
+        activate()
         self.instrumentation_hook.buffer = buffer
         return buffer
 
