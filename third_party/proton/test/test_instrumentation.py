@@ -32,8 +32,6 @@ pytestmark = pytest.mark.skipif(is_hip_cdna2(), reason="old AMD GPUs are not sup
 HAS_WARP_SPECIALIZE = supports_ws() and supports_tma()
 
 
-
-
 @pytest.mark.parametrize(
     "mode",
     [
@@ -944,6 +942,7 @@ def test_threaded_kernel_call(tmp_path: pathlib.Path):
         assert len(events) > 0
         kernel_events = [e for e in events if e["name"] == "kernel"]
         assert len(kernel_events) > 0
+
 
 @gluon.jit
 def gluon_clc_vector_add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: gl.constexpr):
