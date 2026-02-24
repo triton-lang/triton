@@ -543,7 +543,7 @@ def tcgen05_mma_barrier_count(smems, multicast):
     assert len(smems) == 2
     num_broadcast_bits_a = num_broadcast_bits(smems[0])
     num_broadcast_bits_b = num_broadcast_bits(smems[1])
-    # Asser that for every basis, at least one of them is non-zero
+    # Assert that for every basis, at least one of them is non-zero
     # so that the inclusion-exclusion principle below works
     # This can be generalised if needed by substracting below 2**size_intersection
     for i in range(len(smems[0].layout.cga_layout)):
