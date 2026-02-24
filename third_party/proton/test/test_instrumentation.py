@@ -749,14 +749,18 @@ def test_overhead(tmp_path: pathlib.Path):
         data = json.load(f)
     root = data[0]
 
+    def non_metadata_children(node):
+        return [child for child in node.get("children", []) if child["frame"]["name"] != "metadata"]
+
     def session_kernel_time(session_name: str) -> Tuple[int, int]:
-        session_node = next(child for child in root["children"] if child["frame"]["name"] == session_name)
-        single_node = next(child for child in session_node["children"] if child["frame"]["name"] == "single")
-        loop_node = next(child for child in session_node["children"] if child["frame"]["name"] == "loop")
-        kernel_node = single_node["children"][0]
-        single_time = kernel_node["metrics"]["time (ns)"]
-        kernel_node = loop_node["children"][0]
-        loop_time = kernel_node["metrics"]["time (ns)"]
+        session_node = next(child for child in non_metadata_children(root) if child["frame"]["name"] == session_name)
+        session_children = non_metadata_children(session_node)
+        single_node = next(child for child in session_children if child["frame"]["name"] == "single")
+        loop_node = next(child for child in session_children if child["frame"]["name"] == "loop")
+        single_kernel_node = next(child for child in non_metadata_children(single_node) if child["frame"]["name"] == "kernel")
+        loop_kernel_node = next(child for child in non_metadata_children(loop_node) if child["frame"]["name"] == "kernel")
+        single_time = single_kernel_node["metrics"]["time (ns)"]
+        loop_time = loop_kernel_node["metrics"]["time (ns)"]
         return single_time, loop_time
 
     session0_single_time, session0_loop_time = session_kernel_time("session0")
