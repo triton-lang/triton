@@ -456,18 +456,6 @@ def get_full_name(fn):
     return f"{fn.__module__}.{fn.__qualname__}"
 
 
-def get_begin_col_number(raw_src_str):
-    # Find the amount of indenting to use in the source location information.
-    indented_def = INDENT_PATTERN.search(raw_src_str)
-    if not indented_def:
-        raise ValueError("No function definition found for kernel")
-    # Consider spaces and tabs as single characters to match the ast
-    begin_col = len(indented_def.group("indent"))
-    # Columns start at 1
-    begin_col += 1
-    return begin_col
-
-
 class JITCallable:
 
     def __init__(self, fn):
@@ -483,9 +471,9 @@ class JITCallable:
         # function source code (without decorators)
         raw_src_str = "".join(self.raw_src)
 
-        # get file name and starting row
-        self.file_name, self.begin_row = get_jit_fn_file_line(fn)
-        # get starting column number
+        # get file name, starting line number and starting col number
+        self.file_name = fn.__code__.co_filename
+        self.begin_line = get_begin_line_number(self.raw_src, self.starting_line_number)
         self.begin_col = get_begin_col_number(raw_src_str)
 
         src = textwrap.dedent(raw_src_str)
@@ -1085,22 +1073,30 @@ def reinterpret(tensor, dtype):
         raise TypeError(f"Cannot reinterpret a {type(tensor)}.")
 
 
-def get_jit_fn_file_line(fn):
-    base_fn = fn
-    while not isinstance(base_fn, JITCallable):
-        base_fn = base_fn.fn
-    file_name = base_fn.fn.__code__.co_filename
-    begin_line = base_fn.starting_line_number
+def get_begin_line_number(raw_src, starting_line_number):
+    begin_line = starting_line_number
     # Match the following pattern:
     # @triton.autotune(...) <- foo.__code__.co_firstlineno
     # @triton.heuristics(...)
     # @triton.jit
     # def foo(...): <- this line is the first line
-    for idx, line in enumerate(base_fn.raw_src):
+    for idx, line in enumerate(raw_src):
         if line.strip().startswith("def "):
             begin_line += idx
             break
-    return file_name, begin_line
+    return begin_line
+
+
+def get_begin_col_number(raw_src_str):
+    # Find the amount of indenting to use in the source location information.
+    indented_def = INDENT_PATTERN.search(raw_src_str)
+    if not indented_def:
+        raise ValueError("No function definition found for kernel")
+    # Consider spaces and tabs as single characters to match the ast
+    begin_col = len(indented_def.group("indent"))
+    # Columns start at 1
+    begin_col += 1
+    return begin_col
 
 
 class BoundConstexprFunction(JITCallable):
