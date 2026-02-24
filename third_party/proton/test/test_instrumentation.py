@@ -952,34 +952,6 @@ def test_threaded_kernel_call(tmp_path: pathlib.Path):
         assert len(kernel_events) > 0
 
 
-@gluon.jit
-def gluon_clc_vector_add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: gl.constexpr):
-    tile_id = gl.program_id(0)
-    has_work = gl.to_tensor(True)
-    phase = gl.to_tensor(0)
-
-    layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0])
-    clc_result = gl.allocate_shared_memory(gl.int64, [2], layout)
-    clc_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(clc_bar, count=1)
-
-    while has_work:
-        with pl.scope("clc_add_step"):
-            offsets = tile_id * BLOCK_SIZE + gl.arange(0, BLOCK_SIZE)
-            mask = offsets < n_elements
-            x = gl.load(x_ptr + offsets, mask)
-            y = gl.load(y_ptr + offsets, mask)
-            gl.store(out_ptr + offsets, x + y, mask)
-
-        clc.try_cancel(clc_result, clc_bar, multicast=True)
-        mbarrier.expect(clc_bar, 16)
-        mbarrier.wait(clc_bar, phase)
-
-        clc_response = clc.load_result(clc_result)
-        has_work = clc_response.is_canceled()
-        tile_id = clc_response.program_id(0)
-        phase = phase ^ 1
-
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability(0)[0] < 10, reason="Requires Blackwell")
 @pytest.mark.parametrize(
@@ -990,6 +962,35 @@ def gluon_clc_vector_add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: g
     ],
 )
 def test_gluon_clc_vector_add_profile(tmp_path: pathlib.Path, profile_data: str, file_suffix: str):
+
+    @gluon.jit
+    def gluon_clc_vector_add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: gl.constexpr):
+        tile_id = gl.program_id(0)
+        has_work = gl.to_tensor(True)
+        phase = gl.to_tensor(0)
+
+        layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0])
+        clc_result = gl.allocate_shared_memory(gl.int64, [2], layout)
+        clc_bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(clc_bar, count=1)
+
+        while has_work:
+            with pl.scope("clc_add_step"):
+                offsets = tile_id * BLOCK_SIZE + gl.arange(0, BLOCK_SIZE)
+                mask = offsets < n_elements
+                x = gl.load(gl.set_auto_layout(x_ptr + offsets), mask)
+                y = gl.load(gl.set_auto_layout(y_ptr + offsets), mask)
+                gl.store(out_ptr + offsets, x + y, mask)
+
+            clc.try_cancel(clc_result, clc_bar, multicast=True)
+            mbarrier.expect(clc_bar, 16)
+            mbarrier.wait(clc_bar, phase)
+
+            clc_response = clc.load_result(clc_result)
+            has_work = clc_response.is_canceled()
+            tile_id = clc_response.program_id(0)
+            phase = phase ^ 1
+
     block_size = 256
     num_tiles = torch.cuda.get_device_properties(0).multi_processor_count * 8
     n_elements = block_size * num_tiles
