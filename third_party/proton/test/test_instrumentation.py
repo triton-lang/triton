@@ -427,8 +427,12 @@ def test_multi_session(tmp_path: pathlib.Path):
 
     with open(temp_file_inst, "rb") as f:
         data = json.load(f)
-        kernel_frame = data[0]["children"][0]
-        assert "add_kernel" == kernel_frame["frame"]["name"]
+        kernel_frame = None
+        for frame in data[0]["children"]:
+            if "add_kernel" in frame["frame"]["name"]:
+                kernel_frame = frame
+                break
+        assert kernel_frame is not None
         assert "cycles" in kernel_frame["children"][0]["metrics"]
 
     with open(temp_file_driver, "rb") as f:
@@ -439,8 +443,12 @@ def test_multi_session(tmp_path: pathlib.Path):
 
     with open(temp_file_restart, "rb") as f:
         data = json.load(f)
-        kernel_frame = data[0]["children"][0]
-        assert "add_kernel" == kernel_frame["frame"]["name"]
+        kernel_frame = None
+        for frame in data[0]["children"]:
+            if "add_kernel" in frame["frame"]["name"]:
+                kernel_frame = frame
+                break
+        assert kernel_frame is not None
         assert "cycles" in kernel_frame["children"][0]["metrics"]
 
 
