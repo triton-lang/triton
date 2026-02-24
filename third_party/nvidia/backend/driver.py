@@ -3,9 +3,8 @@ import os
 import subprocess
 import triton
 import re
-from pathlib import Path
 from triton import knobs
-from triton.runtime.build import compile_module_from_src
+from triton.runtime.build import compile_module_from_file
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
@@ -63,8 +62,8 @@ class CudaUtils(object):
         return cls.instance
 
     def __init__(self):
-        mod = compile_module_from_src(
-            src=Path(os.path.join(dirname, "driver.c")).read_text(),
+        mod = compile_module_from_file(
+            src_path=os.path.join(dirname, "driver.c"),
             name="cuda_utils",
             library_dirs=library_dirs(),
             include_dirs=include_dirs,
