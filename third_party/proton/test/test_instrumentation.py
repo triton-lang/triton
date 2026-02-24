@@ -757,8 +757,10 @@ def test_overhead(tmp_path: pathlib.Path):
         session_children = non_metadata_children(session_node)
         single_node = next(child for child in session_children if child["frame"]["name"] == "single")
         loop_node = next(child for child in session_children if child["frame"]["name"] == "loop")
-        single_kernel_node = next(child for child in non_metadata_children(single_node) if child["frame"]["name"] == "kernel")
-        loop_kernel_node = next(child for child in non_metadata_children(loop_node) if child["frame"]["name"] == "kernel")
+        single_kernel_node = next(child for child in non_metadata_children(single_node)
+                                  if child["frame"]["name"] == "kernel")
+        loop_kernel_node = next(child for child in non_metadata_children(loop_node)
+                                if child["frame"]["name"] == "kernel")
         single_time = single_kernel_node["metrics"]["time (ns)"]
         loop_time = loop_kernel_node["metrics"]["time (ns)"]
         return single_time, loop_time
@@ -950,7 +952,6 @@ def test_threaded_kernel_call(tmp_path: pathlib.Path):
         assert len(events) > 0
         kernel_events = [e for e in events if e["name"] == "kernel"]
         assert len(kernel_events) > 0
-
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability(0)[0] < 10, reason="Requires Blackwell")
