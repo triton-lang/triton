@@ -74,6 +74,7 @@ bool CircularLayoutParser::parseMetadata() {
     trace.uid = uid;
     trace.count = count;
   }
+  return true;
 }
 
 void CircularLayoutParser::parseProfileEvents() {
