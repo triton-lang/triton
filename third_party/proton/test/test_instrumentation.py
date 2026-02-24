@@ -976,10 +976,10 @@ def test_gluon_clc_vector_add_profile(tmp_path: pathlib.Path, profile_data: str,
 
         while has_work:
             with pl.scope("clc_add_step"):
-                offsets = tile_id * BLOCK_SIZE + gl.arange(0, BLOCK_SIZE)
+                offsets = tile_id * BLOCK_SIZE + gl.arange(0, BLOCK_SIZE, gl.BlockedLayout([1], [32], [4], [0]))
                 mask = offsets < n_elements
-                x = gl.load(gl.set_auto_layout(x_ptr + offsets), mask)
-                y = gl.load(gl.set_auto_layout(y_ptr + offsets), mask)
+                x = gl.load(x_ptr + offsets, mask)
+                y = gl.load(y_ptr + offsets, mask)
                 gl.store(out_ptr + offsets, x + y, mask)
 
             clc.try_cancel(clc_result, clc_bar, multicast=True)
