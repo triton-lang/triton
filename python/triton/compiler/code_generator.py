@@ -1328,8 +1328,8 @@ class CodeGenerator(ast.NodeVisitor):
             prototype = ASTFunction([], arg_types, dict())
             generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
-                                      noinline=fn.noinline, file_name=fn.file_name, begin_line=fn.begin_line,
-                                      begin_col=fn.begin_col, options=self.builder.options,
+                                      noinline=fn.noinline, file_name=fn.file_name, begin_line=fn.def_file_line_number,
+                                      begin_col=fn.def_file_col_number, options=self.builder.options,
                                       codegen_fns=self.builder.codegen_fns, module_map=self.builder.module_map,
                                       caller_context=caller_context, is_gluon=self.is_gluon)
             try:
@@ -1645,9 +1645,9 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     signature = src.signature
     proxy = namedtuple("SpecializationProxy", ["constants", "signature"])(constants, signature)
     generator = CodeGenerator(context, prototype, gscope=fn.get_capture_scope(), function_name=fn.repr(proxy),
-                              jit_fn=fn, is_kernel=True, file_name=fn.file_name, begin_line=fn.begin_line,
-                              begin_col=fn.begin_col, options=options, codegen_fns=codegen_fns, module_map=module_map,
-                              module=module, is_gluon=fn.is_gluon())
+                              jit_fn=fn, is_kernel=True, file_name=fn.file_name, begin_line=fn.def_file_line_number,
+                              begin_col=fn.def_file_col_number, options=options, codegen_fns=codegen_fns,
+                              module_map=module_map, module=module, is_gluon=fn.is_gluon())
     generator.visit(fn.parse())
     module = generator.module
     # module takes ownership of the context

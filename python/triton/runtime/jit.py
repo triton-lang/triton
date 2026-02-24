@@ -473,8 +473,8 @@ class JITCallable:
 
         # get file name, starting line number and starting col number
         self.file_name = fn.__code__.co_filename
-        self.begin_line = get_begin_line_number(self.raw_src, self.starting_line_number)
-        self.begin_col = get_begin_col_number(raw_src_str)
+        self.def_file_line_number = get_def_line_number(self.raw_src, self.starting_line_number)
+        self.def_file_col_number = get_def_col_number(raw_src_str)
 
         src = textwrap.dedent(raw_src_str)
         src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
@@ -1073,8 +1073,8 @@ def reinterpret(tensor, dtype):
         raise TypeError(f"Cannot reinterpret a {type(tensor)}.")
 
 
-def get_begin_line_number(raw_src, starting_line_number):
-    begin_line = starting_line_number
+def get_def_line_number(raw_src, starting_line_number):
+    def_file_line_number = starting_line_number
     # Match the following pattern:
     # @triton.autotune(...) <- foo.__code__.co_firstlineno
     # @triton.heuristics(...)
@@ -1082,21 +1082,21 @@ def get_begin_line_number(raw_src, starting_line_number):
     # def foo(...): <- this line is the first line
     for idx, line in enumerate(raw_src):
         if line.strip().startswith("def "):
-            begin_line += idx
+            def_file_line_number += idx
             break
-    return begin_line
+    return def_file_line_number
 
 
-def get_begin_col_number(raw_src_str):
+def get_def_col_number(raw_src_str):
     # Find the amount of indenting to use in the source location information.
     indented_def = INDENT_PATTERN.search(raw_src_str)
     if not indented_def:
         raise ValueError("No function definition found for kernel")
     # Consider spaces and tabs as single characters to match the ast
-    begin_col = len(indented_def.group("indent"))
+    def_file_col_number = len(indented_def.group("indent"))
     # Columns start at 1
-    begin_col += 1
-    return begin_col
+    def_file_col_number += 1
+    return def_file_col_number
 
 
 class BoundConstexprFunction(JITCallable):
