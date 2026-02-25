@@ -1378,6 +1378,10 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let extraClassDeclaration = extraDistributedDeclaration # [{
     template<class T>
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
+
+    unsigned getRank() const {
+      return mlir::cast<LayoutEncodingTrait>(getParent()).getRank() - 1;
+    }
   }];
 
   let hasCustomAssemblyFormat = 1;
