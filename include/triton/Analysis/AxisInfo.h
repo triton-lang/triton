@@ -219,6 +219,9 @@ public:
         });
     SetVector<FunctionOpInterface> sortedFuncs(funcs.begin(), funcs.end());
     SymbolTableCollection symbolTable;
+    // Pass 1: Initialize all functions and propagate argument info from
+    // callers to callees. Processes callers before callees (reverse
+    // post-order) so argument attributes are set before callee analysis.
     for (auto funcOp : llvm::reverse(sortedFuncs)) {
       initialize(funcOp, callback);
       funcOp.walk([&](CallOpInterface callOp) {
@@ -226,6 +229,26 @@ public:
             callOp.resolveCallableInTable(&symbolTable));
         update(callOp, callee);
       });
+    }
+    // Pass 2: Propagate return value hint attributes from callees to
+    // caller call results. After pass 1, all functions have been analyzed
+    // so callee AxisInfo is available. Re-initialize callers whose call
+    // results gain new hint attributes.
+    for (auto funcOp : sortedFuncs) {
+      bool needsReinit = false;
+      funcOp.walk([&](CallOpInterface callOp) {
+        auto callee = dyn_cast<FunctionOpInterface>(
+            callOp.resolveCallableInTable(&symbolTable));
+        if (!callee)
+          return;
+        propagateReturnInfo(callOp, callee);
+        if (callOp->getDiscardableAttr("tt.contiguity") ||
+            callOp->getDiscardableAttr("tt.divisibility") ||
+            callOp->getDiscardableAttr("tt.constancy"))
+          needsReinit = true;
+      });
+      if (needsReinit)
+        initialize(funcOp, callback);
     }
   }
 
@@ -265,6 +288,7 @@ private:
   void initialize(FunctionOpInterface funcOp,
                   axisinfo::CallbackType callback = nullptr);
   void update(CallOpInterface callOp, FunctionOpInterface funcOp);
+  void propagateReturnInfo(CallOpInterface callOp, FunctionOpInterface callee);
 };
 } // namespace mlir::triton
 

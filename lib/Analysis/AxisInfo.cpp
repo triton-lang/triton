@@ -1386,6 +1386,80 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
   });
 }
 
+void ModuleAxisInfoAnalysis::propagateReturnInfo(CallOpInterface callOp,
+                                                 FunctionOpInterface callee) {
+  auto *calleeAxisInfoMap = getFuncData(callee);
+  if (!calleeAxisInfoMap)
+    return;
+  if (callOp->getNumResults() == 0)
+    return;
+
+  // Collect AxisInfo from all return ops in the callee. For multiple return
+  // paths, take the conservative (minimum) values across all returns.
+  SmallVector<ReturnOp> returnOps;
+  callee.walk([&](ReturnOp retOp) { returnOps.push_back(retOp); });
+  if (returnOps.empty())
+    return;
+
+  // For each result index, compute the minimum contiguity/divisibility/
+  // constancy across all return paths.
+  for (unsigned i = 0; i < callOp->getNumResults(); ++i) {
+    int64_t minContiguity = 0;
+    int64_t minDivisibility = 0;
+    int64_t minConstancy = 0;
+    bool first = true;
+
+    for (auto retOp : returnOps) {
+      if (i >= retOp.getNumOperands())
+        continue;
+      auto operand = retOp.getOperand(i);
+      auto it = calleeAxisInfoMap->find(operand);
+      if (it == calleeAxisInfoMap->end())
+        continue;
+
+      auto &axisInfo = it->second;
+      if (axisInfo.getRank() != 1)
+        continue;
+
+      auto contiguity = axisInfo.getContiguity(0);
+      auto divisibility = axisInfo.getDivisibility(0);
+      auto constancy = axisInfo.getConstancy(0);
+
+      if (first) {
+        minContiguity = contiguity;
+        minDivisibility = divisibility;
+        minConstancy = constancy;
+        first = false;
+      } else {
+        minContiguity = std::min(minContiguity, contiguity);
+        minDivisibility = std::min(minDivisibility, divisibility);
+        minConstancy = std::min(minConstancy, constancy);
+      }
+    }
+
+    if (first)
+      continue; // No return info found
+
+    // Set attributes on the call operation. For multi-result calls, we use
+    // the minimum across all results since attributes are per-operation.
+    auto setAttrFn = [&](StringRef attrName, int64_t value) {
+      if (value <= 1)
+        return;
+      // If there's already an attribute, take the minimum (conservative).
+      if (auto existing = dyn_cast_or_null<IntegerAttr>(
+              callOp->getDiscardableAttr(attrName)))
+        value = std::min(value, existing.getInt());
+      auto attr = IntegerAttr::get(
+          IntegerType::get(callOp->getContext(), 64), value);
+      callOp->setDiscardableAttr(attrName, attr);
+    };
+
+    setAttrFn("tt.contiguity", minContiguity);
+    setAttrFn("tt.divisibility", minDivisibility);
+    setAttrFn("tt.constancy", minConstancy);
+  }
+}
+
 void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
                                     FunctionOpInterface callee) {
   auto caller = callOp->getParentOfType<FunctionOpInterface>();
