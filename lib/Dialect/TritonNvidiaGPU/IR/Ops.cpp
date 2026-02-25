@@ -633,7 +633,8 @@ LogicalResult TCGen5MMAOp::verify() {
   if (auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
     if (tmemEnc.getTwoCTAs() != getTwoCtas()) {
       return emitOpError("The LHS operand's encoding must have twoCTA=")
-             << getTwoCtas() << " to be used in a twoCTA kernel";
+             << getTwoCtas() << " to be used in a "
+             << (getTwoCtas() ? "twoCTA" : "non-twoCTA") << " kernel";
     }
   }
 

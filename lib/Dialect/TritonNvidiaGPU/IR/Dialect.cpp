@@ -489,6 +489,9 @@ TensorDescIm2ColType::verify(function_ref<InFlightDiagnostic()> emitError,
 }
 
 namespace {
+//===----------------------------------------------------------------------===//
+// Verify Tensor/MemDesc Layout Interface
+//===----------------------------------------------------------------------===//
 class TritonNvidiaGPUVerifyTensorLayoutInterface
     : public triton::DialectVerifyTensorLayoutInterface {
 public:
@@ -497,7 +500,7 @@ public:
   LogicalResult verifyTensorLayout(
       Attribute layout, RankedTensorType rankedTy, Operation *op,
       function_ref<InFlightDiagnostic()> makeErr) const override {
-    auto *dialect =
+    Dialect *dialect =
         op->getContext()->getOrLoadDialect<triton::gpu::TritonGPUDialect>();
     auto *verifyLayoutInterface =
         dyn_cast<triton::DialectVerifyTensorLayoutInterface>(dialect);
@@ -510,7 +513,7 @@ public:
   LogicalResult verifyMemDescLayout(
       Attribute layout, Type type, Operation *op,
       function_ref<InFlightDiagnostic()> makeErr) const override {
-    auto *dialect =
+    Dialect *dialect =
         op->getContext()->getOrLoadDialect<triton::gpu::TritonGPUDialect>();
     auto *verifyLayoutInterface =
         dyn_cast<triton::DialectVerifyTensorLayoutInterface>(dialect);
