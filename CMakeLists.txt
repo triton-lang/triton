@@ -37,6 +37,7 @@ set(TRITON_CUDACRT_PATH "" CACHE PATH "Path to CUDA CRT headers.")
 set(TRITON_CUDART_PATH "" CACHE PATH "Path to CUDA Runtime headers")
 set(TRITON_CUPTI_INCLUDE_PATH "" CACHE PATH "Path to CUPTI headers")
 set(TRITON_CUPTI_LIB_PATH "" CACHE PATH "Path to CUPTI libraries")
+set(TRITON_CUDA_STDLIB_PATH "" CACHE PATH "Path to CUDA standard library headers")
 
 if(NOT TRITON_CACHE_PATH)
   message(FATAL_ERROR "TRITON_CACHE_PATH must be set or derivable from TRITON_HOME/HOME/USERPROFILE/HOMEPATH.")
@@ -78,6 +79,9 @@ if(NOT "${TRITON_CUPTI_INCLUDE_PATH}" STREQUAL "")
 endif()
 if(NOT "${TRITON_CUPTI_LIB_PATH}" STREQUAL "")
   list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cupti-lib-path "${TRITON_CUPTI_LIB_PATH}")
+endif()
+if(NOT "${TRITON_CUDA_STDLIB_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cuda-stdlib-path "${TRITON_CUDA_STDLIB_PATH}")
 endif()
 
 # Resolve third-party package paths in CMake so direct CMake builds don't rely on setup.py.
@@ -401,6 +405,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
                   ${PYTHON_SRC_PATH}/ir.cc
                   ${PYTHON_SRC_PATH}/gluon_ir.cc
+                  ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/experimental/gsan/src/gsan_testing.cc
                   ${PYTHON_SRC_PATH}/linear_layout.cc
                   ${PYTHON_SRC_PATH}/passes.cc
                   ${PYTHON_SRC_PATH}/interpreter.cc

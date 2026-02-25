@@ -81,3 +81,21 @@ tt.func private @experimental_memdesc_to_i32(
   tt.return
 }
 }
+
+// -----
+
+#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_gsan_tensor_access
+// CHECK: llvm.store
+// CHECK: llvm.call @__triton_gsan_load_tensor
+// CHECK: llvm.call @__triton_gsan_store_tensor
+tt.func private @experimental_gsan_tensor_access(
+  %ptrs: tensor<2x!tt.ptr<f32>, #blocked1>,
+  %mask: tensor<2xi1, #blocked1>
+) {
+  tti.experimental_gsan_tensor_access %ptrs, 4, false, %mask : tensor<2x!tt.ptr<f32>, #blocked1>
+  tti.experimental_gsan_tensor_access %ptrs, 4, true : tensor<2x!tt.ptr<f32>, #blocked1>
+  tt.return
+}
+}

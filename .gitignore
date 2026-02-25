@@ -71,6 +71,7 @@ ptxas-blackwell
 third_party/nvidia/backend/include
 third_party/nvidia/backend/lib/cupti
 third_party/nvidia/backend/lib/cupti-blackwell
+third_party/nvidia/backend/lib/gsan.ll
 
 # Docs
 docs/_build/

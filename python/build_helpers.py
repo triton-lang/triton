@@ -51,6 +51,7 @@ class BuildHelperArgs:
     cupti_include_path: Optional[str]
     cupti_lib_path: Optional[str]
     cupti_lib_blackwell_path: Optional[str]
+    cuda_stdlib_path: Optional[str]
 
 
 def _normalize_bool(value: str, default: str = "") -> bool:
@@ -384,6 +385,26 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
         helper_args=helper_args,
     )
     download_and_copy(
+        name="cuda-stdlib",
+        src_func=lambda system, arch, version: f"cuda_cccl-{system}-{arch}-{version}-archive/include/cccl/cuda",
+        dst_path="include/cuda",
+        override_path=helper_args.cuda_stdlib_path,
+        version=nvidia_toolchain_version["cuda-stdlib"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cccl/{system}-{arch}/cuda_cccl-{system}-{arch}-{version}-archive.tar.xz",
+        helper_args=helper_args,
+    )
+    download_and_copy(
+        name="cuda-stdlib",
+        src_func=lambda system, arch, version: f"cuda_cccl-{system}-{arch}-{version}-archive/include/cccl/nv",
+        dst_path="include/nv",
+        override_path=helper_args.cuda_stdlib_path,
+        version=nvidia_toolchain_version["cuda-stdlib"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cccl/{system}-{arch}/cuda_cccl-{system}-{arch}-{version}-archive.tar.xz",
+        helper_args=helper_args,
+    )
+    download_and_copy(
         name="cupti",
         src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/include",
         dst_path="include",
@@ -439,25 +460,24 @@ def add_common_args(parser: argparse.ArgumentParser):
     parser.add_argument("--triton-cupti-lib-path", default="", help="Path override for TRITON_CUPTI_LIB_PATH")
     parser.add_argument("--triton-cupti-lib-blackwell-path", default="",
                         help="Path override for TRITON_CUPTI_LIB_BLACKWELL_PATH")
+    parser.add_argument("--triton-cuda-stdlib-path", default="", help="Path override for TRITON_CUDA_STDLIB_PATH")
 
 
 def normalize_parsed_args(parsed_args) -> BuildHelperArgs:
     return BuildHelperArgs(
-        cache_path=_normalize_required_path(parsed_args.triton_cache_path, "TRITON_CACHE_PATH"),
-        offline_build=parsed_args.triton_offline_build,
+        cache_path=_normalize_required_path(parsed_args.triton_cache_path,
+                                            "TRITON_CACHE_PATH"), offline_build=parsed_args.triton_offline_build,
         llvm_system_suffix=_normalize_optional(parsed_args.triton_llvm_system_suffix),
-        llvm_syspath=_normalize_optional_path(parsed_args.llvm_syspath),
-        json_syspath=_normalize_optional_path(parsed_args.json_syspath),
-        ptxas_path=_normalize_optional_path(parsed_args.triton_ptxas_path),
+        llvm_syspath=_normalize_optional_path(parsed_args.llvm_syspath), json_syspath=_normalize_optional_path(
+            parsed_args.json_syspath), ptxas_path=_normalize_optional_path(parsed_args.triton_ptxas_path),
         ptxas_blackwell_path=_normalize_optional_path(parsed_args.triton_ptxas_blackwell_path),
         cuobjdump_path=_normalize_optional_path(parsed_args.triton_cuobjdump_path),
-        nvdisasm_path=_normalize_optional_path(parsed_args.triton_nvdisasm_path),
-        cudacrt_path=_normalize_optional_path(parsed_args.triton_cudacrt_path),
-        cudart_path=_normalize_optional_path(parsed_args.triton_cudart_path),
+        nvdisasm_path=_normalize_optional_path(parsed_args.triton_nvdisasm_path), cudacrt_path=_normalize_optional_path(
+            parsed_args.triton_cudacrt_path), cudart_path=_normalize_optional_path(parsed_args.triton_cudart_path),
         cupti_include_path=_normalize_optional_path(parsed_args.triton_cupti_include_path),
         cupti_lib_path=_normalize_optional_path(parsed_args.triton_cupti_lib_path),
         cupti_lib_blackwell_path=_normalize_optional_path(parsed_args.triton_cupti_lib_blackwell_path),
-    )
+        cuda_stdlib_path=_normalize_optional_path(parsed_args.triton_cuda_stdlib_path))
 
 
 def main(argv=None):
