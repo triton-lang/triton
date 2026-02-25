@@ -1,13 +1,19 @@
+
+/**
+ * @file Membar_upgrade.c++
+ * @brief Memory barrier analysis and synchronization for Triton GPU backend.
+ * @author Upgraded
+ * @date 2026
+ */
+
 #include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-
 #include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
-
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include <deque>
@@ -15,6 +21,11 @@
 
 namespace mlir {
 
+
+/**
+ * @brief Run the memory barrier analysis for a function.
+ * @param funcBlockInfoMap Map of function block info.
+ */
 void MembarAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
     auto funcOp = dyn_cast<FunctionOpInterface>(allocation->getOperation());
     if (!funcOp) return; // Handle cases where the cast fails
@@ -22,6 +33,13 @@ void MembarAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
     resolve(funcOp, &funcBlockInfoMap, &builder);
 }
 
+
+/**
+ * @brief Resolve memory barriers and propagate block info through the function CFG.
+ * @param funcOp The function operation interface.
+ * @param funcBlockInfoMap Pointer to the function block info map.
+ * @param builder Pointer to the OpBuilder.
+ */
 void MembarAnalysis::resolve(FunctionOpInterface funcOp,
                              FuncBlockInfoMapT *funcBlockInfoMap,
                              OpBuilder *builder) {
@@ -76,6 +94,12 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
     });
 }
 
+
+/**
+ * @brief Visit a terminator operation and collect successor blocks.
+ * @param op The operation pointer.
+ * @param successors Reference to a vector of successor blocks.
+ */
 void MembarAnalysis::visitTerminator(Operation *op,
                                      SmallVector<Block *> &successors) {
     if (auto branchInterface = dyn_cast<BranchOpInterface>(op)) {
@@ -91,6 +115,14 @@ void MembarAnalysis::visitTerminator(Operation *op,
     llvm_unreachable("Unknown terminator encountered in Membar analysis");
 }
 
+
+/**
+ * @brief Update block info for a given operation, handling barriers and dependencies.
+ * @param op The operation pointer.
+ * @param blockInfo Pointer to the current block info.
+ * @param funcBlockInfoMap Pointer to the function block info map.
+ * @param builder Pointer to the OpBuilder.
+ */
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
@@ -118,12 +150,25 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     blockInfo->join(curBlockInfo);
 }
 
+
+/**
+ * @brief Check if an operation is a barrier operation.
+ * @param op The operation pointer.
+ * @return True if the operation is a barrier, false otherwise.
+ */
 bool MembarAnalysis::isBarrierOp(Operation *op) const {
     return isa<gpu::BarrierOp>(op) ||
            (isa<LLVM::InlineAsmOp>(op) &&
             dyn_cast<LLVM::InlineAsmOp>(op).getAsmString().find("bar.sync") != std::string::npos);
 }
 
+
+/**
+ * @brief Handle an async wait operation, inserting barriers as needed.
+ * @param op The async wait operation.
+ * @param blockInfo Pointer to the current block info.
+ * @param builder Pointer to the OpBuilder.
+ */
 void MembarAnalysis::handleAsyncWaitOp(triton::gpu::AsyncWaitOp op, BlockInfo *blockInfo, OpBuilder *builder) {
     blockInfo->sync();
     OpBuilder::InsertionGuard guard(*builder);
@@ -144,6 +189,12 @@ void MembarAnalysis::handleAsyncWaitOp(triton::gpu::AsyncWaitOp op, BlockInfo *b
     blockInfo->sync();
 }
 
+
+/**
+ * @brief Collect dependencies for a given operation.
+ * @param op The operation pointer.
+ * @return BlockInfo containing dependency information.
+ */
 BlockInfo MembarAnalysis::collectDependencies(Operation *op) const {
     BlockInfo curBlockInfo;
 
@@ -152,10 +203,10 @@ BlockInfo MembarAnalysis::collectDependencies(Operation *op) const {
             curBlockInfo = funcBlockInfoMap->lookup(callee);
         }
     } else {
-        for (Value value : op->getOperands()) {
+        for (auto value : op->getOperands()) {
             updateBlockInfoForOperand(value, op, curBlockInfo);
         }
-        for (Value value : op->getResults()) {
+        for (auto value : op->getResults()) {
             updateBlockInfoForResult(value, op, curBlockInfo);
         }
         if (auto bufferId = allocation->getBufferId(op); bufferId != Allocation::InvalidBufferId) {
@@ -167,6 +218,13 @@ BlockInfo MembarAnalysis::collectDependencies(Operation *op) const {
     return curBlockInfo;
 }
 
+
+/**
+ * @brief Update block info for an operand value.
+ * @param value The operand value.
+ * @param op The operation pointer.
+ * @param curBlockInfo Reference to the current block info.
+ */
 void MembarAnalysis::updateBlockInfoForOperand(Value value, Operation *op, BlockInfo &curBlockInfo) const {
     for (auto bufferId : allocation->getBufferIds(value)) {
         if (bufferId != Allocation::InvalidBufferId) {
@@ -179,12 +237,25 @@ void MembarAnalysis::updateBlockInfoForOperand(Value value, Operation *op, Block
     }
 }
 
+
+/**
+ * @brief Update block info for a result value.
+ * @param value The result value.
+ * @param op The operation pointer.
+ * @param curBlockInfo Reference to the current block info.
+ */
 void MembarAnalysis::updateBlockInfoForResult(Value value, Operation *op, BlockInfo &curBlockInfo) const {
     if (auto bufferId = allocation->getBufferId(value); bufferId != Allocation::InvalidBufferId) {
         curBlockInfo.syncWriteIntervals.insert(allocation->getAllocatedInterval(bufferId));
     }
 }
 
+
+/**
+ * @brief Insert a synchronization barrier at the given operation.
+ * @param op The operation pointer.
+ * @param builder Pointer to the OpBuilder.
+ */
 void MembarAnalysis::insertSyncBarrier(Operation *op, OpBuilder *builder) const {
     OpBuilder::InsertionGuard guard(*builder);
     builder->setInsertionPoint(op);
