@@ -285,6 +285,12 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   auto cvt = regLayout.invertAndCompose(memLayout);
   auto maybeSublayout = cvt.quotient({kBlock});
   if (!maybeSublayout) {
+    if (emitError) {
+      emitError() << "The cga_layout of the register and memory layout must be "
+                     "the same. Got:\n"
+                  << regLayout.toString() << "\n"
+                  << memLayout.toString();
+    }
     return failure();
   }
   cvt = maybeSublayout.value();

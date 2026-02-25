@@ -55,7 +55,7 @@ class TensorMemoryLayout:
     def __post_init__(self):
         super().__setattr__("block", _unwrap_if_constexpr(self.block))
         super().__setattr__("col_stride", _unwrap_if_constexpr(self.col_stride))
-        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout) or [])
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
         super().__setattr__("two_ctas", _unwrap_if_constexpr(self.two_ctas))
         assert len(self.block) == 2
         assert all(len(basis) == 2 for basis in self.cga_layout)
@@ -73,7 +73,7 @@ class TensorMemoryLayout:
     def mangle(self) -> str:
         block_str = f"{self.block[0]}x{self.block[1]}"
         stride_str = f"C{self.col_stride}"
-        cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout) if self.cga_layout else ""
+        cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
         two_ctas_str = "2CT" if self.two_ctas else ""
         return f"TL{block_str}{stride_str}{cga_layout_str}{two_ctas_str}TL"
 
@@ -92,14 +92,14 @@ class TensorMemoryScalesLayout:
     cga_layout: List[List[int]] = field(default_factory=list)
 
     def __post_init__(self):
-        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout) or [])
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
         assert all(len(basis) == 2 for basis in self.cga_layout)
 
     def _to_ir(self, builder):
         return builder.get_tensor_memory_scales_layout([list(basis) for basis in self.cga_layout])
 
     def mangle(self) -> str:
-        cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout) if self.cga_layout else ""
+        cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
         return f"TLS{cga_layout_str}TLS"
 
     def __hash__(self):

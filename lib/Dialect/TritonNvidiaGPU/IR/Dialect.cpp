@@ -488,9 +488,6 @@ TensorDescIm2ColType::verify(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
-//===----------------------------------------------------------------------===//
-// ASM Interface (i.e.: alias)
-//===----------------------------------------------------------------------===//
 namespace {
 class TritonNvidiaGPUVerifyTensorLayoutInterface
     : public triton::DialectVerifyTensorLayoutInterface {
@@ -500,9 +497,8 @@ public:
   LogicalResult verifyTensorLayout(
       Attribute layout, RankedTensorType rankedTy, Operation *op,
       function_ref<InFlightDiagnostic()> makeErr) const override {
-    auto *ttgDialect =
+    auto *dialect =
         op->getContext()->getOrLoadDialect<triton::gpu::TritonGPUDialect>();
-    Dialect *dialect = ttgDialect;
     auto *verifyLayoutInterface =
         dyn_cast<triton::DialectVerifyTensorLayoutInterface>(dialect);
     if (!verifyLayoutInterface)
@@ -514,9 +510,8 @@ public:
   LogicalResult verifyMemDescLayout(
       Attribute layout, Type type, Operation *op,
       function_ref<InFlightDiagnostic()> makeErr) const override {
-    auto *ttgDialect =
+    auto *dialect =
         op->getContext()->getOrLoadDialect<triton::gpu::TritonGPUDialect>();
-    Dialect *dialect = ttgDialect;
     auto *verifyLayoutInterface =
         dyn_cast<triton::DialectVerifyTensorLayoutInterface>(dialect);
     if (!verifyLayoutInterface)
@@ -526,6 +521,9 @@ public:
   }
 };
 
+//===----------------------------------------------------------------------===//
+// ASM Interface (i.e.: alias)
+//===----------------------------------------------------------------------===//
 class TritonGPUOpAsmInterface : public OpAsmDialectInterface {
 public:
   using OpAsmDialectInterface::OpAsmDialectInterface;

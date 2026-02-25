@@ -3522,8 +3522,7 @@ struct TritonGPUVerifyTensorLayoutInterface
     if (!isa<LayoutEncodingTrait>(layout))
       return success();
 
-    ModuleOp module = op->getParentOfType<ModuleOp>();
-    int moduleCTAsPerCGA = TritonGPUDialect::getNumCTAs(module);
+    int moduleCTAsPerCGA = lookupNumCTAs(op);
     int layoutCTAsPerCGA = getNumCTAs(layout);
     if (layoutCTAsPerCGA != moduleCTAsPerCGA) {
       return makeErr() << layout << ".\nLayout has " << layoutCTAsPerCGA
