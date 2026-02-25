@@ -1,3 +1,9 @@
+"""Run a Python script under Triton Global Memory Sanitizer.
+
+This module provides a small command-line wrapper runs the wrapped script with GSan enabled, e.g.
+    python -m triton.tools.gsan my_script.py
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -22,7 +28,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> tuple[Path, list[str], str
     if script_args[:1] == ["--"]:
         script_args = script_args[1:]
 
-    return Path(args.script), script_args, args.allocator_mode
+    return Path(args.script), script_args
 
 
 @contextlib.contextmanager
@@ -40,15 +46,16 @@ def _script_context(script_path: Path, script_args: Sequence[str]):
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    script_path, script_args, allocator_mode = _parse_args(argv)
+    script_path, script_args = _parse_args(argv)
 
     script_path = script_path.resolve()
     if not script_path.is_file():
         raise FileNotFoundError(f"Script not found: {script_path}")
 
-    triton.knobs.compilation.instrumentation = "gsan"
+    triton.knobs.compilation.instrumentation_mode = "gsan"
 
-    with torch.use_mem_pool(create_mem_pool()), _script_context(script_path):
+    with torch.cuda.use_mem_pool(create_mem_pool()), \
+        _script_context(script_path, script_args):
         runpy.run_path(str(script_path), run_name="__main__")
     return 0
 
