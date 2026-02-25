@@ -83,3 +83,33 @@ def test_float_annotation(device, dtype, test_val):
     elif dtype == tl.float64:
         assert "%val: f64" in h.asm["ttir"]
         assert "arith.truncf %val : f64 to f32" in h.asm["ttir"]
+
+
+# Test that contiguity/divisibility hints survive JIT function returns
+def test_contiguity_hint_across_jit_return(device):
+    """tt.contiguity set inside a callee must propagate to the caller's TTIR.
+
+    Regression test for https://github.com/triton-lang/triton/issues/8592
+    """
+
+    @triton.jit
+    def _inner(ptr, offset):
+        ptrs = ptr + offset
+        ptrs = tl.max_contiguous(tl.multiple_of(ptrs, 16), 16)
+        return ptrs
+
+    @triton.jit
+    def _kernel(ptr, out_ptr):
+        offsets = tl.arange(0, 128)
+        ptrs = _inner(ptr, offsets)
+        v = tl.load(ptrs).to(tl.float32)
+        tl.store(out_ptr + offsets, v)
+
+    data = torch.randn(128, device=device, dtype=torch.float32)
+    out = torch.empty(128, device=device, dtype=torch.float32)
+    h = _kernel[(1,)](data, out)
+
+    assert "tt.contiguity" in h.asm["ttir"], \
+        "tt.contiguity lost when hint is applied inside a JIT callee and returned"
+    assert "tt.divisibility" in h.asm["ttir"]
+    torch.testing.assert_close(out, data)
