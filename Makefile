@@ -49,6 +49,11 @@ test-gluon: all
 	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
 	$(PYTEST) -n 2 python/examples/gluon/
 
+.PHONY: test-gsan
+test-gsan: all
+	$(PYTEST) --tb=short python/test/gsan --ignore python/test/gsan/test_gsan_failures.py
+	$(PYTEST) --tb=short python/test/gsan/test_gsan_failures.py
+
 .PHONY: test-regression
 test-regression: all
 	$(PYTEST) -n $(NUM_PROCS) python/test/regression
