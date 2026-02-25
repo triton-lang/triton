@@ -1,3 +1,5 @@
+import math
+import os
 import torch
 
 import triton
@@ -31,6 +33,3 @@ def test_xpu_backend(alteer):
                 assert torch.all(x + y == z)
     else:
         return
-    
-import math 
-import os

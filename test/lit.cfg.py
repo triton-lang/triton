@@ -5,8 +5,8 @@ import platform
 import re
 import subprocess
 import tempfile
-import config
 
+import config
 import lit.formats
 import lit.util
 from lit.llvm import llvm_config
@@ -18,7 +18,7 @@ from lit.llvm.subst import FindTool, ToolSubst
 config.name = 'TRITON'
 
 # Test format configuration
-config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell) # getting an attribute error
+config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell)  # getting an attribute error
 
 
 # Suffixes: A list of file extensions to treat as test files

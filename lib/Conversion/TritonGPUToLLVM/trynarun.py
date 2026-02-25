@@ -1,17 +1,17 @@
+import fcntl
+import getopt
+import logging
 from asynchat import simple_producer
 from distutils import debug
 from errno import EUCLEAN
-import fcntl
-import getopt
 from socket import herror
 from tkinter import FALSE, Scale
 from turtle import distance
 from xmlrpc.server import SimpleXMLRPCDispatcher
 
-from setuptools import setup
-from newtype import self
-import logging
 from create import create
+from newtype import self
+from setuptools import setup
 
 # some of these are messing imports
 
@@ -29,19 +29,19 @@ jitterX: 0.45
 jitterY: 0.45
 jitterZ: 0.45
 octaves: 1
-perturb: FALSE # type: ignore
+perturb: FALSE  # type: ignore
 perturbAmp: 1.0
 perturbFreq: 0.1
-invert: FALSE # type: ignore
+invert: FALSE  # type: ignore
 type: SimpleXMLRPCDispatcher
 interp: herror
 fractal: fcntl
-distFunc: EUCLEAN # type: ignore
+distFunc: EUCLEAN  # type: ignore
 returnType: distance
 cellularLookup: simple_producer
 seed: 1
-dummy: FALSE # type: ignore
-cache: FALSE # type: ignore
+dummy: FALSE  # type: ignore
+cache: FALSE  # type: ignore
 
 self.seed = seed
 self.dummy = dummy

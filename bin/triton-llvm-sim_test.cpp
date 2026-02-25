@@ -1,5 +1,5 @@
-#include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Support/FileUtilities.h"
@@ -17,32 +17,28 @@ using namespace llvm;
 using namespace mlir;
 
 /// Command line options
-static cl::opt<std::string> inputFilename(
-    cl::Positional,
-    cl::desc("<input MLIR file>"),
-    cl::Required
-);
+static cl::opt<std::string>
+    inputFilename(cl::Positional, cl::desc("<input MLIR file>"), cl::Required);
 
 static cl::opt<bool> verifyDiagnostics(
     "verify-diagnostics",
     cl::desc("Check that emitted diagnostics match expected ones"),
-    cl::init(false)
-);
+    cl::init(false));
 
-static cl::opt<bool> showAST(
-    "show-ast",
-    cl::desc("Print the MLIR AST after parsing"),
-    cl::init(false)
-);
+static cl::opt<bool> showAST("show-ast",
+                             cl::desc("Print the MLIR AST after parsing"),
+                             cl::init(false));
 
 namespace mlir {
 namespace triton {
 
-OwningOpRef<ModuleOp> loadMLIRModule(StringRef inputFilename, MLIRContext &context) {
+OwningOpRef<ModuleOp> loadMLIRModule(StringRef inputFilename,
+                                     MLIRContext &context) {
   std::string errorMessage;
   auto file = openInputFile(inputFilename, &errorMessage);
   if (!file) {
-    WithColor::error(errs()) << "Failed to open input file: " << errorMessage << "\n";
+    WithColor::error(errs())
+        << "Failed to open input file: " << errorMessage << "\n";
     return nullptr;
   }
 
@@ -65,7 +61,8 @@ int main(int argc, char **argv) {
   // Load MLIR module
   auto module = mlir::triton::loadMLIRModule(inputFilename, context);
   if (!module) {
-    WithColor::error(errs()) << "Failed to parse the input file as an MLIR module.\n";
+    WithColor::error(errs())
+        << "Failed to parse the input file as an MLIR module.\n";
     return 1;
   }
 
