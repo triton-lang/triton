@@ -43,7 +43,7 @@ def kernel_call_noinline(X, Y, BLOCK: tl.constexpr):
 
 @triton.autotune(
     configs=[
-        triton.Config({"BLOCK": 128}, num_warps=4),
+        triton.Config({"BLOCK": 64}, num_warps=4),
     ],
     key=[],
 )
