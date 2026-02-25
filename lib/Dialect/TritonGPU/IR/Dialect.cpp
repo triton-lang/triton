@@ -245,16 +245,9 @@ SmallVector<unsigned> getWarpOrder(DistributedEncodingTrait layout,
 }
 
 CGAEncodingAttr getCGALayout(Attribute layout) {
-  if (isa<LinearEncodingAttr, SharedLinearEncodingAttr>(layout)) {
-    llvm::report_fatal_error(
-        "Linear/SharedLinear layouts do not have a CGA layout in general.\n"
-        "Having a CGA layout implies being of the form cta_layout * "
-        "cga_layout.\n"
-        "If you know for a fact that this particular layout has a CGA layout, "
-        "you can use cast<LayoutEncodingTrait>(layout).getCGALayout() "
-        "instead.");
-    return {};
-  }
+  // Note: This function may error out if used on a Linear/SharedLinear layouts
+  // That does not have a CGA layout (i.e. that is not of the form cta_layout *
+  // cga_layout)
   if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout))
     return ttgLayout.getCGALayout();
   llvm_unreachable("Unimplemented usage of getCGALayout");
