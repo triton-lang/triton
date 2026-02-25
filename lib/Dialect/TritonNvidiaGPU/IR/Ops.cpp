@@ -624,16 +624,15 @@ LogicalResult TCGen5MMAOp::verify() {
       return emitOpError(
           "We don't allow to emit more than one mma instruction along N. "
           "Reduce the block or increase the number of warps or CTAs along N");
-
-    if (!retEnc.getTwoCTAs())
-      return emitOpError(
-          "The returned value's encoding must have twoCTA=true to be used "
-          "in a twoCTA matmul");
-    if (auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
-      if (!tmemEnc.getTwoCTAs())
-        return emitOpError(
-            "The LHS operand's encoding must have twoCTA=true to be used "
-            "in a twoCTA matmul");
+  }
+  if (retEnc.getTwoCTAs() != getTwoCtas()) {
+    return emitOpError("The returned value's encoding must have twoCTA=")
+           << getTwoCtas() << " to be used in a twoCTA kernel";
+  }
+  if (auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
+    if (tmemEnc.getTwoCTAs() != getTwoCtas()) {
+      return emitOpError("The LHS operand's encoding must have twoCTA=")
+             << getTwoCtas() << " to be used in a twoCTA kernel";
     }
   }
 
