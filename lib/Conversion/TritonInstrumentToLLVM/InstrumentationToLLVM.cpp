@@ -6,6 +6,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -24,6 +25,13 @@ namespace ttng = mlir::triton::nvidia_gpu;
 // Utility functions
 ////////////////////////////////////////////
 
+Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
+  TritonLLVMOpBuilder tb(loc, rewriter);
+  if (a && b)
+    return tb.and_(a, b);
+  return a ? a : b;
+}
+
 Value createMemDescToI32(RewriterBase &rewriter, Location loc,
                          const LLVMTypeConverter *typeConverter,
                          ttg::MemDescType memDescTy, Value sharedMemStruct) {
@@ -41,6 +49,146 @@ Value createMemDescToI32(RewriterBase &rewriter, Location loc,
   auto elemSize = srcElemTy.getIntOrFloatBitWidth() / 8;
   offset = b.mul(offset, b.i32_val(elemSize));
   return b.add(offset, b.ptrtoint(i32Ty, smemObj.getBase()));
+}
+
+static constexpr StringLiteral kGSanLoadTensorRuntimeFn =
+    "__triton_gsan_load_tensor";
+static constexpr StringLiteral kGSanStoreTensorRuntimeFn =
+    "__triton_gsan_store_tensor";
+static constexpr StringLiteral kGSanInitRuntimeFn = "__triton_gsan_init";
+static constexpr StringLiteral kGSanGlobalStateArgAttr =
+    "tti.gsan_global_state";
+
+LLVM::LLVMFuncOp
+getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
+                               StringRef funcName) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  if (auto funcOp = moduleOp.lookupSymbol<LLVM::LLVMFuncOp>(funcName))
+    return funcOp;
+
+  auto *ctx = rewriter.getContext();
+  SmallVector<Type> argTys;
+  if (funcName == kGSanInitRuntimeFn) {
+    argTys = {ptr_ty(ctx)};
+  } else {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty};
+  }
+  auto funcTy = LLVM::LLVMFunctionType::get(void_ty(ctx), argTys);
+  RewriterBase::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(moduleOp.getBody());
+  return LLVM::LLVMFuncOp::create(rewriter, UnknownLoc::get(ctx), funcName,
+                                  funcTy);
+}
+
+Value castToI1Predicate(Value value, ConversionPatternRewriter &rewriter,
+                        Location loc) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  if (value.getType().isInteger(1))
+    return value;
+  if (auto intTy = dyn_cast<IntegerType>(value.getType()))
+    return b.icmp_ne(value, b.int_val(intTy.getWidth(), 0));
+  if (isa<LLVM::LLVMPointerType>(value.getType())) {
+    Value asInt = b.ptrtoint(i64_ty, value);
+    return b.icmp_ne(asInt, b.i64_val(0));
+  }
+  llvm_unreachable("unsupported mask element type for GSan instrumentation");
+}
+
+Value castPointerElementToI64(Value value, ConversionPatternRewriter &rewriter,
+                              Location loc) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  if (isa<LLVM::LLVMPointerType>(value.getType()))
+    return b.ptrtoint(i64_ty, value);
+  if (value.getType().isInteger(64))
+    return value;
+  if (auto intTy = dyn_cast<IntegerType>(value.getType())) {
+    if (intTy.getWidth() < 64)
+      return b.zext(i64_ty, value);
+    if (intTy.getWidth() > 64)
+      return b.trunc(i64_ty, value);
+    return value;
+  }
+  llvm_unreachable("unsupported pointer element type for GSan instrumentation");
+}
+
+void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
+                                 Location loc, Value gsanGlobalStatePtr,
+                                 ArrayRef<Value> ptrElems,
+                                 ArrayRef<Value> maskElems, uint32_t regMask,
+                                 Value threadPred, int32_t bytesPerElem,
+                                 bool isStore) {
+  if (ptrElems.empty())
+    return;
+
+  auto *ctx = rewriter.getContext();
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value one = b.i32_val(1);
+  Value zero = b.i32_val(0);
+  Type i8Ty = rewriter.getI8Type();
+  Type i64Ty = rewriter.getI64Type();
+
+  auto ptrArrayTy = array_ty(i64Ty, ptrElems.size());
+  auto maskArrayTy = array_ty(i8Ty, ptrElems.size());
+  SmallVector<Type> argsFieldTys = {ptrArrayTy, maskArrayTy};
+  auto argsTy = LLVM::LLVMStructType::getLiteral(ctx, argsFieldTys);
+  auto argsBuffer = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), argsTy,
+                                           one, /*alignment=*/0);
+
+  for (unsigned i = 0; i < ptrElems.size(); ++i) {
+    Value idx = b.i32_val(i);
+    Value ptrValue = castPointerElementToI64(ptrElems[i], rewriter, loc);
+    Value ptrSlot =
+        b.gep(ptr_ty(ctx), argsTy, argsBuffer, ValueRange{zero, zero, idx});
+    b.store(ptrValue, ptrSlot);
+
+    Value maskValue = maskElems.empty() ? b.true_val() : maskElems[i];
+    if (!isCanonicalIndex(i, regMask))
+      maskValue = b.false_val();
+    maskValue = castToI1Predicate(maskValue, rewriter, loc);
+    if (threadPred)
+      maskValue = maybeAnd(rewriter, loc, maskValue, threadPred);
+    Value maskByte = b.zext(i8Ty, maskValue);
+    Value maskSlot =
+        b.gep(ptr_ty(ctx), argsTy, argsBuffer, ValueRange{zero, one, idx});
+    b.store(maskByte, maskSlot);
+  }
+
+  StringRef funcName =
+      isStore ? kGSanStoreTensorRuntimeFn : kGSanLoadTensorRuntimeFn;
+  auto runtimeFunc = getOrCreateGSanRuntimeFunction(rewriter, funcName);
+  if (gsanGlobalStatePtr.getType() != ptr_ty(ctx)) {
+    gsanGlobalStatePtr = b.addrspacecast(ptr_ty(ctx), gsanGlobalStatePtr);
+  }
+  Value argsPtr = b.bitcast(argsBuffer, ptr_ty(ctx));
+  b.call(runtimeFunc,
+         ValueRange{gsanGlobalStatePtr, argsPtr, b.i32_val(ptrElems.size()),
+                    b.i32_val(bytesPerElem)});
+}
+
+Value getGSanGlobalStateArg(FunctionOpInterface funcOp) {
+  for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
+    if (funcOp.getArgAttr(i, kGSanGlobalStateArgAttr))
+      return funcOp.getArgument(i);
+  }
+  return {};
+}
+
+Value getGSanGlobalStateArgOrNull(ConversionPatternRewriter &rewriter,
+                                  Location loc, FunctionOpInterface funcOp) {
+  if (Value arg = funcOp ? getGSanGlobalStateArg(funcOp) : Value{})
+    return arg;
+
+  TritonLLVMOpBuilder b(loc, rewriter);
+  return b.inttoptr(ptr_ty(rewriter.getContext()), b.i64_val(0));
+}
+
+Value castGSanGlobalStateArgToGenericPtr(ConversionPatternRewriter &rewriter,
+                                         Location loc, Value ptr) {
+  auto *ctx = rewriter.getContext();
+  TritonLLVMOpBuilder b(loc, rewriter);
+  if (ptr.getType() != ptr_ty(ctx))
+    return b.addrspacecast(ptr_ty(ctx), ptr);
+  return ptr;
 }
 
 ////////////////////////////////////////////
@@ -261,6 +409,80 @@ public:
   }
 };
 
+struct GSanTensorAccessOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanTensorAccessOp> {
+public:
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalGSanTensorAccessOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanTensorAccessOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto func = op->getParentOfType<FunctionOpInterface>();
+    Value gsanGlobalStatePtr = getGSanGlobalStateArgOrNull(rewriter, loc, func);
+
+    Value llPtr = adaptor.getPtr();
+    unsigned numElems = ttg::getTotalElemsPerThread(op.getPtr().getType());
+    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    assert(ptrElems.size() == numElems &&
+           "Expected pointer element count to match layout");
+
+    SmallVector<Value> maskElems;
+    if (Value llMask = adaptor.getMask()) {
+      maskElems = unpackLLElements(loc, llMask, rewriter);
+      assert(maskElems.size() == numElems &&
+             "Expected mask element count to match layout");
+    }
+
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    uint32_t regMask =
+        freeVarMasks.lookup(StringAttr::get(op.getContext(), "reg"));
+    Value threadPred;
+    if (op.getIsStore()) {
+      TritonLLVMOpBuilder b(loc, rewriter);
+      auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+      Value laneIsZero = b.icmp_eq(laneId, b.i32_val(0));
+      Value warpIsZero = b.icmp_eq(warpId, b.i32_val(0));
+      threadPred = b.and_(laneIsZero, warpIsZero);
+    }
+    emitTensorAccessRuntimeCall(rewriter, loc, gsanGlobalStatePtr, ptrElems,
+                                maskElems, regMask, threadPred,
+                                static_cast<int32_t>(op.getBytesPerElem()),
+                                static_cast<bool>(op.getIsStore()));
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GSanInitOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanInitOp> {
+public:
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalGSanInitOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanInitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    (void)adaptor;
+    auto func = op->getParentOfType<FunctionOpInterface>();
+    Value gsanGlobalStatePtr =
+        getGSanGlobalStateArgOrNull(rewriter, op.getLoc(), func);
+
+    auto runtimeFunc =
+        getOrCreateGSanRuntimeFunction(rewriter, kGSanInitRuntimeFn);
+    auto loc = op.getLoc();
+    gsanGlobalStatePtr =
+        castGSanGlobalStateArgToGenericPtr(rewriter, loc, gsanGlobalStatePtr);
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    b.call(runtimeFunc, ValueRange{gsanGlobalStatePtr});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateInstrumentationToLLVMPatterns(
@@ -270,4 +492,6 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<LockAcquireOpConversion>(typeConverter);
   patterns.add<LockReleaseOpConversion>(typeConverter);
   patterns.add<MemDescToI32OpConversion>(typeConverter);
+  patterns.add<GSanInitOpConversion>(typeConverter);
+  patterns.add<GSanTensorAccessOpConversion>(typeConverter);
 }
