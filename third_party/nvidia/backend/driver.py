@@ -3,9 +3,8 @@ import os
 import subprocess
 import triton
 import re
-from pathlib import Path
 from triton import knobs
-from triton.runtime.build import compile_module_from_src
+from triton.runtime.build import compile_module_from_file
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
@@ -19,6 +18,7 @@ PyKernelArg = None
 ARG_CONSTEXPR = None
 ARG_KERNEL = None
 ARG_TUPLE = None
+GSAN_PER_DEVICE_STATE_STRIDE = 1 << 30
 
 
 @functools.lru_cache()
@@ -63,8 +63,8 @@ class CudaUtils(object):
         return cls.instance
 
     def __init__(self):
-        mod = compile_module_from_src(
-            src=Path(os.path.join(dirname, "driver.c")).read_text(),
+        mod = compile_module_from_file(
+            src_path=os.path.join(dirname, "driver.c"),
             name="cuda_utils",
             library_dirs=library_dirs(),
             include_dirs=include_dirs,
@@ -333,6 +333,9 @@ class CudaLauncher(object):
 
         launcher = triton.runtime.driver.active.utils.launch
         expanded_signature = expand_signature(signature.values(), tensordesc_meta)
+        self.gsan_enabled = "gsan" in getattr(metadata, "instrumentation_mode", "")
+        if self.gsan_enabled:
+            expanded_signature.append("*i8")
         self.arg_annotations = annotate_arguments(expanded_signature)
         self.kernel_signature = make_kernel_signature(expanded_signature)
         self.num_ctas = getattr(metadata, "num_ctas", 1)
@@ -358,10 +361,17 @@ class CudaLauncher(object):
         global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
         profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
                                            _allocation._profile_allocator)
+        kernel_args = args
+        if self.gsan_enabled:
+            from triton.experimental.gsan import _allocator as gsan_allocator
+
+            device = triton.runtime.driver.active.get_current_device()
+            gsan_state_ptr = gsan_allocator.get_global_state_pointer() + device * GSAN_PER_DEVICE_STATE_STRIDE
+            kernel_args = (*args, gsan_state_ptr)
 
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
                     kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
-                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+                    profile_scratch, self.arg_annotations, self.kernel_signature, kernel_args)
 
 
 class CudaDriver(GPUDriver):

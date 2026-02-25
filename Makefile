@@ -55,6 +55,11 @@ test-gluon: all
 	$(PYTEST) --tb=short -vs python/examples/gluon/01-attention-forward.py
 	$(PYTEST) --tb=short -n $(NUM_PROCS) -vs python/tutorials/gluon
 
+.PHONY: test-gsan
+test-gsan: all
+	$(PYTEST) --tb=short python/test/gsan --ignore python/test/gsan/test_gsan_failures.py
+	$(PYTEST) --tb=short python/test/gsan/test_gsan_failures.py
+
 .PHONY: test-regression
 test-regression: all
 	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/regression
