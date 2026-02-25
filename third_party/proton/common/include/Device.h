@@ -43,6 +43,8 @@ Device getDevice(DeviceType type, uint64_t index);
 
 const std::string getDeviceTypeString(DeviceType type);
 
+unsigned int getWarpSize(DeviceType type);
+
 }; // namespace proton
 
 #endif // PROTON_COMMON_DEVICE_H_

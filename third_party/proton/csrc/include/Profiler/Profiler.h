@@ -108,11 +108,10 @@ public:
   /// when modules and contexts are switched.
   /// So we just set them as thread local storage before the application kernel
   /// starts or after the application kernel ends.
-  void setMetricKernels(void *tensorMetricKernel, void *scalarMetricKernel,
-                        void *stream) override {
-    this->tensorMetricKernel = tensorMetricKernel;
-    this->scalarMetricKernel = scalarMetricKernel;
-    this->metricKernelStream = stream;
+  void
+  setMetricKernels(const MetricKernelLaunchState &metricKernelLaunchState)
+      override {
+    this->metricKernelLaunchState = metricKernelLaunchState;
   }
 
 protected:
@@ -127,9 +126,7 @@ protected:
 
   mutable std::shared_mutex mutex;
   std::set<Data *> dataSet;
-  static thread_local void *tensorMetricKernel;
-  static thread_local void *scalarMetricKernel;
-  static thread_local void *metricKernelStream;
+  static thread_local MetricKernelLaunchState metricKernelLaunchState;
 
 private:
   bool started{};

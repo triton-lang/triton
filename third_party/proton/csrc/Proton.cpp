@@ -174,12 +174,29 @@ static void initProton(pybind11::module &&m) {
 
   m.def("set_metric_kernels",
         [](uintptr_t tensorMetricKernel, uintptr_t scalarMetricKernel,
-           uintptr_t stream) {
+           uintptr_t stream, unsigned int tensorMetricKernelNumWarps,
+           unsigned int tensorMetricKernelSharedMemBytes,
+           unsigned int scalarMetricKernelNumWarps,
+           unsigned int scalarMetricKernelSharedMemBytes) {
+          MetricKernelLaunchState metricKernelLaunchState{
+              MetricKernelLaunchConfig{
+                  reinterpret_cast<void *>(tensorMetricKernel),
+                  tensorMetricKernelNumWarps,
+                  tensorMetricKernelSharedMemBytes},
+              MetricKernelLaunchConfig{
+                  reinterpret_cast<void *>(scalarMetricKernel),
+                  scalarMetricKernelNumWarps,
+                  scalarMetricKernelSharedMemBytes},
+              reinterpret_cast<void *>(stream)};
           SessionManager::instance().setMetricKernels(
-              reinterpret_cast<void *>(tensorMetricKernel),
-              reinterpret_cast<void *>(scalarMetricKernel),
-              reinterpret_cast<void *>(stream));
-        });
+              metricKernelLaunchState);
+        },
+        pybind11::arg("tensorMetricKernel"),
+        pybind11::arg("scalarMetricKernel"), pybind11::arg("stream"),
+        pybind11::arg("tensorMetricKernelNumWarps") = 1,
+        pybind11::arg("tensorMetricKernelSharedMemBytes") = 0,
+        pybind11::arg("scalarMetricKernelNumWarps") = 1,
+        pybind11::arg("scalarMetricKernelSharedMemBytes") = 0);
 
   m.def("get_context_depth", [](size_t sessionId) {
     return SessionManager::instance().getContextDepth(sessionId);
