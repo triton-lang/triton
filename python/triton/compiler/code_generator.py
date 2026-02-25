@@ -702,10 +702,22 @@ class CodeGenerator(ast.NodeVisitor):
         self.set_value(self.visit(target), value)
 
     def visit_Assign(self, node):
+        targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
+        assert len(targets) == 1
+        target = targets[0]
+
         # construct values to assign
         def _sanitize_value(value):
             if isinstance(value, language.tuple):
                 return _apply_to_tuple_values(value, _sanitize_value)
+
+            # Keep loop-carried constexpr variables as constexpr to avoid
+            # introducing tensor/constexpr type flips across loop iterations.
+            if isinstance(value, constexpr) and isinstance(target, ast.Name):
+                existing_value = self.lscope.get(target.id)
+                if isinstance(existing_value, constexpr):
+                    return value
+
             native_nontensor_types = (language.dtype, language.tuple)
             value = _unwrap_if_constexpr(value)
             if value is not None and \
@@ -714,9 +726,6 @@ class CodeGenerator(ast.NodeVisitor):
                 value = self.semantic.to_tensor(value)
             return value
 
-        targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
-        assert len(targets) == 1
-        target = targets[0]
         if isinstance(target, ast.Name):
             with self._name_loc_prefix(target.id):
                 values = _sanitize_value(self.visit(node.value))
