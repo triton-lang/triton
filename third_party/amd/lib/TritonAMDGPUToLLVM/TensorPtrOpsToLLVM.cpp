@@ -28,22 +28,13 @@ void collectUsers(Value value, llvm::SetVector<Operation *> &users) {
       collectUsers(unrealCast->getResult(argIdx), users);
     }
 
-    if (auto branch = dyn_cast<LLVM::BrOp>(userOp)) {
-      Block *dest = branch.getDest();
-      collectUsers(dest->getArgument(argIdx), users);
-    }
-
-    if (auto condBranch = dyn_cast<LLVM::CondBrOp>(userOp)) {
-      auto trueOperands = condBranch.getTrueDestOperands();
-      if ((argIdx < trueOperands.size()) &&
-          (use.get() == trueOperands[argIdx])) {
-        collectUsers(condBranch.getTrueDest()->getArgument(argIdx), users);
-      }
-
-      auto falseOperands = condBranch.getFalseDestOperands();
-      if ((argIdx < falseOperands.size()) &&
-          (use.get() == falseOperands[argIdx])) {
-        collectUsers(condBranch.getFalseDest()->getArgument(argIdx), users);
+    if (auto branch = dyn_cast<mlir::BranchOpInterface>(userOp)) {
+      auto successors = branch->getSuccessors();
+      for (auto [idx, successor] : llvm::enumerate(successors)) {
+        auto operands = branch.getSuccessorOperands(idx);
+        if (argIdx < operands.size()) {
+          collectUsers(successor->getArgument(argIdx), users);
+        }
       }
     }
   }
