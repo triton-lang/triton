@@ -487,8 +487,9 @@ def _matmul_kernel(
         mbarrier.init(clc_barriers.index(i), count=1)
         mbarrier.init(clc_consumed_bars.index(i), count=3)
 
-    clc_result_shape: gl.constexpr = [clc_barriers.shape[0], 2 * clc_barriers.shape[1]]
-    clc_result_buffers = gl.allocate_shared_memory(gl.int64, clc_result_shape, clc_barriers.layout)
+    cga_layout: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
+    clc_result_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 2],
+                                                   gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout))
 
     if TWO_CTAS:
         mbarrier.sync_cluster_init()
