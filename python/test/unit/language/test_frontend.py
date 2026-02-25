@@ -650,3 +650,156 @@ def test_return_promotion():
         tl.static_assert(c.type == tl.tuple_type([tl.int32, tl.int32]))
 
     run_parser(kernel)
+
+
+# ===-----------------------------------------------------------------------===#
+# Aggregate inheritance, __post_init__, and aggregate_replace tests
+# ===-----------------------------------------------------------------------===#
+
+
+def test_aggregate_field_inheritance():
+    """Child aggregate inherits parent fields."""
+
+    @tl.core._aggregate
+    class Base:
+        x: tl.constexpr
+
+    @tl.core._aggregate
+    class Child(Base):
+        y: tl.constexpr
+
+    child = Child(10, 20)
+    assert isinstance(child.x, tl.constexpr)
+    assert isinstance(child.y, tl.constexpr)
+    assert child.x.value == 10
+    assert child.y.value == 20
+
+
+def test_aggregate_multilevel_inheritance():
+    """Multi-level inheritance: grandparent -> parent -> child."""
+
+    @tl.core._aggregate
+    class GrandParent:
+        a: tl.constexpr
+
+    @tl.core._aggregate
+    class Parent(GrandParent):
+        b: tl.constexpr
+
+    @tl.core._aggregate
+    class Child(Parent):
+        c: tl.constexpr
+
+    child = Child(1, 2, 3)
+    assert child.a.value == 1
+    assert child.b.value == 2
+    assert child.c.value == 3
+
+
+def test_aggregate_field_inheritance_with_methods():
+    """Inherited methods work with inherited fields."""
+
+    @tl.core._aggregate
+    class Base:
+        x: tl.constexpr
+
+        @triton.constexpr_function
+        def get_x(self):
+            return self.x
+
+    @tl.core._aggregate
+    class Child(Base):
+        y: tl.constexpr
+
+    child = Child(10, 20)
+    assert child.get_x().value == 10
+
+
+def test_aggregate_post_init():
+    """__post_init__ is called after auto-generated init."""
+
+    @tl.core._aggregate
+    class WithPostInit:
+        x: tl.constexpr
+        y: tl.constexpr
+
+        def __post_init__(self):
+            # Compute a derived constexpr field after init
+            self.y = tl.constexpr(self.x.value * 2)
+
+    obj = WithPostInit(5, 0)
+    assert obj.x.value == 5
+    assert obj.y.value == 10  # __post_init__ overwrote y
+
+
+def test_aggregate_default_values():
+    """Fields with default values can be omitted from constructor."""
+
+    @tl.core._aggregate
+    class WithDefaults:
+        x: tl.constexpr
+        y: tl.constexpr = tl.constexpr(42)
+
+    # Provide both
+    obj1 = WithDefaults(10, 20)
+    assert obj1.x.value == 10
+    assert obj1.y.value == 20
+
+    # Use default for y
+    obj2 = WithDefaults(10)
+    assert obj2.x.value == 10
+    assert obj2.y.value == 42
+
+
+def test_aggregate_replace():
+    """aggregate_replace creates a copy with modified fields."""
+
+    @tl.core._aggregate
+    class State:
+        x: tl.constexpr
+        y: tl.constexpr
+
+    original = State(10, 20)
+    modified = tl.aggregate_replace(original, x=30)
+
+    # Modified has the new value
+    assert modified.x.value == 30
+    assert modified.y.value == 20
+
+    # Original is unchanged
+    assert original.x.value == 10
+    assert original.y.value == 20
+
+
+def test_aggregate_replace_invalid_field():
+    """aggregate_replace raises on unknown field names."""
+
+    @tl.core._aggregate
+    class State:
+        x: tl.constexpr
+
+    obj = State(10)
+    with pytest.raises(TypeError, match="has no field 'z'"):
+        tl.aggregate_replace(obj, z=99)
+
+
+def test_aggregate_replace_non_aggregate():
+    """aggregate_replace raises on non-aggregate instances."""
+    with pytest.raises(TypeError, match="expects an aggregate instance"):
+        tl.aggregate_replace(42, x=1)
+
+
+def test_aggregate_inherited_defaults():
+    """Child inherits default values from parent fields."""
+
+    @tl.core._aggregate
+    class Base:
+        x: tl.constexpr = tl.constexpr(100)
+
+    @tl.core._aggregate
+    class Child(Base):
+        y: tl.constexpr
+
+    child = Child(y=7)
+    assert child.x.value == 100
+    assert child.y.value == 7

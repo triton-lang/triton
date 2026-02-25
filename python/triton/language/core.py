@@ -1583,11 +1583,63 @@ def _wrap_init_args(x):
     return constexpr(x)
 
 
+_AGGREGATE_MISSING = object()
+
+
+def _resolve_aggregate_fields(cls):
+    """Resolve annotations across the MRO for field inheritance.
+
+    Walks the class hierarchy (excluding object) in reverse MRO order so that
+    child annotations override parent annotations while preserving field order:
+    parent fields come first, then child fields.
+
+    Only considers the class itself and parent classes marked as aggregates
+    (__triton_aggregate__ = True), skipping infrastructure bases like base_value.
+
+    Returns:
+        all_annotations: dict mapping field name -> type annotation
+        all_defaults: dict mapping field name -> default value (only for fields with defaults)
+    """
+    all_annotations = {}
+    all_defaults = {}
+    # Walk MRO in reverse (most base first, excluding object) so child overrides parent
+    for base in reversed(cls.__mro__):
+        if base is object:
+            continue
+        # Only include the class itself and processed aggregate parents
+        if base is not cls and not getattr(base, "__triton_aggregate__", False):
+            continue
+        for name, ann in getattr(base, "__annotations__", {}).items():
+            all_annotations[name] = ann
+        # Collect default values: from __aggregate_defaults__ (processed parents)
+        # or from the class dict (the class being processed)
+        parent_defaults = getattr(base, "__aggregate_defaults__", None)
+        if parent_defaults is not None:
+            all_defaults.update(parent_defaults)
+        for name in getattr(base, "__annotations__", {}):
+            if name in base.__dict__:
+                val = base.__dict__[name]
+                # Skip descriptors and methods — only plain values are defaults
+                if not callable(val) or isinstance(val, (constexpr, base_value)):
+                    all_defaults[name] = val
+    return all_annotations, all_defaults
+
+
 def _aggregate(cls):
-    field_annotations = typing.get_type_hints(cls)
-    field_names = builtins.tuple(field_annotations.keys())
+    all_annotations, all_defaults = _resolve_aggregate_fields(cls)
+
     init = cls.__dict__.get("__init__", None)
+    post_init = None
+    # Look for __post_init__ in the class or its bases
+    for base in cls.__mro__:
+        if base is object:
+            continue
+        if "__post_init__" in base.__dict__:
+            post_init = base.__dict__["__post_init__"]
+            break
+
     if init is None:
+        field_names = builtins.tuple(all_annotations.keys())
 
         def init(self, *args, **kwargs):
             if len(args) > len(field_names):
@@ -1601,6 +1653,8 @@ def _aggregate(cls):
                     value = args[index]
                 elif name in kwargs:
                     value = kwargs.pop(name)
+                elif name in all_defaults:
+                    value = all_defaults[name]
                 else:
                     raise TypeError(f"{cls.__name__}.__init__() missing required argument: '{name}'")
 
@@ -1611,13 +1665,17 @@ def _aggregate(cls):
                 unexpected = next(iter(kwargs))
                 raise TypeError(f"{cls.__name__}.__init__() got an unexpected keyword argument '{unexpected}'")
 
+            # Call __post_init__ if defined
+            if post_init is not None:
+                post_init(self)
+
         init.__triton_builtin__ = True
 
     # Define the wrapped Triton value type.
     class aggregate_value(base_value):
         __triton_builtin__ = True
         __triton_aggregate__ = True
-        __annotations__ = field_annotations
+        __annotations__ = all_annotations
 
         @classmethod
         def _get_instance(this_cls):
@@ -1638,7 +1696,7 @@ def _aggregate(cls):
             init(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
-            for name in field_names:
+            for name in all_annotations.keys():
                 if not hasattr(instance, name):
                     raise AttributeError(f"constructor for {cls.__name__} did not initialize attribute '{name}'")
 
@@ -1646,35 +1704,41 @@ def _aggregate(cls):
 
         # Only allow setting attributes defined in the class annotations.
         def __setattr__(self, name, value):
-            if name not in field_annotations:
+            if name not in all_annotations:
                 raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
-            if not isinstance(value, field_annotations[name]):
-                raise TypeError(f"Expected {field_annotations[name]} for attribute '{name}', got {type(value)}")
+            if not isinstance(value, all_annotations[name]):
+                raise TypeError(f"Expected {all_annotations[name]} for attribute '{name}', got {type(value)}")
             super().__setattr__(name, value)
 
         def _set_name(self, builder: ir.builder, name: str) -> None:
-            for key_name in field_names:
+            for key_name in all_annotations.keys():
                 getattr(self, key_name)._set_name(builder, f"{name}.{key_name}")
 
         def _flatten_ir(self, handles: List[ir.value]) -> None:
-            for name in field_names:
+            for name in all_annotations.keys():
                 getattr(self, name)._flatten_ir(handles)
 
         @property
         def type(self):
-            return _aggregate_type(aggregate_value, [(name, getattr(self, name).type) for name in field_names])
+            return _aggregate_type(aggregate_value,
+                                   [(name, getattr(self, name).type) for name in all_annotations.keys()])
 
     hash_attrs = [init]
+    if post_init is not None:
+        hash_attrs.append(post_init)
 
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
-            if name != "__init__":
-                setattr(aggregate_value, name, member)
+            if name == "__init__" or name == "__post_init__":
+                continue
+            # Don't override aggregate infrastructure methods inherited from
+            # processed parent aggregates (e.g. __new__, __setattr__, _flatten_ir)
+            if name in aggregate_value.__dict__:
+                continue
+            setattr(aggregate_value, name, member)
 
-            # Exclude the members with names from hash:
-            #  * __init__ - added above.
-            #  * __annotate_func__ - isn't user facing.
-            if name not in {"__init__", "__annotate_func__"}:
+            # Exclude __annotate_func__ from hash — isn't user facing (Python 3.14+).
+            if name != "__annotate_func__":
                 hash_attrs.append(member)
 
     aggregate_value.hash_attrs = hash_attrs
@@ -1682,8 +1746,39 @@ def _aggregate(cls):
     aggregate_value.__module__ = cls.__module__
     aggregate_value.__qualname__ = cls.__qualname__
     aggregate_value.__doc__ = cls.__doc__
+    aggregate_value.__aggregate_fields__ = builtins.tuple(all_annotations.keys())
+    aggregate_value.__aggregate_defaults__ = dict(all_defaults)
 
     return aggregate_value
+
+
+def aggregate_replace(instance, **changes):
+    """Create a copy of an aggregate instance with specified fields replaced.
+
+    Similar to dataclasses.replace() — returns a new instance of the same
+    aggregate type with the given fields updated and all other fields copied
+    from the original instance.
+
+    :param instance: The aggregate instance to copy
+    :param changes: Keyword arguments for fields to replace
+    :return: A new aggregate instance with the specified changes
+    """
+    if not getattr(type(instance), "__triton_aggregate__", False):
+        raise TypeError(f"aggregate_replace() expects an aggregate instance, got {type(instance)}")
+
+    field_names = type(instance).__aggregate_fields__
+    for name in changes:
+        if name not in field_names:
+            raise TypeError(f"{type(instance).__name__} has no field '{name}'")
+
+    kwargs = {}
+    for name in field_names:
+        if name in changes:
+            kwargs[name] = changes[name]
+        else:
+            kwargs[name] = getattr(instance, name)
+
+    return type(instance)(**kwargs)
 
 
 def _is_block_ptr(value) -> bool:
