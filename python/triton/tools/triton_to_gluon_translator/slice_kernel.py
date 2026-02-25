@@ -737,10 +737,14 @@ def slice_kernel_from_trace(
     fn_name = lambda path: path.split(":")[1]
     if len(root_paths) > 1:
         jit_fns = list(root_paths - {kernel_path})
-        sliced += ("\n" + f"""
+        remap_lines = "\n".join(f"    '{fn_name(fn)}': {fn_name(fn)}," for fn in jit_fns)
+        sliced += (
+            "\n"
+            + f"""
 {fn_name(kernel_path)}.__jit_fn_remap__ = {{
-{"\n".join([f"    '{fn_name(fn)}': {fn_name(fn)}," for fn in jit_fns])}
-}}""")
+{remap_lines}
+}}"""
+        )
 
     return sliced
 
