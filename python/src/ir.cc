@@ -1890,8 +1890,7 @@ void init_triton_ir(py::module &&m) {
                    /*printModuleScope=*/true,
                    /*printAfterOnlyOnChange=*/false,
                    /*printAfterOnlyOnFailure*/ true,
-                   ::mlir::triton::tools::mlirDumpsOrDbgs(),
-                   printingFlags);
+                   ::mlir::triton::tools::mlirDumpsOrDbgs(), printingFlags);
              }
              return haveDump;
            })
