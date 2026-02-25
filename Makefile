@@ -2,7 +2,7 @@
 # Make sure to first initialize the build system with:
 #     make dev-install
 
-PYTHON ?= python
+PYTHON ?= python3
 BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
@@ -50,7 +50,7 @@ test-gluon: all
 
 .PHONY: test-gsan
 test-gsan: all
-	$(PYTEST) --tb=short python/test/gsan
+	$(PYTEST) python/test/gsan -n $(NUM_PROCS)
 
 .PHONY: test-regression
 test-regression: all
