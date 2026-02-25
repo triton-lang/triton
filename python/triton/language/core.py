@@ -1729,7 +1729,11 @@ def _aggregate(cls):
 
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
-            if name == "__init__" or name == "__post_init__":
+            if name in ("__init__", "__post_init__"):
+                continue
+            # __annotate__ is a Python 3.14+ internal; exclude from hash and
+            # don't copy it onto the aggregate value type.
+            if name == "__annotate__":
                 continue
             # Don't override aggregate infrastructure methods inherited from
             # processed parent aggregates (e.g. __new__, __setattr__, _flatten_ir)

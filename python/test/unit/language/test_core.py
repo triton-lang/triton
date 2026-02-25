@@ -6781,3 +6781,93 @@ def test_libdevice_rint(dtype_str, device):
     rint_kernel[(triton.cdiv(numel, BLOCK_SIZE), )](res_out, x_tri, numel, BLOCK_SIZE)
     ref_out = np.rint(x_np)
     np.testing.assert_allclose(to_numpy(res_out), ref_out, rtol=0, atol=0, equal_nan=True)
+
+
+# ===-----------------------------------------------------------------------===#
+# Aggregate inheritance GPU tests
+# ===-----------------------------------------------------------------------===#
+
+
+def test_aggregate_inheritance_kernel(device):
+    """Child aggregate with inherited tensor fields works in a real kernel."""
+
+    @tl.core._aggregate
+    class Base:
+        data: tl.tensor
+        BLOCK: tl.constexpr
+
+    @tl.core._aggregate
+    class Child(Base):
+        bias: tl.tensor
+
+    @triton.jit
+    def kernel(X, B, Out, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        child = Child(tl.load(X + offs), BLOCK, tl.load(B + offs))
+        result = child.data + child.bias
+        tl.store(Out + offs, result)
+
+    SIZE = 128
+    x = torch.randn(SIZE, device=device, dtype=torch.float32)
+    b = torch.randn(SIZE, device=device, dtype=torch.float32)
+    out = torch.empty(SIZE, device=device, dtype=torch.float32)
+
+    kernel[(1, )](x, b, out, SIZE)
+    torch.testing.assert_close(out, x + b)
+
+
+def test_aggregate_inherited_method_kernel(device):
+    """Inherited JIT method works on inherited fields in a real kernel."""
+
+    @tl.core._aggregate
+    class Base:
+        val: tl.tensor
+        BLOCK: tl.constexpr
+
+        @triton.jit
+        def doubled(self):
+            return self.val + self.val
+
+    @tl.core._aggregate
+    class Child(Base):
+        offset: tl.tensor
+
+    @triton.jit
+    def kernel(X, Off, Out, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        child = Child(tl.load(X + offs), BLOCK, tl.load(Off + offs))
+        result = child.doubled() + child.offset
+        tl.store(Out + offs, result)
+
+    SIZE = 128
+    x = torch.randn(SIZE, device=device, dtype=torch.float32)
+    off = torch.randn(SIZE, device=device, dtype=torch.float32)
+    out = torch.empty(SIZE, device=device, dtype=torch.float32)
+
+    kernel[(1, )](x, off, out, SIZE)
+    torch.testing.assert_close(out, x * 2 + off)
+
+
+def test_aggregate_replace_kernel(device):
+    """aggregate_replace produces a functional copy usable in a real kernel."""
+
+    @tl.core._aggregate
+    class State:
+        vals: tl.tensor
+        BLOCK: tl.constexpr
+
+    @triton.jit
+    def kernel(X, Y, Out, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        state = State(tl.load(X + offs), BLOCK)
+        # Replace vals with data from Y
+        state2 = tl.aggregate_replace(state, vals=tl.load(Y + offs))
+        tl.store(Out + offs, state2.vals)
+
+    SIZE = 128
+    x = torch.randn(SIZE, device=device, dtype=torch.float32)
+    y = torch.randn(SIZE, device=device, dtype=torch.float32)
+    out = torch.empty(SIZE, device=device, dtype=torch.float32)
+
+    kernel[(1, )](x, y, out, SIZE)
+    torch.testing.assert_close(out, y)
