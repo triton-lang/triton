@@ -1200,6 +1200,9 @@ def _patch_lang(fn):
 
 # TODO: wrap everything in triton tensors
 def _implicit_cvt(arg):
+    if isinstance(arg, bool):
+        handle = TensorHandle(np.array([arg], dtype=np.bool_), tl.int1)
+        return tl.tensor(handle, tl.int1)
     if isinstance(arg, int):
         ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg), None)
         dtype = np.int32
