@@ -136,7 +136,7 @@ def resolve_module_alias(stmt: ast.ImportFrom, cur_module: ModuleType) -> Module
     assert cur_module.__file__ is not None
     if stmt.level > 0:
         parts = cur_module.__name__.split(".")
-        parent_name = parts[: len(parts) - stmt.level + cur_module.__file__.endswith("__init__.py")]
+        parent_name = parts[:len(parts) - stmt.level + cur_module.__file__.endswith("__init__.py")]
         module_name = ".".join(parent_name) + "." + stmt.module
     else:
         module_name = stmt.module
@@ -177,9 +177,8 @@ def find_module(context: scoped_dict[str, Any], node: ast.AST) -> ModuleType | N
     return None
 
 
-def get_reference(
-    context: scoped_dict[str, Any], cur_module: ModuleType, node: ast.AST
-) -> tuple[Any, ModuleType, str] | None:
+def get_reference(context: scoped_dict[str, Any], cur_module: ModuleType,
+                  node: ast.AST) -> tuple[Any, ModuleType, str] | None:
     if isinstance(node, ast.Name):
         if not isinstance(node.ctx, ast.Load) or node.id not in context:
             return None
@@ -201,10 +200,7 @@ def is_ignored_decorator(
     decorator: ast.expr,
     ignored_decorator_matchers: Sequence[DecoratorMatcher],
 ) -> bool:
-    return any(
-        matcher(context, cur_module, decorator)
-        for matcher in ignored_decorator_matchers
-    )
+    return any(matcher(context, cur_module, decorator) for matcher in ignored_decorator_matchers)
 
 
 @dataclass
@@ -232,14 +228,11 @@ class ReferenceScanner(ast.NodeVisitor):
 
     edges: ordered_set[int] = field(default_factory=ordered_set[int])
 
-    def process_reference(
-        self, node: ast.Name | ast.Attribute, name: str, value: Any, rel_module: ModuleType
-    ) -> None:
+    def process_reference(self, node: ast.Name | ast.Attribute, name: str, value: Any, rel_module: ModuleType) -> None:
         if isinstance(value, ModuleType | LocalMarker):
             return self.generic_visit(node)
         global_value = self.value_remap.get(id(value), None) or GlobalValue.wrap(
-            value, name, lambda: get_name_ref_module(name, rel_module, self.filter)
-        )
+            value, name, lambda: get_name_ref_module(name, rel_module, self.filter))
 
         ref_id = global_value.id
         module = global_value.module
@@ -272,9 +265,7 @@ class ReferenceScanner(ast.NodeVisitor):
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         original_decorators = node.decorator_list
         node.decorator_list = [
-            decorator
-            for decorator in original_decorators
-            if not is_ignored_decorator(
+            decorator for decorator in original_decorators if not is_ignored_decorator(
                 self.context,
                 self.cur_module,
                 decorator,
@@ -304,10 +295,8 @@ def get_base_value(path: str) -> GlobalValue:
 
 
 def is_submodule(module: ModuleType, leaf_modules: list[str]) -> bool:
-    return any(
-        module.__name__ == leaf_module or module.__name__.startswith(f"{leaf_module}.")
-        for leaf_module in leaf_modules
-    )
+    return any(module.__name__ == leaf_module or module.__name__.startswith(f"{leaf_module}.")
+               for leaf_module in leaf_modules)
 
 
 def mangle_name(name: str, module: ModuleType, reference_names: set[str]) -> str:
@@ -330,6 +319,7 @@ RewriteFn = Callable[[GlobalValue, ordered_set[str]], ast.AST | None]
 
 
 def sugar_rewrite(module: str, alias: str) -> RewriteFn:
+
     def rewrite(global_value: GlobalValue, imports: ordered_set[str]) -> ast.AST | None:
         if module not in sys.modules:
             return None
@@ -337,9 +327,7 @@ def sugar_rewrite(module: str, alias: str) -> RewriteFn:
             return None
         if id(getattr(sys.modules[module], global_value.name)) == global_value.id:
             imports.add(f"import {module} as {alias}" if alias != module else f"import {module}")
-            return ast.Attribute(
-                value=ast.Name(id=alias, ctx=ast.Load()), attr=global_value.name, ctx=ast.Load()
-            )
+            return ast.Attribute(value=ast.Name(id=alias, ctx=ast.Load()), attr=global_value.name, ctx=ast.Load())
         return None
 
     return rewrite
@@ -353,9 +341,7 @@ def add_sugar_rewrites(rewrites: list[RewriteFn], translate_to_gluon: bool) -> N
         rewrites.append(sugar_rewrite("triton.language", "tl"))
         rewrites.append(sugar_rewrite("triton", "triton"))
 
-    def sugar_tensor_descriptor(
-        global_value: GlobalValue, imports: ordered_set[str]
-    ) -> ast.AST | None:
+    def sugar_tensor_descriptor(global_value: GlobalValue, imports: ordered_set[str]) -> ast.AST | None:
         if global_value.original_value is TensorDescriptor:
             imports.add("from triton.tools.tensor_descriptor import TensorDescriptor")
             return ast.Name(id="TensorDescriptor", ctx=ast.Load())
@@ -376,14 +362,12 @@ class ReferenceRewriter(ast.NodeTransformer):
 
     rewrites: list[RewriteFn] = field(default_factory=list)
 
-    def process_reference(
-        self, node: ast.Name | ast.Attribute, name: str, value: Any, rel_module: ModuleType
-    ) -> ast.AST:
+    def process_reference(self, node: ast.Name | ast.Attribute, name: str, value: Any,
+                          rel_module: ModuleType) -> ast.AST:
         if isinstance(value, ModuleType | LocalMarker):
             return self.generic_visit(node)
         global_value = self.value_remap.get(id(value), None) or GlobalValue.wrap(
-            value, name, lambda: get_name_ref_module(name, rel_module, self.filter)
-        )
+            value, name, lambda: get_name_ref_module(name, rel_module, self.filter))
 
         ref_id = global_value.id
         if ref_id not in self.references:
@@ -484,9 +468,7 @@ class SliceRewriter(ReferenceRewriter):
             self.imports.add("import triton.experimental.gluon._runtime as gluon_runtime")
             new_node = parse_expr("gluon_runtime.GluonJITFunction")
         elif value is tl.tensor_descriptor:
-            self.imports.add(
-                "from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor"
-            )
+            self.imports.add("from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor")
             new_node = ast.Name(id="tensor_descriptor", ctx=ast.Load())
         return new_node
 
@@ -508,10 +490,10 @@ class SliceRewriter(ReferenceRewriter):
             # Decorators are applied bottom to top, so decorators above the
             # matched downstream kernel decorator will be applied after.
             if is_ignored_decorator(
-                self.context,
-                self.cur_module,
-                decorator,
-                self.ignored_decorator_matchers,
+                    self.context,
+                    self.cur_module,
+                    decorator,
+                    self.ignored_decorator_matchers,
             ):
                 new_decorators = []
                 continue
@@ -595,6 +577,7 @@ def find_jit_functions(
     filter: FilterFn,
     ignored_decorator_matchers: Sequence[DecoratorMatcher] | None = None,
 ) -> list[GlobalValue]:
+
     def new_filter(value: ModuleType | GlobalValue) -> bool:
         if isinstance(value, GlobalValue) and isinstance(value.original_value, JITFunction):
             return True
@@ -607,9 +590,7 @@ def find_jit_functions(
         ignored_decorator_matchers=ignored_decorator_matchers,
     )
     return [
-        reference.value
-        for reference in references.values()
-        if isinstance(reference.value.original_value, JITFunction)
+        reference.value for reference in references.values() if isinstance(reference.value.original_value, JITFunction)
     ]
 
 
@@ -742,9 +723,7 @@ def slice_kernel_from_trace(
     # Remove obvious leaf paths.
     for leaf_path in list(leaf_paths):
         base_module = leaf_path.split(":")[0].split(".")[0]
-        if base_module in ["triton", "torch"] or is_stdlib_module(
-            importlib.import_module(base_module)
-        ):
+        if base_module in ["triton", "torch"] or is_stdlib_module(importlib.import_module(base_module)):
             leaf_paths.remove(leaf_path)
 
     sliced = slice_kernel(
@@ -758,13 +737,10 @@ def slice_kernel_from_trace(
     fn_name = lambda path: path.split(":")[1]
     if len(root_paths) > 1:
         jit_fns = list(root_paths - {kernel_path})
-        sliced += (
-            "\n"
-            + f"""
+        sliced += ("\n" + f"""
 {fn_name(kernel_path)}.__jit_fn_remap__ = {{
 {"\n".join([f"    '{fn_name(fn)}': {fn_name(fn)}," for fn in jit_fns])}
-}}"""
-        )
+}}""")
 
     return sliced
 

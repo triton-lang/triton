@@ -25,11 +25,10 @@ from triton.tools.triton_to_gluon_translator.stable_toposort import stable_topos
 
 
 def one_to_one_rewrite(obj: Any) -> RewriteFn:
+
     def rewrite(global_value: GlobalValue, imports: ordered_set[str]) -> ast.AST | None:
         if global_value.original_value is obj:
-            return ast.Attribute(
-                value=ast.Name(id="gl", ctx=ast.Load()), attr=obj.__name__, ctx=ast.Load()
-            )
+            return ast.Attribute(value=ast.Name(id="gl", ctx=ast.Load()), attr=obj.__name__, ctx=ast.Load())
         return None
 
     return rewrite
@@ -42,9 +41,7 @@ def add_one_to_one_rewrites(rewrites: list[RewriteFn]) -> None:
         module = inspect.getmodule(value)
         if module is None:
             continue
-        if getattr(value, "__triton_builtin__", False) and is_submodule(
-            module, ["triton.language"]
-        ):
+        if getattr(value, "__triton_builtin__", False) and is_submodule(module, ["triton.language"]):
             tl_value = getattr(tl, value.__name__, None)
             if tl_value is None:
                 tl_value = getattr(tl.core, value.__name__, None)
@@ -63,11 +60,10 @@ def add_one_to_one_rewrites(rewrites: list[RewriteFn]) -> None:
 
 
 def translator_helper_rewrite(obj: Any, helper_name: str) -> RewriteFn:
+
     def rewrite(global_value: GlobalValue, imports: ordered_set[str]) -> ast.AST | None:
         if global_value.original_value is obj:
-            return ast.Attribute(
-                value=ast.Name(id="helpers", ctx=ast.Load()), attr=helper_name, ctx=ast.Load()
-            )
+            return ast.Attribute(value=ast.Name(id="helpers", ctx=ast.Load()), attr=helper_name, ctx=ast.Load())
         return None
 
     return rewrite
@@ -93,6 +89,7 @@ def add_translator_helper_rewrites(rewrites: list[RewriteFn]) -> None:
 
 
 def expr_rewrite(obj: Any, expr: str) -> RewriteFn:
+
     def rewrite(value: GlobalValue, imports: ordered_set[str]) -> ast.AST | None:
         if value.original_value is obj:
             return parse_expr(expr)
@@ -140,15 +137,10 @@ class Translator(ReferenceRewriter):
     def canonicalize_call(self, node: ast.Call) -> tuple[ast.Call, str | None]:
         if self.get_reference(node.func) is not None:
             return node, None
-        if (
-            not isinstance(node.func, ast.Attribute)
-            or node.func.attr not in self.tensor_member_match_fns
-        ):
+        if (not isinstance(node.func, ast.Attribute) or node.func.attr not in self.tensor_member_match_fns):
             return node, None
         new_callable = parse_expr(f"tl.{node.func.attr}")
-        new_call = ast.Call(
-            func=new_callable, args=[node.func.value] + node.args, keywords=node.keywords
-        )
+        new_call = ast.Call(func=new_callable, args=[node.func.value] + node.args, keywords=node.keywords)
         return new_call, node.func.attr
 
     def uncanonicalize_call(self, node: ast.Call, fn_name: str | None) -> ast.Call:
@@ -164,15 +156,13 @@ class Translator(ReferenceRewriter):
         if ref is None:
             assert canonicalized is None
             if isinstance(node.func, ast.Attribute) and node.func.attr in [
-                "store",
-                "load",
-                "gather",
-                "scatter",
+                    "store",
+                    "load",
+                    "gather",
+                    "scatter",
             ]:
                 new_callee = parse_expr(f"helpers.tl_obj_{node.func.attr}")
-                node = ast.Call(
-                    func=new_callee, args=[node.func.value] + node.args, keywords=node.keywords
-                )
+                node = ast.Call(func=new_callee, args=[node.func.value] + node.args, keywords=node.keywords)
             return self.generic_visit(node)
         value, _, _ = ref
         if value in [tl.reshape, tl.ravel]:
@@ -189,9 +179,7 @@ class Translator(ReferenceRewriter):
         node = self.uncanonicalize_call(node, canonicalized)
         new_node = self.generic_visit(node)
         if value in [tl.reshape, tl.trans, tl.permute, tl.join, tl.split, tl.reduce, tl.sum]:
-            new_node = cast(
-                ast.Call, parse_expr(f"helpers.reset_to_default_layout({ast.unparse(new_node)})")
-            )
+            new_node = cast(ast.Call, parse_expr(f"helpers.reset_to_default_layout({ast.unparse(new_node)})"))
         return new_node
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
@@ -202,20 +190,17 @@ class Translator(ReferenceRewriter):
         for index, dim in enumerate(node.slice.elts):
             if isinstance(dim, ast.Constant) and dim.value is None:
                 expand_dims.append(index)
-            elif isinstance(dim, ast.Slice) and all(
-                d is None for d in [dim.lower, dim.upper, dim.step]
-            ):
+            elif isinstance(dim, ast.Slice) and all(d is None for d in [dim.lower, dim.upper, dim.step]):
                 continue
             else:
                 return self.generic_visit(node)
-        value_expr = parse_expr(
-            f"helpers.convert_to_expand_dims_layout({ast.unparse(node.value)}, {expand_dims})"
-        )
+        value_expr = parse_expr(f"helpers.convert_to_expand_dims_layout({ast.unparse(node.value)}, {expand_dims})")
         node = ast.Subscript(value=value_expr, slice=node.slice, ctx=node.ctx)
         return self.generic_visit(node)
 
 
 def translate_kernels(kernels: list[GlobalValue]) -> str:
+
     def filter(value: ModuleType | GlobalValue) -> bool:
         if isinstance(value, ModuleType):
             return False
@@ -277,8 +262,7 @@ def convert_triton_to_gluon(src: list[JITCallable]) -> str:
             kernel,
             getattr(getattr(kernel, "fn", kernel), "__name__", ""),
             lambda: builtins,
-        )
-        for kernel in src
+        ) for kernel in src
     ]
     return translate_kernels(kernels)
 

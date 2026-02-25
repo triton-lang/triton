@@ -1,5 +1,6 @@
 defs: dict[str, str] = {
-    "convert_host_descriptor": R"""
+    "convert_host_descriptor":
+    R"""
 def convert_host_descriptor(desc):
     def torch_dtype_to_triton(dtype):
         import torch

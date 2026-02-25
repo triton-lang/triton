@@ -44,7 +44,7 @@ class ordered_set(MutableSet["T"]):
     A set that preserves insertion order by internally using a dict.
     """
 
-    __slots__ = ("values",)
+    __slots__ = ("values", )
 
     def __init__(self, elements: "Iterable[T] | None" = None) -> None:
         self.values = OrderedDict.fromkeys(elements or [])

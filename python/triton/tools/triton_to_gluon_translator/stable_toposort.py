@@ -53,9 +53,7 @@ def stable_toposort(edges: Mapping[int, ordered_set[int]]) -> list[int]:  # noqa
                 outgoing[src].add(dst)
                 indegree[dst] += 1
 
-    queue = deque(
-        sorted((cid for cid, deg in enumerate(indegree) if deg == 0), key=priority.__getitem__)
-    )
+    queue = deque(sorted((cid for cid, deg in enumerate(indegree) if deg == 0), key=priority.__getitem__))
     result: list[int] = []
     while queue:
         cid = queue.popleft()

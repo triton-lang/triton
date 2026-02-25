@@ -55,7 +55,8 @@ def test_slice_kernel_basic_module_slicing(tmp_path):
     pkg, mod = _make_package(
         tmp_path,
         {
-            "lib_foo.py": """
+            "lib_foo.py":
+            """
                 import math
 
                 def some_util() -> int:
@@ -64,14 +65,16 @@ def test_slice_kernel_basic_module_slicing(tmp_path):
                 def common_util() -> int:
                     return math.prod([11, 33])
             """,
-            "lib_bar.py": """
+            "lib_bar.py":
+            """
                 def prod(values) -> None:
                     return
 
                 def some_util() -> int:
                     return 55
             """,
-            "kernel_mod.py": """
+            "kernel_mod.py":
+            """
                 from .lib_bar import prod as util_bar
                 from .lib_bar import some_util
                 from .lib_foo import common_util as util_foo
@@ -104,7 +107,8 @@ def test_slice_kernel_supports_injected_decorator_matchers(tmp_path):
     pkg, mod = _make_package(
         tmp_path,
         {
-            "kernel_mod.py": """
+            "kernel_mod.py":
+            """
                 def mock_kernel(fn=None, *, idle_sms=None):
                     def deco(inner):
                         return inner
@@ -170,7 +174,8 @@ def test_slice_kernel_translate_to_gluon_keeps_tensor_method_rewrites(tmp_path):
     pkg, mod = _make_package(
         tmp_path,
         {
-            "kernel_mod.py": """
+            "kernel_mod.py":
+            """
                 import triton
                 import triton.language as tl
 
@@ -192,7 +197,8 @@ def test_slice_kernel_translate_to_gluon_inlines_descriptor_adapter(tmp_path):
     pkg, mod = _make_package(
         tmp_path,
         {
-            "kernel_mod.py": """
+            "kernel_mod.py":
+            """
                 from triton.tools.ragged_tma import create_ragged_descriptor
 
                 def kernel(t):
