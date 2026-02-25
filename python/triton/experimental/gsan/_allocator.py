@@ -64,3 +64,29 @@ def get_reserve_size() -> int:
 
 def get_global_state_pointer() -> int:
     return _load_gsan_module().get_global_state_pointer()
+
+
+def export_allocation_handles(ptr: int) -> tuple[int, int, int]:
+    module = _load_gsan_module()
+    return module.export_allocation_handles(ptr)
+
+
+def import_allocation_handles(real_fd: int, shadow_fd: int, alloc_size: int, device: int) -> int:
+    module = _load_gsan_module()
+    return module.import_allocation_handles(real_fd, shadow_fd, alloc_size, device)
+
+
+def export_runtime_state_handle(device: int) -> tuple[int, int]:
+    module = _load_gsan_module()
+    return module.export_runtime_state_handle(device)
+
+
+def import_runtime_state_handle(fd: int, alloc_size: int, peer_device: int, device: int) -> None:
+    module = _load_gsan_module()
+    module.import_runtime_state_handle(fd, alloc_size, peer_device, device)
+
+
+def free_allocation(ptr: int, device: int) -> None:
+    if ptr == 0:
+        return
+    gsan_free(ptr, device, size=0, stream=0)

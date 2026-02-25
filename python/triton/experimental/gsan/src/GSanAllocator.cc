@@ -338,6 +338,7 @@ CUresult ensureRuntimeStateMapped(int device) {
   prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
   prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
   prop.location.id = device;
+  prop.requestedHandleTypes = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
 
   size_t granularity = 0;
   err = cuMemGetAllocationGranularity(&granularity, &prop,
@@ -486,6 +487,7 @@ extern "C" void *gsanMalloc(ssize_t size, int device,
   prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
   prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
   prop.location.id = device;
+  prop.requestedHandleTypes = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
 
   size_t granularity = 0;
   err = cuMemGetAllocationGranularity(&granularity, &prop,
@@ -588,6 +590,219 @@ void *gsanGetReservePointer() {
   if (gsanEnsureInit() != 0)
     return nullptr;
   return reinterpret_cast<void *>(alloc->reserveBaseAddress);
+}
+
+int gsanExportAllocationHandles(void *void_ptr, int *realFd, int *shadowFd,
+                                size_t *allocSize) {
+  if (realFd == nullptr || shadowFd == nullptr || allocSize == nullptr)
+    return -1;
+  *realFd = -1;
+  *shadowFd = -1;
+  *allocSize = 0;
+
+  const auto ptr = reinterpret_cast<CUdeviceptr>(void_ptr);
+  if (ptr == 0)
+    return -1;
+
+  std::lock_guard lg(mut);
+  if (alloc == nullptr)
+    return -1;
+
+  AllocNode *node = findNodeByAddress(&alloc->treeRoot, ptr);
+  if (node == nullptr || node->maxFreeBlockSize != 0 ||
+      node->virtualAddress != ptr) {
+    fprintf(stderr,
+            "gsanExportAllocationHandles called with invalid pointer\n");
+    return -1;
+  }
+
+  int realFdLocal = -1;
+  int shadowFdLocal = -1;
+  CUresult err =
+      cuMemExportToShareableHandle(&realFdLocal, node->realHandle,
+                                   CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    return -1;
+  }
+
+  err =
+      cuMemExportToShareableHandle(&shadowFdLocal, node->shadowHandle,
+                                   CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    close(realFdLocal);
+    return -1;
+  }
+
+  *realFd = realFdLocal;
+  *shadowFd = shadowFdLocal;
+  *allocSize = node->size;
+  return 0;
+}
+
+int gsanExportRuntimeStateHandle(int device, int *fd, size_t *allocSize) {
+  if (fd == nullptr || allocSize == nullptr)
+    return -1;
+  *fd = -1;
+  *allocSize = 0;
+
+  if (device < 0 || device >= static_cast<int>(gsan::kMaxGPUs))
+    return -1;
+
+  std::lock_guard lg(mut);
+  if (gsanEnsureInit() != 0)
+    return -1;
+  CUresult err = ensureContext(device);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    return -1;
+  }
+  err = ensureRuntimeStateMapped(device);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    return -1;
+  }
+
+  auto handle = alloc->perDeviceHandles[device];
+  auto size = alloc->perDeviceStateSize;
+  if (handle == 0 || size == 0)
+    return -1;
+
+  int fdLocal = -1;
+  err = cuMemExportToShareableHandle(
+      &fdLocal, handle, CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    return -1;
+  }
+
+  *fd = fdLocal;
+  *allocSize = size;
+  return 0;
+}
+
+void *gsanImportAllocationHandles(int realFd, int shadowFd, size_t allocSize,
+                                  int device) {
+  if (realFd < 0 || shadowFd < 0 || allocSize == 0)
+    return nullptr;
+
+  std::lock_guard lg(mut);
+  if (gsanEnsureInit() != 0)
+    return nullptr;
+  CUresult err = ensureContext(device);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    return nullptr;
+  }
+  err = ensureRuntimeStateMapped(device);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    return nullptr;
+  }
+
+  AllocNode *node = allocateNode(&alloc->treeRoot, allocSize);
+  if (node == nullptr)
+    return nullptr;
+
+  if (node->size != allocSize) {
+    freeNode(node);
+    fprintf(stderr, "gsanImportAllocationHandles requires power-of-two size\n");
+    return nullptr;
+  }
+
+  CUmemGenericAllocationHandle realHandle = 0;
+  CUmemGenericAllocationHandle shadowHandle = 0;
+  bool realMapped = false;
+  bool shadowMapped = false;
+  err = cuMemImportFromShareableHandle(
+      &realHandle, reinterpret_cast<void *>(static_cast<uintptr_t>(realFd)),
+      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR);
+  if (err != CUDA_SUCCESS)
+    goto error;
+
+  err = cuMemImportFromShareableHandle(
+      &shadowHandle, reinterpret_cast<void *>(static_cast<uintptr_t>(shadowFd)),
+      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR);
+  if (err != CUDA_SUCCESS)
+    goto error;
+
+  err = mapNodeHandles(node, realHandle, shadowHandle, device, &realMapped,
+                       &shadowMapped);
+  if (err != CUDA_SUCCESS)
+    goto error;
+
+  node->realHandle = realHandle;
+  node->shadowHandle = shadowHandle;
+  return reinterpret_cast<void *>(node->virtualAddress);
+
+error:
+  printCUDAError(err);
+  unmapNodeHandles(node, realMapped, shadowMapped);
+  if (shadowHandle != 0)
+    cuMemRelease(shadowHandle);
+  if (realHandle != 0)
+    cuMemRelease(realHandle);
+  freeNode(node);
+  return nullptr;
+}
+
+int gsanImportRuntimeStateHandle(int fd, size_t allocSize, int peerDevice,
+                                 int device) {
+  if (fd < 0 || allocSize == 0)
+    return -1;
+  if (peerDevice < 0 || peerDevice >= static_cast<int>(gsan::kMaxGPUs))
+    return -1;
+
+  std::lock_guard lg(mut);
+  if (gsanEnsureInit() != 0)
+    return -1;
+  CUresult err = ensureContext(device);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    return -1;
+  }
+
+  if (device < 0 || device >= alloc->config.numGPUs)
+    return -1;
+  if (allocSize != alloc->perDeviceStateSize)
+    return -1;
+
+  CUmemGenericAllocationHandle importedHandle = 0;
+  bool mapped = false;
+  CUmemAccessDesc accessDesc = {};
+  CUdeviceptr deviceAddr =
+      alloc->globalStateAddress + peerDevice * gsan::kPerDeviceStateStride;
+
+  err = cuMemImportFromShareableHandle(
+      &importedHandle, reinterpret_cast<void *>(static_cast<uintptr_t>(fd)),
+      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR);
+  if (err != CUDA_SUCCESS)
+    goto error;
+
+  err = cuMemMap(deviceAddr, allocSize, /*offset*/ 0, importedHandle,
+                 /*flags*/ 0);
+  if (err != CUDA_SUCCESS)
+    goto error;
+  mapped = true;
+
+  accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+  accessDesc.location.id = device;
+  accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+  err = cuMemSetAccess(deviceAddr, allocSize, &accessDesc, 1);
+  if (err != CUDA_SUCCESS)
+    goto error;
+
+  alloc->perDeviceHandles[peerDevice] = importedHandle;
+  return 0;
+
+error:
+  printCUDAError(err);
+  if (mapped)
+    cuMemUnmap(deviceAddr, allocSize);
+  if (importedHandle != 0)
+    cuMemRelease(importedHandle);
+  return -1;
 }
 
 namespace {
@@ -700,6 +915,126 @@ PyObject *pyGetGlobalStatePointer(PyObject *self, PyObject *args) {
   return PyLong_FromUnsignedLongLong(alloc->globalStateAddress);
 }
 
+PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
+                                    Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 1) {
+    PyErr_Format(
+        PyExc_TypeError,
+        "%s.export_allocation_handles expected 1 positional argument, got %zd",
+        kModuleName, nargs);
+    return nullptr;
+  }
+
+  void *ptr = nullptr;
+  if (!parseVoidPtrArg(args[0], &ptr))
+    return nullptr;
+
+  int realFd = -1;
+  int shadowFd = -1;
+  size_t allocSize = 0;
+  int rc = gsanExportAllocationHandles(ptr, &realFd, &shadowFd, &allocSize);
+  if (rc != 0) {
+    PyErr_SetString(PyExc_RuntimeError, "gsanExportAllocationHandles failed.");
+    return nullptr;
+  }
+
+  return Py_BuildValue("(iiK)", realFd, shadowFd,
+                       static_cast<unsigned long long>(allocSize));
+}
+
+PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
+                                    Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 4) {
+    PyErr_Format(
+        PyExc_TypeError,
+        "%s.import_allocation_handles expected 4 positional arguments, got %zd",
+        kModuleName, nargs);
+    return nullptr;
+  }
+
+  int realFd = 0;
+  int shadowFd = 0;
+  int device = 0;
+  if (!parseIntArg(args[0], "real_fd", &realFd) ||
+      !parseIntArg(args[1], "shadow_fd", &shadowFd) ||
+      !parseIntArg(args[3], "device", &device)) {
+    return nullptr;
+  }
+
+  size_t allocSize = PyLong_AsSize_t(args[2]);
+  if (allocSize == static_cast<size_t>(-1) && PyErr_Occurred())
+    return nullptr;
+
+  void *ptr = gsanImportAllocationHandles(realFd, shadowFd, allocSize, device);
+  if (ptr == nullptr) {
+    PyErr_SetString(PyExc_RuntimeError, "gsanImportAllocationHandles failed.");
+    return nullptr;
+  }
+
+  return PyLong_FromVoidPtr(ptr);
+}
+
+PyObject *pyExportRuntimeStateHandle(PyObject *self, PyObject *const *args,
+                                     Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 1) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.export_runtime_state_handle expected 1 positional "
+                 "argument, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  int device = 0;
+  if (!parseIntArg(args[0], "device", &device))
+    return nullptr;
+
+  int fd = -1;
+  size_t allocSize = 0;
+  int rc = gsanExportRuntimeStateHandle(device, &fd, &allocSize);
+  if (rc != 0) {
+    PyErr_SetString(PyExc_RuntimeError, "gsanExportRuntimeStateHandle failed.");
+    return nullptr;
+  }
+
+  return Py_BuildValue("(iK)", fd, static_cast<unsigned long long>(allocSize));
+}
+
+PyObject *pyImportRuntimeStateHandle(PyObject *self, PyObject *const *args,
+                                     Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 4) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.import_runtime_state_handle expected 4 positional "
+                 "arguments, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  int fd = 0;
+  int peerDevice = 0;
+  int device = 0;
+  if (!parseIntArg(args[0], "fd", &fd) ||
+      !parseIntArg(args[2], "peer_device", &peerDevice) ||
+      !parseIntArg(args[3], "device", &device)) {
+    return nullptr;
+  }
+
+  size_t allocSize = PyLong_AsSize_t(args[1]);
+  if (allocSize == static_cast<size_t>(-1) && PyErr_Occurred())
+    return nullptr;
+
+  int rc = gsanImportRuntimeStateHandle(fd, allocSize, peerDevice, device);
+  if (rc != 0) {
+    PyErr_SetString(PyExc_RuntimeError, "gsanImportRuntimeStateHandle failed.");
+    return nullptr;
+  }
+
+  Py_RETURN_NONE;
+}
+
 PyMethodDef kGSanAllocatorMethods[] = {
     {"malloc", reinterpret_cast<PyCFunction>(pyMalloc), METH_FASTCALL,
      "Allocate GSan memory. Returns a CUDA pointer as an integer."},
@@ -715,6 +1050,18 @@ PyMethodDef kGSanAllocatorMethods[] = {
     {"get_global_state_pointer",
      reinterpret_cast<PyCFunction>(pyGetGlobalStatePointer), METH_NOARGS,
      "Return the pointer to the GSan global state region."},
+    {"export_allocation_handles",
+     reinterpret_cast<PyCFunction>(pyExportAllocationHandles), METH_FASTCALL,
+     "Export allocation handles for an existing allocation pointer."},
+    {"import_allocation_handles",
+     reinterpret_cast<PyCFunction>(pyImportAllocationHandles), METH_FASTCALL,
+     "Import allocation handles and map into this process's VA space."},
+    {"export_runtime_state_handle",
+     reinterpret_cast<PyCFunction>(pyExportRuntimeStateHandle), METH_FASTCALL,
+     "Export a runtime-state handle for a local device."},
+    {"import_runtime_state_handle",
+     reinterpret_cast<PyCFunction>(pyImportRuntimeStateHandle), METH_FASTCALL,
+     "Import a peer runtime-state handle into this process's global-state VA."},
     {nullptr, nullptr, 0, nullptr},
 };
 

@@ -1,19 +1,16 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
 
 from triton._internal_testing import is_cuda
 from triton.experimental.gsan import create_mem_pool
-from triton.experimental.gsan._allocator import get_reserve_pointer, get_reserve_size, gsan_free, gsan_malloc
+from triton.experimental.gsan._allocator import (export_allocation_handles, free_allocation, get_reserve_pointer,
+                                                 get_reserve_size, gsan_free, gsan_malloc, import_allocation_handles)
+from triton.experimental.gsan._testing_utils import shadow_tensor_for
 from triton.experimental.gsan._utils import shadow_region, uint8_cuda_tensor_from_ptr
-
-
-def shadow_tensor_for(real: torch.Tensor) -> torch.Tensor:
-    reserve_ptr = get_reserve_pointer()
-    reserve_size = get_reserve_size()
-    shadow_ptr, shadow_size = shadow_region(real.data_ptr(), real.untyped_storage().nbytes(), reserve_ptr, reserve_size)
-    return uint8_cuda_tensor_from_ptr(shadow_ptr, shadow_size, torch.cuda.current_device())
 
 
 @pytest.fixture
@@ -150,3 +147,47 @@ def test_mem_pool():
     del real
     del shadow
     torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator):
+    malloc, free, reserve_ptr, reserve_size = _direct_allocator
+    device = torch.cuda.current_device()
+
+    real_ptr = malloc(4096)
+    assert real_ptr != 0
+
+    imported_ptr = 0
+    real_fd = -1
+    shadow_fd = -1
+    try:
+        real_fd, shadow_fd, alloc_size = export_allocation_handles(real_ptr)
+        assert alloc_size > 0
+
+        imported_ptr = import_allocation_handles(real_fd, shadow_fd, alloc_size, device)
+        assert imported_ptr != 0
+        assert imported_ptr != real_ptr
+
+        local_real = uint8_cuda_tensor_from_ptr(real_ptr, alloc_size, device)
+        imported_real = uint8_cuda_tensor_from_ptr(imported_ptr, alloc_size, device)
+
+        local_shadow_ptr, local_shadow_size = shadow_region(real_ptr, alloc_size, reserve_ptr, reserve_size)
+        imported_shadow_ptr, imported_shadow_size = shadow_region(imported_ptr, alloc_size, reserve_ptr, reserve_size)
+        assert local_shadow_size == imported_shadow_size
+
+        local_shadow = uint8_cuda_tensor_from_ptr(local_shadow_ptr, local_shadow_size, device)
+        imported_shadow = uint8_cuda_tensor_from_ptr(imported_shadow_ptr, imported_shadow_size, device)
+
+        imported_real.fill_(11)
+        assert torch.all(local_real == 11).item()
+
+        imported_shadow.fill_(5)
+        assert torch.all(local_shadow == 5).item()
+    finally:
+        if real_fd >= 0:
+            os.close(real_fd)
+        if shadow_fd >= 0:
+            os.close(shadow_fd)
+        if imported_ptr != 0:
+            free_allocation(imported_ptr, device)
+        free(real_ptr)
