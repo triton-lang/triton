@@ -80,6 +80,30 @@ def TTI_ExperimentalClusterCTAIdOp
   let assemblyFormat = "attr-dict `:` type($result)";
 }
 
+def TTI_ExperimentalGSanInitOp
+    : TTI_Op<"experimental_gsan_init"> {
+  let summary = "Initialize GSan thread";
+  let arguments = (ins);
+}
+
+def TTI_ExperimentalGSanTensorAccessOp
+    : TTI_Op<"experimental_gsan_tensor_access",
+             [MemoryEffects<[MemWrite<GlobalMemory>, MemWrite<GlobalMemory>]>,
+              TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                             "getI1SameShape(getPointeeType($_self))",
+                             "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
+  let summary = "Instrument a tensor load/store access for GSan";
+  let description = [{
+    Emits runtime instrumentation for a tensor pointer access. The pointer and
+    optional mask are consumed by the GSan runtime.
+  }];
+  let arguments = (ins TT_PtrLike:$ptr, Optional<TT_BoolLike>:$mask,
+                   BoolAttr:$isStore);
+  let assemblyFormat = [{
+    $ptr `,` $isStore (`,` $mask^)? attr-dict `:` type($ptr)
+  }];
+}
+
 // ===== Critical section lock ops =====
 
 

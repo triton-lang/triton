@@ -25,4 +25,12 @@ def TritonInstrumentFpSanitizer: Pass<"tritoninstrument-fp-sanitizer", "mlir::Mo
                            "mlir::triton::instrument::TritonInstrumentDialect"];
 }
 
+def TritonInstrumentGlobalSanitizer: Pass<"tritoninstrument-global-sanitizer", "mlir::ModuleOp"> {
+  let summary = "Add gsan instrumentation to memory access operations.";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::triton::instrument::TritonInstrumentDialect"];
+}
+
 #endif // TRITON_INSTRUMENT_PASSES

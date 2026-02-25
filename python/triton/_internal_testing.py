@@ -1,11 +1,15 @@
+import multiprocessing
 import os
+import queue
 import re
+import tempfile
 import numpy as np
 import torch
 import triton
 import triton.language as tl
 from triton import knobs
 from typing import Optional, Set, Union
+from dataclasses import dataclass
 import pytest
 
 from numpy.random import RandomState
@@ -232,6 +236,52 @@ def unwrap_tensor(t: Union[torch.Tensor, triton.runtime.jit.TensorWrapper]) -> t
     if isinstance(t, triton.runtime.jit.TensorWrapper):
         return t.base
     return t
+
+
+@dataclass
+class ProcessResult:
+    exc: None | BaseException
+    driver_stderr_output: str
+
+
+def _run_in_process_worker(client_fn, q, args, kwargs, env):
+    if env is not None:
+        os.environ.update(env)
+
+    # Capture driver/runtime writes to stderr that bypass Python's file objects.
+    with tempfile.TemporaryFile(mode="w+b") as tmp_stderr:
+        saved_stderr_fd = os.dup(2)
+        os.dup2(tmp_stderr.fileno(), 2)
+        exc = None
+
+        try:
+            client_fn(*args, **kwargs)
+            # Raise any CUDA errors
+            torch.cuda.synchronize()
+        except Exception as e:
+            exc = e
+        finally:
+            os.dup2(saved_stderr_fd, 2)
+            os.close(saved_stderr_fd)
+            tmp_stderr.seek(0)
+            driver_stderr_output = tmp_stderr.read().decode("utf-8", errors="replace")
+            q.put(ProcessResult(exc, driver_stderr_output))
+
+
+def run_in_process(client_fn, args=(), kwargs=None, env=None):
+    if kwargs is None:
+        kwargs = {}
+
+    ctx = multiprocessing.get_context("forkserver")
+    q = ctx.Queue()
+    process = ctx.Process(target=_run_in_process_worker, args=(client_fn, q, args, kwargs, env))
+    process.start()
+    process.join()
+    try:
+        result = q.get(timeout=1)
+    except queue.Empty:
+        raise RuntimeError(f"child process exited with code {process.exitcode} without returning a result")
+    return result
 
 
 def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
