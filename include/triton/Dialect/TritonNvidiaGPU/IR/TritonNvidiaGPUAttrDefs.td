@@ -5,6 +5,7 @@ include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/EnumAttr.td"
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.td"
 include "mlir/IR/EnumAttr.td"
 
 def TTG_TensorMemorySpace : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemorySpace"> {
@@ -61,7 +62,9 @@ def TTNG_CGALayoutRankTwoParam
       "::mlir::triton::gpu::CGAEncodingAttr::get1CTALayout($_ctxt, 2)";
 }
 
-def TTG_TensorMemoryEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemoryEncoding"> {
+def TTG_TensorMemoryEncodingAttr
+    : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemoryEncoding",
+              [LayoutEncodingTrait]> {
   let mnemonic = "tensor_memory_encoding";
   let attrName = "triton.gpu.tensor_memory_encoding";
   let description = [{
@@ -85,7 +88,9 @@ def TTG_TensorMemoryEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemor
   let assemblyFormat = "`<` struct(params) `>`";
 }
 
-def TTG_TensorMemoryScalesEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemoryScalesEncoding"> {
+def TTG_TensorMemoryScalesEncodingAttr
+    : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemoryScalesEncoding",
+              [LayoutEncodingTrait]> {
   let mnemonic = "tensor_memory_scales_encoding";
   let attrName = "triton.gpu.tensor_memory_scales_encoding";
   let description = [{

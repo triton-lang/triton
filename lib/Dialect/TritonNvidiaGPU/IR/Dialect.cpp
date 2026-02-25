@@ -493,6 +493,40 @@ TensorDescIm2ColType::verify(function_ref<InFlightDiagnostic()> emitError,
 // ASM Interface (i.e.: alias)
 //===----------------------------------------------------------------------===//
 namespace {
+class TritonNvidiaGPUVerifyTensorLayoutInterface
+    : public triton::DialectVerifyTensorLayoutInterface {
+public:
+  using DialectVerifyTensorLayoutInterface::DialectVerifyTensorLayoutInterface;
+
+  LogicalResult verifyTensorLayout(
+      Attribute layout, RankedTensorType rankedTy, Operation *op,
+      function_ref<InFlightDiagnostic()> makeErr) const override {
+    auto *ttgDialect =
+        op->getContext()->getOrLoadDialect<triton::gpu::TritonGPUDialect>();
+    Dialect *dialect = ttgDialect;
+    auto *verifyLayoutInterface =
+        dyn_cast<triton::DialectVerifyTensorLayoutInterface>(dialect);
+    if (!verifyLayoutInterface)
+      return makeErr() << "Could not access TritonGPU layout verifier.";
+    return verifyLayoutInterface->verifyTensorLayout(layout, rankedTy, op,
+                                                     makeErr);
+  }
+
+  LogicalResult verifyMemDescLayout(
+      Attribute layout, Type type, Operation *op,
+      function_ref<InFlightDiagnostic()> makeErr) const override {
+    auto *ttgDialect =
+        op->getContext()->getOrLoadDialect<triton::gpu::TritonGPUDialect>();
+    Dialect *dialect = ttgDialect;
+    auto *verifyLayoutInterface =
+        dyn_cast<triton::DialectVerifyTensorLayoutInterface>(dialect);
+    if (!verifyLayoutInterface)
+      return makeErr() << "Could not access TritonGPU layout verifier.";
+    return verifyLayoutInterface->verifyMemDescLayout(layout, type, op,
+                                                      makeErr);
+  }
+};
+
 class TritonGPUOpAsmInterface : public OpAsmDialectInterface {
 public:
   using OpAsmDialectInterface::OpAsmDialectInterface;
@@ -526,6 +560,7 @@ void TritonNvidiaGPUDialect::initialize() {
 #define GET_TYPEDEF_LIST
 #include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
       >();
+  addInterfaces<TritonNvidiaGPUVerifyTensorLayoutInterface>();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonInlinerInterface>();
 }
