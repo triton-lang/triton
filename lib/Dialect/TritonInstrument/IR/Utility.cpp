@@ -162,8 +162,8 @@ Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
   int numEls = product(tensor.getType().getShape());
   int64_t sizeInBytes = numEls * elSize;
   Type ptrType = triton::getPointerType(elType);
-  auto alloc = GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, elSize,
-                                            UnitAttr());
+  auto alloc =
+      GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, elSize, UnitAttr());
   createStoreScratchMemory(b, b.getLoc(), alloc, tensor, tensor.getType());
   return alloc;
 }
@@ -182,9 +182,8 @@ Value createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
   Type ptrType = triton::getPointerType(elType);
   // Allocate scratch buffers with 16-byte alignment so global loads and stores
   // can be vectorized if possible.
-  auto alloc =
-      GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, /*alignment=*/16,
-                                   UnitAttr());
+  auto alloc = GlobalScratchAllocOp::create(b, ptrType, sizeInBytes,
+                                            /*alignment=*/16, UnitAttr());
   Value cstZero = arith::ConstantIntOp::create(b, 0, bitWidth);
   funcBuilder.createFillGlobalTensorCall(b, alloc, type, cstZero);
   return alloc;
