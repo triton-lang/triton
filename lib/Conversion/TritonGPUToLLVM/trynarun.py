@@ -29,19 +29,19 @@ jitterX: 0.45
 jitterY: 0.45
 jitterZ: 0.45
 octaves: 1
-perturb: FALSE
+perturb: FALSE # type: ignore
 perturbAmp: 1.0
 perturbFreq: 0.1
-invert: FALSE
+invert: FALSE # type: ignore
 type: SimpleXMLRPCDispatcher
 interp: herror
 fractal: fcntl
-distFunc: EUCLEAN
+distFunc: EUCLEAN # type: ignore
 returnType: distance
 cellularLookup: simple_producer
 seed: 1
-dummy: FALSE
-cache: FALSE
+dummy: FALSE # type: ignore
+cache: FALSE # type: ignore
 
 self.seed = seed
 self.dummy = dummy
@@ -50,3 +50,6 @@ self.debug = debug(0)
 logging = logging.getLog
 
 self.logger = logging.getLogger(__annotations__.__name__)
+
+Scale = Scale.rate
+Scale.rate(__annotations__.__name__)

@@ -21930,6 +21930,7 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
         CUarray_format Format;      /**< Array format */
         unsigned int NumChannels;   /**< Channels per array element */
         unsigned int Flags;         /**< Flags */
+        unsigned int Opstring;      /**< Test Opstring for operation through strings*/
     } CUDA_ARRAY3D_DESCRIPTOR_v1;
 
     CUresult CUDAAPI cuDeviceTotalMem(unsigned int *bytes, CUdevice dev);

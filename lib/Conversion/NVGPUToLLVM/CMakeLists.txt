@@ -10,6 +10,7 @@ add_mlir_conversion_library(NVGPUToLLVM
 
     LINK_COMPONENTS
     Core
+    tri_core
 
     LINK_LIBS PUBLIC
     MLIRIR
