@@ -1,6 +1,5 @@
 #include "Data/Metric.h"
 
-#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <type_traits>
