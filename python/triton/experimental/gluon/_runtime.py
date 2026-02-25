@@ -34,7 +34,8 @@ class GluonASTSource(ASTSource):
         module.set_attr("ttg.threads-per-warp", builder.get_int32_attr(options.warp_size))
 
         is_cuda = options.backend_name == "cuda"
-        if is_cuda and options.maxnreg is not None:
+        is_hip = options.backend_name == "hip"
+        if (is_cuda or is_hip) and options.maxnreg is not None:
             module.set_attr("ttg.maxnreg", builder.get_int32_attr(options.maxnreg))
 
         module = ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
