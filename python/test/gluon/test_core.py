@@ -3490,8 +3490,9 @@ def test_clc_basic(num_ctas):
         # Allocate clc_mbar before clc_result to make sure that we are indeed aligning
         # clc_result correctly after a i64 element.
         clc_mbar = mbarrier.allocate_mbarrier()
-        clc_result_shape: ttgl.constexpr = [clc_mbar.shape[0] * 2]
-        clc_result = ttgl.allocate_shared_memory(ttgl.int64, clc_result_shape, clc_mbar.layout)
+        cga_layout: ttgl.constexpr = [[0]] * (ttgl.num_ctas().bit_length() - 1)
+        layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=cga_layout)
+        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], layout)
         mbarrier.init(clc_mbar, count=1)
 
         # Large shared memory allocation to force 1 block per SM

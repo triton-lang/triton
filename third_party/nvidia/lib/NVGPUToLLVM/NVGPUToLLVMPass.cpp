@@ -558,7 +558,7 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     auto loc = ret.getLoc();
     auto voidTy = void_ty(ctx);
     if (twoCTAs) {
-      NVVM::ClusterArriveRelaxedOp::create(b, loc, UnitAttr::get(ctx));
+      NVVM::ClusterArriveOp::create(b, loc, UnitAttr::get(ctx));
       NVVM::ClusterWaitOp::create(b, loc, UnitAttr::get(ctx));
     } else {
       NVVM::Barrier0Op::create(b, loc);
