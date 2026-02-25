@@ -306,9 +306,8 @@ getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
   return getDistributedLayoutForTmemLdSt(ll, atom, numWarps, bitwidth);
 }
 
-DistributedEncodingTrait
-getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps,
-                            gpu::CGAEncodingAttr /*cgaLayout*/) {
+DistributedEncodingTrait getDefaultLayoutForTmemLdSt(gpu::MemDescType memType,
+                                                     unsigned numWarps) {
   auto *ctx = memType.getContext();
   bool prefer16x256 =
       triton::tools::getBoolEnv("TRITON_PREFER_TMEM_16x256_LAYOUT");

@@ -134,8 +134,7 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
                                        gpu::MemDescType memType);
 
 gpu::DistributedEncodingTrait
-getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps,
-                            gpu::CGAEncodingAttr cgaLayout);
+getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps);
 
 std::optional<LinearLayout>
 getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,

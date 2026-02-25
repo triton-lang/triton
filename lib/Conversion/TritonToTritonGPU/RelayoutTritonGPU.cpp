@@ -22,9 +22,7 @@ RankedTensorType getTMEMTensorLayout(const TypeConverter *tc,
                                      RankedTensorType type, MemDescType memdesc,
                                      unsigned numWarps) {
   type = cast<RankedTensorType>(tc->convertType(type));
-  auto cgaLayout = getCGALayout(type.getEncoding());
-  auto encoding =
-      ttng::getDefaultLayoutForTmemLdSt(memdesc, numWarps, cgaLayout);
+  auto encoding = ttng::getDefaultLayoutForTmemLdSt(memdesc, numWarps);
   return type.cloneWithEncoding(encoding);
 }
 

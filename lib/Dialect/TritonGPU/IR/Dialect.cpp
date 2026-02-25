@@ -249,7 +249,10 @@ CGAEncodingAttr getCGALayout(Attribute layout) {
     llvm::report_fatal_error(
         "Linear/SharedLinear layouts do not have a CGA layout in general.\n"
         "Having a CGA layout implies being of the form cta_layout * "
-        "cga_layout");
+        "cga_layout.\n"
+        "If you know for a fact that this particular layout has a CGA layout, "
+        "you can use cast<LayoutEncodingTrait>(layout).getCGALayout() "
+        "instead.");
     return {};
   }
   if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout))

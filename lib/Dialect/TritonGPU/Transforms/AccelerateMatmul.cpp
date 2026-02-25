@@ -578,8 +578,8 @@ public:
         MemDescType::get(oldRetType.getShape(), oldRetType.getElementType(),
                          accEncoding, tensorMemorySpace,
                          /*mutableMemory=*/true);
-    auto newDistributedEncoding = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-        accMemDescType, numWarps, CGALayout);
+    auto newDistributedEncoding =
+        nvidia_gpu::getDefaultLayoutForTmemLdSt(accMemDescType, numWarps);
     auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
     Value cvtAcc =
         ConvertLayoutOp::create(rewriter, loc, newAccType, dotOp.getOperand(2));
@@ -831,8 +831,8 @@ public:
         MemDescType::get(oldRetType.getShape(), oldRetType.getElementType(),
                          accEncoding, tensorMemorySpace,
                          /*mutableMemory=*/true);
-    auto newDistributedEncoding = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-        accMemDescType, numWarps, CGALayout);
+    auto newDistributedEncoding =
+        nvidia_gpu::getDefaultLayoutForTmemLdSt(accMemDescType, numWarps);
     auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
     Value cvtAcc =
         ConvertLayoutOp::create(rewriter, loc, newAccType, dotOp.getOperand(2));
@@ -854,10 +854,10 @@ public:
         oldScaleBType.getShape(), oldScaleBType.getElementType(), scaleEncoding,
         tensorMemorySpace,
         /*mutableMemory=*/false);
-    Attribute scaleALayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-        scaleAType, numWarps, getCGALayout(oldScaleAType.getEncoding()));
-    Attribute scaleBLayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-        scaleBType, numWarps, getCGALayout(oldScaleBType.getEncoding()));
+    Attribute scaleALayout =
+        nvidia_gpu::getDefaultLayoutForTmemLdSt(scaleAType, numWarps);
+    Attribute scaleBLayout =
+        nvidia_gpu::getDefaultLayoutForTmemLdSt(scaleBType, numWarps);
     RankedTensorType newScaleAType =
         oldScaleAType.cloneWithEncoding(scaleALayout);
     RankedTensorType newScaleBType =

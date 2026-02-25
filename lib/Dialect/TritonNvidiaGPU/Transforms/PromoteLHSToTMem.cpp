@@ -19,11 +19,9 @@ namespace nvidia_gpu {
 
 namespace {
 template <class MMAOpTy>
-Attribute getLHSTMemLayout(MMAOpTy tcGen5MMAOp, gpu::MemDescType lhsTMEMType,
-                           ttg::CGAEncodingAttr cgaLayout) {
+Attribute getLHSTMemLayout(MMAOpTy tcGen5MMAOp, gpu::MemDescType lhsTMEMType) {
   int numWarps = ttg::lookupNumWarps(tcGen5MMAOp);
-  return nvidia_gpu::getDefaultLayoutForTmemLdSt(lhsTMEMType, numWarps,
-                                                 cgaLayout);
+  return nvidia_gpu::getDefaultLayoutForTmemLdSt(lhsTMEMType, numWarps);
 }
 
 template <class MMAOpTy> class LHSToTMem : public OpRewritePattern<MMAOpTy> {
@@ -71,8 +69,7 @@ public:
     if (!layoutTmemCompatible) {
       if (!comesFromLoadOrBlockArg(src) ||
           triton::tools::getBoolEnv("ALLOW_LHS_TMEM_LAYOUT_CONVERSION")) {
-        newLayout = getLHSTMemLayout(tcGen5MMAOp, lhsMemDescType,
-                                     ttg::getCGALayout(srcType.getEncoding()));
+        newLayout = getLHSTMemLayout(tcGen5MMAOp, lhsMemDescType);
       } else {
         return failure();
       }

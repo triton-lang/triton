@@ -874,13 +874,12 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     RankedTensorType oldRetType = tmemLdOp.getType();
     auto retShapePerCTA = getShapePerCTA(oldRetType);
     int numWarps = mlir::triton::gpu::lookupNumWarps(op);
-    auto CGALayout = getCGALayout(oldRetType.getEncoding());
     builder.setInsertionPoint(op);
     // The source op is already sliced at this point, so srcTy, type, tmem is
     // sliced. We use getTmemCompatibleLayout to get a block layout that is for
     // the sliced tmem here.
     auto newDistributedEncoding =
-        nvidia_gpu::getDefaultLayoutForTmemLdSt(type, numWarps, CGALayout);
+        nvidia_gpu::getDefaultLayoutForTmemLdSt(type, numWarps);
 
     // oldRetType is the desired output, we slice it and convert from the
     // compatible layout to the sliced desired output.
@@ -914,7 +913,6 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
       // convert from srcTy to a compatible blocked layout.
       auto retShapePerCTA = getShapePerCTA(srcTy);
       int numWarps = mlir::triton::gpu::lookupNumWarps(op);
-      auto CGALayout = getCGALayout(srcTy.getEncoding());
       builder.setInsertionPoint(op);
 
       // calculate new tmem type.
@@ -935,7 +933,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
                                       retType.getMutableMemory());
 
       auto newDistributedEncoding =
-          nvidia_gpu::getDefaultLayoutForTmemLdSt(retType, numWarps, CGALayout);
+          nvidia_gpu::getDefaultLayoutForTmemLdSt(retType, numWarps);
       auto newAccType = RankedTensorType::get(
           srcTy.getShape(), srcTy.getElementType(), newDistributedEncoding);
       auto cvtOp = builder.createWithAsyncTaskIds<ConvertLayoutOp>(

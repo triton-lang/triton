@@ -119,10 +119,8 @@ public:
       // Choose a layout compatible with the slice size.
       gpu::MemDescType subSliceType =
           cast<gpu::MemDescType>(subSlice.getType());
-      auto cgaLayout =
-          ttg::getCGALayout(splitOp.getOutLHS().getType().getEncoding());
-      auto distLayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-          subSliceType, numWarps, cgaLayout);
+      auto distLayout =
+          nvidia_gpu::getDefaultLayoutForTmemLdSt(subSliceType, numWarps);
 
       RankedTensorType newLoadType =
           splitOp.getOutLHS().getType().cloneWithEncoding(distLayout);
@@ -184,13 +182,12 @@ public:
     int numWarps = ttg::lookupNumWarps(storeOp);
     Value truePred = arith::ConstantOp::create(b, loc, b.getBoolAttr(true));
 
-    auto cgaLayout = ttg::getCGALayout(joinOp.getLhs().getType().getEncoding());
     auto *ctx = joinOp.getContext();
 
     auto createSlice = [&](TypedValue<RankedTensorType> input, int offset) {
       auto subSlice = TMEMSubSliceOp::create(b, loc, tmem, offset, splitNSize);
-      auto distLayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-          subSlice.getType(), numWarps, cgaLayout);
+      auto distLayout =
+          nvidia_gpu::getDefaultLayoutForTmemLdSt(subSlice.getType(), numWarps);
       auto newType = input.getType().cloneWithEncoding(distLayout);
       auto cvt = ttg::ConvertLayoutOp::create(b, loc, newType, input);
       auto store =
