@@ -817,8 +817,7 @@ void mlir::triton::gpu::printCGAAttr(mlir::AsmPrinter &printer,
 
 // Print the CGA encoding as `CGALayout = [[...]]` when the layout is
 // non-trivial.
-static void maybePrintCGALayout(mlir::MLIRContext * /*context*/,
-                                mlir::AsmPrinter &printer,
+static void maybePrintCGALayout(mlir::AsmPrinter &printer,
                                 CGAEncodingAttr layout) {
   if (layout.getLinearLayout().getTotalInDimSize() == 1)
     return;
@@ -946,7 +945,7 @@ void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]"
           << ", order = [" << getOrder() << "]";
 
-  maybePrintCGALayout(getContext(), printer, getCGALayout());
+  maybePrintCGALayout(printer, getCGALayout());
 
   printer << "}>";
 }
@@ -1318,7 +1317,7 @@ void NvidiaMmaEncodingAttr::print(AsmPrinter &printer) const {
           << ", versionMinor = " << getVersionMinor() //
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
 
-  maybePrintCGALayout(getContext(), printer, getCGALayout());
+  maybePrintCGALayout(printer, getCGALayout());
 
   printer << ", instrShape = [" << getInstrShape() << "]}>";
 }
@@ -1397,7 +1396,7 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
 
   printer << ", isTransposed = " << getIsTransposed();
 
-  maybePrintCGALayout(getContext(), printer, getCGALayout());
+  maybePrintCGALayout(printer, getCGALayout());
 
   auto tilesPerWarp = getTilesPerWarp();
   if (!hasUnitTilesPerWarp())
@@ -1531,7 +1530,7 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
 
   printer << "}";
 
-  maybePrintCGALayout(getContext(), printer, getCGALayout());
+  maybePrintCGALayout(printer, getCGALayout());
 
   if (getInstrShape() != ArrayRef(getDefaultInstrShape())) {
     printer << ", instrShape = [" << getInstrShape() << "]";
@@ -1710,7 +1709,7 @@ void SwizzledSharedEncodingAttr::print(AsmPrinter &printer) const {
           << ", perPhase = " << getPerPhase()
           << ", maxPhase = " << getMaxPhase() //
           << ", order = [" << getOrder() << "]";
-  maybePrintCGALayout(getContext(), printer, getCGALayout());
+  maybePrintCGALayout(printer, getCGALayout());
   printer << "}>";
 }
 
@@ -2332,7 +2331,7 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
   if (getCGALayout() == defaultLayout && rank != 2) {
     printer << ", rank = " << rank;
   } else {
-    maybePrintCGALayout(ctx, printer, getCGALayout());
+    maybePrintCGALayout(printer, getCGALayout());
   }
   printer << "}>";
 }
@@ -2385,7 +2384,7 @@ void AMDRotatingSharedEncodingAttr::print(AsmPrinter &printer) const {
           << ", perPhase = " << getPerPhase()
           << ", maxPhase = " << getMaxPhase() //
           << ", order = [" << getOrder() << "]";
-  maybePrintCGALayout(getContext(), printer, getCGALayout());
+  maybePrintCGALayout(printer, getCGALayout());
   printer << "}>";
 }
 

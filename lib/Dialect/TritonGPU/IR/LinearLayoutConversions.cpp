@@ -1034,7 +1034,6 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   auto *ctx = encoding.getContext();
   auto kRow = S("row");
   auto kCol = S("col");
-  auto kBlock = S("block");
   auto dims = standardOutDimNames(ctx, 2);
   auto cgaLayout = encoding.getCGALayout();
   auto cgaLL = cgaLayout.getLinearLayout();
