@@ -6,6 +6,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Tools/Sys/Dump.hpp"
 
 #define DEBUG_TYPE "nvgpu-warp-specialization"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -64,7 +65,7 @@ public:
       // Partition key ops into multiple async tasks.
       doTaskPartition(funcOp, numWarpGroups);
       if (dumpIntermediateSteps) {
-        llvm::dbgs()
+        ::mlir::triton::tools::mlirDumpsOrDbgs()
             << "// -----// WarpSpec internal IR Dump After: doTaskPartition\n"
             << moduleOp << "\n\n\n";
       }
@@ -73,7 +74,7 @@ public:
       if (retCode == -1)
         continue;
       if (dumpIntermediateSteps) {
-        llvm::dbgs()
+        ::mlir::triton::tools::mlirDumpsOrDbgs()
             << "// -----// WarpSpec internal IR Dump After: doTaskIdPropagate\n"
             << moduleOp << "\n\n\n";
       }
@@ -81,7 +82,7 @@ public:
       // Partition ops into parallel sub ops.
       if (doDataPartition(funcOp, numWarpGroups - 1)) {
         if (dumpIntermediateSteps) {
-          llvm::dbgs()
+          ::mlir::triton::tools::mlirDumpsOrDbgs()
               << "// -----// WarpSpec internal IR Dump After: doDataPartition\n"
               << moduleOp << "\n\n\n";
         }
@@ -99,7 +100,7 @@ public:
 
     doCodePartition(funcOp, numStages);
     if (dumpIntermediateSteps) {
-      llvm::dbgs()
+      ::mlir::triton::tools::mlirDumpsOrDbgs()
           << "// -----// WarpSpec internal IR Dump After: doCodePartition\n"
           << moduleOp << "\n\n\n";
     }
