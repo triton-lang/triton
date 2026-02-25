@@ -85,13 +85,6 @@ materializeSourceLocation(ConversionPatternRewriter &rewriter, Location loc) {
 // Utility functions
 ////////////////////////////////////////////
 
-Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
-  TritonLLVMOpBuilder tb(loc, rewriter);
-  if (a && b)
-    return tb.and_(a, b);
-  return a ? a : b;
-}
-
 void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
                                  Location loc, Value gsanGlobalStatePtr,
                                  ArrayRef<Value> ptrElems,
@@ -122,10 +115,10 @@ void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
         b.gep(ptr_ty(ctx), argsTy, argsBuffer, ValueRange{zero, zero, idx});
     b.store(ptrValue, ptrSlot);
 
-    Value maskValue = maskElems.empty() ? b.true_val() : maskElems[i];
+    Value maskValue = maskElems.empty() ? Value{} : maskElems[i];
     if (!isCanonicalIndex(i, regMask))
       maskValue = b.false_val();
-    maskValue = maybeAnd(rewriter, loc, maskValue, threadPred);
+    maskValue = ttg::maybeAnd(rewriter, loc, maskValue, threadPred);
     Value maskByte = b.zext(i8Ty, maskValue);
     Value maskSlot =
         b.gep(ptr_ty(ctx), argsTy, argsBuffer, ValueRange{zero, one, idx});
@@ -228,6 +221,7 @@ public:
   LogicalResult
   matchAndRewrite(tti::ExperimentalGSanTensorAccessOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto ctx = getContext();
     Location loc = op.getLoc();
     auto func = op->getParentOfType<FunctionOpInterface>();
     Value gsanGlobalStatePtr = getGSanGlobalStateArg(func);
@@ -250,7 +244,6 @@ public:
     }
 
     auto freeVarMasks = getFreeVariableMasks(ptrTy);
-    auto *ctx = getContext();
     uint32_t regMask = freeVarMasks.lookup(str_attr("reg"));
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, *targetInfo);
