@@ -257,6 +257,26 @@ CGAEncodingAttr getCGALayout(Attribute layout) {
   llvm_unreachable("Unimplemented usage of getCGALayout");
 }
 
+static LinearEncodingAttr
+getSlicedLinearEncoding(SliceEncodingAttr sliceLayout) {
+  SmallVector<unsigned> slices = {sliceLayout.getDim()};
+  Attribute parent = sliceLayout.getParent();
+  while (auto parentSlice = dyn_cast<SliceEncodingAttr>(parent)) {
+    slices.push_back(parentSlice.getDim());
+    parent = parentSlice.getParent();
+  }
+
+  auto linearEncoding = dyn_cast<LinearEncodingAttr>(parent);
+  if (!linearEncoding)
+    return {};
+
+  auto shape = convertType<int64_t>(
+      llvm::to_vector(linearEncoding.getLinearLayout().getOutDimSizes()));
+  for (unsigned i = slices.size(); i > 0; --i)
+    shape.erase(shape.begin() + slices[i - 1]);
+  return toLinearEncoding(cast<DistributedEncodingTrait>(sliceLayout), shape);
+}
+
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   // A generic linear encoding may not have a CGA layout
   // as having a CGA layout implies being of the form cta_layout * cga_layout
@@ -266,6 +286,12 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   } else if (auto sharedLinearLayout =
                  dyn_cast<SharedLinearEncodingAttr>(layout)) {
     return sharedLinearLayout.basesPerDim(kBlock, /*skipBroadcast=*/false);
+  } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
+    if (auto slicedLinear = getSlicedLinearEncoding(sliceLayout))
+      return slicedLinear.basesPerDim(kBlock, /*skipBroadcast=*/false);
+    return cast<LayoutEncodingTrait>(sliceLayout)
+        .getCGALayout()
+        .getCTAsPerCGA();
   } else if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout)) {
     return ttgLayout.getCGALayout().getCTAsPerCGA();
   }
@@ -281,6 +307,12 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   } else if (auto sharedLinearLayout =
                  dyn_cast<SharedLinearEncodingAttr>(layout)) {
     return sharedLinearLayout.basesPerDim(kBlock);
+  } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
+    if (auto slicedLinear = getSlicedLinearEncoding(sliceLayout))
+      return slicedLinear.basesPerDim(kBlock);
+    return cast<LayoutEncodingTrait>(sliceLayout)
+        .getCGALayout()
+        .getCTASplitNum();
   } else if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout)) {
     return ttgLayout.getCGALayout().getCTASplitNum();
   }
@@ -295,6 +327,10 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
                  dyn_cast<SharedLinearEncodingAttr>(layout)) {
     return sharedLinearLayout.orderPerDim(kBlock,
                                           sharedLinearLayout.getOrder());
+  } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
+    if (auto slicedLinear = getSlicedLinearEncoding(sliceLayout))
+      return slicedLinear.orderPerDim(kBlock, slicedLinear.getOrder());
+    return cast<LayoutEncodingTrait>(sliceLayout).getCGALayout().getCTAOrder();
   } else if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout)) {
     return ttgLayout.getCGALayout().getCTAOrder();
   }
