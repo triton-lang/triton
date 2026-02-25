@@ -693,10 +693,12 @@ public:
     auto isFP4 = [&](ScaleDotElemType elemType) -> bool {
       return elemType == ScaleDotElemType::E2M1;
     };
-    // mixed precision is not supported
-    if (isFP8(aElemType) && isFP4(bElemType) ||
-        isFP4(aElemType) && isFP8(bElemType)) {
-      return failure();
+
+    // TODO: Enable mixed-precision mxfp for sm120
+    if (!((isFP8(aElemType) && isFP8(bElemType)) ||
+          (isFP4(aElemType) && isFP4(bElemType)))) {
+      return rewriter.notifyMatchFailure(
+          dotOp, "only FP8xFP8 and FP4xFP4 are supported on sm120");
     }
 
     auto scaleElemType = dotOp.getAScale().getType().getElementType();
