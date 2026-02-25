@@ -108,9 +108,8 @@ public:
   /// when modules and contexts are switched.
   /// So we just set them as thread local storage before the application kernel
   /// starts or after the application kernel ends.
-  void
-  setMetricKernels(const MetricKernelLaunchState &metricKernelLaunchState)
-      override {
+  void setMetricKernels(
+      const MetricKernelLaunchState &metricKernelLaunchState) override {
     this->metricKernelLaunchState = metricKernelLaunchState;
   }
 

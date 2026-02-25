@@ -262,10 +262,9 @@ protected:
         threadState.isMetricKernelLaunching = false;
       } else { // Eager mode, directly copy
         // Populate tensor metrics
-        auto tensorMetricsHost =
-            collectTensorMetrics(profiler.metricBuffer->getRuntime(),
-                                 tensorMetrics,
-                                 profiler.metricKernelLaunchState.stream);
+        auto tensorMetricsHost = collectTensorMetrics(
+            profiler.metricBuffer->getRuntime(), tensorMetrics,
+            profiler.metricKernelLaunchState.stream);
         auto &dataToEntry = threadState.dataToEntry;
         if (dataToEntry.empty()) {
           // Add metrics to a specific scope

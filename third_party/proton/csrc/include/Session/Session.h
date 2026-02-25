@@ -128,8 +128,7 @@ public:
                   const std::map<std::string, MetricValueType> &scalarMetrics,
                   const std::map<std::string, TensorMetric> &tensorMetrics);
 
-  void setMetricKernels(
-      const MetricKernelLaunchState &metricKernelLaunchState);
+  void setMetricKernels(const MetricKernelLaunchState &metricKernelLaunchState);
 
   void setState(std::optional<Context> context);
 
