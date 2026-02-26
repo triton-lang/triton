@@ -3,6 +3,7 @@ isort
 numpy
 pytest
 pytest-forked
+pytest-sugar
 pytest-xdist
 scipy>=1.7.1
 llnl-hatchet
