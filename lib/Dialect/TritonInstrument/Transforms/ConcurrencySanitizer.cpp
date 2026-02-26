@@ -246,9 +246,8 @@ private:
         }
         // Post-wait: transfer visible writes and reads to all peer threads,
         // and clear waiting for this barrier
-        if (auxData.barriers.empty() || !auxData.barriers.contains(op)) {
-          return;
-        }
+        assert(!auxData.barriers.empty() &&
+               "barrier descriptors must exist when instrumenting wait");
         auto pred = waitOp.getPred();
         auto barrier = waitOp.getAlloc();
 

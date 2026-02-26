@@ -614,9 +614,10 @@ void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
 void FunctionBuilder::createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b,
                                                      Value mbar,
                                                      Operation *insertPoint) {
-  if (auxData.barriers.empty() || auxData.barrierStates.empty()) {
-    return;
-  }
+  assert(!auxData.barriers.empty() &&
+         "barrier descriptors must exist when verifying barrier init");
+  assert(!auxData.barrierStates.empty() &&
+         "barrier states must exist when verifying barrier init");
   Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
       cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
@@ -658,9 +659,10 @@ void FunctionBuilder::createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b,
 
 void FunctionBuilder::createVerifyBarrierInitializedCall(
     ImplicitLocOpBuilder &b, Value mbar, Value pred, Operation *insertPoint) {
-  if (auxData.barriers.empty() || auxData.barrierStates.empty()) {
-    return;
-  }
+  assert(!auxData.barriers.empty() &&
+         "barrier descriptors must exist when verifying barrier use");
+  assert(!auxData.barrierStates.empty() &&
+         "barrier states must exist when verifying barrier use");
   if (!pred) {
     pred = arith::ConstantIntOp::create(b, 1, 1);
   }
@@ -769,10 +771,12 @@ void FunctionBuilder::createInitBarrierStateCall(ImplicitLocOpBuilder &b,
 void FunctionBuilder::createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b,
                                                        Value mbar,
                                                        Operation *insertPoint) {
-  if (auxData.barriers.empty() || auxData.barrierStates.empty() ||
-      auxData.waiting.empty()) {
-    return;
-  }
+  assert(!auxData.barriers.empty() &&
+         "barrier descriptors must exist when invalidating a barrier");
+  assert(!auxData.barrierStates.empty() &&
+         "barrier states must exist when invalidating a barrier");
+  assert(!auxData.waiting.empty() &&
+         "waiting state must exist when invalidating a barrier");
   Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
       cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
@@ -1441,10 +1445,11 @@ void FunctionBuilder::createTrackVisibleReadsCall(ImplicitLocOpBuilder &b,
 void FunctionBuilder::createClearBarrierWriteTrackingCall(
     ImplicitLocOpBuilder &b, Value mbar, Value pred, MemType memType,
     Operation *insertPoint) {
-  if (auxData.barriers.empty() || auxData.writeTracking[(int)memType].empty() ||
-      !auxData.writeTracking[(int)memType].contains(insertPoint)) {
+  if (auxData.writeTracking[(int)memType].empty()) {
     return;
   }
+  assert(!auxData.barriers.empty() &&
+         "barrier descriptors must exist when clearing barrier write tracking");
   if (!pred) {
     pred = arith::ConstantIntOp::create(b, 1, 1);
   }
@@ -1497,10 +1502,11 @@ void FunctionBuilder::createClearBarrierWriteTrackingCall(
 void FunctionBuilder::createClearBarrierReadTrackingCall(
     ImplicitLocOpBuilder &b, Value mbar, Value pred, MemType memType,
     Operation *insertPoint) {
-  if (auxData.barriers.empty() || auxData.readTracking[(int)memType].empty() ||
-      !auxData.readTracking[(int)memType].contains(insertPoint)) {
+  if (auxData.readTracking[(int)memType].empty()) {
     return;
   }
+  assert(!auxData.barriers.empty() &&
+         "barrier descriptors must exist when clearing barrier read tracking");
   if (!pred) {
     pred = arith::ConstantIntOp::create(b, 1, 1);
   }
