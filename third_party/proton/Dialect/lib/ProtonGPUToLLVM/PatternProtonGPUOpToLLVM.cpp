@@ -537,69 +537,6 @@ protected:
   const proton::gpu::TargetInfoBase &targetInfo;
 };
 
-struct GlobalScratchAllocOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::GlobalScratchAllocOp> {
-  explicit GlobalScratchAllocOpConversion(
-      LLVMTypeConverter &typeConverter,
-      const proton::gpu::TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : mlir::ConvertOpToLLVMPattern<triton::gpu::GlobalScratchAllocOp>(
-            typeConverter, benefit),
-        targetInfo(targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto *ctx = rewriter.getContext();
-
-    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
-    if (!funcOp) {
-      return failure();
-    }
-
-    ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
-    auto ptrTy = mlir::LLVM::LLVMPointerType::get(ctx, 1);
-    assert(op->hasAttr("offset"));
-    size_t offset =
-        cast<IntegerAttr>(op->getAttr("offset")).getValue().getZExtValue();
-
-    Value allocOffset = b.i32_val(offset);
-
-    // See NOTE: [Additional Function Arguments]
-    if (!LLVM::isKernel(funcOp)) {
-      // Base for this function
-      auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() +
-                                         kProfileScratchBufferOffset);
-
-      Value ptr = b.gep(ptrTy, i8_ty, gmemBase, allocOffset);
-      rewriter.replaceOp(op, ptr);
-      return success();
-    }
-
-    // Base for entire kernel
-    auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() +
-                                       kProfileScratchBufferOffset);
-    auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
-        "ttg.profile_scratch_memory_size");
-    assert(allocSizeAttr);
-
-    Value linearId = getLinearId(loc, rewriter);
-
-    auto allocSize = allocSizeAttr.getValue().getZExtValue();
-    Value gmemOffset =
-        b.add(allocOffset, b.mul(linearId, b.i32_val(allocSize)));
-
-    auto ptr = b.gep(ptrTy, i8_ty, gmemBase, gmemOffset);
-
-    rewriter.replaceOp(op, ptr);
-    return success();
-  }
-
-protected:
-  const proton::gpu::TargetInfoBase &targetInfo;
-};
-
 struct InitCtxOpConversion
     : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::InitCtxOp> {
   explicit InitCtxOpConversion(LLVMTypeConverter &typeConverter,
@@ -799,8 +736,6 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
   patterns.add<InitializeOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<FinalizeOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<SegmentAllocOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<GlobalScratchAllocOpConversion>(typeConverter, targetInfo,
-                                               benefit);
   patterns.add<InitCtxOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<RestoreCtxOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<SaveCtxOpConversion>(typeConverter, targetInfo, benefit);
