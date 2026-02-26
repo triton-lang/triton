@@ -550,9 +550,8 @@ the second fp4 element.</p>
 </pre></div>
 </div>
 <p>This operation allocates a buffer in global memory that is private to the current program.
-The <code class="docutils literal notranslate"><span class="pre">backend</span></code> attribute specifies the backend to use for allocation.
-The <code class="docutils literal notranslate"><span class="pre">default</span></code> backend is used by TritonGPU passes.
-Downstream Triton tools and compilers can register a different backend and use a different allocation policy.</p>
+A custom third-party allocation can be marked using the optional
+<code class="docutils literal notranslate"><span class="pre">third_party_allocation</span></code> unit attribute.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id12">
 <h3>Attributes:<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
@@ -560,7 +559,7 @@ Downstream Triton tools and compilers can register a different backend and use a
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>nbytes</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>alignment</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
-<tr><td><code>backend</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
+<tr><td><code>third_party_allocation</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 </section>
 <section id="id13">
