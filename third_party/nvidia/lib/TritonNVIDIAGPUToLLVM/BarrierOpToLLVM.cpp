@@ -162,8 +162,7 @@ struct InvalBarrierOpConversion
     auto barrierTy = op.getAlloc().getType();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getAlloc(),
-        typeConverter->convertType(barrierTy.getElementType()),
-        rewriter);
+        typeConverter->convertType(barrierTy.getElementType()), rewriter);
 
     // We use an elect predicate to tell ptxas that the operation is uniform,
     // which results in better codegen.
@@ -171,9 +170,8 @@ struct InvalBarrierOpConversion
     if (auto leaderPred =
             LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
       pred = b.and_(pred, *leaderPred);
-    Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(loc, rewriter,
-                                                      smemObj.getBase(),
-                                                      barrierTy);
+    Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
+        loc, rewriter, smemObj.getBase(), barrierTy);
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.inval.shared::cta.b64 [$1];";
     auto &barSyncOp = *ptxBuilder.create(ptx);
