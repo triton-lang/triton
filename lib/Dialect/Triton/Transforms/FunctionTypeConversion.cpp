@@ -23,9 +23,12 @@ FuncArgRenamer::apply(Type type, FunctionOpInterface funcOp, int index,
         }
         int newIndex = mapping->inputNo;
         auto loc = funcOp.getArgument(newIndex).getLoc();
-        auto baseName = isa<NameLoc>(loc)
-                            ? cast<NameLoc>(loc).getName().getValue()
-                            : "arg_" + std::to_string(index);
+        std::string baseName;
+        if (isa<NameLoc>(loc)) {
+          baseName = cast<NameLoc>(loc).getName().getValue();
+        } else {
+          baseName = "arg_" + std::to_string(index);
+        }
         assert(out_suffix.size() == mapping->size);
         for (auto [i, suffix] : llvm::enumerate(out_suffix)) {
           if (!suffix.empty()) {
