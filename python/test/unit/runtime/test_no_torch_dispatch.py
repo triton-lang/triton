@@ -2,14 +2,15 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import torch
 
 import pytest
 from triton._internal_testing import is_cuda
 
 
 def test_nvidia_kernel_dispatch_without_torch():
-    if not is_cuda():
-        pytest.skip("Requires CUDA")
+    if not is_cuda() and torch.cuda.get_device_capability()[0] >= 9:
+        pytest.skip("Requires CUDA and TMAs")
 
     env = os.environ.copy()
     # force cuda driver to avoid importing torch when checking for other backends.
