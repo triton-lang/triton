@@ -148,8 +148,7 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                           reinterpret_cast<void *>(&metricValueSize),
                           reinterpret_cast<void *>(&globalScratchPtr),
                           reinterpret_cast<void *>(&profileScratchPtr)};
-  unsigned int blockDimX =
-      launchConfig.numWarps * getWarpSize(runtime->getDeviceType());
+  unsigned int blockDimX = std::max(1u, launchConfig.numThreads);
   runtime->launchKernel(launchConfig.kernel, 1, 1, 1, blockDimX, 1, 1,
                         launchConfig.sharedMemBytes, stream, kernelParams,
                         nullptr);
@@ -187,8 +186,7 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
                           reinterpret_cast<void *>(&metricBits),
                           reinterpret_cast<void *>(&globalScratchPtr),
                           reinterpret_cast<void *>(&profileScratchPtr)};
-  unsigned int blockDimX =
-      launchConfig.numWarps * getWarpSize(runtime->getDeviceType());
+  unsigned int blockDimX = std::max(1u, launchConfig.numThreads);
   runtime->launchKernel(launchConfig.kernel, 1, 1, 1, blockDimX, 1, 1,
                         launchConfig.sharedMemBytes, stream, kernelParams,
                         nullptr);

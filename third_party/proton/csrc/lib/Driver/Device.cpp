@@ -25,14 +25,4 @@ const std::string getDeviceTypeString(DeviceType type) {
   throw std::runtime_error("DeviceType not supported");
 }
 
-unsigned int getWarpSize(DeviceType type) {
-  if (type == DeviceType::HIP) {
-    return 64;
-  }
-  if (type == DeviceType::CUDA) {
-    return 32;
-  }
-  throw std::runtime_error("DeviceType not supported");
-}
-
 } // namespace proton

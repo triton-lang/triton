@@ -385,7 +385,7 @@ struct TensorMetric {
 
 struct MetricKernelLaunchConfig {
   void *kernel{nullptr};
-  unsigned int numWarps{1};
+  unsigned int numThreads{1};
   unsigned int sharedMemBytes{0};
 };
 
