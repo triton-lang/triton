@@ -64,6 +64,10 @@ struct AuxDataMap {
       return at(getEnclosingParitionOrFunctionRegion(op));
     }
     void insert(Region *region, ValueType value) { values[region] = value; }
+    bool contains(Region *region) const { return values.contains(region); }
+    bool contains(Operation *op) {
+      return contains(getEnclosingParitionOrFunctionRegion(op));
+    }
     bool empty() const { return values.empty(); }
 
   private:

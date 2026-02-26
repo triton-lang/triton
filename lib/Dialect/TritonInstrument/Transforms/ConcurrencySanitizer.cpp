@@ -17,7 +17,7 @@
 // ------------------|---------|-----------------|------------
 // buffers           | tensor  | <B x i64>       | Base pointers of all (sub)buffers
 // barriers          | tensor  | <K x i64>       | Pointers to all individual mbarriers
-// barrierStates     | scratch | <K x i32>       | Packed barrier phase (bit 0) and arrival counts (bits[1..8] init, [9..16] current)
+// barrierStates     | scratch | <K x i32>       | Packed barrier phase (bit 0) and arrival counts (bits[1..8] init, [9..16] current); zero means invalid/uninitialized
 // waiting           | scratch | <K x i32>       | Two bits per thread: waiting flag bit (LSB), stored phase bit (bit 1)
 // writeVisibility   | scratch | <B x i64>       | Per-buffer thread-visibility bitmask (bit i => thread i visible)
 // readVisibility    | scratch | <B x T x i64>   | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
@@ -208,8 +208,22 @@ private:
         }
       }
       if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op)) {
+        funcBuilder.createVerifyBarrierCanInitCall(b, initOp.getAlloc(),
+                                                   initOp);
         funcBuilder.createInitBarrierStateCall(b, initOp.getAlloc(),
                                                initOp.getCount(), initOp);
+      }
+      if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op)) {
+        Value barrier = invalOp.getAlloc();
+        funcBuilder.createVerifyBarrierInitializedCall(b, barrier, nullptr,
+                                                       invalOp);
+        funcBuilder.createInvalidateBarrierStateCall(b, barrier, invalOp);
+        for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
+          funcBuilder.createClearBarrierWriteTrackingCall(b, barrier, nullptr,
+                                                          memType, invalOp);
+          funcBuilder.createClearBarrierReadTrackingCall(b, barrier, nullptr,
+                                                         memType, invalOp);
+        }
       }
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
         // Pre-wait: mark waiting threads and check for deadlock.
@@ -219,6 +233,8 @@ private:
           b.setInsertionPoint(waitOp);
           auto pred = waitOp.getPred();
           auto barrier = waitOp.getAlloc();
+          funcBuilder.createVerifyBarrierInitializedCall(b, barrier, pred,
+                                                         waitOp);
           funcBuilder.createSetWaitingCall(b, barrier, baseThread,
                                            waitOp.getPhase(), pred, waitOp);
           funcBuilder.createCheckAllActiveWaitingCall(b, getActiveMask(op),
@@ -230,8 +246,9 @@ private:
         }
         // Post-wait: transfer visible writes and reads to all peer threads,
         // and clear waiting for this barrier
-        auto _barriers = auxData.barriers.at(op).value;
-        assert(!auxData.barriers.empty());
+        if (auxData.barriers.empty() || !auxData.barriers.contains(op)) {
+          return;
+        }
         auto pred = waitOp.getPred();
         auto barrier = waitOp.getAlloc();
 
@@ -372,6 +389,8 @@ private:
     for (const auto &barrierInfo : opInfo->barriers) {
       Value barrier = barrierInfo.barrier;
       Value combinedPred = combinePredicates(barrierInfo.pred);
+      funcBuilder.createVerifyBarrierInitializedCall(b, barrier, combinedPred,
+                                                     op);
       // If the op has barriers, we treat it as a commit emitted for each
       // barrier.
       for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
