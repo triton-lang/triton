@@ -164,8 +164,8 @@ public:
       int64_t alignment = std::max<int64_t>(elSize, 16);
       int64_t sizeInBytes = product(memTy.getShape()) * elSize;
       auto ptrTy = triton::getPointerType(memTy.getElementType());
-      auto allocOp = ttg::GlobalScratchAllocOp::create(rewriter, loc, ptrTy,
-                                                       sizeInBytes, alignment);
+      auto allocOp = ttg::GlobalScratchAllocOp::create(
+          rewriter, loc, ptrTy, sizeInBytes, alignment, UnitAttr());
       allocOp->setDiscardableAttr("tt.divisibility",
                                   rewriter.getI64IntegerAttr(alignment));
       Value ptr = allocOp.getResult();
@@ -312,8 +312,8 @@ Value createScratchAndStore(PatternRewriter &rewriter, Location loc, Value val,
   int64_t alignment = std::max<int64_t>(elSize, 16);
   int64_t sizeInBytes = product(tensorTy.getShape()) * elSize;
   auto ptrTy = triton::getPointerType(tensorTy.getElementType());
-  auto allocOp = ttg::GlobalScratchAllocOp::create(rewriter, loc, ptrTy,
-                                                   sizeInBytes, alignment);
+  auto allocOp = ttg::GlobalScratchAllocOp::create(
+      rewriter, loc, ptrTy, sizeInBytes, alignment, UnitAttr());
   allocOp->setDiscardableAttr("tt.divisibility",
                               rewriter.getI64IntegerAttr(alignment));
   createStoreScratchMemory(rewriter, loc, allocOp.getResult(), val, tensorTy);
@@ -482,8 +482,8 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
   int64_t alignment = std::max<int64_t>(elSize, 16);
   int64_t sizeInBytes = product(memTy.getShape()) * elSize;
   auto ptrTy = triton::getPointerType(memTy.getElementType());
-  auto allocOp = ttg::GlobalScratchAllocOp::create(rewriter, loc, ptrTy,
-                                                   sizeInBytes, alignment);
+  auto allocOp = ttg::GlobalScratchAllocOp::create(
+      rewriter, loc, ptrTy, sizeInBytes, alignment, UnitAttr());
   allocOp->setDiscardableAttr("tt.divisibility",
                               rewriter.getI64IntegerAttr(alignment));
   Value ptr = allocOp.getResult();
