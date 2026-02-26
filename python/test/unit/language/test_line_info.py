@@ -484,3 +484,8 @@ def test_map_elementwise_has_lineinfo():
     kernel_info = kernel.warmup(torch.float32, torch.float32, grid=(1, ))
     check_template = inspect.getsource(kernel.fn)
     run_filecheck("test", kernel_info.asm["ttir"], check_template)
+
+
+@pytest.fixture(scope="module")
+def with_line_info(fresh_knobs):
+    fresh_knobs.compile.disable_line_info = False

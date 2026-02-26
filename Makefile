@@ -31,14 +31,10 @@ test-cpp:
 
 .PHONY: test-unit
 test-unit: all
-	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore=language/test_line_info.py \
-		--ignore=language/test_subprocess.py --ignore=test_debug.py --ignore=plugins/test_dialect_plugin.py --ignore=plugins/test_plugin.py
-	$(PYTEST) -n $(NUM_PROCS) python/test/unit/language/test_subprocess.py
-	$(PYTEST) -n $(NUM_PROCS) python/test/unit/test_debug.py
+	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*'
 	$(PYTEST) -n 6 python/triton_kernels/tests/
-	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) python/test/unit/language/test_line_info.py
 	$(PYTEST) -n $(NUM_PROCS) python/tutorials/ --ignore-glob='*/gluon/*' --ignore python/tutorials/06-fused-attention.py
-	# Run tutorials separately to avoid out of gpu memory
+	# Run attention tutorial separately to avoid out of gpu memory
 	$(PYTEST) python/tutorials/06-fused-attention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
