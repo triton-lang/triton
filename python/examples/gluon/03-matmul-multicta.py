@@ -423,6 +423,7 @@ def _matmul_kernel(
     BLOCK_M: gl.constexpr = a_desc.block_shape[0]
     BLOCK_N: gl.constexpr = b_desc.block_shape[1]
     TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
+    N_PARTITIONS: gl.constexpr = 4
 
     dtype: gl.constexpr = a_desc.dtype
     a_bufs = gl.allocate_shared_memory(dtype, [STAGES] + a_desc.block_shape, a_desc.layout)
@@ -456,7 +457,8 @@ def _matmul_kernel(
     clc_consumed_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=TWO_CTAS)
     for i in gl.static_range(ACC_STAGES):
         mbarrier.init(clc_barriers.index(i), count=1)
-        mbarrier.init(clc_consumed_bars.index(i), count=3)
+        # Every partition but itself arrives on the barrier
+        mbarrier.init(clc_consumed_bars.index(i), count=N_PARTITIONS - 1)
 
     cga_layout: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
     clc_result_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 2],
