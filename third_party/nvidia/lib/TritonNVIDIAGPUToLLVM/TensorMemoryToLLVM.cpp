@@ -356,7 +356,6 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
-  auto kBlock = str_attr("block");
 
   auto kCol = str_attr("col");
   auto kRow = str_attr("row");
@@ -380,11 +379,9 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
   // The block offset is already added to the tmemBase
   // Add warp groups to tmemBase
   if (reps.getInDimSize(kWarp) > 4) {
-    auto rowCol = applyLinearLayout(loc, rewriter, reps,
-                                    {{kReg, b.i32_val(0)},
-                                     {kLane, b.i32_val(0)},
-                                     {kWarp, warpId},
-                                     {kBlock, b.i32_val(0)}});
+    auto rowCol = applyLinearLayout(
+        loc, rewriter, reps,
+        {{kReg, b.i32_val(0)}, {kLane, b.i32_val(0)}, {kWarp, warpId}});
     auto [row, col] = getRowCol(rowCol);
     tmemBase = b.add(tmemBase,
                      b.or_(b.shl(row, b.i32_val(16)), col, /*disjoint*/ true));
@@ -393,7 +390,7 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
   SmallVector<Value> resultVals, redvalVals;
   for (int i = 0; i < reps.getInDimSize(kReg); i += valsPerMessage) {
     auto [row, col] =
-        getRowCol(reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}}));
+        getRowCol(reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}}));
     // Encode row into the base address and pass col as an immediate colOffset.
     int staticOffset = col | (row << 16);
     if (isStore) {
@@ -704,6 +701,7 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
   auto kOffset = str_attr("offset");
   auto kRow = str_attr("row");
   auto kCol = str_attr("col");
+  auto kBlock = str_attr("block");
 
   MemDescType srcTy = op.getSrc().getType();
   MemDescType dstTy = op.getDst().getType();
@@ -725,9 +723,11 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
   // once we have access to the lbo/sbo
   const SmallVector<unsigned> instrShape = {32, atom.bCol / bitwidth};
   auto kWarp = str_attr("warp");
-  auto cvtWarp =
-      cvt.reshapeIns({{kRow, 32}, {kWarp, 4}, {kCol, cvt.getInDimSize(kCol)}})
-          .sublayout({kRow, kCol}, to_vector(cvt.getOutDimNames()));
+  auto cvtWarp = cvt.reshapeIns({{kRow, 32},
+                                 {kWarp, 4},
+                                 {kCol, cvt.getInDimSize(kCol)},
+                                 {kBlock, cvt.getInDimSize(kBlock)}})
+                     .sublayout({kRow, kCol}, to_vector(cvt.getOutDimNames()));
 
   auto loader = DotOpMmaSmemLoader::build(loc, rewriter, cvtWarp, bitwidth,
                                           smemBase, instrShape, 0, 5);
@@ -751,13 +751,7 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
            strideRow * (64 / 8));
   }
 
-  // Only copy scale columns that map to block=0 (this CTA's slice).
-  auto kBlock = str_attr("block");
-  const int blockIdx = cvtWarp.getOutDimIndex(kBlock);
   for (int col = 0; col < cvt.getInDimSize(kCol); col += instrShape[1]) {
-    auto offsetBlock = cvtWarp.apply({{kRow, 0}, {kCol, col}});
-    if (offsetBlock[blockIdx].second != 0)
-      continue;
     auto desc = loader->smemLoad(0, col, rewriter, loc);
     auto tmemAddr =
         b.add(b.ptrtoint(i32_ty, baseDst), b.i32_val(col * bitwidth / 32));

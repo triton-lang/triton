@@ -34,6 +34,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -535,6 +536,13 @@ LogicalResult TCGen5MMAOp::verify() {
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
 
+  if (getA().getType().getRank() != 2)
+    return emitOpError("LHS operand must have a rank-2 tensor");
+  if (getB().getType().getRank() != 2)
+    return emitOpError("RHS operand must have a rank-2 tensor");
+  if (getD().getType().getRank() != 2)
+    return emitOpError("Return operand must have a rank-2 tensor");
+
   auto aEnc = getA().getType().getEncoding();
   if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
            TensorMemoryEncodingAttr>(aEnc))
@@ -562,22 +570,24 @@ LogicalResult TCGen5MMAOp::verify() {
     return emitOpError("The block size of the return operand must be less than "
                        "or equal to 256");
 
-  auto aSplit = getCTASplitNum(aEnc);
-  auto bSplit = getCTASplitNum(bEnc);
-  if (aSplit[1] != 1) {
+  auto aCGA = getCGALayout(aEnc).getLinearLayout();
+  auto bCGA = getCGALayout(bEnc).getLinearLayout();
+  auto outDims = standardOutDimNames(getContext(), 2);
+  if (aCGA.getOutDimSize(outDims[1]) != 1) {
     return emitOpError("LHS CTASplit along K should be 1, but got ")
-           << aSplit[1];
+           << aCGA.getOutDimSize(outDims[1]);
   }
-  if (bSplit[0] != 1) {
+  if (bCGA.getOutDimSize(outDims[0]) != 1) {
     return emitOpError("RHS CTASplit along K should be 1, but got ")
-           << bSplit[0];
+           << bCGA.getOutDimSize(outDims[0]);
   }
 
+  auto kBlock = StringAttr::get(getContext(), "block");
   if (getTwoCtas()) {
-    auto retSplit = getCTASplitNum(retEnc);
-
-    auto nPerCTA = retType.getDimSize(1) / retSplit[1];
-
+    if (bCGA.getBasis(kBlock, 0) != ArrayRef{0, 1}) {
+      return emitOpError("twoCTA mode expects the first basis of the "
+                         "cga_layout of the RHS to be [0, 1]");
+    }
     // [Note: numRepN > 1 and two_ctas]
     // Consider, just as an example, num_ctas=16, and a huge tile of shape
     // MNK = 512x64x2048
@@ -608,37 +618,42 @@ LogicalResult TCGen5MMAOp::verify() {
     // right.
     // We could allow with a bit of effort SharedLinearLayouts that did not
     // divide on the right by a CGALayout, but for now we throw a lovely error.
+    auto dCGA = getCGALayout(retEnc).getLinearLayout();
+    auto nPerCTA = retType.getDimSize(1) / dCGA.getOutDimSize(outDims[1]);
     if (nPerCTA > 256)
       return emitOpError(
           "We don't allow to emit more than one mma instruction along N. "
           "Reduce the block or increase the number of warps or CTAs along N");
-
-    unsigned retM = retSplit[0];
-    unsigned retN = retSplit[1];
-    if (aSplit[0] != retM) {
-      return emitOpError("twoCTA mode expects the LHS split along M to match "
-                         "the result split along M. Expected ")
-             << retM << " but got " << aSplit[0];
-    }
-    if (bSplit[1] != 2 * retN) {
-      return emitOpError(
-                 "twoCTA mode expects the RHS split along N to be twice the "
-                 "result split along N. Expected ")
-             << 2 * retN << " but got " << bSplit[1];
-    }
-
-    if (!retEnc.getTwoCTAs())
-      return emitOpError(
-          "The returned value's encoding must have twoCTA=true to be used "
-          "in a twoCTA matmul");
-    if (auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
-      if (!tmemEnc.getTwoCTAs())
-        return emitOpError(
-            "The LHS operand's encoding must have twoCTA=true to be used "
-            "in a twoCTA matmul");
+  }
+  if (retEnc.getTwoCTAs() != getTwoCtas()) {
+    return emitOpError("The returned value's encoding must have twoCTA=")
+           << getTwoCtas() << " to be used in a "
+           << (getTwoCtas() ? "twoCTA" : "non-twoCTA") << " kernel";
+  }
+  if (auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
+    if (tmemEnc.getTwoCTAs() != getTwoCtas()) {
+      return emitOpError("The LHS operand's encoding must have twoCTA=")
+             << getTwoCtas() << " to be used in a "
+             << (getTwoCtas() ? "twoCTA" : "non-twoCTA") << " kernel";
     }
   }
 
+  auto aLayout = toLinearLayout(getA().getType());
+  auto bLayout = toLinearLayout(getB().getType());
+  auto dLayout = toLinearLayout(getD().getType());
+  auto log2nCTAs = dLayout.getInDimSizeLog2(kBlock);
+  for (int i = 0; i < log2nCTAs; i++) {
+    std::vector<int32_t> basis = {aLayout.getBasis(kBlock, i, outDims[0]),
+                                  bLayout.getBasis(kBlock, i, outDims[1])};
+    if (getTwoCtas() && i == 0) {
+      basis[1] = 0;
+    }
+    if (dLayout.getBasis(kBlock, i) != ArrayRef<int32_t>(basis)) {
+      return emitOpError("expected block basis ")
+             << basis << " at result index " << i << ", but got "
+             << dLayout.getBasis(kBlock, i);
+    }
+  }
   return success();
 }
 
@@ -1066,6 +1081,15 @@ LogicalResult TMEMCopyOp::verify() {
     return emitOpError("Source must have at least 16-byte alignment to be "
                        "representable in a matrix descriptor.");
   }
+  auto shmemLl = toLinearLayout(srcTy);
+  auto tmemLl = toLinearLayout(dstTy);
+
+  auto kBlock = StringAttr::get(srcTy.getContext(), "block");
+  auto cvt = tmemLl.invertAndCompose(shmemLl);
+  if (!cvt.isTrivialOver(kBlock))
+    return emitOpError("The source and destination must have the same cga "
+                       "layout. Got source: ")
+           << shmemLl.toString() << " and destination: " << tmemLl.toString();
 
   // Fp4 we could lift if we needed
   auto nvmmaEnc =
@@ -1122,8 +1146,7 @@ LogicalResult TMEMSubSliceOp::verify() {
   if (!dstEncoding)
     return emitOpError("The destination must be a tensor memory buffer.");
   if (dstEncoding.getBlockM() != encoding.getBlockM() ||
-      dstEncoding.getCTASplitM() != encoding.getCTASplitM() ||
-      dstEncoding.getCTASplitN() != encoding.getCTASplitN() ||
+      dstEncoding.getCGALayout() != encoding.getCGALayout() ||
       dstEncoding.getColStride() != encoding.getColStride())
     return emitOpError("The destination must have the same block size and "
                        "CTASplit size as the source.");
@@ -1140,8 +1163,7 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
   unsigned newBlockN = std::min<unsigned>(encoding.getBlockN(), size);
   auto newEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
       builder.getContext(), encoding.getBlockM(), newBlockN,
-      encoding.getColStride(), encoding.getCTASplitM(), encoding.getCTASplitN(),
-      encoding.getTwoCTAs());
+      encoding.getColStride(), encoding.getCGALayout(), encoding.getTwoCTAs());
   auto subsliceType = gpu::MemDescType::get(
       shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
       allocTy.getMutableMemory(), allocTy.getAllocShape());

@@ -1035,61 +1035,25 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   auto kRow = S("row");
   auto kCol = S("col");
   auto dims = standardOutDimNames(ctx, 2);
-  // The CTAOrder = [0, 1] so se start by N so that it ends up as
-  // ((tile * splitM) * splitN)
-  if (encoding.getCTASplitN() > 1) {
-    auto split =
-        LinearLayout::identity1D(encoding.getCTASplitN(), kCol, dims[1]);
-    auto newEncoding = TensorMemoryEncodingAttr::get(
-        ctx, encoding.getBlockM(), encoding.getBlockN(),
-        encoding.getColStride(), encoding.getCTASplitM(), 1,
-        encoding.getTwoCTAs());
-    return tensorMemoryToLinearLayout(
-               {shape[0], shape[1] / encoding.getCTASplitN()}, newEncoding) *
-           split;
-  }
-  if (encoding.getCTASplitM() > 1) {
-    auto splitM = encoding.getCTASplitM();
-    auto blockM = encoding.getBlockM();
-    bool isM64TwoCTA = blockM == 64 && encoding.getTwoCTAs();
-    if (isM64TwoCTA) {
-      // blockM == 64 and twoCTAs is laid out as the transpose of 128xblockN
-      // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-b
-      blockM *= 2;
-      splitM /= 2;
-    }
-    auto newEncoding = TensorMemoryEncodingAttr::get(
-        ctx, blockM, encoding.getBlockN(), encoding.getColStride(), 1,
-        encoding.getCTASplitN(), encoding.getTwoCTAs());
-    auto ret =
-        tensorMemoryToLinearLayout({shape[0] / splitM, shape[1]}, newEncoding);
-    // In this case, we swap the basis of the last row and last column
-    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-bny
-    if (isM64TwoCTA) {
-      auto bases = ret.getBases();
-      auto basisCTA1 =
-          llvm::Log2_32(encoding.getBlockN() * encoding.getColStride()) - 1;
-      std::swap(bases[kRow].back(), bases[kCol][basisCTA1]);
-      ret =
-          LinearLayout(std::move(bases), ret.getOutDims(), ret.isSurjective());
-    }
-    auto split = LinearLayout::identity1D(splitM, kCol, dims[0]);
-    return ret * split;
-  }
-  assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1);
+  auto cgaLayout = encoding.getCGALayout();
+  auto cgaLL = cgaLayout.getLinearLayout();
+  bool isM64TwoCTA = encoding.getBlockM() == 64 && encoding.getTwoCTAs();
+
+  auto shapePerCTA = getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
+  assert(shapePerCTA.size() == 2);
 
   auto blockM = encoding.getBlockM();
-  auto blockN = std::min<int32_t>(encoding.getBlockN(), shape[1]);
+  auto blockN = std::min<int32_t>(encoding.getBlockN(), shapePerCTA[1]);
   assert(blockM == 64 || blockM == 128);
   LinearLayout tile =
       LinearLayout::zeros1D(encoding.getColStride(), kCol, dims[1]);
-  if (blockM == 64) {
+  if (blockM == 64 && !encoding.getTwoCTAs()) {
     tile *= LinearLayout::identity1D(16, kRow, dims[0]) *
             LinearLayout::identity1D(blockN, kCol, dims[1]);
     auto bases = tile.getBases();
-    if (shape[0] > blockM) {
+    if (shapePerCTA[0] > blockM) {
       bases[kRow].push_back({64, 0});
-    } else if (shape[1] > blockN) {
+    } else if (shapePerCTA[1] > blockN) {
       bases[kRow].push_back({0, blockN});
     } else {
       // Empty, meaning the element is not defined
@@ -1101,13 +1065,21 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   } else {
     tile *= LinearLayout::identity1D(blockM, kRow, dims[0]) *
             LinearLayout::identity1D(blockN, kCol, dims[1]);
+    if (isM64TwoCTA) {
+      auto bases = tile.getBases();
+      bases[kRow].push_back(bases[kCol].back());
+      bases[kCol].pop_back();
+      tile = LinearLayout(std::move(bases), tile.getOutDims(),
+                          tile.isSurjective());
+    }
   }
-  auto repsM = shape[0] / tile.getOutDimSize(dims[0]);
-  auto repsN = shape[1] / tile.getOutDimSize(dims[1]);
+  auto repsM = shapePerCTA[0] / tile.getOutDimSize(dims[0]);
+  auto repsN = shapePerCTA[1] / tile.getOutDimSize(dims[1]);
   assert(repsM >= 1 && repsN >= 1);
   // Broadcast the remaining dimensions in order [0, 1]
   tile = tile * LinearLayout::identity1D(repsM, kCol, dims[0]) *
          LinearLayout::identity1D(repsN, kCol, dims[1]);
+  tile *= cgaLL;
   return tile;
 }
 
@@ -1118,29 +1090,11 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
   auto *ctx = encoding.getContext();
   auto kRow = S("row");
   auto kCol = S("col");
+  auto kBlock = S("block");
   auto dims = standardOutDimNames(ctx, 2);
-
-  // The CTAOrder = [0, 1] so se start by N so that it ends up as
-  // ((tile * splitM) * splitN)
-  if (encoding.getCTASplitN() > 1) {
-    auto split =
-        LinearLayout::identity1D(encoding.getCTASplitN(), kCol, dims[1]);
-    auto newEncoding =
-        TensorMemoryScalesEncodingAttr::get(ctx, encoding.getCTASplitM(), 1);
-    return tensorMemoryScalesToLinearLayout(
-               {shape[0], shape[1] / encoding.getCTASplitN()}, newEncoding) *
-           split;
-  }
-  if (encoding.getCTASplitM() > 1) {
-    auto split =
-        LinearLayout::identity1D(encoding.getCTASplitM(), kCol, dims[0]);
-    auto newEncoding =
-        TensorMemoryScalesEncodingAttr::get(ctx, 1, encoding.getCTASplitN());
-    return tensorMemoryScalesToLinearLayout(
-               {shape[0] / encoding.getCTASplitM(), shape[1]}, newEncoding) *
-           split;
-  }
-  assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1);
+  auto cgaLayout = encoding.getCGALayout();
+  auto shapePerCTA = getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
+  assert(shapePerCTA.size() == 2);
 
   // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-1x
   auto tile = LinearLayout::identity1D(32, kRow, dims[0]) *
@@ -1150,18 +1104,21 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
               LinearLayout::identity1D(2, kCol, dims[0]);
   // We choose repOrder = [0, 1]
   tile *= LinearLayout::identity1D(
-              llvm::divideCeil(shape[0], tile.getOutDimSize(dims[0])), kCol,
-              dims[0]) *
+              llvm::divideCeil(shapePerCTA[0], tile.getOutDimSize(dims[0])),
+              kCol, dims[0]) *
           LinearLayout::identity1D(
-              llvm::divideCeil(shape[1], tile.getOutDimSize(dims[1])), kCol,
-              dims[1]);
+              llvm::divideCeil(shapePerCTA[1], tile.getOutDimSize(dims[1])),
+              kCol, dims[1]);
+  // Add a trivial block dimension
+  tile *= LinearLayout::identity1D(1, kBlock, dims[0]);
   // See [Zeros in TMEM LinearLayouts]
   // Set some rows/cols to 0 if shape is smaller than 64 x 4
   llvm::SmallDenseMap<StringAttr, int64_t> shapeMap;
-  for (auto [dim, size] : llvm::zip(dims, shape)) {
+  for (auto [dim, size] : llvm::zip(dims, shapePerCTA)) {
     shapeMap[dim] = size;
   }
-  return ensureLayoutNotLargerThan(tile, shapeMap);
+  tile = ensureLayoutNotLargerThan(tile, shapeMap);
+  return tile * cgaLayout.getLinearLayout();
 }
 
 // Convert a PartitionedSharedEncodingAttr to a LinearLayout.

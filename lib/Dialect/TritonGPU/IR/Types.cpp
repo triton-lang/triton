@@ -130,11 +130,12 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
     shape = shape.take_back(2);
     allocShape = allocShape.take_back(2);
-    if (allocShape[0] < enc.getBlockM() * enc.getCTASplitM() ||
-        allocShape[1] < enc.getBlockN() * enc.getCTASplitN()) {
+    auto ctaSplit = enc.getCGALayout().getCTASplitNum();
+    if (allocShape[0] < enc.getBlockM() * ctaSplit[0] ||
+        allocShape[1] < enc.getBlockN() * ctaSplit[1]) {
       return emitError() << "the allocation shape must be at least "
-                         << enc.getBlockM() * enc.getCTASplitM() << "x"
-                         << enc.getBlockN() * enc.getCTASplitN() << ". Got "
+                         << enc.getBlockM() * ctaSplit[0] << "x"
+                         << enc.getBlockN() * ctaSplit[1] << ". Got "
                          << allocShape;
     }
     auto ll = toLinearLayout(allocShape, enc);
