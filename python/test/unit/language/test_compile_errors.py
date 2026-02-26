@@ -212,13 +212,14 @@ def test_runtime_loop_err_on_constexpr_value_change():
         for _ in range(0, n, 1):
             a0 = b0
 
-    with pytest.raises(AssertionError, match="Loop-carried constexpr a0 changed value"):
+    with pytest.raises(CompilationError) as e:
         triton.compile(
             triton.compiler.ASTSource(
                 fn=kernel,
                 signature={"a0": "constexpr", "b0": "constexpr", "n": "i32"},
                 constexprs={"a0": 1, "b0": 2},
             ))
+    assert "Loop-carried constexpr a0 changed value" in str(e.value)
 
 
 @triton.jit
