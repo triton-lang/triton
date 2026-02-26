@@ -31,17 +31,16 @@ test-cpp:
 
 .PHONY: test-unit
 test-unit: all
-	cd python/test/unit && $(PYTEST) --tb=short -n $(NUM_PROCS) --ignore=language/test_line_info.py \
+	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore=language/test_line_info.py \
 		--ignore=language/test_subprocess.py --ignore=test_debug.py --ignore=plugins/test_dialect_plugin.py --ignore=plugins/test_plugin.py
-	$(PYTEST) --tb=short -n $(NUM_PROCS) python/test/unit/language/test_subprocess.py
-	$(PYTEST) --tb=short -n $(NUM_PROCS) python/test/unit/test_debug.py --forked
-	$(PYTEST) --tb=short -n 6 python/triton_kernels/tests/
-	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) --tb=short python/test/unit/language/test_line_info.py
-	# Run attention separately to avoid out of gpu memory
-	$(PYTEST) --tb=short python/tutorials/06-fused-attention.py
-	$(PYTEST) --tb=short -n $(NUM_PROCS) python/test/gluon
-	$(PYTEST) --tb=short -n $(NUM_PROCS) python/tutorials/gluon
-	$(PYTEST) --tb=short python/examples/gluon/
+	$(PYTEST) -n $(NUM_PROCS) python/test/unit/language/test_subprocess.py
+	$(PYTEST) -n $(NUM_PROCS) python/test/unit/test_debug.py
+	$(PYTEST) -n 6 python/triton_kernels/tests/
+	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) python/test/unit/language/test_line_info.py
+	$(PYTEST) -n $(NUM_PROCS) python/test/gluon
+	$(PYTEST) -n $(NUM_PROCS) python/tutorials/ python/examples --ignore python/tutorials/06-fused-attention.py
+	# Run tutorials separately to avoid out of gpu memory
+	$(PYTEST) python/tutorials/06-fused-attention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libTritonPluginsTestLib.so \
@@ -51,13 +50,13 @@ test-unit: all
 
 .PHONY: test-gluon
 test-gluon: all
-	$(PYTEST) --tb=short -n $(NUM_PROCS) python/test/gluon
-	$(PYTEST) --tb=short python/examples/gluon/
-	$(PYTEST) --tb=short -n $(NUM_PROCS) python/tutorials/gluon
+	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/
+	$(PYTEST) python/examples/gluon/
+	$(PYTEST) -n $(NUM_PROCS) python/tutorials/gluon/
 
 .PHONY: test-regression
 test-regression: all
-	$(PYTEST) --tb=short -n $(NUM_PROCS) python/test/regression
+	$(PYTEST) -n $(NUM_PROCS) python/test/regression
 
 .PHONY: test-microbenchmark
 test-microbenchmark: all
@@ -65,17 +64,17 @@ test-microbenchmark: all
 
 .PHONY: test-interpret
 test-interpret: all
-	cd python/test/unit && TRITON_INTERPRET=1 $(PYTEST) --tb=short -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
+	cd python/test/unit && TRITON_INTERPRET=1 $(PYTEST) -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
 		language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
 		language/test_tuple.py runtime/test_launch.py runtime/test_autotuner.py::test_kwargs[False] \
 		../../tutorials/06-fused-attention.py::test_op --device=cpu
 
 .PHONY: test-proton
 test-proton: all
-	$(PYTEST) --tb=short -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py -k "not test_overhead and not test_hw_trace"
-	$(PYTEST) --tb=short third_party/proton/test/test_profile.py::test_hw_trace
-	$(PYTEST) --tb=short third_party/proton/test/test_override.py
-	$(PYTEST) --tb=short third_party/proton/test/test_instrumentation.py::test_overhead
+	$(PYTEST) -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py -k "not test_overhead and not test_hw_trace"
+	$(PYTEST) third_party/proton/test/test_profile.py::test_hw_trace
+	$(PYTEST) third_party/proton/test/test_override.py
+	$(PYTEST) third_party/proton/test/test_instrumentation.py::test_overhead
 
 .PHONY: test-python
 test-python: test-unit test-regression test-interpret test-proton
