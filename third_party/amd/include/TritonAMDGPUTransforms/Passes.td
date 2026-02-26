@@ -186,6 +186,14 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
   ];
 }
 
+def TritonAMDGPUOptimizeBufferOpPtr : Pass<"tritonamdgpu-optimize-buffer-op-ptr", "mlir::triton::FuncOp"> {
+  let summary = "Optimize address operands of buffer operations";
+
+  let description = "This pass optimizes address computation for buffer operations";
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
+}
+
 def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::ModuleOp"> {
   let summary = "Interleaving instructions from two warps on the same SIMD to better utilize matrix core";
 

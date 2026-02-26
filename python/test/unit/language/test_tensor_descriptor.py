@@ -1662,6 +1662,55 @@ def test_host_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK, devi
     torch.testing.assert_close(expect, unwrap_tensor(out))
 
 
+@pytest.mark.interpreter()
+@pytest.mark.parametrize("dtype_str", tma_dtypes)
+def test_host_tensor_descriptor_in_tuple(dtype_str, device):
+
+    @triton.jit(debug=True)
+    def kernel(out_ptr, payload, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        desc0 = payload[0]
+        desc1 = payload[1]
+        m_idx = payload[2]
+
+        assert desc0.shape[0] == M
+        assert desc0.shape[1] == N
+        assert desc0.strides[0] == N
+        assert desc0.strides[1] == 1
+        assert desc0.block_shape == [M_BLOCK, N_BLOCK]
+
+        assert desc1.shape[0] == M * 2
+        assert desc1.shape[1] == N + 16
+        assert desc1.strides[0] == N + 16
+        assert desc1.strides[1] == 1
+        assert desc1.block_shape == [M_BLOCK, N_BLOCK]
+
+        block0 = desc0.load([m_idx * M_BLOCK, N_BLOCK])
+        block1 = desc1.load([m_idx * M_BLOCK, 2 * N_BLOCK])
+        block = block0 + block1
+        idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    M_BLOCK, N_BLOCK = 8, 16
+    m_idx = 2
+    M, N = M_BLOCK * 4, N_BLOCK * 4
+    # Keep ranges small to avoid integer overflow
+    inp0_np = numpy_random((M, N), dtype_str, low=0, high=32)
+    inp1_np = numpy_random((M * 2, N + 16), dtype_str, low=0, high=32)
+
+    inp0 = to_triton(inp0_np, device=device, dst_type=dtype_str)
+    inp1 = to_triton(inp1_np, device=device, dst_type=dtype_str)
+    out = inp0.new_empty((M_BLOCK, N_BLOCK))
+
+    inp_desc0 = TensorDescriptor.from_tensor(inp0, [M_BLOCK, N_BLOCK])
+    inp_desc1 = TensorDescriptor.from_tensor(inp1, [M_BLOCK, N_BLOCK])
+    kernel[(1, )](out, (inp_desc0, inp_desc1, m_idx), M, N, M_BLOCK, N_BLOCK)
+
+    expect0 = unwrap_tensor(inp0)[m_idx * M_BLOCK:(m_idx + 1) * M_BLOCK, N_BLOCK:2 * N_BLOCK]
+    expect1 = unwrap_tensor(inp1)[m_idx * M_BLOCK:(m_idx + 1) * M_BLOCK, 2 * N_BLOCK:3 * N_BLOCK]
+    expect = expect0 + expect1
+    torch.testing.assert_close(expect, unwrap_tensor(out))
+
+
 @triton.jit
 def matmul_kernel_host_tensor_descriptor(a_desc, b_desc, c_desc):
     K = a_desc.shape[1]

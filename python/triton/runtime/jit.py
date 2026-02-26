@@ -123,6 +123,7 @@ class DependenciesFinder(ast.NodeVisitor):
             return
 
         if getattr(val, "__triton_aggregate__", False):
+            self.hasher.update(str(val.__annotations__).encode("utf-8"))
             for attr in val.hash_attrs:
                 self.record_reference(attr)
             return
@@ -825,13 +826,13 @@ class JITFunction(JITCallable, KernelInterface[T]):
                 return tl.dtype(value)
             if isinstance(value, dict):
                 if 'constexpr' in value:
-                    return tl.constexpr(value['constexpr'])
+                    return tl.constexpr(convert_to_tuple_if_list(value['constexpr']))
                 if 'jit_function' in value:
                     jf_key = value['jit_function']
                     if jf_key in _triton_jit_function_registry:
                         return _triton_jit_function_registry[jf_key]
                     raise RuntimeError(f"Unable to resolve JITFunction {jf_key} for preload")
-            return value
+            return convert_to_tuple_if_list(value)
 
         constexprs = {key: _decode_constant(value) for key, value in zip(constant_keys, constant_vals)}
         attrs_keys = map(tuple, deserialized_obj['attrs_keys'])

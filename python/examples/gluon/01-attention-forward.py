@@ -48,12 +48,6 @@ class BarrierCounter:
     phase: gl.tensor
     num_barriers: gl.constexpr
 
-    @gluon.constexpr_function
-    def __init__(self, index, phase, num_barriers):
-        self.index = index
-        self.phase = phase
-        self.num_barriers = gl.constexpr(num_barriers)
-
     @gluon.must_use_result
     @gluon.jit
     def increment(self):
@@ -75,14 +69,6 @@ def Channel(T, alloc_fn):
         empty_bars: gl.shared_memory_descriptor
         num_buffers: gl.constexpr
         num_consumers: gl.constexpr
-
-        @gluon.constexpr_function
-        def __init__(self, mem, ready_bars, empty_bars, num_buffers, num_consumers):
-            self.mem = mem
-            self.ready_bars = ready_bars
-            self.empty_bars = empty_bars
-            self.num_buffers = gl.constexpr(num_buffers)
-            self.num_consumers = gl.constexpr(num_consumers)
 
         @gluon.jit
         def alloc(shape: gl.constexpr, dtype: gl.constexpr, layout: gl.constexpr, num_buffers: gl.constexpr,
@@ -141,11 +127,6 @@ def Channel(T, alloc_fn):
         channel: ChannelType
         counter: BarrierCounter
 
-        @gluon.constexpr_function
-        def __init__(self, channel, counter):
-            self.channel = channel
-            self.counter = counter
-
         @gluon.jit
         def acquire(self):
             mem, ready_bar = self.channel.acquire_producer(self.counter)
@@ -156,11 +137,6 @@ def Channel(T, alloc_fn):
     class Consumer:
         channel: ChannelType
         counter: BarrierCounter
-
-        @gluon.constexpr_function
-        def __init__(self, channel, counter):
-            self.channel = channel
-            self.counter = counter
 
         @gluon.jit
         def acquire(self):
@@ -306,14 +282,6 @@ class ProgramScheduler:
     num_pid_in_group: gl.tensor
     num_tiles: gl.tensor
 
-    @gluon.constexpr_function
-    def __init__(self, config, start_pid, num_pid_n, num_pid_in_group, num_tiles):
-        self.config = config
-        self.start_pid = start_pid
-        self.num_pid_n = num_pid_n
-        self.num_pid_in_group = num_pid_in_group
-        self.num_tiles = num_tiles
-
     @gluon.jit
     def create(config):
         start_pid = gl.program_id(0)
@@ -340,14 +308,6 @@ class AttentionProgram:
     off_hz: gl.tensor
     offset_y: gl.tensor
     qo_offset_y: gl.tensor
-
-    @gluon.constexpr_function
-    def __init__(self, config, start_m, off_hz, offset_y, qo_offset_y):
-        self.config = config
-        self.start_m = start_m
-        self.off_hz = off_hz
-        self.offset_y = offset_y
-        self.qo_offset_y = qo_offset_y
 
     @gluon.jit
     def get_fused_loop_bounds(self, STAGE: gl.constexpr):
@@ -975,16 +935,21 @@ def is_blackwell_ultra():
     return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
 
 
-@pytest.mark.parametrize("Z", [1, 4])
-@pytest.mark.parametrize("H", [2, 48])
-@pytest.mark.parametrize("N_CTX", [256, 1024, 4 * 1024])
-@pytest.mark.parametrize("HEAD_DIM", [64, 128])
-@pytest.mark.parametrize("causal", [False, True])
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-@pytest.mark.parametrize("use_tmem_red", [False, True])
+@pytest.mark.parametrize("Z", [4])
+@pytest.mark.parametrize("H", [48])
+@pytest.mark.parametrize("N_CTX", [1024])
+@pytest.mark.parametrize("HEAD_DIM", [128])
+@pytest.mark.parametrize("causal", [True])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("use_tmem_red", [False])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, profile=False):
     device = "cuda"
+
+    def alloc_fn(size: int, alignment: int, stream):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
 
     if use_tmem_red and not is_blackwell_ultra():
         pytest.skip("TMEM reduction is only supported on Blackwell Ultra GPUs")

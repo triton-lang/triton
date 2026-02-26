@@ -1,42 +1,7 @@
 #ifndef TRITONGPU_ATTRDEFS
 #define TRITONGPU_ATTRDEFS
 
-include "triton/Dialect/TritonGPU/IR/TritonGPUAttrBase.td"
-
-//===----------------------------------------------------------------------===//
-// Traits, Interfaces and shared Parameters
-//===----------------------------------------------------------------------===//
-
-def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
-  let description = [{
-    Common trait for all TTGIR layouts.
-  }];
-  let methods = [
-    InterfaceMethod<"Get the CGA layout backing this encoding.",
-                    "CGAEncodingAttr", "getCGALayout">,
-    InterfaceMethod<"Get the rank of the layout.", "unsigned", "getRank",
-                    (ins), [{}], [{
-      return $_attr.getCGALayout().getRank();
-    }]>
-  ];
-}
-def DeclareLayoutEncodingMethods : DeclareAttrInterfaceMethods<
-  LayoutEncodingTrait, ["getCGALayout"]>;
-
-def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
-
-  let description = [{
-    Common trait describing shared memory.
-  }];
-  let methods = [
-    InterfaceMethod<"Return the default alignment for the layout.",
-                    "int32_t", "getAlignment", (ins), [{}], [{ return 16; }]>,
-  ];
-}
-def DeclareSharedEncodingMethods : DeclareAttrInterfaceMethods<
-  SharedEncodingTrait, ["getAlignment"]>;
+include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.td"
 
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
@@ -359,6 +324,72 @@ For identity mappings a short form based on order and shape is used to increase 
   let genVerifyDecl = 1;
 }
 
+
+def PartitionedSharedEncodingAttr
+    : TritonGPU_Attr<"PartitionedSharedEncoding", "partitioned_shared_encoding",
+                     [SharedEncodingTrait, DeclareLayoutEncodingMethods,  LayoutEncodingTrait]> {
+  let mnemonic = "partitioned_shared";
+
+  let description = [{
+    An encoding for tensors whose elements are partitioned across multiple
+    separate shared memory allocations. This reduces shared memory partition
+    conflicts by splitting a tensor along a specific dimension into separate
+    allocations.
+
+    Parameters:
+    - numPartitions: Number of distinct memory partitions (and separate buffers).
+      Buffers in different partitions MUST be placed in different physical
+      shared memory slots.
+    - numGroups: Number of groups. Each group contains numPartitions
+      consecutive pieces of the tensor.
+    - partitionDim: The dimension along which the tensor is partitioned.
+    - partitionLayout: The shared memory layout used within each piece.
+
+    The total number of logical pieces is numPartitions * numGroups.
+    Pieces are organized as:
+      [Group 0: pieces 0..numPartitions-1]
+      [Group 1: pieces numPartitions..2*numPartitions-1]
+      ...
+
+    ## Memory Allocation
+
+    The allocator creates numPartitions buffers (NOT numLogicalPieces buffers).
+    Each buffer contains all pieces from all groups that belong to that partition,
+    concatenated together. Buffer size = pieceSize * numGroups.
+
+    For example, with numPartitions=2, numGroups=4 and
+    partitionDim=0 on a [128, 32] tensor:
+    - Total 8 logical pieces, each of size [16, 32] (pieceSize = 16*32 elements)
+    - Piece layout: [0, 1, 2, 3, 4, 5, 6, 7]
+    - Partitions:    0  1  0  1  0  1  0  1
+    - Groups:       |Grp0||Grp1||Grp2||Grp3|
+
+    Physical allocation (2 buffers, each containing 4 pieces):
+    - Buffer 0 (Partition 0): [Piece0 | Piece2 | Piece4 | Piece6]
+    - Buffer 1 (Partition 1): [Piece1 | Piece3 | Piece5 | Piece7]
+
+    Physical allocation guarantee: Buffers in different partitions MUST reside
+    in distinct physical shared memory partitions.
+  }];
+
+  let parameters = (ins
+      "unsigned":$numPartitions,
+      "unsigned":$numGroups,
+      "unsigned":$partitionDim,
+      "SharedEncodingTrait":$partitionLayout
+  );
+
+  let extraClassDeclaration = [{
+    /// Returns the total number of logical pieces.
+    unsigned getNumLogicalPieces() const {
+      return getNumPartitions() * getNumGroups();
+    }
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
+}
+
 def SharedLinearEncodingAttr
     : TritonGPU_Attr<"SharedLinearEncoding", "shared_linear_encoding",
                      [SharedEncodingTrait, LayoutEncodingTrait,
@@ -560,58 +591,6 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
   let hasCustomAssemblyFormat = 1;
 }
 
-
-//===----------------------------------------------------------------------===//
-// Distributed Layout Encoding
-//===----------------------------------------------------------------------===//
-
-def DistributedEncodingTrait : AttrInterface<"DistributedEncodingTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
-
-  let description = [{
-The Distributed encoding describes the layout L with the 4-level compute hierarchy on GPU.
-It is abstracted from the top to the bottom as CTAs Per CGA->Warps Per CTA->Threads Per Warp->Values Per Thread.
-
-For CTAs Per CGA and Warps Per CTA level, the linear id is distributed contiguously with the shape and order.
-For example, for a shape/order pair defines a distribution layout
-shape = [4, 4]
-order = [0, 1] // The fastest-changing axis first
-->
-layout = [0  4  8  12]
-         [1  5  9  13]
-         [2  6  10 14]
-         [3  7  11 15]
-
-For the Threads Per Warp and Values Per Thread level, the linear id distribution is variant for each sub-class encoding.
-
-If the layout does not completely cover the tensor, we tile it until we cover the entire tensor.
-We call each individual tile "rep".
-  }];
-
-  let methods = [
-    InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getRepOrder">,
-    InterfaceMethod<"Return total element size per thread.",
-                    "unsigned",
-                    "getTotalElemsPerThread",
-                     (ins "ArrayRef<int64_t>":$shape),
-                     /*defaultImplementation=*/[{
-                         return toLinearEncoding($_self, shape).getTotalElemsPerThread(shape);
-                     }]>,
-    InterfaceMethod<"Return element size per thread in each dimension.",
-                    "SmallVector<unsigned>",
-                    "getElemsPerThread",
-                     (ins "ArrayRef<int64_t>":$shape),
-                     /*defaultImplementation=*/[{
-                         return toLinearEncoding($_self, shape).getElemsPerThread(shape);
-                     }]>,
-    InterfaceMethod<"Convert to LinearLayout.",
-                    "LinearLayout",
-                    "toLinearLayout",
-                    (ins "ArrayRef<int64_t>":$shape)>,
-  ];
-}
 
 class DistributedEncoding<string name, string attrMnemonic, list<Trait> traits = []>
   : TritonGPU_Attr<name, attrMnemonic,
@@ -883,20 +862,6 @@ for
   let extraClassDeclaration = extraDistributedDeclaration;
 
   let hasCustomAssemblyFormat = 1;
-}
-
-//===----------------------------------------------------------------------===//
-// MMA Layout Encoding
-//===----------------------------------------------------------------------===//
-
-def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
-  let methods = [
-    InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getRepOrderForOperand",
-                    (ins "int":$opIdx)>,
-  ];
 }
 
 def AMDMfmaEncodingAttr : DistributedEncoding<"AMDMfmaEncoding", "amd_mfma_encoding", [MmaEncodingTrait]> {
@@ -1258,6 +1223,9 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
         CGAEncodingAttr cgaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
         ArrayRef<unsigned> sharedOrder, unsigned kWidth,
         unsigned elemBitWidth, bool needTrans) const;
+
+    // Returns true if the two WMMA layouts are equal, ignoring the CGA layout.
+    bool isEqualIgnoringCGALayout(AMDWmmaEncodingAttr other) const;
   }];
 }
 
@@ -1410,6 +1378,10 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let extraClassDeclaration = extraDistributedDeclaration # [{
     template<class T>
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
+
+    unsigned getRank() const {
+      return mlir::cast<LayoutEncodingTrait>(getParent()).getRank() - 1;
+    }
   }];
 
   let hasCustomAssemblyFormat = 1;

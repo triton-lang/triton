@@ -46,6 +46,12 @@ def _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, offs, mask):
     return (offs, mask)
 
 
+@triton.jit
+def round_f32_to_tf32(x: tl.tensor):
+    ASM: tl.constexpr = "cvt.rn.tf32.f32 $0, $1;" if cuda_capability_geq(9, 0) else "cvt.rna.tf32.f32 $0, $1;"
+    return tl.inline_asm_elementwise(ASM, "=r, r", [x], dtype=tl.float32, is_pure=True, pack=1)
+
+
 _matmul_repr = make_matmul_repr("_p_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
             repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
@@ -120,7 +126,7 @@ def _p_matmul(
     is_w_microscaled: tl.constexpr = WMxScale is not None
     is_x_microscaled: tl.constexpr = XMxScale is not None
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
-    tl.static_assert(not is_w_microscaled or W_TRANSPOSE, "NYI. Non-transposed mxfp4 weights")
+    tl.static_assert(not is_w_mxfp4 or W_TRANSPOSE, "NYI. Non-transposed mxfp4 weights")
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_w_microscaled:
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
@@ -312,7 +318,9 @@ def _p_matmul(
                         x = tl.load(XPtrs)
                 else:
                     x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
-
+                if x.dtype == tl.float32 and ALLOW_TF32:
+                    # since data are not loaded from TMA we need to explicitly round to tf32.
+                    x = round_f32_to_tf32(x)
             # --- load x_scale ---
             x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
             if is_x_microscaled:

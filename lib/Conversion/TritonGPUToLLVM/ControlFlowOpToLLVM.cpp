@@ -95,16 +95,19 @@ private:
 
     auto opOffsetAttr = callOp->getAttrOfType<mlir::IntegerAttr>(
         "ttg.global_scratch_memory_offset");
-    Value opOffsetVal;
-    if (opOffsetAttr) {
-      auto opOffset = opOffsetAttr.getValue().getZExtValue();
-      opOffsetVal = b.i32_val(opOffset);
-    }
+    Value globalOffsetVal;
+    if (opOffsetAttr)
+      globalOffsetVal = b.i32_val(opOffsetAttr.getValue().getZExtValue());
+    auto profileOffsetAttr = callOp->getAttrOfType<mlir::IntegerAttr>(
+        "ttg.profile_scratch_memory_offset");
+    Value profileOffsetVal;
+    if (profileOffsetAttr)
+      profileOffsetVal = b.i32_val(profileOffsetAttr.getValue().getZExtValue());
 
     promotedOperands.push_back(LLVM::getGlobalScratchPtr(
-        loc, rewriter, targetInfo, caller, opOffsetVal));
-    promotedOperands.push_back(
-        LLVM::getProfileScratchPtr(loc, rewriter, caller));
+        loc, rewriter, targetInfo, caller, globalOffsetVal));
+    promotedOperands.push_back(LLVM::getProfileScratchPtr(
+        loc, rewriter, targetInfo, caller, profileOffsetVal));
     return promotedOperands;
   }
 

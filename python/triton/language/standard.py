@@ -466,8 +466,31 @@ def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTE
 
 
 @jit
-def topk(x, k: core.constexpr, dim: core.constexpr = None):
-    return sort_impl(x, k=k, dim=dim, descending=True)
+def topk(x, k: core.constexpr, dim: core.constexpr = None, descending: core.constexpr = True):
+    """
+    Returns the k largest (or smallest) elements of the input tensor along the specified dimension.
+
+    The elements are returned in sorted order (largest first).
+
+    :param x: The input tensor.
+    :type x: Tensor
+    :param k: The number of top elements to return. Must be a power of two.
+    :type k: int
+    :param dim: The dimension along which to find the top k elements.
+                If None, uses the last dimension. Currently only the last dimension is supported.
+    :type dim: int, optional
+    :param descending: If set to True, returns k largest elements. If set to False, returns k smallest elements.
+    :type descending: bool, optional
+    :return: A tensor containing the k largest elements along the specified dimension.
+    :rtype: Tensor
+
+    Example::
+
+        # Get top 4 elements from a 1D tensor
+        x = tl.arange(0, 16)
+        top4 = tl.topk(x, 4)  # Returns [15, 14, 13, 12]
+    """
+    return sort_impl(x, k=k, dim=dim, descending=descending)
 
 
 @jit

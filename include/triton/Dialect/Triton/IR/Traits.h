@@ -28,7 +28,7 @@ LogicalResult verifyTensorLayouts(Operation *op);
 
 LogicalResult verifySameOperandsEncoding(Operation *op,
                                          bool allowTensorPointerType = false);
-LogicalResult verifyEquivalentType(Type typeA, Type typeB);
+LogicalResult verifyEquivalentTensorType(Type typeA, Type typeB);
 LogicalResult
 verifySameOperandsAndResultEncoding(Operation *op,
                                     bool allowTensorPointerType = false);

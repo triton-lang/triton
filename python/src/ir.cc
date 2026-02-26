@@ -37,8 +37,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/PluginUtils.h"
+#include "triton/Tools/Sys/Dump.hpp"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 
 namespace {
@@ -49,22 +49,6 @@ using namespace triton;
 namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
-
-llvm::raw_fd_ostream &mlir_dumps() {
-  std::error_code EC;
-  static llvm::raw_fd_ostream S(::triton::tools::getStrEnv("MLIR_DUMP_PATH"),
-                                EC, llvm::sys::fs::CD_CreateAlways);
-  assert(!EC);
-  return S;
-}
-
-llvm::raw_ostream &mlir_dumps_or_dbgs() {
-  if (!::triton::tools::getStrEnv("MLIR_DUMP_PATH").empty()) {
-    return mlir_dumps();
-  } else {
-    return llvm::dbgs();
-  }
-}
 
 // Function to parse a comma-separated string into a vector of C-style strings
 llvm::SmallVector<const char *, 3>
@@ -156,21 +140,6 @@ setupTritonDiagnosticHandler(MLIRContext *context) {
   return TritonSourceMgrDiagnosticHandler(context, minSeverity);
 }
 
-std::string locationToString(Location loc) {
-  std::string str;
-  llvm::raw_string_ostream os(str);
-  loc.print(os);
-  os.flush(); // Make sure all the content is dumped into the 'str' string
-  return str;
-}
-
-void outputWarning(Location loc, const std::string &msg) {
-  std::string locStr = locationToString(loc);
-
-  PyErr_WarnEx(PyExc_UserWarning, (locStr + ": " + msg).c_str(),
-               /*stack_level=*/2);
-}
-
 // Allow dump a reproducer in the console on crash.
 struct ConsoleReproducerStream : public mlir::ReproducerStream {
   ~ConsoleReproducerStream() override {}
@@ -210,10 +179,11 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
   assert(kernelFunc);
 
   for (auto [i, arg] : llvm::enumerate(kernelFunc.getArguments())) {
-    auto descTy = dyn_cast<TensorDescType>(arg.getType());
+    auto descTy = dyn_cast<TensorDescInterface>(arg.getType());
     if (!descTy)
       continue;
 
+    bool isIm2Col = isa<ttng::TensorDescIm2ColType>(arg.getType());
     auto blockType = descTy.getBlockType();
     auto encoding = blockType.getEncoding();
 
@@ -224,14 +194,16 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       auto elemType = ttng::getTMAElementType(arg.getLoc(), descTy);
       if (failed(swizzle) || failed(elemType))
         throw py::type_error("invalid TMA descriptor type");
-      auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
+      auto tmaMode = isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
+      auto blockSize =
+          ttng::getTMABlockShape(blockType, /*packedSize=*/false, tmaMode);
       metadata["swizzle"] = *swizzle;
-      metadata["elem_size"] =
-          descTy.getBlockType().getElementTypeBitWidth() / 8;
+      metadata["elem_size"] = blockType.getElementTypeBitWidth() / 8;
       metadata["elem_type"] = *elemType;
       metadata["block_size"] =
           std::vector<int>(blockSize.begin(), blockSize.end());
       metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
+      metadata["is_im2col"] = isIm2Col;
     } else {
       auto blockShape = blockType.getShape();
       metadata["block_size"] =
@@ -1004,6 +976,10 @@ void init_triton_ir(py::module &&m) {
       .def("get_int64_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getI64Type();
+           })
+      .def("get_int128_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getIntegerType(128);
            })
       .def("get_fp8e4nv_ty",
            [](TritonOpBuilder &self) -> Type {
@@ -1913,8 +1889,8 @@ void init_triton_ir(py::module &&m) {
                    /*shouldPrintAfterPass=*/printAlways,
                    /*printModuleScope=*/true,
                    /*printAfterOnlyOnChange=*/false,
-                   /*printAfterOnlyOnFailure*/ true, mlir_dumps_or_dbgs(),
-                   printingFlags);
+                   /*printAfterOnlyOnFailure*/ true,
+                   ::mlir::triton::tools::mlirDumpsOrDbgs(), printingFlags);
              }
              return haveDump;
            })

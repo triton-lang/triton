@@ -50,9 +50,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
         [](mlir::PassManager &pm, const std::string &arch, bool ftz) {
           pm.addPass(createConvertTritonAMDGPUToLLVMPass(arch, ftz));
         });
-  m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm, bool ftz) {
-    pm.addPass(createConvertBuiltinFuncToLLVMPass(ftz));
-  });
+  m.def("add_builtin_func_to_llvmir",
+        [](mlir::PassManager &pm, const std::string &arch, bool ftz) {
+          pm.addPass(createConvertBuiltinFuncToLLVMPass(arch, ftz));
+        });
   m.def("insert_instruction_sched_hints", [](mlir::PassManager &pm,
                                              const std::string &variant) {
     pm.addPass(createTritonAMDGPUInsertInstructionSchedHintsPass(variant));
@@ -100,6 +101,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_OPTION_WRAPPER_3("add_convert_to_buffer_ops",
                             mlir::createTritonAMDGPUConvertToBufferOps,
                             const std::string &, bool, bool);
+  ADD_FUNC_PASS_WRAPPER_0("add_optimize_buffer_op_ptr",
+                          mlir::createTritonAMDGPUOptimizeBufferOpPtr);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
 
   ADD_PASS_OPTION_WRAPPER_1("add_block_pingpong",

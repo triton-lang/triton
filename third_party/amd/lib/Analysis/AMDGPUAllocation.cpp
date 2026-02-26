@@ -1,4 +1,5 @@
 #include "Analysis/AMDGPUAllocation.h"
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -25,6 +26,19 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op) {
     auto srcTy = cvtLayout.getSrc().getType();
     auto dstTy = cvtLayout.getType();
     return getConvertLayoutScratchInBytes(srcTy, dstTy);
+  }
+
+  if (auto ws = dyn_cast<mlir::triton::gpu::WarpSpecializeOp>(op)) {
+    uint64_t captureSize = 0;
+    // Tightly pack the captures in memory.
+    for (Type type : ws.getPartitionOp().getOperandTypes()) {
+      if (auto descType = dyn_cast<TensorDescType>(type))
+        captureSize +=
+            mlir::triton::amdgpu::getTensorDescNumDwords(descType) * 4;
+      else
+        captureSize += mlir::triton::gpu::getSharedMemorySize(type);
+    }
+    return captureSize;
   }
 
   return defaultAllocationAnalysisScratchSizeFn(op);

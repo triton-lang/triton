@@ -61,10 +61,6 @@ public:
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addLegalOp<triton::amdgpu::InstructionSchedHint>();
-    addDynamicallyLegalOp<triton::gpu::GlobalScratchAllocOp>(
-        [](triton::gpu::GlobalScratchAllocOp op) {
-          return op.getBackend() != "default";
-        });
     // Warp specialization is lowered later.
     addLegalOp<triton::gpu::WarpSpecializeOp>();
     addLegalOp<triton::gpu::WarpYieldOp>();
@@ -107,7 +103,9 @@ struct ConvertTritonAMDGPUToLLVM
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Allocate shared memory and set barrier
-    ModuleAllocation allocation(mod);
+    ModuleAllocation allocation(mod,
+                                triton::defaultAllocationAnalysisScratchSizeFn,
+                                targetInfo.getSharedMemoryPartitionSize());
 
     if (targetInfo.requiresAliasInfoForAsyncOps())
       AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
@@ -197,6 +195,8 @@ struct ConvertTritonAMDGPUToLLVM
                       commonBenefit);
     populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns,
                       commonBenefit);
+    AMD::populateHistogramOpToLLVMPatterns(typeConverter, patterns, targetInfo,
+                                           AMDBenefit);
     populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns,
                       commonBenefit);
     populatePatterns7(mlir::triton::populateGatherOpToLLVMPatterns,

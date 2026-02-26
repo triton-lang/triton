@@ -63,7 +63,8 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
                     K: tl.constexpr, S0, X_S1, Y_S1,  #
                     POSTPROCESS_FN1: tl.constexpr, postprocess_fn1_args,  #
                     POSTPROCESS_FN2: tl.constexpr, postprocess_fn2_args,  #
-                    XFlex,  # x flex (global) scale
+                    XFlex,  # TODO: remove this
+                    XGlobalScale,  # x global scale
                     YFlexExpected, YFlexActual, YFlexChecksum,
                     Y_FLEX_SATURATE_INF: tl.constexpr,  # y flex (global) scale
                     IS_MASK_NONE: tl.constexpr,  #
@@ -126,6 +127,8 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
         y += x
     if POSTPROCESS_FN1 is not None:
         y = POSTPROCESS_FN1(y, *postprocess_fn1_args)
+    if XGlobalScale is not None:
+        y *= tl.load(XGlobalScale)
     offs_y_s1 = pid_s1 * BLOCK_Y_S1 + tl.arange(0, BLOCK_Y_S1)
     offs_y_smx1 = pid_s1 * BLOCK_Y_SMX1 + tl.arange(0, BLOCK_Y_SMX1)
     valid_y_s1 = offs_y_s1 < Y_S1
@@ -159,6 +162,7 @@ def reduce_forward(
     scale: Optional[torch.Tensor] = None,
     x_mxscale: Optional[torch.Tensor] = None,
     x_flex: Optional[InFlexData] = InFlexData(),
+    x_global_scale: Optional[torch.Tensor] = None,
     y_dtype: Optional[torch.dtype] = None,
     y_flex: Optional[OutFlexData] = OutFlexData(),
     y_flex_saturate_inf: bool = False,
@@ -263,7 +267,7 @@ def reduce_forward(
         unpadded_batch_size,  #
         K, S0, X_S1, Y_S1,  #
         *postprocess_fn1.fn_args, *postprocess_fn2.fn_args,  #
-        x_flex.scale, y_flex.expected_scale, y_flex.actual_scale, y_flex.checksum_scale,  #
+        x_flex.scale, x_global_scale, y_flex.expected_scale, y_flex.actual_scale, y_flex.checksum_scale,  #
         y_flex_saturate_inf,  #
         IS_MASK_NONE=(mask is None),  #
         BROADCAST_R=(stride_mr == 0),  #
@@ -492,9 +496,9 @@ class _ReduceAutograd(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x: torch.Tensor, dim: int, mask: Optional[torch.Tensor], scale: Optional[torch.Tensor],
-                x_mxscale: Optional[torch.Tensor], x_flex: Optional[InFlexData], y_dtype: Optional[torch.dtype],
-                y_flex: Optional[OutFlexData], y_flex_saturate_inf: bool, y_has_mx: Optional[bool],
-                y: Optional[torch.Tensor], postprocess_fn1: Optional[PostprocessFn],
+                x_mxscale: Optional[torch.Tensor], x_flex: Optional[InFlexData], x_global_scale: Optional[torch.Tensor],
+                y_dtype: Optional[torch.dtype], y_flex: Optional[OutFlexData], y_flex_saturate_inf: bool,
+                y_has_mx: Optional[bool], y: Optional[torch.Tensor], postprocess_fn1: Optional[PostprocessFn],
                 postprocess_fn2: Optional[PostprocessFn], unpadded_batch_size: Optional[torch.Tensor]):
         # Run your existing Triton forward
         y, y_mx = reduce_forward(
@@ -504,6 +508,7 @@ class _ReduceAutograd(torch.autograd.Function):
             scale=scale,
             x_mxscale=x_mxscale,
             x_flex=x_flex,
+            x_global_scale=x_global_scale,
             y_dtype=y_dtype,
             y_flex=y_flex,
             y_flex_saturate_inf=y_flex_saturate_inf,
@@ -558,7 +563,7 @@ class _ReduceAutograd(torch.autograd.Function):
             dx=dx,
             unpadded_batch_size=ctx.unpadded_batch_size,
         )
-        return dx, None, None, None, None, None, None, None, None, None, None, None, None, None
+        return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
 
 def reduce(
@@ -568,6 +573,7 @@ def reduce(
     scale: Optional[torch.Tensor] = None,
     x_mxscale: Optional[torch.Tensor] = None,
     x_flex: Optional[InFlexData] = InFlexData(),
+    x_global_scale: Optional[torch.Tensor] = None,
     y: Optional[torch.Tensor] = None,
     y_dtype: Optional[torch.dtype] = None,
     y_flex: Optional[OutFlexData] = OutFlexData(),
@@ -577,7 +583,7 @@ def reduce(
     postprocess_fn2: Optional[PostprocessFn] = None,
     unpadded_batch_size: Optional[torch.Tensor] = None,
 ):
-    return _ReduceAutograd.apply(x, dim, mask, scale, x_mxscale, x_flex, y_dtype, y_flex,  #
+    return _ReduceAutograd.apply(x, dim, mask, scale, x_mxscale, x_flex, x_global_scale, y_dtype, y_flex,  #
                                  y_flex_saturate_inf, y_has_mx, y, postprocess_fn1, postprocess_fn2,
                                  unpadded_batch_size)
 

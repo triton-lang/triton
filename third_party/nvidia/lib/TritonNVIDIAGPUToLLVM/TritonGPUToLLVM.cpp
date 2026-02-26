@@ -18,6 +18,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
 
 #include "Allocation.h"
 #include "PatternTritonGPUOpToLLVM.h"
@@ -71,10 +72,6 @@ public:
     addLegalOp<triton::gpu::WarpYieldOp>();
     addLegalOp<triton::gpu::WarpSpecializePartitionsOp>();
     addLegalOp<triton::gpu::WarpReturnOp>();
-    addDynamicallyLegalOp<triton::gpu::GlobalScratchAllocOp>(
-        [](triton::gpu::GlobalScratchAllocOp op) {
-          return op.getBackend() != "default";
-        });
   }
 };
 
@@ -96,6 +93,8 @@ struct ConvertTritonGPUToLLVM
     ModuleAllocation allocation(
         mod, mlir::triton::nvidia_gpu::getNvidiaAllocationAnalysisScratchSizeFn(
                  targetInfo));
+    mlir::triton::nvidia_gpu::runClusterBarrierInsertion(allocation,
+                                                         computeCapability);
     ModuleMembarAnalysis membarPass(&allocation, canSkipBarSync);
     membarPass.run();
 
@@ -179,8 +178,8 @@ struct ConvertTritonGPUToLLVM
                                                            patterns, benefit);
     mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
                                                         benefit);
-    mlir::triton::populateInstrumentationToLLVMPatterns(
-        typeConverter, targetInfo, patterns, benefit);
+    mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter,
+                                                        patterns);
 
     TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
@@ -253,6 +252,7 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability,
 }
 
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
+                            bool /*beforeIsRead*/, bool /*afterIsRead*/,
                             Allocation *allocation) {
   // These mbarrier ops are single threaded, so are always synchronized wrt.
   // each other.

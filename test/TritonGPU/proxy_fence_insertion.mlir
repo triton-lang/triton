@@ -28,6 +28,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: missing_proxy_fence_memdesc_index_alias_single
+  tt.func @missing_proxy_fence_memdesc_index_alias_single(%arg0: !tt.tensordesc<tensor<64x64xf32, #shared>>, %arg1: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) {
+    // Keep the first fence to clear dependencies from local_alloc.
+    // CHECK: ttng.fence_async_shared
+    // CHECK: ttg.local_load
+    // CHECK-NEXT: "test.keep"
+    // CHECK-NEXT: ttng.fence_async_shared
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+    %c0_i32 = arith.constant 0 : i32
+    %true = arith.constant true
+    %0 = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<1x64x64xf32, #shared, #smem, mutable>
+    %1 = ttg.memdesc_index %0[%c0_i32] : !ttg.memdesc<1x64x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
+    ttng.fence_async_shared {bCluster = false}
+    %2 = ttg.local_load %1 : !ttg.memdesc<64x64xf32, #shared, #smem, mutable> -> tensor<64x64xf32, #blocked>
+    "test.keep"(%2) : (tensor<64x64xf32, #blocked>) -> ()
+    ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32] %1, %arg1, %true : !tt.tensordesc<tensor<64x64xf32, #shared>>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_proxy_after_async_proxy
   tt.func @async_proxy_after_async_proxy(%arg0: !tt.tensordesc<tensor<64x64xf32, #shared>>, %arg1: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) {
     // CHECK: ttng.async_tma_copy_global_to_local

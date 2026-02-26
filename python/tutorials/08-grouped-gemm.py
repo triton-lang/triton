@@ -225,7 +225,7 @@ tma_configs = [
 
 @triton.autotune(
     tma_configs,
-    key=['group_a_ptrs', 'group_b_ptrs', 'gropup_c_ptrs', 'group_size'],
+    key=['group_size'],
 )
 @triton.jit
 def grouped_matmul_tma_kernel(
@@ -487,7 +487,7 @@ def benchmark_square_matrices(N, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(
             lambda: triton_tma_perf_fn(d_a_ptrs, d_b_t_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size, dtype=torch.
                                        float16), quantiles=quantiles)
-    return ms, max_ms, min_ms
+    return ms, min_ms, max_ms
 
 
 @triton.testing.perf_report(
@@ -558,7 +558,7 @@ def benchmark_batches(M, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(
             lambda: triton_tma_perf_fn(d_a_ptrs, d_b_t_ptrs, d_c_ptrs, d_g_sizes, d_g_t_lds, group_size, dtype=torch.
                                        float16), quantiles=quantiles)
-    return ms, max_ms, min_ms
+    return ms, min_ms, max_ms
 
 
 benchmark_square_matrices.run(show_plots=True, print_data=True)

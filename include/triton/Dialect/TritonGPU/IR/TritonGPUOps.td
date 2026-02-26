@@ -6,6 +6,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUEnums.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
@@ -25,7 +26,7 @@ def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic,
-       !listconcat(traits, [VerifyTensorLayoutsTrait])> {
+       !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
@@ -271,7 +272,7 @@ def TTG_MemDescSubsliceOp : TTG_Op<"memdesc_subslice", [Pure, MemDescViewTrait]>
 def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
                                                   MemDescViewTrait,
                                                   TransposeOpInterface,
-                                                  InferTypeOpWithLayoutEquivalence,
+                                                  InferMemDescTypeOpWithLayoutEquivalence,
                                                   SameOperandsAndResultElementType]> {
   let summary = "transpose the descriptor";
 
@@ -524,15 +525,14 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
   let summary = "allocate a global memory buffer";
   let description = [{
     This operation allocates a buffer in global memory that is private to the current program.
-    The `backend` attribute specifies the backend to use for allocation.
-    The `default` backend is used by TritonGPU passes.
-    Downstream Triton tools and compilers can register a different backend and use a different allocation policy.
+    A custom third-party allocation can be marked using the optional
+    `third_party_allocation` unit attribute.
   }];
   let arguments = (
     ins
     I32Attr:$nbytes,
     I32Attr:$alignment,
-    DefaultValuedAttr<StrAttr, "\"default\"">:$backend
+    OptionalAttr<UnitAttr>:$third_party_allocation
   );
   let results = (outs Arg<TT_Ptr, "", [MemAlloc<GlobalMemory>]>:$result);
 
@@ -593,8 +593,10 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
     RegionRange getPartitionRegions();
     WarpSpecializePartitionsOp getPartitionOp();
 
-    // Get the size and alignment of the capture list.
-    std::pair<uint64_t, uint64_t> getCaptureSizeAlign();
+    // Get the size of the capture list.
+    uint64_t getCaptureSize();
+    // Get the alignment of the capture list.
+    uint64_t getCaptureAlign();
     // Get the total number of extra warps required.
     unsigned getTotalPartitionWarps();
   }];

@@ -2,9 +2,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <pybind11/pybind11.h>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -40,6 +42,7 @@ static PyObject *constexpr_cls = nullptr;
 static PyObject *jit_callable_cls = nullptr;
 static PyObject *tensor_descriptor_cls = nullptr;
 static PyObject *nvidia_tensor_descriptor_cls = nullptr;
+static PyObject *nvidia_tensor_descriptor_im2col_cls = nullptr;
 static PyObject *amd_tensor_descriptor_cls = nullptr;
 static PyObject *canonicalize_dtype_fn = nullptr;
 static PyObject *canonicalize_ptr_dtype_fn = nullptr;
@@ -61,6 +64,7 @@ static PyObject *dtype_attr = nullptr;
 static PyObject *cache_key_attr = nullptr;
 static PyObject *_fields_attr = nullptr;
 static PyObject *block_shape_attr = nullptr;
+static PyObject *shape_attr = nullptr;
 static PyObject *layout_attr = nullptr;
 static PyObject *has_native_tensor_spec_attr = nullptr;
 static PyObject *get_tensor_spec_attr = nullptr;
@@ -109,6 +113,7 @@ void init_interned_strings() {
   cache_key_attr = intern_from_string("cache_key");
   _fields_attr = intern_from_string("_fields");
   block_shape_attr = intern_from_string("block_shape");
+  shape_attr = intern_from_string("shape");
   layout_attr = intern_from_string("layout");
   has_native_tensor_spec_attr =
       intern_from_string("supports_native_tensor_specialization");
@@ -126,6 +131,8 @@ bool init_globals() noexcept try {
       import_from("triton.tools.tensor_descriptor", "TensorDescriptor");
   nvidia_tensor_descriptor_cls = import_from(
       "triton.experimental.gluon.nvidia.hopper", "TensorDescriptor");
+  nvidia_tensor_descriptor_im2col_cls = import_from(
+      "triton.experimental.gluon.nvidia.hopper", "TensorDescriptorIm2Col");
   amd_tensor_descriptor_cls =
       import_from("triton.experimental.gluon.amd.gfx1250", "TensorDescriptor");
 
@@ -179,7 +186,17 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
 
   std::string desc_cstr;
   desc_cstr.reserve(128);
-  desc_cstr = "tensordesc<";
+
+  // Determine im2col by class type (Gluon only).
+  bool is_im2col = false;
+  if (has_layout && nvidia_tensor_descriptor_im2col_cls) {
+    int is_inst = PyObject_IsInstance(arg, nvidia_tensor_descriptor_im2col_cls);
+    if (is_inst < 0)
+      return {};
+    is_im2col = is_inst == 1;
+  }
+
+  desc_cstr = is_im2col ? "tensordesc_im2col<" : "tensordesc<";
   auto dtype_str = from_new_ref(PyObject_Str(type_str));
   if (!dtype_str)
     return {};
@@ -202,6 +219,20 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   if (!block_shape_cstr)
     return {};
   desc_cstr += block_shape_cstr;
+
+  // For im2col mode, append input tensor rank after block_shape
+  // Format: tensordesc_im2col<dtype[block_shape],input_rank=N,layout>
+  // This allows the driver to know the N-dimensional shape/strides to pass
+  if (is_im2col) {
+    auto tensor_shape_obj = from_new_ref(PyObject_GetAttr(arg, shape_attr));
+    if (!tensor_shape_obj)
+      return {};
+    Py_ssize_t tensor_rank = PySequence_Size(tensor_shape_obj.ptr());
+    if (tensor_rank < 0)
+      return {};
+    desc_cstr += ",input_rank=";
+    desc_cstr += std::to_string(tensor_rank);
+  }
 
   if (has_layout) {
     auto layout_obj = from_new_ref(PyObject_GetAttr(arg, layout_attr));
@@ -450,6 +481,11 @@ void init_type_handler_cache() {
     type_handler_cache[(PyTypeObject *)nvidia_tensor_descriptor_cls] =
         handle_gluon_tensor_descriptor;
   }
+  if (nvidia_tensor_descriptor_im2col_cls &&
+      PyType_Check(nvidia_tensor_descriptor_im2col_cls)) {
+    type_handler_cache[(PyTypeObject *)nvidia_tensor_descriptor_im2col_cls] =
+        handle_gluon_tensor_descriptor;
+  }
   if (amd_tensor_descriptor_cls && PyType_Check(amd_tensor_descriptor_cls)) {
     type_handler_cache[(PyTypeObject *)amd_tensor_descriptor_cls] =
         handle_gluon_tensor_descriptor;
@@ -570,9 +606,151 @@ PyObject *specialize_impl(PyObject *self, PyObject *const *args,
   return PyTuple_Pack(2, type.ptr(), key.ptr());
 }
 
+bool visit_make_tensordesc_args(PyObject *arg, PyObject *sig,
+                                PyObject *relevant_paths,
+                                PyObject *tensordesc_meta,
+                                bool has_tensordesc_meta, PyObject *base_args,
+                                PyObject *make_tensordesc_arg,
+                                Py_ssize_t *tensordesc_idx, PyObject *result) {
+  assert(PyTuple_Check(sig));
+  auto arg_fast =
+      from_new_ref(PySequence_Fast(arg, "Expected iterable args node"));
+  if (!arg_fast)
+    return false;
+
+  Py_ssize_t arg_len = PySequence_Fast_GET_SIZE(arg_fast.ptr());
+  Py_ssize_t sig_len = PyTuple_GET_SIZE(sig);
+  assert(sig_len == arg_len || !"Invalid signature");
+  Py_ssize_t len = arg_len;
+
+  for (Py_ssize_t i = 0; i < len; ++i) {
+    PyObject *a = PySequence_Fast_GET_ITEM(arg_fast.ptr(), i);
+    PyObject *s = PyTuple_GET_ITEM(sig, i);
+
+    if (PyUnicode_CheckExact(s)) {
+      Py_ssize_t size;
+      const char *type_cstr = PyUnicode_AsUTF8AndSize(s, &size);
+      if (!type_cstr)
+        return false;
+
+      // if not s.startswith("tensordesc")
+      std::string_view tensordesc = "tensordesc";
+      std::string_view type_str(type_cstr, size);
+      if (type_str.substr(0, tensordesc.length()) != tensordesc) {
+        if (PyList_Append(result, a) < 0)
+          return false;
+        continue;
+      }
+
+      PyObject *meta = Py_None;
+      if (has_tensordesc_meta) {
+        // Borrowed reference
+        meta = PyList_GetItem(tensordesc_meta, *tensordesc_idx);
+        if (!meta)
+          return false;
+      }
+
+      PyObject *vector_args[] = {a, meta, base_args};
+      auto desc_args = from_new_ref(
+          PyObject_Vectorcall(make_tensordesc_arg, vector_args, 3, nullptr));
+      if (!desc_args)
+        return false;
+      // list.extend(desc_args)
+      if (PyList_SetSlice(result, PY_SSIZE_T_MAX, PY_SSIZE_T_MAX,
+                          desc_args.ptr()) < 0)
+        return false;
+
+      *tensordesc_idx += 1;
+      continue;
+    }
+
+    auto key = from_new_ref(PyLong_FromSsize_t(i));
+    if (!key)
+      return false;
+
+    // Borrowed ref
+    PyObject *inner_relevant_paths =
+        PyDict_GetItemWithError(relevant_paths, key.ptr());
+    if (PyErr_Occurred())
+      return false;
+
+    if (!inner_relevant_paths) {
+      // Short-circuit if tuple doesn't contain any tensordesc args
+      if (PyList_Append(result, a) < 0)
+        return false;
+      continue;
+    }
+
+    // Recurse into tuple
+    auto inner_res = from_new_ref(PyList_New(0));
+    if (!inner_res)
+      return false;
+    if (!visit_make_tensordesc_args(
+            a, s, inner_relevant_paths, tensordesc_meta, has_tensordesc_meta,
+            base_args, make_tensordesc_arg, tensordesc_idx, inner_res.ptr()))
+      return false;
+
+    auto inner_tuple = from_new_ref(PyList_AsTuple(inner_res.ptr()));
+    if (!inner_tuple)
+      return false;
+    if (PyList_Append(result, inner_tuple.ptr()) < 0)
+      return false;
+  }
+  return true;
+}
+
+PyObject *make_tensordesc_args(PyObject *self, PyObject *const *args,
+                               Py_ssize_t nargs) {
+  if (nargs != 6) {
+    PyErr_SetString(PyExc_TypeError,
+                    "make_tensordesc_args expected 6 arguments");
+    return nullptr;
+  }
+
+  PyObject *kernel_args = args[0];
+  PyObject *signature = args[1];
+  PyObject *relevant_paths = args[2];
+  PyObject *tensordesc_meta = args[3];
+  PyObject *base_args = args[4];
+  PyObject *make_tensordesc_arg = args[5];
+
+  if (!PyList_CheckExact(tensordesc_meta)) {
+    PyErr_SetString(PyExc_TypeError, "Expected tensordesc_meta to be a list");
+    return nullptr;
+  }
+  bool has_tensordesc_meta = PyList_GET_SIZE(tensordesc_meta) > 0;
+
+  auto result = from_new_ref(PyList_New(0));
+  if (!result)
+    return nullptr;
+
+  Py_ssize_t tensordesc_idx = 0;
+  if (!visit_make_tensordesc_args(kernel_args, signature, relevant_paths,
+                                  tensordesc_meta, has_tensordesc_meta,
+                                  base_args, make_tensordesc_arg,
+                                  &tensordesc_idx, result.ptr()))
+    return nullptr;
+
+  if (has_tensordesc_meta) {
+    Py_ssize_t meta_len = PySequence_Size(tensordesc_meta);
+    if (meta_len < 0)
+      return nullptr;
+
+    if (tensordesc_idx != meta_len) {
+      PyErr_SetString(PyExc_ValueError,
+                      "make_tensordesc_args: tensordesc_idx != meta_len");
+      return nullptr;
+    }
+  }
+
+  return result.release().ptr();
+}
+
 static PyMethodDef module_methods[] = {
     {"native_specialize_impl", (PyCFunction)specialize_impl, METH_FASTCALL,
      nullptr},
+    {"make_tensordesc_args", (PyCFunction)make_tensordesc_args, METH_FASTCALL,
+     "Helper to translate tensordesc args"},
     {nullptr, nullptr, 0, nullptr} // sentinel
 };
 
