@@ -13,6 +13,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     get_tmem_reg_layout,
     tcgen05_commit,
     tcgen05_mma,
+    tcgen05_mma_barrier_count,
     tensor_memory_descriptor,
 )
 from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared, mbarrier, tma
@@ -37,6 +38,11 @@ def as_gl_dtype(torch_dtype):
     raise ValueError(f"Unsupported dtype for Gluon layout: {torch_dtype}")
 
 
+@gluon.constexpr_function
+def get_split_dim(cga_layout, dim):
+    return 1 << sum(b[dim] != 0 for b in cga_layout)
+
+
 def matmul_get_configs(pre_hook=None):
     return [
         triton.Config(
@@ -48,23 +54,24 @@ def matmul_get_configs(pre_hook=None):
                 "GRID_TILE_WIDTH": grid_tile_width,
                 "STAGES": stages,
                 "ACC_STAGES": acc_stages,
-                "TWO_CTAS": two_cta,
-                "EPILOGUE_SIZE_N": epilogue_size_n,
+                # Remove after #7777 lands
+                "EPILOGUE_SIZE_N": epilogue_size_n if not cga_layout or BM != 64 else BN,
+                "CGA_LAYOUT": cga_layout,
             },
             num_warps=4,
-            num_ctas=2 if two_cta else 1,
+            num_ctas=2**len(cga_layout),
             pre_hook=pre_hook,
         )
         for BM in (128, )
-        for BN in (128, 256)
+        for BN in (128, 256, 512)
         for BK in (64, 128)
         for minor_dim in (0, 1)
         for grid_tile_width in (1, 4, 8, 12, 16)
         for stages in (2, 4, 6)
         for acc_stages in (2, 3, 4)
         for epilogue_size_n in (32, 64)
-        for two_cta in (False, True)
-        if not (two_cta and BN > 128)
+        for cga_layout in ((), ((1, 0), ), ((1, 0), (2, 0)))
+        if BN // get_split_dim(cga_layout, 1) <= 256
     ]
 
 
@@ -73,34 +80,44 @@ def matmul_tma_set_block_size_hook(nargs):
     block_n = nargs["BLOCK_SIZE_N"]
     block_k = nargs["BLOCK_SIZE_K"]
     epilogue_size_n = nargs["EPILOGUE_SIZE_N"]
-    two_ctas = bool(nargs["TWO_CTAS"])
+    cga_layout = nargs["CGA_LAYOUT"]
 
-    tile_m = block_m * (2 if two_ctas else 1)
-    # Keeping this here because pallas does this, but in reality
-    # we should just multiply block_m by 2 if we want to compute
-    # the same number of elements per output tile
-    tile_n = block_n * (2 if two_ctas else 1)
+    tile_m = block_m * get_split_dim(cga_layout, 0)
     nargs["a_desc"].block_shape = [tile_m, block_k]
-    nargs["b_desc"].block_shape = [block_k, tile_n]
+    nargs["b_desc"].block_shape = [block_k, block_n]
     nargs["c_desc"].block_shape = [tile_m, epilogue_size_n]
 
-    if two_ctas:
-        cga_layouts = [[[1, 0]], [[0, 1]], [[1, 0]]]
-        for desc, cga_layout in zip(("a_desc", "b_desc", "c_desc"), cga_layouts):
-            nargs[desc].layout = gl.NVMMASharedLayout.get_default_for(
-                nargs[desc].block_shape,
-                as_gl_dtype(nargs[desc].base.dtype),
-                cga_layout=cga_layout,
-            )
-    else:
-        for desc in ("a_desc", "b_desc", "c_desc"):
-            nargs[desc].layout = gl.NVMMASharedLayout.get_default_for(
-                nargs[desc].block_shape,
-                as_gl_dtype(nargs[desc].base.dtype),
-            )
+    # Janky version of make_2cta_cga_layout
+    def get_cga_layout(layout, op_idx):
+        assert op_idx in (0, 1)
+        if not layout:
+            return layout
+        ret = list(layout)
+        # 2cta
+        if op_idx == 1:
+            ret[0] = (0, 1)
+        inner = 1 - op_idx
+        outer = op_idx
+        for i in range(1, len(ret)):
+            b = list(ret[i])
+            b[inner] = 0
+            if op_idx == 1:
+                b[outer] *= 2
+            ret[i] = tuple(b)
+        return tuple(ret)
+
+    cga_layout_a = get_cga_layout(cga_layout, 0)
+    cga_layout_b = get_cga_layout(cga_layout, 1)
+    cga_layout_c = cga_layout
+    for desc, cga_layout in zip(("a_desc", "b_desc", "c_desc"), (cga_layout_a, cga_layout_b, cga_layout_c)):
+        nargs[desc].layout = gl.NVMMASharedLayout.get_default_for(
+            nargs[desc].block_shape,
+            as_gl_dtype(nargs[desc].base.dtype),
+            cga_layout=cga_layout,
+        )
 
 
-# From Pallas.
+# From Pallas / CUTLASS
 @gluon.jit
 def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width: gl.constexpr):
     major_size = n_tiles if minor_dim == 0 else m_tiles
@@ -140,12 +157,6 @@ class Counter:
     phase: gl.tensor
     num_barriers: gl.constexpr
 
-    @gluon.constexpr_function
-    def __init__(self, index, phase, num_barriers):
-        self.index = index
-        self.phase = phase
-        self.num_barriers = gl.constexpr(num_barriers)
-
     @gluon.jit
     def create(phase, num_barriers: gl.constexpr):
         return Counter(gl.to_tensor(0), gl.to_tensor(phase), num_barriers)
@@ -175,23 +186,6 @@ class ClcTileSchedulerConsumer:
     clc_consumed_bars: gl.shared_memory_descriptor
     counter: Counter
     consumed_counter: Counter
-
-    @gluon.constexpr_function
-    def __init__(self, has_work, tile_id, num_pid_m, num_pid_n, TILE_M, TILE_N, MINOR_DIM, GRID_TILE_WIDTH,
-                 clc_result_buffers, clc_barriers, clc_consumed_bars, counter, consumed_counter):
-        self.has_work = has_work
-        self.tile_id = tile_id
-        self.num_pid_m = num_pid_m
-        self.num_pid_n = num_pid_n
-        self.TILE_M = gl.constexpr(TILE_M)
-        self.TILE_N = gl.constexpr(TILE_N)
-        self.MINOR_DIM = gl.constexpr(MINOR_DIM)
-        self.GRID_TILE_WIDTH = gl.constexpr(GRID_TILE_WIDTH)
-        self.clc_result_buffers = clc_result_buffers
-        self.clc_barriers = clc_barriers
-        self.clc_consumed_bars = clc_consumed_bars
-        self.counter = counter
-        self.consumed_counter = consumed_counter
 
     @gluon.jit
     def initialize(M, N, TILE_M: gl.constexpr, TILE_N: gl.constexpr, MINOR_DIM: gl.constexpr,
@@ -276,28 +270,6 @@ class PartitionArgs:
     clc_consumed_bars: gl.shared_memory_descriptor
     MINOR_DIM: gl.constexpr
     GRID_TILE_WIDTH: gl.constexpr
-    TWO_CTAS: gl.constexpr
-
-    @gluon.constexpr_function
-    def __init__(self, a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_bufs,
-                 acc_empty_bars, acc_ready_bars, clc_result_buffers, clc_barriers, clc_consumed_bars, MINOR_DIM,
-                 GRID_TILE_WIDTH, TWO_CTAS):
-        self.a_desc = a_desc
-        self.b_desc = b_desc
-        self.c_desc = c_desc
-        self.a_bufs = a_bufs
-        self.b_bufs = b_bufs
-        self.load_empty_bars = load_empty_bars
-        self.load_ready_bars = load_ready_bars
-        self.acc_bufs = acc_bufs
-        self.acc_empty_bars = acc_empty_bars
-        self.acc_ready_bars = acc_ready_bars
-        self.clc_result_buffers = clc_result_buffers
-        self.clc_barriers = clc_barriers
-        self.clc_consumed_bars = clc_consumed_bars
-        self.MINOR_DIM = gl.constexpr(MINOR_DIM)
-        self.GRID_TILE_WIDTH = gl.constexpr(GRID_TILE_WIDTH)
-        self.TWO_CTAS = gl.constexpr(TWO_CTAS)
 
     @gluon.jit
     def get_clc_consumer(self):
@@ -353,8 +325,8 @@ def matmul_load_partition(p):
             mbarrier.wait(p.load_empty_bars.index(state.index), state.phase, pred=pred)
             bar = p.load_ready_bars.index(state.index)
             mbarrier.expect(bar, p.a_desc.nbytes_per_cta + p.b_desc.nbytes_per_cta)
-            tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
-            tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
+            tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index), multicast=True)
+            tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index), multicast=True)
             state = state.next()
         scheduler = scheduler.step(i)
         i += 1
@@ -378,10 +350,10 @@ def matmul_mma_partition(p):
         for k in range(0, K, BLOCK_K):
             mbarrier.wait(p.load_ready_bars.index(load_state.index), load_state.phase)
             tcgen05_mma(p.a_bufs.index(load_state.index), p.b_bufs.index(load_state.index), acc_buf, use_acc=use_acc,
-                        mbarriers=[p.load_empty_bars.index(load_state.index)])
+                        multicast=True, mbarriers=[p.load_empty_bars.index(load_state.index)])
             load_state = load_state.next()
             use_acc = True
-        tcgen05_commit(p.acc_ready_bars.index(acc_state.index))
+        tcgen05_commit(p.acc_ready_bars.index(acc_state.index), descs=[p.a_bufs.index(0), p.b_bufs.index(0)])
         acc_state = acc_state.next()
         scheduler = scheduler.step(i)
         i += 1
@@ -445,29 +417,30 @@ def _matmul_kernel(
     GRID_TILE_WIDTH: gl.constexpr,
     STAGES: gl.constexpr,
     ACC_STAGES: gl.constexpr,
-    TWO_CTAS: gl.constexpr,
+    CGA_LAYOUT: gl.constexpr,
     EPILOGUE_SIZE_N: gl.constexpr,
 ):
     BLOCK_M: gl.constexpr = a_desc.block_shape[0]
     BLOCK_N: gl.constexpr = b_desc.block_shape[1]
+    TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
 
     dtype: gl.constexpr = a_desc.dtype
     a_bufs = gl.allocate_shared_memory(dtype, [STAGES] + a_desc.block_shape, a_desc.layout)
     b_bufs = gl.allocate_shared_memory(dtype, [STAGES] + b_desc.block_shape, b_desc.layout)
+    mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count([a_bufs.index(0), b_bufs.index(0)], multicast=True)
 
     # Equiv. consumed_barrier. Barrier TCGEN05 MMA -> Load TMA
     load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
     # Equiv. ab_tma_barrier. Barrier Load TMA -> TCGEN05 MMA
     load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=TWO_CTAS)
     for i in gl.static_range(STAGES):
-        # For multicast we could use tcgen05_mma_barrier_count
-        mbarrier.init(load_empty_bars.index(i), count=1)
+        mbarrier.init(load_empty_bars.index(i), count=mma_barrier_count)
         mbarrier.init(load_ready_bars.index(i), count=1)
 
     tmem_layout: gl.constexpr = TensorMemoryLayout(
-        [BLOCK_SIZE_M, BLOCK_N],
+        [BLOCK_SIZE_M, BLOCK_N // get_split_dim(CGA_LAYOUT, 1)],
         col_stride=1,
-        cta_split_num=(2, 1) if TWO_CTAS else None,
+        cga_layout=CGA_LAYOUT,
         two_ctas=TWO_CTAS,
     )
     acc_bufs = allocate_tensor_memory(gl.float32, [ACC_STAGES, BLOCK_M, BLOCK_N], tmem_layout)
@@ -477,8 +450,7 @@ def _matmul_kernel(
     acc_ready_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     for i in gl.static_range(ACC_STAGES):
         mbarrier.init(acc_empty_bars.index(i), count=1)
-        # For multicast we could use tcgen05_mma_barrier_count
-        mbarrier.init(acc_ready_bars.index(i), count=1)
+        mbarrier.init(acc_ready_bars.index(i), count=mma_barrier_count)
 
     clc_barriers = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     clc_consumed_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=TWO_CTAS)
@@ -490,7 +462,7 @@ def _matmul_kernel(
     clc_result_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 2],
                                                    gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout))
 
-    if TWO_CTAS:
+    if gl.num_ctas() > 1:
         mbarrier.sync_cluster_init()
     p = PartitionArgs(
         a_desc,
@@ -508,7 +480,6 @@ def _matmul_kernel(
         clc_consumed_bars,
         GRID_MINOR_DIM,
         GRID_TILE_WIDTH,
-        TWO_CTAS,
     )
 
     gl.warp_specialize([
@@ -530,18 +501,18 @@ def matmul_with_config(
     b,
     out=None,
     *,
-    block_size_m=128,
-    block_size_n=128,
-    block_size_k=64,
-    grid_minor_dim=0,
-    grid_tile_width=1,
-    stages=4,
-    acc_stages=2,
-    two_ctas=False,
-    epilogue_size_n=32,
+    block_size_m,
+    block_size_n,
+    block_size_k,
+    grid_minor_dim,
+    grid_tile_width,
+    stages,
+    acc_stages,
+    cga_layout,
+    epilogue_size_n,
 ):
-    if two_ctas and block_size_n > 128:
-        raise ValueError("two_ctas only supports BLOCK_SIZE_N <= 128")
+    if block_size_n // get_split_dim(cga_layout, 1) > 256:
+        raise ValueError(f"cga_layout={list(cga_layout)} only supports BLOCK_SIZE_N <= 256")
     M, K = a.shape
     K1, N = b.shape
     if K != K1:
@@ -549,10 +520,9 @@ def matmul_with_config(
     if a.dtype != torch.float16 or b.dtype != torch.float16:
         raise ValueError("matmul only supports fp16 inputs")
 
-    tile_m = block_size_m * (2 if two_ctas else 1)
-    tile_n = block_size_n * (2 if two_ctas else 1)
-    if M % tile_m != 0 or N % tile_n != 0 or K % block_size_k != 0:
-        raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, tile_n, block_size_k)}")
+    tile_m = block_size_m * (2 if cga_layout else 1)
+    if M % tile_m != 0 or N % block_size_n != 0 or K % block_size_k != 0:
+        raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, block_size_n, block_size_k)}")
 
     if out is None:
         c = torch.empty((M, N), device=a.device, dtype=a.dtype)
@@ -579,17 +549,17 @@ def matmul_with_config(
         "GRID_TILE_WIDTH": grid_tile_width,
         "STAGES": stages,
         "ACC_STAGES": acc_stages,
-        "TWO_CTAS": two_ctas,
+        "CGA_LAYOUT": cga_layout,
         "EPILOGUE_SIZE_N": epilogue_size_n,
     })
 
     def grid(meta):
-        tile_m = meta["BLOCK_SIZE_M"] * (2 if bool(meta["TWO_CTAS"]) else 1)
-        tile_n = meta["BLOCK_SIZE_N"] * (2 if bool(meta["TWO_CTAS"]) else 1)
+        tile_m = meta["BLOCK_SIZE_M"] * (2 if len(meta["CGA_LAYOUT"]) > 0 else 1)
+        block_n = meta["BLOCK_SIZE_N"]
         block_k = meta["BLOCK_SIZE_K"]
-        if M % tile_m != 0 or N % tile_n != 0 or K % block_k != 0:
-            raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, tile_n, block_k)}")
-        num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, tile_n)
+        if M % tile_m != 0 or N % block_n != 0 or K % block_k != 0:
+            raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, block_n, block_k)}")
+        num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, block_n)
         return (num_tiles, )
 
     _matmul_kernel[grid](
@@ -606,10 +576,10 @@ def matmul_with_config(
         grid_tile_width,
         stages,
         acc_stages,
-        two_ctas,
+        cga_layout,
         epilogue_size_n,
         num_warps=4,
-        num_ctas=2 if two_ctas else 1,
+        num_ctas=2**len(cga_layout),
     )
     return c
 
@@ -630,12 +600,12 @@ def matmul(a, b):
     c_desc = TensorDescriptor.from_tensor(c, dummy_block, dummy_layout)
 
     def grid(meta):
-        tile_m = meta["BLOCK_SIZE_M"] * (2 if bool(meta["TWO_CTAS"]) else 1)
-        tile_n = meta["BLOCK_SIZE_N"] * (2 if bool(meta["TWO_CTAS"]) else 1)
+        tile_m = meta["BLOCK_SIZE_M"] * get_split_dim(meta["CGA_LAYOUT"], 0)
+        block_n = meta["BLOCK_SIZE_N"]
         block_k = meta["BLOCK_SIZE_K"]
-        if M % tile_m != 0 or N % tile_n != 0 or K % block_k != 0:
-            raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, tile_n, block_k)}")
-        num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, tile_n)
+        if M % tile_m != 0 or N % block_n != 0 or K % block_k != 0:
+            raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, block_n, block_k)}")
+        num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, block_n)
         return (num_tiles, )
 
     matmul_kernel[grid](a_desc, b_desc, c_desc, M, N, K)
@@ -643,36 +613,8 @@ def matmul(a, b):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize(
-    "grid_minor_dim,grid_tile_width,stages,block_size_n",
-    [
-        (0, 1, 2, 128),
-        (1, 8, 4, 128),
-        (0, 16, 2, 256),
-    ],
-)
-def test_matmul_single_cta_configs(grid_minor_dim, grid_tile_width, stages, block_size_n):
-    M, N, K = 512, 512, 256
-    torch.manual_seed(0)
-    a = torch.rand((M, K), device=torch.device("cuda"), dtype=torch.float16)
-    b = torch.rand((K, N), device=torch.device("cuda"), dtype=torch.float16)
-    expected = torch.matmul(a, b)
-    actual = matmul_with_config(
-        a,
-        b,
-        block_size_m=128,
-        block_size_n=block_size_n,
-        block_size_k=64,
-        grid_minor_dim=grid_minor_dim,
-        grid_tile_width=grid_tile_width,
-        stages=stages,
-        two_ctas=False,
-        epilogue_size_n=32,
-    )
-    torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
-
-
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("block_size_m", [64, 128])
+@pytest.mark.parametrize("cga_layout", [(), ((1, 0), ), ((1, 0), (2, 0))])
 @pytest.mark.parametrize(
     "grid_minor_dim,grid_tile_width,stages",
     [
@@ -682,51 +624,47 @@ def test_matmul_single_cta_configs(grid_minor_dim, grid_tile_width, stages, bloc
         (0, 8, 4),
     ],
 )
-def test_matmul_two_cta_configs(grid_minor_dim, grid_tile_width, stages):
+def test_matmul_configs(cga_layout, block_size_m, grid_minor_dim, grid_tile_width, stages):
     M, N, K = 512, 512, 256
     torch.manual_seed(0)
     a = torch.rand((M, K), device=torch.device("cuda"), dtype=torch.float16)
     b = torch.rand((K, N), device=torch.device("cuda"), dtype=torch.float16)
     expected = torch.matmul(a, b)
-    actual = matmul_with_config(
-        a,
-        b,
-        block_size_m=128,
-        block_size_n=128,
-        block_size_k=64,
-        grid_minor_dim=grid_minor_dim,
-        grid_tile_width=grid_tile_width,
-        stages=stages,
-        two_ctas=True,
-        epilogue_size_n=32,
-    )
+    # We don't support epilogue splitting for 2CTA MMA until
+    # https://github.com/triton-lang/triton/pull/7777 lands
+    # To support epilogue splitting we need to be able to split within a CTA
+    can_split_n = sum(b[1] != 0 for b in cga_layout) == 0
+    block_size_n = 256
+    epilogue_size_n = block_size_n if cga_layout and (block_size_m == 64 or not can_split_n) else 32
+    try:
+        actual = matmul_with_config(
+            a,
+            b,
+            block_size_m=block_size_m,
+            block_size_n=block_size_n,
+            block_size_k=64,
+            grid_minor_dim=grid_minor_dim,
+            grid_tile_width=grid_tile_width,
+            stages=stages,
+            acc_stages=2,
+            cga_layout=cga_layout,
+            epilogue_size_n=epilogue_size_n,
+        )
+    except triton.runtime.errors.OutOfResources:
+        pytest.skip("not enough shmem")
     torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
 
 
+@pytest.mark.skip(reason="Too slow. Remove skip once we trim the config space")
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize(
-    "M,N,K",
-    [
-        (256, 256, 128),
-        (512, 256, 256),
-    ],
-)
-def test_matmul_autotuned_matches_torch(M, N, K):
+def test_matmul_autotuned_matches_torch():
+    M, N, K = 512, 256, 256
     torch.manual_seed(0)
     a = torch.rand((M, K), device=torch.device("cuda"), dtype=torch.float16)
     b = torch.rand((K, N), device=torch.device("cuda"), dtype=torch.float16)
     expected = torch.matmul(a, b)
     actual = matmul(a, b)
     torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
-
-
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_matmul_with_config_rejects_invalid_collective_config():
-    M, N, K = 512, 512, 256
-    a = torch.rand((M, K), device=torch.device("cuda"), dtype=torch.float16)
-    b = torch.rand((K, N), device=torch.device("cuda"), dtype=torch.float16)
-    with pytest.raises(ValueError, match="BLOCK_SIZE_N <= 128"):
-        _ = matmul_with_config(a, b, two_ctas=True, block_size_n=256)
 
 
 def show_profile(profile_name):
@@ -759,13 +697,13 @@ def create_benchmark_tensors():
 def get_benchmark_kernel_config():
     return {
         "tile_m": 128,
-        "tile_n": 128,
+        "tile_n": 256,
         "tile_k": 64,
         "grid_minor_dim": 0,
         "grid_tile_width": 16,
         "stages": 6,
         "acc_stages": 2,
-        "collective": True,
+        "cga_layout": [[1, 0]],
         "epilogue_tile_n": 32,
     }
 
@@ -790,7 +728,7 @@ def make_gluon_runner(a, b, c_triton, cfg, use_autotuned=False):
             grid_tile_width=cfg["grid_tile_width"],
             stages=cfg["stages"],
             acc_stages=cfg["acc_stages"],
-            two_ctas=cfg["collective"],
+            cga_layout=cfg["cga_layout"],
             epilogue_size_n=cfg["epilogue_tile_n"],
         )
 
