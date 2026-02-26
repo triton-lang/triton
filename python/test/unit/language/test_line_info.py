@@ -486,6 +486,6 @@ def test_map_elementwise_has_lineinfo():
     run_filecheck("test", kernel_info.asm["ttir"], check_template)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(autouse=True)
 def with_line_info(fresh_knobs):
-    fresh_knobs.compile.disable_line_info = False
+    fresh_knobs.compilation.disable_line_info = False
