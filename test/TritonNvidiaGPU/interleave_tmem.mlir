@@ -89,8 +89,8 @@ tt.func @interleave_load_store_ws() {
       %val1 = ttng.tmem_load %slice1 : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x128> -> tensor<128x64xf32, #linear64>
       %mul1 = arith.mulf %val1, %alpha : tensor<128x64xf32, #linear64>
 
-      ttng.tmem_store %mul0, %slice0, %true : tensor<128x64xf32, #blocked1> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x128>
-      ttng.tmem_store %mul1, %slice1, %true : tensor<128x64xf32, #blocked1> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x128>
+      ttng.tmem_store %mul0, %slice0, %true : tensor<128x64xf32, #linear64> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x128>
+      ttng.tmem_store %mul1, %slice1, %true : tensor<128x64xf32, #linear64> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x128>
 
     }
     ttg.warp_return

@@ -134,10 +134,10 @@ tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #shared1d = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0]}>
 #smem = #ttg.shared_memory
-tt.func public @result_dim_too_large(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+tt.func public @result_dim_too_large(%arg0: !ttg.memdesc<8x16xf32, #shared1d, #smem>) {
     %zero = arith.constant 0 : i32
     // expected-error @+1 {{result shape}}
-    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<32xf32, #shared1d, #smem>
+    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<8x16xf32, #shared1d, #smem> -> !ttg.memdesc<32xf32, #shared1d, #smem>
     tt.return
 }
 
