@@ -41,16 +41,16 @@ def main():
     import triton
     import triton.language as tl
     from triton._C.libtriton import nvidia
+    from triton.tools.tensor_descriptor import TensorDescriptor
 
     device = triton.runtime.driver.active.get_current_device()
     triton.runtime.driver.active.set_current_device(device)
-
     block_size = tl.constexpr(SIZE)
 
     @triton.jit
-    def add_kernel(x_ptr, y_ptr, out_ptr):
+    def add_kernel(x_desc, y_ptr, out_ptr):
         offsets = tl.arange(0, block_size)
-        x = tl.load(x_ptr + offsets)
+        x = x_desc.load([0])
         y = tl.load(y_ptr + offsets)
         tl.store(out_ptr + offsets, x + y)
 
@@ -70,8 +70,9 @@ def main():
     x_arg = DevicePtr(x_ptr, tl.float32)
     y_arg = DevicePtr(y_ptr, tl.float32)
     out_arg = DevicePtr(out_ptr, tl.float32)
+    x_desc = TensorDescriptor(x_arg, shape=[SIZE], strides=[1], block_shape=[SIZE])
 
-    add_kernel[(1, )](x_arg, y_arg, out_arg)
+    add_kernel[(1, )](x_desc, y_arg, out_arg)
     nvidia.synchronize()
 
     out = struct.unpack(f"{SIZE}f", nvidia.copy_device_to_host(out_ptr, n_bytes))
