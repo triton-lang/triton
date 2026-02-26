@@ -856,23 +856,11 @@ struct TMEMSubSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto *ctx = op.getContext();
     auto dstTy = cast<MemDescType>(op.getResult().getType());
-    auto llInv = toLinearLayout(dstTy).pseudoinvert();
-    auto dimNames = llvm::to_vector(llInv.getInDimNames());
-    llvm::SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
-    for (auto dim : dimNames)
-      logicalOffsets.push_back({dim, 0});
-    logicalOffsets.back().second = op.getN();
-    auto rowCol = llInv.apply(logicalOffsets);
-
-    // Columns are in 32-bit elements
-    auto bitwidth = dstTy.getElementTypeBitWidth();
-    auto offsetRow = rowCol[0].second;
-    auto offsetCol = rowCol[1].second * bitwidth / 32;
+    uint32_t offset = getTMemSubSliceOffset(dstTy, op.getN());
 
     Value tmemBase = adaptor.getSrc();
-    Value offsetVal = b.i32_val(offsetCol | offsetRow << 16);
+    Value offsetVal = b.i32_val(offset);
     Value newBase = b.add(b.ptrtoint(i32_ty, tmemBase), offsetVal);
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
