@@ -88,6 +88,7 @@ def test_instrumented_op_entry_exit():
 
 def test_set_metric_kernels():
     libproton.set_metric_kernels(0, 0, 0)
+    libproton.set_metric_kernels(0, 0, 0, 1, 0, 1, 0)
 
 
 def test_tensor_metric_construction():
