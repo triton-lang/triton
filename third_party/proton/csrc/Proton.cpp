@@ -182,12 +182,10 @@ static void initProton(pybind11::module &&m) {
         MetricKernelLaunchState metricKernelLaunchState{
             MetricKernelLaunchConfig{
                 reinterpret_cast<void *>(tensorMetricKernel),
-                tensorMetricKernelNumThreads,
-                tensorMetricKernelSharedMemBytes},
+                tensorMetricKernelNumThreads, tensorMetricKernelSharedMemBytes},
             MetricKernelLaunchConfig{
                 reinterpret_cast<void *>(scalarMetricKernel),
-                scalarMetricKernelNumThreads,
-                scalarMetricKernelSharedMemBytes},
+                scalarMetricKernelNumThreads, scalarMetricKernelSharedMemBytes},
             reinterpret_cast<void *>(stream)};
         SessionManager::instance().setMetricKernels(metricKernelLaunchState);
       },
