@@ -383,6 +383,18 @@ struct TensorMetric {
   uint64_t size{1};   // number of uint64 words stored at ptr
 };
 
+struct MetricKernelLaunchConfig {
+  void *kernel{nullptr};
+  unsigned int numThreads{1};
+  unsigned int sharedMemBytes{0};
+};
+
+struct MetricKernelLaunchState {
+  MetricKernelLaunchConfig tensor{};
+  MetricKernelLaunchConfig scalar{};
+  void *stream{nullptr};
+};
+
 /// Collect tensor metrics from device to host.
 std::map<std::string, MetricValueType>
 collectTensorMetrics(Runtime *runtime,
@@ -422,8 +434,7 @@ public:
 
   void receive(const std::map<std::string, TensorMetric> &tensorMetrics,
                const std::map<std::string, MetricValueType> &scalarMetrics,
-               void *tensorMetricKernel, void *scalarMetricKernel,
-               void *stream);
+               const MetricKernelLaunchState &metricKernelLaunchState);
 
   void reserve() { getOrCreateBuffer(); }
 
@@ -478,11 +489,11 @@ private:
 
   DeviceBuffer &getOrCreateBuffer();
 
-  void queue(size_t metricId, TensorMetric tensorMetric, void *kernel,
-             void *stream);
+  void queue(size_t metricId, TensorMetric tensorMetric, void *stream,
+             const MetricKernelLaunchConfig &launchConfig);
 
-  void queue(size_t metricId, MetricValueType scalarMetric, void *kernel,
-             void *stream);
+  void queue(size_t metricId, MetricValueType scalarMetric, void *stream,
+             const MetricKernelLaunchConfig &launchConfig);
 
   void synchronize(DeviceBuffer &buffer);
 
@@ -513,12 +524,13 @@ private:
   }
 
   template <typename MetricsT>
-  void queueMetrics(const MetricsT &metrics, void *kernel, void *stream) {
+  void queueMetrics(const MetricsT &metrics, void *stream,
+                    const MetricKernelLaunchConfig &launchConfig) {
     for (const auto &[name, metric] : metrics) {
       size_t typeIndex = getMetricTypeIndex(metric);
       size_t size = getMetricSize(metric);
       auto descriptor = getOrCreateMetricDescriptor(name, typeIndex, size);
-      queue(descriptor.id, metric, kernel, stream);
+      queue(descriptor.id, metric, stream, launchConfig);
     }
   }
 
@@ -548,8 +560,8 @@ public:
              const std::map<std::string, MetricValueType> &scalarMetrics,
              const std::map<std::string, TensorMetric> &tensorMetrics) = 0;
 
-  virtual void setMetricKernels(void *tensorMetricKernel,
-                                void *scalarMetricKernel, void *stream) = 0;
+  virtual void
+  setMetricKernels(const MetricKernelLaunchState &metricKernelLaunchState) = 0;
 };
 
 } // namespace proton
