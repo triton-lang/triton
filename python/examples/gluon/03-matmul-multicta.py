@@ -612,6 +612,11 @@ def matmul(a, b):
     return c
 
 
+########################################################
+# Testing
+########################################################
+
+
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("block_size_m", [64, 128])
 @pytest.mark.parametrize("cga_layout", [(), ((1, 0), ), ((1, 0), (2, 0))])
@@ -667,6 +672,11 @@ def test_matmul_autotuned_matches_torch():
     torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
 
 
+########################################################
+# Benchmarking
+########################################################
+
+
 def show_profile(profile_name):
     import triton.profiler.viewer as proton_viewer
     metric_names = ["tflop16/s", "time/ms"]
@@ -703,7 +713,7 @@ def get_benchmark_kernel_config():
         "grid_tile_width": 16,
         "stages": 6,
         "acc_stages": 2,
-        "cga_layout": [[1, 0]],
+        "cga_layout": ((1, 0), ),
         "epilogue_tile_n": 32,
     }
 
