@@ -294,13 +294,13 @@ py::object layoutToGluon(Attribute layout) {
         partitioned.getPartitionDim(), partitionLayout);
   } else if (auto tmemScales =
                  dyn_cast<ttng::TensorMemoryScalesEncodingAttr>(layout)) {
-    return layouts.TensorMemoryScalesLayout(std::vector<unsigned>{
-        tmemScales.getCTASplitM(), tmemScales.getCTASplitN()});
+    return layouts.TensorMemoryScalesLayout(
+        getCgaLayoutBases(tmemScales.getCGALayout()));
   } else if (auto tmem = dyn_cast<ttng::TensorMemoryEncodingAttr>(layout)) {
     return layouts.TensorMemoryLayout(
         std::vector<unsigned>{tmem.getBlockM(), tmem.getBlockN()},
-        tmem.getColStride(),
-        std::vector<unsigned>{tmem.getCTASplitM(), tmem.getCTASplitN()});
+        tmem.getColStride(), getCgaLayoutBases(tmem.getCGALayout()),
+        tmem.getTwoCTAs());
   }
 
   throw py::value_error("Unhandled encoding encountered");
@@ -415,8 +415,9 @@ void init_gluon_ir(py::module &&m) {
              auto inNamesRange = linearLayout.getInDimNames();
              auto inNames = llvm::to_vector(inNamesRange);
              bool isTmemLayout =
-                 (inNames.size() == 2 && inNames[0].str() == "row" &&
-                  inNames[1].str() == "col");
+                 ((inNames.size() == 2 || inNames.size() == 3) &&
+                  inNames[0].str() == "row" && inNames[1].str() == "col" &&
+                  (inNames.size() == 2 || inNames[2].str() == "block"));
              if (!isTmemLayout)
                throw std::invalid_argument(
                    "Unsupported layout in to_linear_layout");
@@ -557,22 +558,21 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("get_tensor_memory_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &block,
-              unsigned colStride, std::vector<unsigned> &ctaSplitNum,
+              unsigned colStride, std::vector<std::vector<int32_t>> &cgaBases,
               bool twoCTAs) -> Attribute {
              auto ctx = self.getContext();
              check(block.size() == 2, "expected a 2D block");
-             check(ctaSplitNum.size() == 2, "expected 2D CTA dimensions");
+             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, /*rank=*/2);
              return self.getChecked<ttng::TensorMemoryEncodingAttr>(
-                 ctx, block[0], block[1], colStride, ctaSplitNum[0],
-                 ctaSplitNum[1], twoCTAs);
+                 ctx, block[0], block[1], colStride, cgaLayout, twoCTAs);
            })
       .def("get_tensor_memory_scales_layout",
            [](GluonOpBuilder &self,
-              std::vector<unsigned> &ctaSplitNum) -> Attribute {
+              std::vector<std::vector<int32_t>> &cgaBases) -> Attribute {
              auto ctx = self.getContext();
-             check(ctaSplitNum.size() == 2, "expected 2D CTA dimensions");
+             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, /*rank=*/2);
              return self.getChecked<ttng::TensorMemoryScalesEncodingAttr>(
-                 ctx, ctaSplitNum[0], ctaSplitNum[1]);
+                 ctx, cgaLayout);
            })
       .def("get_shape_from_tensor",
            [](GluonOpBuilder &self, Value tensor) -> std::vector<int64_t> {
@@ -1096,8 +1096,8 @@ void init_gluon_ir(py::module &&m) {
   m.def(
       "compute_tmem_reg_layout",
       [](py::object elementTyObj, std::vector<int64_t> shape,
-         py::object layoutObj, unsigned numWarps, const std::string &atomName,
-         std::vector<std::vector<int32_t>> cgaBases) -> py::object {
+         py::object layoutObj, unsigned numWarps,
+         const std::string &atomName) -> py::object {
         DialectRegistry registry;
         registry.insert<triton::TritonDialect, ttg::TritonGPUDialect,
                         ttng::TritonNvidiaGPUDialect, gluon::GluonDialect>();
@@ -1115,12 +1115,10 @@ void init_gluon_ir(py::module &&m) {
         auto allocShape = shape;
 
         auto ctx = builder.getContext();
-        unsigned rank = shape.size();
         auto memDescTy = builder.getChecked<ttg::MemDescType>(
             shape, elementType, layoutAttr,
             ttng::TensorMemorySpaceAttr::get(ctx),
             /*mutableMemory=*/true, allocShape);
-        auto ctaLayoutAttr = buildCgaLayoutAttr(ctx, cgaBases, rank);
 
         auto maybeAtom =
             llvm::StringSwitch<std::optional<ttng::TMemAccessAtom>>(atomName)
@@ -1141,8 +1139,8 @@ void init_gluon_ir(py::module &&m) {
           throw std::invalid_argument(
               "numWarps must be a power of two and >= 4");
 
-        auto layout = ttng::getDistributedLayoutForTmemLdSt(
-            memDescTy, atom, numWarps, ctaLayoutAttr);
+        auto layout =
+            ttng::getDistributedLayoutForTmemLdSt(memDescTy, atom, numWarps);
         if (!layout)
           return py::none();
 

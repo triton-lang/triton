@@ -417,7 +417,6 @@ def matmul_epilogue_partition(p):
                     (TILE_M, SPLIT_TILE_N),
                     acc_sub.type.layout,
                     gl.num_warps(),
-                    cga_layout=p.c_desc.layout.cga_layout,
                 )).to(dtype)
             tma.store_wait(pendings=1)
             acc_smem.store(acc)
