@@ -66,9 +66,9 @@ def matmul_get_configs(pre_hook=None):
         for BN in (128, 256, 512)
         for BK in (64, 128)
         for minor_dim in (0, 1)
-        for grid_tile_width in (1, 4, 8, 12, 16)
+        for grid_tile_width in (4, 8, 16)
         for stages in (2, 4, 6)
-        for acc_stages in (2, 3, 4)
+        for acc_stages in (2, )
         for epilogue_size_n in (32, 64)
         for cga_layout in ((), ((1, 0), ), ((1, 0), (2, 0)))
         if BN // get_split_dim(cga_layout, 1) <= 256
