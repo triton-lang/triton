@@ -386,14 +386,19 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // Negative test: no cluster barrier should be inserted for multiCTA TMA when the multicast is not set
-  // CHECK-LABEL: @no_cluster_tma_without_multicast
+  // The barrier layout is still cross-CTA here, so reusing the allocation must
+  // insert a cluster barrier even without the multicast attribute.
+  // CHECK-LABEL: @cluster_tma_without_multicast_when_barrier_is_distributed
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_arrive {relaxed = true}
   // CHECK-NEXT: ttng.cluster_wait
+  // CHECK: ttg.local_dealloc
+  // CHECK: ttg.local_alloc
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: ttg.local_store
   // CHECK: tt.return
-  tt.func @no_cluster_tma_without_multicast(%desc: !tt.tensordesc<tensor<64x128xf16, #nvmma>>) -> tensor<64x128xf16, #blocked> {
+  tt.func @cluster_tma_without_multicast_when_barrier_is_distributed(%desc: !tt.tensordesc<tensor<64x128xf16, #nvmma>>) -> tensor<64x128xf16, #blocked> {
     %c0 = arith.constant 0 : i32
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<64x128xf16, #blocked>

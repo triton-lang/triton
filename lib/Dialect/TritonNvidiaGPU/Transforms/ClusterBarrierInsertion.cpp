@@ -4,6 +4,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include "mlir/Interfaces/FunctionInterfaces.h"
@@ -19,6 +20,11 @@ namespace {
 
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
+
+static bool hasDistributedBarrier(ttg::MemDescType barrierTy) {
+  auto kBlock = StringAttr::get(barrierTy.getContext(), "block");
+  return toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock) != 0;
+}
 
 static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
@@ -42,7 +48,8 @@ static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   } else if (auto mmaScaled = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
     return mmaScaled.getTwoCtas();
   } else if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-    return tma.getMulticast();
+    auto barrierTy = cast<ttg::MemDescType>(tma.getBarrier().getType());
+    return tma.getMulticast() || hasDistributedBarrier(barrierTy);
   }
   return false;
 }
