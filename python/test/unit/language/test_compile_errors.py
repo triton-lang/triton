@@ -205,21 +205,19 @@ def test_runtime_constexpr_loop_reassign_no_err():
         ))
 
 
-def test_runtime_loop_err_on_constexpr_value_change():
+def test_runtime_loop_constexpr_value_change_no_err():
 
     @triton.jit
     def kernel(a0, b0, n):
         for _ in range(0, n, 1):
             a0 = b0
 
-    with pytest.raises(CompilationError) as e:
-        triton.compile(
-            triton.compiler.ASTSource(
-                fn=kernel,
-                signature={"a0": "constexpr", "b0": "constexpr", "n": "i32"},
-                constexprs={"a0": 1, "b0": 2},
-            ))
-    assert "Loop-carried constexpr a0 changed value" in str(e.value)
+    triton.compile(
+        triton.compiler.ASTSource(
+            fn=kernel,
+            signature={"a0": "constexpr", "b0": "constexpr", "n": "i32"},
+            constexprs={"a0": 1, "b0": 2},
+        ))
 
 
 @triton.jit
