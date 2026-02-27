@@ -12,7 +12,7 @@ permissions: read-all
 jobs:
 
   Build-Wheels:
-    timeout-minutes: 120
+    timeout-minutes: 180
     runs-on: ${{ matrix.config.runs_on }}
 
     strategy:
@@ -99,12 +99,12 @@ jobs:
           path: ./wheelhouse/*.whl
 
       - name: Install Azure CLI
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
+        if: ${{ steps.check-version.outputs.new_commit == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
         run: |
           curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
       - name: Azure login
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
+        if: ${{ steps.check-version.outputs.new_commit == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -113,20 +113,20 @@ jobs:
 
       - id: generate-token
         name: Generate token
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
+        if: ${{ steps.check-version.outputs.new_commit == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
         run: |
           AZ_TOKEN=$(az account get-access-token --query accessToken)
           echo "::add-mask::$AZ_TOKEN"
           echo "access_token=$AZ_TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Publish wheels to Azure DevOps
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
+        if: ${{ steps.check-version.outputs.new_commit == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
         run: |
           python3 -m pip install twine
           python3 -m twine upload -r Triton-Nightly -u TritonArtifactsSP -p ${{ steps.generate-token.outputs.access_token }} --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
 
       - name: Azure Logout
-        if: ${{ steps.check-version.outputs.new_commit == 'true' && (success() || failure()) }}
+        if: ${{ steps.check-version.outputs.new_commit == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (success() || failure()) }}
         run: |
           az logout
           az cache purge

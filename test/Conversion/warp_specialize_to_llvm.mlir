@@ -540,6 +540,51 @@ llvm.func @partition_warpid_order() attributes {allocation.offset = 32 : i32} {
 
 // -----
 
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 18 : i32} {
+
+llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+
+// CHECK-LABEL: @warpid_warp_specialize
+llvm.func @warpid_warp_specialize() attributes {allocation.offset = 32 : i32} {
+  // CHECK-DAG: [[C4:%.*]] = llvm.mlir.constant(4 : i32)
+  // CHECK-DAG: [[C6:%.*]] = llvm.mlir.constant(6 : i32)
+
+  // Partition warp IDs are rewritten to be relative in this pass, while
+  // keeping ttg.warp_id for NVGPUToLLVM to lower later.
+  // CHECK: %{{.*}} = ttg.warp_id
+  // CHECK-NEXT: [[REL0:%.*]] = llvm.sub %{{.*}}, [[C6]] : i32
+  // CHECK-NEXT: "use"([[REL0]]) : (i32) -> ()
+
+  // CHECK: %{{.*}} = ttg.warp_id
+  // CHECK-NEXT: [[REL1:%.*]] = llvm.sub %{{.*}}, [[C4]] : i32
+  // CHECK-NEXT: "use"([[REL1]]) : (i32) -> ()
+
+  %0 = ttg.warp_id
+  "use"(%0) : (i32) -> ()
+
+  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 6, 4>}
+  default {
+    %1 = ttg.warp_id
+    "use"(%1) : (i32) -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    %1 = ttg.warp_id
+    "use"(%1) : (i32) -> ()
+    ttg.warp_return
+  }
+  partition1() num_warps(2) {
+    %1 = ttg.warp_id
+    "use"(%1) : (i32) -> ()
+    ttg.warp_return
+  } : () -> ()
+  llvm.return
+}
+
+}
+
+// -----
+
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 12 : i32} {
 
 llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>

@@ -78,6 +78,7 @@ def test_init_function_metadata(tmp_path: pathlib.Path):
         [],
         str(metadata_file),
     )
+    libproton.destroy_function_metadata(0)
 
 
 def test_instrumented_op_entry_exit():
@@ -87,6 +88,7 @@ def test_instrumented_op_entry_exit():
 
 def test_set_metric_kernels():
     libproton.set_metric_kernels(0, 0, 0)
+    libproton.set_metric_kernels(0, 0, 0, 1, 0, 1, 0)
 
 
 def test_tensor_metric_construction():

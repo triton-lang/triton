@@ -1200,6 +1200,9 @@ def _patch_lang(fn):
 
 # TODO: wrap everything in triton tensors
 def _implicit_cvt(arg):
+    if isinstance(arg, bool):
+        handle = TensorHandle(np.array([arg], dtype=np.bool_), tl.int1)
+        return tl.tensor(handle, tl.int1)
     if isinstance(arg, int):
         ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg), None)
         dtype = np.int32
@@ -1404,8 +1407,9 @@ class FunctionRewriter:
         return self._compile_and_exec(transformed_ast)
 
     def _get_jit_fn_file_line(self):
-        from .jit import get_jit_fn_file_line, JITFunction
-        return get_jit_fn_file_line(JITFunction(self.fn))
+        from .jit import JITFunction
+        jit_func = JITFunction(self.fn)
+        return jit_func.file_name, jit_func.def_file_line_number
 
     def _find_def(self, lines):
         def_lineno = 0

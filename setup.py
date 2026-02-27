@@ -584,6 +584,11 @@ setup(
     package_dir=dict(get_package_dirs()),
     entry_points=get_entry_points(),
     include_package_data=True,
+    exclude_package_data={"": [
+        "__pycache__",
+        "__pycache__/*",
+        "*.py[cod]",
+    ]},
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={
         "bdist_wheel": plugin_bdist_wheel,
@@ -602,25 +607,4 @@ setup(
     url="https://github.com/triton-lang/triton/",
     python_requires=PYTHON_REQUIRES,
     classifiers=CLASSIFIERS,
-    extras_require={
-        "build": [
-            "cmake>=3.20,<4.0",
-            "lit",
-        ],
-        "tests": [
-            "autopep8",
-            "isort",
-            "numpy",
-            "pytest",
-            "pytest-forked",
-            "pytest-xdist",
-            "scipy>=1.7.1",
-            "llnl-hatchet",
-        ],
-        "tutorials": [
-            "matplotlib",
-            "pandas",
-            "tabulate",
-        ],
-    },
 )

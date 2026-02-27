@@ -37,8 +37,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/PluginUtils.h"
+#include "triton/Tools/Sys/Dump.hpp"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 
 namespace {
@@ -49,22 +49,6 @@ using namespace triton;
 namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
-
-llvm::raw_fd_ostream &mlir_dumps() {
-  std::error_code EC;
-  static llvm::raw_fd_ostream S(::triton::tools::getStrEnv("MLIR_DUMP_PATH"),
-                                EC, llvm::sys::fs::CD_CreateAlways);
-  assert(!EC);
-  return S;
-}
-
-llvm::raw_ostream &mlir_dumps_or_dbgs() {
-  if (!::triton::tools::getStrEnv("MLIR_DUMP_PATH").empty()) {
-    return mlir_dumps();
-  } else {
-    return llvm::dbgs();
-  }
-}
 
 // Function to parse a comma-separated string into a vector of C-style strings
 llvm::SmallVector<const char *, 3>
@@ -424,11 +408,18 @@ void init_triton_ir(py::module &&m) {
              self.print(os);
              return os.str();
            })
-      .def("set_name", [](Location &self, std::string &name) {
-        mlir::StringAttr nameAttr =
-            mlir::StringAttr::get(self.getContext(), name);
-        mlir::NameLoc nameLoc = mlir::NameLoc::get(nameAttr, self);
-        self = dyn_cast<Location>(nameLoc);
+      .def("set_name",
+           [](Location &self, std::string &name) {
+             mlir::StringAttr nameAttr =
+                 mlir::StringAttr::get(self.getContext(), name);
+             mlir::NameLoc nameLoc = mlir::NameLoc::get(nameAttr, self);
+             self = dyn_cast<Location>(nameLoc);
+           })
+      .def("get_name", [](Location &self) -> std::optional<std::string> {
+        if (auto nameLoc = dyn_cast<NameLoc>(self)) {
+          return nameLoc.getName().str();
+        }
+        return std::nullopt;
       });
 
   py::class_<Value>(m, "value", py::module_local())
@@ -1905,8 +1896,8 @@ void init_triton_ir(py::module &&m) {
                    /*shouldPrintAfterPass=*/printAlways,
                    /*printModuleScope=*/true,
                    /*printAfterOnlyOnChange=*/false,
-                   /*printAfterOnlyOnFailure*/ true, mlir_dumps_or_dbgs(),
-                   printingFlags);
+                   /*printAfterOnlyOnFailure*/ true,
+                   ::mlir::triton::tools::mlirDumpsOrDbgs(), printingFlags);
              }
              return haveDump;
            })

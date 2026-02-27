@@ -117,6 +117,8 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
 
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 
+uint32_t getTMemSubSliceOffset(gpu::MemDescType memDescType, int32_t nOffset);
+
 SmallVector<gpu::DistributedEncodingTrait>
 getTmemCompatibleLayouts(gpu::MemDescType memType, unsigned numWarps,
                          ArrayRef<int64_t> ctaSplit = {1, 1});
@@ -134,13 +136,11 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
                                        gpu::MemDescType memType);
 
 gpu::DistributedEncodingTrait
-getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps,
-                            gpu::CGAEncodingAttr cgaLayout);
+getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps);
 
 std::optional<LinearLayout>
 getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
-                                unsigned numWarps,
-                                gpu::CGAEncodingAttr cgaLayout);
+                                unsigned numWarps);
 
 } // namespace mlir::triton::nvidia_gpu
 

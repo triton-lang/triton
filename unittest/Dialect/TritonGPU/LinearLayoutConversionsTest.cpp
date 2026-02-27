@@ -134,16 +134,14 @@ public:
   }
 
   TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN,
-                                unsigned colStride, unsigned ctaSplitM,
-                                unsigned ctaSplitN) {
-    return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, colStride,
-                                         ctaSplitM, ctaSplitN, false);
+                                CGAEncodingAttr cgaLayout) {
+    return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, 1, cgaLayout,
+                                         false);
   }
 
-  TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN,
-                                unsigned ctaSplitM, unsigned ctaSplitN) {
+  TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN) {
     // TODO Test colStride > 1
-    return tmem(blockM, blockN, 1, ctaSplitM, ctaSplitN);
+    return tmem(blockM, blockN, CGAEncodingAttr::get1CTALayout(&ctx, 2));
   }
 
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
@@ -3266,15 +3264,17 @@ TEST_F(LinearLayoutConversionsTest, MMAv5Fp4Padded) {
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_64) {
-  auto enc = tmem(64, 64, 1, 1);
+  auto enc = tmem(64, 64);
   auto d0 = S("dim0");
   auto d1 = S("dim1");
   auto kRow = S("row");
   auto kCol = S("col");
+  auto kBlock = S("block");
   LinearLayout expected1 = LinearLayout(
       {{kRow, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {64, 0}, {16, 0}, {32, 0}}},
        {kCol, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}}}},
       {d0, d1});
+  expected1 *= LinearLayout::identity1D(1, kBlock, d0);
   EXPECT_EQ(toLinearLayout({128, 64}, enc), expected1);
   // Tensor just fits blockMxblockN -> the layout is not injective (row=16 is
   // zero)
@@ -3282,6 +3282,7 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_64) {
       {{kRow, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}, {16, 0}, {32, 0}}},
        {kCol, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}}}},
       {d0, d1});
+  expected2 *= LinearLayout::identity1D(1, kBlock, d0);
   EXPECT_EQ(toLinearLayout({64, 64}, enc), expected2);
   // Broadcasts M then N
   LinearLayout expected3 = LinearLayout(
@@ -3289,23 +3290,27 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_64) {
        {kCol,
         {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}, {128, 0}, {0, 64}}}},
       {d0, d1});
+  expected3 *= LinearLayout::identity1D(1, kBlock, d0);
   EXPECT_EQ(toLinearLayout({256, 128}, enc), expected3);
   // Fits N in basis the 5th basis if shape[0] == 64
   LinearLayout expected4 = LinearLayout(
       {{kRow, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 64}, {16, 0}, {32, 0}}},
        {kCol, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 128}}}},
       {d0, d1});
+  expected4 *= LinearLayout::identity1D(1, kBlock, d0);
   EXPECT_EQ(toLinearLayout({64, 256}, enc), expected4);
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
-  auto enc = tmem(128, 128, 1, 1);
+  auto enc = tmem(128, 128);
   auto d0 = S("dim0");
   auto d1 = S("dim1");
   auto kRow = S("row");
   auto kCol = S("col");
+  auto kBlock = S("block");
   LinearLayout tile = LinearLayout::identity1D(128, kRow, d0) *
-                      LinearLayout::identity1D(128, kCol, d1);
+                      LinearLayout::identity1D(128, kCol, d1) *
+                      LinearLayout::identity1D(1, kBlock, d0);
   EXPECT_EQ(toLinearLayout({128, 128}, enc), tile);
   EXPECT_EQ(toLinearLayout({256, 128}, enc),
             tile * LinearLayout::identity1D(2, kCol, d0));
@@ -3319,11 +3324,14 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
   auto d1 = S("dim1");
   auto kRow = S("row");
   auto kCol = S("col");
-  auto enc = tmem(128, 64, 1, 2);
-  auto enc1 = tmem(128, 64, 1, 1);
+  auto kBlock = S("block");
+  LinearLayout ll = LinearLayout({{kBlock, {{0, 1}}}}, {d0, d1});
+  auto cgaLayout = CGAEncodingAttr::get(&ctx, std::move(ll));
+  auto enc = tmem(128, 64, cgaLayout);
+  auto enc1 = tmem(128, 64);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             toLinearLayout({128, 64}, enc1) *
-                LinearLayout::identity1D(2, kCol, d1));
+                LinearLayout::identity1D(2, kBlock, d1));
 }
 
 // Tests for SM120 DotScaled Scale Layout

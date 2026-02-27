@@ -117,10 +117,8 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
     return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
 
   // We dispatch only along x; return the workgroup id x
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                         "llvm.amdgcn.cluster.workgroup.id.x",
-                                         {rewriter.getI32Type()}, {})
-      .getResult(0);
+  return ROCDL::ClusterWorkgroupIdXOp::create(rewriter, loc,
+                                              rewriter.getI32Type());
 }
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -675,6 +673,12 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
+bool TargetInfo::supportBitwidth16Elementwise() const { return true; }
+
+bool TargetInfo::supportBitwidth32Elementwise() const {
+  return getISAFamily() == ISAFamily::GFX1250;
+}
+
 bool TargetInfo::supportsDirectToLDSScattering() const {
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
@@ -733,6 +737,11 @@ bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
     return llvm::is_contained({128, 64, 32, 8}, bitWidth);
   }
   return false;
+}
+
+bool TargetInfo::supportsBufferLoadToLocal() const {
+  return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                            getISAFamily());
 }
 
 bool TargetInfo::supportsWaveId() const {

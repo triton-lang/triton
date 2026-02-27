@@ -27,6 +27,23 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: inval_barrier_cluster_broadcast
+  tt.func @inval_barrier_cluster_broadcast(%alloc: !ttg.memdesc<1xi64, #shared0, #smem, mutable>) {
+    // CHECK: nvg.cluster_id
+    // CHECK: llvm.ptrtoint
+    // CHECK: llvm.and
+    // CHECK: llvm.inttoptr
+    // CHECK: @$0 mbarrier.inval.shared::cta.b64 [$1];
+    ttng.inval_barrier %alloc : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -122,6 +139,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: return
   tt.func @tma_copy_global_to_local(%tma: !tt.tensordesc<tensor<128x128xf32, #shared1>>, %alloc: !ttg.memdesc<128x128xf32, #shared1, #smem, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
     ttng.async_tma_copy_global_to_local %tma[%x, %x] %alloc, %barrier, %pred : !tt.tensordesc<tensor<128x128xf32, #shared1>>, !ttg.memdesc<1xi64, #shared0, #smem> -> !ttg.memdesc<128x128xf32, #shared1, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// TMA copy with barrier mask zero: barrier has no CGALayout -> shared::cta
+#shared0_cta = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: tma_copy_barrier_mask_zero
+  // CHECK: cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes
+  // CHECK-NOT: cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier
+  tt.func @tma_copy_barrier_mask_zero(%tma: !tt.tensordesc<tensor<128x128xf32, #shared1>>, %alloc: !ttg.memdesc<128x128xf32, #shared1, #smem, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0_cta, #smem>, %pred: i1) {
+    ttng.async_tma_copy_global_to_local %tma[%x, %x] %alloc, %barrier, %pred : !tt.tensordesc<tensor<128x128xf32, #shared1>>, !ttg.memdesc<1xi64, #shared0_cta, #smem> -> !ttg.memdesc<128x128xf32, #shared1, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// TMA copy with barrier mask non-zero: barrier has CGALayout
+#shared0_cluster = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#shared1_cga = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: tma_copy_barrier_mask_nonzero
+  // Barrier pointer is modified when barrier mask != 0
+  // CHECK: llvm.ptrtoint
+  // CHECK: llvm.and
+  // CHECK: llvm.inttoptr
+  // TMA uses shared::cluster when barrier mask is non-zero
+  // CHECK: cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes
+  // CHECK-NOT: cp.async.bulk.tensor.2d.shared::cta.global.mbarrier
+  tt.func @tma_copy_barrier_mask_nonzero(%tma: !tt.tensordesc<tensor<128x128xf32, #shared1_cga>>, %alloc: !ttg.memdesc<128x128xf32, #shared1_cga, #smem, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0_cluster, #smem>, %pred: i1) {
+    ttng.async_tma_copy_global_to_local %tma[%x, %x] %alloc, %barrier, %pred : !tt.tensordesc<tensor<128x128xf32, #shared1_cga>>, !ttg.memdesc<1xi64, #shared0_cluster, #smem> -> !ttg.memdesc<128x128xf32, #shared1_cga, #smem, mutable>
     tt.return
   }
 }
@@ -376,10 +430,99 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @mbarrier_sync_cluster_init() {
     // CHECK: fence.mbarrier_init.release.cluster
     // CHECK: nvvm.cluster.arrive.relaxed
-    // CHECK: nvvm.cluster.wait
+    // CHECK-NEXT: nvvm.cluster.wait
     ttng.fence_mbarrier_init_release_cluster
-    ttng.cluster_arrive {relaxed = 1 : i1}
-    ttng.cluster_wait
+    ttng.cluster_barrier {relaxed = 1 : i1}
     tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @cluster_arrive_not_warp_specialized
+  llvm.func @cluster_arrive_not_warp_specialized() {
+    // CHECK-NOT: ttg.warp_specialize
+    // CHECK: nvvm.cluster.arrive
+    ttng.cluster_arrive
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // CHECK-LABEL: @cluster_arrive_warp_specialized
+  llvm.func @cluster_arrive_warp_specialized() {
+    // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
+    // CHECK: default {
+    // CHECK-NEXT: nvvm.cluster.arrive.relaxed
+    // CHECK-NEXT: ttg.warp_yield
+    // CHECK: partition0() num_warps(4) {
+    // CHECK-NEXT: nvvm.cluster.arrive.relaxed
+    // CHECK-NEXT: ttg.warp_return
+    ttng.cluster_arrive {relaxed = true}
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @cluster_wait_not_warp_specialized
+  llvm.func @cluster_wait_not_warp_specialized() {
+    // CHECK-NOT: ttg.warp_specialize
+    // CHECK: nvvm.cluster.wait
+    ttng.cluster_wait
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // CHECK-LABEL: @cluster_wait_warp_specialized
+  llvm.func @cluster_wait_warp_specialized() {
+    // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
+    // CHECK: default {
+    // CHECK-NEXT: nvvm.cluster.wait
+    // CHECK-NEXT: ttg.warp_yield
+    // CHECK: partition0() num_warps(4) {
+    // CHECK-NEXT: nvvm.cluster.wait
+    // CHECK-NEXT: ttg.warp_return
+    ttng.cluster_wait
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @cluster_barrier_not_warp_specialized
+  llvm.func @cluster_barrier_not_warp_specialized() {
+    // CHECK-NOT: ttg.warp_specialize
+    // CHECK: nvvm.cluster.arrive
+    // CHECK-NEXT: nvvm.cluster.wait
+    ttng.cluster_barrier
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // CHECK-LABEL: @cluster_barrier_warp_specialized
+  llvm.func @cluster_barrier_warp_specialized() {
+    // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
+    // CHECK: default {
+    // CHECK-NEXT: nvvm.cluster.arrive.relaxed
+    // CHECK-NEXT: nvvm.cluster.wait
+    // CHECK-NEXT: ttg.warp_yield
+    // CHECK: partition0() num_warps(4) {
+    // CHECK-NEXT: nvvm.cluster.arrive.relaxed
+    // CHECK-NEXT: nvvm.cluster.wait
+    // CHECK-NEXT: ttg.warp_return
+    ttng.cluster_barrier {relaxed = true}
+    llvm.return
   }
 }

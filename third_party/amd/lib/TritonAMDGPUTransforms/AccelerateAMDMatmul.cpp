@@ -1432,13 +1432,11 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     auto D = dotOp.getD();
     OpBuilder builder(dotOp);
     Type AElType = dotOp.getA().getType().getElementType();
+    Type BElType = dotOp.getB().getType().getElementType();
+    auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
+                                BElType.getIntOrFloatBitWidth());
     Type promoteType;
     if (isa<ttg::AMDMfmaEncodingAttr>(D.getType().getEncoding())) {
-      Type BElType = dotOp.getB().getType().getElementType();
-
-      auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
-                                  BElType.getIntOrFloatBitWidth());
-
       // TODO check mfma tensor core version compatibility
       if (maxBitWidth == 8)
         return;
@@ -1451,7 +1449,8 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
       else if (maxBitWidth <= 32)
         promoteType = builder.getF32Type();
     } else if (isa<ttg::AMDWmmaEncodingAttr>(D.getType().getEncoding())) {
-      Type BElType = dotOp.getB().getType().getElementType();
+      if (maxBitWidth == 8)
+        return;
 
       if (AElType == BElType)
         return;

@@ -567,8 +567,7 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
   if (numCTAs == 1) {
     b.barrier(ttg::AddrSpace::Local);
   } else {
-    triton::nvidia_gpu::ClusterArriveOp::create(rewriter, loc, false);
-    triton::nvidia_gpu::ClusterWaitOp::create(rewriter, loc);
+    triton::nvidia_gpu::ClusterBarrierOp::create(rewriter, loc);
   }
 }
 
@@ -1374,10 +1373,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     uint32_t barrierMask =
         toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    // We emit a cluster-level barrier if we change the barrier and we don't
-    // multicast over that dimension (in which case that CTA would be predicated
-    // out)
-    bool clusterBarrier = barrierMask & ~maskCGABroadcast;
+    // We emit a cluster-level barrier when the barrier mask is set.
+    bool clusterBarrier = barrierMask != 0;
     if (clusterBarrier) {
       barrierPtr =
           LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
