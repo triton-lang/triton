@@ -67,11 +67,10 @@ struct TCGen5MMAScaleSharedToTmemConversion
     auto numElems = product(oldType.getShape());
     Type elType = oldType.getElementType();
     ttg::CGAEncodingAttr CGALayout = ttg::getCGALayout(oldType.getEncoding());
-    auto CTASplitNum = CGALayout.getCTASplitNum();
     // Distribute the scales across the rows of the MMA operation.
     SmallVector<int64_t> shape = {rows, numElems / rows};
-    Attribute scaleEncoding = TensorMemoryScalesEncodingAttr::get(
-        context, CTASplitNum[0], CTASplitNum[1]);
+    Attribute scaleEncoding =
+        TensorMemoryScalesEncodingAttr::get(context, CGALayout);
     Type scaleAType =
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);

@@ -168,7 +168,7 @@ public:
     auto loc = op.getLoc();
     auto alloc = triton::gpu::GlobalScratchAllocOp::create(
         rewriter, loc, getPointerType(rewriter.getI8Type()), TMA_SIZE_BYTES,
-        TMA_ALIGN);
+        TMA_ALIGN, UnitAttr());
     if (failed(createTMADesc(alloc, op, rewriter))) {
       return failure();
     }

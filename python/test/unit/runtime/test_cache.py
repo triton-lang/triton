@@ -588,6 +588,56 @@ def test_preload(device, fresh_triton_cache) -> None:
         kernel_add.preload(specialization_data_unknown_target)
 
 
+@triton.jit
+def sequence_offset(idx, offsets: tl.constexpr):
+    tl.static_assert(len(offsets) == 2)
+    tl.static_assert(len(offsets[0]) == 2)
+    tl.static_assert(len(offsets[1]) == 1)
+    return idx + offsets[0][0] + offsets[0][1] + offsets[1][0]
+
+
+@triton.jit
+def tuple_call_kernel(out_ptr, offsets: tl.constexpr):
+    tl.static_assert(len(offsets) == 2)
+    idx = tl.arange(0, 1)
+    tl.store(out_ptr + idx, sequence_offset(idx, offsets))
+
+
+def test_preload_constexpr_tuple_arg(device, fresh_triton_cache, fresh_knobs) -> None:
+    device = getattr(torch, device).current_device()
+    offsets = ((2, 3), (5, ))
+    specialization_data = None
+
+    def cache_hook(*args, **kwargs):
+        nonlocal specialization_data
+        specialization_data = kwargs["compile"]["specialization_data"]
+
+    fresh_knobs.runtime.jit_cache_hook = cache_hook
+    tuple_call_kernel.device_caches[device][0].clear()
+    pre_compile = tuple_call_kernel.warmup(torch.int32, offsets, grid=(1, ))
+    hash = pre_compile.hash
+    assert specialization_data is not None
+
+    shutil.rmtree(fresh_triton_cache)
+    tuple_call_kernel.device_caches[device][0].clear()
+
+    kernel_preload = tuple_call_kernel.preload(specialization_data)
+    assert kernel_preload.hash == hash
+    assert len(tuple_call_kernel.device_caches[device][0]) == 1
+
+    counter = 0
+
+    def inc_counter(*args, **kwargs):
+        nonlocal counter
+        counter += 1
+
+    fresh_knobs.runtime.jit_cache_hook = inc_counter
+    final_kernel = tuple_call_kernel.warmup(torch.int32, offsets, grid=(1, ))
+    assert counter == 0
+    assert len(tuple_call_kernel.device_caches[device][0]) == 1
+    assert final_kernel.hash == hash
+
+
 def test_hooks(device, fresh_triton_cache) -> None:
 
     @triton.jit
