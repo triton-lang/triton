@@ -677,7 +677,15 @@ bool TargetInfo::supportVectorizedAtomics() const {
 bool TargetInfo::supportBitwidth16Elementwise() const { return true; }
 
 bool TargetInfo::supportBitwidth32Elementwise() const {
-  return getISAFamily() == ISAFamily::GFX1250;
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+  case ISAFamily::GFX1250:
+    return true;
+  default:
+    return false;
+  }
 }
 
 bool TargetInfo::supportsDirectToLDSScattering() const {
