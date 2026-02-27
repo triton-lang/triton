@@ -143,7 +143,7 @@ static SmallVector<Value> splitValueAlongAxis(Value input, int32_t numSlices,
 // ConvertLayout.
 static Value joinValuesAlongAxis(SmallVector<Value> tiles, int axis,
                                  Location loc, OpBuilder &builder) {
-                                  
+
   auto joinOnce = [&](Value left, Value right,
                       RankedTensorType dstType) -> Value {
     auto leftType = cast<RankedTensorType>(left.getType());
@@ -228,12 +228,8 @@ createDotOp(Operation *dotOp, OpBuilder &builder, Location loc,
 }
 
 class Prefetcher {
-  /// cache the ForOp we are working on
-  scf::ForOp forOp;
   /// cache the YieldOp of this ForOp
   scf::YieldOp yieldOp;
-  /// minimum transpose width
-  unsigned minTransposeWidth;
 
   /// dots to be prefetched (DotOp or DotScaledOp, both implement
   /// DotOpInterface)
@@ -279,14 +275,14 @@ class Prefetcher {
                                      SmallVector<Value> &yieldValues);
 
 protected:
+  /// cache the ForOp we are working on
+  scf::ForOp forOp;
   /// Prefetch tile dimensions; set by computePrefetchWidths().
   unsigned prefetchWidthM = 0;
   unsigned prefetchWidthN = 0;
   unsigned prefetchWidthK = 0;
   /// Store original kWidth to maintain when creating new local_loads.
   unsigned kWidth = 0;
-
-  unsigned getMinTransposeWidth() const { return minTransposeWidth; }
 
   /// Target-specific: compute prefetch widths from dot encoding and shapes.
   /// Returns true if widths were set and this dot should be prefetched;
@@ -295,8 +291,8 @@ protected:
                                      unsigned aTypeBitWidth,
                                      ArrayRef<int64_t> dShape, unsigned mSize,
                                      unsigned nSize, unsigned kSize,
-                                     unsigned kWidth, bool transA, bool transB,
-                                     unsigned minTransposeWidth) = 0;
+                                     unsigned kWidth, bool transA,
+                                     bool transB) = 0;
 
   /// Target-specific: optionally insert a scheduling barrier (e.g. AMD).
   /// Default is no-op.
@@ -308,8 +304,7 @@ public:
   Prefetcher() = delete;
   virtual ~Prefetcher() = default;
 
-  Prefetcher(scf::ForOp forOp, int minTransposeWidth)
-      : forOp(forOp), minTransposeWidth(minTransposeWidth) {
+  Prefetcher(scf::ForOp forOp) : forOp(forOp) {
     yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   }
 
@@ -782,13 +777,13 @@ LogicalResult Prefetcher::initialize() {
     return yieldOp.getOperand(yieldIdx);
   };
 
-  for (Operation *dotOp : dotsInFor) {
-    auto dotInterface = cast<triton::DotOpInterface>(dotOp);
+  for (Operation *dot : dotsInFor) {
+    auto dotInterface = cast<triton::DotOpInterface>(dot);
     auto aOpd = dotInterface.getA();
     auto bOpd = dotInterface.getB();
     auto aType = cast<RankedTensorType>(aOpd.getType());
     auto bType = cast<RankedTensorType>(bOpd.getType());
-    auto dType = cast<RankedTensorType>(dotOp->getResult(0).getType());
+    auto dType = cast<RankedTensorType>(dot->getResult(0).getType());
     auto aEnc =
         mlir::cast<triton::gpu::DotOperandEncodingAttr>(aType.getEncoding());
     auto bEnc =
@@ -814,10 +809,10 @@ LogicalResult Prefetcher::initialize() {
     bool transA = transOp(aOpd.getDefiningOp(), 0);
     bool transB = transOp(bOpd.getDefiningOp(), 1);
     Attribute dotEncoding =
-        cast<RankedTensorType>(dotOp->getResult(0).getType()).getEncoding();
+        cast<RankedTensorType>(dot->getResult(0).getType()).getEncoding();
     if (!computePrefetchWidths(dotEncoding, aType.getElementTypeBitWidth(),
                                dType.getShape(), mSize, nSize, kSize, kWidth,
-                               transA, transB, getMinTransposeWidth()))
+                               transA, transB))
       continue;
     LDBG("prefetchWidthMNK: " << prefetchWidthM << "x" << prefetchWidthN << "x"
                               << prefetchWidthK);
@@ -832,15 +827,15 @@ LogicalResult Prefetcher::initialize() {
       Value bHeaderDef = getIncomingOp(bSmem);
       // Only prefetch loop arg
       if (aHeaderDef && bHeaderDef) {
-        dots.insert(dotOp);
-        dot2aVals[dotOp] = aVals;
-        dot2bVals[dotOp] = bVals;
-        dot2aHeaderDef[dotOp] = aHeaderDef;
-        dot2bHeaderDef[dotOp] = bHeaderDef;
-        dot2aLoopArg[dotOp] = aSmem;
-        dot2bLoopArg[dotOp] = bSmem;
-        dot2aYield[dotOp] = getYieldOperand(aSmem);
-        dot2bYield[dotOp] = getYieldOperand(bSmem);
+        dots.insert(dot);
+        dot2aVals[dot] = aVals;
+        dot2bVals[dot] = bVals;
+        dot2aHeaderDef[dot] = aHeaderDef;
+        dot2bHeaderDef[dot] = bHeaderDef;
+        dot2aLoopArg[dot] = aSmem;
+        dot2bLoopArg[dot] = bSmem;
+        dot2aYield[dot] = getYieldOperand(aSmem);
+        dot2bYield[dot] = getYieldOperand(bSmem);
       }
     }
   }
@@ -851,22 +846,22 @@ LogicalResult Prefetcher::initialize() {
 void Prefetcher::emitPrologue() {
   OpBuilder builder(forOp);
 
-  for (Operation *dotOp : dots) {
-    auto dotInterface = cast<triton::DotOpInterface>(dotOp);
+  for (Operation *dot : dots) {
+    auto dotInterface = cast<triton::DotOpInterface>(dot);
     FailureOr<Value> awtA = getAsyncWaitTokenForLocalLoad(
-        dot2aVals[dotOp].back().getDefiningOp(), false, builder);
+        dot2aVals[dot].back().getDefiningOp(), false, builder);
     FailureOr<Value> awtB = getAsyncWaitTokenForLocalLoad(
-        dot2bVals[dotOp].back().getDefiningOp(), false, builder);
+        dot2bVals[dot].back().getDefiningOp(), false, builder);
     Attribute dotEncoding =
-        cast<RankedTensorType>(dotOp->getResult(0).getType()).getEncoding();
+        cast<RankedTensorType>(dot->getResult(0).getType()).getEncoding();
     Value aPrefetched = generatePrefetch(
-        dot2aHeaderDef[dotOp], 0, true, dotEncoding, builder,
+        dot2aHeaderDef[dot], 0, true, dotEncoding, builder,
         failed(awtA) ? std::nullopt : std::optional<Value>(*awtA));
-    cloneElementwiseOps(aPrefetched, dot2aVals[dotOp], builder);
+    cloneElementwiseOps(aPrefetched, dot2aVals[dot], builder);
     Value bPrefetched = generatePrefetch(
-        dot2bHeaderDef[dotOp], 1, true, dotEncoding, builder,
+        dot2bHeaderDef[dot], 1, true, dotEncoding, builder,
         failed(awtB) ? std::nullopt : std::optional<Value>(*awtB));
-    cloneElementwiseOps(bPrefetched, dot2bVals[dotOp], builder);
+    cloneElementwiseOps(bPrefetched, dot2bVals[dot], builder);
     operand2headPrefetch[dotInterface.getA()] = aPrefetched;
     operand2headPrefetch[dotInterface.getB()] = bPrefetched;
   }
@@ -878,8 +873,8 @@ scf::ForOp Prefetcher::createNewForOp() {
   SmallVector<Value> loopArgs;
   for (auto v : forOp.getInitArgs())
     loopArgs.push_back(v);
-  for (Operation *dotOp : dots) {
-    auto dotInterface = cast<triton::DotOpInterface>(dotOp);
+  for (Operation *dot : dots) {
+    auto dotInterface = cast<triton::DotOpInterface>(dot);
     loopArgs.push_back(operand2headPrefetch[dotInterface.getA()]);
     loopArgs.push_back(operand2headPrefetch[dotInterface.getB()]);
   }
@@ -934,8 +929,8 @@ scf::ForOp Prefetcher::createNewForOp() {
   SmallVector<Value> yieldValues;
   for (Value v : forOp.getBody()->getTerminator()->getOperands())
     yieldValues.push_back(mapping.lookupOrDefault(v));
-  for (Operation *dotOp : dots) {
-    generatePrefetchingLocalLoads(dotOp, builder, mapping, yieldValues);
+  for (Operation *dot : dots) {
+    generatePrefetchingLocalLoads(dot, builder, mapping, yieldValues);
   }
   // Update ops of yield
   builder.setInsertionPointToEnd(newForOp.getBody());
@@ -977,11 +972,23 @@ scf::ForOp Prefetcher::createNewForOp() {
 class PrefetchAMD : public Prefetcher {
   using Prefetcher::Prefetcher;
 
-  static std::tuple<unsigned, unsigned, unsigned>
-  prefetchWidth(unsigned mSize, unsigned nSize, unsigned kSize,
-                unsigned minTransposeWidth, bool transA, bool transB,
-                ArrayRef<unsigned> instrShape, ArrayRef<unsigned> warpsPerCta,
-                unsigned numInsts) {
+  std::tuple<unsigned, unsigned, unsigned>
+  prefetchWidth(unsigned mSize, unsigned nSize, unsigned kSize, bool transA,
+                bool transB, ArrayRef<unsigned> instrShape,
+                ArrayRef<unsigned> warpsPerCta, unsigned numInsts) {
+
+    // minimum transpose width
+    ModuleOp module = this->forOp.getOperation()->getParentOfType<ModuleOp>();
+    std::optional<StringRef> arch = getAMDArch(module);
+    std::string archStr = arch->str();
+    unsigned mtw = 32;
+    if (archStr == "gfx1250") {
+      mtw = 128;
+    } else if (archStr == "gfx942" || archStr == "gfx950" ||
+               archStr == "gfx951") {
+      mtw = 64;
+    }
+
     LDBG("instrShape: " << instrShape[0] << "x" << instrShape[1] << "x"
                         << instrShape[2]);
     LDBG("warpsPerCta: " << warpsPerCta[0] << "x" << warpsPerCta[1]);
@@ -994,12 +1001,12 @@ class PrefetchAMD : public Prefetcher {
     unsigned maxN = nSize / (instrShape[1] * warpsPerCta[1]);
     unsigned maxK = kSize / (instrShape[2]);
     if (transA) {
-      m = std::max<unsigned>(m, minTransposeWidth / instrShape[0]);
-      k = std::max<unsigned>(k, minTransposeWidth / instrShape[2]);
+      m = std::max<unsigned>(m, mtw / instrShape[0]);
+      k = std::max<unsigned>(k, mtw / instrShape[2]);
     }
     if (transB) {
-      n = std::max<unsigned>(n, minTransposeWidth / instrShape[1]);
-      k = std::max<unsigned>(k, minTransposeWidth / instrShape[2]);
+      n = std::max<unsigned>(n, mtw / instrShape[1]);
+      k = std::max<unsigned>(k, mtw / instrShape[2]);
     }
     numInsts /= (m * n * k);
     LDBG("instr tile m: " << m << ", n: " << n << ", k: " << k);
@@ -1034,14 +1041,13 @@ class PrefetchAMD : public Prefetcher {
   bool computePrefetchWidths(Attribute dotEncoding, unsigned aTypeBitWidth,
                              ArrayRef<int64_t> dShape, unsigned mSize,
                              unsigned nSize, unsigned kSize, unsigned kWidth,
-                             bool transA, bool transB,
-                             unsigned minTransposeWidth) {
+                             bool transA, bool transB) {
     if (auto mfmaEnc = dyn_cast<AMDMfmaEncodingAttr>(dotEncoding)) {
 
       unsigned numInsts = 4;
       std::tie(prefetchWidthM, prefetchWidthN, prefetchWidthK) = prefetchWidth(
-          mSize, nSize, kSize, minTransposeWidth, transA, transB,
-          mfmaEnc.getInstrShape(), mfmaEnc.getWarpsPerCTA(), numInsts);
+          mSize, nSize, kSize, transA, transB, mfmaEnc.getInstrShape(),
+          mfmaEnc.getWarpsPerCTA(), numInsts);
       return true;
     }
 
@@ -1049,7 +1055,7 @@ class PrefetchAMD : public Prefetcher {
       unsigned numInsts = 8;
       auto warpsPerCTA = getWarpsPerCTA(wmmaEnc, dShape);
       std::tie(prefetchWidthM, prefetchWidthN, prefetchWidthK) =
-          prefetchWidth(mSize, nSize, kSize, minTransposeWidth, transA, transB,
+          prefetchWidth(mSize, nSize, kSize, transA, transB,
                         wmmaEnc.getInstrShape(), warpsPerCTA, numInsts);
       return true;
     }
@@ -1088,8 +1094,7 @@ class PrefetchNV : public Prefetcher {
   bool computePrefetchWidths(Attribute dotEncoding, unsigned aTypeBitWidth,
                              ArrayRef<int64_t> dShape, unsigned mSize,
                              unsigned nSize, unsigned kSize, unsigned kWidth,
-                             bool transA, bool transB,
-                             unsigned minTransposeWidth) {
+                             bool transA, bool transB) {
     auto mmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(dotEncoding);
     if (!mmaEnc)
       return false;
@@ -1124,9 +1129,9 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
     getOperation()->walk([&](scf::ForOp forOp) {
       std::unique_ptr<Prefetcher> prefetcher;
       if (arch) {
-        prefetcher = std::make_unique<PrefetchAMD>(forOp, minTransposeWidth);
+        prefetcher = std::make_unique<PrefetchAMD>(forOp);
       } else {
-        prefetcher = std::make_unique<PrefetchNV>(forOp, minTransposeWidth);
+        prefetcher = std::make_unique<PrefetchNV>(forOp);
       }
       if (prefetcher->initialize().failed())
         return;

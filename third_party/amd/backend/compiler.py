@@ -19,15 +19,6 @@ def get_min_dot_size(target: GPUTarget):
     return lambda lhs_type, rhs_type: (1, 1, 1)
 
 
-def get_min_transpose_width(arch: str) -> int:
-    if arch == "gfx1250":
-        return 128
-    elif (arch == "gfx942") or (arch == "gfx950") or (arch == "gfx951"):
-        return 64
-    else:
-        return 32
-
-
 def is_pingpong_schedule_enabled(arch, use_async_copy):
     return (arch == "gfx942" or (arch == "gfx950" and use_async_copy is True)) \
         if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
@@ -270,8 +261,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
         amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong, use_lds_prefetch)
         if use_lds_prefetch:
-            min_transpose_width = get_min_transpose_width(options.arch)
-            passes.ttgpuir.add_prefetch(pm, min_transpose_width)
+            passes.ttgpuir.add_prefetch(pm)
 
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)

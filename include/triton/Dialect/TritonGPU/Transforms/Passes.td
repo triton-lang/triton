@@ -198,11 +198,6 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
-
-  let options = [
-    Option<"minTransposeWidth", "min-transpose-width", "int", /*default*/"32",
-           "minimum width for transpose memory operations">
-  ];
 }
 
 def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::ModuleOp"> {
