@@ -20,8 +20,7 @@ from ._common import (
 
 @triton.jit
 def round_f32_to_tf32(x: tl.tensor):
-    # use cvt.rn on Hopper+ to match the rounding of TMA.
-    ASM: tl.constexpr = "cvt.rn.tf32.f32 $0, $1;" if cuda_capability_geq(9, 0) else "cvt.rna.tf32.f32 $0, $1;"
+    ASM: tl.constexpr = "cvt.rna.tf32.f32 $0, $1;"
     return tl.inline_asm_elementwise(ASM, "=r, r", [x], dtype=tl.float32, is_pure=True, pack=1)
 
 _matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])

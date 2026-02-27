@@ -9,7 +9,6 @@ import triton.language as tl
 @triton.constexpr_function
 def get_scaled_dot_format_string(dtype: tl.dtype):
     mapping = {
-        tl.float32: "fp32",
         tl.float16: "fp16",
         tl.bfloat16: "bf16",
         tl.uint8: "e2m1",
