@@ -1029,25 +1029,18 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@filecheck_test
 @gluon.jit
-def tmem_reduction_default_layout_kernel():
+def test_tmem_reduction_default_layout_constexpr():
+    # CHECK-LABEL: @test_tmem_reduction_default_layout_constexpr
     layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 128], col_stride=1)
     tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.float32, [128, 128], layout)
+    # CHECK: ttng.tmem_load {{.*}} {abs = true, redOp = #ttng.redOp<min>}
     _ = tmem.load_min(abs=True)
+    # CHECK: ttng.tmem_load {{.*}} {NaN = true, redOp = #ttng.redOp<max>}
+    # CHECK-NOT: ttng.tmem_load
+    # CHECK: tt.return
     _ = tmem.load_max(propagate_nan=tl.PropagateNan.ALL)
-
-
-def test_tmem_reduction_default_layout_constexpr():
-    ir = anonymize_ir(
-        run_parser(
-            tmem_reduction_default_layout_kernel,
-            *make_args(num_warps=4),
-            target=BLACKWELL_TARGET,
-        ).str_nodebug())
-    load_lines = [line.strip() for line in ir.splitlines() if "ttng.tmem_load" in line]
-    assert len(load_lines) == 2
-    assert any("redOp = #ttng.redOp<min>" in line and "abs = true" in line for line in load_lines)
-    assert any("redOp = #ttng.redOp<max>" in line and "NaN = true" in line for line in load_lines)
 
 
 @gluon.jit
