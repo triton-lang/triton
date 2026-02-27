@@ -1199,21 +1199,20 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
 
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getResult().getType();
-    auto paddedEnc =
-        llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
+    auto encoding = smemTy.getEncoding();
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
+    triton::LinearLayout sharedLayout = isPaddedEncoding(smemTy.getEncoding())
+                                            ? paddedLinearLayout(smemTy)
+                                            : toLinearLayout(smemTy);
 
-    triton::LinearLayout sharedLayout;
+    // Extract padding information if present
     unsigned padInterval = 0;
     unsigned padAmount = 0;
-    if (paddedEnc) {
-      assert(paddedEnc.getIntervals().size() == 1 &&
-             paddedEnc.getPaddings().size() == 1);
-      sharedLayout = paddedEnc.getLinearComponent();
-      padInterval = paddedEnc.getIntervals()[0];
-      padAmount = paddedEnc.getPaddings()[0];
-    } else {
-      sharedLayout = triton::gpu::toLinearLayout(smemTy);
+    if (auto padEnc = getPaddedEncoding(encoding)) {
+      assert(padEnc.getIntervals().size() == 1 &&
+             padEnc.getPaddings().size() == 1);
+      padInterval = padEnc.getIntervals()[0];
+      padAmount = padEnc.getPaddings()[0];
     }
     Value multicastMask;
     if (targetInfo.supportsMultiCTALaunch()) {
@@ -1235,7 +1234,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
 
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), elementType, rewriter);
-    Value dstPtr = dstMemObj.getBase();
+    // Get all base pointers (multiple for partitioned encoding)
+    SmallVector<Value> dstPtrs = llvm::to_vector(dstMemObj.getBases());
     SmallVector<Value> offset = adaptor.getIndices();
     int numWarps = triton::gpu::lookupNumWarps(op);
 
@@ -1249,16 +1249,13 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       barrierPtr = smemObj.getBase();
     }
 
-    auto kBlock = rewriter.getStringAttr("block");
-    auto cgaLayout = sharedLayout.sublayout(
-        {kBlock}, to_vector(sharedLayout.getOutDimNames()));
     auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
-        padInterval, padAmount, offset, dstPtr, op.getPred(), multicastMask,
-        elementType, barrierPtr, /*isLoad=*/true, cgaLayout, ctaId);
+        padInterval, padAmount, offset, dstPtrs, op.getPred(), multicastMask,
+        elementType, barrierPtr, /*isLoad=*/true, sharedLayout, ctaId);
 
     rewriter.eraseOp(op);
     return success();
@@ -1300,7 +1297,8 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
 
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(), elementType, rewriter);
-    Value dstPtr = dstMemObj.getBase();
+    // Get all base pointers (multiple for partitioned encoding)
+    SmallVector<Value> srcPtrs = llvm::to_vector(dstMemObj.getBases());
     SmallVector<Value> offset = adaptor.getIndices();
     int numWarps = triton::gpu::lookupNumWarps(op);
 
@@ -1329,18 +1327,15 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     }
 
     // Verifier ensures smem is not usind a PaddedSharedEncodingAttr
-    auto kBlock = rewriter.getStringAttr("block");
-    auto cgaLayout = sharedLayout.sublayout(
-        {kBlock}, to_vector(sharedLayout.getOutDimNames()));
     auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
-        padInterval, padAmount, offset, dstPtr, pred,
+        padInterval, padAmount, offset, srcPtrs, pred,
         /*multicastMask=*/{}, elementType, barrierPtr,
-        /*isLoad=*/false, cgaLayout, ctaId);
+        /*isLoad=*/false, sharedLayout, ctaId);
 
     rewriter.eraseOp(op);
     return success();
