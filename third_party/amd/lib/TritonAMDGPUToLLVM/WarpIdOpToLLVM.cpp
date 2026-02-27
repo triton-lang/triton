@@ -43,9 +43,7 @@ public:
     Value warpId;
 
     if (targetInfo.supportsWaveId()) {
-      auto warpIdOp = LLVM::createLLVMIntrinsicCallOp(
-          rewriter, loc, "llvm.amdgcn.wave.id", {i32_ty}, ValueRange{});
-      warpId = warpIdOp.getResult(0);
+      warpId = ROCDL::WaveId::create(rewriter, loc, i32_ty);
     } else {
       int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
       Value warpSizeVal = b.i32_val(threadsPerWarp);
