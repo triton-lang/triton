@@ -1706,32 +1706,37 @@ def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrappe
     triton.set_allocator(alloc_fn)
 
     @gluon.jit
-    def reader(alias0: ttgl.constexpr, smem: ttgl.constexpr, bar: ttgl.constexpr, blocked_layout: ttgl.constexpr):
-        val = alias0.load(blocked_layout)
+    def reader(alias0: ttgl.constexpr, smem: ttgl.constexpr, blocked_layout_read: ttgl.constexpr, bar: ttgl.constexpr):
+        val = alias0.load(blocked_layout_read)
         smem.store(val)  # keep the load alive
         mbarrier.arrive(bar.index(0), count=1)
 
     @gluon.jit
-    def writer(alias1: ttgl.constexpr, bar: ttgl.constexpr, FAILURE: ttgl.constexpr, blocked_layout: ttgl.constexpr):
+    def writer(alias1: ttgl.constexpr, bar: ttgl.constexpr, FAILURE: ttgl.constexpr,
+               blocked_layout_write: ttgl.constexpr):
         if not FAILURE:
             mbarrier.wait(bar.index(0), phase=0)
-        alias1.store(ttgl.zeros([XBLOCK, XBLOCK], ttgl.float32, blocked_layout))
+        alias1.store(ttgl.zeros([XBLOCK, XBLOCK // 2], ttgl.float32, blocked_layout_write))
 
     @gluon.jit
     def kernel(FAILURE: ttgl.constexpr):
         smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
-        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
-                                                            warps_per_cta=[4, 1], order=[0, 1])
+        blocked_layout_read: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                                 warps_per_cta=[4, 1], order=[0, 1])
+        blocked_layout_write: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK // 2],
+                                                                  threads_per_warp=[32, 1], warps_per_cta=[4, 1],
+                                                                  order=[0, 1])
         smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], smem_layout)
         tmem_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK * 2], col_stride=1)
         tmem = blackwell.allocate_tensor_memory(ttgl.float32, [XBLOCK, XBLOCK * 2], tmem_layout)
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
         mbarrier.init(bar.index(0), count=1)
         alias0 = tmem.slice(0, XBLOCK)
-        alias1 = tmem.slice(XBLOCK // 2, XBLOCK)
+        # Second half of the tmem
+        alias1 = tmem.slice(XBLOCK // 2, XBLOCK // 2)
 
-        ttgl.warp_specialize([(reader, (alias0, smem, bar, blocked_layout)),
-                              (writer, (alias1, bar, FAILURE, blocked_layout))], [4], [32])
+        ttgl.warp_specialize([(reader, (alias0, smem, blocked_layout_read, bar)),
+                              (writer, (alias1, bar, FAILURE, blocked_layout_write))], [4], [32])
 
     kernel[(1, )](FAILURE=FAILURE, num_warps=4)
 

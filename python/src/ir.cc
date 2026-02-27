@@ -408,11 +408,18 @@ void init_triton_ir(py::module &&m) {
              self.print(os);
              return os.str();
            })
-      .def("set_name", [](Location &self, std::string &name) {
-        mlir::StringAttr nameAttr =
-            mlir::StringAttr::get(self.getContext(), name);
-        mlir::NameLoc nameLoc = mlir::NameLoc::get(nameAttr, self);
-        self = dyn_cast<Location>(nameLoc);
+      .def("set_name",
+           [](Location &self, std::string &name) {
+             mlir::StringAttr nameAttr =
+                 mlir::StringAttr::get(self.getContext(), name);
+             mlir::NameLoc nameLoc = mlir::NameLoc::get(nameAttr, self);
+             self = dyn_cast<Location>(nameLoc);
+           })
+      .def("get_name", [](Location &self) -> std::optional<std::string> {
+        if (auto nameLoc = dyn_cast<NameLoc>(self)) {
+          return nameLoc.getName().str();
+        }
+        return std::nullopt;
       });
 
   py::class_<Value>(m, "value", py::module_local())

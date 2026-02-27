@@ -14,7 +14,7 @@ tt.func public @wave_id() {
   //  GFX9-NEXT: %[[DIV:.+]] = llvm.udiv %[[AND]], %[[C64]] : i32
   //  GFX9-NEXT: %{{.+}} = rocdl.readfirstlane %[[DIV]] : i32
 
-  // GFX12-NEXT: llvm.call_intrinsic "llvm.amdgcn.wave.id"
+  // GFX12-NEXT: rocdl.wave.id
   //      CHECK: scf.for
 
   %c0 = arith.constant 0 : index

@@ -553,6 +553,8 @@ static Value createBarrierAlloc(triton::FuncOp funcOp, unsigned distance) {
                             sharedMemorySpace, /*mutableMemory=*/true);
   Value barrierAlloc = mlir::triton::gpu::LocalAllocOp::create(
       builder, loc, barrierMemDescType, Value());
+  barrierAlloc.getDefiningOp()->setAttr(kWarpSpecializeGeneratedBarrierAttrName,
+                                        builder.getUnitAttr());
   for (unsigned i = 0; i < distance; i++) {
     Value idx = arith::ConstantIntOp::create(builder, loc, i, 32);
     Value barrierView = ttg::MemDescIndexOp::create(
