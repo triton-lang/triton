@@ -172,6 +172,8 @@ LogicalResult WarpGroupDotWaitOp::verify() {
 LogicalResult InitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
+  if (getCount() < 1)
+    return emitOpError("count must be greater than or equal to 1");
   return success();
 }
 

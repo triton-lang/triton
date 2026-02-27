@@ -1633,6 +1633,91 @@ def test_barrier_underflow(device, run_wrapper, monkeypatch):
     kernel[(1, )](num_warps=4)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize("WITH_INVALIDATE", [False, True])
+def test_barrier_reinit_requires_invalidate(WITH_INVALIDATE, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_barrier_reinit_requires_invalidate, (WITH_INVALIDATE, device, False, monkeypatch))
+        if WITH_INVALIDATE:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert "device-side assert" in str(result.exc)
+            assert "Barrier re-initialized without prior invalidation" in result.driver_stderr_output
+        return
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def kernel(WITH_INVALIDATE: ttgl.constexpr):
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar.index(0), count=1)
+        if WITH_INVALIDATE:
+            mbarrier.invalidate(bar.index(0))
+        mbarrier.init(bar.index(0), count=1)
+        mbarrier.invalidate(bar.index(0))
+
+    kernel[(1, )](WITH_INVALIDATE=WITH_INVALIDATE, num_warps=4)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize("USE_KIND", ["wait", "arrive", "invalidate", "expect"])
+def test_barrier_use_without_init(USE_KIND, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_barrier_use_without_init, (USE_KIND, device, False, monkeypatch))
+        assert "device-side assert" in str(result.exc)
+        assert "Barrier used before initialization or after invalidation" in result.driver_stderr_output
+        return
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def kernel(USE_KIND: ttgl.constexpr):
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
+        if USE_KIND == "wait":
+            mbarrier.wait(bar.index(0), phase=0)
+        elif USE_KIND == "arrive":
+            mbarrier.arrive(bar.index(0), count=1)
+        elif USE_KIND == "invalidate":
+            mbarrier.invalidate(bar.index(0))
+        elif USE_KIND == "expect":
+            mbarrier.expect(bar.index(0), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+
+    kernel[(1, )](USE_KIND=USE_KIND, num_warps=4)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize("USE_KIND", ["wait", "arrive", "expect"])
+def test_barrier_use_after_invalidate(USE_KIND, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_barrier_use_after_invalidate, (USE_KIND, device, False, monkeypatch))
+        assert "device-side assert" in str(result.exc)
+        assert "Barrier used before initialization or after invalidation" in result.driver_stderr_output
+        return
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def kernel(USE_KIND: ttgl.constexpr):
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar.index(0), count=1)
+        mbarrier.invalidate(bar.index(0))
+        if USE_KIND == "wait":
+            mbarrier.wait(bar.index(0), phase=0)
+        elif USE_KIND == "arrive":
+            mbarrier.arrive(bar.index(0), count=1)
+        elif USE_KIND == "expect":
+            mbarrier.expect(bar.index(0), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+
+    kernel[(1, )](USE_KIND=USE_KIND, num_warps=4)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("MISSING_BAR", [True, False])
 @pytest.mark.parametrize("OVERLAP", [True, False])
