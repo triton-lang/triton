@@ -176,4 +176,4 @@ class GPUDriver(DriverBase):
 
     def allocate_default_profile_scratch(self, size: int, alignment: int, stream):
         import torch
-        return torch.empty(size, dtype=torch.int8, device=self.get_active_torch_device())
+        return torch.zeros(size, dtype=torch.int8, device=self.get_active_torch_device())
