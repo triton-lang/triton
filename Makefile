@@ -51,8 +51,7 @@ test-gluon: all
 
 .PHONY: test-gsan
 test-gsan: all
-	$(PYTEST) --tb=short python/test/gsan --ignore python/test/gsan/test_gsan_failures.py
-	$(PYTEST) --tb=short python/test/gsan/test_gsan_failures.py
+	$(PYTEST) --tb=short python/test/gsan
 
 .PHONY: test-regression
 test-regression: all

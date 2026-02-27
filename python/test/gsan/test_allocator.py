@@ -6,14 +6,7 @@ import torch
 from triton._internal_testing import is_cuda
 from triton.experimental.gsan import create_mem_pool
 from triton.experimental.gsan._allocator import get_reserve_pointer, get_reserve_size, gsan_free, gsan_malloc
-from triton.experimental.gsan._utils import shadow_region, uint8_cuda_tensor_from_ptr
-
-
-def shadow_tensor_for(real: torch.Tensor) -> torch.Tensor:
-    reserve_ptr = get_reserve_pointer()
-    reserve_size = get_reserve_size()
-    shadow_ptr, shadow_size = shadow_region(real.data_ptr(), real.untyped_storage().nbytes(), reserve_ptr, reserve_size)
-    return uint8_cuda_tensor_from_ptr(shadow_ptr, shadow_size, torch.cuda.current_device())
+from triton.experimental.gsan._utils import shadow_tensor_for
 
 
 @pytest.fixture
