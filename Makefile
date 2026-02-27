@@ -34,8 +34,7 @@ test-unit: all
 	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*' --ignore=test_debug.py
 	$(PYTEST) -n $(NUM_PROCS) python/test/unit/test_debug.py
 	$(PYTEST) -n 6 python/triton_kernels/tests/
-	$(PYTEST) -n $(NUM_PROCS) python/tutorials/ --ignore-glob='*/gluon/*' --ignore python/tutorials/06-fused-attention.py
-	# Run attention tutorial separately to avoid out of gpu memory
+	# Run attention separately to avoid out of gpu memory
 	$(PYTEST) python/tutorials/06-fused-attention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
