@@ -252,6 +252,7 @@ class CudaLauncher(object):
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
+        active_driver = triton.runtime.driver.active
 
         def allocate_scratch(size, align, allocator):
             if size > 0:
@@ -261,9 +262,19 @@ class CudaLauncher(object):
                 return alloc_fn(alloc_size, align, stream)
             return None
 
+        def allocate_default_profile_scratch(size, align):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                return active_driver.allocate_default_profile_scratch(alloc_size, align, stream)
+            return None
+
         global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
-        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
-                                           _allocation._profile_allocator)
+        if _allocation.has_profile_allocator():
+            profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                               _allocation._profile_allocator)
+        else:
+            profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
 
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
                     kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,

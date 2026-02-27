@@ -146,6 +146,12 @@ class DriverBase(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
+    def allocate_default_profile_scratch(self, size: int, alignment: int, stream):
+        """
+        Allocate profile scratch when no explicit profile allocator override was installed.
+        """
+        raise NotImplementedError
+
     def __init__(self) -> None:
         pass
 
@@ -167,3 +173,7 @@ class GPUDriver(DriverBase):
     # TODO: remove once TMA is cleaned up
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
         return args
+
+    def allocate_default_profile_scratch(self, size: int, alignment: int, stream):
+        import torch
+        return torch.empty(size, dtype=torch.int8, device=self.get_active_torch_device())
