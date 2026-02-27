@@ -5,7 +5,7 @@
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tmem_load_store
   tt.func public @tmem_load_store() {
-    // CHECK: ttg.global_scratch_alloc
+    // CHECK: ttg.global_scratch_alloc {{.*}}third_party_allocation
     // CHECK: tt.store
     // CHECK: tt.load
     // CHECK-NOT: ttng.tmem_load
@@ -29,7 +29,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tmem_copy_subslice
   tt.func public @tmem_copy_subslice() {
-    // CHECK: ttg.global_scratch_alloc
+    // CHECK: ttg.global_scratch_alloc {{.*}}third_party_allocation
     // CHECK: ttng.arrive_barrier
     // CHECK-NOT: ttng.tmem_copy
     // CHECK-NOT: ttng.tmem_subslice
@@ -49,7 +49,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tmem_subslice_load_store
   tt.func public @tmem_subslice_load_store() {
-    // CHECK: ttg.global_scratch_alloc
+    // CHECK: ttg.global_scratch_alloc {{.*}}third_party_allocation
     // CHECK-NOT: ttng.tmem_subslice
     // CHECK-NOT: ttng.tmem_load
     // CHECK-NOT: ttng.tmem_store
@@ -72,7 +72,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tcgen05_mma
   tt.func public @tcgen05_mma() {
-    // CHECK: ttg.global_scratch_alloc
+    // CHECK: ttg.global_scratch_alloc {{.*}}third_party_allocation
     // CHECK: scf.for
     // CHECK: ttng.arrive_barrier
     // CHECK-NOT: ttng.tc_gen5_mma
@@ -95,7 +95,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tcgen05_mma_pred
   tt.func public @tcgen05_mma_pred() {
-    // CHECK: ttg.global_scratch_alloc
+    // CHECK: ttg.global_scratch_alloc {{.*}}third_party_allocation
     // CHECK: scf.for
     // CHECK: ttng.arrive_barrier
     // CHECK-NOT: ttng.tc_gen5_mma
@@ -116,7 +116,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tmem_memdesc_index
   tt.func public @tmem_memdesc_index() {
-    // CHECK: ttg.global_scratch_alloc
+    // CHECK: ttg.global_scratch_alloc {{.*}}third_party_allocation
     // CHECK-NOT: ttng.tmem_load
     // CHECK-NOT: ttng.tmem_store
     // CHECK-NOT: ttg.memdesc_index
@@ -138,7 +138,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tmem_memdesc_index_nonzero
   tt.func public @tmem_memdesc_index_nonzero() {
-    // CHECK: ttg.global_scratch_alloc
+    // CHECK: ttg.global_scratch_alloc {{.*}}third_party_allocation
     // CHECK-NOT: ttng.tmem_load
     // CHECK-NOT: ttng.tmem_store
     %true = arith.constant true
@@ -264,7 +264,7 @@ tt.func public @cast_truncf(%a: tensor<4xf32>) -> tensor<4xf16> {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tmem_reinterpret
   tt.func public @tmem_reinterpret() {
-    // CHECK: ttg.global_scratch_alloc
+    // CHECK: ttg.global_scratch_alloc {{.*}}third_party_allocation
     // CHECK-NOT: ttng.tmem_load
     // CHECK-NOT: ttng.tmem_store
     %true = arith.constant true
@@ -287,7 +287,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
   // CHECK-LABEL: @ws_partition_tmem_load
   tt.func public @ws_partition_tmem_load() {
-    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {{.*}}third_party_allocation
     // CHECK: ttg.warp_specialize(%{{.*}}, %{{.*}}, %{{.*}}, %[[SCRATCH]])
     // CHECK: partition0(%{{.*}}: !ttg.memdesc<1xi64, #{{[^,>]+}}, #smem, mutable>, %{{.*}}: !ttg.memdesc<128x128xf32, #{{[^,>]+}}, #smem, mutable>, %{{.*}}: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %[[SCRATCH_ARG:.*]]: !tt.ptr<f32>) num_warps(4)
     // CHECK: %[[PTRS:.*]] = tt.splat %[[SCRATCH_ARG]] : !tt.ptr<f32> -> tensor<128x128x!tt.ptr<f32>, #blocked>
