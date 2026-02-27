@@ -16,6 +16,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     allocate_tensor_memory,
     get_tmem_reg_layout,
     tensor_memory_descriptor,
+    tensor_memory_descriptor_type,
     tma,
     mbarrier,
     tcgen05_mma,
@@ -244,13 +245,17 @@ class AttentionConfig:
         self.p_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), col_stride=1))
         o_splitn_tmem_layout: gl.constexpr = TensorMemoryLayout(
             (o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR), col_stride=1)
+        qk_tmem_ty: gl.constexpr = tensor_memory_descriptor_type(gl.float32, self.qk_shape, self.qk_tmem_layout,
+                                                                 self.qk_shape)
+        o_splitn_tmem_ty: gl.constexpr = tensor_memory_descriptor_type(
+            gl.float32,
+            [self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR],
+            o_splitn_tmem_layout,
+            self.o_shape,
+        )
 
-        self.qk_layout = gl.constexpr(
-            get_tmem_reg_layout(gl.float32, self.qk_shape, self.qk_tmem_layout, self.num_warps,
-                                instr_variant="32x32b_splitn"))
-        self.o_splitn_layout = gl.constexpr(
-            get_tmem_reg_layout(gl.float32, (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR),
-                                o_splitn_tmem_layout, self.num_warps))
+        self.qk_layout = gl.constexpr(get_tmem_reg_layout(qk_tmem_ty, self.num_warps, instr_variant="32x32b_splitn"))
+        self.o_splitn_layout = gl.constexpr(get_tmem_reg_layout(o_splitn_tmem_ty, self.num_warps))
         self.alpha_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1]))
 
         is_fp16 = self.dtype.value in [gl.float16, gl.bfloat16]
@@ -561,19 +566,17 @@ def _compute_and_store_exp2(config, qk, p_tmem):
 @gluon.jit
 def _subtiled_qk_load(config, s_tmem, use_tmem_red: gl.constexpr):
     SIZE: gl.constexpr = s_tmem.shape[1] // config.SPLIT_QK_LOAD_FACTOR
-    s = s_tmem.slice(0, SIZE)
-    layout: gl.constexpr = get_tmem_reg_layout(gl.float32, s.shape, s.layout, config.num_warps)
     qks = ()
     if use_tmem_red:
         red_total = None
         for i in gl.static_range(config.SPLIT_QK_LOAD_FACTOR):
-            vals, reds = s_tmem.slice(i * SIZE, SIZE).load_max(layout)
+            vals, reds = s_tmem.slice(i * SIZE, SIZE).load_max()
             red_total = reds if red_total is None else gl.maximum(red_total, reds)
             qks = qks + (vals, )
         return _join_n(qks), red_total
     else:
         for i in gl.static_range(config.SPLIT_QK_LOAD_FACTOR):
-            qks = qks + (s_tmem.slice(i * SIZE, SIZE).load(layout), )
+            qks = qks + (s_tmem.slice(i * SIZE, SIZE).load(), )
         return _join_n(qks), None
 
 

@@ -27,6 +27,7 @@ __all__ = [
     "mbarrier",
     "mma_v2",
     "tensor_memory_descriptor",
+    "tensor_memory_descriptor_type",
     "TensorMemoryLayout",
     "TensorMemoryScalesLayout",
     "tma",
@@ -126,20 +127,12 @@ class _TensorMemoryLinearLayout:
 
 
 @constexpr_function
-def get_tmem_reg_layout(
-    element_ty,
-    shape,
-    layout,
-    num_warps,
-    instr_variant="32x32b",
-):
+def get_tmem_reg_layout(tmem_ty, num_warps, instr_variant="32x32b"):
     """
     Returns a DistributedLinearLayout compatible with TMEM load/store instructions.
 
     Args:
-        element_ty (dtype): Element type stored in tensor memory.
-        shape (Sequence[int]): Global tensor shape addressed by the TMEM descriptor.
-        layout (TensorMemoryLayout): Tensor memory layout descriptor.
+        tmem_ty (tensor_memory_descriptor_type): Type of the tensor memory descriptor.
         num_warps (int): Number of warps participating in the operation.
         instr_variant (str): TMEM instruction variant (e.g. ``\"32x32b\"``).
     """
@@ -153,10 +146,15 @@ def get_tmem_reg_layout(
             return tuple(_unwrap(i) for i in x)
         return x
 
+    tmem_ty = _unwrap(tmem_ty)
+    if not isinstance(tmem_ty, tensor_memory_descriptor_type):
+        raise TypeError(f"expected a tensor_memory_descriptor_type but got {type(tmem_ty)!r}")
+
     return _compute_tmem_reg_layout(
-        _unwrap(element_ty),
-        _unwrap(shape),
-        _unwrap(layout),
+        _unwrap(tmem_ty.element_ty),
+        _unwrap(tmem_ty.shape),
+        _unwrap(tmem_ty.alloc_shape),
+        _unwrap(tmem_ty.layout),
         _unwrap(num_warps),
         _unwrap(instr_variant),
     )
@@ -165,11 +163,11 @@ def get_tmem_reg_layout(
 class tensor_memory_descriptor_type(base_type):
 
     def __init__(self, element_ty, shape, layout, alloc_shape):
-        self.element_ty = element_ty
-        self.shape = shape
-        self.layout = layout
-        self.alloc_shape = alloc_shape
-        assert isinstance(layout, TensorMemoryLayout) or isinstance(layout, TensorMemoryScalesLayout)
+        self.element_ty = _unwrap_if_constexpr(element_ty)
+        self.shape = _unwrap_if_constexpr(shape)
+        self.layout = _unwrap_if_constexpr(layout)
+        self.alloc_shape = _unwrap_if_constexpr(alloc_shape)
+        assert isinstance(self.layout, (TensorMemoryLayout, TensorMemoryScalesLayout))
 
     def to_ir(self, builder: GluonOpBuilder) -> None:
         return builder.get_tensor_mem_desc_ty(
@@ -236,27 +234,34 @@ class tensor_memory_descriptor(base_value):
         return str(self.type)
 
     @builtin
-    def load(self, layout, _semantic: GluonSemantic = None) -> ttgl.tensor:
+    def load(self, layout=None, _semantic: GluonSemantic = None, _generator=None) -> ttgl.tensor:
         """
         Load a tensor from tensor memory.
 
         Args:
-            layout (DistributedLayout): Destination layout of the tensor.
+            layout (Optional[DistributedLayout]): Destination layout of the tensor.
+                When omitted, infer the default TMEM register layout for this
+                descriptor type and the caller's warp count.
 
         Returns:
             tensor: A distributed tensor containing the loaded data.
         """
-        layout = _unwrap_if_constexpr(layout)
+        layout = self._get_load_layout(layout, _semantic, _generator)
         ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
         builder = _semantic.builder
         handle = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle)
         return ttgl.tensor(handle, ret_ty)
 
-    def _load_red(self, layout, red_op, abs, propagate_nan, _semantic: GluonSemantic):
+    def _get_load_layout(self, layout, _semantic: GluonSemantic, _generator):
+        if layout is None:
+            layout = get_tmem_reg_layout(self.type, ttgl.num_warps(_semantic=_semantic, _generator=_generator))
+        return _unwrap_if_constexpr(layout)
+
+    def _load_red(self, layout, red_op, abs, propagate_nan, _semantic: GluonSemantic, _generator=None):
         #   red_op: MIN/MAX reduction operation
         #   abs (bool): If True, reduce absolute values.
         #   propagate_nan (NONE): If ALL, propagate NaN in specified reduction operation.
-        layout = _unwrap_if_constexpr(layout)
+        layout = self._get_load_layout(layout, _semantic, _generator)
         abs_flag = _unwrap_if_constexpr(abs)
         propagate_nan = _unwrap_if_constexpr(propagate_nan)
 
@@ -272,12 +277,15 @@ class tensor_memory_descriptor(base_value):
         return (ttgl.tensor(result, ret_ty), ttgl.tensor(reduced, red_ty))
 
     @builtin
-    def load_min(self, layout, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE, _semantic: GluonSemantic = None):
+    def load_min(self, layout=None, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE, _semantic: GluonSemantic = None,
+                 _generator=None):
         """
         Load a tensor from tensor memory with MIN reduction along the N-dimension.
 
         Args:
-            layout (DistributedLayout): Destination layout of the tensor.
+            layout (Optional[DistributedLayout]): Destination layout of the tensor.
+                When omitted, infer the default TMEM register layout for this
+                descriptor type and the caller's warp count.
             abs (bool): If True, reduce absolute values. Defaults to False.
             propagate_nan (PROPAGATE_NAN): If ALL, propagate NaN in the reduction operation. Defaults to NONE.
 
@@ -285,15 +293,18 @@ class tensor_memory_descriptor(base_value):
             tuple: A tuple containing (tensor, reduced_tensor) where tensor is the loaded data
                    and reduced_tensor is the result of MIN reduction along the N-dimension of loaded data
         """
-        return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MIN, abs, propagate_nan, _semantic)
+        return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MIN, abs, propagate_nan, _semantic, _generator)
 
     @builtin
-    def load_max(self, layout, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE, _semantic: GluonSemantic = None):
+    def load_max(self, layout=None, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE, _semantic: GluonSemantic = None,
+                 _generator=None):
         """
         Load a tensor from tensor memory with MAX reduction along the N-dimension.
 
         Args:
-            layout (DistributedLayout): Destination layout of the tensor.
+            layout (Optional[DistributedLayout]): Destination layout of the tensor.
+                When omitted, infer the default TMEM register layout for this
+                descriptor type and the caller's warp count.
             abs (bool): If True, reduce absolute values. Defaults to False.
             propagate_nan (PROPAGATE_NAN): If ALL, propagate NaN in the reduction operation. Defaults to NONE.
 
@@ -301,7 +312,7 @@ class tensor_memory_descriptor(base_value):
             tuple: A tuple containing (tensor, reduced_tensor) where tensor is the loaded data
                    and reduced_tensor is the result of MAX reduction along the N-dimension of loaded data.
         """
-        return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MAX, abs, propagate_nan, _semantic)
+        return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MAX, abs, propagate_nan, _semantic, _generator)
 
     @builtin
     def store(self, value, pred=True, _semantic: GluonSemantic = None) -> None:

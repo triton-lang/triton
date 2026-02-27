@@ -1096,8 +1096,8 @@ void init_gluon_ir(py::module &&m) {
   m.def(
       "compute_tmem_reg_layout",
       [](py::object elementTyObj, std::vector<int64_t> shape,
-         py::object layoutObj, unsigned numWarps,
-         const std::string &atomName) -> py::object {
+         std::vector<int64_t> allocShape, py::object layoutObj,
+         unsigned numWarps, const std::string &atomName) -> py::object {
         DialectRegistry registry;
         registry.insert<triton::TritonDialect, ttg::TritonGPUDialect,
                         ttng::TritonNvidiaGPUDialect, gluon::GluonDialect>();
@@ -1112,8 +1112,6 @@ void init_gluon_ir(py::module &&m) {
         auto elementType = elementTyObj.attr("to_ir")(builderObj).cast<Type>();
         auto layoutAttr =
             layoutObj.attr("_to_ir")(builderObj).cast<Attribute>();
-        auto allocShape = shape;
-
         auto ctx = builder.getContext();
         auto memDescTy = builder.getChecked<ttg::MemDescType>(
             shape, elementType, layoutAttr,

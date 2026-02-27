@@ -118,15 +118,13 @@ def tmem_example_kernel(in_ptr, out_ptr, M: gl.constexpr, N: gl.constexpr, num_w
 
     # Get the register layout needed to access the tensor memory using a helper.
     tmem_reg_layout: gl.constexpr = get_tmem_reg_layout(
-        in_ptr.dtype.element_ty,
-        (M, N),
-        tmem_layout,
-        num_warps=num_warps,
+        tmem.type,
+        num_warps,
     )
 
     input = gl.convert_layout(input, tmem_reg_layout)
     tmem.store(input)
-    output = tmem.load(tmem_reg_layout)
+    output = tmem.load()
     output = gl.convert_layout(output, global_memory_layout)
 
     gl.store(out_ptr + offs, output)
@@ -189,9 +187,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     )
     acc_tmem = allocate_tensor_memory(d_desc.dtype, [M, N], acc_tmem_layout)
     acc_reg_layout: gl.constexpr = get_tmem_reg_layout(
-        d_desc.dtype,
-        (M, N),
-        acc_tmem_layout,
+        acc_tmem.type,
         num_warps,
     )
     acc = c_smem.load(acc_reg_layout)
@@ -206,9 +202,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
         lhs_tmem = allocate_tensor_memory(a_desc.dtype, [M, K], lhs_tmem_layout)
 
         lhs_reg_layout: gl.constexpr = get_tmem_reg_layout(
-            a_desc.dtype,
-            (M, K),
-            lhs_tmem_layout,
+            lhs_tmem.type,
             num_warps,
         )
         lhs = a_smem.load(lhs_reg_layout)
@@ -261,7 +255,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     # way to zero the accumulator.
 
     d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)
-    acc = acc_tmem.load(acc_reg_layout)
+    acc = acc_tmem.load()
     d_smem.store(acc)
     fence_async_shared()
     tma.async_copy_shared_to_global(d_desc, [0, 0], d_smem)
@@ -362,13 +356,7 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc, TRANSPOSE_B: gl.constexpr, num
     mbarrier.invalidate(tma_bar)
     mbarrier.invalidate(mma_bar)
 
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(
-        gl.float32,
-        (BLOCK_M, BLOCK_N),
-        tmem_layout,
-        num_warps,
-    )
-    acc = acc_tmem.load(acc_reg_layout)
+    acc = acc_tmem.load()
 
     # Downcast accumulator and store tile of C.
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
@@ -585,13 +573,6 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
         tma.async_copy_global_to_shared(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
         k += BLOCK_K
 
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(
-        gl.float32,
-        (BLOCK_M, BLOCK_N),
-        tmem_layout,
-        num_warps,
-    )
-
     mma_index, mma_phase, mma_counter = get_and_increment(mma_counter)
     ub_bar = mma_ub_bars.index(mma_index)
     vb_bar = mma_vb_bars.index(mma_index)
@@ -617,14 +598,14 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     # Wait UBN, UB epilogue
     mbarrier.wait(ub_bar, epilogue_phase)
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
-    ub = ub_tmem.load(acc_reg_layout)
+    ub = ub_tmem.load()
     c_smem.store(ub.to(dtype))
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
 
     # Wait VBN, VB epilogue
     mbarrier.wait(vb_bar, epilogue_phase)
-    vb = vb_tmem.load(acc_reg_layout)
+    vb = vb_tmem.load()
     tma.store_wait(pendings=0)
     c_smem.store(vb.to(dtype))
     fence_async_shared()

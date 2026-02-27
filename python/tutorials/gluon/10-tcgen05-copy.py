@@ -16,8 +16,8 @@ tcgen05_copy(lhs_smem, lhs_tmem)
 tcgen05_copy(acc_smem, acc_tmem)
 tcgen05_commit(bar)
 mbarrier.wait(bar, phase=phase)
-acc = acc_tmem.load(acc_reg_layout)
-lhs = lhs_tmem.load(lhs_reg_layout)
+acc = acc_tmem.load()
+lhs = lhs_tmem.load()
 ```
 
 `tcgen05_copy` can be used to copy data into tensor memory that is fed into a
@@ -88,7 +88,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     tensor_memory_descriptor,
     allocate_tensor_memory,
-    get_tmem_reg_layout,
     fence_async_shared,
     tcgen05_copy,
     tcgen05_commit,
@@ -144,8 +143,7 @@ def tcgen05_copy_kernel(in_ptr, in_stride0, in_stride1, out_ptr, out_stride0, ou
     mbarrier.invalidate(bar)
 
     # Read the data from tensor memory.
-    tmem_reg_layout: gl.constexpr = get_tmem_reg_layout(input.dtype, (M, N), tmem_layout, gl.num_warps())
-    output = tmem.load(tmem_reg_layout)
+    output = tmem.load()
 
     # Write using a coalesced layout.
     output = gl.convert_layout(output, coalesced_2d_layout)
@@ -307,13 +305,11 @@ def matmul_accmulate_mma_partition(p):
 def matmul_accumulate_epilogue_partition(p):
     BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
-    dtype: gl.constexpr = p.c_desc.dtype
 
     coalesced_2d_layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, gl.num_warps()], [1, 0])
     range_m = gl.arange(0, BLOCK_M, gl.SliceLayout(1, coalesced_2d_layout))
     range_n = gl.arange(0, BLOCK_N, gl.SliceLayout(0, coalesced_2d_layout))
 
-    acc_layout: gl.constexpr = get_tmem_reg_layout(dtype, (BLOCK_M, BLOCK_N), p.acc_bufs.type.layout, gl.num_warps())
     acc_state = t8.Counter.create(0, p.acc_empty_bars.shape[0])
     scheduler = p.SchedulerImpl.initialize(p.c_desc.shape[0], p.c_desc.shape[1], BLOCK_M, BLOCK_N)
     for idx in range(scheduler.get_num_tiles()):
@@ -322,16 +318,16 @@ def matmul_accumulate_epilogue_partition(p):
         off_n = pid_n * BLOCK_N
         # Wait for the accumulator.
         mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
-        acc = p.acc_bufs.index(acc_state.index).load(acc_layout)
+        acc = p.acc_bufs.index(acc_state.index).load()
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
         acc_state = acc_state.next()
         offs_m = (off_m + range_m)
         offs_n = (off_n + range_n)
         # This `convert_layout` is fairly expensive and it uses a lot of shared
-        # memory, because `acc_layout` assigns contiguous columns to the same
-        # thread, but the coalesced layout assigns contiguous columns to different
-        # threads for efficient global writes. We could subtile the store to
-        # reduce the shared memory usage.
+        # memory, because the default TMEM register layout assigns contiguous
+        # columns to the same thread, but the coalesced layout assigns
+        # contiguous columns to different threads for efficient global writes.
+        # We could subtile the store to reduce the shared memory usage.
         acc = gl.convert_layout(acc, coalesced_2d_layout)
         gl.store(p.d_ptr + offs_m[:, None] * p.d_stride_m + offs_n[None, :] * p.d_stride_n, acc)
 
