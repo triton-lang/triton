@@ -1162,3 +1162,12 @@ tt.func @dead_op_pessimistic() {
   }
   tt.return
 }
+
+// -----
+
+// Verify that tensor descriptor types get the correct rank in pessimistic state.
+tt.func @make_tensor_desc(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i64) {
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
+  %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg1], [%arg2, %arg2] : <f32>, <tensor<128x64xf32>>
+  tt.return
+}
