@@ -470,6 +470,8 @@ class HIPBackend(BaseBackend):
             amd.add_scalarize_packed_fops_llvm_pass(fns[0])
 
         # Get some metadata
+        if total_num_warps is not None and total_num_warps != metadata["num_warps"]:
+            metadata["num_warps_base"] = metadata["num_warps"]
         metadata["num_warps"] = total_warps_num
         metadata["shared"] = src.get_int_attr("ttg.shared")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
