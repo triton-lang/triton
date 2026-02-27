@@ -258,9 +258,18 @@ struct DotOpMFMAConversionHelper {
     bool allowXF32 =
         op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
     StringRef intrinsicName;
+    // When mfmaLayout is transposed, operands will be swapped later (op1, op2
+    // swap). For asymmetric types (e.g., bf8_fp8), we need to select the
+    // intrinsic with swapped types so the hardware interprets the data
+    // correctly after the swap.
+    Type intrinsicElemTyA = elemTyA;
+    Type intrinsicElemTyB = elemTyB;
+    if (mfmaLayout.getIsTransposed() && elemTyA != elemTyB) {
+      std::swap(intrinsicElemTyA, intrinsicElemTyB);
+    }
     FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic = MfmaIntrinsic::get(
-        op.getLoc(), mfmaVersion, mDim, nDim, kDim, elemTyA, elemTyB,
-        /*withScale=*/false, allowXF32);
+        op.getLoc(), mfmaVersion, mDim, nDim, kDim, intrinsicElemTyA,
+        intrinsicElemTyB, /*withScale=*/false, allowXF32);
     if (failed(maybeMfmaIntrinsic))
       return op.emitError("no matching matrix core intrinsic ")
              << "for mfma version " << mfmaVersion
@@ -320,7 +329,7 @@ struct DotOpMFMAConversionHelper {
         aTensorTy.getElementType(), allowXF32, preserveBF16);
     auto operandB = getValuesFromDotOperandLayoutStruct(
         loadedB, numRepB, numRepN, numRepKB, kWidth, kBase,
-        aTensorTy.getElementType(), allowXF32, preserveBF16);
+        bTensorTy.getElementType(), allowXF32, preserveBF16);
 
     int warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
     int elemsPerVec = mDim * nDim / warpSize;
