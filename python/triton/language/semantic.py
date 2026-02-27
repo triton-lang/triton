@@ -1626,7 +1626,7 @@ class TritonSemantic(Generic[TensorTy]):
             # Default to scale32, i.e. 32 elements of operand share one scale element
             return 32
         elif scale_factor_a != 0 and scale_factor_b != 0:
-            assert scale_factor_a == scale_factor_b, "scale factors must be the same for both operands"
+            assert scale_factor_a == scale_factor_b, f"Operands must have the same scale factor; (lhs: {scale_factor_a} vs rhs: {scale_factor_b})"
             return scale_factor_a
         else:
             return scale_factor_a if scale_factor_a != 0 else scale_factor_b
