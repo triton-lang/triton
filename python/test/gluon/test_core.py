@@ -1390,16 +1390,13 @@ def test_tmem_subslice_block_m_64():
         s_tmem.store(s)
         o_tmem.store(s)
 
-        p_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), col_stride=1)
-        p_tmem = s_tmem.slice(0, N // 2)._reinterpret(ttgl.float16, [BLOCK_M, N], p_tmem_layout)
+        p_tmem = s_tmem.slice(0, N // 2)._reinterpret(ttgl.float16, [BLOCK_M, N], tmem_layout)
         p_tmem.store(ttgl.full((BLOCK_M, N), 0.0, dtype=ttgl.float16, layout=layout))
 
         d1_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, 2), col_stride=1)
-        d1_tmem_ty: ttgl.constexpr = tensor_memory_descriptor_type(ttgl.float32, [BLOCK_M, 2], d1_tmem_layout,
-                                                                   [BLOCK_M, 2])
-        d1_layout: ttgl.constexpr = get_tmem_reg_layout(d1_tmem_ty, num_warps=4)
 
         m_tmem = s_tmem.slice(N // 4, 2)._reinterpret(ttgl.float32, [BLOCK_M, 2], d1_tmem_layout)
+        d1_layout: ttgl.constexpr = get_tmem_reg_layout(m_tmem.type, num_warps=ttgl.num_warps())
         m_tmem.store(ttgl.full((BLOCK_M, 2), 2.0, dtype=ttgl.float32, layout=d1_layout))
         l_tmem = s_tmem.slice(N // 4 + 2, 2)._reinterpret(ttgl.float32, [BLOCK_M, 2], d1_tmem_layout)
         l_tmem.store(ttgl.full((BLOCK_M, 2), 3.0, dtype=ttgl.float32, layout=d1_layout))
