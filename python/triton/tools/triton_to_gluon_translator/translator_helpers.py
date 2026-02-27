@@ -10,7 +10,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
     get_tmem_reg_layout,
-    tensor_memory_descriptor_type,
     tcgen05_commit,
     tcgen05_mma,
     tcgen05_mma_scaled,
@@ -154,13 +153,13 @@ def tl_dot_blackwell(
     acc_dtype: ttgl.constexpr = acc.dtype if acc is not None else out_dtype
     col_stride: ttgl.constexpr = 32 // acc_dtype.primitive_bitwidth
     acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([m, n], col_stride=col_stride)
-    acc_tmem_ty: ttgl.constexpr = tensor_memory_descriptor_type(acc_dtype, [M, N], acc_tmem_layout, [M, N])
-    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(acc_tmem_ty, ttgl.num_warps())
+    acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_tmem_layout)
+    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(acc_tmem.type, ttgl.num_warps())
     if acc is not None:
         acc_temp = ttgl.convert_layout(acc, tmem_reg_layout)
     else:
         acc_temp = ttgl.zeros([M, N], out_dtype, layout=tmem_reg_layout)
-    acc_tmem = allocate_tensor_memory(acc_temp.dtype, [M, N], acc_tmem_layout, acc_temp)
+    acc_tmem.store(acc_temp)
     fence_async_shared()
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
@@ -465,28 +464,26 @@ def tl_dot_scaled_blackwell(
     acc_dtype: ttgl.constexpr = acc.dtype if acc is not None else out_dtype
     col_stride: ttgl.constexpr = 32 // acc_dtype.primitive_bitwidth
     acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([m, n], col_stride=col_stride)
-    acc_tmem_ty: ttgl.constexpr = tensor_memory_descriptor_type(acc_dtype, [M, N], acc_tmem_layout, [M, N])
-    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(acc_tmem_ty, ttgl.num_warps())
+    acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_tmem_layout)
+    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(acc_tmem.type, ttgl.num_warps())
     if acc is not None:
         acc_temp = ttgl.convert_layout(acc, tmem_reg_layout)
     else:
         acc_temp = ttgl.zeros([M, N], out_dtype, layout=tmem_reg_layout)
-    acc_tmem = allocate_tensor_memory(acc_temp.dtype, [M, N], acc_tmem_layout, acc_temp)
+    acc_tmem.store(acc_temp)
     fence_async_shared()
 
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
     scale_layout: ttgl.constexpr = TensorMemoryScalesLayout()
-    lhs_scale_tmem_ty: ttgl.constexpr = tensor_memory_descriptor_type(lhs_scale.dtype, lhs_scale.type.shape,
-                                                                      scale_layout, lhs_scale.type.shape)
-    rhs_scale_tmem_ty: ttgl.constexpr = tensor_memory_descriptor_type(rhs_scale.dtype, rhs_scale.type.shape,
-                                                                      scale_layout, rhs_scale.type.shape)
-    scale_layout_reg_lhs: ttgl.constexpr = get_tmem_reg_layout(lhs_scale_tmem_ty, ttgl.num_warps())
-    scale_layout_reg_rhs: ttgl.constexpr = get_tmem_reg_layout(rhs_scale_tmem_ty, ttgl.num_warps())
+    a_scale_tmem = allocate_tensor_memory(lhs_scale.dtype, lhs_scale.shape, scale_layout)
+    b_scale_tmem = allocate_tensor_memory(rhs_scale.dtype, rhs_scale.shape, scale_layout)
+    scale_layout_reg_lhs: ttgl.constexpr = get_tmem_reg_layout(a_scale_tmem.type, ttgl.num_warps())
+    scale_layout_reg_rhs: ttgl.constexpr = get_tmem_reg_layout(b_scale_tmem.type, ttgl.num_warps())
     lhs_scale = ttgl.convert_layout(lhs_scale, scale_layout_reg_lhs)
     rhs_scale = ttgl.convert_layout(rhs_scale, scale_layout_reg_rhs)
-    a_scale_tmem = allocate_tensor_memory(lhs_scale.dtype, lhs_scale.shape, scale_layout, lhs_scale)
-    b_scale_tmem = allocate_tensor_memory(rhs_scale.dtype, rhs_scale.shape, scale_layout, rhs_scale)
+    a_scale_tmem.store(lhs_scale)
+    b_scale_tmem.store(rhs_scale)
 
     tcgen05_mma_scaled(a_smem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, lhs_format, rhs_format, use_acc=True)
     tcgen05_commit(bar)
