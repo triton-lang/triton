@@ -856,46 +856,11 @@ struct TMEMSubSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-
-    auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-        srcTy.getEncoding());
-    auto shapePerCTA = getShapePerCTA(srcTy);
-    int blockN = encoding.getBlockN();
-    int blockM = encoding.getBlockM();
-    int offsetCol = 0;
-    int offsetRow = 0;
-    assert(llvm::is_contained({64, 128}, blockM) && "checked by the verifier");
-    offsetCol = op.getN();
-
-    if (blockM == 64) {
-      // The layout interleaves blocks along the N dimension with the rows, such
-      // that the odd numbered blocks are in lanes [16, 32), below the previous
-      // even-numbered block.
-      int blockOffset = op.getN() / blockN;
-      if (blockOffset % 2) {
-        // Offset into rows [16, 32).
-        offsetRow = 16;
-        // Normalize column offset to the even block.
-        offsetCol -= blockN;
-      }
-      offsetCol -= blockN * (blockOffset / 2);
-    }
-
-    unsigned elementBitWidth = srcTy.getElementTypeBitWidth();
-    if (encoding.getColStride() * elementBitWidth != 32) {
-      // Adjust the column offset based on the element size.
-      int numElementsPer32B = 32 / (encoding.getColStride() * elementBitWidth);
-      if (offsetCol % numElementsPer32B != 0) {
-        return failure();
-      }
-      offsetCol /= numElementsPer32B;
-    }
+    auto dstTy = cast<MemDescType>(op.getResult().getType());
+    uint32_t offset = getTMemSubSliceOffset(dstTy, op.getN());
 
     Value tmemBase = adaptor.getSrc();
-    Value offsetVal = b.i32_val(offsetCol | offsetRow << 16);
+    Value offsetVal = b.i32_val(offset);
     Value newBase = b.add(b.ptrtoint(i32_ty, tmemBase), offsetVal);
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
@@ -908,15 +873,14 @@ struct TMEMSubSliceOpConversion
 void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<TensorMemoryCopyOpConversion, TMEMSubSliceOpConversion,
-               TensorMemoryLoadOpConversion, TensorMemoryStoreOpConversion,
-               TensorMemoryAllocOpConversion>(typeConverter, benefit);
+  patterns.add<TensorMemoryCopyOpConversion, TensorMemoryLoadOpConversion,
+               TensorMemoryStoreOpConversion, TensorMemoryAllocOpConversion>(
+      typeConverter, benefit);
 }
 
 void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<MemDescIndexOpConversion>(typeConverter, benefit);
-  patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
-  return;
+  patterns.add<MemDescReinterpretOpConversion, MemDescIndexOpConversion,
+               TMEMSubSliceOpConversion>(typeConverter, benefit);
 }
