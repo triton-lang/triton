@@ -74,7 +74,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
-    get_tmem_reg_layout,
     fence_async_shared,
     tensor_memory_descriptor,
     tcgen05_copy,
@@ -198,8 +197,8 @@ def simple_mma_scaled_kernel(a_desc, b_desc, c_desc, a_scale_ptr, a_scale_stride
 
         # We have to write the scales to tensor memory. Convert them into a the right
         # layout so we can write into tensor memory with layout `TensorMemoryScalesLayout`.
-        a_scale_layout: gl.constexpr = get_tmem_reg_layout(a_scale_tmem.type, gl.num_warps())
-        b_scale_layout: gl.constexpr = get_tmem_reg_layout(b_scale_tmem.type, gl.num_warps())
+        a_scale_layout: gl.constexpr = a_scale_tmem.get_reg_layout()
+        b_scale_layout: gl.constexpr = b_scale_tmem.get_reg_layout()
         a_scale = gl.convert_layout(a_scale, a_scale_layout)
         b_scale = gl.convert_layout(b_scale, b_scale_layout)
         a_scale_tmem.store(a_scale)
@@ -510,8 +509,8 @@ def mma_scaled_contig_kernel(a_desc, b_desc, c_desc, a_scale_ptr, b_scale_ptr, V
         b_scale = b_scale.reshape(BLOCK_N, SCALE_BLOCK_K)
 
         # ======= Begin unchanged code from `simple_mma_scaled_kernel` =======
-        a_scale_layout: gl.constexpr = get_tmem_reg_layout(a_scale_tmem.type, gl.num_warps())
-        b_scale_layout: gl.constexpr = get_tmem_reg_layout(b_scale_tmem.type, gl.num_warps())
+        a_scale_layout: gl.constexpr = a_scale_tmem.get_reg_layout()
+        b_scale_layout: gl.constexpr = b_scale_tmem.get_reg_layout()
         a_scale = gl.convert_layout(a_scale, a_scale_layout)
         b_scale = gl.convert_layout(b_scale, b_scale_layout)
         a_scale_tmem.store(a_scale)
@@ -737,8 +736,8 @@ def mma_scaled_packed_block_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         # which to load the scales from shared memory such that after unswizzling,
         # they have the right 2D layout for the store to TMEM. Instead, we will use
         # AutoLayout to let the compiler backwards propagate the layout.
-        a_scale_layout: gl.constexpr = get_tmem_reg_layout(a_scale_tmem.type, gl.num_warps())
-        b_scale_layout: gl.constexpr = get_tmem_reg_layout(b_scale_tmem.type, gl.num_warps())
+        a_scale_layout: gl.constexpr = a_scale_tmem.get_reg_layout()
+        b_scale_layout: gl.constexpr = b_scale_tmem.get_reg_layout()
 
         # Load the scales with AutoLayout. Subsequent operations, including the unswizzling,
         # will be generic over the layout.

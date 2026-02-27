@@ -9,7 +9,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
-    get_tmem_reg_layout,
     tcgen05_commit,
     tcgen05_mma,
     tcgen05_mma_scaled,
@@ -154,7 +153,7 @@ def tl_dot_blackwell(
     col_stride: ttgl.constexpr = 32 // acc_dtype.primitive_bitwidth
     acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([m, n], col_stride=col_stride)
     acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_tmem_layout)
-    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(acc_tmem.type, ttgl.num_warps())
+    tmem_reg_layout: ttgl.constexpr = acc_tmem.get_reg_layout()
     if acc is not None:
         acc_temp = ttgl.convert_layout(acc, tmem_reg_layout)
     else:
@@ -465,7 +464,7 @@ def tl_dot_scaled_blackwell(
     col_stride: ttgl.constexpr = 32 // acc_dtype.primitive_bitwidth
     acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([m, n], col_stride=col_stride)
     acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_tmem_layout)
-    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(acc_tmem.type, ttgl.num_warps())
+    tmem_reg_layout: ttgl.constexpr = acc_tmem.get_reg_layout()
     if acc is not None:
         acc_temp = ttgl.convert_layout(acc, tmem_reg_layout)
     else:
@@ -478,8 +477,8 @@ def tl_dot_scaled_blackwell(
     scale_layout: ttgl.constexpr = TensorMemoryScalesLayout()
     a_scale_tmem = allocate_tensor_memory(lhs_scale.dtype, lhs_scale.shape, scale_layout)
     b_scale_tmem = allocate_tensor_memory(rhs_scale.dtype, rhs_scale.shape, scale_layout)
-    scale_layout_reg_lhs: ttgl.constexpr = get_tmem_reg_layout(a_scale_tmem.type, ttgl.num_warps())
-    scale_layout_reg_rhs: ttgl.constexpr = get_tmem_reg_layout(b_scale_tmem.type, ttgl.num_warps())
+    scale_layout_reg_lhs: ttgl.constexpr = a_scale_tmem.get_reg_layout()
+    scale_layout_reg_rhs: ttgl.constexpr = b_scale_tmem.get_reg_layout()
     lhs_scale = ttgl.convert_layout(lhs_scale, scale_layout_reg_lhs)
     rhs_scale = ttgl.convert_layout(rhs_scale, scale_layout_reg_rhs)
     a_scale_tmem.store(lhs_scale)

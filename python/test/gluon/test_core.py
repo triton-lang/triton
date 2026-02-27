@@ -33,7 +33,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
-    get_tmem_reg_layout,
     tcgen05_mma_barrier_count,
     tcgen05_mma,
     tcgen05_mma_scaled,
@@ -1380,7 +1379,7 @@ def test_tmem_subslice_block_m_64():
         s_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=tmem_layout)
         o_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=tmem_layout)
 
-        layout: ttgl.constexpr = get_tmem_reg_layout(s_tmem.type, num_warps=4)
+        layout: ttgl.constexpr = s_tmem.get_reg_layout()
 
         offsets = ttgl.arange(0, BLOCK_M)[:, None] * N + ttgl.arange(0, N)[None, :]
         offsets = ttgl.set_auto_layout(offsets, layout)
@@ -1395,7 +1394,7 @@ def test_tmem_subslice_block_m_64():
         d1_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, 2), col_stride=1)
 
         m_tmem = s_tmem.slice(N // 4, 2)._reinterpret(ttgl.float32, [BLOCK_M, 2], d1_tmem_layout)
-        d1_layout: ttgl.constexpr = get_tmem_reg_layout(m_tmem.type, num_warps=ttgl.num_warps())
+        d1_layout: ttgl.constexpr = m_tmem.get_reg_layout()
         m_tmem.store(ttgl.full((BLOCK_M, 2), 2.0, dtype=ttgl.float32, layout=d1_layout))
         l_tmem = s_tmem.slice(N // 4 + 2, 2)._reinterpret(ttgl.float32, [BLOCK_M, 2], d1_tmem_layout)
         l_tmem.store(ttgl.full((BLOCK_M, 2), 3.0, dtype=ttgl.float32, layout=d1_layout))
@@ -1463,7 +1462,7 @@ def test_block_m_64_mma():
         al_tmem = allocate_tensor_memory(ttgl.float16, (BLOCK_M, N), layout=a_tmem_layout)
         ar_tmem = allocate_tensor_memory(ttgl.float16, (BLOCK_M, N), layout=a_tmem_layout)
         acc_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=acc_tmem_layout)
-        a_layout: ttgl.constexpr = get_tmem_reg_layout(al_tmem.type, num_warps=4, instr_variant="32x32b_splitn")
+        a_layout: ttgl.constexpr = al_tmem.get_reg_layout(instr_variant="32x32b_splitn")
         b_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
         a_offsets = ttgl.set_auto_layout(a_offsets, a_layout)
         b_offsets = ttgl.set_auto_layout(b_offsets, b_layout)
@@ -1619,10 +1618,7 @@ def test_tmem_copy_no_scales(M, N, BLOCK_N, num_warps, swizzle):
             shape=[M, N],
             layout=tmem_layout,
         )
-        tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(
-            tmem.type,
-            num_warps=num_warps,
-        )
+        tmem_reg_layout: ttgl.constexpr = tmem.get_reg_layout()
         offs_m = ttgl.arange(0, M, ttgl.SliceLayout(1, tmem_reg_layout))
         offs_n = ttgl.arange(0, N, ttgl.SliceLayout(0, tmem_reg_layout))
         offs = offs_m[:, None] * N + offs_n[None, :]
@@ -1995,7 +1991,7 @@ def test_tcgen05_mma_scaled_minimal():
         # Accumulator in TMEM initialized to ones
         acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, N], col_stride=1)
         acc_tmem = allocate_tensor_memory(ttgl.float32, [M, N], acc_tmem_layout)
-        tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(acc_tmem.type, ttgl.num_warps())
+        tmem_reg_layout: ttgl.constexpr = acc_tmem.get_reg_layout()
         acc_init = ttgl.zeros([M, N], ttgl.float32, layout=tmem_reg_layout)
         acc_tmem.store(acc_init)
 
@@ -2003,8 +1999,8 @@ def test_tcgen05_mma_scaled_minimal():
         scale_layout: ttgl.constexpr = TensorMemoryScalesLayout()
         a_scale_tmem = allocate_tensor_memory(a_scale.dtype.element_ty, [M, K // 32], scale_layout)
         b_scale_tmem = allocate_tensor_memory(b_scale.dtype.element_ty, [N, K // 32], scale_layout)
-        scale_reg_layout_m: ttgl.constexpr = get_tmem_reg_layout(a_scale_tmem.type, ttgl.num_warps())
-        scale_reg_layout_n: ttgl.constexpr = get_tmem_reg_layout(b_scale_tmem.type, ttgl.num_warps())
+        scale_reg_layout_m: ttgl.constexpr = a_scale_tmem.get_reg_layout()
+        scale_reg_layout_n: ttgl.constexpr = b_scale_tmem.get_reg_layout()
         scale_offs_k = ttgl.arange(0, (K // 32), layout=ttgl.SliceLayout(0, scale_reg_layout_m))[None, :]
         scale_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, scale_reg_layout_m))[:, None]
         scale_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, scale_reg_layout_n))[:, None]
@@ -3372,10 +3368,7 @@ def tmem_reduction_kernel(
     )
 
     # Get register layout for TMEM access
-    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(
-        tmem.type,
-        num_warps=num_warps,
-    )
+    tmem_reg_layout: ttgl.constexpr = tmem.get_reg_layout()
 
     # Store input to TMEM
     input_data = ttgl.convert_layout(input_data, tmem_reg_layout)

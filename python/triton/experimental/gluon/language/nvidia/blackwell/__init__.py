@@ -23,7 +23,6 @@ __all__ = [
     "async_copy",
     "clc",
     "fence_async_shared",
-    "get_tmem_reg_layout",
     "mbarrier",
     "mma_v2",
     "tensor_memory_descriptor",
@@ -126,38 +125,14 @@ class _TensorMemoryLinearLayout:
         return hash((tuple(map(tuple, self.rows)), tuple(map(tuple, self.cols)), tuple(self.shape)))
 
 
-@constexpr_function
-def get_tmem_reg_layout(tmem_ty, num_warps, instr_variant="32x32b"):
-    """
-    Returns a DistributedLinearLayout compatible with TMEM load/store instructions.
-
-    Args:
-        tmem_ty (tensor_memory_descriptor_type): Type of the tensor memory descriptor.
-        num_warps (int): Number of warps participating in the operation.
-        instr_variant (str): TMEM instruction variant (e.g. ``\"32x32b\"``).
-    """
-
-    def _unwrap(x):
-        if isinstance(x, ttgl.constexpr):
-            return _unwrap(x.value)
-        if isinstance(x, list):
-            return [_unwrap(i) for i in x]
-        if isinstance(x, tuple):
-            return tuple(_unwrap(i) for i in x)
-        return x
-
-    tmem_ty = _unwrap(tmem_ty)
-    if not isinstance(tmem_ty, tensor_memory_descriptor_type):
-        raise TypeError(f"expected a tensor_memory_descriptor_type but got {type(tmem_ty)!r}")
-
-    return _compute_tmem_reg_layout(
-        _unwrap(tmem_ty.element_ty),
-        _unwrap(tmem_ty.shape),
-        _unwrap(tmem_ty.alloc_shape),
-        _unwrap(tmem_ty.layout),
-        _unwrap(num_warps),
-        _unwrap(instr_variant),
-    )
+def _unwrap_tmem_layout_arg(x):
+    if isinstance(x, ttgl.constexpr):
+        return _unwrap_tmem_layout_arg(x.value)
+    if isinstance(x, list):
+        return [_unwrap_tmem_layout_arg(i) for i in x]
+    if isinstance(x, tuple):
+        return tuple(_unwrap_tmem_layout_arg(i) for i in x)
+    return x
 
 
 class tensor_memory_descriptor_type(base_type):
@@ -198,6 +173,36 @@ class tensor_memory_descriptor_type(base_type):
         shape_str = "_".join([str(s) for s in self.shape])
         return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{self.alloc_shape}ASMD"
 
+    @constexpr_function
+    def get_reg_layout(self, num_warps=None, instr_variant="32x32b"):
+        """
+        Return a DistributedLinearLayout compatible with TMEM load/store
+        instructions for this descriptor type.
+
+        Args:
+            num_warps (Optional[int]): Number of warps participating in the
+                operation. Must be provided when it cannot be inferred by the
+                caller.
+            instr_variant (str): TMEM instruction variant (e.g. ``"32x32b"``).
+        """
+        tmem_ty = _unwrap_tmem_layout_arg(self)
+        if not isinstance(tmem_ty, tensor_memory_descriptor_type):
+            raise TypeError(f"expected a tensor_memory_descriptor_type but got {type(tmem_ty)!r}")
+        num_warps = _unwrap_tmem_layout_arg(num_warps)
+        if num_warps is None:
+            raise ValueError("num_warps could not be inferred; pass a positive power of two")
+        if not isinstance(num_warps, int) or num_warps <= 0 or (num_warps & (num_warps - 1)) != 0:
+            raise ValueError(f"num_warps must be a positive power of two, got {num_warps!r}")
+
+        return _compute_tmem_reg_layout(
+            _unwrap_tmem_layout_arg(tmem_ty.element_ty),
+            _unwrap_tmem_layout_arg(tmem_ty.shape),
+            _unwrap_tmem_layout_arg(tmem_ty.alloc_shape),
+            _unwrap_tmem_layout_arg(tmem_ty.layout),
+            num_warps,
+            _unwrap_tmem_layout_arg(instr_variant),
+        )
+
 
 class tensor_memory_descriptor(base_value):
     """
@@ -234,6 +239,25 @@ class tensor_memory_descriptor(base_value):
         return str(self.type)
 
     @builtin
+    def get_reg_layout(self, num_warps=None, instr_variant="32x32b", _semantic: GluonSemantic = None, _generator=None):
+        """
+        Return the register layout used to access this tensor memory descriptor.
+
+        Args:
+            num_warps (Optional[int]): Number of warps participating in the
+                operation. When omitted, infer it from the caller's context.
+            instr_variant (str): TMEM instruction variant. Defaults to
+                ``"32x32b"``.
+
+        Returns:
+            DistributedLayout: A register layout compatible with TMEM
+            load/store instructions for this descriptor.
+        """
+        if num_warps is None:
+            num_warps = ttgl.num_warps(_semantic=_semantic, _generator=_generator)
+        return self.type.get_reg_layout(num_warps=num_warps, instr_variant=instr_variant)
+
+    @builtin
     def load(self, layout=None, _semantic: GluonSemantic = None, _generator=None) -> ttgl.tensor:
         """
         Load a tensor from tensor memory.
@@ -246,22 +270,21 @@ class tensor_memory_descriptor(base_value):
         Returns:
             tensor: A distributed tensor containing the loaded data.
         """
-        layout = self._get_load_layout(layout, _semantic, _generator)
+        if layout is None:
+            layout = self.get_reg_layout(_semantic=_semantic, _generator=_generator)
+        layout = _unwrap_if_constexpr(layout)
         ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
         builder = _semantic.builder
         handle = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle)
         return ttgl.tensor(handle, ret_ty)
 
-    def _get_load_layout(self, layout, _semantic: GluonSemantic, _generator):
-        if layout is None:
-            layout = get_tmem_reg_layout(self.type, ttgl.num_warps(_semantic=_semantic, _generator=_generator))
-        return _unwrap_if_constexpr(layout)
-
     def _load_red(self, layout, red_op, abs, propagate_nan, _semantic: GluonSemantic, _generator=None):
         #   red_op: MIN/MAX reduction operation
         #   abs (bool): If True, reduce absolute values.
         #   propagate_nan (NONE): If ALL, propagate NaN in specified reduction operation.
-        layout = self._get_load_layout(layout, _semantic, _generator)
+        if layout is None:
+            layout = self.get_reg_layout(_semantic=_semantic, _generator=_generator)
+        layout = _unwrap_if_constexpr(layout)
         abs_flag = _unwrap_if_constexpr(abs)
         propagate_nan = _unwrap_if_constexpr(propagate_nan)
 

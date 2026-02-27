@@ -14,7 +14,6 @@ from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
-    get_tmem_reg_layout,
     tensor_memory_descriptor,
     tensor_memory_descriptor_type,
     tma,
@@ -254,8 +253,9 @@ class AttentionConfig:
             self.o_shape,
         )
 
-        self.qk_layout = gl.constexpr(get_tmem_reg_layout(qk_tmem_ty, self.num_warps, instr_variant="32x32b_splitn"))
-        self.o_splitn_layout = gl.constexpr(get_tmem_reg_layout(o_splitn_tmem_ty, self.num_warps))
+        self.qk_layout = gl.constexpr(qk_tmem_ty.get_reg_layout(num_warps=self.num_warps,
+                                                                instr_variant="32x32b_splitn"))
+        self.o_splitn_layout = gl.constexpr(o_splitn_tmem_ty.get_reg_layout(num_warps=self.num_warps))
         self.alpha_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1]))
 
         is_fp16 = self.dtype.value in [gl.float16, gl.bfloat16]
