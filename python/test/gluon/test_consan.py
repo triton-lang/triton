@@ -1620,7 +1620,6 @@ def test_barrier_reinit_requires_invalidate(WITH_INVALIDATE, device, run_wrapper
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(WITH_INVALIDATE: ttgl.constexpr):
@@ -1645,7 +1644,6 @@ def test_barrier_use_without_init(USE_KIND, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(USE_KIND: ttgl.constexpr):
@@ -1673,7 +1671,6 @@ def test_barrier_use_after_invalidate(USE_KIND, device, run_wrapper, monkeypatch
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(USE_KIND: ttgl.constexpr):
