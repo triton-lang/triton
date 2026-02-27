@@ -1,7 +1,6 @@
 import os
 import torch
 import pytest
-import triton
 from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -12,7 +11,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_
 from triton._internal_testing import is_cuda
 import multiprocessing
 import tempfile
-from typing import Optional
 
 try:
     multiprocessing.set_start_method("spawn")
@@ -86,14 +84,7 @@ def failing_kernel(input):
     ampere.async_copy.wait_group(0)
 
 
-def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-    return torch.empty(size, device="cuda", dtype=torch.int8)
-
-
 def run_failing_kernel(device, enable_consan, mode):
-    # ConSan requires a global memory allocation
-    triton.set_allocator(alloc_fn)
-
     if enable_consan:
         if mode == "env":
             os.environ["TRITON_INSTRUMENTATION_MODE"] = "consan"
@@ -127,6 +118,17 @@ def test_cache_miss_env(device, monkeypatch):
     assert "device-side assert" in str(result.exc)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+def test_consan_uses_profile_scratch(device, fresh_knobs):
+    with knobs.cache.scope(), knobs.runtime.scope():
+        knobs.cache.dir = tempfile.mkdtemp(prefix="triton-cache-")
+        fresh_knobs.compilation.instrumentation_mode = "consan"
+        input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+        compiled = failing_kernel.warmup(input, grid=(1, ))
+        assert compiled.metadata.profile_scratch_size > 0
+        assert compiled.metadata.global_scratch_size == 0
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch):
@@ -140,7 +142,6 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(input_desc, out, FAILURE: ttgl.constexpr):
@@ -182,7 +183,6 @@ def test_async_tma_kernel_2bufs_1bar(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(a_desc, b_desc, out, FAILURE: ttgl.constexpr):
@@ -232,7 +232,6 @@ def test_tma_interleave_kernel(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(input_desc, out, FAILURE: ttgl.constexpr):
@@ -287,7 +286,6 @@ def test_async_copy(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(input, FAILURE: ttgl.constexpr):
@@ -329,7 +327,6 @@ def test_tma_store(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(output_desc, FAILURE: ttgl.constexpr):
@@ -374,7 +371,6 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(input_desc, FAILURE: ttgl.constexpr, MEM_ACCESS_KIND: ttgl.constexpr):
@@ -434,7 +430,6 @@ def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(input, FAILURE: ttgl.constexpr):
@@ -474,7 +469,6 @@ def test_warpgroup_mma2(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(input, FAILURE: ttgl.constexpr):
@@ -518,7 +512,6 @@ def test_tcgen5_mma_multibar(BUF_IDX, BAR_IDX, device, run_wrapper, monkeypatch)
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(input_desc, BUF_IDX: ttgl.constexpr, BAR_IDX: ttgl.constexpr):
@@ -572,7 +565,6 @@ def test_multibuffered_loop(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(input_desc, FAILURE: ttgl.constexpr):
@@ -682,7 +674,6 @@ def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel(input_desc, FAILURE: ttgl.constexpr):
@@ -758,7 +749,6 @@ def test_ws_store_wait_load(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
@@ -809,7 +799,6 @@ def test_ws_load_wait_store(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
@@ -860,7 +849,6 @@ def test_ws_two_loads_two_bars(MISSING_BAR, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(smem, bar, MISSING_BAR: ttgl.constexpr, layout: ttgl.constexpr):
@@ -921,7 +909,6 @@ def test_ws_two_loads_one_bar(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
@@ -982,7 +969,6 @@ def test_ws_two_loads_two_bars_loop(MISSING_BAR, device, run_wrapper, monkeypatc
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(smem, bar, MISSING_BAR: ttgl.constexpr, layout: ttgl.constexpr):
@@ -1061,7 +1047,6 @@ def test_ws_load_ordering(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
@@ -1123,7 +1108,6 @@ def test_ws_two_producers_two_consumers(MISSING_BAR, device, run_wrapper, monkey
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(smem, bar, MISSING_BAR: ttgl.constexpr, layout: ttgl.constexpr):
@@ -1210,7 +1194,6 @@ def test_ws_different_warp_sizes(MISSING_BAR, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(smem, bar, MISSING_BAR: ttgl.constexpr):
@@ -1278,7 +1261,6 @@ def test_ws_async_copy_commits(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_prog(input, smem, FAILURE: ttgl.constexpr, blocked_layout: ttgl.constexpr, BASE: ttgl.constexpr):
@@ -1340,7 +1322,6 @@ def test_ws_async_copy_wait_visibility(FAILURE, device, run_wrapper, monkeypatch
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(input, smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
@@ -1391,7 +1372,6 @@ def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(smem, bar, FAILURE: ttgl.constexpr, blocked_layout: ttgl.constexpr, mma_layout: ttgl.constexpr):
@@ -1439,8 +1419,6 @@ def test_deadlock_two_partitions(device, run_wrapper, monkeypatch):
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
 
-    triton.set_allocator(alloc_fn)
-
     @gluon.jit
     def ws_default(bar):
         mbarrier.wait(bar.index(0), phase=0)
@@ -1472,7 +1450,6 @@ def test_deadlock_overarrival(device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def kernel():
@@ -1497,7 +1474,6 @@ def test_deadlock_underarrival(device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(bar):
@@ -1532,7 +1508,6 @@ def test_deadlock_different_phases(device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(bar):
@@ -1566,7 +1541,6 @@ def test_deadlock_exempt_when_tma_signals(device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(input_desc, smem, bar):
@@ -1608,7 +1582,6 @@ def test_barrier_underflow(device, run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def ws_default(bar):
@@ -1735,7 +1708,6 @@ def test_aliasing_shared_visibility_outstanding_write(MISSING_BAR, OVERLAP, devi
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def writer(alias0: ttgl.constexpr, bar: ttgl.constexpr, OVERLAP: ttgl.constexpr, blocked_layout: ttgl.constexpr):
@@ -1787,7 +1759,6 @@ def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrappe
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def reader(alias0: ttgl.constexpr, smem: ttgl.constexpr, blocked_layout_read: ttgl.constexpr, bar: ttgl.constexpr):
@@ -1842,7 +1813,6 @@ def test_aliasing_commit_tracking(MISSING_WAIT, OVERLAP, device, run_wrapper, mo
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     @gluon.jit
     def producer(input, alias0, bar, MISSING_WAIT: ttgl.constexpr, OVERLAP: ttgl.constexpr,
@@ -1913,7 +1883,6 @@ def test_mma_read_async_copy_write(run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 128
     A = torch.randn((BLOCK_M, BLOCK_K), device="cuda", dtype=torch.float16)
@@ -1960,7 +1929,6 @@ def test_mma_read_local_alloc_write(run_wrapper, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
-    triton.set_allocator(alloc_fn)
 
     K = 512
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 64

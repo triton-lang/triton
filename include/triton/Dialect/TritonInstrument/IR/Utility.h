@@ -8,6 +8,10 @@
 
 #include <array>
 
+namespace mlir::triton::gpu {
+class GlobalScratchAllocOp;
+}
+
 namespace mlir::triton::instrument {
 class FunctionBuilder;
 
@@ -29,6 +33,9 @@ Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType);
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                               RankedTensorType tensorType);
+gpu::GlobalScratchAllocOp
+createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
+                             int64_t sizeInBytes, int64_t alignment);
 Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor);
 RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,
                                   unsigned bitWidth);
