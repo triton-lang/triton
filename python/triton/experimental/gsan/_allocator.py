@@ -29,7 +29,8 @@ def _load_gsan_module() -> ModuleType:
 
 @functools.lru_cache()
 def _compile_gsan_allocator() -> str:
-    return str(_load_gsan_module().__file__)
+    # __file__ for a compiled module is the so file
+    return _load_gsan_module().__file__
 
 
 @functools.lru_cache()

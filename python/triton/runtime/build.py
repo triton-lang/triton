@@ -114,18 +114,26 @@ def _load_module_from_path(name: str, path: str) -> ModuleType:
     return mod
 
 
-def _get_cache_manager(src: bytes, language: str):
+def _get_cache_manager(src: bytes, config: dict[str, list[str] | None]):
     digest = hashlib.sha256()
     digest.update(src)
     digest.update(platform_key().encode("utf-8"))
-    digest.update(language.encode("utf-8"))
+    for k, vs in config.items():
+        if vs is None:
+            continue
+        digest.update(k.encode("utf-8"))
+        for v in vs:
+            digest.update(v.encode("utf-8"))
+            digest.update(b":")
     key = digest.hexdigest()
     return get_cache_manager(key)
 
 
 def _compile_so(src: bytes, src_path: str, name: str, library_dirs: list[str] | None, include_dirs: list[str] | None,
                 libraries: list[str] | None, ccflags: list[str] | None, load_module: bool, language: str):
-    cache = _get_cache_manager(src, language)
+    config = dict(language=[language], library_dirs=library_dirs, include_dirs=include_dirs, libraries=libraries,
+                  ccflags=ccflags)
+    cache = _get_cache_manager(src, config=config)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
     cache_path = cache.get_file(f"{name}{suffix}")
     if cache_path is not None:

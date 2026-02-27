@@ -3,12 +3,14 @@
 
 #include <algorithm>
 #include <cassert>
+#include <charconv>
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <random>
 
 #include "GSan.h"
 
@@ -50,14 +52,15 @@ struct AllocNode {
   // Allocation handles, used only by leaf nodes
   CUmemGenericAllocationHandle realHandle = 0;
   CUmemGenericAllocationHandle shadowHandle = 0;
+  size_t allocSize = 0;
 };
 
 struct GSanConfig {
-  int numGPUs = 4;
-  int numSMs = 152;
-  int numThreads = 4 * 152;
-  int clockBufferSize = 1024;
-  uint32_t rngSeed = 0x12345678u;
+  int numGPUs;
+  int numSMs;
+  int numThreads;
+  int clockBufferSize;
+  uint32_t rngSeed;
 };
 
 struct AllocatorState {
@@ -88,20 +91,22 @@ size_t roundUp(size_t val, size_t alignment) {
   return cdiv(val, alignment) * alignment;
 }
 
-size_t roundUpToPowerOfTwo(size_t value) {
-  if (value <= 1)
-    return 1;
-  if ((value & (value - 1)) == 0)
-    return value;
-  size_t rounded = 1;
-  while (rounded < value)
-    rounded <<= 1;
-  return rounded;
+uint32_t roundDownToPowerOfTwo(uint32_t x) {
+  if (x == 0)
+    return 0;
+
+  x |= x >> 1;
+  x |= x >> 2;
+  x |= x >> 4;
+  x |= x >> 8;
+  x |= x >> 16;
+
+  return x - (x >> 1);
 }
 
 size_t getShadowSize(size_t realMemSize) {
   auto wordSize = cdiv(realMemSize, gsan::kShadowMemGranularityBytes);
-  return wordSize * gsan::kShadowSizeBytes;
+  return wordSize * sizeof(gsan::ShadowCell);
 }
 
 bool isLeaf(const AllocNode *node) {
@@ -232,6 +237,7 @@ void coalesceUp(AllocNode *node) {
 
 void freeNode(AllocNode *leaf) {
   assert(isLeaf(leaf));
+  leaf->allocSize = 0;
   leaf->realHandle = 0;
   leaf->shadowHandle = 0;
   leaf->maxFreeBlockSize = leaf->size;
@@ -265,8 +271,16 @@ int gsanEnsureInit() {
 
   auto *root = &alloc->treeRoot;
   root->virtualAddress = gsan::getRealBaseAddress(reserveBase);
-  root->size = gsan::kReserveSize / 2;
-  root->maxFreeBlockSize = root->size;
+
+  // Choose size so that both shadow memory and real memory definitely fit in
+  // the address reservation
+  auto shadowSize = gsan::kReserveSize / 2;
+  auto realSize = gsan::kShadowMemGranularityBytes *
+                  (shadowSize / sizeof(gsan::ShadowCell));
+  realSize = std::min(gsan::kReserveSize / 2, realSize);
+  realSize = roundDownToPowerOfTwo(realSize);
+  root->size = realSize;
+  root->maxFreeBlockSize = realSize;
   return 0;
 }
 
@@ -313,14 +327,41 @@ CUresult refreshConfigForDevice(int device) {
     return CUDA_ERROR_INVALID_VALUE;
 
   auto &config = alloc->config;
-  // Triton may execute more than one instrumented launch on a kernel's first
-  // user-visible invocation (e.g. compile/warmup paths). Using 3 slots avoids
-  // aliasing back to the same logical thread ID when two launches occur.
-  constexpr int kGSanThreadSlotsPerDeviceThread = 3;
   config.numGPUs = numGPUs;
   config.numSMs = numSMs;
-  config.numThreads =
-      kGSanThreadSlotsPerDeviceThread * config.numGPUs * config.numSMs;
+  config.numThreads = config.numGPUs * config.numSMs;
+
+  // Seed rng for stochastic read clocks
+  auto userSeed = getenv("TRITON_GSAN_SEED");
+  if (userSeed) {
+    auto res =
+        std::from_chars(userSeed, userSeed + strlen(userSeed), config.rngSeed);
+    if (res.ec != std::errc()) {
+      auto errc = make_error_code(res.ec);
+      auto msg = errc.message();
+      fprintf(stderr, "Invalid TRITON_GSAN_SEED value: %s", msg.c_str());
+      return CUDA_ERROR_INVALID_VALUE;
+    }
+  } else {
+    std::uniform_int_distribution<uint32_t> dist;
+    std::random_device rd{};
+    config.rngSeed = dist(rd);
+  }
+
+  auto userClockSize = getenv("TRITON_GSAN_CLOCK_BUFFER_SIZE");
+  if (userClockSize) {
+    auto res =
+        std::from_chars(userSeed, userSeed + strlen(userSeed), config.rngSeed);
+    if (res.ec != std::errc()) {
+      auto errc = make_error_code(res.ec);
+      auto msg = errc.message();
+      fprintf(stderr, "Invalid TRITON_CLOCK_BUFFER_SIZE value: %s",
+              msg.c_str());
+      return CUDA_ERROR_INVALID_VALUE;
+    }
+  } else {
+    config.clockBufferSize = 1024;
+  }
   return CUDA_SUCCESS;
 }
 
@@ -354,15 +395,14 @@ CUresult ensureRuntimeStateMapped(int device) {
   auto clockSizeBytes = sizeof(gsan::epoch_t) * config.numThreads;
   // 1 local clock + the circular clock buffer
   auto clocksPerThread = 1 + config.clockBufferSize;
-  auto perDeviceStateSize = (
-      // Each device has a local copy of the constant global state
-      sizeof(gsan::GlobalState) +
-      // Plus per-thread state for each SM
-      config.numSMs *
-          (sizeof(gsan::ThreadState) + clockSizeBytes * clocksPerThread));
-  assert(perDeviceStateSize <= gsan::kPerDeviceStateStride);
-
+  auto perSMStateSize =
+      sizeof(gsan::ThreadState) + clockSizeBytes * clocksPerThread;
+  perSMStateSize = roundUp(perSMStateSize, alignof(gsan::ThreadState));
+  // Each device has a local copy of the constant global state
+  auto perDeviceStateSize =
+      (sizeof(gsan::GlobalState) + config.numSMs * perSMStateSize);
   size_t allocSize = roundUp(perDeviceStateSize, granularity);
+  assert(allocSize <= gsan::kPerDeviceStateStride);
 
   CUmemGenericAllocationHandle allocHandle = 0;
   bool mapped = false;
@@ -507,7 +547,7 @@ extern "C" void *gsanMalloc(ssize_t size, int device,
   auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
   auto shadowSize = getShadowSize(allocSize);
 
-  err = cuMemCreate(&realHandle, node->size, &prop, 0);
+  err = cuMemCreate(&realHandle, allocSize, &prop, 0);
   if (err != CUDA_SUCCESS)
     goto error;
 
@@ -525,6 +565,7 @@ extern "C" void *gsanMalloc(ssize_t size, int device,
   if (err != CUDA_SUCCESS)
     goto error;
 
+  node->allocSize = allocSize;
   node->realHandle = realHandle;
   node->shadowHandle = shadowHandle;
   LOGF("gsanMalloc: %p, 0x%zxu", reinterpret_cast<void *>(node->virtualAddress),
@@ -562,9 +603,9 @@ extern "C" void gsanFree(void *void_ptr, [[maybe_unused]] ssize_t size,
   }
 
   const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
-  const auto shadowSize = getShadowSize(node->size);
+  const auto shadowSize = getShadowSize(node->allocSize);
 
-  CUresult err = cuMemUnmap(node->virtualAddress, node->size);
+  CUresult err = cuMemUnmap(node->virtualAddress, node->allocSize);
   if (err != CUDA_SUCCESS)
     printCUDAError(err);
 
@@ -612,8 +653,8 @@ bool parseVoidPtrArg(PyObject *obj, void **out) {
   return !(*out == nullptr && PyErr_Occurred());
 }
 
-PyObject *pyMalloc(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
-  (void)self;
+PyObject *pyMalloc([[maybe_unused]] PyObject *self, PyObject *const *args,
+                   Py_ssize_t nargs) {
   if (nargs != 2 && nargs != 3) {
     PyErr_Format(PyExc_TypeError,
                  "%s.malloc expected 2 or 3 positional arguments, got %zd",
@@ -636,8 +677,8 @@ PyObject *pyMalloc(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
   return PyLong_FromVoidPtr(gsanMalloc(size, device, stream));
 }
 
-PyObject *pyFree(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
-  (void)self;
+PyObject *pyFree([[maybe_unused]] PyObject *self, PyObject *const *args,
+                 Py_ssize_t nargs) {
   if (nargs < 2 || nargs > 4) {
     PyErr_Format(
         PyExc_TypeError,
@@ -669,9 +710,8 @@ PyObject *pyFree(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
   Py_RETURN_NONE;
 }
 
-PyObject *pyGetReservePointer(PyObject *self, PyObject *const *args,
-                              Py_ssize_t nargs) {
-  (void)self;
+PyObject *pyGetReservePointer([[maybe_unused]] PyObject *self,
+                              PyObject *const *args, Py_ssize_t nargs) {
   if (nargs != 0) {
     PyErr_Format(
         PyExc_TypeError,
@@ -690,8 +730,8 @@ PyObject *pyGetShadowSizeBytes(PyObject *self, PyObject *args) {
   return PyLong_FromLong(sizeof(gsan::ShadowCell));
 }
 
-PyObject *pyGetGlobalStatePointer(PyObject *self, PyObject *args) {
-  (void)self;
+PyObject *pyGetGlobalStatePointer([[maybe_unused]] PyObject *self,
+                                  PyObject *args) {
   std::lock_guard lg(mut);
   if (gsanEnsureInit() != 0) {
     PyErr_SetString(PyExc_RuntimeError, "failed to initialize gsan allocator");

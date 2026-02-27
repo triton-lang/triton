@@ -47,8 +47,6 @@ struct alignas(4) ShadowCell {
 static_assert(sizeof(ShadowCell) == 24);
 static_assert(alignof(ShadowCell) == 4);
 
-static constexpr int kShadowSizeBytes = sizeof(ShadowCell);
-
 struct GlobalState {
   // Base address of gsan managed memory
   uintptr_t reserveBase;
@@ -112,7 +110,7 @@ inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress) {
   auto realBase = getRealBaseAddress(reserveBase);
   auto byteOffset = virtualAddress - realBase;
   auto wordOffset = byteOffset / kShadowMemGranularityBytes;
-  return reserveBase + kShadowSizeBytes * wordOffset;
+  return reserveBase + sizeof(ShadowCell) * wordOffset;
 }
 
 inline GSAN_HOST_DEVICE bool isGsanManaged(uintptr_t addr,
