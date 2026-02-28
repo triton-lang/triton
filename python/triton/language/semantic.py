@@ -258,6 +258,9 @@ class TritonSemantic(Generic[TensorTy]):
             return self.tensor(self.builder.create_add(input.handle, other.handle), input.type)
         raise TypeError(f"unexpected type {input_scalar_ty}")
 
+    def getBuilder(self):
+        return self.builder
+
     def sub(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number,
             sanitize_overflow: bool) -> TensorTy:
         input, other = self.binary_op_type_checking_impl(input, other, True, False)
