@@ -54,21 +54,15 @@ Because the second `tcgen05_copy` will only execute after the preceeding
 `tcgen05_commit` are all implicitly pipelined and executed in order.
 
 `tcgen05_copy` accesses shared memory via the async proxy, just like `tcgen05_mma`.
-Make sure to insert fences as appropriate:
 
 ```python
 lhs_smem.store(value1)
-fence_async_shared()
 tcgen05_copy(lhs_smem, lhs_tmem)
 tcgen05_commit(bar)
 
 mbarrier.wait(bar, phase=phase)
 lhs_smem.store(value0)
 ```
-
-Note that a fence is not needed between `tcgen05_copy` and the second write to
-`lhs_smem` because waiting on the completion of the `tcgen05_copy` operation
-via the mbarrier implicitly fences the generic and async proxies.
 
 What makes using `tcgen05_copy` particularly tricky is selecting the right
 shared memory and tensor memory layouts, as `tcgen05_copy` only supports a
@@ -88,7 +82,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     tensor_memory_descriptor,
     allocate_tensor_memory,
-    fence_async_shared,
     tcgen05_copy,
     tcgen05_commit,
     tcgen05_mma,
@@ -132,8 +125,6 @@ def tcgen05_copy_kernel(in_ptr, in_stride0, in_stride1, out_ptr, out_stride0, ou
 
     # Copy data from shared memory to tensor memory.
     smem.store(input)
-    # Fence generic and async proxies
-    fence_async_shared()
     # Issue the async copy
     tcgen05_copy(smem, tmem)
     # Track completion of the async copy

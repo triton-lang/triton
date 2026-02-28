@@ -14,7 +14,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_mma,
     tensor_memory_descriptor,
 )
-from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared, mbarrier, tma
+from triton.experimental.gluon.language.nvidia.hopper import mbarrier, tma
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.language.core import _aggregate as aggregate
 
@@ -413,7 +413,6 @@ def matmul_epilogue_partition(p):
             acc = acc_sub.load().to(dtype)
             tma.store_wait(pendings=1)
             acc_smem.store(acc)
-            fence_async_shared()
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_TILE_N * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
         # Signal that the accumulator slot can be reused only after all stores are done.

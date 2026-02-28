@@ -22,7 +22,6 @@ from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.hopper import (
     tma,
     mbarrier,
-    fence_async_shared,
     warpgroup_mma_init,
     warpgroup_mma,
     warpgroup_mma_wait,
@@ -86,18 +85,12 @@ if __name__ == "__main__" and not is_hopper():
 #
 # Because warpgroup_mma is an asynchronous, until the operation is complete,
 # we cannot access the result even though it is in registers, and we cannot
-# write to any of the shared memory inputs. WGMMA accesses shared memory through
-# the async proxy. Since TMAs also access shared memory through the async proxy,
-# we don't need fences between TMA and WGMMA instructions.
+# write to any of the shared memory inputs.
 #
 # ```python
 # b_smem.store(b)
-# fence_async_shared()
 # warpgroup_mma(a, b_smem, c, is_async=True)
 # ```
-#
-# A fence is needed between the shared store and warpgroup_mma to order their
-# shared memory accesses.
 #
 # Completion of the WGMMA implies its reads from shared memory are complete.
 # Thus, it is safe to write to the shared memory inputs after waiting:
@@ -196,7 +189,6 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
 
     d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)
     d_smem.store(d)
-    fence_async_shared()
     tma.async_copy_shared_to_global(d_desc, [0, 0], d_smem)
     tma.store_wait(pendings=0)
 
@@ -375,7 +367,6 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     # Downcast accumulator and store tile of C.
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
     c_smem.store(acc.to(dtype))
-    fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
 
@@ -574,7 +565,6 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
 
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
     c_smem.store(acc.to(dtype))
-    fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
 

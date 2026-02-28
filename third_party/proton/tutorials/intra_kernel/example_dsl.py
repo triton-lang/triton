@@ -12,7 +12,6 @@ import triton.profiler.language as pl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.hopper import (
-    fence_async_shared,
     mbarrier,
     tma,
     warpgroup_mma,
@@ -263,7 +262,6 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
 
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
     c_smem.store(acc.to(dtype))
-    fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
 
