@@ -1,0 +1,106 @@
+import torch
+
+import triton
+import triton.language as tl
+from triton._C.libtriton import ir
+from triton.language.core import builtin
+from typing import TypeVar, Type
+import builtins
+import os
+from triton import knobs
+import pathlib
+import hashlib
+import importlib
+import inspect
+import sys
+import textwrap
+from triton.compiler.code_generator import flatten_values_to_ir
+
+T = TypeVar('T')
+TensorTy = TypeVar('TensorTy')
+
+triton.language.__all__.append("custom_op")
+tensor: Type[TensorTy] = tl.tensor
+builder: ir.builder
+
+TRITON_BUILTIN = "__triton_builtin__"
+
+
+def _unwrap_if_constexpr(o):
+    if isinstance(o, list):
+        return [_unwrap_if_constexpr(x) for x in o]
+    if isinstance(o, builtins.tuple):
+        return builtins.tuple(_unwrap_if_constexpr(x) for x in o)
+    if isinstance(o, tuple):
+        return tuple(_unwrap_if_constexpr(x) for x in o)
+    return o.value if isinstance(o, tl.constexpr) else o
+
+
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
+
+def get_key():
+    return pathlib.Path(__file__).read_text()
+
+
+def get_hash():
+    return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
+
+
+def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
+    if all(arg is None for arg in (stages, options, language, capability)):
+        return get_key(), get_hash()
+    module_name = 'dynamic_module'
+    spec = importlib.util.spec_from_loader(module_name, loader=None)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    stage_src = textwrap.dedent(inspect.getsource(self.make_ttir))
+    stage_src = 'from triton._C.libtriton import ir, passes, llvm, amd, nvidia\n' + stage_src
+    # Inject plugin pass right after loop unroll in the dynamically loaded stage source
+    stage_src = stage_src.replace(
+        "    pm = ir.pass_manager(mod.context)", "    pm = ir.pass_manager(mod.context)\n"
+        "    passes.plugin.plugingpu_farith_conversion(pm, [ str(opt.num_warps), '32', str(opt.num_ctas) ])\n")
+    exec(stage_src, module.__dict__)
+    make_lambda = lambda f: lambda src, metadata: f(src, metadata, options, capability)
+    stages["ttir"] = make_lambda(module.make_ttir)
+    return get_key(), get_hash()
+
+
+@builtin
+def custom_op(x, sanitize_overflow: tl.constexpr = True, _semantic=None):
+    x = _unwrap_if_constexpr(x)
+    builder = _semantic.getBuilder()
+    arg_handles = []
+    arg_handles.extend(flatten_values_to_ir([x]))
+    return tl.tensor(builder.create_custom_op(arg_handles), x.type)
+
+
+@triton.jit
+def add_kernel(
+    x_ptr,
+    output_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    output = custom_op(x)
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+
+def test_custom_ops(tmp_path: pathlib.Path):
+    if os.environ.get('LLVM_BUILD_SHARED_LIBS', '0') == '0':
+        return
+    size = 8
+    x = torch.zeros(size, device=DEVICE, dtype=torch.float32)
+    output_triton = torch.empty_like(x)
+    n_elements = output_triton.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
+    h = add_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=32)
+
+    src = h.asm["source"]
+    assert "plugin.fmagic" in src

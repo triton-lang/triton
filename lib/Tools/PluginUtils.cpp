@@ -85,6 +85,22 @@ llvm::Error TritonPlugin::loadPlugin() {
     dialectPluginInfoAPI = *dialectPluginInfoAPIOrErr;
   }
 
+  if ((intptr_t)library.getAddressOfSymbol(ENUMERATE_CUSTOMOPS)) {
+    auto enumerateCustomOpAPIOrErr =
+        getAPI<EnumeratePyBindHandlesType, EnumeratePyBindHandlesCType>(
+            ENUMERATE_CUSTOMOPS);
+    auto addCustomOpAPIOrErr =
+        getAPI<AddCustomOpType, AddCustomOpCType>(ADD_CUSTOMOP);
+
+    if (auto Err = enumerateCustomOpAPIOrErr.takeError())
+      return Err;
+    if (auto Err = addCustomOpAPIOrErr.takeError())
+      return Err;
+
+    enumerateCustomOpAPI = *enumerateCustomOpAPIOrErr;
+    addCustomOpAPI = *addCustomOpAPIOrErr;
+  }
+
   isLoaded = true;
   return llvm::Error::success();
 }
@@ -141,17 +157,22 @@ TritonPlugin::getDialectHandles(std::vector<const char *> &dialectNames) {
 }
 
 llvm::Expected<TritonPluginResult>
-TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle) {
-  if (auto Err = loadPlugin())
-    return Err;
-  return checkAPIResult(addPassAPI(pm, passHandle), passHandle);
+TritonPlugin::getCustomOpHandles(std::vector<const char *> &customOpNames) {
+  return enumeratePyBindHandles(enumerateCustomOpAPI, customOpNames);
 }
 
 llvm::Expected<TritonPluginResult>
-TritonPlugin::registerPass(const char *passHandle) {
+TritonPlugin::addPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
   if (auto Err = loadPlugin())
     return Err;
-  return checkAPIResult(registerPassAPI(passHandle), passHandle);
+  return checkAPIResult(addPassAPI(pm, handle, args), handle);
+}
+
+llvm::Expected<TritonPluginResult>
+TritonPlugin::registerPass(TRITON_PLUGIN_PASS_ARGS) {
+  if (auto Err = loadPlugin())
+    return Err;
+  return checkAPIResult(registerPassAPI(handle, args), handle);
 }
 
 llvm::Expected<::mlir::DialectPluginLibraryInfo>
@@ -159,4 +180,12 @@ TritonPlugin::getDialectPluginInfo(const char *dialectName) {
   if (auto Err = loadPlugin())
     return Err;
   return dialectPluginInfoAPI(dialectName);
+}
+
+llvm::Expected<TritonPluginResult>
+TritonPlugin::addCustomOp(TRITON_PLUGIN_CUSTOM_OP_ARGS) {
+  if (auto Err = loadPlugin())
+    return Err;
+  addCustomOpAPI(handle, self, operands);
+  return TP_SUCCESS;
 }
