@@ -124,23 +124,26 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         return _summarize_statistics(ret, quantiles, return_mode)
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean",
+             fixed_warmup_rep_runs=False):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
 
     :param fn: Function to benchmark
     :type fn: Callable
-    :param warmup: Warmup time (in ms)
+    :param warmup: If fixed_warmup_rep_runs=False, warmup time (in ms); if True, number of warmup runs.
     :type warmup: int
-    :param rep: Repetition time (in ms)
+    :param rep: If fixed_warmup_rep_runs=False, repetition time (in ms); if True, number of repetition runs.
     :type rep: int
-    :param grad_to_none: Reset the gradient of the provided tensor to None
+    :param grad_to_none: Reset the gradient of the provided tensor to None.
     :type grad_to_none: torch.tensor, optional
     :param quantiles: Performance percentile to return in addition to the median.
     :type quantiles: list[float], optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :param fixed_warmup_rep_runs: If True, treat warmup and rep as run counts; if False, treat as time (ms).
+    :type fixed_warmup_rep_runs: bool
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
@@ -151,20 +154,31 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
 
     cache = runtime.driver.active.get_empty_cache_for_benchmark()
 
-    # Estimate the runtime of the function
-    start_event = di.Event(enable_timing=True)
-    end_event = di.Event(enable_timing=True)
-    start_event.record()
-    for _ in range(5):
-        runtime.driver.active.clear_cache(cache)
-        fn()
-    end_event.record()
-    di.synchronize()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
+    if not fixed_warmup_rep_runs:
+        # Estimate the runtime of the function
+        start_event = di.Event(enable_timing=True)
+        end_event = di.Event(enable_timing=True)
+        start_event.record()
+        for _ in range(5):
+            runtime.driver.active.clear_cache(cache)
+            fn()
+        end_event.record()
+        di.synchronize()
+        estimate_ms = start_event.elapsed_time(end_event) / 5
 
-    # compute number of warmup and repeat
-    n_warmup = max(1, int(warmup / estimate_ms))
-    n_repeat = max(1, int(rep / estimate_ms))
+        # Rewrite to avoid possible division by 0 issues with fast benchmarks
+        if estimate_ms == 0:
+            n_warmup = 250
+            n_repeat = 1000
+        else:
+            # compute number of warmup and repeat
+            n_warmup = max(1, int(warmup / estimate_ms))
+            n_repeat = max(1, int(rep / estimate_ms))
+    else:
+        # treat warmup and rep as run counts
+        n_warmup = max(1, warmup)
+        n_repeat = max(1, rep)
+
     start_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
     # Warm-up
