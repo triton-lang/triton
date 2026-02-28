@@ -175,7 +175,11 @@ LinearLayout zerosLike(const LinearLayout &layout) {
     }
   }
 
-  return LinearLayout(std::move(bases), layout.getOutDims(),
+  SmallVector<std::pair<StringAttr, int32_t>> outDims;
+  for (auto outDim : layout.getOutDimNames()) {
+    outDims.emplace_back(outDim, layout.getOutDimSize(outDim));
+  }
+  return LinearLayout(std::move(bases), std::move(outDims),
                       /*requireSurjective=*/false);
 }
 
@@ -270,10 +274,9 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
 std::pair<int64_t, ColumnAction>
 actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
                       uint64_t maskSpanOffsets) {
-  // General idea:
-  // We wan to swap an xor into an addition when computing the register offsets.
-  // We can do this if the output bits of this register are disjoint from those
-  // from lanes/warps/blocks or any affine offset (i.e., markSpanOffsets).
+  // We are looking to put at the front (after any zeros) any basis that does
+  // not intersect with any bit moved by any basis in kLane / kWarp
+  // and that is not moved by any affine offset
 
   // Note this function assumes that if any registers are used in the addrLayout
   // of the layout (as in ldmatrix/stmatrix) they will be the first non-zero
@@ -281,18 +284,19 @@ actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
   assert(layout.getNumInDims() != 0);
   auto kReg = *layout.getInDimNames().begin();
   assert(kReg.str() == "register");
+  auto kLane = StringAttr::get(kReg.getContext(), "lane");
+  auto kWarp = StringAttr::get(kReg.getContext(), "warp");
+  assert(layout.getNumOutDims() == 1);
   uint32_t bits = maskSpanOffsets;
   llvm::SetVector<uint32_t> tileBases;
-  auto addrNamedBases = addrLayout.flattenOuts().getBases();
-  for (auto bases : llvm::make_second_range(addrNamedBases)) {
+  for (auto bases : llvm::make_second_range(addrLayout.getBases())) {
     for (auto basis : bases) {
       bits |= basis[0];
       tileBases.insert(basis[0]);
     }
   }
   SmallVector<size_t> front, back;
-  auto layoutNamedBases = layout.flattenOuts().getBases();
-  for (auto [idx, basis] : llvm::enumerate(layoutNamedBases.lookup(kReg))) {
+  for (auto [idx, basis] : llvm::enumerate(layout.getBases().lookup(kReg))) {
     if ((basis[0] & bits) == 0 || tileBases.contains(basis[0])) {
       front.push_back(idx);
     } else {

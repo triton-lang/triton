@@ -419,8 +419,8 @@ protected:
 // Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
-bool isCvtDimSync(const triton::LinearLayout &srcLayout,
-                  const triton::LinearLayout &dstLayout, StringAttr dim);
+bool isCvtWarpSync(const triton::LinearLayout &srcLayout,
+                   const triton::LinearLayout &dstLayout);
 
 } // namespace mlir
 

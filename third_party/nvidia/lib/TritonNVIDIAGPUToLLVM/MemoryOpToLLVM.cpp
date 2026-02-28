@@ -52,7 +52,6 @@ LogicalResult lowerLdStMatrix(
   auto memLayout = toLinearLayout(memDescType);
   auto cvt = regLayout.invertAndCompose(memLayout);
   auto kBlock = StringAttr::get(loc.getContext(), "block");
-  // ldmatrix/stmatrix does not support shared::cluster
   auto maybeSublayout = cvt.quotient({kBlock});
   if (!maybeSublayout) {
     return failure();

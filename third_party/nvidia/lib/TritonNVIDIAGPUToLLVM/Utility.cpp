@@ -209,6 +209,7 @@ LogicalResult lowerLdStMatrix(
   auto kReg = S("register");
   auto kLane = S("lane");
   auto kWarp = S("warp");
+  auto kBlock = S("block");
   auto kOffset = S("offset");
   auto kAddr = S("addr");
   auto smemPtrTy = ptr_ty(ctx, 3);
@@ -218,6 +219,9 @@ LogicalResult lowerLdStMatrix(
   if ((!transpose && bitwidth > 32) ||
       (transpose && !(bitwidth == 16 ||
                       (bitwidth == 8 && targetInfo.supportLdStMatrixB8()))))
+    return failure();
+  // Inter block stmatrix is not supported
+  if (cvt.hasInDim(kBlock))
     return failure();
 
   // Map onto offsets (contiguous part) and addr (non-contiguous part)

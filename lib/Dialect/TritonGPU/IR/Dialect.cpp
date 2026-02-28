@@ -252,30 +252,18 @@ CGAEncodingAttr getCGALayout(Attribute layout) {
 }
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
-  // A generic linear encoding may not have a CGA layout
-  // as having a CGA layout implies being of the form cta_layout * cga_layout
-  if (auto linearLayout = mlir::dyn_cast<LinearEncodingAttr>(layout)) {
-    return linearLayout.basesPerDim(
-        StringAttr::get(layout.getContext(), "block"), /*skipBroadcast=*/false);
-  } else if (auto ttgLayout = mlir::dyn_cast<LayoutEncodingTrait>(layout)) {
+  if (auto ttgLayout = mlir::dyn_cast<LayoutEncodingTrait>(layout))
     return ttgLayout.getCGALayout().getCTAsPerCGA();
-  }
   llvm::report_fatal_error("Unimplemented usage of getCTAsPerCGA");
 }
 
 SmallVector<unsigned> getCTASplitNum(Attribute layout) {
-  // A generic linear encoding may not have a CGA layout
-  // as having a CGA layout implies being of the form cta_layout * cga_layout
-  if (auto linearLayout = mlir::dyn_cast<LinearEncodingAttr>(layout)) {
-    return linearLayout.basesPerDim(
-        StringAttr::get(layout.getContext(), "block"));
-  } else if (auto ttgLayout = mlir::dyn_cast<LayoutEncodingTrait>(layout)) {
-    return ttgLayout.getCGALayout().getCTASplitNum();
-  }
   SmallVector<unsigned> res;
-  if (auto tmemLayout =
-          mlir::dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-              layout)) {
+  if (auto ttgLayout = mlir::dyn_cast<LayoutEncodingTrait>(layout)) {
+    return ttgLayout.getCGALayout().getCTASplitNum();
+  } else if (auto tmemLayout =
+                 mlir::dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+                     layout)) {
     res.resize(2);
     res[0] = tmemLayout.getCTASplitM();
     res[1] = tmemLayout.getCTASplitN();

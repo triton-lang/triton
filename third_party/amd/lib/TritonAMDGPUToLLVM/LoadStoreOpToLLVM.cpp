@@ -468,6 +468,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                    : "direct from lds stores do not support "
                                      "non-trivial block dimension");
     }
+    cvt = cvt.sublayout(
+        {str_attr("register"), str_attr("lane"), str_attr("warp")},
+        {str_attr("offset")});
 
     // Multicast is only supported for loads
     Value ctaMulticastMask;
@@ -491,9 +494,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
     auto lowerInstForwardMulticastMask =
         [&](RewriterBase &rewriter, Location loc, ArrayRef<Value> vals,
-            Value shmemAddr, int idx, VectorType vecTy,
-            std::optional<Value> ctaId) {
-          assert(!ctaId.has_value() && "NYI");
+            Value shmemAddr, int idx, VectorType vecTy) {
           return lowerInst(rewriter, loc, vals, shmemAddr, idx, vecTy,
                            ctaMulticastMask);
         };

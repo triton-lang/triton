@@ -1421,23 +1421,17 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
   return solver;
 }
 
-bool isCvtDimSync(const triton::LinearLayout &srcLayout,
-                  const triton::LinearLayout &dstLayout, StringAttr dim) {
-  // We can use a dimension-level sync when the conversion is trivial over that
-  // dimension and there is no broadcasting over it.
+bool isCvtWarpSync(const triton::LinearLayout &srcLayout,
+                   const triton::LinearLayout &dstLayout) {
+  // We can use warp.sync when the warp dimension in the convert is trival
+  // and there is no broadcasting at a warp level (otherwise reads may be
+  // wrong)
   auto *ctx = srcLayout.getInDimNames().begin()->getContext();
-  auto kWarp = StringAttr::get(ctx, "warp");
-  auto kBlock = StringAttr::get(ctx, "block");
-  assert((dim == kWarp || dim == kBlock) && "expected dim to be warp or block");
-  assert(srcLayout.hasInDim(dim) && dstLayout.hasInDim(dim) &&
-         "expected dim to be present in both layouts");
-  auto parentTrivial = true;
-  if (dim == kWarp) {
-    parentTrivial = isCvtDimSync(srcLayout, dstLayout, kBlock);
-  }
   auto comp = dstLayout.invertAndCompose(srcLayout);
-  return parentTrivial && comp.isTrivialOver(dim) &&
-         srcLayout.getFreeVariableMasks()[dim] == 0 &&
-         dstLayout.getFreeVariableMasks()[dim] == 0;
+  auto kWarp = StringAttr::get(ctx, "warp");
+  return comp.isTrivialOver(kWarp) &&
+         srcLayout.getFreeVariableMasks()[kWarp] == 0 &&
+         dstLayout.getFreeVariableMasks()[kWarp] == 0;
 }
+
 } // namespace mlir

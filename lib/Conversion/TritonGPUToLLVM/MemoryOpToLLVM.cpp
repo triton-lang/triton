@@ -150,10 +150,11 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
     cvt = regLayout.invertAndCompose(sharedLayout);
   }
   auto kBlock = str_attr("block");
-  // We could support it by removing this check if we ever want to
+  // NYI. We would need to emit a map.shared::cluster instruction.
   if (!cvt.isTrivialOver({kBlock})) {
     return failure();
   }
+  cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
                  rewriter, targetInfo);
 
@@ -300,10 +301,11 @@ public:
       cvt = regLayout.invertAndCompose(sharedLayout);
     }
     auto kBlock = str_attr("block");
-    // We could support it by removing this check if we ever want to
+    // NYI. We would need to emit a map.shared::cluster instruction.
     if (!cvt.isTrivialOver({kBlock})) {
       return failure();
     }
+    cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
 
     auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
                                   smemObj, rewriter, targetInfo, op);
