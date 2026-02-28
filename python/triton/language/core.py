@@ -1109,6 +1109,14 @@ class tensor(base_value):
             slices = [slices]
         if isinstance(slices, tuple):
             slices = slices.values
+
+        slice_count = sum(_unwrap_if_constexpr(sl) is not None for sl in slices)
+
+        # check if we're trying to index more dimensions than exist
+        if slice_count > len(self.shape):
+            raise ValueError(
+                f"too many indices for tensor: tensor is {len(self.shape)}-dimensional, but {slice_count} were indexed")
+
         ret = self
         for dim, sl in enumerate(slices):
             if _unwrap_if_constexpr(sl) is None:
