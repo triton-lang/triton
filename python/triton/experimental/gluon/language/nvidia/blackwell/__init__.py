@@ -429,8 +429,8 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     acc = a * b + (acc if use_acc else 0)
 
     Args:
-        a (shared_memory_descriptor): Left hand side operand in shared memory.
-        b (shared_memory_descriptor or tensor_memory_descriptor): Right hand side operand in shared or tensor memory.
+        a (shared_memory_descriptor or tensor_memory_descriptor): Left hand side operand in shared or tensor memory.
+        b (shared_memory_descriptor): Right hand side operand in shared memory.
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
