@@ -499,6 +499,16 @@ class HIPBackend(BaseBackend):
         names = re.findall(r"define amdgpu_kernel void @([a-zA-Z_][a-zA-Z0-9_]*)", src)
         assert len(names) == 1
         metadata["name"] = names[0]
+        # Bail early if shared memory exceeds hardware limit — avoids LLVM RA hang
+        shared = metadata.get("shared", 0)
+        if shared > 0:
+            from triton.compiler.compiler import max_shared_mem
+            from triton.runtime import driver
+            device = driver.active.get_current_device()
+            max_shared = max_shared_mem(device)
+            if shared > max_shared:
+                from triton.runtime.errors import OutOfResources
+                raise OutOfResources(shared, max_shared, "shared memory")
         # llvm -> hsaco
         flags = []
         features = '-real-true16' if 'gfx11' in options.arch else ''
