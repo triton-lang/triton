@@ -10,7 +10,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 from dataclasses import dataclass
 import builtins
 from .. import knobs
-from ..runtime.jit import JITCallable
+from ..runtime.jit import constexpr_function, JITCallable
 import inspect
 
 from .._C.libtriton import ir
@@ -826,6 +826,7 @@ float64 = dtype('fp64')
 pi32_t = pointer_type(int32)
 
 
+@triton.constexpr_function
 def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
     if bitwidth == 1:
         return int1
