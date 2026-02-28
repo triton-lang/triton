@@ -79,10 +79,21 @@ class Autotuner(KernelInterface):
         self.perf_model = None
         self.configs_top_k = 1.0
         self.early_config_prune = None
+        self.early_config_bailout = None
         if prune_configs_by:
             self.perf_model = prune_configs_by.get("perf_model", self.perf_model)
             self.configs_top_k = prune_configs_by.get("top_k", self.configs_top_k)
             self.early_config_prune = prune_configs_by.get("early_config_prune", self.early_config_prune)
+            self.early_config_bailout = prune_configs_by.get("early_config_bailout", self.early_config_bailout)
+
+        if self.early_config_bailout is not None:
+            if self.early_config_bailout < 1.0:
+                import warnings
+                warnings.warn("bailout < 1.0 will discard good configs, falling back to bailout=1.5")
+                self.early_config_bailout = 1.5
+            elif self.early_config_bailout < 1.5:
+                import warnings
+                warnings.warn("narrow bailout (bailout < 1.5) may discard good configs unexpectedly")
 
         self.fn = fn
         self.base_fn = fn
@@ -161,7 +172,20 @@ class Autotuner(KernelInterface):
             self.post_hook(full_nargs, exception=None)
 
         try:
-            return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+            if self.early_config_bailout:
+                initial_timing = self.do_bench(
+                    kernel_call, warmup=2, rep=8, quantiles=(0.5, 0.2, 0.8)
+                )
+
+                if initial_timing <= (self.best_timing * self.early_config_bailout):
+                    timing = self.do_bench(kernel_call, quantile=(0.5, 0.2, 0.8))
+                    self.best_timing = min(timing[0], self.best_timing)
+                else:
+                    timing = initial_timing
+            else:
+                timing = self.do_bench(kernel_call, quantile=(0.5, 0.2, 0.8))
+
+            return timing
         except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as e:
             if verbose:
                 print(f"Autotuning failed with {e}")
@@ -210,6 +234,7 @@ class Autotuner(KernelInterface):
         return False
 
     def run(self, *args, **kwargs):
+        self.best_timing = float("inf")
         self.nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
         if len(self.configs) > 1:
@@ -414,6 +439,7 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
         'early_config_prune': a function used to prune configs. It should have the signature
                 `prune_configs_by( configs: List[triton.Config], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:`
                 and return pruned configs. It should return at least one config.
+        'early_config_bailout': a floating point number delineating the cutoff factor (* the best config so-far) for unpromising candidate
     :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
     :type reset_to_zero: list[str]
     :param restore_value: a list of argument names whose value will be restored after evaluating any configs.
