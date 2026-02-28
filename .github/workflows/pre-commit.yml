@@ -20,7 +20,7 @@ jobs:
           echo "pre_commit_hash=$(sha256sum .pre-commit-config.yaml | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache pre-commit's cache dir
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
