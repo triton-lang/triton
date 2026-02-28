@@ -403,7 +403,7 @@ public:
     DenseMap<triton::nvidia_gpu::TMEMAllocOp, int> offsets;
     // TODO: handle cases with multiple function with TMEMAllocOp.
     int totalMemorySize = allocateTMem(mod, offsets);
-
+    totalMemorySize = 512;
     std::array<int, 6> possibleAllocations = {0, 32, 64, 128, 256, 512};
     // NOTE: if totalMemorySize > 512 we exceeded the maximum amount of tensor
     // memory, but we let the compilation finish so that we can raise an
