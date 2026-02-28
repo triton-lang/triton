@@ -370,15 +370,14 @@ LogicalResult DotScaledOp::verify() {
   auto cShape = this->getC().getType().getShape();
   int64_t mDim = cShape[cShape.size() - 2];
   int64_t nDim = cShape[cShape.size() - 1];
+  unsigned scaleFactor = this->getScaleFactor();
 
   if (getAScale()) {
     auto aScaleShape = getAScale().getType().getShape();
     if (aScaleShape[rank - 2] != mDim)
       return this->emitError(
           "scales M dimension must match the operand M dimension");
-    int scale_factor =
-        isa<Float8E4M3FNType>(getAScale().getType().getElementType()) ? 16 : 32;
-    if (aScaleShape[rank - 1] != k / scale_factor)
+    if (aScaleShape[rank - 1] != k / scaleFactor)
       return this->emitError("scales K dimension must match the operand K "
                              "divided by the scale factor");
   }
@@ -387,9 +386,7 @@ LogicalResult DotScaledOp::verify() {
     if (bScaleShape[rank - 2] != nDim)
       return this->emitError(
           "scales N dimension must match the operand N dimension");
-    int scale_factor =
-        isa<Float8E4M3FNType>(getBScale().getType().getElementType()) ? 16 : 32;
-    if (bScaleShape[rank - 1] != k / scale_factor)
+    if (bScaleShape[rank - 1] != k / scaleFactor)
       return this->emitError("scales K dimension must match the operand K "
                              "divided by the scale factor");
   }
