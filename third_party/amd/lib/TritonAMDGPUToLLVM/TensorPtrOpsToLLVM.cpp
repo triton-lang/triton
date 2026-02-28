@@ -12,10 +12,41 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
 namespace {
-Attribute findEncodingFromUsers(Operation *op) {
-  Attribute sharedEnc;
+// Collects all users of the value beyond the basic block boundaries
+// defining a given value.
+void collectUsers(Value value, llvm::SetVector<Operation *> &users) {
+  for (OpOperand &use : value.getUses()) {
+    Operation *userOp = use.getOwner();
+    if (users.contains(userOp)) {
+      // stop recursion; avoid loops
+      return;
+    }
+    users.insert(userOp);
+    const unsigned argIdx = use.getOperandNumber();
 
-  for (auto use : op->getUsers()) {
+    if (auto unrealCast = dyn_cast<mlir::UnrealizedConversionCastOp>(userOp)) {
+      collectUsers(unrealCast->getResult(argIdx), users);
+    }
+
+    if (auto branch = dyn_cast<mlir::BranchOpInterface>(userOp)) {
+      auto successors = branch->getSuccessors();
+      for (auto [idx, successor] : llvm::enumerate(successors)) {
+        auto operands = branch.getSuccessorOperands(idx);
+        if (argIdx < operands.size()) {
+          collectUsers(successor->getArgument(argIdx), users);
+        }
+      }
+    }
+  }
+}
+
+Attribute findEncodingFromUsers(Operation *op) {
+  llvm::SetVector<Operation *> users;
+  for (auto result : op->getResults())
+    collectUsers(result, users);
+
+  Attribute sharedEnc;
+  for (auto use : users) {
     Attribute userEnc;
     if (auto load = llvm::dyn_cast<amdgpu::AsyncTDMCopyGlobalToLocalOp>(use)) {
       userEnc = load.getResult().getType().getEncoding();
@@ -34,6 +65,8 @@ Attribute findEncodingFromUsers(Operation *op) {
       return {};
     }
   }
+  if (!sharedEnc)
+    op->emitError("Encoding hasn't been found from users.");
   return sharedEnc;
 }
 
