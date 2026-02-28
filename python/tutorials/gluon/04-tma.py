@@ -28,7 +28,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
+from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier
 
 # Re-use utilities from the previous tutorial.
 t3 = importlib.import_module("03-async-copy")
@@ -148,51 +148,6 @@ def test_memcpy_1d_tma(XBLOCK, xnumel):
 # of the kernel is almost the same. However, we now need to allocate one
 # mbarrier per buffer to track completion of the reads. We will also use TMA for
 # the store, meaning we need to allocate more shared memory for it.
-#
-# TMAs access shared memory through a different hardware called the "async
-# proxy". However, reading and writing shared memory from registers accesses it
-# through the "generic proxy". Memory operations across proxies are not ordered,
-# so we have to use `fence_async_shared` to establish ordering. Here are some
-# examples of hazards that require fences:
-#
-# ```python
-# value = smem.load()
-# fence_async_shared()
-# tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
-# ```
-#
-# Without the fence, async_copy_global_to_shared can start copying into `smem`
-# while the shared memory load is still in progress.
-#
-# ```python
-# smem.store(value)
-# fence_async_shared()
-# tma.async_copy_shared_to_global(desc, [0, 0], smem)
-# ```
-#
-# Without the fence, async_copy_shared_to_global can start copying from `smem`
-# before the shared memory store is complete.
-#
-# Note that certain cases imply total completion of a memory transaction and
-# do not require a fence. For example, waiting on the result of a TMA load:
-#
-# ```python
-# tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
-# mbarrier.wait(bar, phase=0)
-# value = smem.load()
-# ```
-#
-# fence_async_shared is not needed because after the mbarrier.wait on the TMA
-# read barrier, we know it has finished writing into shared memory via the async
-# proxy. Thus the read via the generic proxy will be ordered after. This applies
-# specifically to the TMA read barrier, a fence is still needed in this case:
-#
-# ```python
-# smem.store(value)
-# mbarrier.arrive(bar, count=1)
-# mbarrier.wait(bar, phase=0)
-# fence_async_shared()
-# tma.async_copy_shared_to_global(desc, [0, 0], smem)
 # ```
 
 
@@ -221,7 +176,6 @@ def perform_add(read_index, bars, a_smem, b_smem, c_smem, c_desc, xoff, layout: 
     # Pipeline the store by rotating the store wait.
     tma.store_wait(pendings=0)
     c_smem.store(c_val)
-    fence_async_shared()
     # Issue the store without waiting for it.
     tma.async_copy_shared_to_global(c_desc, [xoff, yoff], c_smem)
     return read_index + 1
