@@ -387,6 +387,40 @@ def check_bit_width(value, shift_value):
 
 
 class dtype(base_type):
+    """Data types supported by a Triton `tensor` object.
+
+    Triton supports integer and floats data types.
+    The following tables shows which data types are supported:
+
+    **Floatint point dtypes**
+
+    ============    ======================================= =======
+    Dtype           Description                             S-E-M
+    ============    ======================================= =======
+    ``fp64``        64-bit double precision floating point. 1-11-52
+    ``fp32``        32-bit single precision floating point. 1-8-23
+    ``fp16``        16-bit half precision floating point.   1-5-10
+    ``bf16``        16-bit brain floating point.            1-8-7
+    ``fp8e5``       8-bit floating point.                   1-5-2
+    ``fp8e4nv``     8-bit floating point.                   1-4-3
+    ============    ======================================= =======
+
+    **Integer dtypes**
+
+    ============    =======================================
+    Dtype           Description
+    ============    =======================================
+    ``uint64``      64-bit integer (unsigned)
+    ``int64``       64-bit integer (signed)
+    ``uint32``      32-bit integer (unsigned)
+    ``int32``       32-bit integer (signed)
+    ``uint16``      16-bit integer (unsigned)
+    ``int16``       16-bit integer (signed)
+    ``uint8``       8-bit integer (unsigned)
+    ``int8``        8-bit integer (signed)
+    ============    =======================================
+    """
+
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
     FP_TYPES = ['fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
