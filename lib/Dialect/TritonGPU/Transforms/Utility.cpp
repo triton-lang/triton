@@ -1550,6 +1550,31 @@ void replaceUsesAndPropagateType(
         region.getArgument(use.getOperandNumber()).setType(val.getType());
     }
 
+    // If val is used as the iter arg of a scf::ForOp, update the corresponding
+    // types on the forOp. Additionally, if it is used as an operand inside the
+    // loop, schedule it for late replacement.
+    if (auto forOp = dyn_cast<scf::ForOp>(use.getOwner())) {
+      unsigned operandIdx = use.getOperandNumber();
+      if (operandIdx < forOp.getNumControlOperands()) {
+        continue;
+      }
+      // Iter args don't include the control operands, so adjust the index.
+      unsigned iterArgIdx = operandIdx - forOp.getNumControlOperands();
+      forOp.getResult(iterArgIdx).setType(val.getType());
+      auto iterArg = forOp.getRegionIterArg(iterArgIdx);
+      if (iterArg.getType() == val.getType()) {
+        continue;
+      }
+      iterArg.setType(val.getType());
+      for (OpOperand &iterArgUse : iterArg.getUses()) {
+        operandsToReplace.push_back(&iterArgUse);
+      }
+    }
+
+    if (llvm::isa<scf::WhileOp>(use.getOwner())) {
+      assert(false && "cannot replace uses through a while loop");
+    }
+
     // Non-subview/trans ops will be replaced by `val`.
     if (!use.getOwner()->hasTrait<OpTrait::MemDescViewTrait>()) {
       operandsToReplace.push_back(&use);

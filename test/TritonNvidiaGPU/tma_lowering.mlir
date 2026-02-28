@@ -162,3 +162,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %9 : tensor<64x32xf32, #mma1>
   }
 }
+
+// -----
+
+// Checks that the TMA lowering pass correctly handles a memdesc in the
+// iter_args whose type has to be changed to mutable.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 128, 16]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @tma_memdesc_mutable_mismatch
+  tt.func public @tma_memdesc_mutable_mismatch(%desc_q: !tt.tensordesc<tensor<128x128xf16, #shared>>,
+                                                 %desc_v: !tt.tensordesc<tensor<128x128xf16, #shared>>,
+                                                 %N: i32) -> tensor<128x128xf32, #mma> {
+    %c0_i32 = arith.constant 0 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
+    %q = tt.descriptor_load %desc_q[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<128x128xf16, #shared>> -> tensor<128x128xf16, #blocked>
+    %q_smem = ttg.local_alloc %q : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #smem>
+    %v_initial = tt.descriptor_load %desc_v[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<128x128xf16, #shared>> -> tensor<128x128xf16, #blocked>
+    %v_smem_initial = ttg.local_alloc %v_initial : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #smem>
+    // CHECK: scf.for
+    // CHECK-SAME: -> (tensor<128x128xf32, #mma>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>)
+    %result:2 = scf.for %iv = %c0_i32 to %N step %c128_i32 iter_args(%acc = %cst, %v_smem = %v_smem_initial) -> (tensor<128x128xf32, #mma>, !ttg.memdesc<128x128xf16, #shared, #smem>) : i32 {
+      %v_new = tt.descriptor_load %desc_v[%iv, %c0_i32] : !tt.tensordesc<tensor<128x128xf16, #shared>> -> tensor<128x128xf16, #blocked>
+      %v_smem_new = ttg.local_alloc %v_new : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #smem>
+      %acc_new = ttng.warp_group_dot %q_smem, %v_smem, %acc {inputPrecision = 0 : i32} : !ttg.memdesc<128x128xf16, #shared, #smem> * !ttg.memdesc<128x128xf16, #shared, #smem> -> tensor<128x128xf32, #mma>
+      scf.yield %acc_new, %v_smem_new : tensor<128x128xf32, #mma>, !ttg.memdesc<128x128xf16, #shared, #smem>
+    }
+    tt.return %result#0 : tensor<128x128xf32, #mma>
+  }
+}
