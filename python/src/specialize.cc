@@ -142,9 +142,14 @@ bool init_globals() noexcept try {
       import_from("triton._utils", "canonicalize_ptr_dtype");
   constexpr_cls = import_from("triton.language", "constexpr");
 
-  try {
-    torch_tensor_cls = import_from("torch", "Tensor");
-  } catch (py::error_already_set &e) {
+  PyObject *loaded_modules = PyImport_GetModuleDict();
+  PyObject *torch_module = PyDict_GetItemString(loaded_modules, "torch");
+  if (torch_module) {
+    auto tensor_cls =
+        from_new_ref(PyObject_GetAttrString(torch_module, "Tensor"));
+    if (!tensor_cls)
+      return false;
+    torch_tensor_cls = tensor_cls.release().ptr();
   }
 
   init_interned_strings();
