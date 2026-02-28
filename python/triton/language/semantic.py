@@ -1604,9 +1604,9 @@ class TritonSemantic(Generic[TensorTy]):
             assert val.dtype == unsigned_ty, f"Unexpected dtype for {float_format}. Got {val.dtype}"
             return self.bitcast(val, triton_ty)
 
-    def deduce_scale_factor(self, lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format):
+    def deduce_scale_factor(self, lhs, lhs_scale, lhs_format, lhs_k_pack, rhs, rhs_scale, rhs_format, rhs_k_pack):
 
-        def deduce_by_shape(operand, scale, op_idx, format):
+        def deduce_by_shape(operand, scale, op_idx, format, k_pack):
             # Skip cases where we can't get shape information from the scale
             if scale is None or isinstance(scale, tl.constexpr) or scale.numel.value == 1:
                 return 0
@@ -1614,14 +1614,14 @@ class TritonSemantic(Generic[TensorTy]):
             op_shape = operand.type.shape
             scale_shape = scale.type.shape
 
-            unpack_factor = 2 if format == "e2m1" else 1
+            unpack_factor = 2 if format == "e2m1" and k_pack else 1
             kdim = op_shape[-1 if op_idx == 0 else -2] * unpack_factor
             scale_factor = kdim // scale_shape[-1]
             assert scale_factor in (16, 32), f"scale factor must be 16 or 32. Got {scale_factor}"
             return scale_factor
 
-        scale_factor_a = deduce_by_shape(lhs, lhs_scale, 0, lhs_format)
-        scale_factor_b = deduce_by_shape(rhs, rhs_scale, 1, rhs_format)
+        scale_factor_a = deduce_by_shape(lhs, lhs_scale, 0, lhs_format, lhs_k_pack)
+        scale_factor_b = deduce_by_shape(rhs, rhs_scale, 1, rhs_format, rhs_k_pack)
         if scale_factor_a == 0 and scale_factor_b == 0:
             # Default to scale32, i.e. 32 elements of operand share one scale element
             return 32
@@ -1691,7 +1691,7 @@ class TritonSemantic(Generic[TensorTy]):
         rhs_scale_handle = None if rhs_scale_is_none else rhs_scale.handle
         lhs_scale_handle = None if lhs_scale_is_none else lhs_scale.handle
 
-        scale_factor = self.deduce_scale_factor(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format)
+        scale_factor = self.deduce_scale_factor(lhs, lhs_scale, lhs_format, lhs_k_pack, rhs, rhs_scale, rhs_format, rhs_k_pack)
         self.verify_scaled_shape(M, N, K, None if lhs_scale_is_none else lhs_scale,
                                  None if rhs_scale_is_none else rhs_scale, scale_factor)
         return self.tensor(
