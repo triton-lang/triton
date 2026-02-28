@@ -4,12 +4,17 @@ Flash Attention Forward v2 for SM120 (Consumer Blackwell)
 
 This example implements flash attention using Gluon on SM120 GPUs
 (DGX Spark, RTX 5090, GB10). SM120 lacks tcgen05/TMEM/WGMMA but has
-MMAv2 (mma.sync.aligned) tensor cores and cp.async for async data movement.
+MMAv2 (mma.sync.aligned) tensor cores and TMA for async data movement.
 
 Features:
-- Double-buffered K pipelining with FIFO-correct async groups:
-  K[i+1] prefetch overlaps QK compute + softmax, V[i] load overlaps softmax.
-  Both wait_group calls use compile-time constant 1.
+- TMA (Tensor Memory Accelerator) for all global memory access:
+  eliminates per-element address computation, reduces register pressure,
+  and auto-handles out-of-bounds with zero-fill via tensor descriptors.
+- Double-buffered K pipelining with mbarrier phase tracking:
+  K[i+1] prefetch overlaps QK compute + softmax.
+- Single-buffered V with mbarrier phase tracking:
+  V[i] load overlaps QK compute + softmax.
+- TMA store for output (shared memory → global via async proxy).
 - Causal masking with early loop termination
 - BF16 and FP8 (E5M2) support
 - Online softmax with numerically stable rescaling
@@ -26,8 +31,11 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.language.core import _aggregate as aggregate
 
-from triton.experimental.gluon.language.nvidia.ampere import (
-    async_copy as cp,
+from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
+from triton.experimental.gluon.language.nvidia.blackwell import (
+    tma,
+    mbarrier,
+    fence_async_shared,
     mma_v2,
 )
 
@@ -61,8 +69,6 @@ class AttentionConfig:
     # Operand layouts for P*V
     p_dot_layout: gl.constexpr
     v_dot_layout: gl.constexpr
-    # Blocked layout for global loads/stores
-    blocked_layout: gl.constexpr
     # Shared memory layouts
     q_smem_layout: gl.constexpr
     kv_smem_layout: gl.constexpr
@@ -98,10 +104,6 @@ class AttentionConfig:
         self.v_dot_layout = gl.constexpr(
             gl.DotOperandLayout(operand_index=1, parent=self.mma_layout, k_width=k_width))
 
-        # Blocked layout for global memory access
-        self.blocked_layout = gl.constexpr(
-            gl.BlockedLayout([1, 1], [32, 1], [NUM_WARPS, 1], [1, 0]))
-
         # Shared memory layouts (swizzled for bank-conflict-free MMA access)
         smem_dtype = gl.float8e5 if IS_FP8 else gl.bfloat16
         self.q_smem_layout = gl.constexpr(
@@ -119,11 +121,7 @@ RCP_LN2 = gl.constexpr(1.4426950408889634)  # 1/ln(2) for exp2-based softmax
 
 @gluon.jit
 def attn_fwd_kernel(
-    q_ptr, k_ptr, v_ptr, out_ptr,
-    stride_qz, stride_qh, stride_qm, stride_qk,
-    stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vn, stride_vk,
-    stride_oz, stride_oh, stride_om, stride_ok,
+    desc_q, desc_k, desc_v, desc_o,
     sm_scale,
     SEQ_LEN_Q: gl.constexpr,
     SEQ_LEN_K: gl.constexpr,
@@ -142,25 +140,30 @@ def attn_fwd_kernel(
     off_zh = gl.program_id(0)
     off_m = gl.program_id(1) * BLOCK_M
 
-    # Compute batch and head offsets
-    q_offset = off_zh * stride_qh
-    k_offset = off_zh * stride_kh
-    v_offset = off_zh * stride_vh
-    o_offset = off_zh * stride_oh
-
-    # --- Load Q block to shared memory, then to registers ---
+    # --- Allocate shared memory ---
     q_smem = gl.allocate_shared_memory(
         SMEM_DTYPE, [BLOCK_M, HEAD_DIM], layout=cfg.q_smem_layout)
+    k_smem = gl.allocate_shared_memory(
+        SMEM_DTYPE, [2, BLOCK_N, HEAD_DIM], layout=cfg.kv_smem_layout)
+    v_smem = gl.allocate_shared_memory(
+        SMEM_DTYPE, [BLOCK_N, HEAD_DIM], layout=cfg.kv_smem_layout)
 
-    q_offs_m = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, cfg.blocked_layout))[:, None]
-    q_offs_k = gl.arange(0, HEAD_DIM, layout=gl.SliceLayout(0, cfg.blocked_layout))[None, :]
-    q_ptrs = q_ptr + q_offset + (off_m + q_offs_m) * stride_qm + q_offs_k * stride_qk
-    q_mask = (off_m + q_offs_m) < SEQ_LEN_Q
+    # --- Allocate mbarriers ---
+    q_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    k_bars = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())
+    v_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
 
-    cp.async_copy_global_to_shared(q_smem, q_ptrs, mask=q_mask)
-    cp.commit_group()
-    cp.wait_group(0)
-    gl.barrier()
+    mbarrier.init(q_bar, count=1)
+    for i in gl.static_range(2):
+        mbarrier.init(k_bars.index(i), count=1)
+    mbarrier.init(v_bar, count=1)
+
+    # --- Load Q block via TMA ---
+    q_offset_y = off_zh * SEQ_LEN_Q + off_m
+    mbarrier.expect(q_bar, desc_q.block_type.nbytes)
+    tma.async_copy_global_to_shared(desc_q, [q_offset_y, 0], q_bar, q_smem)
+    mbarrier.wait(q_bar, phase=0)
+    mbarrier.invalidate(q_bar)
 
     q = q_smem.load(cfg.q_dot_layout)
 
@@ -170,17 +173,6 @@ def attn_fwd_kernel(
     l_i = gl.full([BLOCK_M], 1.0, dtype=gl.float32,
                   layout=gl.SliceLayout(1, cfg.mma_layout))
     acc = gl.zeros([BLOCK_M, HEAD_DIM], dtype=gl.float32, layout=cfg.mma_layout)
-
-    # --- Allocate K/V shared memory ---
-    # K is double-buffered for async pipelining; V is single-buffered
-    k_smem = gl.allocate_shared_memory(
-        SMEM_DTYPE, [2, BLOCK_N, HEAD_DIM], layout=cfg.kv_smem_layout)
-    v_smem = gl.allocate_shared_memory(
-        SMEM_DTYPE, [BLOCK_N, HEAD_DIM], layout=cfg.kv_smem_layout)
-
-    # Precompute K/V offset patterns
-    kv_offs_n = gl.arange(0, BLOCK_N, layout=gl.SliceLayout(1, cfg.blocked_layout))[:, None]
-    kv_offs_d = gl.arange(0, HEAD_DIM, layout=gl.SliceLayout(0, cfg.blocked_layout))[None, :]
 
     # Scaling factor
     qk_scale = sm_scale * RCP_LN2
@@ -194,43 +186,35 @@ def attn_fwd_kernel(
     # Precompute m_offs for causal mask (only used inside loop if IS_CAUSAL)
     m_offs = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, cfg.mma_layout))
 
-    # --- Prologue: prefetch K[0] into buffer 0 ---
-    k_ptrs_0 = k_ptr + k_offset + kv_offs_n * stride_kn + kv_offs_d * stride_kk
-    k_mask_0 = kv_offs_n < SEQ_LEN_K
-    cp.async_copy_global_to_shared(k_smem.index(0), k_ptrs_0, mask=k_mask_0)
-    cp.commit_group()
-    # Outstanding FIFO: [K[0]]
+    # --- Prologue: prefetch K[0] via TMA ---
+    kv_base_y = off_zh * SEQ_LEN_K
+    mbarrier.expect(k_bars.index(0), desc_k.block_type.nbytes)
+    tma.async_copy_global_to_shared(desc_k, [kv_base_y, 0], k_bars.index(0), k_smem.index(0))
 
     # --- Main loop over K/V blocks ---
-    # Double-buffer pipelining: K[i] prefetched in prologue/previous iter,
-    # V[i] issued first so it's newest in FIFO. Both wait_group(1) calls
-    # use a compile-time constant, avoiding the runtime-value limitation.
     for start_n in range(0, loop_end, BLOCK_N):
-        # Current/next K buffer (alternates 0, 1, 0, 1, ...)
-        cur_buf = (start_n // BLOCK_N) % 2
-        next_buf = 1 - cur_buf
+        iter_idx = start_n // BLOCK_N
+        cur_buf = iter_idx % 2
+        k_phase = iter_idx // 2 & 1
 
-        # Issue V[i] load (async) — newest in FIFO
-        v_ptrs = v_ptr + v_offset + (start_n + kv_offs_n) * stride_vn + kv_offs_d * stride_vk
-        v_mask = (start_n + kv_offs_n) < SEQ_LEN_K
-        cp.async_copy_global_to_shared(v_smem, v_ptrs, mask=v_mask)
-        cp.commit_group()
-        # FIFO: [K[i], V[i]]
+        # Issue V[i] load via TMA
+        v_phase = iter_idx & 1
+        mbarrier.expect(v_bar, desc_v.block_type.nbytes)
+        tma.async_copy_global_to_shared(desc_v, [kv_base_y + start_n, 0], v_bar, v_smem)
 
-        # Wait for K[i] (oldest completes), V[i] stays in flight
-        cp.wait_group(1)
-        gl.barrier()
+        # Wait for K[i]
+        mbarrier.wait(k_bars.index(cur_buf), k_phase)
 
         # Load K[i]: [BLOCK_N, HEAD_DIM] → transposed for Q @ K^T
         k = k_smem.index(cur_buf).permute([1, 0]).load(cfg.k_dot_layout)
 
-        # Prefetch K[i+1] into next buffer (OOB on last iter → mask handles it)
-        next_start = start_n + BLOCK_N
-        k_next_ptrs = k_ptr + k_offset + (next_start + kv_offs_n) * stride_kn + kv_offs_d * stride_kk
-        k_next_mask = (next_start + kv_offs_n) < SEQ_LEN_K
-        cp.async_copy_global_to_shared(k_smem.index(next_buf), k_next_ptrs, mask=k_next_mask)
-        cp.commit_group()
-        # FIFO: [V[i], K[i+1]]
+        # Prefetch K[i+1] into next buffer
+        next_buf = 1 - cur_buf
+        next_k_phase = (iter_idx + 1) // 2 & 1
+        mbarrier.expect(k_bars.index(next_buf), desc_k.block_type.nbytes)
+        tma.async_copy_global_to_shared(
+            desc_k, [kv_base_y + start_n + BLOCK_N, 0],
+            k_bars.index(next_buf), k_smem.index(next_buf))
 
         # QK = Q @ K^T: [BLOCK_M, BLOCK_N]
         qk = gl.zeros([BLOCK_M, BLOCK_N], dtype=gl.float32, layout=cfg.mma_layout)
@@ -246,7 +230,7 @@ def attn_fwd_kernel(
             causal_mask = (off_m + m_offs[:, None]) >= n_offs
             qk = gl.where(causal_mask, qk, float("-inf"))
 
-        # --- Online softmax (overlaps V[i] and K[i+1] loads) ---
+        # --- Online softmax (overlaps V[i] load) ---
         m_ij = gl.maximum(m_i, gl.max(qk, 1))
         m_ij_scaled = m_ij * qk_scale
 
@@ -266,35 +250,41 @@ def attn_fwd_kernel(
         p_cast = p.to(SMEM_DTYPE, fp_downcast_rounding="rtz")
         p_dot = gl.convert_layout(p_cast, cfg.p_dot_layout)
 
-        # Wait for V[i] (oldest completes), K[i+1] stays in flight
-        cp.wait_group(1)
-        gl.barrier()
+        # Wait for V[i]
+        mbarrier.wait(v_bar, v_phase)
 
         v = v_smem.load(cfg.v_dot_layout)
 
         acc = mma_v2(p_dot, v, acc)
 
-    # Drain last K prefetch (unused — loop has ended)
-    cp.wait_group(0)
+    # --- Invalidate mbarriers ---
+    for i in gl.static_range(2):
+        mbarrier.invalidate(k_bars.index(i))
+    mbarrier.invalidate(v_bar)
 
     # --- Final normalization ---
     l_recip = 1.0 / l_i
     acc = acc * l_recip[:, None]
 
-    # --- Store output ---
+    # --- Store output via TMA ---
     out = acc.to(SMEM_DTYPE, fp_downcast_rounding="rtz")
-    out_blocked = gl.convert_layout(out, cfg.blocked_layout)
+    q_smem.store(out)
+    fence_async_shared()
 
-    o_offs_m = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, cfg.blocked_layout))[:, None]
-    o_offs_d = gl.arange(0, HEAD_DIM, layout=gl.SliceLayout(0, cfg.blocked_layout))[None, :]
-    o_ptrs = out_ptr + o_offset + (off_m + o_offs_m) * stride_om + o_offs_d * stride_ok
-    o_mask = (off_m + o_offs_m) < SEQ_LEN_Q
-    gl.store(o_ptrs, out_blocked, mask=o_mask)
+    o_offset_y = off_zh * SEQ_LEN_Q + off_m
+    tma.async_copy_shared_to_global(desc_o, [o_offset_y, 0], q_smem)
+    tma.store_wait(pendings=0)
 
 
 # ---------------------------------------------------------------------------
 # Host wrapper
 # ---------------------------------------------------------------------------
+
+def torch_dtype_to_triton(dtype):
+    if dtype == torch.float8_e5m2:
+        return gl.float8e5
+    return getattr(gl, str(dtype).split('.')[1])
+
 
 def attention_forward(q, k, v, sm_scale, causal=False, BLOCK_M=128, BLOCK_N=64, num_warps=4):
     """Run flash attention forward pass.
@@ -315,17 +305,28 @@ def attention_forward(q, k, v, sm_scale, causal=False, BLOCK_M=128, BLOCK_N=64, 
     assert q.dtype == k.dtype == v.dtype
     assert q.dtype in (torch.bfloat16, torch.float8_e5m2)
 
+    q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
     out = torch.empty_like(q)
+
+    triton_dtype = torch_dtype_to_triton(q.dtype)
+
+    def make_desc(t, block_shape):
+        total_rows = t.shape[0] * t.shape[1] * t.shape[2]
+        layout = gl.NVMMASharedLayout.get_default_for(block_shape, triton_dtype)
+        return TensorDescriptor(
+            t, shape=[total_rows, D], strides=[D, 1],
+            block_shape=block_shape, layout=layout)
+
+    desc_q = make_desc(q, [BLOCK_M, D])
+    desc_k = make_desc(k, [BLOCK_N, D])
+    desc_v = make_desc(v, [BLOCK_N, D])
+    desc_o = make_desc(out, [BLOCK_M, D])
 
     # Grid: [B*H, ceil(Sq/BLOCK_M)]
     grid = (B * H, triton.cdiv(Sq, BLOCK_M))
 
     attn_fwd_kernel[grid](
-        q, k, v, out,
-        q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-        k.stride(0), k.stride(1), k.stride(2), k.stride(3),
-        v.stride(0), v.stride(1), v.stride(2), v.stride(3),
-        out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+        desc_q, desc_k, desc_v, desc_o,
         sm_scale,
         SEQ_LEN_Q=Sq,
         SEQ_LEN_K=Sk,
