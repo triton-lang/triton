@@ -580,11 +580,28 @@ class TritonRewriteTensorDescriptorToPointerPass
       return mlir::success();
     });
 
+    FuncArgRenamer renamer(".");
+    renamer.addRenamer([](mlir::triton::TensorDescType type,
+                          llvm::SmallVectorImpl<std::string> &out_suffix) {
+      auto tensorType = type.getSignlessBlockType();
+      int dims = tensorType.getRank();
+      out_suffix.push_back("");
+      for (int i = 0; i < dims; i++) {
+        out_suffix.push_back("shape." + std::to_string(i));
+      }
+      for (int i = 0; i < dims; i++) {
+        out_suffix.push_back("stride." + std::to_string(i));
+      }
+      out_suffix.push_back("padding");
+      out_suffix.push_back("roundF32ToTF32");
+      return success();
+    });
+
     mlir::RewritePatternSet patterns(op->getContext());
 
     // Populate conversion patterns to handle loops, function calls, and arith
     // ops.
-    triton::populateFunctionTypeConversions(converter, patterns);
+    triton::populateFunctionTypeConversions(converter, renamer, patterns);
     mlir::scf::populateSCFStructuralTypeConversions(converter, patterns);
     triton::populateArithTypeConversions(converter, patterns);
 

@@ -11,6 +11,41 @@
 
 namespace mlir::triton {
 
+LogicalResult
+FuncArgRenamer::apply(Type type, FunctionOpInterface funcOp, int index,
+                      TypeConverter::SignatureConversion &conversion) const {
+  if (auto mapping = conversion.getInputMapping(index)) {
+    for (auto &renamer : llvm::reverse(renamers)) {
+      llvm::SmallVector<std::string, 8> out_suffix;
+      if (std::optional<LogicalResult> result = renamer(type, out_suffix)) {
+        if (failed(*result)) {
+          return failure();
+        }
+        int newIndex = mapping->inputNo;
+        auto loc = funcOp.getArgument(newIndex).getLoc();
+        std::string baseName;
+        if (isa<NameLoc>(loc)) {
+          baseName = cast<NameLoc>(loc).getName().getValue();
+        } else {
+          baseName = "arg_" + std::to_string(index);
+        }
+        assert(out_suffix.size() == mapping->size);
+        for (auto [i, suffix] : llvm::enumerate(out_suffix)) {
+          if (!suffix.empty()) {
+            auto newLoc =
+                NameLoc::get(StringAttr::get(funcOp.getContext(),
+                                             baseName + delimiter + suffix),
+                             loc);
+            funcOp.getArgument(newIndex + i).setLoc(newLoc);
+          }
+        }
+        return success(); // early return
+      }
+    }
+  }
+  return success();
+}
+
 namespace {
 
 SmallVector<Value> flattenValues(ArrayRef<ValueRange> values) {
@@ -102,6 +137,7 @@ convertFuncOpAttrs(FunctionOpInterface funcOp,
 
 LogicalResult convertFuncOpTypes(FunctionOpInterface funcOp,
                                  const TypeConverter &typeConverter,
+                                 const FuncArgRenamer &renamer,
                                  ConversionPatternRewriter &rewriter) {
   FunctionType type = dyn_cast<FunctionType>(funcOp.getFunctionType());
   if (!type)
@@ -129,6 +165,13 @@ LogicalResult convertFuncOpTypes(FunctionOpInterface funcOp,
     }
   });
 
+  // Apply the renamer to the function signature.
+  for (auto [i, input] : llvm::enumerate(type.getInputs())) {
+    if (failed(renamer.apply(input, funcOp, i, result))) {
+      return failure();
+    }
+  }
+
   return success();
 }
 
@@ -139,24 +182,30 @@ struct FunctionOpInterfaceSignatureConversion : public ConversionPattern {
   FunctionOpInterfaceSignatureConversion(StringRef functionLikeOpName,
                                          MLIRContext *ctx,
                                          const TypeConverter &converter,
+                                         const FuncArgRenamer &renamer,
                                          PatternBenefit benefit = 1)
-      : ConversionPattern(converter, functionLikeOpName, benefit, ctx) {}
+      : ConversionPattern(converter, functionLikeOpName, benefit, ctx),
+        renamer(renamer) {}
 
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> /*operands*/,
                   ConversionPatternRewriter &rewriter) const override {
     FunctionOpInterface funcOp = cast<FunctionOpInterface>(op);
-    return convertFuncOpTypes(funcOp, *typeConverter, rewriter);
+    return convertFuncOpTypes(funcOp, *typeConverter, renamer, rewriter);
   }
+
+private:
+  const FuncArgRenamer &renamer;
 };
 
 } // namespace
 
 void populateFunctionTypeConversions(const TypeConverter &converter,
+                                     const FuncArgRenamer &renamer,
                                      RewritePatternSet &patterns) {
   auto context = patterns.getContext();
   patterns.add<FunctionOpInterfaceSignatureConversion>(
-      triton::FuncOp::getOperationName(), context, converter);
+      triton::FuncOp::getOperationName(), context, converter, renamer);
   patterns.add<CallOpConversion, ReturnOpConversion>(converter, context);
 }
 
