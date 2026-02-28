@@ -4,8 +4,6 @@
 
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
@@ -109,150 +107,14 @@ bool ReduceOpHelper::isAssociative() {
   return !hasNoAssociativeOp;
 }
 
-ReduceOpHelper::InThreadVectorizeOpKind
-ReduceOpHelper::getInThreadVectorizeOpKind(unsigned axisPack,
-                                           bool supportBitwidth16Elementwise,
-                                           bool supportBitwidth32Elementwise) {
-  Operation *reduceOperation = op.getOperation();
-  if (axisPack < 4 || reduceOperation->getNumOperands() != 1 ||
-      reduceOperation->getNumResults() != 1)
-    return InThreadVectorizeOpKind::None;
-
-  assert(reduceOperation->getNumRegions() == 1 &&
-         "expected a single combine region");
-  Region &combineRegion = reduceOperation->getRegion(0);
-  Block &block = combineRegion.front();
-  if (block.getOperations().size() != 2)
-    return InThreadVectorizeOpKind::None;
-  Operation &combiner = block.front();
-
-  Type elemTy = srcElementTypes.front();
-  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
-  if (bitwidth == 16 && !supportBitwidth16Elementwise)
-    return InThreadVectorizeOpKind::None;
-  if (bitwidth == 32 && !supportBitwidth32Elementwise)
-    return InThreadVectorizeOpKind::None;
-
-  bool is16Bit = bitwidth == 16;
-  bool isF32 = elemTy.isF32();
-  if (!is16Bit && !isF32)
-    return InThreadVectorizeOpKind::None;
-
-  if (isa<arith::AddFOp>(combiner)) {
-    return (is16Bit || isF32) ? InThreadVectorizeOpKind::AddF
-                              : InThreadVectorizeOpKind::None;
-  }
-  if (isa<arith::MulFOp>(combiner)) {
-    return (is16Bit || isF32) ? InThreadVectorizeOpKind::MulF
-                              : InThreadVectorizeOpKind::None;
-  }
-  if (isa<arith::MinNumFOp>(combiner)) {
-    return is16Bit ? InThreadVectorizeOpKind::MinNumF
-                   : InThreadVectorizeOpKind::None;
-  }
-  if (isa<arith::MaxNumFOp>(combiner)) {
-    return is16Bit ? InThreadVectorizeOpKind::MaxNumF
-                   : InThreadVectorizeOpKind::None;
-  }
-  if (isa<arith::MinimumFOp>(combiner)) {
-    return is16Bit ? InThreadVectorizeOpKind::MinimumF
-                   : InThreadVectorizeOpKind::None;
-  }
-  if (isa<arith::MaximumFOp>(combiner)) {
-    return is16Bit ? InThreadVectorizeOpKind::MaximumF
-                   : InThreadVectorizeOpKind::None;
-  }
-
-  if (!elemTy.isInteger(16))
-    return InThreadVectorizeOpKind::None;
-
-  if (isa<arith::AddIOp>(combiner)) {
-    return InThreadVectorizeOpKind::AddI;
-  }
-  if (isa<arith::MulIOp>(combiner)) {
-    return InThreadVectorizeOpKind::MulI;
-  }
-  if (isa<arith::MinSIOp>(combiner)) {
-    return InThreadVectorizeOpKind::MinSI;
-  }
-  if (isa<arith::MaxSIOp>(combiner)) {
-    return InThreadVectorizeOpKind::MaxSI;
-  }
-  if (isa<arith::MinUIOp>(combiner)) {
-    return InThreadVectorizeOpKind::MinUI;
-  }
-  if (isa<arith::MaxUIOp>(combiner)) {
-    return InThreadVectorizeOpKind::MaxUI;
-  }
-
-  return InThreadVectorizeOpKind::None;
-}
-
-Value ReduceOpHelper::createInThreadVectorizedCombineOp(
-    OpBuilder &builder, Location loc, InThreadVectorizeOpKind kind, Value lhs,
-    Value rhs) {
-  auto vecTy = lhs.getType();
-  Value result;
-  switch (kind) {
-  case InThreadVectorizeOpKind::AddF:
-    result = LLVM::FAddOp::create(builder, loc, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MulF:
-    result = LLVM::FMulOp::create(builder, loc, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MinNumF:
-    result = LLVM::MinNumOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MaxNumF:
-    result = LLVM::MaxNumOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MinimumF:
-    result = LLVM::MinimumOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MaximumF:
-    result = LLVM::MaximumOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::AddI:
-    result = LLVM::AddOp::create(builder, loc, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MulI:
-    result = LLVM::MulOp::create(builder, loc, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MinSI:
-    result = LLVM::SMinOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MaxSI:
-    result = LLVM::SMaxOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MinUI:
-    result = LLVM::UMinOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MaxUI:
-    result = LLVM::UMaxOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::None:
-  default:
-    llvm::report_fatal_error("Unsupported in-thread vectorize op kind");
-  }
-  return result;
-}
-
 ColumnAction ReduceOpHelper::moveAxisBasesToFront(const LinearLayout &layout,
-                                                  int axis, bool isVectorized) {
+                                                  int axis) {
   auto *ctx = layout.getOutDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   const auto &bases = layout.getBases().lookup(kReg);
-  if (bases.empty())
-    return ColumnAction::identity(kReg, bases.size());
-
-  // We keep the first basis where it is if it's vectorized to pack it without
-  // PRMT/MOV, and then we move the rest of the bases that don't move the axis
-  // to the front after it
   SmallVector<size_t> perm;
-  if (isVectorized)
-    perm.push_back(0);
   SmallVector<size_t> back;
-  for (size_t i = isVectorized ? 1 : 0; i < bases.size(); ++i) {
+  for (size_t i = 0; i < bases.size(); ++i) {
     if (bases[i][axis] != 0)
       perm.push_back(i);
     else
@@ -331,7 +193,6 @@ LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
   reduced = reduced.sublayout({kReg, kLane, kWarp},
                               to_vector(reduced.getOutDimNames()));
   reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);
-
   reduced = moveAxisBasesToFront(reduced, axis).apply(reduced);
   reduced = zeroBasesAlongDimAndReorder(reduced, axis, kReg);
   reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);
