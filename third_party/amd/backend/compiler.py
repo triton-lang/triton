@@ -2,7 +2,7 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 from types import ModuleType
 import os
 import hashlib
@@ -61,6 +61,10 @@ class HIPOptions:
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
     backend_name: str = 'hip'
+    # maxnreg corresponds to the amdgpu-num-vgpr attribute, which controls the
+    # maximum number of VGPRs (vector registers) used per work-item. Similar to
+    # CUDA's .maxnreg PTX directive. Not supported on all platforms.
+    maxnreg: Optional[int] = None
     instrumentation_mode: str = ""
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
@@ -430,6 +434,12 @@ class HIPBackend(BaseBackend):
         fns[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}, {options.waves_per_eu}")
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
+        # maxnreg can come from options (autotuner) or from ttg.maxnreg on the module (e.g. Gluon)
+        maxnreg = options.maxnreg
+        if maxnreg is None and hasattr(src, 'get_int_attr'):
+            maxnreg = src.get_int_attr("ttg.maxnreg")
+        if maxnreg is not None:
+            fns[0].add_fn_attr("amdgpu-num-vgpr", str(maxnreg))
         if knobs.compilation.enable_asan:
             fns[0].add_fn_target_feature("+xnack")
             fns[0].add_fn_asan_attr()
