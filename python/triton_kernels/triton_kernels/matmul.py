@@ -321,8 +321,9 @@ def matmul(a, b, bias,
         b.numel() > 0 and is_tma_compliant(b) and
         (b_scale is None or is_tma_compliant(b_scale)) and
         (ragged_dimension != "M" or a.stride(-1) == 1) and
-        # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
-        (c is None or c.stride(-1) == 1) and
+        # We support TMA for both row-major and column-major output.
+        # For column-major output (stride(-1) != 1), we currently only support the dense (no-scatter) output path.
+        (c is None or c.stride(-1) == 1 or (scatter_indx is None and is_tma_compliant(wrap_torch_tensor(c)))) and
         (c_acc_in is None or c_acc_is_c) and
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
         (ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)
@@ -498,6 +499,7 @@ def matmul(a, b, bias,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
+    y_transpose = out_matmul.stride(-1) != 1
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c.storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
@@ -549,6 +551,7 @@ def matmul(a, b, bias,
                    UPCAST_INDICES=should_upcast_indices(a, b, out_matmul),
                    X_TMA_MODE=a_tma_mode,
                    Y_TMA_MODE=c_tma_mode,
+                   Y_TRANSPOSE=y_transpose,
                    SWAP_XW=get_swap_xw(precision_config, opt_flags),
                    IS_EPILOGUE_QUANT_MXFP8=epilogue.specs.name == FnName.QUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
