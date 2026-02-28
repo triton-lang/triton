@@ -4,6 +4,7 @@
 
 PYTHON ?= python
 BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
+INSTALL_DIR ?= $(dir $(BUILD_DIR))install
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
 LLVM_BUILD_PATH ?= "$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/.llvm-project/build"
@@ -119,6 +120,12 @@ dev-install-llvm:
 		LLVM_LIBRARY_DIR=$(LLVM_BUILD_PATH)/lib \
 		LLVM_SYSPATH=$(LLVM_BUILD_PATH) \
 	$(MAKE) dev-install
+
+# Package C++ artifacts
+
+.PHONY: install
+install:
+	cmake --install $(BUILD_DIR) --prefix $(INSTALL_DIR)
 
 # Updating lit tests
 
