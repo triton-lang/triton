@@ -260,7 +260,7 @@ endfunction()
 # Disable warnings that show up in external code (gtest;pybind11)
 if(NOT MSVC)
   set(TRITON_DISABLE_EH_RTTI_FLAGS "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti>")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4244 /wd4624 /wd4715 /wd4530")
 endif()
@@ -409,6 +409,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
+
+  # Do not propagate libraries that libtriton depends on. This ensures that
+  # targets that link against libtriton do not accidentally link in their own
+  # copies of core Triton code and LLVM.
+  set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
+
   if(WIN32)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
@@ -431,10 +437,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     "${TRITON_WHEEL_DIR}/FileCheck"
     COPYONLY)
 
-endif()
-
-if (UNIX AND NOT APPLE)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
+  # Only build plugins when building libtriton since they depend on libtriton.
+  add_subdirectory(examples/plugins)
 endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
@@ -460,7 +464,6 @@ find_package(Threads REQUIRED)
 add_subdirectory(third_party/f2reduce)
 add_subdirectory(bin)
 add_subdirectory(test)
-add_subdirectory(examples)
 
 if(TRITON_BUILD_UT)
   add_subdirectory(unittest)

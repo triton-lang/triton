@@ -1,11 +1,11 @@
 import torch
 
 import pytest
-import os
 
 import triton
 import triton.language as tl
 from triton import knobs
+from triton._internal_testing import is_hip
 import custom_stages
 
 
@@ -21,10 +21,8 @@ def kernel2(BLOCK_SIZE: tl.constexpr):
     return
 
 
+@pytest.mark.skipif(is_hip(), reason="plugin not supported/tested on AMD yet")
 def test_op(capfd, device: str):
-    if os.environ.get('LLVM_BUILD_SHARED_LIBS', '0') == '0':
-        return
-
     size = 98432
     x = torch.rand(size, device=device)
     output = torch.empty_like(x)
