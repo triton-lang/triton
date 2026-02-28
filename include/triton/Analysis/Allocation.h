@@ -19,10 +19,6 @@ using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
-unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
-                                       const LinearLayout &dstLayout,
-                                       int bitwidth);
-
 unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
                                        RankedTensorType dstTy);
 
