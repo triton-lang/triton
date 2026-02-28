@@ -44,4 +44,4 @@ namespace nvgpu {} // namespace nvgpu
 } // namespace triton
 } // namespace mlir
 
-#endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
+#endif // TRITON_DIALECT_NVGPU_IR_DIALECT_H_
