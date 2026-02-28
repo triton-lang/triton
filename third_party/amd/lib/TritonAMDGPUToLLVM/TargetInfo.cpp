@@ -313,11 +313,11 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
 // threads. The output acc has the final accumulated values.
 //
 // Two special cases are supported:
-// When reduceLaneIdMask == 32:
+// When numLaneToReduce == 2 && interleave == 32:
 //   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
 //           the row 0 and 1 of the copy of acc
 //   step 2: apply reduction to the result values to get final result
-// When reduceLaneIdMask == (16 | 32):
+// When numLaneToReduce == 4 && interleave == 16:
 //   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
 //           the row 0 and 1 of the copy of acc
 //   step 2: apply reduction to the result values to get the partial result
@@ -326,13 +326,14 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
 //   step 4: apply reduction to get the final results
 static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
                                  SmallVector<Value> &acc, triton::ReduceOp op,
-                                 unsigned reduceLaneIdMask) {
+                                 unsigned numLaneToReduce,
+                                 unsigned interleave) {
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
     return false;
 
-  bool mfma32Case = reduceLaneIdMask == 32;
-  bool mfma16Case = reduceLaneIdMask == (16 | 32);
+  bool mfma32Case = numLaneToReduce == 2 && interleave == 32;
+  bool mfma16Case = numLaneToReduce == 4 && interleave == 16;
   if (!(mfma32Case || mfma16Case))
     return false;
 
@@ -357,12 +358,12 @@ static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
 
 static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
                              SmallVector<Value> &acc, triton::ReduceOp op,
-                             unsigned reduceLaneIdMask) {
+                             unsigned numLaneToReduce, unsigned interleave) {
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
     return false;
 
-  bool mfma16Case = reduceLaneIdMask == 16;
+  bool mfma16Case = numLaneToReduce == 2 && interleave == 16;
   if (!mfma16Case)
     return false;
 
@@ -380,16 +381,17 @@ static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned reduceLaneIdMask) const {
+                            unsigned numLaneToReduce,
+                            unsigned interleave) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   if (getISAFamily() == ISAFamily::CDNA4 &&
-      warpReduceSwap16or32(rewriter, loc, acc, op, reduceLaneIdMask))
+      warpReduceSwap16or32(rewriter, loc, acc, op, numLaneToReduce, interleave))
     return true;
   if ((getISAFamily() == ISAFamily::GFX1250) &&
-      warpReduceSwap16(rewriter, loc, acc, op, reduceLaneIdMask))
+      warpReduceSwap16(rewriter, loc, acc, op, numLaneToReduce, interleave))
     return true;
-  if (reduceLaneIdMask != (getWarpSize() - 1))
+  if (numLaneToReduce != getWarpSize())
     return false;
   if (isCDNA(getISAFamily()) && getISAFamily() == ISAFamily::CDNA1)
     return false;
