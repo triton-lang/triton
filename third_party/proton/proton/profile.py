@@ -29,6 +29,24 @@ def _get_mode_str(backend: str, mode: Optional[Union[str, BaseMode]]) -> str:
     return str(mode) if mode else ""
 
 
+def _get_cupti_lib_dir(backend: str) -> Optional[str]:
+    if backend != "cupti":
+        return None
+
+    variant = triton.knobs.proton.cupti_variant
+    if variant == "generic":
+        return triton.knobs.proton.cupti_lib_dir
+    if variant == "blackwell":
+        return triton.knobs.proton.cupti_lib_blackwell_dir
+    if variant != "auto":
+        raise ValueError("TRITON_CUPTI_VARIANT must be one of: auto, generic, blackwell")
+
+    if triton.runtime.driver.active.get_current_target().arch >= 100:
+        return triton.knobs.proton.cupti_lib_blackwell_dir
+
+    return triton.knobs.proton.cupti_lib_dir
+
+
 def _check_env(backend: str) -> None:
     if backend == "roctracer":
         hip_device_envs = ["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
@@ -37,16 +55,14 @@ def _check_env(backend: str) -> None:
                 raise ValueError(
                     f"Proton does not work when the environment variable {env} is set on AMD GPUs. Please unset it and use `ROCR_VISIBLE_DEVICES` instead"
                 )
-
-    use_blackwell_cupti = backend == "cupti" and triton.runtime.driver.active.get_current_target().arch >= 100
+    selected_cupti_lib_dir = _get_cupti_lib_dir(backend)
 
     # Ensure default envs are set for Proton knobs if not already set by the user.
     for attr, desc in triton.knobs.proton.knob_descriptors.items():
         key = desc.key
         if getenv(key, None) is None:
-            if key == "TRITON_CUPTI_LIB_PATH" and use_blackwell_cupti:
-                # For Blackwell+ GPUs, use the cupti library built for Blackwell.
-                triton.knobs.setenv(key, triton.knobs.proton.cupti_lib_blackwell_dir)
+            if key == "TRITON_CUPTI_LIB_PATH" and selected_cupti_lib_dir is not None:
+                triton.knobs.setenv(key, selected_cupti_lib_dir)
                 continue
             val = getattr(triton.knobs.proton, attr)
             if val is not None:

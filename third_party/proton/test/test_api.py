@@ -8,9 +8,11 @@ import pytest
 import json
 import triton.profiler as proton
 import pathlib
+from triton.backends.compiler import GPUTarget
 from triton.profiler.hooks.hook import HookManager
 from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
+from triton.profiler import profile as proton_profile
 from triton._internal_testing import is_hip
 
 
@@ -105,6 +107,33 @@ def test_profile_mode(tmp_path: pathlib.Path):
             assert "Cannot add a session with the same profiler but a different mode than existing sessions" in str(e)
         finally:
             proton.finalize()
+
+
+def test_get_cupti_lib_dir_variants(monkeypatch: pytest.MonkeyPatch):
+    class FakeDriver:
+
+        def __init__(self, arch: int):
+            self._target = GPUTarget("cuda", arch, 32)
+
+        def get_current_target(self):
+            return self._target
+
+    monkeypatch.setattr(proton_profile.triton.runtime.driver, "active", FakeDriver(100))
+    monkeypatch.setattr(proton_profile.triton.knobs.proton, "cupti_lib_dir", "/tmp/cupti")
+    monkeypatch.setattr(proton_profile.triton.knobs.proton, "cupti_lib_blackwell_dir", "/tmp/cupti-blackwell")
+
+    monkeypatch.setattr(proton_profile.triton.knobs.proton, "cupti_variant", "auto")
+    assert proton_profile._get_cupti_lib_dir("cupti") == "/tmp/cupti-blackwell"
+
+    monkeypatch.setattr(proton_profile.triton.knobs.proton, "cupti_variant", "generic")
+    assert proton_profile._get_cupti_lib_dir("cupti") == "/tmp/cupti"
+
+    monkeypatch.setattr(proton_profile.triton.knobs.proton, "cupti_variant", "blackwell")
+    assert proton_profile._get_cupti_lib_dir("cupti") == "/tmp/cupti-blackwell"
+
+    monkeypatch.setattr(proton_profile.triton.knobs.proton, "cupti_variant", "invalid")
+    with pytest.raises(ValueError, match="TRITON_CUPTI_VARIANT"):
+        proton_profile._get_cupti_lib_dir("cupti")
 
 
 def test_profile_decorator(tmp_path: pathlib.Path):
