@@ -93,7 +93,7 @@ def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, seman
 
         return semantic.full(scale_shape, scale_value, scale_dtype, scale_layout)
 
-    scale_factor = semantic.deduce_scale_factor(a, a_scale, a_format, b, b_scale, b_format)
+    scale_factor = semantic.deduce_scale_factor(a, a_scale, a_format, True, b, b_scale, b_format, True)
 
     a_scale = _create_and_broadcast_default_scale(0, a_scale, a_format, scale_factor)
     b_scale = _create_and_broadcast_default_scale(1, b_scale, b_format, scale_factor)
