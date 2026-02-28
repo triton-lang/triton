@@ -53,8 +53,8 @@ static inline int32_t getMfmaF8F6F4MatrixFormat(Type t) {
   return llvm::TypeSwitch<Type, int32_t>(t)
       .Case<Float8E4M3FNType>([](Type) { return 0; })
       .Case<Float8E5M2Type>([](Type) { return 1; })
-      .Case<Float6E3M2FNType>([](Type) { return 2; })
-      .Case<Float6E2M3FNType>([](Type) { return 3; })
+      .Case<Float6E2M3FNType>([](Type) { return 2; })
+      .Case<Float6E3M2FNType>([](Type) { return 3; })
       .Case<Float4E2M1FNType>([](Type) { return 4; })
       .Default([](Type) { return -1; });
 }
@@ -410,51 +410,57 @@ struct DotOpMFMAConversionHelper {
   /// element type from the input. We need to prepare a vector of kBase
   /// elements of appropriate element type required by mfma instructions.
   Value prepareOperands(Value rawElems, int kBase, Type type, bool preserveBF16,
-                        bool isConstantScale = false) const {
+                        bool isConstantScale = false,
+                        bool isFP6 = false) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value results;
 
     // Construct a vector type of kBase elements with desired type
-    auto vecTy = vec_ty(type, kBase);
+    if (isFP6)
+      assert(type.getIntOrFloatBitWidth() == 8);
+    const int vecSize = isFP6 ? (kBase * 3) / 4 : kBase;
+
+    auto vecTy = vec_ty(type, vecSize);
     if (type.isBF16() && !preserveBF16)
-      vecTy = vec_ty(i16_ty, kBase);
+      vecTy = vec_ty(i16_ty, vecSize);
     Value vec = b.undef(vecTy);
 
     // For each element in rawElems, extract the element as the desired type,
     // bitcast it if needed, and insert it into vec.
-    for (int elemId = 0; elemId < kBase; ++elemId) {
+    for (int elemId = 0, counter = 0; elemId < kBase; ++elemId) {
       auto val = b.extract_element(type, rawElems, b.i32_val(elemId));
       if (type.isBF16() && !preserveBF16) {
         // rocdl.mfma.f32.32x32x8bf16.1k calls for input of i16 type
         auto cast = b.bitcast(val, i16_ty);
         vec = b.insert_element(vecTy, vec, cast, b.i32_val(elemId));
       } else {
-        vec = b.insert_element(vecTy, vec, val, b.i32_val(elemId));
+        if (isFP6 && ((elemId + 1) % 4 == 0))
+          continue;
+        vec = b.insert_element(vecTy, vec, val, b.i32_val(counter++));
       }
     }
 
     // Now we have a vector of kBase elements of desired type.
     // Then we need to prepare vec for results.
     if (type.getIntOrFloatBitWidth() == 8) {
-      if (1 == kBase)
+      if (vecSize == 1) {
         // This is only for the scale operands of scaled mfma on CDNA4
         results = b.zext(i32_ty, b.bitcast(vec, i8_ty));
-      if (2 == kBase)
+      } else if (vecSize == 2) {
         // This case can occur during scale tensor packing when there aren't
         // enough elements to fill all 4 opSel slots. For example, with an A
         // tensor of size 16x256 and using 16x16x128 block sizes, we end up with
         // only 2 elements to pack,  resulting in a kBase of 2.
         results = b.zext(i32_ty, b.bitcast(vec, i16_ty));
-      if (4 == kBase)
+      } else if (vecSize == 4) {
         // This is for int8 on pre- CDNA3 GPUs and scale tensors on CDNA4 GPUs
         results = b.bitcast(vec, i32_ty);
-      if (8 == kBase)
+      } else if (vecSize == 8) {
         results = b.bitcast(vec, i64_ty);
-      if (16 == kBase)
-        // This is only for the operands of scaled mfma on CDNA4
-        results = b.bitcast(vec, vec_ty(i32_ty, 4));
-      if (32 == kBase)
-        results = b.bitcast(vec, vec_ty(i32_ty, 8));
+      } else {
+        const size_t numInt32InVector = vecSize / 4;
+        results = b.bitcast(vec, vec_ty(i32_ty, numInt32InVector));
+      }
     } else {
       results = vec;
     }
@@ -466,7 +472,7 @@ struct DotOpMFMAConversionHelper {
   virtual ValueTable getValuesFromDotOperandLayoutStruct(
       Value value, int batch, int nonKRep, int kRepInKWidth, int kWidth,
       int kBase, Type type, bool allowXF32, bool preserveBF16,
-      bool isConstantScale = false) const {
+      bool isConstantScale = false, bool isFP6 = false) const {
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto elems = unpackLLElements(loc, value, rewriter);
     // number of kBase-element vectors
@@ -509,7 +515,7 @@ struct DotOpMFMAConversionHelper {
               vals = prepareOperands(rawElems, kBase, f32_ty, preserveBF16);
             } else if (type.getIntOrFloatBitWidth() == 8) {
               vals = prepareOperands(rawElems, kBase, i8_ty, preserveBF16,
-                                     isConstantScale);
+                                     isConstantScale, isFP6);
             } else if (type.isBF16()) {
               vals = prepareOperands(rawElems, kBase, bf16_ty, preserveBF16);
             } else {
@@ -611,13 +617,20 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
     auto supportsTypes = [](ScaleDotElemType elemType) {
       return elemType == ScaleDotElemType::E2M1 ||
+             elemType == ScaleDotElemType::E2M3 ||
+             elemType == ScaleDotElemType::E3M2 ||
              elemType == ScaleDotElemType::E4M3 ||
              elemType == ScaleDotElemType::E5M2;
     };
 
     if (!supportsTypes(aElemType) || !supportsTypes(bElemType)) {
-      llvm::report_fatal_error("NYI: mxfp6\n");
+      llvm::report_fatal_error("unsuported data type\n");
     }
+
+    const bool isAFP6 = aElemType == ScaleDotElemType::E2M3 ||
+                        aElemType == ScaleDotElemType::E3M2;
+    const bool isBFP6 = bElemType == ScaleDotElemType::E2M3 ||
+                        bElemType == ScaleDotElemType::E3M2;
 
     int64_t kDimOperandSize = aTensorTy.getShape().back();
 
@@ -691,10 +704,12 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
     auto operandA = getValuesFromDotOperandLayoutStruct(
         loadedA, numRepB, numRepM, numRepK, aKWidth, aKBase,
-        aTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
+        aTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false, false,
+        isAFP6);
     auto operandB = getValuesFromDotOperandLayoutStruct(
         loadedB, numRepB, numRepN, numRepK, bKWidth, bKBase,
-        bTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
+        bTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false, false,
+        isBFP6);
 
     // Scales have the same replica distributions as their corresponding
     // operands.

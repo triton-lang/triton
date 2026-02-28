@@ -5,9 +5,9 @@ import numpy as np
 import triton
 import triton.language as tl
 from triton._internal_testing import is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
-from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
+from triton.tools.mxfp import MXFP4Tensor, MXFP6Tensor, MXScaleTensor
 from typing import Optional
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton import CompilationError
 
@@ -1352,6 +1352,135 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, 
     ref_out = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
 
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
+
+
+@triton.jit
+def mxfp6_matmul(  #
+        a_ptr, b_ptr, output_ptr,  #
+        a_scale, b_scale,  #
+        M, N, K,  #
+        stride_scale,  #
+        stride_am, stride_ak,  #
+        stride_bk, stride_bn,  #
+        stride_cm, stride_cn,  #
+        FP_FLAG: tl.constexpr,  #
+        SCALE_BLOCK: tl.constexpr,  #
+        BLOCK_M: tl.constexpr,  #
+        BLOCK_N: tl.constexpr,  #
+        BLOCK_K: tl.constexpr,  #
+        NUM_STAGES: tl.constexpr):  #
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
+    offs_k = tl.arange(0, BLOCK_K)
+    offs_scale_k = tl.arange(0, BLOCK_K // SCALE_BLOCK)
+    a_scale_ptr = a_scale + offs_am[:, None] * stride_scale + offs_scale_k[None, :]
+    b_scale_ptr = b_scale + offs_bn[:, None] * stride_scale + offs_scale_k[None, :]
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
+
+    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
+        k_remaining = K - k * BLOCK_K
+        valid_k = offs_k < k_remaining
+        a = tl.load(a_ptrs, mask=valid_k[None, :], other=0.)
+        b = tl.load(b_ptrs, mask=valid_k[:, None], other=0.)
+        scale_a = tl.load(a_scale_ptr)
+        scale_b = tl.load(b_scale_ptr)
+
+        if FP_FLAG == 0:
+            accumulator = tl.dot_scaled(a, scale_a, "e2m3", b, scale_b, "e2m3", accumulator)
+        else:
+            accumulator = tl.dot_scaled(a, scale_a, "e3m2", b, scale_b, "e3m2", accumulator)
+
+        a_ptrs += BLOCK_K * stride_ak
+        b_ptrs += BLOCK_K * stride_bk
+        a_scale_ptr += BLOCK_K // SCALE_BLOCK
+        b_scale_ptr += BLOCK_K // SCALE_BLOCK
+
+    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    output_ptrs = output_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    tl.store(output_ptrs, accumulator, mask=c_mask)
+
+
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (8192, 8192, 8192)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 128), (32, 64, 128), (64, 32, 128), (64, 64, 128)])
+@pytest.mark.parametrize("NUM_STAGES", [1, 2])
+@pytest.mark.parametrize("dtype", ["float6_e2m3", "float6_e3m2"])
+def test_mxfp6(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, dtype, device):
+    if not is_hip_cdna4():
+        pytest.skip('supported only by cdna4')
+
+    if dtype == "float6_e2m3":
+        exponent = 2
+    elif dtype == "float6_e3m2":
+        exponent = 3
+
+    a = MXFP6Tensor(data=torch.randint(1, 6, (M, K)).to(torch.float32), e=exponent)
+    b = MXFP6Tensor(data=torch.randint(1, 6, (K, N)).to(torch.float32), e=exponent)
+
+    a_ref = a.to(torch.float32)
+    b_ref = b.to(torch.float32)
+
+    a = a.to_packed_tensor(dim=1).to(device)
+    b = b.to_packed_tensor(dim=0).to(device)
+
+    SCALE_BLOCK = 32
+    FP_FLAG = 0 if dtype == 'float6_e2m3' else 1
+
+    a_scale = torch.randint(124, 130, (M, K // SCALE_BLOCK), dtype=torch.uint8)
+    b_scale = torch.randint(124, 130, (N, K // SCALE_BLOCK), dtype=torch.uint8)
+
+    def fp8e8m0_to_float32(tensor):
+        tensor = tensor.view(torch.uint8)
+        tensor = tensor.to(torch.int32)
+        tensor = tensor << 23
+        tensor = tensor.view(torch.float32)
+        return tensor
+
+    a_scale_ref = fp8e8m0_to_float32(a_scale)
+    a_scale_ref = a_scale_ref.repeat_interleave(SCALE_BLOCK, dim=1)
+
+    b_scale_ref = fp8e8m0_to_float32(b_scale)
+    b_scale_ref = b_scale_ref.repeat_interleave(SCALE_BLOCK, dim=1)
+    b_scale_ref = b_scale_ref.T.contiguous()
+
+    a_scale = a_scale.to(device)
+    b_scale = b_scale.to(device)
+
+    triton_output = torch.empty((M, N), device=device, dtype=torch.float32)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    mxfp6_matmul[grid](
+        a, b, triton_output,  #
+        a_scale, b_scale,  #
+        M, N, K,  #
+        a_scale.stride(0),  #
+        a.stride(0), a.stride(1),  #
+        b.stride(0), b.stride(1),  #
+        triton_output.stride(0), triton_output.stride(1),  #
+        FP_FLAG=FP_FLAG,  #
+        SCALE_BLOCK=SCALE_BLOCK,  #
+        BLOCK_M=BLOCK_M,  #
+        BLOCK_N=BLOCK_N,  #
+        BLOCK_K=BLOCK_K,  #
+        NUM_STAGES=NUM_STAGES)
+
+    a_ref = a_ref * a_scale_ref
+    b_ref = b_ref * b_scale_ref
+
+    torch_output = torch.matmul(a_ref, b_ref).to(torch.float32).to(device)
+    torch.testing.assert_close(torch_output, triton_output, atol=1e-3, rtol=1e-3)
 
 
 @triton.jit
