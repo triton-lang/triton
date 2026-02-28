@@ -1035,16 +1035,22 @@ def test_abs(dtype_x, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4nv, tl.float8e5])
+@pytest.mark.parametrize("in_dtype",
+                         [tl.float8e4b15, tl.float8e4nv, tl.float8e5, tl.float8e4b8, tl.float8e5b16])
 def test_abs_fp8(in_dtype, device):
     if is_hip():
-        pytest.skip('test_abs_fp8 not supported on HIP.')
+        if in_dtype == tl.float8e4b15:
+            pytest.skip("float8e4b15 not supported on HIP")
+        if in_dtype in [tl.float8e4b8, tl.float8e5b16] and not is_hip_cdna3():
+            pytest.skip(f"{in_dtype} only supported on HIP CDNA3")
     elif is_cuda():
         cc = torch.cuda.get_device_capability()
         if in_dtype == tl.float8e4b15 and cc >= (9, 0):
             pytest.skip("float8e4b15 not supported on CUDA >= 9.0")
         if in_dtype == tl.float8e4nv and cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
+        if in_dtype in [tl.float8e4b8, tl.float8e5b16]:
+            pytest.skip(f"{in_dtype} not supported on CUDA")
 
     @triton.jit
     def abs_kernel(X, Z, SIZE: tl.constexpr):
@@ -2220,12 +2226,16 @@ def convert_float_to_float32(fp: torch.tensor, dtype=None):
 
     extended_exp = (
         (1 << (tl.float32.primitive_bitwidth - tl.float32.fp_mantissa_width - 1)) - 1) << tl.float32.fp_mantissa_width
-    # special cases, exp is 0b11..1
-    if dtype in [tl.float8e4nv, tl.float8e4b15]:
+    # special cases
+    if dtype in [tl.float8e4b8, tl.float8e5b16]:
+        # FNUZ types: 0x80 is NaN, no negative zero, no infinities
+        output[fp == (1 << (dtype.primitive_bitwidth - 1))] = torch.nan
+    elif dtype in [tl.float8e4nv, tl.float8e4b15]:
         # float8e4m3nv does not have infinities
         output[fp == 0b01111111] = torch.nan
         output[fp == 0b11111111] = torch.nan
     else:
+        # exp is 0b11..1
         output = torch.where(exp == (1 << exp_width) - 1,
                              ((sign << (tl.float32.primitive_bitwidth - 1)) | extended_exp
                               | (frac << (tl.float32.fp_mantissa_width - dtype.fp_mantissa_width)))  #
