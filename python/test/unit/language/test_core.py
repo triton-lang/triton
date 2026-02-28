@@ -1779,10 +1779,10 @@ def test_atomic_unsupported_type(dtype_str, device):
 @pytest.mark.parametrize("size", [1, 4, 16])
 @pytest.mark.parametrize("op", ["add", "cas"])
 def test_tensor_atomic_use_result(dtype_str, size, op, device):
-    if is_hip():
-        pytest.skip(
-            "HIP is broken because (1) it doesn't support thread predicate in atomic cas, and (2) it doesn't support"
-            " atomic rmw with float16")
+    if is_hip() and op == "add" and dtype_str == "float16":
+        pytest.skip("HIP does not support atomic rmw with float16")
+    if is_hip() and dtype_str == "int32" and size > 1:
+        pytest.skip("Pre-existing int32 tensor atomic result broadcast issue on HIP")
 
     @triton.jit
     def kernel(index_ptr, out_ptr, size: tl.constexpr, op: tl.constexpr):
