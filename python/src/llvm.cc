@@ -26,6 +26,9 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/IR/DiagnosticHandler.h"
+#include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
@@ -39,6 +42,30 @@
 #include <stdexcept>
 
 namespace py = pybind11;
+
+namespace {
+/// Diagnostic handler that catches LLVM errors (especially resource limit
+/// violations) and records them instead of letting LLVMContext::diagnose()
+/// call exit(1). When handleDiagnostics() returns true, the diagnose()
+/// function returns immediately (LLVMContext.cpp:258-260).
+class TritonDiagnosticHandler : public llvm::DiagnosticHandler {
+public:
+  bool HasError = false;
+  std::string ErrorMessage;
+
+  bool handleDiagnostics(const llvm::DiagnosticInfo &DI) override {
+    if (DI.getSeverity() == llvm::DS_Error) {
+      llvm::raw_string_ostream OS(ErrorMessage);
+      llvm::DiagnosticPrinterRawOStream DP(OS);
+      DI.print(DP);
+      OS.flush();
+      HasError = true;
+      return true;
+    }
+    return false;
+  }
+};
+} // anonymous namespace
 
 namespace llvm {
 struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
@@ -387,6 +414,12 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   // emit machine code
   std::string result;
   {
+    // Install diagnostic handler to catch LLVM errors (e.g., resource limit
+    // violations) instead of exit(1).
+    auto handler = std::make_unique<TritonDiagnosticHandler>();
+    TritonDiagnosticHandler *handlerPtr = handler.get();
+    module.getContext().setDiagnosticHandler(std::move(handler));
+
     llvm::raw_string_ostream stream(result);
     llvm::buffer_ostream pstream(stream);
     llvm::legacy::PassManager pass;
@@ -400,6 +433,11 @@ std::string translateLLVMIRToASM(llvm::Module &module,
       reportAndResetTimings(&reportStream);
       llvm::dbgs() << reportStream.str();
       timePassesStr.clear();
+    }
+
+    // Check if LLVM reported any errors during codegen.
+    if (handlerPtr->HasError) {
+      throw std::runtime_error("LLVM error: " + handlerPtr->ErrorMessage);
     }
   }
   return result;

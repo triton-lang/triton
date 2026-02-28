@@ -472,6 +472,14 @@ class HIPBackend(BaseBackend):
         # Get some metadata
         metadata["num_warps"] = total_warps_num
         metadata["shared"] = src.get_int_attr("ttg.shared")
+
+        # Communicate dynamic LDS size to LLVM so our AMDGPUEarlyResourceCheck
+        # pass can check it before register allocation (prevents RA hangs).
+        shared_bytes = metadata["shared"]
+        if shared_bytes and shared_bytes > 0:
+            for fn in fns:
+                fn.add_fn_attr("amdgpu-dynamic-lds-bytes", str(shared_bytes))
+
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
@@ -503,12 +511,28 @@ class HIPBackend(BaseBackend):
         if knobs.amd.swap_mir_enable_misched and not knobs.amd.swap_mir:
             raise ValueError("TRITON_SWAP_MIR_ENABLE_MISCHED requires TRITON_SWAP_MIR to be set")
         if knobs.amd.swap_mir:
-            amdgcn = llvm.translate_mir_to_asm(os.path.join(knobs.amd.swap_mir, dump_file_id + '.txt'),
-                                               amd.TARGET_TRIPLE, options.arch, features, flags,
-                                               options.enable_fp_fusion, False, knobs.amd.swap_mir_enable_misched)
+            try:
+                amdgcn = llvm.translate_mir_to_asm(os.path.join(knobs.amd.swap_mir, dump_file_id + '.txt'),
+                                                   amd.TARGET_TRIPLE, options.arch, features, flags,
+                                                   options.enable_fp_fusion, False, knobs.amd.swap_mir_enable_misched)
+            except RuntimeError as e:
+                from triton.runtime.errors import OutOfResources
+                error_msg = str(e)
+                if "local memory" in error_msg:
+                    raise OutOfResources(metadata.get("shared", 0),
+                                         0, "shared memory") from e
+                raise
         else:
-            amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
-                                           options.enable_fp_fusion, False)
+            try:
+                amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
+                                               options.enable_fp_fusion, False)
+            except RuntimeError as e:
+                from triton.runtime.errors import OutOfResources
+                error_msg = str(e)
+                if "local memory" in error_msg:
+                    raise OutOfResources(metadata.get("shared", 0),
+                                         0, "shared memory") from e
+                raise
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
