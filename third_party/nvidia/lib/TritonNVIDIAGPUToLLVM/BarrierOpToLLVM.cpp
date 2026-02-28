@@ -351,6 +351,11 @@ struct ArriveBarrierOpConversion
     ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
 
     Value id = getThreadId(rewriter, loc);
+    if (op.getFrequency() == triton::nvidia_gpu::ArriveFrequency::PER_WARP) {
+      LLVM::NVIDIA::createSyncWarp(op.getLoc(), rewriter);
+      id = b.urem(id, b.i32_val(32));
+    }
+
     Value pred = b.icmp_eq(id, b.i32_val(0));
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
