@@ -228,3 +228,31 @@ Debug Ops
     static_assert
     device_print
     device_assert
+
+
+Valid tl.dtype Data Types
+-----------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    is_fp8e4nv
+    is_fp8e4b8
+    is_fp8e4b15
+    is_fp8e5
+    is_fp8e5b16
+    is_fp16
+    is_bf16
+    is_fp32
+    is_fp64
+    is_int1
+    is_int8
+    is_int16
+    is_int32
+    is_int64
+    is_uint8
+    is_uint16
+    is_uint32
+    is_uint64
+    is_void
