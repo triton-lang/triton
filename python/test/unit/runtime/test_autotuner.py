@@ -9,14 +9,15 @@ import uuid
 from triton._internal_testing import is_cuda, is_hip_cdna2
 
 
-def do_bench(kernel_call, quantiles, use_cuda_graph=False):
+def do_bench(kernel_call, quantiles, use_cuda_graph=False, clear_cache=False):
     if use_cuda_graph:
-        return triton.testing.do_bench_cudagraph(kernel_call, quantiles=quantiles)
+        return triton.testing.do_bench_cudagraph(kernel_call, quantiles=quantiles, clear_cache=clear_cache)
+    assert not clear_cache, "clear_cache arg is only meaningful with do_bench_cudagraph"
     return triton.testing.do_bench(kernel_call, quantiles=quantiles, warmup=1, rep=1)
 
 
-@pytest.mark.parametrize('use_cuda_graph', [False, True])
-def test_kwargs(use_cuda_graph: bool, device: str):
+@pytest.mark.parametrize('use_cuda_graph,clear_cache', [(False, False), (True, False), (True, True)])
+def test_kwargs(use_cuda_graph: bool, clear_cache: bool, device: str):
     if use_cuda_graph and not torch.cuda.is_available():
         pytest.xfail("CUDA is not available")
 
@@ -26,8 +27,11 @@ def test_kwargs(use_cuda_graph: bool, device: str):
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE_M': 32}), triton.Config(kwargs={'BLOCK_SIZE_M': 128})]
 
-    @triton.autotune(configs=configs, key=["M"],
-                     do_bench=lambda kernel, quantiles: do_bench(kernel, quantiles, use_cuda_graph))
+    @triton.autotune(
+        configs=configs,
+        key=["M"],
+        do_bench=lambda kernel, quantiles: do_bench(kernel, quantiles, use_cuda_graph, clear_cache),
+    )
     @triton.jit
     def _kernel(dst, src, stride_m: tl.constexpr, M, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_M: tl.constexpr):
         offsets_m = tl.program_id(0) * stride_m + tl.arange(0, BLOCK_SIZE_M)
