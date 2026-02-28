@@ -48,7 +48,7 @@ import triton.experimental.gluon.language as gl
 from triton._C.libtriton import ir, gluon_ir
 
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-from triton.experimental.gluon.language.nvidia.blackwell import (tma, mbarrier, fence_async_shared)
+from triton.experimental.gluon.language.nvidia.blackwell import tma, mbarrier
 
 
 def is_blackwell():
@@ -390,7 +390,6 @@ def async_scatter_kernel(tensor_desc, x_offsets_ptr, y_offset, src_ptr, src_stri
     # An async fence is required between the store to shared memory and the async scatter.
     # Recall from `04-tma` that a fence is needed when using different proxies to access shared
     # memory (generic proxy for the store, and async proxy for the `async_scatter`).
-    fence_async_shared()
     tma.async_scatter(tensor_desc, x_offsets, y_offset, smem_src)
     # Wait for the completion of the async scatter using `store_wait`.
     tma.store_wait(0)
@@ -566,7 +565,6 @@ def matmul_fused_gather_scatter_kernel(X_desc, W_desc, out_desc, X_gather_indx_p
         # Pipeline the async scatter by waiting for the previous store to complete.
         tma.store_wait(pendings=0)
         out_smem.store(out)
-        fence_async_shared()
         tma.async_scatter(out_desc, out_offs_m, epilogue_off_n, out_smem)
     # Wait for the last async scatter to complete.
     tma.store_wait(pendings=0)

@@ -68,7 +68,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor, TensorDescriptorIm2Col
-from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared, mbarrier, tma
+from triton.experimental.gluon.language.nvidia.hopper import mbarrier, tma
 
 t7 = importlib.import_module("07-persistence")
 
@@ -950,7 +950,6 @@ def store_output_tile(mma, dtype, out_desc, offs_m, offs_n):
     acc, mma = mma.take_result()
     c_smem = ttgl.allocate_shared_memory(dtype, out_desc.block_shape, out_desc.layout)
     c_smem.store(acc.to(dtype))
-    fence_async_shared()
     tma.async_copy_shared_to_global(out_desc, [offs_m, offs_n], c_smem)
     tma.store_wait(pendings=0)
 

@@ -27,7 +27,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     mbarrier,
     tcgen05_mma,
     tcgen05_commit,
-    fence_async_shared,
 )
 
 
@@ -203,19 +202,12 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
 
     # tcgen05_mma is an asynchronous operation. Until the operation is complete,
     # we cannot read or write to the accumulator memory and we cannot write to
-    # the operand memory. tcgen05_mma accesses shared memory through the async
-    # proxy:
+    # the operand memory:
     #
     # ```python
     # b_smem.store(b)
-    # fence_async_shared()
     # tcgen05_mma(a, b_smem, acc_tmem)
     # ```
-    #
-    # A fence is required between the shared store and tcgen05_mma to order
-    # their shared memory accesses. Completion of the tcgen05_mma operation
-    # implies its reads from shared memory are complete, thus it would be safe
-    # to write to the shared memory inputs after waiting without a fence.
     #
     # Completion of tcgen05_mma operations is tracked with mbarriers. Invoking
     # tcgen05_commit on an mbarrier causes the mbarrier to be arrived on when
@@ -247,7 +239,6 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)
     acc = acc_tmem.load()
     d_smem.store(acc)
-    fence_async_shared()
     tma.async_copy_shared_to_global(d_desc, [0, 0], d_smem)
     tma.store_wait(pendings=0)
 
@@ -351,7 +342,6 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc, TRANSPOSE_B: gl.constexpr, num
     # Downcast accumulator and store tile of C.
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
     c_smem.store(acc.to(dtype))
-    fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
 
@@ -590,7 +580,6 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
     ub = ub_tmem.load()
     c_smem.store(ub.to(dtype))
-    fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
 
     # Wait VBN, VB epilogue
@@ -598,7 +587,6 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     vb = vb_tmem.load()
     tma.store_wait(pendings=0)
     c_smem.store(vb.to(dtype))
-    fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m + BLOCK_M, off_n], c_smem)
     tma.store_wait(pendings=0)
 

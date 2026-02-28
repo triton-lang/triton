@@ -74,7 +74,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
-    fence_async_shared,
     tensor_memory_descriptor,
     tcgen05_copy,
     tcgen05_commit,
@@ -235,7 +234,6 @@ def simple_mma_scaled_kernel(a_desc, b_desc, c_desc, a_scale_ptr, a_scale_stride
     # Write the accumulator via TMA store.
     acc_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
     acc_smem.store(acc)
-    fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], acc_smem)
     tma.store_wait(0)
 
@@ -531,7 +529,6 @@ def mma_scaled_contig_kernel(a_desc, b_desc, c_desc, a_scale_ptr, b_scale_ptr, V
     acc = acc.to(c_desc.dtype)
     acc_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
     acc_smem.store(acc)
-    fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], acc_smem)
     tma.store_wait(0)
     # ======= End unchanged code from `simple_mma_scaled_kernel` =======
@@ -770,7 +767,6 @@ def mma_scaled_packed_block_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     acc = acc.to(c_desc.dtype)
     acc_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
     acc_smem.store(acc)
-    fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], acc_smem)
     tma.store_wait(0)
     # ======= End unchanged code from `simple_mma_scaled_kernel` =======
@@ -1039,7 +1035,6 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     acc = acc.to(c_desc.dtype)
     acc_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
     acc_smem.store(acc)
-    fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], acc_smem)
     tma.store_wait(0)
     # ======= End unchanged code from `mma_scaled_packed_block_kernel` =======
@@ -1320,7 +1315,6 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
         # Pipeline the store by waiting for the previous store to complete.
         tma.store_wait(0)
         acc_smem.store(acc)
-        fence_async_shared()
         tma.async_copy_shared_to_global(c_desc, [epilogue_pid_m * BLOCK_M, epilogue_pid_n * BLOCK_N], acc_smem)
 
     # Wait for the last store.
@@ -1405,7 +1399,6 @@ def mma_scaled_epilogue_partition(p):
 
         tma.store_wait(0)
         acc_smem.store(acc.to(p.c_desc.dtype))
-        fence_async_shared()
         tma.async_copy_shared_to_global(p.c_desc, [pid_m * p.BLOCK_M, pid_n * p.BLOCK_N], acc_smem)
     tma.store_wait(0)
 

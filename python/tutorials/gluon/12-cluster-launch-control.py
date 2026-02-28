@@ -32,7 +32,7 @@ import importlib
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.nvidia.blackwell import TensorDescriptor
-from triton.experimental.gluon.language.nvidia.blackwell import tma, mbarrier, fence_async_shared, clc
+from triton.experimental.gluon.language.nvidia.blackwell import tma, mbarrier, clc
 from triton.language.core import _aggregate as aggregate
 
 
@@ -176,7 +176,6 @@ def persistent_matmul_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.constexpr, Sche
         c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
         c, mma = mma.take_result()
         c_smem.store(c.to(dtype))
-        fence_async_shared()
         tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
         tma.store_wait(pendings=0)
         scheduler = scheduler.advance()
