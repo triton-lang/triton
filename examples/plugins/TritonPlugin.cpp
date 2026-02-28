@@ -82,3 +82,24 @@ tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
   }
   return TP_SUCCESS;
 }
+
+TRITON_PLUGIN_API
+tritonEnumeratePluginCustomOps(uint32_t *opCount, const char **opNames) {
+  if (!opCount)
+    return TP_GENERIC_FAILURE;
+  *opCount = 1;
+  if (!opNames)
+    return TP_SUCCESS;
+  opNames[0] = "create_custom_fadd2";
+  return TP_SUCCESS;
+}
+
+TRITON_PLUGIN_API
+tritonAddPluginCustomOp(const char *opName, TritonOpBuilder &self,
+                        void **operands) {
+  ::mlir::Value *dst = static_cast<::mlir::Value *>(operands[0]);
+  ::mlir::Value *lhs = static_cast<::mlir::Value *>(operands[1]);
+  ::mlir::Value *rhs = static_cast<::mlir::Value *>(operands[2]);
+  *dst = self.create<::mlir::arith::AddFOp>(*lhs, *rhs);
+  return TP_SUCCESS;
+}

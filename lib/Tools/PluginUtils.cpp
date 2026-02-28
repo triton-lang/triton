@@ -85,6 +85,22 @@ llvm::Error TritonPlugin::loadPlugin() {
     dialectPluginInfoAPI = *dialectPluginInfoAPIOrErr;
   }
 
+  if ((intptr_t)library.getAddressOfSymbol(ENUMERATE_CUSTOMOPS)) {
+    auto enumerateCustomOpAPIOrErr =
+        getAPI<EnumeratePyBindHandlesType, EnumeratePyBindHandlesCType>(
+            ENUMERATE_CUSTOMOPS);
+    auto addCustomOpAPIOrErr =
+        getAPI<AddCustomOpType, AddCustomOpCType>(ADD_CUSTOMOP);
+
+    if (auto Err = enumerateCustomOpAPIOrErr.takeError())
+      return Err;
+    if (auto Err = addCustomOpAPIOrErr.takeError())
+      return Err;
+
+    enumerateCustomOpAPI = *enumerateCustomOpAPIOrErr;
+    addCustomOpAPI = *addCustomOpAPIOrErr;
+  }
+
   isLoaded = true;
   return llvm::Error::success();
 }
@@ -141,10 +157,18 @@ TritonPlugin::getDialectHandles(std::vector<const char *> &dialectNames) {
 }
 
 llvm::Expected<TritonPluginResult>
-TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle) {
+TritonPlugin::getCustomOpHandles(std::vector<const char *> &customOpNames) {
+  return enumeratePyBindHandles(enumerateCustomOpAPI, customOpNames);
+}
+
+llvm::Expected<TritonPluginResult>
+TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle,
+                      int num_warps, int threadsPerWarp, int numCTAs) {
   if (auto Err = loadPlugin())
     return Err;
-  return checkAPIResult(addPassAPI(pm, passHandle), passHandle);
+  return checkAPIResult(
+      addPassAPI(pm, passHandle, num_warps, threadsPerWarp, numCTAs),
+      passHandle);
 }
 
 llvm::Expected<TritonPluginResult>
@@ -159,4 +183,18 @@ TritonPlugin::getDialectPluginInfo(const char *dialectName) {
   if (auto Err = loadPlugin())
     return Err;
   return dialectPluginInfoAPI(dialectName);
+}
+
+llvm::Expected<TritonPluginResult>
+TritonPlugin::addCustomOp(const char *customOpHandle, TritonOpBuilder &self,
+                          std::vector<mlir::Value> &values) {
+  if (auto Err = loadPlugin())
+    return Err;
+  std::vector<void *> opaqueValues;
+  opaqueValues.resize(values.size());
+  for (unsigned i = 0; i < values.size(); ++i) {
+    opaqueValues[i] = &values.data()[i];
+  }
+  addCustomOpAPI(customOpHandle, self, opaqueValues.data());
+  return TP_SUCCESS;
 }
