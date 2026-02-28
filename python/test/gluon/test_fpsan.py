@@ -9,7 +9,7 @@ from triton.experimental.gluon import language as gl
 from triton import language as tl
 from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_interpreter
 from triton.experimental.gluon.language.nvidia.blackwell import (TensorMemoryLayout, allocate_tensor_memory, mbarrier,
-                                                                 tcgen05_mma, get_tmem_reg_layout)
+                                                                 tcgen05_mma)
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
@@ -559,8 +559,8 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
         smem_b.store(b_tile)
 
         tmem_layout: gl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
-        acc_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK, BLOCK), tmem_layout, gl.num_warps())
         acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK, BLOCK], layout=tmem_layout)
+        acc_reg_layout: gl.constexpr = acc_tmem.get_reg_layout()
         if USE_ACC:
             c_tile = gl.load(c_ptr + out_offs)
             acc_init = gl.convert_layout(c_tile, acc_reg_layout)
@@ -575,7 +575,7 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
         mbarrier.wait(bar, phase=0, deps=[smem_a, smem_b])
         mbarrier.invalidate(bar)
 
-        out = acc_tmem.load(acc_reg_layout)
+        out = acc_tmem.load()
         out = gl.convert_layout(out, layout)
         gl.store(out_ptr + out_offs, out)
 
@@ -629,11 +629,10 @@ def test_tmem_index_subslice(device, fresh_knobs):
         view = tmem.index(1)
         sub = view.slice(0, SLICE_N)
 
-        sub_layout: gl.constexpr = TensorMemoryLayout((BLOCK, SLICE_N), col_stride=1)
-        sub_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK, SLICE_N), sub_layout, gl.num_warps())
+        sub_reg_layout: gl.constexpr = sub.get_reg_layout()
         x_reg = gl.convert_layout(x, sub_reg_layout)
         sub.store(x_reg)
-        out = sub.load(sub_reg_layout)
+        out = sub.load()
         out = gl.convert_layout(out, layout)
         gl.store(out_ptr + offs, out)
 

@@ -14,7 +14,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
     tensor_memory_descriptor,
-    get_tmem_reg_layout,
     tcgen05_mma,
     tcgen05_commit,
 )
@@ -246,15 +245,11 @@ def epilogue_partition(p):
     pid = gl.program_id(axis=0)
     prog = config.get_program(pid)
 
-    # Register layouts
-    tmem_layout: gl.constexpr = TensorMemoryLayout(block=(128, BLOCK_N), col_stride=1)
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), tmem_layout, config.num_warps)
-
     # Wait for accumulator to be ready
     mbarrier.wait(p.acc_ready_bars.index(0), phase=0)
 
     # Load from TMEM and convert to fp16
-    acc = p.acc_bufs.index(0).load(acc_reg_layout)
+    acc = p.acc_bufs.index(0).load()
     result = gl.convert_layout(acc.to(gl.float16), gl.CoalescedLayout())
 
     # Signal that accumulator is consumed
