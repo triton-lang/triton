@@ -124,7 +124,7 @@ bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
 // for CDNA3, we have optimized sequence that can combine scale during the
 // conversion
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
-                                    bool toFp16, Value packedVec,
+                                    Type elemType, Value packedVec,
                                     mlir::triton::AMD::ISAFamily isaFamily,
                                     Value scale = nullptr);
 

@@ -35,8 +35,8 @@ SmallVector<Value> upcastMxfp4_SW(RewriterBase &rewriter,
   Value packedVec = b.undef(vec_ty(i8_ty, 4));
   for (int i : llvm::seq(4))
     packedVec = b.insert_element(packedVec, values[idx + i], b.i32_val(i));
-  return upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec, isaFamily,
-                          scale);
+  return upcast8xMxfp4_SW(rewriter, upcastOp, toFp16 ? f16_ty : bf16_ty,
+                          packedVec, isaFamily, scale);
 }
 
 Value mxfpScaleFp16(RewriterBase &rewriter, Location loc, Value v, Value scale,
