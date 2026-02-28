@@ -85,6 +85,8 @@ docs/sg_execution_times.rst
 .clangd/
 .cache
 /compile_commands.json
+mlir-lsp-server
+tblgen-lsp-server
 .vscode
 .vs
 .cursor
