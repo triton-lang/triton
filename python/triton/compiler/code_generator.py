@@ -449,6 +449,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.set_loc(loc)
 
     def _find_carries(self, node, liveins, ignore: set[str] = set()):
+        ip, loc = self._get_insertion_point_and_loc()
         # create loop body block
         block = self.builder.create_block()
         self.builder.set_insertion_point_to_start(block)
@@ -457,6 +458,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.visit_compound_statement(node.body)
         self.scf_stack.pop()
         block.erase()
+        self._set_insertion_point_and_loc(ip, loc)
 
         # If a variable (name) has changed value within the loop, then it's
         # a loop-carried variable. (The new and old value must be of the
@@ -471,7 +473,16 @@ class CodeGenerator(ast.NodeVisitor):
 
             if _is_triton_value(live_val):
                 loop_val = self.lscope[name]
-                self._verify_loop_carried_variable(name, loop_val, live_val)
+                loop_val, live_val = self._verify_loop_carried_variable(name, loop_val, live_val)
+
+                constexpr_only = self._is_constexpr_only_loop_value(loop_val) and \
+                    self._is_constexpr_only_loop_value(live_val)
+                if constexpr_only and self._constexpr_loop_values_equal(loop_val, live_val):
+                    continue
+
+                if self._loop_value_contains_constexpr(loop_val) or self._loop_value_contains_constexpr(live_val):
+                    loop_val = self._relax_loop_carried_value(loop_val)
+                    live_val = self._relax_loop_carried_value(live_val)
 
                 live_handles = flatten_values_to_ir([live_val])
                 loop_handles = flatten_values_to_ir([loop_val])
@@ -703,10 +714,15 @@ class CodeGenerator(ast.NodeVisitor):
         self.set_value(self.visit(target), value)
 
     def visit_Assign(self, node):
+        targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
+        assert len(targets) == 1
+        target = targets[0]
+
         # construct values to assign
         def _sanitize_value(value):
             if isinstance(value, language.tuple):
                 return _apply_to_tuple_values(value, _sanitize_value)
+
             native_nontensor_types = (language.dtype, language.tuple)
             value = _unwrap_if_constexpr(value)
             if value is not None and \
@@ -715,9 +731,6 @@ class CodeGenerator(ast.NodeVisitor):
                 value = self.semantic.to_tensor(value)
             return value
 
-        targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
-        assert len(targets) == 1
-        target = targets[0]
         if isinstance(target, ast.Name):
             with self._name_loc_prefix(target.id):
                 values = _sanitize_value(self.visit(node.value))
@@ -1072,15 +1085,52 @@ class CodeGenerator(ast.NodeVisitor):
         ast.USub: '__neg__', ast.UAdd: '__pos__', ast.Not: '__not__', ast.Invert: '__invert__'
     }
 
+    def _loop_value_contains_constexpr(self, value):
+        if isinstance(value, constexpr):
+            return True
+        if isinstance(value, language.tuple):
+            return any(self._loop_value_contains_constexpr(v) for v in value.values)
+        return False
+
+    def _is_constexpr_only_loop_value(self, value):
+        if isinstance(value, constexpr):
+            return True
+        if isinstance(value, language.tuple):
+            return all(self._is_constexpr_only_loop_value(v) for v in value.values)
+        return False
+
+    def _constexpr_loop_values_equal(self, lhs, rhs):
+        if isinstance(lhs, constexpr) and isinstance(rhs, constexpr):
+            return lhs.value == rhs.value
+        if isinstance(lhs, language.tuple) and isinstance(rhs, language.tuple):
+            if lhs.type.fields != rhs.type.fields or len(lhs.values) != len(rhs.values):
+                return False
+            return all(self._constexpr_loop_values_equal(l, r) for l, r in zip(lhs.values, rhs.values))
+        return False
+
+    def _relax_loop_carried_value(self, value):
+        if isinstance(value, constexpr):
+            return self.semantic.to_tensor(value)
+        if isinstance(value, language.tuple):
+            return _apply_to_tuple_values(value, self._relax_loop_carried_value)
+        return value
+
+    def _normalize_loop_carried_type(self, ty):
+        tl = language.core
+        if isinstance(ty, tl.constexpr_type):
+            return self.semantic.to_tensor_type(ty)
+        if isinstance(ty, tl.tuple_type):
+            return tl.tuple_type([self._normalize_loop_carried_type(child_ty) for child_ty in ty.types], ty.fields)
+        return ty
+
     def _verify_loop_carried_variable(self, name, loop_val, live_val):
         assert _is_triton_value(loop_val), f'cannot reassign constexpr {name} in the loop'
         assert _is_triton_value(live_val), f'cannot reassign constexpr {name} in the loop'
-        assert type(loop_val) is type(live_val), (
-            f'Loop carried variable {name} changed type, was {type(loop_val)} but is now {type(live_val)}')
-        assert not _is_triton_tensor(loop_val) or loop_val.type == live_val.type, \
-            f'Loop-carried variable {name} has initial type {live_val.type} '\
-            f'but is re-assigned to {loop_val.type} in loop! '\
-            f'Please make sure that the type stays consistent.'
+        loop_ty = self._normalize_loop_carried_type(loop_val.type)
+        live_ty = self._normalize_loop_carried_type(live_val.type)
+        assert loop_ty == live_ty, (
+            f'Loop carried variable {name} changed type, was {live_val.type} but is now {loop_val.type}')
+        return loop_val, live_val
 
     def visit_While(self, node):
         with enter_sub_region(self) as sr:
