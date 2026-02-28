@@ -32,6 +32,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "llvm/Support/Debug.h"
+#include <functional>
 
 #define DEBUG_TYPE "tritongpu-prefetch"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -76,6 +77,9 @@ class Prefetcher {
 
   void cloneElementwiseOps(Value &bRem, const SmallVector<Value> &vals,
                            OpBuilder &builder);
+
+  Value cloneValueOutsideLoop(Value v, ArrayRef<Value> replacements,
+                              OpBuilder &builder);
 
 public:
   Prefetcher() = delete;
@@ -153,6 +157,61 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
 LogicalResult Prefetcher::initialize() {
   Block *loop = forOp.getBody();
 
+  // Clone a value defined inside the loop body into the loop preheader (or
+  // anywhere dominating the loop) by replacing loop-carried arguments with the
+  // provided replacements. Only side-effect-free, single-result ops are
+  // supported.
+  auto isSupportedForCloning = [](Operation *op) {
+    return op->getNumResults() == 1 && op->getNumRegions() == 0 &&
+           isMemoryEffectFree(op);
+  };
+
+  auto createReplacementMap = [&](ValueRange replacements) {
+    DenseMap<Value, Value> mapping;
+    auto loopArgs = forOp.getRegionIterArgs();
+    if (loopArgs.size() != replacements.size())
+      return mapping;
+    for (auto [arg, replacement] : llvm::zip_equal(loopArgs, replacements))
+      mapping[arg] = replacement;
+    return mapping;
+  };
+
+  auto cloneWithMap = [&](Value v, ValueRange replacements,
+                          OpBuilder &builder) -> Value {
+    DenseMap<Value, Value> cache;
+    DenseMap<Value, Value> replacementMap = createReplacementMap(replacements);
+    std::function<Value(Value)> recurse = [&](Value val) -> Value {
+      if (auto it = cache.find(val); it != cache.end())
+        return it->second;
+      if (auto barg = dyn_cast<BlockArgument>(val)) {
+        if (barg.getOwner()->getParentOp() != forOp.getOperation())
+          return cache[val] = val;
+        if (barg.getArgNumber() < forOp.getNumInductionVars())
+          return Value(); // Unsupported induction variable dependency
+        auto it = replacementMap.find(barg);
+        if (it == replacementMap.end())
+          return Value();
+        return cache[val] = it->second;
+      }
+      Operation *def = val.getDefiningOp();
+      if (!def || def->getBlock() != forOp.getBody())
+        return cache[val] = val;
+      if (!isSupportedForCloning(def))
+        return Value();
+      SmallVector<Value> newOperands;
+      for (Value operand : def->getOperands()) {
+        Value cloned = recurse(operand);
+        if (!cloned)
+          return Value();
+        newOperands.push_back(cloned);
+      }
+      Operation *clone = builder.clone(*def);
+      clone->setOperands(newOperands);
+      return cache[val] = clone->getResult(0);
+    };
+    return recurse(v);
+  };
+
   auto getEncoding = [](Value v) {
     return cast<TensorOrMemDesc>(v.getType()).getEncoding();
   };
@@ -211,19 +270,6 @@ LogicalResult Prefetcher::initialize() {
     return {};
   };
 
-  auto getIncomingOp = [this](Value v) -> Value {
-    if (auto arg = mlir::dyn_cast<BlockArgument>(v))
-      if (arg.getOwner()->getParentOp() == forOp.getOperation())
-        return forOp.getTiedLoopInit(arg)->get();
-    return Value();
-  };
-
-  auto getYieldOperand = [this](Value v) -> Value {
-    auto arg = mlir::cast<BlockArgument>(v);
-    unsigned yieldIdx = arg.getArgNumber() - forOp.getNumInductionVars();
-    return yieldOp.getOperand(yieldIdx);
-  };
-
   for (triton::DotOp dot : dotsInFor) {
     auto aType = dot.getA().getType();
     auto bType = dot.getB().getType();
@@ -253,10 +299,18 @@ LogicalResult Prefetcher::initialize() {
     if (aVals.size() && bVals.size()) {
       Value aSmem = aVals.front();
       Value bSmem = bVals.front();
-      Value aHeaderDef = getIncomingOp(aSmem);
-      Value bHeaderDef = getIncomingOp(bSmem);
+      OpBuilder preheaderBuilder(forOp);
+      Value aHeaderDef =
+          cloneWithMap(aSmem, forOp.getInitArgs(), preheaderBuilder);
+      Value bHeaderDef =
+          cloneWithMap(bSmem, forOp.getInitArgs(), preheaderBuilder);
+      OpBuilder yieldBuilder(yieldOp);
+      Value aYieldDef =
+          cloneWithMap(aSmem, yieldOp->getOperands(), yieldBuilder);
+      Value bYieldDef =
+          cloneWithMap(bSmem, yieldOp->getOperands(), yieldBuilder);
       // Only prefetch loop arg
-      if (aHeaderDef && bHeaderDef) {
+      if (aHeaderDef && bHeaderDef && aYieldDef && bYieldDef) {
         dots.insert(dot);
         dot2aVals[dot] = aVals;
         dot2bVals[dot] = bVals;
@@ -264,8 +318,8 @@ LogicalResult Prefetcher::initialize() {
         dot2bHeaderDef[dot] = bHeaderDef;
         dot2aLoopArg[dot] = aSmem;
         dot2bLoopArg[dot] = bSmem;
-        dot2aYield[dot] = getYieldOperand(aSmem);
-        dot2bYield[dot] = getYieldOperand(bSmem);
+        dot2aYield[dot] = aYieldDef;
+        dot2bYield[dot] = bYieldDef;
       }
     }
   }
@@ -275,6 +329,19 @@ LogicalResult Prefetcher::initialize() {
 
 void Prefetcher::emitPrologue() {
   OpBuilder builder(forOp);
+
+  // Ensure all outstanding async copies that feed the prefetch buffers have
+  // completed before issuing the first local_loads in the prologue.
+  SmallVector<Value> preLoopTokens;
+  for (Operation &op : *forOp->getBlock()) {
+    if (&op == forOp.getOperation())
+      break;
+    for (Value res : op.getResults())
+      if (isa<triton::gpu::AsyncTokenType>(res.getType()))
+        preLoopTokens.push_back(res);
+  }
+  if (!preLoopTokens.empty())
+    triton::gpu::AsyncWaitOp::create(builder, forOp.getLoc(), preLoopTokens, 0);
 
   for (triton::DotOp dot : dots) {
     Attribute dotEncoding = dot.getType().getEncoding();
