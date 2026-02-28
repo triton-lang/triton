@@ -1,9 +1,22 @@
 from dataclasses import dataclass
-from triton_kernels.numerics import InFlexData, OutFlexData
+from typing import Protocol
+
 import torch
 import triton
-from .swiglu_details._swiglu import _swiglu, _swiglu_fn
+from torch.autograd.function import FunctionCtx
+
+from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels import target_info
+from .swiglu_details._swiglu import _swiglu, _swiglu_fn
+
+
+class _RoutingExptData(Protocol):
+    token_offs: torch.Tensor
+
+
+class _RoutingData(Protocol):
+    expt_data: _RoutingExptData
+    n_expts_tot: int
 
 
 @dataclass(frozen=True)
@@ -25,7 +38,13 @@ swiglu_fn = _swiglu_fn
 class SwiGLU(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, a, alpha, precision_config, routing_data):
+    def forward(
+        ctx: FunctionCtx,
+        a: torch.Tensor,
+        alpha: float | torch.Tensor,
+        precision_config: PrecisionConfig,
+        routing_data: _RoutingData | None,
+    ) -> torch.Tensor:
         N = a.shape[-1]
         M = a.numel() // N
         assert a.stride()[-1] == 1
@@ -82,11 +101,20 @@ class SwiGLU(torch.autograd.Function):
         return out
 
 
-def swiglu(a, alpha, precision_config, routing_data=None):
+def swiglu(
+    a: torch.Tensor,
+    alpha: float | torch.Tensor,
+    precision_config: PrecisionConfig,
+    routing_data: _RoutingData | None = None,
+) -> torch.Tensor:
     return SwiGLU.apply(a, alpha, precision_config, routing_data)
 
 
-def swiglu_torch(a, alpha, precision_config):
+def swiglu_torch(
+    a: torch.Tensor,
+    alpha: float | torch.Tensor,
+    precision_config: PrecisionConfig,
+) -> torch.Tensor:
     limit = precision_config.limit
     a_gelu = a[..., ::2]
     if limit is not None:

@@ -1,7 +1,7 @@
 [project]
 name = "triton_kernels"
 version = "1.0.0"
-dependencies = ["numpy", "pytest"]
+dependencies = ["numpy", "pytest", "typing-extensions", "torch"]
 
 [project.optional-dependencies]
 tests = ["llnl-hatchet", "matplotlib", "pandas"]

@@ -7,6 +7,7 @@ from .layout_details.hopper_value import HopperMXValueLayout
 from .layout_details.cdna4_scale import CDNA4MXScaleLayout
 from .layout_details.strided import StridedLayout
 from ..target_info import cuda_capability_geq, is_hip_cdna4
+from .ragged_tensor import RaggedTensorMetadata
 
 __all__ = [
     "Layout",
@@ -20,7 +21,7 @@ __all__ = [
 ]
 
 
-def make_default_matmul_mxfp4_w_layout(mx_axis: int):
+def make_default_matmul_mxfp4_w_layout(mx_axis: int) -> Layout:
     if cuda_capability_geq(10):
         return BlackwellMXValueLayout()
     elif cuda_capability_geq(9):
@@ -29,7 +30,7 @@ def make_default_matmul_mxfp4_w_layout(mx_axis: int):
         return StridedLayout(-2)
 
 
-def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
+def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8) -> Layout:
     if is_hip_cdna4():
         return CDNA4MXScaleLayout()
     else:
@@ -41,7 +42,7 @@ def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
     return StridedLayout(-2)
 
 
-def make_default_matmul_mxfp8_act_scale_layout(ragged_metadata):
+def make_default_matmul_mxfp8_act_scale_layout(ragged_metadata: RaggedTensorMetadata, ) -> Layout:
     if cuda_capability_geq(10):
         return BlackwellActMXScaleLayout(ragged_metadata)
     return StridedLayout(-2)

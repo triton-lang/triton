@@ -1,16 +1,23 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Any, Callable, Literal, Sequence, TypeVar
 
 import torch
+from typing_extensions import deprecated
+
 from triton.tools.ragged_tma import create_ragged_descriptor
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 from .target_info import cuda_capability_geq
 from .tensor_details import bitmatrix as bitmatrix_details
 from .tensor_details import ragged_tensor as ragged_tensor_details
+from .tensor_details.dtype import (BF16, FP4, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP16, FP32, FP64, INT16, INT32, INT64,
+                                   UINT8, DataType, FloatType,  # noqa: F401
+                                   IntegerType,  # noqa: F401
+                                   )
 from .tensor_details.layout import BlackwellMXValueLayout, Layout, StridedLayout
 from .tensor_details.ragged_tensor import RaggedTensorMetadata
-from .tensor_details.dtype import IntegerType, FloatType, DataType
-from .tensor_details.dtype import FP4, UINT8, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP16, BF16, FP32, FP64, INT16, INT32, INT64
+from .tensor_details.sharding import Sharding
+from .tensor_metadata import TensorMetadata
 
 
 # storage
@@ -21,85 +28,55 @@ class Storage:
     layout: Layout
 
     @property
-    def device(self):
+    def device(self) -> torch.device:
         return self.data.device
 
 
 # main tensor class
 # ---------------------------------------------------------------------------- #
 
+# We only support sharding across one single dimension.
+# This can eventually be relaxed, but we have to agree on one consistent story about how to map
+# shards to ranks across dimensions.
+
 
 @dataclass
-class Tensor:
+class Tensor(TensorMetadata):
     storage: Storage
-    dtype: IntegerType | FloatType
-    shape: list[int] | None = None
-    shape_max: list[int] | None = None
-
-    def __post_init__(self):
-        assert isinstance(self.storage, Storage)
-        # initialize dtype
-        if self.dtype.bitwidth < 8 and self.shape is None:
-            raise ValueError("shape must be provided for sub-byte types")
-        # initialize shape
-        if self.shape is None:
-            self.shape = list(self.storage.data.shape)
-        self.shape = list(self.shape)
-        # validate shape: all elements must be `int` or numel-1 `torch.Tensor`
-        is_int = lambda s: isinstance(s, int)
-        is_item = lambda s: hasattr(s, "numel") and s.numel() == 1
-        assert all(map(lambda s: is_int(s) or is_item(s), self.shape))
-        # initialize shape_max
-        if self.shape_max is None:
-            self.shape_max = [None] * len(self.shape)
-        for i, (s, smax) in enumerate(zip(self.shape, self.shape_max)):
-            if smax is not None and not is_int(smax):
-                raise ValueError(f"shape_max[{i}] must be `int` or `None`; got {type(smax)}")
-            if smax is None:
-                self.shape_max[i] = s
-        # validate shape_max: all elements must be `int`
-        assert all(map(is_int, self.shape_max))
-
-    # torch compatibility layer
-    @property
-    def ndim(self):
-        return len(self.shape)
 
     @property
-    def device(self):
-        return self.storage.device
+    def sharding_dim(self) -> int | None:
+        return self.sharding.dim if self.sharding is not None else None
 
-    def stride(self, i=None):
-        return self.storage.data.stride() if i is None else self.storage.data.stride(i)
+    def __post_init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__post_init__(*args, default_shape=self.storage.data.shape, **kwargs)
 
-    def data_ptr(self):
-        return self.storage.data.data_ptr()
+        # TODO: validate dtype compatibility between storage and metadata, this needs
+        # to be format-aware.
 
-    def numel(self):
-        return self.storage.data.numel()
+    # backwards compatibility alias, deprecated
+    @property
+    @deprecated("Use local_shape_max instead")
+    def shape_max(self) -> list[int]:
+        assert self.local_shape_max is not None
+        return self.local_shape_max
 
-    def element_size(self):
+    def element_size(self) -> int:
         return self.dtype.bitwidth // 8
 
     @property
-    def data(self):
-        t = self.storage
-        return t.data if isinstance(t, Storage) else t
+    def ndim(self) -> int:
+        return len(self.shape)
 
-    def dim(self):
-        return self.ndim
-
-    def size(self, i=None):
-        if i is None:
-            return self.shape
-        return self.shape[i]
+    def size(self, i: int | None = None) -> list[int | torch.Tensor] | torch.Tensor | int:
+        return self.shape if i is None else self.shape[i]
 
         @property
         def specialization_key(self):
             return (tuple(self.data.shape), self.data.dtype)
 
 
-def is_tma_compliant(tensor):
+def is_tma_compliant(tensor: Tensor) -> bool:
     storage = tensor.storage
     # TMAs didn't exist until Hopper
     if not cuda_capability_geq(9, 0):
@@ -120,7 +97,7 @@ def is_tma_compliant(tensor):
     return all(compliant)
 
 
-def make_dense_tma(tensor, block_shape, is_scale):
+def make_dense_tma(tensor: Tensor, block_shape: Sequence[int], is_scale: bool = False) -> TensorDescriptor:
     storage = tensor.storage
     strides = list(storage.data.stride())
     shape = list(storage.data.shape)
@@ -141,7 +118,12 @@ def make_dense_tma(tensor, block_shape, is_scale):
     return TensorDescriptor(storage.data, shape, strides, block_shape)
 
 
-def make_tma(tensor, block_shape, mode, is_scale=False):
+def make_tma(
+    tensor: Tensor,
+    block_shape: Sequence[int],
+    mode: Literal["dense", "gather", "scatter", "ragged"],
+    is_scale: bool = False,
+) -> TensorDescriptor:
     if mode in ["dense", "gather", "scatter"]:
         return make_dense_tma(tensor, block_shape, is_scale)
     assert mode == "ragged"
@@ -198,7 +180,7 @@ class SparseMatrix:
     vals: torch.Tensor
     mask: Tensor
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.mask_metadata = make_bitmatrix_metadata(self.indx, self.mask)
 
 
@@ -206,25 +188,39 @@ class SparseMatrix:
 # ---------------------------------------------------------------------------- #
 
 
-def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layout=None):
+def wrap_torch_tensor(
+    torch_tensor: torch.Tensor,
+    dtype: torch.dtype | DataType | None = None,
+    shape: list[int] | None = None,
+    local_shape_max: int | None = None,
+    layout: Layout | None = None,
+    sharding: Sharding | None = None,
+    sharding_dim: int | None = None,
+) -> Tensor:
     if dtype is None:
         dtype = torch_tensor.dtype
     dtype = torch_dtype_to_dtype(dtype)
     if shape is None:
         shape = list(torch_tensor.shape)
-        if dtype == FP4:
-            shape[torch_tensor.stride().index(1)] *= (8 * torch_tensor.dtype.itemsize) // dtype.bitwidth
-    if shape_max is None:
-        shape_max = list(shape)
+        if dtype.bitwidth < 8:  # FP4, BIT, ...
+            shape[torch_tensor.stride().index(1)] *= (8 * torch_tensor.dtype.itemsize // dtype.bitwidth)
     if layout is None:
         # For a strided (dense) tensor we only track which dimension has unit stride.
         # This is consistent with how we expand `shape` for packed sub-byte dtypes.
         major_dim = torch_tensor.stride().index(1) if 1 in torch_tensor.stride() else -1
         layout = StridedLayout(major_dim=major_dim - torch_tensor.ndim)
-    return Tensor(Storage(torch_tensor, layout), dtype=dtype, shape=shape, shape_max=shape_max)
+    return Tensor(
+        storage=Storage(torch_tensor, layout),
+        dtype=dtype,
+        shape=shape,
+        local_shape_max=local_shape_max,
+        sharding=sharding,
+        sharding_dim=sharding_dim,
+    )
 
 
-def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
+def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs: Any) -> Tensor:
+    # TODO: tighten kwargs type once layout transformation parameters are standardized.
     shape = list(tensor.shape)
     # convert `tensor` into canonical form
     transformation = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)
@@ -233,10 +229,14 @@ def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwarg
     transformation = layout.make_transformation(shape, tensor.dtype == FP4, **layout_transformation_kwargs)
     # print("convert layout ", torch.cuda.memory_summary(0, abbreviated=True))
     new_data = transformation.swizzle_data(canonical_data)
-    return Tensor(Storage(new_data, layout), shape=list(tensor.shape), dtype=tensor.dtype)
+    return Tensor(
+        storage=Storage(new_data, layout),
+        shape=list(tensor.shape),
+        dtype=tensor.dtype,
+    )
 
 
-def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
+def dtype_to_torch_dtype(dtype: DataType | torch.dtype | None) -> torch.dtype | None:
     if dtype is None:
         return None
     if not isinstance(dtype, DataType):
@@ -257,7 +257,7 @@ def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
     }[dtype]
 
 
-def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
+def torch_dtype_to_dtype(dtype: torch.dtype | DataType) -> DataType:
     if isinstance(dtype, DataType):
         return dtype
     id = str(dtype).split(".")[-1]
@@ -282,7 +282,7 @@ def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
 
 
 def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None,
-          allow_implicit_conversion: bool = False):
+          allow_implicit_conversion: bool = False) -> Tensor:
     storage_shape = list(shape)
     storage_dtype = torch.uint8 if dtype == FP4 else dtype_to_torch_dtype(dtype)
     initial_layout = layout if isinstance(layout, StridedLayout) else StridedLayout()
@@ -302,3 +302,12 @@ def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None,
     if allow_implicit_conversion:
         ret = convert_layout(ret, layout)
     return ret
+
+
+T = TypeVar("T", Tensor, torch.Tensor)
+
+
+def apply_to_torch(t: T, cb: Callable[[torch.Tensor], torch.Tensor]) -> T:
+    """Apply a function to the local tensor (as torch.Tensor); works for either Tensor or
+    torch.Tensor."""
+    return (replace(t, storage=replace(t.storage, data=cb(t.storage.data))) if isinstance(t, Tensor) else cb(t))
