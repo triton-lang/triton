@@ -203,7 +203,7 @@ class Autotuner(KernelInterface):
         cache.put(
             json.dumps({
                 "key":
-                tuning_key,
+                [str(k) for k in tuning_key],
                 "configs_timings":
                 [(config.__dict__, timings) for config, timings in self.configs_timings.items() if not config.pre_hook],
             }), file_name, binary=False)
