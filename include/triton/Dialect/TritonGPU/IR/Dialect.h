@@ -323,19 +323,6 @@ bool hasPartition(Operation *op);
 bool hasWarpSpecializeTag(Operation *op);
 std::optional<int> getWarpSpecializeTag(Operation *op);
 
-// Extract the PaddedSharedEncodingAttr from an encoding, whether standalone
-// or wrapped inside a PartitionedSharedEncodingAttr. Returns nullptr if the
-// encoding does not involve padding.
-PaddedSharedEncodingAttr getPaddedEncoding(Attribute encoding);
-
-// Returns true if the encoding is a PaddedSharedEncodingAttr, or a
-// PartitionedSharedEncodingAttr wrapping a PaddedSharedEncodingAttr.
-bool isPaddedEncoding(Attribute encoding);
-
-// Returns the minInterval for a padded encoding (standalone or
-// wrapped in partitioned).
-unsigned getMinInterval(Attribute encoding);
-
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

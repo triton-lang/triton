@@ -55,13 +55,6 @@ LinearLayout toLinearLayout(TensorOrMemDesc type);
 // with the allocShape as the shape, otherwise the layout will be incorrect!
 LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 
-// Returns the linear component of a padded shared encoding. The encoding must
-// satisfy isPaddedEncoding (asserts otherwise).
-//
-// Unlike toLinearLayout, this makes explicit that the resulting linear layout
-// is incomplete — the padding information is not captured in the linear layout.
-LinearLayout paddedLinearLayout(MemDescType type);
-
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
 //

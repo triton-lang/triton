@@ -107,9 +107,7 @@ struct ConvertTritonAMDGPUToLLVM
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Allocate shared memory and set barrier
-    ModuleAllocation allocation(mod,
-                                triton::defaultAllocationAnalysisScratchSizeFn,
-                                targetInfo.getSharedMemoryPartitionSize());
+    ModuleAllocation allocation(mod);
 
     if (targetInfo.requiresAliasInfoForAsyncOps())
       AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
