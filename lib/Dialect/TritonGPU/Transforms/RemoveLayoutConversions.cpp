@@ -1303,8 +1303,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     return;
 
   Operation *extOrBroadcastOp = nullptr;
-  unsigned sliceSize = slice.size();
-  for (unsigned i = 0; i < sliceSize; i++) {
+  for (unsigned i = 0; i < slice.size(); i++) {
     Value v = slice[i];
     Operation *op = v.getDefiningOp();
     if (!op || !isExtOrBroadcastOp(op))
@@ -1317,7 +1316,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     // If we can rematerialize the rest of the ext slice we can ignore this ext
     // as it won't need a convert.
     if (succeeded(getRematerializableSlice(op->getOpOperand(0), srcEncoding,
-                                           slice, layout)))
+                                           slice, layout, isExtOrBroadcastOp)))
       continue;
 
     // Only apply it if there is a single ext op otherwise we would have to
