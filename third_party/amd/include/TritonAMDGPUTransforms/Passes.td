@@ -34,7 +34,10 @@ def TritonAMDGPUPipeline : Pass<"tritonamdgpu-pipeline", "mlir::ModuleOp"> {
            "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
     Option<"usePingpong", "use_pingpong",
            "bool", /*default*/"false",
-           "Use schedules to enable block ping-pong">
+           "Use schedules to enable block ping-pong">,
+    Option<"useLdsPrefetch", "use_lds_prefetch",
+           "bool", /*default*/"false",
+           "Use schedules to enable lds prefetching.">
   ];
 }
 
