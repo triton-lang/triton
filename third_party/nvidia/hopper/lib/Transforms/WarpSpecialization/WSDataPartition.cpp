@@ -1296,8 +1296,8 @@ static bool doDeepCleanup(triton::FuncOp &funcOp,
     });
 
     // delete block arguments
+    runDeadIterArgElimination(funcOp);
     RewritePatternSet cleanUpPatterns(funcOp.getContext());
-    populateForOpDeadArgumentElimination(cleanUpPatterns);
     scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns,
                                             funcOp.getContext());
     scf::IfOp::getCanonicalizationPatterns(cleanUpPatterns,
