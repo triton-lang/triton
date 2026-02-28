@@ -1287,6 +1287,10 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
         auto result = mlir::cast<OpResult>(value);
         OpOperand &forOperand = *nestedFor.getTiedLoopInit(result);
         markLive(forOperand.get());
+        // forOp is live, ensure the loop bounds are live.
+        markLive(nestedFor.getLowerBound());
+        markLive(nestedFor.getUpperBound());
+        markLive(nestedFor.getStep());
         auto nestedYieldOp =
             cast<scf::YieldOp>(nestedFor.getBody()->getTerminator());
         Value nestedYieldOperand =
