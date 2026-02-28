@@ -64,7 +64,7 @@ jobs:
           files: dist/${{env.RELEASE_FILE}}
       - name: Upload source distribution to GHA artifacts for release tags
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && contains(github.ref, 'rc') }}
-        uses: actions/upload-artifact@v4.4.0
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.RELEASE_FILE }}
           path: dist/${{ env.RELEASE_FILE }}
