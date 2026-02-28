@@ -50,7 +50,7 @@ def inspect_stages_hook_dialect(self=None, stages=None, options=None, language=N
         mod = self.make_ttgir(mod, metadata, opt, capability)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.plugin.plugingpu_conversion(pm)
+        passes.plugin.plugingpu_conversion(pm, 0, 0, 0)
         pm.run(mod, 'make_ttgir_plugin')
         return mod
 

@@ -3,6 +3,7 @@
 
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Tools/Plugins/DialectPlugin.h"
+#include "python/src/ir.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
 #include <cstdint>
@@ -29,6 +30,9 @@ public:
   static constexpr char DIALECT_PLUGININFO[] = "tritonGetDialectPluginInfo";
   static constexpr char ADD_PASS[] = "tritonAddPluginPass";
   static constexpr char REGISTER_PASS[] = "tritonRegisterPluginPass";
+  static constexpr char ENUMERATE_CUSTOMOPS[] =
+      "tritonEnumeratePluginCustomOps";
+  static constexpr char ADD_CUSTOMOP[] = "tritonAddPluginCustomOp";
 
 private:
   using EnumeratePyBindHandlesType =
@@ -36,10 +40,10 @@ private:
   using EnumeratePyBindHandlesCType = TritonPluginResult (*)(uint32_t *,
                                                              const char **);
 
-  using AddPassType =
-      std::function<TritonPluginResult(mlir::PassManager *, const char *)>;
-  using AddPassCType = TritonPluginResult (*)(mlir::PassManager *,
-                                              const char *);
+  using AddPassType = std::function<TritonPluginResult(
+      mlir::PassManager *, const char *, int, int, int)>;
+  using AddPassCType = TritonPluginResult (*)(mlir::PassManager *, const char *,
+                                              int, int, int);
 
   using RegisterPassType = std::function<TritonPluginResult(const char *)>;
   using RegisterPassCType = TritonPluginResult (*)(const char *);
@@ -48,6 +52,13 @@ private:
       std::function<::mlir::DialectPluginLibraryInfo(const char *)>;
   using DialectPluginInfoCType =
       ::mlir::DialectPluginLibraryInfo (*)(const char *);
+
+  using AddCustomOpType = std::function<TritonPluginResult(
+      const char *, TritonOpBuilder &self, void **)>;
+
+  using AddCustomOpCType = TritonPluginResult (*)(const char *,
+                                                  TritonOpBuilder &self,
+                                                  void **);
 
   llvm::Expected<intptr_t> getAddressOfSymbol(const std::string &symbol) const;
 
@@ -78,8 +89,17 @@ public:
   llvm::Expected<TritonPluginResult>
   getDialectHandles(std::vector<const char *> &handles);
 
+  llvm::Expected<TritonPluginResult>
+  getCustomOpHandles(std::vector<const char *> &handles);
+
   llvm::Expected<TritonPluginResult> addPass(mlir::PassManager *pm,
-                                             const char *passHandle);
+                                             const char *passHandle,
+                                             int num_warps, int threadsPerWarp,
+                                             int numCTAs);
+
+  llvm::Expected<TritonPluginResult>
+  addCustomOp(const char *customOpHandle, TritonOpBuilder &self,
+              std::vector<mlir::Value> &values);
 
   llvm::Expected<TritonPluginResult> registerPass(const char *passHandle);
 
@@ -91,9 +111,11 @@ private:
   mutable llvm::sys::DynamicLibrary library;
   EnumeratePyBindHandlesType enumeratePassesAPI;
   EnumeratePyBindHandlesType enumerateDialectsAPI;
+  EnumeratePyBindHandlesType enumerateCustomOpAPI;
   AddPassType addPassAPI;
   RegisterPassType registerPassAPI;
   DialectPluginInfoType dialectPluginInfoAPI;
+  AddCustomOpType addCustomOpAPI;
   bool isLoaded = false;
 };
 
