@@ -17,7 +17,7 @@ from triton._internal_testing import is_hip_gfx1250, str_to_triton_dtype, numpy_
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
-from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout
+from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout, PartitionedSharedLayout
 
 
 @gluon.jit
@@ -1178,9 +1178,18 @@ def tensor_async_copy_kernel(a_ptr, b_ptr, M, N,  #
 
 @gluon.jit
 def tensor_device_tdm_copy_kernel(a_ptr, b_ptr, M, N,  #
-                                  BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
+                                  BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr,
+                                  USE_PARTITIONED: ttgl.constexpr):
     num_warps: ttgl.constexpr = ttgl.num_warps()
-    smem_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+    if USE_PARTITIONED:
+        NUM_PARTITIONS: ttgl.constexpr = 2
+        NUM_GROUPS: ttgl.constexpr = 1
+        inner_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]],
+                                                                                 [BLOCK_M // NUM_PARTITIONS, BLOCK_N],
+                                                                                 [1, 0])
+        smem_layout: ttgl.constexpr = PartitionedSharedLayout(NUM_PARTITIONS, NUM_GROUPS, 0, inner_layout)
+    else:
+        smem_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
     block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
 
     pid_m = ttgl.program_id(axis=0)
@@ -1269,6 +1278,7 @@ def test_compile_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM
             "BLOCK_M": "constexpr",
             "BLOCK_N": "constexpr",
             "NUM_BUFFERS": "constexpr",
+            "USE_PARTITIONED": "constexpr",
         }
         constexprs = {"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "NUM_BUFFERS": NUM_BUFFERS}
     else:
@@ -1303,11 +1313,15 @@ def test_compile_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64), (1, 512), (256, 2)])
 @pytest.mark.parametrize("NUM_BUFFERS", [2])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
-@pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "DEVICE_TDM", "HOST_TDM"])
+@pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "DEVICE_TDM", "HOST_TDM", "DEVICE_TDM_PARTITIONED"])
 @pytest.mark.parametrize("M,N", [(1024, 1024), (1008, 1008)])
 def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM_WARPS):
     if ASYNC_LOAD_TYPE == "ASYNC_COPY" and any([x % 16 != 0 for x in [M, N]]):
         pytest.skip("AsyncCopy tests need divisibility==16 to get vectorization information")
+
+    # PartitionedSharedLayout requires BLOCK_M divisible by num_partitions * num_groups (2*1=2)
+    if ASYNC_LOAD_TYPE == "DEVICE_TDM_PARTITIONED" and BLOCK_M % 2 != 0:
+        pytest.skip("PartitionedSharedLayout requires BLOCK_M divisible by num_partitions * num_groups")
 
     torch.manual_seed(42)
     a = torch.randint(0x0, 0xFFFF, (M, N), dtype=torch.uint16)
@@ -1320,7 +1334,10 @@ def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYP
         tensor_async_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, num_warps=NUM_WARPS)
     elif ASYNC_LOAD_TYPE == "DEVICE_TDM":
         tensor_device_tdm_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS,
-                                            num_warps=NUM_WARPS)
+                                            USE_PARTITIONED=False, num_warps=NUM_WARPS)
+    elif ASYNC_LOAD_TYPE == "DEVICE_TDM_PARTITIONED":
+        tensor_device_tdm_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS,
+                                            USE_PARTITIONED=True, num_warps=NUM_WARPS)
     else:
         assert ASYNC_LOAD_TYPE == "HOST_TDM"
         smem_layout = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
