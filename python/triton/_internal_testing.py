@@ -114,6 +114,17 @@ def is_xpu():
     return False if target is None else target.backend == "xpu"
 
 
+def is_maia(generation=None):
+    target = get_current_target()
+    if target is None:
+        return False
+    if target.backend != "maia":
+        return False
+    if generation is not None and generation != target.arch:
+        return False
+    return True
+
+
 def get_arch():
     target = get_current_target()
     return "" if target is None else str(target.arch)
