@@ -168,6 +168,14 @@ class Autotuner(KernelInterface):
                 print(f"Autotuning failed with {e}")
             return [float("inf"), float("inf"), float("inf")]
 
+    @staticmethod
+    def _resolve_num_workers():
+        """Resolve the effective number of compile workers from the knob."""
+        num_workers = knobs.autotuning.compile_workers
+        if num_workers == 0:
+            num_workers = min(4, max(1, (os.cpu_count() or 1) // 2))
+        return num_workers
+
     def _compile_config(self, *args, config, **meta):
         """Compile a single config without benchmarking. Thread-safe."""
         current = dict(meta, **config.all_kwargs())
@@ -273,9 +281,7 @@ class Autotuner(KernelInterface):
                 pruned_configs = self.prune_configs(kwargs)
 
                 def benchmark():
-                    num_workers = knobs.autotuning.compile_workers
-                    if num_workers == 0:
-                        num_workers = min(4, max(1, (os.cpu_count() or 1) // 2))
+                    num_workers = self._resolve_num_workers()
 
                     bench_start = time.perf_counter()
                     if num_workers > 1 and len(pruned_configs) > 1:
@@ -342,13 +348,28 @@ class Autotuner(KernelInterface):
 
     def warmup(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
-        ret = []
-        for autotune_config in self.prune_configs(kwargs):
-            ret.append(self.fn.warmup(
-                *args,
-                **kwargs,
-                **autotune_config.all_kwargs(),
-            ))
+        pruned_configs = self.prune_configs(kwargs)
+        num_workers = self._resolve_num_workers()
+        if num_workers > 1 and len(pruned_configs) > 1:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import sysconfig
+            sysconfig.get_config_vars()
+            ret = [None] * len(pruned_configs)
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = {}
+                for i, autotune_config in enumerate(pruned_configs):
+                    future = executor.submit(self.fn.warmup, *args, **kwargs, **autotune_config.all_kwargs())
+                    futures[future] = i
+                for future in as_completed(futures):
+                    ret[futures[future]] = future.result()
+        else:
+            ret = []
+            for autotune_config in pruned_configs:
+                ret.append(self.fn.warmup(
+                    *args,
+                    **kwargs,
+                    **autotune_config.all_kwargs(),
+                ))
         self.nargs = None
         return ret
 

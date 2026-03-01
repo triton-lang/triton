@@ -1,7 +1,7 @@
 """Tests for parallel autotuner compilation.
 
-Verifies correctness, restore_value, and exception handling across all
-code paths: sequential (workers=1), parallel with overlap disabled, and
+Verifies correctness, restore_value, exception handling, and warmup across
+all code paths: sequential (workers=1), parallel with overlap disabled, and
 parallel with overlap enabled.
 
 Each test uses a unique SCALE constexpr per mode to force fresh compilations
@@ -27,6 +27,12 @@ MODES = [
     (2, 2, True),
 ]
 MODE_IDS = ["sequential", "parallel-no-overlap", "parallel-overlap"]
+
+WARMUP_MODES = [
+    (0, 1),
+    (1, 2),
+]
+WARMUP_IDS = ["sequential", "parallel"]
 
 CONFIGS = [
     triton.Config(kwargs={"BLOCK_SIZE": 32}),
@@ -145,3 +151,27 @@ def test_exceed_threads(mode_idx, workers, overlap, device):
             exception_out_of_resource)
     finally:
         _clear_env()
+
+
+@pytest.mark.parametrize("mode_idx, workers", WARMUP_MODES, ids=WARMUP_IDS)
+def test_warmup(mode_idx, workers, device):
+    """Warmup compiles all configs without executing."""
+    from triton.runtime.jit import MockTensor
+
+    scale = 400 + mode_idx
+
+    @triton.autotune(configs=list(CONFIGS), key=["N", "SCALE"])
+    @triton.jit
+    def copy_kernel(src_ptr, dst_ptr, N, SCALE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+        offs = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offs < N
+        tl.store(dst_ptr + offs, tl.load(src_ptr + offs, mask=mask) * SCALE, mask=mask)
+
+    os.environ["TRITON_AUTOTUNING_COMPILE_WORKERS"] = str(workers)
+    try:
+        ret = copy_kernel.warmup(MockTensor(torch.float16), MockTensor(torch.float16),
+                                 4096, scale, grid=(128,))
+        assert len(ret) == len(CONFIGS)
+        assert all(r is not None for r in ret)
+    finally:
+        os.environ.pop("TRITON_AUTOTUNING_COMPILE_WORKERS", None)

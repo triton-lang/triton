@@ -1,6 +1,6 @@
 """Benchmark for parallel autotuner compilation.
 
-Measures autotuning time across worker counts and overlap modes.
+Measures autotuning and warmup time across worker counts and overlap modes.
 Each case uses a unique scale factor (derived from --key) to force fresh compilations.
 
 Usage:
@@ -26,7 +26,7 @@ CONFIGS = [
     for bk in [32, 64]
 ]
 
-CASES = [
+AUTOTUNE_CASES = [
     ("workers=1 (sequential)", 1, True),
     ("workers=0 (auto)", 0, True),
     ("workers=2, overlap=off", 2, False),
@@ -37,6 +37,15 @@ CASES = [
     ("workers=4, overlap=on", 4, True),
     ("workers=8, overlap=on", 8, True),
     ("workers=12, overlap=on", 12, True),
+]
+
+WARMUP_CASES = [
+    ("workers=1 (sequential)", 1),
+    ("workers=0 (auto)", 0),
+    ("workers=2", 2),
+    ("workers=4", 4),
+    ("workers=8", 8),
+    ("workers=12", 12),
 ]
 
 
@@ -98,6 +107,56 @@ def _run_matmul(scale):
     return elapsed
 
 
+def _run_warmup(scale):
+    """Define a fresh autotuned matmul kernel, warmup all configs, return elapsed time."""
+    from triton.runtime.jit import MockTensor
+
+    @triton.autotune(configs=list(CONFIGS), key=["M", "N", "K", "SCALE"])
+    @triton.jit
+    def matmul_kernel(
+        a_ptr, b_ptr, c_ptr,
+        M, N, K,
+        stride_am, stride_ak,
+        stride_bk, stride_bn,
+        stride_cm, stride_cn,
+        SCALE: tl.constexpr,
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+    ):
+        pid_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+        a_ptrs = a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
+        b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
+        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+        for _ in range(0, K, BLOCK_K):
+            a = tl.load(a_ptrs, mask=offs_k[None, :] < K)
+            b = tl.load(b_ptrs, mask=offs_k[:, None] < K)
+            acc += tl.dot(a, b)
+            a_ptrs += BLOCK_K * stride_ak
+            b_ptrs += BLOCK_K * stride_bk
+        acc = acc * SCALE
+        c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
+        tl.store(c_ptrs, acc, mask=(offs_m[:, None] < M) & (offs_n[None, :] < N))
+
+    M, N, K = 512, 512, 512
+
+    start = time.perf_counter()
+    matmul_kernel.warmup(
+        MockTensor(torch.float16), MockTensor(torch.float16), MockTensor(torch.float16),
+        M, N, K,
+        K, 1,  # stride_am, stride_ak
+        N, 1,  # stride_bk, stride_bn
+        N, 1,  # stride_cm, stride_cn
+        scale,
+        grid=(triton.cdiv(M, 32), triton.cdiv(N, 32)),
+    )
+    elapsed = time.perf_counter() - start
+
+    return elapsed
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Benchmark parallel autotuner")
@@ -110,18 +169,45 @@ def main():
     if args.key < 1 or args.key > 1000:
         parser.error("--key must be between 1 and 1000")
 
+    num_cases = len(AUTOTUNE_CASES) + len(WARMUP_CASES)
+
     print(f"Parallel autotuner benchmark - {len(CONFIGS)} configs, key={args.key}")
+
+    # Autotune benchmark (compile + bench)
     print()
+    print(f"  Autotune (compile + benchmark)")
     print(f"  {'Case':30s}  {'Time':>7s}  {'vs seq':>7s}")
     print(f"  {'-'*48}")
 
     baseline = None
-    for i, (label, workers, overlap) in enumerate(CASES):
-        scale = args.key * len(CASES) + i
+    for i, (label, workers, overlap) in enumerate(AUTOTUNE_CASES):
+        scale = args.key * num_cases + i
         os.environ["TRITON_AUTOTUNING_COMPILE_WORKERS"] = str(workers)
         os.environ["TRITON_AUTOTUNING_OVERLAP_BENCH"] = "1" if overlap else "0"
         try:
             elapsed = _run_matmul(scale)
+        except Exception as e:
+            print(f"  {label:30s}  FAILED (scale={scale})")
+            for line in str(e).split("\n")[-3:]:
+                print(f"    {line}")
+            continue
+        if baseline is None:
+            baseline = elapsed
+        speedup = baseline / elapsed if elapsed > 0 else float("inf")
+        print(f"  {label:30s}  {elapsed:6.2f}s  {speedup:5.2f}x")
+
+    # Warmup benchmark (compile only)
+    print()
+    print(f"  Warmup (compile only)")
+    print(f"  {'Case':30s}  {'Time':>7s}  {'vs seq':>7s}")
+    print(f"  {'-'*48}")
+
+    baseline = None
+    for i, (label, workers) in enumerate(WARMUP_CASES):
+        scale = args.key * num_cases + len(AUTOTUNE_CASES) + i
+        os.environ["TRITON_AUTOTUNING_COMPILE_WORKERS"] = str(workers)
+        try:
+            elapsed = _run_warmup(scale)
         except Exception as e:
             print(f"  {label:30s}  FAILED (scale={scale})")
             for line in str(e).split("\n")[-3:]:
