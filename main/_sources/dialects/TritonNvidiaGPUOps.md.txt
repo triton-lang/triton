@@ -1007,7 +1007,7 @@ containing the address and a view of the subslice.
 This is similar to ttg.memdesc_subslice except we can only slice along the inner dimension
 of a 2D memdesc as this is the only one we can do for TMem.
 
-Traits: `AlwaysSpeculatableImplTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
