@@ -19,4 +19,23 @@ def DialectPluginMagicOp: Pass<"convert-plugin-gpu-to-llvm", "mlir::ModuleOp"> {
     ];
 }
 
+def DialectPluginFMagicOp: Pass<"convert-plugin-gpu-to-triton-gpu", "mlir::ModuleOp"> {
+  let summary = "Converts PluginGPU Ops to TritonGPU Ops";
+  let constructor = "mlir::triton::plugin::createConvertPluginGPUToTritonGPUPass(4, 32, 1)";
+
+   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                            "mlir::triton::plugin::DialectPluginDialect"];
+   let options = [
+        Option<"num_warps", "num-warps",
+               "int32_t", /*default*/"4",
+               "Number of warps">,
+        Option<"threadsPerWarp", "threads-per-warp",
+               "int32_t", /*default*/"32",
+               "Threads per warp">,
+        Option<"numCTAs", "num-ctas",
+               "int32_t", /*default*/"1",
+               "Number of CTAs">,
+    ];
+}
+
 #endif // DIALECTPLUGIN_PASS
