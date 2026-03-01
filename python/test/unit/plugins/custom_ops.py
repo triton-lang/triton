@@ -85,6 +85,7 @@ def custom_op(x, sanitize_overflow: tl.constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
     builder = _semantic.getBuilder()
     return tl.tensor(builder.create_custom_op(x.handle), x.type)
+
 @triton.jit
 def add_kernel(x_ptr,
                output_ptr,
@@ -99,7 +100,7 @@ def add_kernel(x_ptr,
     output = custom_op(x)
     tl.store(output_ptr + offsets, output, mask=mask)
 
-if __name__ == "__main__":
+def test_custom_ops(tmp_path: pathlib.Path):
     size = 8
     x = torch.zeros(size, device=DEVICE, dtype=torch.float32)
     # y = torch.ones(size, device=DEVICE, dtype=torch.float32)
@@ -109,8 +110,6 @@ if __name__ == "__main__":
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
     knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
     h = add_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=32)
-    print(output_triton)
-    print(h.asm["ttir"])
 
-    # print(f'The maximum difference between torch and custom triton op is '
-    #       f'{torch.max(torch.abs(output_torch - output_triton))}')
+    src = h.asm["source"]
+    assert "plugin.fmagic" in src
