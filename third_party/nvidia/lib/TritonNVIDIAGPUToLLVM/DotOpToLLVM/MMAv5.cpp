@@ -427,7 +427,9 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   auto tensorMemAttr =
       cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
   unsigned mmaSizeM = tensorMemAttr.getBlockM();
-  unsigned mmaSizeN = tensorMemAttr.getBlockN();
+  // Account for subslices
+  unsigned mmaSizeN =
+      std::min<unsigned>(tensorMemAttr.getBlockN(), dTensorTy.getDimSize(1));
   // Checked in the verifier
   assert(mmaSizeN <= 256 &&
          "The maximum size of an MMA instruction is 128x256");
