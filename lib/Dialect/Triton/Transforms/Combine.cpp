@@ -236,12 +236,13 @@ class CombineDotAddPattern : public mlir::OpRewritePattern<OpTy> {
 public:
   using OpRewritePattern<OpTy>::OpRewritePattern;
 
-  mlir::LogicalResult
-  matchAndRewrite(OpTy addOp, mlir::PatternRewriter &rewriter) const override {
-    auto dotOp = addOp.getRhs().template getDefiningOp<DotOp>();
+  template <typename DotOpType>
+  mlir::LogicalResult combine(OpTy addOp,
+                              mlir::PatternRewriter &rewriter) const {
+    auto dotOp = addOp.getRhs().template getDefiningOp<DotOpType>();
     bool isDotLHS = false;
     if (!dotOp) {
-      dotOp = addOp.getLhs().template getDefiningOp<DotOp>();
+      dotOp = addOp.getLhs().template getDefiningOp<DotOpType>();
       if (!dotOp) {
         return failure();
       }
@@ -252,7 +253,8 @@ public:
     }
     if (!isZero(dotOp.getC()))
       return failure();
-    if constexpr (std::is_same_v<OpTy, arith::AddFOp>) {
+    if constexpr (std::is_same_v<DotOpType, DotOp> &&
+                  std::is_same_v<OpTy, arith::AddFOp>) {
       if (dotOp.getMaxNumImpreciseAcc() != 0) {
         return failure();
       }
@@ -263,6 +265,15 @@ public:
     });
     rewriter.replaceAllUsesWith(addOp, dotOp.getResult());
     return success();
+  }
+
+  mlir::LogicalResult
+  matchAndRewrite(OpTy addOp, mlir::PatternRewriter &rewriter) const override {
+    if (succeeded(combine<DotOp>(addOp, rewriter)))
+      return success();
+    if (succeeded(combine<DotScaledOp>(addOp, rewriter)))
+      return success();
+    return failure();
   }
 };
 
