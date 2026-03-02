@@ -30,9 +30,11 @@ MetricBuffer::~MetricBuffer() {
 void MetricBuffer::receive(
     const std::map<std::string, TensorMetric> &tensorMetrics,
     const std::map<std::string, MetricValueType> &scalarMetrics,
-    void *tensorMetricKernel, void *scalarMetricKernel, void *stream) {
-  queueMetrics(tensorMetrics, tensorMetricKernel, stream);
-  queueMetrics(scalarMetrics, scalarMetricKernel, stream);
+    const MetricKernelLaunchState &metricKernelLaunchState) {
+  queueMetrics(tensorMetrics, metricKernelLaunchState.stream,
+               metricKernelLaunchState.tensor);
+  queueMetrics(scalarMetrics, metricKernelLaunchState.stream,
+               metricKernelLaunchState.scalar);
 }
 
 MetricBuffer::MetricDescriptor
@@ -131,7 +133,8 @@ collectTensorMetrics(Runtime *runtime,
 }
 
 void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
-                         void *kernel, void *stream) {
+                         void *stream,
+                         const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
   uint64_t numWords = capacity / sizeof(uint64_t);
   uint64_t metricValueSize = tensorMetric.size;
@@ -145,12 +148,15 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                           reinterpret_cast<void *>(&metricValueSize),
                           reinterpret_cast<void *>(&globalScratchPtr),
                           reinterpret_cast<void *>(&profileScratchPtr)};
-  runtime->launchKernel(kernel, 1, 1, 1, 32, 1, 1, 0, stream, kernelParams,
+  unsigned int blockDimX = std::max(1u, launchConfig.numThreads);
+  runtime->launchKernel(launchConfig.kernel, 1, 1, 1, blockDimX, 1, 1,
+                        launchConfig.sharedMemBytes, stream, kernelParams,
                         nullptr);
 }
 
 void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
-                         void *kernel, void *stream) {
+                         void *stream,
+                         const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
   uint64_t numWords = capacity / sizeof(uint64_t);
   uint64_t metricBits = std::visit(
@@ -180,7 +186,9 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
                           reinterpret_cast<void *>(&metricBits),
                           reinterpret_cast<void *>(&globalScratchPtr),
                           reinterpret_cast<void *>(&profileScratchPtr)};
-  runtime->launchKernel(kernel, 1, 1, 1, 32, 1, 1, 0, stream, kernelParams,
+  unsigned int blockDimX = std::max(1u, launchConfig.numThreads);
+  runtime->launchKernel(launchConfig.kernel, 1, 1, 1, blockDimX, 1, 1,
+                        launchConfig.sharedMemBytes, stream, kernelParams,
                         nullptr);
 }
 

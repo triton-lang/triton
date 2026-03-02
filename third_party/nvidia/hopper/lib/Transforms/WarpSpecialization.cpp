@@ -3,6 +3,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/hopper/include/Transforms/Passes.h"
+#include "nvidia/hopper/lib/Transforms/WarpSpecialization/CodePartitionUtility.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -105,6 +106,7 @@ public:
           << moduleOp << "\n\n\n";
     }
     doTokenLowering(funcOp, numWarpGroups - 1);
+    invalidateWarpSpecializeBarriers(funcOp);
     // Clear num_stages to disable SWP.
     funcOp->walk([&](scf::ForOp forOp) {
       forOp->setAttr(mlir::triton::kNumStagesAttrName,

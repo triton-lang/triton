@@ -2381,14 +2381,7 @@ struct RsqrtOpConversion
       return {};
 
     // `llvm.amdgcn.rsq.f32` provides direct access to v_rsq_f32_e32.
-    StringRef funcName = "llvm.amdgcn.rsq.f32";
-
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
-
-    return {
-        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
+    return {ROCDL::ROCDLRsq::create(rewriter, loc, elemTy, operands[0])};
   }
 
 private:
