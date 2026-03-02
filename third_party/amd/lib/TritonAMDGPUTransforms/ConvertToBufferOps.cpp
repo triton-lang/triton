@@ -152,24 +152,18 @@ bool canUseBufferOps(Value ptr,
       cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth();
   LLVM_DEBUG(llvm::dbgs() << "offset bits:" << ofstBit << "\n");
 
-  // TODO: step 3 and 4 can be reversed to further optimize for performance.
-  // When the base-ptr is func argument and has tt.pointer_range=32 attribute,
-  // it's safe to promote the mem-op into buffer-op even if offset is a 64-bit
-  // value. If this is the case, offset need to be cast down to 32-bit.
-
-  // 3. Bail out if ofst cannot fit in 32-bit.
-  if (ofstBit != 32)
-    return false;
-
-  // 4. If the base is function formal argument which has attribute
-  //  tt.point_range=32, then it's safe to promote this memory op into
-  //  bufferOp. In this case, if offset is 64-bit, we should cast it down to
-  //  32-bit.
+  // 3. If the base is function formal argument which has attribute
+  //  tt.pointer_range=32, then it's safe to promote this memory op into
+  //  bufferOp. 64-bit offsets will be truncated to 32-bit by the caller.
   if (!analyzeSmallTensorOfst &&
       isFuncArgWith32bitPtrRange(maybeSplatOp.getSrc())) {
-    LDBG("base-ptr as tt.pointer_range=32 attribute");
+    LDBG("base-ptr has tt.pointer_range=32 attribute");
     return true;
   }
+
+  // 4. Bail out if ofst cannot fit in 32-bit.
+  if (ofstBit != 32 && ofstBit != 64)
+    return false;
 
   return isByteOffsetSmallerThan2GB(addPtrOp, std::move(solver));
 }
@@ -478,6 +472,18 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
       Value maybeMask{};
       if (op.getMask() && !isSplatOneConstTensor(op.getMask()))
         maybeMask = op.getMask();
+
+      // BufferLoadOp requires i32 offsets; truncate i64 offsets when safe
+      auto offsetTy = cast<RankedTensorType>(tensorOffset.getType());
+      if (offsetTy.getElementTypeBitWidth() == 64) {
+        auto i32Ty = RankedTensorType::get(
+            offsetTy.getShape(),
+            rewriter.getI32Type(),
+            offsetTy.getEncoding());
+        tensorOffset = arith::TruncIOp::create(
+            rewriter, op->getLoc(), i32Ty, tensorOffset);
+      }
+
       Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
 
       auto bufferLoadOp = [&]() {
@@ -553,6 +559,17 @@ struct ConvertTritonStoreToBufferStore
         contig = std::min<unsigned>(
             contig, axisAnalysisPass.getMaskAlignment(maybeMask));
       }
+
+      auto offsetTy = cast<RankedTensorType>(tensorOffset.getType());
+      if (offsetTy.getElementTypeBitWidth() == 64) {
+        auto i32Ty = RankedTensorType::get(
+            offsetTy.getShape(),
+            rewriter.getI32Type(),
+            offsetTy.getEncoding());
+        tensorOffset = arith::TruncIOp::create(
+            rewriter, op->getLoc(), i32Ty, tensorOffset);
+      }
+
       Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
 
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
