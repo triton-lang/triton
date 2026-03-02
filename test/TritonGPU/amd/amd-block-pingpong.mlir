@@ -2032,3 +2032,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return %result#0 : tensor<128x128xf32, #mma>
   }
 }
+
+// -----
+
+// Test with FMA based dot, pingpong should skip optimization of such kernels.
+
+// CHECK-LABEL: fma_dot_neg
+#blocked = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @fma_dot_neg(%arg0: tensor<16x128x!tt.ptr<f16>, #blocked1>, %arg1: tensor<128x1x!tt.ptr<f16>, #blocked>, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %cst_1 = arith.constant dense<0.000000e+00> : tensor<16x1xf32, #blocked2>
+    %cst_2 = arith.constant dense<128> : tensor<128x1xi32, #blocked>
+    %cst_3 = arith.constant dense<128> : tensor<16x128xi32, #blocked1>
+    %38 = tt.load %arg0 {amd.pipeliner_part = "prologue"} : tensor<16x128x!tt.ptr<f16>, #blocked1>
+    %47 = tt.load %arg1 {amd.pipeliner_part = "prologue"} : tensor<128x1x!tt.ptr<f16>, #blocked>
+    %48 = ttg.local_alloc : () -> !ttg.memdesc<1x16x128xf16, #shared, #smem, mutable>
+    %49 = ttg.local_alloc : () -> !ttg.memdesc<1x128x1xf16, #shared1, #smem, mutable>
+    %50 = ttg.memdesc_index %48[%c0_i32] : !ttg.memdesc<1x16x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x128xf16, #shared, #smem, mutable>
+    ttg.local_store %38, %50 : tensor<16x128xf16, #blocked1> -> !ttg.memdesc<16x128xf16, #shared, #smem, mutable>
+    %51 = ttg.memdesc_index %49[%c0_i32] : !ttg.memdesc<1x128x1xf16, #shared1, #smem, mutable> -> !ttg.memdesc<128x1xf16, #shared1, #smem, mutable>
+    ttg.local_store %47, %51 : tensor<128x1xf16, #blocked> -> !ttg.memdesc<128x1xf16, #shared1, #smem, mutable>
+    %53:6 = scf.for %arg6 = %c0_i32 to %c128_i32 step %c1_i32 iter_args(%arg7 = %cst_1, %arg8 = %arg0, %arg9 = %arg1, %arg10 = %c0_i32, %arg11 = %50, %arg12 = %51) -> (tensor<16x1xf32, #blocked2>, tensor<16x128x!tt.ptr<f16>, #blocked1>, tensor<128x1x!tt.ptr<f16>, #blocked>, i32, !ttg.memdesc<16x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x1xf16, #shared1, #smem, mutable>)  : i32 {
+      %71 = tt.addptr %arg8, %cst_3 : tensor<16x128x!tt.ptr<f16>, #blocked1>, tensor<16x128xi32, #blocked1>
+      %72 = tt.addptr %arg9, %cst_2 : tensor<128x1x!tt.ptr<f16>, #blocked>, tensor<128x1xi32, #blocked>
+      %79 = tt.load %71 : tensor<16x128x!tt.ptr<f16>, #blocked1>
+      %80 = ttg.local_load %arg11 : !ttg.memdesc<16x128xf16, #shared, #smem, mutable> -> tensor<16x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
+      %83 = tt.load %72 : tensor<128x1x!tt.ptr<f16>, #blocked>
+      %84 = ttg.local_load %arg12 : !ttg.memdesc<128x1xf16, #shared1, #smem, mutable> -> tensor<128x1xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>>
+      %85 = tt.dot %80, %84, %arg7, inputPrecision = tf32 : tensor<16x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> * tensor<128x1xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>> -> tensor<16x1xf32, #blocked2>
+      %86 = arith.addi %arg10, %c1_i32 : i32
+      %87 = arith.cmpi slt, %86, %c1_i32 : i32
+      %88 = arith.select %87, %86, %c0_i32 : i32
+      %89 = ttg.memdesc_index %48[%88] : !ttg.memdesc<1x16x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x128xf16, #shared, #smem, mutable>
+      ttg.local_store %79, %89 : tensor<16x128xf16, #blocked1> -> !ttg.memdesc<16x128xf16, #shared, #smem, mutable>
+      %90 = ttg.memdesc_index %49[%88] : !ttg.memdesc<1x128x1xf16, #shared1, #smem, mutable> -> !ttg.memdesc<128x1xf16, #shared1, #smem, mutable>
+      ttg.local_store %83, %90 : tensor<128x1xf16, #blocked> -> !ttg.memdesc<128x1xf16, #shared1, #smem, mutable>
+      scf.yield %85, %71, %72, %88, %89, %90 : tensor<16x1xf32, #blocked2>, tensor<16x128x!tt.ptr<f16>, #blocked1>, tensor<128x1x!tt.ptr<f16>, #blocked>, i32, !ttg.memdesc<16x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x1xf16, #shared1, #smem, mutable>
+    }
+    tt.return
+  }
+}
