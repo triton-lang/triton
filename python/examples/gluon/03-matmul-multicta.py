@@ -10,12 +10,11 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
     clc,
-    get_tmem_reg_layout,
     tcgen05_commit,
     tcgen05_mma,
     tensor_memory_descriptor,
 )
-from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared, mbarrier, tma
+from triton.experimental.gluon.language.nvidia.hopper import mbarrier, tma
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.language.core import _aggregate as aggregate
 
@@ -411,16 +410,9 @@ def matmul_epilogue_partition(p):
         for s in gl.static_range(SUBTILE_FACTOR):
             acc_sub = acc_buf.slice(SPLIT_TILE_N * s, SPLIT_TILE_N)
             acc_smem = acc_smems.index(sub_acc_state.index)
-            acc = acc_sub.load(
-                get_tmem_reg_layout(
-                    gl.float32,
-                    (TILE_M, SPLIT_TILE_N),
-                    acc_sub.type.layout,
-                    gl.num_warps(),
-                )).to(dtype)
+            acc = acc_sub.load().to(dtype)
             tma.store_wait(pendings=1)
             acc_smem.store(acc)
-            fence_async_shared()
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_TILE_N * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
         # Signal that the accumulator slot can be reused only after all stores are done.
