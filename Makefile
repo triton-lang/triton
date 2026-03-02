@@ -46,7 +46,7 @@ test-unit: all
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
-	$(PYTEST) python/examples/gluon/
+	$(PYTEST) -n 2 python/examples/gluon/
 
 .PHONY: test-regression
 test-regression: all
