@@ -231,14 +231,13 @@ public:
   }
 };
 
-template <typename OpTy>
+template <typename DotOpType, typename OpTy>
 class CombineDotAddPattern : public mlir::OpRewritePattern<OpTy> {
 public:
   using OpRewritePattern<OpTy>::OpRewritePattern;
 
-  template <typename DotOpType>
-  mlir::LogicalResult combine(OpTy addOp,
-                              mlir::PatternRewriter &rewriter) const {
+  mlir::LogicalResult
+  matchAndRewrite(OpTy addOp, mlir::PatternRewriter &rewriter) const override {
     auto dotOp = addOp.getRhs().template getDefiningOp<DotOpType>();
     bool isDotLHS = false;
     if (!dotOp) {
@@ -266,23 +265,18 @@ public:
     rewriter.replaceAllUsesWith(addOp, dotOp.getResult());
     return success();
   }
-
-  mlir::LogicalResult
-  matchAndRewrite(OpTy addOp, mlir::PatternRewriter &rewriter) const override {
-    if (succeeded(combine<DotOp>(addOp, rewriter)))
-      return success();
-    if (succeeded(combine<DotScaledOp>(addOp, rewriter)))
-      return success();
-    return failure();
-  }
 };
 
 // AddIOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
 // AddFOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
 // AddIOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
 // AddFOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
-using CombineDotAddIPattern = CombineDotAddPattern<arith::AddIOp>;
-using CombineDotAddFPattern = CombineDotAddPattern<arith::AddFOp>;
+using CombineDotAddIPattern = CombineDotAddPattern<DotOp, arith::AddIOp>;
+using CombineDotAddFPattern = CombineDotAddPattern<DotOp, arith::AddFOp>;
+using CombineDotScaledAddIPattern =
+    CombineDotAddPattern<DotScaledOp, arith::AddIOp>;
+using CombineDotScaledAddFPattern =
+    CombineDotAddPattern<DotScaledOp, arith::AddFOp>;
 
 } // anonymous namespace
 
@@ -295,6 +289,8 @@ public:
 
     patterns.add<CombineDotAddIPattern>(context);
     patterns.add<CombineDotAddFPattern>(context);
+    patterns.add<CombineDotScaledAddIPattern>(context);
+    patterns.add<CombineDotScaledAddFPattern>(context);
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
