@@ -479,6 +479,9 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
   funcBlocks.insert(std::next(defaultBlock->getIterator()), switchExit);
   b.setInsertionPointToStart(defaultBlock);
   if (callbacks.lowerWarpTerminatorsToReturn) {
+    // Unassigned worker warps rendezvous once with phase-2 entry sync, then
+    // can exit immediately in early-return mode.
+    callbacks.createAllBarrier(b, switchLoopBarrierIdx);
     LLVM::BrOp::create(b, b.getLoc(), switchExit);
   } else {
     callbacks.createAllBarrier(b, switchLoopBarrierIdx);
