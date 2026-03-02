@@ -414,7 +414,8 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
   b.setInsertionPointToStart(switchLoop);
   callbacks.reallocRegisters(b, wsOps[0], RegisterReallocPhase::SwitchLoopStart,
                              0);
-  callbacks.createAllBarrier(b, switchLoopBarrierIdx);
+  if (!callbacks.lowerWarpTerminatorsToReturn)
+    callbacks.createAllBarrier(b, switchLoopBarrierIdx);
   Value statePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
   Value relWid = b.sub(wid, b.i32_val(defaultNumWarps));
 
@@ -530,7 +531,8 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
 
     // First barrier releases the waiting warpgroups. The second barrier ensures
     // they have read the captures before the memory is released upon entry.
-    callbacks.createAllBarrier(b, switchLoopBarrierIdx);
+    if (!callbacks.lowerWarpTerminatorsToReturn)
+      callbacks.createAllBarrier(b, switchLoopBarrierIdx);
     callbacks.reallocRegisters(b, ws,
                                RegisterReallocPhase::DefaultPartitionStart, 0);
     if (!callbacks.lowerWarpTerminatorsToReturn)
