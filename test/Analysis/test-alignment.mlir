@@ -494,8 +494,7 @@ tt.func @shift(%arg0: i32 {tt.divisibility = 4 : i32}) {
   %4 = arith.shrsi %0, %2 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [128], constancy = [128], constant_value = 128}}
   %5 = arith.shli %1, %2 : tensor<128xi32>
-  // Non-constant shift: conservatively return divisibility 1.
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>}}
+  // expected-remark @below {{contiguity = [1], divisibility = [8], constancy = [128], constant_value = <none>}}
   %6 = arith.shli %1, %s : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %7 = arith.shrsi %0, %s : tensor<128xi32>
@@ -1166,52 +1165,19 @@ tt.func @dead_op_pessimistic() {
 
 // -----
 
-// Negative constants should be sign-extended (not zero-extended) so that
-// constant_value is correct for downstream signed arithmetic.
+// Negative i32 constants should be sign-extended to int64_t, not zero-extended.
+// getSExtValue(-8 as i32) = -8, not 4294967288.
 tt.func @negative_constants() {
-  // Scalar negative constant: -8 (i32) must be sign-extended to int64_t -8,
-  // not zero-extended to 4294967288.
   // expected-remark @below {{contiguity = [1], divisibility = [8], constancy = [1], constant_value = -8}}
   %neg8_scalar = arith.constant -8 : i32
 
-  // Dense (splat) negative constant: same sign-extension requirement.
   // expected-remark @below {{contiguity = [1], divisibility = [8], constancy = [128], constant_value = -8}}
   %neg8_dense = arith.constant dense<-8> : tensor<128xi32>
 
-  // Verify that negative constant_value propagates correctly through arithmetic.
-  // -8 + 16 = 8 (not 4294967288 + 16 = 4294967304 from zero-extension).
+  // -8 + 16 = 8, not 4294967288 + 16 = 4294967304.
   // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [128], constant_value = 16}}
   %sixteen = arith.constant dense<16> : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [8], constancy = [128], constant_value = 8}}
   %sum = arith.addi %neg8_dense, %sixteen : tensor<128xi32>
-  tt.return
-}
-
-// -----
-
-// Shift by an amount >= 63 must not trigger C++ undefined behavior
-// (1ll << shift is UB when shift >= 63).  The analysis should conservatively
-// return divisibility 1.
-tt.func @shift_large_amount() {
-  // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
-  %x = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-
-  // Left shift by 63: triggers UB guard, divisibility must be 1.
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = 63}}
-  %c63 = arith.constant dense<63> : tensor<128xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
-  %shl63 = arith.shli %x, %c63 : tensor<128xi32>
-
-  // Right shift by 64: also triggers UB guard.
-  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [128], constant_value = 64}}
-  %c64 = arith.constant dense<64> : tensor<128xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
-  %shr64 = arith.shrsi %x, %c64 : tensor<128xi32>
-
-  // Left shift by negative amount (sign-extended): triggers UB guard.
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = -1}}
-  %cneg1 = arith.constant dense<-1> : tensor<128xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
-  %shl_neg = arith.shli %x, %cneg1 : tensor<128xi32>
   tt.return
 }

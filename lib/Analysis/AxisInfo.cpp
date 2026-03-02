@@ -231,10 +231,6 @@ public:
     if (intAttr || boolAttr) {
       int64_t value{};
       if (intAttr)
-        // Use getSExtValue() so that negative constants (e.g. -8) are
-        // sign-extended to int64_t instead of zero-extended.  This ensures
-        // the knownConstantValue is correct for downstream visitors that
-        // perform signed arithmetic on it.
         value = intAttr.getValue().getSExtValue();
       else
         value = boolAttr.getValue() ? 1 : 0;
@@ -246,7 +242,6 @@ public:
     // TODO: generalize to dense attr
     auto splatAttr = dyn_cast<SplatElementsAttr>(op.getValue());
     if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
-      // Use getSExtValue() for the same reason as the scalar case above.
       int64_t value = splatAttr.template getSplatValue<APInt>().getSExtValue();
       TensorType ty = cast<TensorType>(splatAttr.getType());
       return AxisInfo(
@@ -945,15 +940,7 @@ private:
 
   int64_t getDivisibility(arith::ShLIOp op, const AxisInfo &lhs,
                           const AxisInfo &rhs, int dim) override {
-    // When the shift amount is not a compile-time constant, we cannot
-    // make any assumptions -- conservatively return divisibility 1.
-    if (!rhs.getConstantValue().has_value())
-      return 1;
-    auto shift = rhs.getConstantValue().value();
-    // Guard against C++ undefined behavior: 1ll << shift is UB when
-    // shift is negative or >= 63 (the number of value bits in int64_t).
-    if (shift < 0 || shift >= 63)
-      return 1;
+    auto shift = rhs.getConstantValue().value_or(0);
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 && shift) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
@@ -991,10 +978,6 @@ private:
     if (!rhs.getConstantValue().has_value())
       return 1;
     auto shift = rhs.getConstantValue().value();
-    // Guard against C++ undefined behavior: int64_t(1) << shift is UB
-    // when shift is negative or >= 63.
-    if (shift < 0 || shift >= 63)
-      return 1;
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 && shift) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
