@@ -459,7 +459,7 @@ def _matmul_kernel(
     tmem_layout: gl.constexpr = TensorMemoryLayout(
         [BLOCK_SIZE_M, BLOCK_N],
         col_stride=1,
-        cta_split_num=(2, 1) if TWO_CTAS else None,
+        cga_layout=[[1, 0]] if TWO_CTAS else [],
         two_ctas=TWO_CTAS,
     )
     acc_bufs = allocate_tensor_memory(gl.float32, [ACC_STAGES, BLOCK_M, BLOCK_N], tmem_layout)
