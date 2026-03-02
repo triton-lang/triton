@@ -389,6 +389,9 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
     partition->walk([&](WarpReturnOp op) {
       TritonLLVMIRRewriter b(op.getLoc(), op);
       if (callbacks.lowerWarpTerminatorsToReturn) {
+        callbacks.reallocRegisters(b, ws,
+                                   RegisterReallocPhase::WorkerPartitionEnd,
+                                   partition->getRegionNumber());
         b.replaceOpWithNewOp<LLVM::ReturnOp>(op, ValueRange());
         return;
       }
@@ -417,16 +420,25 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
                              0);
   callbacks.createAllBarrier(b, switchLoopBarrierIdx);
   Value statePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
+  int32_t maxNumWarps = totalNumWarps - defaultNumWarps;
   Value relWid = b.sub(wid, b.i32_val(defaultNumWarps));
+  Value inRange;
+  Value safeRelWid = relWid;
+  if (callbacks.lowerWarpTerminatorsToReturn) {
+    inRange = b.icmp_ult(relWid, b.i32_val(maxNumWarps));
+    safeRelWid = b.select(inRange, relWid, b.i32_val(0));
+  }
 
   // The default warp group will populate the state pointer with the state ID
   // for all warps.
   // %warp_state_ptr = getelementptr ptr %state_tr[%rel_wid]
   // %warp_state = load i8 %warp_state_ptr
-  Value warpStatePtr = b.gep(ptrTy, int8Type, statePtr, relWid);
+  Value warpStatePtr = b.gep(ptrTy, int8Type, statePtr, safeRelWid);
   // All threads in a warp reading from the same smem address will not create
   // bank conflicts and is better than predicated load.
   Value warpState = b.load(int8Type, warpStatePtr);
+  if (callbacks.lowerWarpTerminatorsToReturn)
+    warpState = b.select(inRange, warpState, b.i8_val(-1));
 
   // Pull the partition regions out. Switch based on the state ID to the right
   // partition.
@@ -436,7 +448,6 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
   // This represents the data that the default warp group will fill into the
   // state pointer before entering each `warp_specialize` region, which maps
   // a warp ID to a state ID in the switch.
-  int32_t maxNumWarps = totalNumWarps - defaultNumWarps;
   SmallVector<SmallVector<int32_t>> warpToState(
       wsOps.size(), SmallVector<int32_t>(maxNumWarps, -1));
 
