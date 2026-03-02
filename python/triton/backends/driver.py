@@ -176,4 +176,12 @@ class GPUDriver(DriverBase):
 
     def allocate_default_profile_scratch(self, size: int, alignment: int, stream):
         import torch
-        return torch.zeros(size, dtype=torch.int8, device=self.get_active_torch_device())
+        device = self.get_active_torch_device()
+        device_interface = self.get_device_interface()
+        if stream is None:
+            return torch.zeros(size, dtype=torch.int8, device=device)
+        launch_stream = device_interface.ExternalStream(stream, device=device)
+        with device_interface.stream(launch_stream):
+            scratch = torch.zeros(size, dtype=torch.int8, device=device)
+        scratch.record_stream(launch_stream)
+        return scratch
