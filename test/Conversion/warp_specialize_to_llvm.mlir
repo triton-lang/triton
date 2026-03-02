@@ -208,7 +208,6 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
 
   // CHECK: [[DEFAULT]]:
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: llvm.br [[SWITCH_LOOP]] {loop_annotation = #llvm.loop_annotation<licm = <disable = true>>}
 
   // CHECK: [[EXIT]]:
@@ -217,19 +216,16 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   // CHECK: [[PARTITION0]]:
   // CHECK: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition0"
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // CHECK: [[PARTITION1]]:
   // CHECK: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition1"
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // CHECK: [[PARTITION2]]:
   // CHECK: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition2"
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // CHECK: [[BODY]]:
@@ -279,7 +275,6 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
 
   // AMD: [[DEFAULT]]:
   // AMD-NEXT: rocdl.barrier
-  // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: llvm.br [[SWITCH_LOOP]] {loop_annotation = #llvm.loop_annotation<licm = <disable = true>>}
 
   // AMD: [[EXIT]]:
@@ -288,19 +283,16 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   // AMD: [[PARTITION0]]:
   // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: "partition0"
-  // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // AMD: [[PARTITION1]]:
   // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: "partition1"
-  // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // AMD: [[PARTITION2]]:
   // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: "partition2"
-  // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // AMD: [[BODY]]:
@@ -416,7 +408,6 @@ llvm.func @pass_captures() attributes {allocation.offset = 32 : i32} {
   // CHECK-NEXT: [[ARG1:%.*]] = llvm.load [[ARG1_PTR]] {alignment = 1 : i64}
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "use"([[ARG0]], [[ARG1]])
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
 
   // CHECK: ^bb5:
   // CHECK: [[INS:%.*]]:2 = "produce"()
@@ -434,7 +425,6 @@ llvm.func @pass_captures() attributes {allocation.offset = 32 : i32} {
   // AMD-NEXT: [[ARG1:%.*]] = llvm.load [[ARG1_PTR]] {alignment = 1 : i64}
   // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: "use"([[ARG0]], [[ARG1]])
-  // AMD-NEXT: rocdl.barrier
 
   // AMD: ^bb5:
   // AMD: [[INS:%.*]]:2 = "produce"()
@@ -869,11 +859,9 @@ llvm.func @cfg() attributes {allocation.offset = 32 : i32} {
   // CHECK-NEXT: "something"()[[[A:\^.*]], [[B:\^.*]]]
   // CHECK: [[A]]:
   // CHECK-NEXT: "A"
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
   // CHECK: [[B]]:
   // CHECK-NEXT: "B"
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // CHECK: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
@@ -895,11 +883,9 @@ llvm.func @cfg() attributes {allocation.offset = 32 : i32} {
   // AMD-NEXT: "something"()[[[A:\^bb[0-9]+]], [[B:\^bb[0-9]+]]]
   // AMD: [[A]]:
   // AMD-NEXT: "A"
-  // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: llvm.br [[SWITCH_LOOP]]
   // AMD: [[B]]:
   // AMD-NEXT: "B"
-  // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // AMD: rocdl.barrier
@@ -1048,8 +1034,6 @@ llvm.func @trivial_remat() attributes {allocation.offset = 0 : i32} {
     // AMD-NEXT: rocdl.barrier
     // AMD-NEXT: "use"([[CAP0]], [[CAP1]])
     "use"(%arg0, %arg1) : (i32, !llvm.ptr<3>) -> ()
-    // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
-    // AMD-NEXT: rocdl.barrier
     ttg.warp_return
   } : (i32, !llvm.ptr<3>) -> ()
   llvm.return
@@ -1085,8 +1069,6 @@ llvm.func @remat_subgraph(%arg0: i32, %arg1: i32) attributes {allocation.offset 
     // AMD-NEXT: [[PTR:%.*]] = llvm.getelementptr [[ADDR]][%arg0]
     // AMD-NEXT: "use"([[PTR]], [[UREM]])
     "use"(%arg2, %arg3) : (!llvm.ptr<3>, i32) -> ()
-    // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
-    // AMD-NEXT: rocdl.barrier
     ttg.warp_return
   } : (!llvm.ptr<3>, i32) -> ()
   llvm.return
@@ -1119,21 +1101,18 @@ llvm.func @dynamic_register_reallocation() attributes {allocation.offset = 0 : i
   // CHECK-NEXT: nvvm.setmaxregister increase 80
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition0"()
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: nvvm.setmaxregister decrease 24
 
   // CHECK: [[PARTITION1]]:
   // CHECK-NEXT: nvvm.setmaxregister increase 48
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition1"()
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: nvvm.setmaxregister decrease 24
 
   // CHECK: [[PARTITION2]]:
   // CHECK-NEXT: nvvm.setmaxregister increase 128
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition2"()
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: nvvm.setmaxregister decrease 24
 
   // CHECK: [[ENTRY]]:
@@ -1193,21 +1172,18 @@ llvm.func @dynamic_register_reallocation_overalloc() attributes {allocation.offs
   // CHECK-NEXT: nvvm.setmaxregister decrease 24
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition0"()
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: nvvm.setmaxregister increase 80
 
   // CHECK: [[PARTITION1]]:
   // CHECK-NEXT: nvvm.setmaxregister increase 192
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition1"()
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: nvvm.setmaxregister decrease 80
 
   // CHECK: [[PARTITION2]]:
   // CHECK-NEXT: nvvm.setmaxregister increase 192
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition2"()
-  // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: nvvm.setmaxregister decrease 80
 
   // CHECK: [[ENTRY]]:

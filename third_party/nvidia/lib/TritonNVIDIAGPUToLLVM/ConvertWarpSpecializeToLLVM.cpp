@@ -204,6 +204,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     LLVM::createLLVMIntrinsicCallOp(
         b, b.getLoc(), "llvm.nvvm.barrier.cta.sync.all", {}, b.i32_val(barIdx));
   };
+  callbacks.lowerWarpTerminatorsToReturn = true;
 
   callbacks.reallocRegisters = [&](TritonLLVMIRRewriter &b, WarpSpecializeOp ws,
                                    RegisterReallocPhase phase,

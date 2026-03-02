@@ -378,13 +378,19 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
       partition->front().eraseArguments([](auto) { return true; });
     }
 
-    // The shared memory is only live for the entry into the region, so put
-    // another barrier here.
-    callbacks.createAllBarrier(b, switchLoopBarrierIdx);
+    // In normal mode, shared memory captures are only live for region entry.
+    // In early-return mode, worker warps may return before this point, so skip
+    // CTA-wide barrier rendezvous.
+    if (!callbacks.lowerWarpTerminatorsToReturn)
+      callbacks.createAllBarrier(b, switchLoopBarrierIdx);
 
     // Rewrite all warp returns.
     partition->walk([&](WarpReturnOp op) {
       TritonLLVMIRRewriter b(op.getLoc(), op);
+      if (callbacks.lowerWarpTerminatorsToReturn) {
+        b.replaceOpWithNewOp<LLVM::ReturnOp>(op, ValueRange());
+        return;
+      }
       callbacks.createAllBarrier(b, switchLoopBarrierIdx);
       callbacks.reallocRegisters(b, ws,
                                  RegisterReallocPhase::WorkerPartitionEnd,
@@ -464,16 +470,20 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
 
   // Default destination.
   Block *defaultBlock = new Block;
-  funcBlocks.insert(std::next(switchLoop->getIterator()), defaultBlock);
-  b.setInsertionPointToStart(defaultBlock);
-  callbacks.createAllBarrier(b, switchLoopBarrierIdx);
-  callbacks.createAllBarrier(b, switchLoopBarrierIdx);
-  auto latchBr = LLVM::BrOp::create(b, b.getLoc(), switchLoop);
-  disableLICM(latchBr);
-
   // Exit state.
   Block *switchExit = new Block;
+  funcBlocks.insert(std::next(switchLoop->getIterator()), defaultBlock);
   funcBlocks.insert(std::next(defaultBlock->getIterator()), switchExit);
+  b.setInsertionPointToStart(defaultBlock);
+  if (callbacks.lowerWarpTerminatorsToReturn) {
+    LLVM::BrOp::create(b, b.getLoc(), switchExit);
+  } else {
+    callbacks.createAllBarrier(b, switchLoopBarrierIdx);
+    callbacks.createAllBarrier(b, switchLoopBarrierIdx);
+    auto latchBr = LLVM::BrOp::create(b, b.getLoc(), switchLoop);
+    disableLICM(latchBr);
+  }
+
   partitionBlocks.push_back(switchExit);
   partitionStates.push_back(partitionStateCounter);
 
@@ -523,11 +533,19 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
     callbacks.createAllBarrier(b, switchLoopBarrierIdx);
     callbacks.reallocRegisters(b, ws,
                                RegisterReallocPhase::DefaultPartitionStart, 0);
-    callbacks.createAllBarrier(b, switchLoopBarrierIdx);
+    if (!callbacks.lowerWarpTerminatorsToReturn)
+      callbacks.createAllBarrier(b, switchLoopBarrierIdx);
     LLVM::BrOp::create(b, b.getLoc(), &ws.getDefaultRegion().front());
 
     ws.getDefaultRegion().walk([&, ws = ws](WarpYieldOp op) mutable {
       TritonLLVMIRRewriter b(op.getLoc(), op);
+      if (callbacks.lowerWarpTerminatorsToReturn) {
+        callbacks.reallocRegisters(b, ws,
+                                   RegisterReallocPhase::DefaultPartitionEnd,
+                                   0);
+        b.replaceOpWithNewOp<LLVM::BrOp>(op, op.getOperands(), after);
+        return;
+      }
       callbacks.createAllBarrier(b, switchLoopBarrierIdx);
       callbacks.reallocRegisters(b, ws,
                                  RegisterReallocPhase::DefaultPartitionEnd, 0);
@@ -544,17 +562,19 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
     ws.erase();
   }
 
-  // Signal all warp groups to exit.
-  func.walk([&](LLVM::ReturnOp op) {
-    TritonLLVMIRRewriter b(op.getLoc(), op);
-    Type int8Type = b.getIntegerType(8);
-    Value statePtrExit =
-        LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
-    Value cst = b.i8_val(partitionStateCounter);
-    for (int32_t i : llvm::seq(maxNumWarps))
-      b.store(cst, b.gep(ptrTy, int8Type, statePtrExit, LLVM::GEPArg(i)));
-    callbacks.createAllBarrier(b, switchLoopBarrierIdx);
-  });
+  if (!callbacks.lowerWarpTerminatorsToReturn) {
+    // Signal all warp groups to exit.
+    func.walk([&](LLVM::ReturnOp op) {
+      TritonLLVMIRRewriter b(op.getLoc(), op);
+      Type int8Type = b.getIntegerType(8);
+      Value statePtrExit =
+          LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
+      Value cst = b.i8_val(partitionStateCounter);
+      for (int32_t i : llvm::seq(maxNumWarps))
+        b.store(cst, b.gep(ptrTy, int8Type, statePtrExit, LLVM::GEPArg(i)));
+      callbacks.createAllBarrier(b, switchLoopBarrierIdx);
+    });
+  }
   b.setInsertionPointToStart(switchExit);
   LLVM::ReturnOp::create(b, b.getLoc(), ValueRange());
 

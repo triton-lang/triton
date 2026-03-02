@@ -80,6 +80,9 @@ struct WarpSpecializeCallbacks {
   /// Create a barrier to synchronize threads across the whole CTA
   std::function<void(TritonLLVMIRRewriter &, unsigned barIdx)> createAllBarrier;
 
+  /// If true, lower warp_yield/warp_return directly to llvm.return.
+  bool lowerWarpTerminatorsToReturn = false;
+
   /// Reallocate registers.
   /// regionNumber is only used for WorkerPartitionStart and WorkerPartitionEnd
   /// phases.
