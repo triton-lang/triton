@@ -6,6 +6,11 @@ Run on gb200:
     python python/test/regression/repro_mmav5_tmem_stale_d.py \
       --iters 200 --progress 25 --noise-size 4096
 
+Zero-input failure on gb200:
+  TRITON_ALWAYS_COMPILE=1 DISABLE_PTXAS_OPT=1 \
+    python python/test/regression/repro_mmav5_tmem_stale_d.py \
+      --iters 100 --progress 25 --noise-size 4096 --zero-inputs
+
 Optimized ptxas path with inline-asm sleep:
   TRITON_ALWAYS_COMPILE=1 DISABLE_PTXAS_OPT=0 \
     python python/test/regression/repro_mmav5_tmem_stale_d.py \
@@ -52,7 +57,8 @@ def tmem_mmav5_leak_repro_kernel(
     x = tl.load(x_ptr)
     dy_ptr = DY + pid * stride_dy_pid + offs_h[:, None] * stride_dy_head + offs_n[None, :]
     dy = tl.load(dy_ptr)
-    dw_t = tl.dot(tl.trans(dy), x)
+    acc = tl.zeros((BLOCK_N, DREL), dtype=tl.float32) + 1.0
+    dw_t = tl.dot(tl.trans(dy), x, acc=acc)
     if SLEEP_CYCLES > 0:
         tl.inline_asm_elementwise(
             f"nanosleep.u32 {SLEEP_CYCLES}; mov.u32 $0, 0;",
@@ -62,6 +68,20 @@ def tmem_mmav5_leak_repro_kernel(
             is_pure=False,
             pack=1,
         )
+    acc = tl.zeros((BLOCK_N, DREL), dtype=tl.float32) + 1.0
+    dw_t2 = tl.dot(tl.trans(dy), x + 0.0, acc=acc)
+    diff = dw_t2 - dw_t
+    max_abs_diff = tl.max(tl.abs(diff))
+    if max_abs_diff != 0.0:
+        tl.device_print(
+            "failure max_abs(dw_t2 - dw_t) != 0.0:",
+            max_abs_diff.to(tl.uint32, bitcast=True),
+        )
+        tl.device_print("max_abs:", max_abs_diff)
+        tl.device_print("x:", x)
+        tl.device_print("dy:", dy)
+        tl.device_print("dw_t:", dw_t)
+        tl.device_print("dw_t2:", dw_t2)
     tl.store(
         DWT_OUT + pid * stride_out_pid + offs_n[:, None] * stride_out_row + offs_d[None, :],
         dw_t,
