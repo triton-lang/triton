@@ -550,6 +550,10 @@ void init_triton_amd(py::module &&m) {
   });
 
   auto hipBlas = m.def_submodule("hipblas");
+  try {
+    py::module_::import("rocm_sdk").attr("preload_libraries")("hipblaslt");
+  } catch (...) {
+  }
   py::class_<HipblasLtInstance>(hipBlas, "HipblasLt")
       .def(py::init<>([&](py::object &workspace) {
         auto wrk_ptr = workspace.attr("data_ptr")().cast<uint64_t>();
