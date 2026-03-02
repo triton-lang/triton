@@ -8,7 +8,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton import language as tl
 from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_interpreter
-from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory, mbarrier, tcgen05_mma, get_tmem_reg_layout
+from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory, mbarrier, tcgen05_mma
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
