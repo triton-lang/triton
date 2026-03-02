@@ -9,7 +9,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
-    get_tmem_reg_layout,
     tcgen05_commit,
     tcgen05_mma,
     tcgen05_mma_scaled,
@@ -153,13 +152,13 @@ def tl_dot_blackwell(
     acc_dtype: ttgl.constexpr = acc.dtype if acc is not None else out_dtype
     col_stride: ttgl.constexpr = 32 // acc_dtype.primitive_bitwidth
     acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([m, n], col_stride=col_stride)
-
-    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(acc_dtype, (M, N), acc_tmem_layout, ttgl.num_warps())
+    acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_tmem_layout)
+    tmem_reg_layout: ttgl.constexpr = acc_tmem.get_reg_layout()
     if acc is not None:
         acc_temp = ttgl.convert_layout(acc, tmem_reg_layout)
     else:
         acc_temp = ttgl.zeros([M, N], out_dtype, layout=tmem_reg_layout)
-    acc_tmem = allocate_tensor_memory(acc_temp.dtype, [M, N], acc_tmem_layout, acc_temp)
+    acc_tmem.store(acc_temp)
     fence_async_shared()
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
@@ -169,7 +168,7 @@ def tl_dot_blackwell(
     mbarrier.invalidate(bar)
 
     # Load back from TMEM using a register layout and convert to acc layout
-    out = acc_tmem.load(tmem_reg_layout)
+    out = acc_tmem.load()
     ret_layout: ttgl.constexpr = default_blocked_layout([M, N], ttgl.num_warps())
     out = ttgl.convert_layout(out, ret_layout)
     return out
@@ -464,32 +463,33 @@ def tl_dot_scaled_blackwell(
     acc_dtype: ttgl.constexpr = acc.dtype if acc is not None else out_dtype
     col_stride: ttgl.constexpr = 32 // acc_dtype.primitive_bitwidth
     acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([m, n], col_stride=col_stride)
-    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(acc_dtype, (M, N), acc_tmem_layout, ttgl.num_warps())
+    acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_tmem_layout)
+    tmem_reg_layout: ttgl.constexpr = acc_tmem.get_reg_layout()
     if acc is not None:
         acc_temp = ttgl.convert_layout(acc, tmem_reg_layout)
     else:
         acc_temp = ttgl.zeros([M, N], out_dtype, layout=tmem_reg_layout)
-    acc_tmem = allocate_tensor_memory(acc_temp.dtype, [M, N], acc_tmem_layout, acc_temp)
+    acc_tmem.store(acc_temp)
     fence_async_shared()
 
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
     scale_layout: ttgl.constexpr = TensorMemoryScalesLayout()
-    scale_layout_reg_lhs: ttgl.constexpr = get_tmem_reg_layout(lhs_scale.dtype, lhs_scale.type.shape, scale_layout,
-                                                               ttgl.num_warps())
-    scale_layout_reg_rhs: ttgl.constexpr = get_tmem_reg_layout(rhs_scale.dtype, rhs_scale.type.shape, scale_layout,
-                                                               ttgl.num_warps())
+    a_scale_tmem = allocate_tensor_memory(lhs_scale.dtype, lhs_scale.shape, scale_layout)
+    b_scale_tmem = allocate_tensor_memory(rhs_scale.dtype, rhs_scale.shape, scale_layout)
+    scale_layout_reg_lhs: ttgl.constexpr = a_scale_tmem.get_reg_layout()
+    scale_layout_reg_rhs: ttgl.constexpr = b_scale_tmem.get_reg_layout()
     lhs_scale = ttgl.convert_layout(lhs_scale, scale_layout_reg_lhs)
     rhs_scale = ttgl.convert_layout(rhs_scale, scale_layout_reg_rhs)
-    a_scale_tmem = allocate_tensor_memory(lhs_scale.dtype, lhs_scale.shape, scale_layout, lhs_scale)
-    b_scale_tmem = allocate_tensor_memory(rhs_scale.dtype, rhs_scale.shape, scale_layout, rhs_scale)
+    a_scale_tmem.store(lhs_scale)
+    b_scale_tmem.store(rhs_scale)
 
     tcgen05_mma_scaled(a_smem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, lhs_format, rhs_format, use_acc=True)
     tcgen05_commit(bar)
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
     # Load back from TMEM using a register layout and convert to acc layout
-    out = acc_tmem.load(tmem_reg_layout)
+    out = acc_tmem.load()
     ret_layout: ttgl.constexpr = default_blocked_layout([M, N], ttgl.num_warps())
     out = ttgl.convert_layout(out, ret_layout)
     return out

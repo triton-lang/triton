@@ -960,6 +960,12 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
                                         {kLane, laneId},
                                         {kWarp, warpId},
                                         {kBlock, ctaId}});
+
+  int cacheScope = 8; // (8) = L2 scope
+  int hintValue = cacheScope | static_cast<int>(isSpeculative);
+  Value hint = LLVM::ConstantOp::create(rewriter, loc, i32_ty,
+                                        rewriter.getI32IntegerAttr(hintValue));
+
   // Iterate over each register and emit a prefetch intrinsic
   SmallVector<Value> offsets(ll.getInDimSize(kRegister));
   for (int reg = 0; reg < ll.getInDimSize(kRegister); reg++) {
@@ -967,17 +973,16 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
         ll.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
 
     // XOR the base indices with the register specific indices
-    SmallVector<std::pair<StringAttr, Value>> indices;
+    SmallVector<Value> indices;
     for (auto [base, regIdx] : llvm::zip(baseIndices, regIndices)) {
       assert(base.first == regIdx.first);
       Value combined = b.xor_(base.second, b.i32_val(regIdx.second));
-      indices.emplace_back(base.first, combined);
+      indices.emplace_back(combined);
     }
 
     // Compute the local offset from tile ptr for this prefetch based on the
     // computed indices
-    Value localOffset =
-        dot64(to_vector(make_second_range(indices)), scaledStride);
+    Value localOffset = dot64(indices, scaledStride);
     auto prefetchPtr = b.gep(globalPtrTy, elementType, tilePtr, localOffset);
 
     // Mask the prefetch if the offset is out of bounds
@@ -995,13 +1000,9 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
                            afterPrefetch);
 
     rewriter.setInsertionPointToStart(prefetchBlock);
-    int cache_scope = 8; // (8) = L2 scope
-    int speculative = isSpeculative;
-    int llvmTemporalHint = cache_scope | speculative;
-    Value scope = LLVM::ConstantOp::create(
-        rewriter, loc, i32_ty, rewriter.getI32IntegerAttr(llvmTemporalHint));
+
     LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, "llvm.amdgcn.global.prefetch", {}, {prefetchPtr, scope});
+        rewriter, loc, "llvm.amdgcn.global.prefetch", {}, {prefetchPtr, hint});
 
     rewriter.setInsertionPointToEnd(prefetchBlock);
     LLVM::BrOp::create(rewriter, loc, afterPrefetch);

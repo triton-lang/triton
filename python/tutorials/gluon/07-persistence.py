@@ -48,7 +48,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     tensor_memory_descriptor,
     allocate_tensor_memory,
-    get_tmem_reg_layout,
     tcgen05_mma,
     tcgen05_commit,
 )
@@ -130,7 +129,6 @@ class MMAv5:
     acc_tmem: tensor_memory_descriptor
     bar: gl.shared_memory_descriptor
     counter: gl.tensor
-    reg_layout: gl.constexpr
 
     @gluon.jit
     def initialize(dtype: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, num_warps: gl.constexpr):
@@ -138,14 +136,13 @@ class MMAv5:
         acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], layout)
         bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
-        reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), layout, num_warps)
-        return MMAv5(gl.to_tensor(False), acc_tmem, bar, gl.to_tensor(0), reg_layout)
+        return MMAv5(gl.to_tensor(False), acc_tmem, bar, gl.to_tensor(0))
 
     @gluon.jit
     def issue_async_mma(self, a, b):
         tcgen05_mma(a, b, self.acc_tmem, use_acc=self.use_acc)
         tcgen05_commit(self.bar)
-        return MMAv5(gl.to_tensor(True), self.acc_tmem, self.bar, self.counter + 1, self.reg_layout)
+        return MMAv5(gl.to_tensor(True), self.acc_tmem, self.bar, self.counter + 1)
 
     @gluon.jit
     def wait_num_outstanding(self, num_outstanding: gl.constexpr):
@@ -154,8 +151,8 @@ class MMAv5:
 
     @gluon.jit
     def take_result(self):
-        next = MMAv5(gl.to_tensor(False), self.acc_tmem, self.bar, self.counter, self.reg_layout)
-        return self.acc_tmem.load(self.reg_layout), next
+        next = MMAv5(gl.to_tensor(False), self.acc_tmem, self.bar, self.counter)
+        return self.acc_tmem.load(), next
 
 
 def select_mma_impl():
