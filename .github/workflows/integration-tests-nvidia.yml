@@ -88,8 +88,10 @@ jobs:
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
-      - name: Run python tests on CUDA
+      - name: Run triton tests
         run: make NUM_PROCS=24 test-unit
+      - name: Run gluon tests
+        run: make NUM_PROCS=24 test-gluon
       - name: Run interpreter tests
         if: ${{ matrix.config.runner_type == 'nvidia-h100' }}
         run: make test-interpret

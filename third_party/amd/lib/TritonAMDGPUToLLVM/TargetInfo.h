@@ -113,6 +113,7 @@ public:
   bool requiresAliasInfoForAsyncOps() const;
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
   bool supportsDirectFromLdsStoreBitWidth(int bitWidth) const;
+  bool supportsBufferLoadToLocal() const;
 
   bool supportsMultiCTALaunch() const;
   bool supportsTDM() const;

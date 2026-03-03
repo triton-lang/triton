@@ -119,68 +119,6 @@ llvm.func @tensor_memory_base_warpgroup() attributes {nvvm.kernel = 1 : ui1, nvv
 
 }
 
-// -----
-
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-
-// CHECK-LABEL: @warpid_warp_specialize
-llvm.func @warpid_warp_specialize() {
-  // CHECK: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
-  // CHECK: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
-  // CHECK: [[ID:%.*]] = llvm.udiv [[TIDX]], [[C32]]
-  // CHECK: [[UNIFORM:%.*]] = nvvm.shfl.sync idx {{%[0-9]+}}, [[ID]]
-  %0 = ttg.warp_id
-  // CHECK: "use"([[UNIFORM]])
-  "use"(%0) : (i32) -> ()
-
-  // CHECK: ttg.warp_specialize
-  ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 6, 4>}
-  // CHECK: default
-  default {
-    // CHECK: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
-    // CHECK: [[ID:%.*]] = llvm.udiv [[TIDX]], [[C32]]
-    // CHECK: [[UNIFORM:%.*]] = nvvm.shfl.sync idx {{%[0-9]+}}, [[ID]]
-    %1 = ttg.warp_id
-    // CHECK: "use"([[UNIFORM]])
-    "use"(%1) : (i32) -> ()
-    ttg.warp_yield
-  }
-  // CHECK: partition0
-  partition0() num_warps(4) {
-    // 6*32 = 196
-
-    // CHECK: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
-    // CHECK: [[C192:%.*]] = llvm.mlir.constant(192 : i32)
-    // CHECK: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
-    // CHECK: [[REL_TIDX:%.*]] = llvm.sub [[TIDX]], [[C192]]
-    // CHECK: [[ID:%.*]] = llvm.udiv [[REL_TIDX]], [[C32]]
-    // CHECK: [[UNIFORM:%.*]] = nvvm.shfl.sync idx {{%[0-9]+}}, [[ID]]
-    %1 = ttg.warp_id
-    // CHECK: "use"([[UNIFORM]])
-    "use"(%1) : (i32) -> ()
-    ttg.warp_return
-  }
-  partition1() num_warps(2) {
-    // 4*32 = 128
-
-    // CHECK: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
-    // CHECK: [[C128:%.*]] = llvm.mlir.constant(128 : i32)
-    // CHECK: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
-    // CHECK: [[REL_TIDX:%.*]] = llvm.sub [[TIDX]], [[C128]]
-    // CHECK: [[ID:%.*]] = llvm.udiv [[REL_TIDX]], [[C32]]
-    // CHECK: [[UNIFORM:%.*]] = nvvm.shfl.sync idx {{%[0-9]+}}, [[ID]]
-    %1 = ttg.warp_id
-    // CHECK: "use"([[UNIFORM]])
-    "use"(%1) : (i32) -> ()
-    ttg.warp_return
-  } : () -> ()
-  llvm.return
-}
-
-}
-
-// -----
-
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 
 // CHECK-LABEL: @one_warp

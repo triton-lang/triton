@@ -78,12 +78,26 @@ def TTNG_FenceMBarrierInitReleaseClusterOp : TTNG_Op<
 }
 
 def TTNG_ClusterArriveOp : TTNG_Op<"cluster_arrive", []> {
-  let arguments = (ins I1Attr:$relaxed);
+  let arguments = (ins DefaultValuedAttr<BoolAttr, "false">:$relaxed);
   let assemblyFormat = "attr-dict";
   let hasVerifier = 1;
 }
 
 def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
+  let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
+}
+
+def TTNG_ClusterBarrierOp : TTNG_Op<"cluster_barrier", []> {
+  let arguments = (ins DefaultValuedAttr<BoolAttr, "false">:$relaxed);
+  let summary = "Synchronize all warps at cluster scope";
+  let description = [{
+    Lowers to a cluster arrive/wait pair.
+
+    In warp-specialized kernels, lowering wraps the barrier in a synthetic
+    `ttg.warp_specialize` region so worker warps also execute the barrier.
+    This op cannot be placed inside an existing `ttg.warp_specialize`.
+  }];
   let assemblyFormat = "attr-dict";
   let hasVerifier = 1;
 }
@@ -619,7 +633,9 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
 
   let description = [{
     $d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
-    if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
+    If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs
+    and synchronize both CTAs if the op is synchronous.
+    If is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
     Otherwise, if a barrier is given, the op will trigger a commit/arrive on it.
     The result will be safe to read after a barrier wait.
 
@@ -641,6 +657,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
+    UnitAttr:$two_ctas,
     UnitAttr:$is_async
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
@@ -662,6 +679,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
       "::mlir::Value":$useD, "::mlir::Value":$pred,
       CArg<"::mlir::ValueRange", "{}">:$barriers,
       CArg<"::mlir::ValueRange", "{}">:$barrier_preds,
+      CArg<"bool", "false">:$two_ctas,
       CArg<"bool", "false">:$is_async)>
   ];
 
@@ -878,7 +896,8 @@ def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [DeclareOpInterfaceMethods<MemoryEf
   }];
 }
 
-def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure]> {
+def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
+                                                    MemDescViewTrait]> {
   let summary = "Take a subslice of a tensor memory allocation";
   let description = [{
     This operation takes a subslice of a tensor memory allocation and returns a new descriptor

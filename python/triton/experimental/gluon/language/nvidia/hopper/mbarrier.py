@@ -51,7 +51,7 @@ def fence_init_release_cluster(_semantic=None):
     """
     Fence that makes prior mbarrier initialization visible across the CTA cluster.
 
-    Needs to be called together with cluster.arrive(relaxed=True) and cluster.wait.
+    Needs to be called together with cluster.barrier(relaxed=True).
     """
     _semantic.builder.create_fence_mbarrier_init_release_cluster()
 
@@ -62,5 +62,4 @@ def sync_cluster_init():
     Ensure mbarrier initialization is visible across the CTA cluster.
     """
     fence_init_release_cluster()
-    cluster.arrive(relaxed=True)
-    cluster.wait()
+    cluster.barrier(relaxed=True)

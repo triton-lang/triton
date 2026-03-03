@@ -248,6 +248,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   auto containsLocalBarrier = [](Operation *op) {
     if (isa<gpu::BarrierOp>(op))
       return true;
+    if (isa<triton::nvidia_gpu::ClusterBarrierOp>(op))
+      return true;
     if (isa<triton::nvidia_gpu::ClusterWaitOp>(op))
       return true;
     if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))

@@ -11,9 +11,11 @@ add_mlir_doc(TritonGPUDialect TritonGPUDialect dialects/ -gen-dialect-doc)
 add_mlir_doc(TritonGPUOps TritonGPUOps dialects/ -gen-op-doc)
 add_public_tablegen_target(TritonGPUTableGen)
 
-set(LLVM_TARGET_DEFINITIONS TritonGPUAttrDefs.td)
+set(LLVM_TARGET_DEFINITIONS TritonGPUAttrInterfaces.td)
 mlir_tablegen(AttrInterfaces.h.inc -gen-attr-interface-decls)
 mlir_tablegen(AttrInterfaces.cpp.inc -gen-attr-interface-defs)
+
+set(LLVM_TARGET_DEFINITIONS TritonGPUAttrDefs.td)
 mlir_tablegen(AttrDefs.h.inc -gen-attrdef-decls)
 
 set(LLVM_TARGET_DEFINITIONS TritonGPUAttrImpls.td)

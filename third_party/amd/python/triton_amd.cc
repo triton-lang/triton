@@ -101,6 +101,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_OPTION_WRAPPER_3("add_convert_to_buffer_ops",
                             mlir::createTritonAMDGPUConvertToBufferOps,
                             const std::string &, bool, bool);
+  ADD_FUNC_PASS_WRAPPER_0("add_optimize_buffer_op_ptr",
+                          mlir::createTritonAMDGPUOptimizeBufferOpPtr);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
 
   ADD_PASS_OPTION_WRAPPER_1("add_block_pingpong",
@@ -548,6 +550,16 @@ void init_triton_amd(py::module &&m) {
   });
 
   auto hipBlas = m.def_submodule("hipblas");
+  // For ROCm installed via TheRock wheels: Preload hipblaslt library via
+  // rocm_sdk if available. When using TheRock wheel installs, libhipblaslt
+  // resides within the Python wheel package rather than in the standard
+  // /opt/rocm/lib location. This preload ensures the library is properly
+  // loaded before HipblasLtInstance tries to dlopen it, allowing the dynamic
+  // linker to find it from the ROCm wheel's bundled libraries.
+  try {
+    py::module_::import("rocm_sdk").attr("preload_libraries")("hipblaslt");
+  } catch (...) {
+  }
   py::class_<HipblasLtInstance>(hipBlas, "HipblasLt")
       .def(py::init<>([&](py::object &workspace) {
         auto wrk_ptr = workspace.attr("data_ptr")().cast<uint64_t>();

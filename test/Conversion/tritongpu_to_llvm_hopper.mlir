@@ -140,6 +140,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: %[[A_MOV1:.*]] = llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.b32 $0, $1;", "=r,r" %{{.*}} : (i32) -> i32
   // CHECK: %[[A_MOV2:.*]] = llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.b32 $0, $1;", "=r,r" %{{.*}} : (i32) -> i32
   // CHECK: %[[A_MOV3:.*]] = llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.b32 $0, $1;", "=r,r" %{{.*}} : (i32) -> i32
+  // CHECK: nvvm.wgmma.fence.aligned
   // CHECK: %[[A_PACK0:.*]] = llvm.insertvalue %[[A_MOV0]], %{{.*}}[0] : !llvm.struct<(i32, i32, i32, i32)>
   // CHECK: %[[A_PACK1:.*]] = llvm.insertvalue %[[A_MOV1]], %[[A_PACK0]][1] : !llvm.struct<(i32, i32, i32, i32)>
   // CHECK: %[[A_PACK2:.*]] = llvm.insertvalue %[[A_MOV2]], %[[A_PACK1]][2] : !llvm.struct<(i32, i32, i32, i32)>

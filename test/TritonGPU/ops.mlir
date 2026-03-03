@@ -83,6 +83,35 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 // -----
 
+#shared_cga_01 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#shared_cga_10 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [4, 0]], block = [[2, 0]]}, alignment = 16>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @subslice_non_trivial_block_cga_01
+  tt.func @subslice_non_trivial_block_cga_01(%arg0: !ttg.memdesc<8x16xf32, #shared_cga_01, #smem>) {
+    // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
+    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared_cga_01, #smem> -> !ttg.memdesc<4x16xf32, #shared_cga_01, #smem>
+    tt.return
+  }
+
+  // CHECK-LABEL: @subslice_non_trivial_block_cga_10
+  tt.func @subslice_non_trivial_block_cga_10(%arg0: !ttg.memdesc<8x16xf32, #shared_cga_10, #smem>) {
+    // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
+    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared_cga_10, #smem> -> !ttg.memdesc<8x8xf32, #shared_cga_10, #smem>
+    tt.return
+  }
+
+  // CHECK-LABEL: @subview_split_on_cta_dim
+  tt.func @subview_split_on_cta_dim(%arg0: !ttg.memdesc<8x4xf32, #shared, #smem>) {
+    // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
+    %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x4xf32, #shared, #smem> -> !ttg.memdesc<4x4xf32, #shared, #smem, 8x4>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -124,6 +153,17 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
   // CHECK: %[[T:.*]] = ttg.memdesc_trans %{{.*}} {order = array<i32: 1, 0>} : !ttg.memdesc<16x16xf32, #{{.*}}, #smem> -> !ttg.memdesc<16x16xf32, #{{.*}}, #smem>
   tt.func @memdesc_trans_equiv(%arg0 : !ttg.memdesc<16x16xf32, #shared_linear_16, #smem>) {
     %0 = ttg.memdesc_trans %arg0 {order = array<i32: 1, 0>} : !ttg.memdesc<16x16xf32, #shared_linear_16, #smem> -> !ttg.memdesc<16x16xf32, #shared2, #smem>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK: #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[1, 0, 0, 0, 0\]\]}}}>
+#shared_rank_5 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0, 0, 0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @nvmma_rank_inference(%arg0 : !ttg.memdesc<1x1x1x1x32xf16, #shared_rank_5, #smem>) {
     tt.return
   }
 }

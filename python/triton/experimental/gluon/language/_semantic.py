@@ -18,7 +18,7 @@ def _is_int_list(value):
     return isinstance(value, Sequence) and all(isinstance(i, int) for i in value)
 
 
-def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant, cga_layout=None):
+def _compute_tmem_reg_layout(element_ty, shape, alloc_shape, layout, num_warps, instr_variant):
     _check(isinstance(instr_variant, str), lambda: "instr_variant must be a string")
     _check(instr_variant in ("32x32b", "16x64b", "16x128b", "16x256b", "16x32bx2", "32x32b_splitn"),
            lambda: f"unknown instr_variant: {instr_variant}")
@@ -29,23 +29,21 @@ def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant
     _check(all(isinstance(dim, int) for dim in shape), lambda: f"shape entries must be ints but got {shape}")
     rank = len(shape)
     _check(rank == 2, lambda: "expected a 2D tensor")
+    alloc_shape = list(alloc_shape)
+    _check(all(isinstance(dim, int) for dim in alloc_shape),
+           lambda: f"alloc_shape entries must be ints but got {alloc_shape}")
+    _check(len(alloc_shape) >= rank, lambda: f"alloc_shape must have rank >= shape rank, got {alloc_shape} and {shape}")
 
-    if cga_layout is None:
-        cga_layout = []
     splitn = instr_variant == "32x32b_splitn"
     atom_variant = "32x32b" if splitn else instr_variant
-
-    if cga_layout:
-        for basis in cga_layout:
-            _check(len(basis) == rank, lambda: "cga_layout basis rank mismatch")
 
     layout_obj = compute_tmem_reg_layout(
         element_ty,
         shape,
+        alloc_shape,
         layout,
         num_warps,
         atom_variant,
-        cga_layout,
     )
     _check(layout_obj is not None,
            lambda: f"TMEM layout '{atom_variant}' unsupported for shape {shape} and num_warps {num_warps}")
