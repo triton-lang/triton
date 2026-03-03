@@ -568,7 +568,10 @@ LogicalResult TCGen5MMAOp::verify() {
            << retType.getElementTypeBitWidth() << " but got "
            << retEnc.getColStride();
   // The maximum size of a MMA instruction is 128x256
-  if (retEnc.getBlockN() > 256)
+  auto ctaShape = getShapePerCTA(retEnc.getCGALayout().getCTASplitNum(),
+                                 retType.getShape());
+  auto instrSizeN = std::min<unsigned>(retEnc.getBlockN(), ctaShape[1]);
+  if (instrSizeN > 256)
     return emitOpError("The block size of the return operand must be less than "
                        "or equal to 256");
 

@@ -87,6 +87,11 @@ struct TCGen5MMAScaleSharedToTmemConversion
     MLIRContext *context = op->getContext();
     auto aScaleType = op.getAScale().getType();
     auto bScaleType = op.getBScale().getType();
+    if (aScaleType.getShape() != aScaleType.getAllocShape() ||
+        bScaleType.getShape() != bScaleType.getAllocShape()) {
+      op.emitError("subviews NYI");
+      return failure();
+    }
     int blockM = op.getBlockM();
     int blockN = op.getBlockN();
     bool anyChanged = false;

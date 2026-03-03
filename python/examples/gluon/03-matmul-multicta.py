@@ -10,12 +10,11 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
     clc,
-    get_tmem_reg_layout,
     tcgen05_commit,
     tcgen05_mma,
     tensor_memory_descriptor,
 )
-from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared, mbarrier, tma
+from triton.experimental.gluon.language.nvidia.hopper import mbarrier, tma
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.language.core import _aggregate as aggregate
 
@@ -411,16 +410,9 @@ def matmul_epilogue_partition(p):
         for s in gl.static_range(SUBTILE_FACTOR):
             acc_sub = acc_buf.slice(SPLIT_TILE_N * s, SPLIT_TILE_N)
             acc_smem = acc_smems.index(sub_acc_state.index)
-            acc = acc_sub.load(
-                get_tmem_reg_layout(
-                    gl.float32,
-                    (TILE_M, SPLIT_TILE_N),
-                    acc_sub.type.layout,
-                    gl.num_warps(),
-                )).to(dtype)
+            acc = acc_sub.load().to(dtype)
             tma.store_wait(pendings=1)
             acc_smem.store(acc)
-            fence_async_shared()
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_TILE_N * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
         # Signal that the accumulator slot can be reused only after all stores are done.
@@ -467,7 +459,7 @@ def _matmul_kernel(
     tmem_layout: gl.constexpr = TensorMemoryLayout(
         [BLOCK_SIZE_M, BLOCK_N],
         col_stride=1,
-        cta_split_num=(2, 1) if TWO_CTAS else None,
+        cga_layout=[[1, 0]] if TWO_CTAS else [],
         two_ctas=TWO_CTAS,
     )
     acc_bufs = allocate_tensor_memory(gl.float32, [ACC_STAGES, BLOCK_M, BLOCK_N], tmem_layout)
@@ -549,11 +541,6 @@ def matmul_with_config(
     if a.dtype != torch.float16 or b.dtype != torch.float16:
         raise ValueError("matmul only supports fp16 inputs")
 
-    tile_m = block_size_m * (2 if two_ctas else 1)
-    tile_n = block_size_n * (2 if two_ctas else 1)
-    if M % tile_m != 0 or N % tile_n != 0 or K % block_size_k != 0:
-        raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, tile_n, block_size_k)}")
-
     if out is None:
         c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     else:
@@ -586,9 +573,6 @@ def matmul_with_config(
     def grid(meta):
         tile_m = meta["BLOCK_SIZE_M"] * (2 if bool(meta["TWO_CTAS"]) else 1)
         tile_n = meta["BLOCK_SIZE_N"] * (2 if bool(meta["TWO_CTAS"]) else 1)
-        block_k = meta["BLOCK_SIZE_K"]
-        if M % tile_m != 0 or N % tile_n != 0 or K % block_k != 0:
-            raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, tile_n, block_k)}")
         num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, tile_n)
         return (num_tiles, )
 
@@ -632,9 +616,6 @@ def matmul(a, b):
     def grid(meta):
         tile_m = meta["BLOCK_SIZE_M"] * (2 if bool(meta["TWO_CTAS"]) else 1)
         tile_n = meta["BLOCK_SIZE_N"] * (2 if bool(meta["TWO_CTAS"]) else 1)
-        block_k = meta["BLOCK_SIZE_K"]
-        if M % tile_m != 0 or N % tile_n != 0 or K % block_k != 0:
-            raise ValueError(f"Shape {(M, N, K)} incompatible with tile {(tile_m, tile_n, block_k)}")
         num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, tile_n)
         return (num_tiles, )
 
@@ -642,81 +623,55 @@ def matmul(a, b):
     return c
 
 
+# Subset of matmul_get_configs
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize(
-    "grid_minor_dim,grid_tile_width,stages,block_size_n",
-    [
-        (0, 1, 2, 128),
-        (1, 8, 4, 128),
-        (0, 16, 2, 256),
-    ],
-)
-def test_matmul_single_cta_configs(grid_minor_dim, grid_tile_width, stages, block_size_n):
-    M, N, K = 512, 512, 256
+@pytest.mark.parametrize("BLOCK_SIZE_M", [128])
+@pytest.mark.parametrize("BLOCK_SIZE_N", [128, 256])
+@pytest.mark.parametrize("BLOCK_SIZE_K", [64, 128])
+@pytest.mark.parametrize("GRID_MINOR_DIM", [0, 1])
+@pytest.mark.parametrize("GRID_TILE_WIDTH", [1, 8])
+@pytest.mark.parametrize("TWO_CTAS", [False, True])
+@pytest.mark.parametrize("STAGES", [2, 4])
+@pytest.mark.parametrize("ACC_STAGES", [2, 3])
+@pytest.mark.parametrize("EPILOGUE_SIZE_N", [32, 64])
+@pytest.mark.parametrize("M, N, K", [(100, 200, 200)])
+def test_matmul_matches_torch(
+    M,
+    N,
+    K,
+    BLOCK_SIZE_M,
+    BLOCK_SIZE_N,
+    BLOCK_SIZE_K,
+    GRID_MINOR_DIM,
+    GRID_TILE_WIDTH,
+    TWO_CTAS,
+    STAGES,
+    ACC_STAGES,
+    EPILOGUE_SIZE_N,
+):
+    if TWO_CTAS and BLOCK_SIZE_N > 128:
+        pytest.skip("Unsupported config")
+
     torch.manual_seed(0)
     a = torch.rand((M, K), device=torch.device("cuda"), dtype=torch.float16)
     b = torch.rand((K, N), device=torch.device("cuda"), dtype=torch.float16)
     expected = torch.matmul(a, b)
-    actual = matmul_with_config(
-        a,
-        b,
-        block_size_m=128,
-        block_size_n=block_size_n,
-        block_size_k=64,
-        grid_minor_dim=grid_minor_dim,
-        grid_tile_width=grid_tile_width,
-        stages=stages,
-        two_ctas=False,
-        epilogue_size_n=32,
-    )
-    torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
-
-
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize(
-    "grid_minor_dim,grid_tile_width,stages",
-    [
-        (1, 1, 2),
-        (1, 4, 4),
-        (0, 12, 6),
-        (0, 8, 4),
-    ],
-)
-def test_matmul_two_cta_configs(grid_minor_dim, grid_tile_width, stages):
-    M, N, K = 512, 512, 256
-    torch.manual_seed(0)
-    a = torch.rand((M, K), device=torch.device("cuda"), dtype=torch.float16)
-    b = torch.rand((K, N), device=torch.device("cuda"), dtype=torch.float16)
-    expected = torch.matmul(a, b)
-    actual = matmul_with_config(
-        a,
-        b,
-        block_size_m=128,
-        block_size_n=128,
-        block_size_k=64,
-        grid_minor_dim=grid_minor_dim,
-        grid_tile_width=grid_tile_width,
-        stages=stages,
-        two_ctas=True,
-        epilogue_size_n=32,
-    )
-    torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
-
-
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize(
-    "M,N,K",
-    [
-        (256, 256, 128),
-        (512, 256, 256),
-    ],
-)
-def test_matmul_autotuned_matches_torch(M, N, K):
-    torch.manual_seed(0)
-    a = torch.rand((M, K), device=torch.device("cuda"), dtype=torch.float16)
-    b = torch.rand((K, N), device=torch.device("cuda"), dtype=torch.float16)
-    expected = torch.matmul(a, b)
-    actual = matmul(a, b)
+    try:
+        actual = matmul_with_config(
+            a,
+            b,
+            block_size_m=BLOCK_SIZE_M,
+            block_size_n=BLOCK_SIZE_N,
+            block_size_k=BLOCK_SIZE_K,
+            grid_minor_dim=GRID_MINOR_DIM,
+            grid_tile_width=GRID_TILE_WIDTH,
+            stages=STAGES,
+            acc_stages=ACC_STAGES,
+            two_ctas=TWO_CTAS,
+            epilogue_size_n=EPILOGUE_SIZE_N,
+        )
+    except triton.OutOfResources:
+        pytest.skip("Out of resources")
     torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
 
 
