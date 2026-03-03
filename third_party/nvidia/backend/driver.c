@@ -10,7 +10,7 @@
 
 typedef struct {
   PyObject_HEAD;
-  _Alignas(128) CUtensorMap tensorMap;
+  _Alignas(alignof(CUtensorMap)) CUtensorMap tensorMap;
 } PyCUtensorMapObject;
 
 typedef enum { ARG_CONSTEXPR = 0, ARG_KERNEL = 1, ARG_TUPLE = 2 } ArgType;
@@ -1038,12 +1038,14 @@ bool extractTmaDesc(void *ptr, PyObject *obj) {
     return false;
   }
   *((CUtensorMap *)ptr) = ((PyCUtensorMapObject *)obj)->tensorMap;
-  uintptr_t align_128 = (uintptr_t)ptr & (128 - 1);
-  if (align_128 != 0) {
+  // Depending on the cuda version, alignof(CUtensorMap) may be 64 or 128.
+  size_t alignment = alignof(CUtensorMap);
+  uintptr_t remainder = (uintptr_t)ptr & (alignment - 1);
+  if (remainder != 0) {
     PyErr_Format(
         PyExc_ValueError,
-        "CUtensorMap must be aligned to 128B, but got (&map) mod 128 = %ld",
-        align_128);
+        "CUtensorMap must be aligned to %ld, but got (&map) mod %ld = %ld",
+        alignment, alignment, remainder);
     return false;
   }
   return true;
