@@ -473,15 +473,10 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
   Block *defaultBlock = new Block;
   funcBlocks.insert(std::next(switchLoop->getIterator()), defaultBlock);
   b.setInsertionPointToStart(defaultBlock);
-  if (callbacks.lowerWarpTerminatorsToReturn) {
-    callbacks.createAllBarrier(b, switchLoopBarrierIdx);
-    LLVM::ReturnOp::create(b, b.getLoc(), ValueRange());
-  } else {
-    callbacks.createAllBarrier(b, switchLoopBarrierIdx);
-    callbacks.createAllBarrier(b, switchLoopBarrierIdx);
-    auto latchBr = LLVM::BrOp::create(b, b.getLoc(), switchLoop);
-    disableLICM(latchBr);
-  }
+  callbacks.createAllBarrier(b, switchLoopBarrierIdx);
+  callbacks.createAllBarrier(b, switchLoopBarrierIdx);
+  auto latchBr = LLVM::BrOp::create(b, b.getLoc(), switchLoop);
+  disableLICM(latchBr);
 
   // Exit state.
   Block *switchExit = new Block;
