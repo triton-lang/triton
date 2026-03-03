@@ -4056,3 +4056,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %3 : tensor<32xf32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 0, parent = #blocked1}>}>>
   }
 }
+
+// -----
+
+// We had a bug where iter args used as the bound of a nested loop would be
+// treated as dead and eliminated. Check that this is not the case.
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @for_arg_used_in_nested_for_bound
+  tt.func public @for_arg_used_in_nested_for_bound(%arg0: i32, %arg1: i32) -> i32 {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: scf.for
+    // CHECK-SAME: iter_args(%{{.*}} = %arg0, %[[OUTER_ARG1:.*]] = %c0_i32)
+    %0:2 = scf.for %arg2 = %c0_i32 to %arg1 step %c1_i32 iter_args(%arg3 = %arg0, %arg4 = %c0_i32) -> (i32, i32)  : i32 {
+      // CHECK-NEXT: %[[ADD_1:.+]] = arith.addi %[[OUTER_ARG1]], %c1_i32 : i32
+      %1 = arith.addi %arg4, %c1_i32 : i32
+      // CHECK-NEXT: scf.for %arg5 = %c0_i32 to %[[ADD_1:.+]] step %c1_i32
+      %2 = scf.for %arg5 = %c0_i32 to %1 step %c1_i32 iter_args(%arg6 = %arg3) -> (i32)  : i32 {
+        %4 = arith.addi %arg6, %arg5 : i32
+        scf.yield %4 : i32
+      }
+      %3 = arith.addi %arg3, %c1_i32 : i32
+      scf.yield %2, %3 : i32, i32
+    }
+    tt.return %0#0 : i32
+  }
+}
