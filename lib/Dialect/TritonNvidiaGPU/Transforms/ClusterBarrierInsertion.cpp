@@ -91,9 +91,9 @@ static bool valueAliasesTrackedBuffers(Value value,
 }
 
 static bool
-usesTrackedBarrierInTwoCTATCGen5Op(Operation *op,
-                                   const Allocation::BufferIdSetT &tracked,
-                                   Allocation *allocation) {
+usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
+                                       const Allocation::BufferIdSetT &tracked,
+                                       Allocation *allocation) {
   auto aliasesTracked = [&](Value value) {
     return value && valueAliasesTrackedBuffers(value, tracked, allocation);
   };
@@ -108,6 +108,9 @@ usesTrackedBarrierInTwoCTATCGen5Op(Operation *op,
   if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
     return ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier());
   }
+  if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+    return tma.getMulticast() && aliasesTracked(tma.getBarrier());
+  }
   return false;
 }
 
@@ -116,7 +119,8 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
                                              Allocation *allocation,
                                              int numCTAs) {
   // Barrier init sync is needed for barriers that are themselves cross-CTA,
-  // and also for per-CTA barriers consumed by 2CTA tcgen05 ops.
+  // and also for per-CTA barriers consumed by multi-CTA ops that multicast or
+  // otherwise fan out barrier state across the cluster.
   if (isCrossCTAMBarrier(initBarrierOp, numCTAs))
     return true;
 
@@ -127,12 +131,12 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
     initBarrierBuffers.insert(bufferId);
   }
 
-  // Or if it's used in a 2CTA tcgen05_commit, which multicasts the commit
-  // to both barriers from the leader CTA
+  // Or if it's used by a multi-CTA consumer that broadcasts barrier state
+  // across CTAs even though the barrier allocation itself looks per-CTA.
   return funcOp
       ->walk<WalkOrder::PreOrder>([&](Operation *op) {
-        if (usesTrackedBarrierInTwoCTATCGen5Op(op, initBarrierBuffers,
-                                               allocation)) {
+        if (usesTrackedBarrierInCrossCTAConsumerOp(op, initBarrierBuffers,
+                                                   allocation)) {
           return WalkResult::interrupt();
         }
         return WalkResult::advance();

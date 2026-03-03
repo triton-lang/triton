@@ -479,6 +479,34 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Multicast TMA still needs init sync even if the barrier allocation shape
+  // looks per-CTA.
+  // CHECK-LABEL: @cluster_tma_multicast_with_per_cta_barrier
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+  // CHECK: tt.return
+  tt.func @cluster_tma_multicast_with_per_cta_barrier(%desc: !tt.tensordesc<tensor<64x128xf16, #nvmma>>) -> tensor<64x128xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x128xf16, #blocked>
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %barrier, %true {multicast} :
+      !tt.tensordesc<tensor<64x128xf16, #nvmma>>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+    ttng.wait_barrier %barrier, %c0 deps %buf :
+      !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>,
+      !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+    ttg.local_dealloc %buf : !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+    ttg.local_dealloc %barrier : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    %buf2 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+    ttg.local_store %cst, %buf2 : tensor<64x128xf16, #blocked> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+    %ld = ttg.local_load %buf2 : !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable> -> tensor<64x128xf16, #blocked>
+    tt.return %ld : tensor<64x128xf16, #blocked>
+  }
+
   // Negative test: no cluster barrier should be inserted for multiCTA TMA when the multicast is not set
   // CHECK-LABEL: @no_cluster_tma_without_multicast
   // CHECK: ttng.init_barrier
