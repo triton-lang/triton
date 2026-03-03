@@ -12,9 +12,6 @@ struct TestScopeIdAllocationPass
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestScopeIdAllocationPass);
 
   TestScopeIdAllocationPass() = default;
-  TestScopeIdAllocationPass(const TestScopeIdAllocationPass &other)
-      : PassWrapper<TestScopeIdAllocationPass, OperationPass<ModuleOp>>(other) {
-  }
 
   StringRef getArgument() const final {
     return "test-print-scope-id-allocation";
