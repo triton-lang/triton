@@ -348,7 +348,8 @@ static void disableLICM(LLVM::BrOp latchBr) {
 static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
                                     const TargetInfoBase &targetInfo,
                                     const WarpSpecializeCallbacks &callbacks,
-                                    unsigned switchLoopBarrierIdx) {
+                                    unsigned switchLoopBarrierIdx,
+                                    bool lastWs = false) {
   TritonLLVMIRRewriter b(ws.getLoc(), ws.getContext());
   for (Region *partition : ws.getPartitionRegions()) {
     // Load the explicit captures from shared memory and replace the block args
@@ -385,7 +386,7 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
     // Rewrite all warp returns.
     partition->walk([&](WarpReturnOp op) {
       TritonLLVMIRRewriter b(op.getLoc(), op);
-      if (callbacks.lowerWarpTerminatorsToReturn) {
+      if (lastWs) {
         callbacks.reallocRegisters(b, ws,
                                    RegisterReallocPhase::WorkerPartitionEnd,
                                    partition->getRegionNumber());
@@ -444,7 +445,7 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
     WarpSpecializeOp op = wsOps[i];
     auto &stateMap = warpToState[i];
     rewritePartitionRegions(op, switchLoop, targetInfo, callbacks,
-                            switchLoopBarrierIdx);
+                            switchLoopBarrierIdx, /*lastWs=*/i == wsOps.size() - 1);
     for (auto [partition, partitionNumWarps, startId] :
          llvm::zip(op.getPartitionRegions(), op.getPartitionNumWarps(),
                    *op.getWarpGroupStartIds())) {
@@ -535,8 +536,12 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
 
     ws.getDefaultRegion().walk([&, ws = ws](WarpYieldOp op) mutable {
       TritonLLVMIRRewriter b(op.getLoc(), op);
-      if (callbacks.lowerWarpTerminatorsToReturn) {
-        b.replaceOpWithNewOp<LLVM::ReturnOp>(op, ValueRange());
+      if (i == wsOps.size() - 1) {
+        // The last warp specialize can jump straight to the exit block, which
+        // allows LLVM to optimize away the switch if there is only one partition.
+        callbacks.reallocRegisters(b, ws,
+                                   RegisterReallocPhase::DefaultPartitionEnd, 0);
+        b.replaceOpWithNewOp<LLVM::BrOp>(op, switchExit);
         return;
       }
       callbacks.createAllBarrier(b, switchLoopBarrierIdx);
