@@ -734,13 +734,14 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
+    lowerTensorMemoryAlloc(mod);
+
     patterns.add<ClusterCTAIdOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
                  WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
 
-    lowerTensorMemoryAlloc(mod);
     makeAllWarpGroupsIsolatedFromAbove(mod);
   }
 };
