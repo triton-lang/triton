@@ -368,7 +368,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #blockedTmaSrc = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #blockedTmaDst = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
-#nvmmaTma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#nvmmaTma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
 #barrierEncTma = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #smem = #ttg.shared_memory
 
@@ -473,7 +473,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
 #barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #smem = #ttg.shared_memory
@@ -536,7 +536,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
 #barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #smem = #ttg.shared_memory
@@ -629,9 +629,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
       %k_i32 = arith.index_cast %k : index to i32
       ttng.barrier_expect %bTMA, 5120, %true : !ttg.memdesc<1xi64, #barrierTMA, #smem, mutable>
       %offs = arith.muli %k_i32, %c16 : i32
-      ttng.async_tma_copy_global_to_local %a_desc[%c0, %offs] %smem_a, %bTMA, %true {multicast} :
+      ttng.async_tma_copy_global_to_local %a_desc[%c0, %offs] %smem_a, %bTMA, %true :
         !tt.tensordesc<tensor<256x16xf16, #sharedA>>, !ttg.memdesc<1xi64, #barrierTMA, #smem, mutable> -> !ttg.memdesc<256x16xf16, #sharedA, #smem, mutable>
-      ttng.async_tma_copy_global_to_local %b_desc[%offs, %c0] %smem_b, %bTMA, %true {multicast} :
+      ttng.async_tma_copy_global_to_local %b_desc[%offs, %c0] %smem_b, %bTMA, %true :
         !tt.tensordesc<tensor<16x64xf16, #sharedB>>, !ttg.memdesc<1xi64, #barrierTMA, #smem, mutable> -> !ttg.memdesc<16x64xf16, #sharedB, #smem, mutable>
       ttng.wait_barrier %bTMA, %phase, %true deps %smem_a, %smem_b :
         !ttg.memdesc<1xi64, #barrierTMA, #smem, mutable>,
@@ -660,7 +660,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
 
 // -----
 
-#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
 #barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #smem = #ttg.shared_memory

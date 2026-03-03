@@ -366,6 +366,9 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
     return failure();
   if (failed(verifyTMAMode(*this, isIm2Col, getCoord(), getOffsets())))
     return failure();
+  if (getMulticast() && !hasCGABroadcast(resultType))
+    return emitOpError(
+        "multicast requires the shared layout to broadcast across CTAs");
   return success();
 }
 

@@ -445,6 +445,9 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
                    CArg<"triton::CacheModifier", "triton::CacheModifier::NONE">:$cache,
                    CArg<"triton::EvictionPolicy", "triton::EvictionPolicy::NORMAL">:$evict,
                    CArg<"bool", "false">:$isVolatile), [{
+      multicast &= ::mlir::triton::nvidia_gpu::hasCGABroadcast(
+                                   ::mlir::cast<::mlir::triton::gpu::MemDescType>(
+                                       result.getType()));
       build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
             result, pred, multicast, cache, evict, isVolatile);
     }]>
