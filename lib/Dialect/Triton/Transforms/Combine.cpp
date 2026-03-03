@@ -231,13 +231,14 @@ public:
   }
 };
 
-template <typename DotOpType, typename OpTy>
-class CombineDotAddPattern : public mlir::OpRewritePattern<OpTy> {
+template <typename DotOpType, typename AddOpType>
+class CombineDotAddPattern : public mlir::OpRewritePattern<AddOpType> {
 public:
-  using OpRewritePattern<OpTy>::OpRewritePattern;
+  using OpRewritePattern<AddOpType>::OpRewritePattern;
 
   mlir::LogicalResult
-  matchAndRewrite(OpTy addOp, mlir::PatternRewriter &rewriter) const override {
+  matchAndRewrite(AddOpType addOp,
+                  mlir::PatternRewriter &rewriter) const override {
     auto dotOp = addOp.getRhs().template getDefiningOp<DotOpType>();
     bool isDotLHS = false;
     if (!dotOp) {
@@ -253,7 +254,7 @@ public:
     if (!isZero(dotOp.getC()))
       return failure();
     if constexpr (std::is_same_v<DotOpType, DotOp> &&
-                  std::is_same_v<OpTy, arith::AddFOp>) {
+                  std::is_same_v<AddOpType, arith::AddFOp>) {
       if (dotOp.getMaxNumImpreciseAcc() != 0) {
         return failure();
       }
@@ -273,8 +274,6 @@ public:
 // AddFOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
 using CombineDotAddIPattern = CombineDotAddPattern<DotOp, arith::AddIOp>;
 using CombineDotAddFPattern = CombineDotAddPattern<DotOp, arith::AddFOp>;
-using CombineDotScaledAddIPattern =
-    CombineDotAddPattern<DotScaledOp, arith::AddIOp>;
 using CombineDotScaledAddFPattern =
     CombineDotAddPattern<DotScaledOp, arith::AddFOp>;
 
@@ -289,7 +288,6 @@ public:
 
     patterns.add<CombineDotAddIPattern>(context);
     patterns.add<CombineDotAddFPattern>(context);
-    patterns.add<CombineDotScaledAddIPattern>(context);
     patterns.add<CombineDotScaledAddFPattern>(context);
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
