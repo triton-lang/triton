@@ -1,10 +1,11 @@
 import pytest
 import torch
-import triton.profiler as proton
-from triton_kernels.topk import topk, topk_torch
-from triton_kernels.testing import assert_equal, assert_close
-from triton_kernels.distributed import SymmetricMemoryPool
 import torch.distributed as dist
+
+import triton.profiler as proton
+from triton_kernels.distributed import symmetric_memory_pool
+from triton_kernels.testing import assert_close, assert_equal
+from triton_kernels.topk import topk, topk_torch
 
 
 @pytest.mark.parametrize("n_rows", [1, 7, 256, 300])
@@ -38,25 +39,30 @@ def bench_topk(n_rows, n_cols, k, apply_softmax, all_gather=False):
     torch.cuda.set_device(rank)
     # run benchmark
     x = torch.randn((n_rows, n_cols), dtype=torch.float32, device=f"cuda:{rank}")
-    symm_mem_pool = SymmetricMemoryPool()
-    symm_mem_pool._reserve_region("topk", world_size * x.numel() * x.element_size(), 128, 0)
-    symm_mem_pool._initialize(world_size, group=torch.distributed.group.WORLD, device=x.device)
-    proton.start(f"profile_{rank}", hook="triton")
-    # warmup
-    proton.deactivate()
-    g = torch.cuda.CUDAGraph()
-    stream = torch.cuda.Stream()
-    with torch.cuda.stream(stream):
-        with torch.cuda.graph(g):
-            _ = topk(x, k, apply_softmax=apply_softmax, all_gather=all_gather, symm_mem_pool=symm_mem_pool)
-    torch.cuda.synchronize()
-    proton.activate()
-    for i in range(100):
-        g.replay()
-    dist.barrier()
-    torch.cuda.synchronize()
-    proton.finalize()
-    symm_mem_pool.release()
+    with symmetric_memory_pool() as symm_mem_pool:
+        symm_mem_pool._reserve_region("topk", world_size * x.numel() * x.element_size(), 128, 0)
+        symm_mem_pool._initialize(world_size, group=torch.distributed.group.WORLD, device=x.device)
+        proton.start(f"profile_{rank}", hook="triton")
+        # warmup
+        proton.deactivate()
+        g = torch.cuda.CUDAGraph()
+        stream = torch.cuda.Stream()
+        with torch.cuda.stream(stream):
+            with torch.cuda.graph(g):
+                _ = topk(
+                    x,
+                    k,
+                    apply_softmax=apply_softmax,
+                    all_gather=all_gather,
+                    symm_mem_pool=symm_mem_pool,
+                )
+        torch.cuda.synchronize()
+        proton.activate()
+        for i in range(100):
+            g.replay()
+        dist.barrier()
+        torch.cuda.synchronize()
+        proton.finalize()
 
 
 if __name__ == "__main__":

@@ -68,5 +68,5 @@ def has_native_mxfp():
     return cuda_capability_geq(10, 0)
 
 
-def num_sms():
+def num_sms() -> int:
     return torch.cuda.get_device_properties(0).multi_processor_count

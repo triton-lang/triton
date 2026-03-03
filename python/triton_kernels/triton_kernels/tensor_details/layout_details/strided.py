@@ -21,7 +21,7 @@ class StridedLayout(Layout):
     # `major_dim == R - 1`.
     major_dim: int = -1
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not isinstance(self.major_dim, int):
             raise TypeError(f"StridedLayout(major_dim=...) must be an int, got {type(self.major_dim)}")
 
@@ -29,10 +29,10 @@ class StridedLayout(Layout):
         return StridedLayoutTransformation(shape, is_fp4, self.order(len(shape)))
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "STRIDED"
 
-    def swizzle_block_shape(self, block_shape):
+    def swizzle_block_shape(self, block_shape: list[int]) -> list[int]:
         return block_shape
 
     def order(self, rank: int) -> list[int]:
@@ -59,7 +59,7 @@ class StridedLayoutTransformation(LayoutTransformation):
 
     order: list[int]
 
-    def swizzle_data(self, data):
+    def swizzle_data(self, data: torch.Tensor) -> torch.Tensor:
         assert data.stride(-1) == 1
         r = len(self.shape)
         if r == 0:
@@ -76,7 +76,7 @@ class StridedLayoutTransformation(LayoutTransformation):
         repack(data, -1, pd, self.is_fp4, out=out)
         return out
 
-    def unswizzle_data(self, data):
+    def unswizzle_data(self, data: torch.Tensor) -> torch.Tensor:
         assert data.stride(self.order[0]) == 1
         out_shape = list(self.shape)
         if self.is_fp4:

@@ -3,7 +3,12 @@ from .compaction_details._masked_compaction import _masked_compaction
 from .tensor import Tensor
 
 
-def compaction(yv, yi, bitmask, sentinel=-1):
+def compaction(
+    yv: torch.Tensor,
+    yi: torch.Tensor,
+    bitmask: torch.Tensor | Tensor,  # REVIEW: torch.Tensor or triton_kernels.Tensor
+    sentinel: int = -1,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Return compacted copies of *yv* and *yi* based on a per-row bitmask.
 
@@ -44,7 +49,12 @@ def compaction(yv, yi, bitmask, sentinel=-1):
     return ret_yv, ret_yi
 
 
-def compaction_torch(yv: torch.Tensor, yi: torch.Tensor, bitmask: torch.Tensor, sentinel=-1):
+def compaction_torch(
+    yv: torch.Tensor,
+    yi: torch.Tensor,
+    bitmask: torch.Tensor,
+    sentinel: int = -1,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     reference implementation of `masked_compact`
     """
