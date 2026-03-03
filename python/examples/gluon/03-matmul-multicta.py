@@ -51,7 +51,7 @@ def get_epilogue_size_n(block_m, block_n, cga_layout):
     for both the TMA and MMA instructions but this is NYI.
     """
     # We can't split the layout along N as N on M=64 2CTA layouts
-    # the basis (0, TileN) is owned by warp=2!
+    # the basis (0, TileN) is owned by the second warp basis!
     if block_m == 64 and cga_layout:
         return block_n
     # We can't split the layout along N as the last basis along N
