@@ -83,7 +83,7 @@ class FnSpecs:
 
 def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple()):
     assert isinstance(fn, triton.runtime.jit.JITFunction)
-    is_gluon = isinstance(fn, triton.experimental.gluon._runtime.GluonJITFunction)
+    is_gluon = fn.is_gluon()
     if name is None:
         name = f"{fn.__name__}"
     # Get original source code
