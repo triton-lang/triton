@@ -321,7 +321,7 @@ static bool getBackwardSliceToPartition(Value v,
       partitionScheme.opPartitionDims[ifOp.elseYield()] = currentDim;
       auto thenYieldArg = ifOp.thenYield().getOperand(resultIndex);
       auto elseYieldArg = ifOp.elseYield().getOperand(resultIndex);
-      if (getBackwardSliceToPartition(thenYieldArg, partitionScheme,
+      if (!getBackwardSliceToPartition(thenYieldArg, partitionScheme,
                                       currentDim))
         return false;
       if (!getBackwardSliceToPartition(elseYieldArg, partitionScheme,
