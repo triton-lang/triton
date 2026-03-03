@@ -88,6 +88,8 @@ def matmul_get_configs(pre_hook=None):
         for acc_stages in (2, )
         for cga_layout in ((), ((1, 0), ), ((1, 0), (2, 0)))
         if BN // get_split_dim(cga_layout, 1) <= 256
+        # Trim some configs with too large a tile
+        if BN == 512 and len(cga_layout) == 0
     ]
 
 
@@ -560,7 +562,7 @@ def matmul_with_config(
     })
 
     def grid(meta):
-        tile_m = meta["BLOCK_SIZE_M"] * (2 if bool(meta["TWO_CTAS"]) else 1)
+        tile_m = meta["BLOCK_SIZE_M"] * (2 if bool(meta["CGA_LAYOUT"]) else 1)
         tile_n = meta["BLOCK_SIZE_N"]
         num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, tile_n)
         return (num_tiles, )
@@ -603,7 +605,7 @@ def matmul(a, b):
     c_desc = TensorDescriptor.from_tensor(c, dummy_block, dummy_layout)
 
     def grid(meta):
-        tile_m = meta["BLOCK_SIZE_M"] * (2 if bool(meta["TWO_CTAS"]) else 1)
+        tile_m = meta["BLOCK_SIZE_M"] * (2 if bool(meta["CGA_LAYOUT"]) else 1)
         tile_n = meta["BLOCK_SIZE_N"]
         num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, tile_n)
         return (num_tiles, )
