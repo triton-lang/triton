@@ -680,49 +680,7 @@ public:
     auto oldAcc = dotOp.getC();
     auto newAcc = convertAndCastTensor(rewriter, oldAcc, mfmaEnc, mfmaAccType);
 
-    // Here is a brief explanation of kWidth, kBase, and kDim
-    // 1. kWidth: the number of **consecutive** elements each thread loads from
-    //    shared memory in preparation for mfma instructions. In theory, each
-    //    thread can issue multiple ds_read to load elements from non-contiguous
-    //    addresses in shared memory for one mfma instruction, but that won't be
-    //    good for performance. So in practice for better vectorization, we
-    //    make sure the kWidth elements can be loaded from shared memory by a
-    //    single ds_read instruction by setting vecSize of the sharedLayout
-    //    to be kWidth.
-    // 2. kDim: the k dimension size of the mfma instruction. E.g. instruction
-    //    mfma_32x32x16 has kDim = 16, meaning this mfma instruction can compute
-    //    a matmul of operands with shape 32x16 and 16x32.
-    // 3. kBase: the number of elements each thread holds for a single mfma
-    //    instruction.
-    // 4. relation between kBase and kDim:
-    //    4.1 For mfma_32, kBase = kDim / 2
-    //    4.2 For mfma_16, kBase = kDim / 4
-    //    4.3 For mfma_4, kBase = kDim / 16
-    // 5. relation between kWidth and kBase: For now it supports two cases
-    //    5.1 kWidth = kBase, i.e. kPack = 1. In this case, each load from
-    //        shared memory results in one mfma instruction.
-    //    5.2 kWidth = 2 * kBase, i.e. kPack = 2. In this case, each load from
-    //        shared memory results in two mfma instructions, since one mfma
-    //        can only consume kBase elements from each thread.
-    //    Note that we cannot have larger kPack since kPack = 2 means
-    //    ds_read_b128, which is the largest vector size for shared memory load.
     auto kWidth = kBase;
-
-    // We want to extend kWidth by kPack (kPack=1 means no extension)
-    // to increase ds_read vector size
-    // However, in FA, the second dot can only use kWidth = kBase since it's
-    // limited by the result of the first dot, which is of mfmaLayout.
-    auto isDotChainTail = isChainDotTail(dotOp);
-    if (!isDotChainTail)
-      kWidth *= kPack;
-
-    // For FA fwd kernel with f16 elementTy, we limit the 2nd dot to have
-    // kWidth = 4 so that the coversion from #mma (result of 1st dot)
-    // to #dotOp (operand 0 of 2nd dot) is a no-op.
-    // TODO (lixun): relax the condition for 8-bit elementTy.
-    if (is16BitElemTy && isDotChainTail) {
-      kWidth = 4;
-    }
 
     Value newDot;
     if (withScale) {
@@ -1818,6 +1776,255 @@ public:
   }
 };
 
+static std::optional<unsigned> deriveMfmaIntrinsicKBase(unsigned mDim,
+                                                        unsigned kDim) {
+  std::optional<unsigned> kBase = std::nullopt;
+  switch (mDim) {
+  case 32:
+    kBase = kDim / 2;
+    break;
+  case 16:
+    kBase = kDim / 4;
+    break;
+  case 4:
+    kBase = kDim / 16;
+    break;
+  }
+  return kBase;
+}
+
+static FailureOr<unsigned>
+getKBase(ttg::AMDMfmaEncodingAttr dotOpResultMfmaEncoding) {
+  auto shape = dotOpResultMfmaEncoding.getInstrShape(); // [mDim, nDim, kDim]
+  unsigned mDim = shape[0];
+  unsigned nDim = shape[1];
+  unsigned kDim = shape[2];
+  std::optional<unsigned> kBase = deriveMfmaIntrinsicKBase(mDim, kDim);
+  if (!kBase.has_value()) {
+    return failure();
+  }
+  return kBase.value();
+}
+
+// Here is a brief explanation of kWidth, kBase, and kDim
+// 1. kWidth: the number of **consecutive** elements each thread loads from
+//    shared memory in preparation for mfma instructions. In theory, each
+//    thread can issue multiple ds_read to load elements from non-contiguous
+//    addresses in shared memory for one mfma instruction, but that won't be
+//    good for performance. So in practice for better vectorization, we
+//    make sure the kWidth elements can be loaded from shared memory by a
+//    single ds_read instruction by setting vecSize of the sharedLayout
+//    to be kWidth.
+// 2. kDim: the k dimension size of the mfma instruction. E.g. instruction
+//    mfma_32x32x16 has kDim = 16, meaning this mfma instruction can compute
+//    a matmul of operands with shape 32x16 and 16x32.
+// 3. kBase: the number of elements each thread holds for a single mfma
+//    instruction.
+// 4. relation between kBase and kDim:
+//    4.1 For mfma_32, kBase = kDim / 2
+//    4.2 For mfma_16, kBase = kDim / 4
+//    4.3 For mfma_4, kBase = kDim / 16
+// 5. relation between kWidth and kBase: For now it supports two cases
+//    5.1 kWidth = kBase, i.e. kPack = 1. In this case, each load from
+//        shared memory results in one mfma instruction.
+//    5.2 kWidth = 2 * kBase, i.e. kPack = 2. In this case, each load from
+//        shared memory results in two mfma instructions, since one mfma
+//        can only consume kBase elements from each thread.
+//    Note that we cannot have larger kPack since kPack = 2 means
+//    ds_read_b128, which is the largest vector size for shared memory load.
+static std::optional<unsigned> chooseDesiredKWidth(mlir::triton::DotOp dotOp,
+                                                   unsigned kBase,
+                                                   unsigned kPack,
+                                                   StringRef arch) {
+  bool tail = mlir::LLVM::AMD::isChainDotTail(dotOp);
+  auto aElem = dotOp.getA().getType().getElementType();
+  bool is16BitElem = aElem.isF16() || aElem.isBF16();
+  auto isaFamily = triton::AMD::deduceISAFamily(arch);
+  if (tail && is16BitElem) {
+    if (isaFamily == ISAFamily::CDNA3 || isaFamily == ISAFamily::CDNA4)
+      return 8;
+    else
+      return 4;
+  } else if (!tail)
+    return kBase * kPack;
+  else
+    return std::nullopt;
+}
+
+static bool isTriviallyRelayoutable(Operation *op) {
+  if (op->getNumOperands() != 1 || op->getNumResults() != 1)
+    return false;
+  return isa<arith::BitcastOp, arith::TruncIOp, arith::ExtSIOp, arith::ExtUIOp,
+             arith::ExtFOp, arith::TruncFOp, tt::FpToFpOp>(op);
+}
+
+static Operation *cloneWithNewEncoding(OpBuilder &builder, Operation *op,
+                                       Attribute newEncoding) {
+  auto loc = op->getLoc();
+  auto oldResTy = cast<RankedTensorType>(op->getResult(0).getType());
+  auto newResTy = RankedTensorType::get(oldResTy.getShape(),
+                                        oldResTy.getElementType(), newEncoding);
+
+  // Helper for single-operand ops that don't carry extra attributes.
+  auto recreateSimple = [&](auto opTag) -> Operation * {
+    using OpTy = decltype(opTag);
+    Value newVal = OpTy::create(builder, loc, newResTy, op->getOperand(0));
+    return newVal.getDefiningOp();
+  };
+
+  // Dispatch on op type. Add cases here for any additional trivially
+  // relayoutable ops.
+  return llvm::TypeSwitch<Operation *, Operation *>(op)
+      .Case<tt::FpToFpOp>([&](tt::FpToFpOp fp2fp) {
+        Value newVal = tt::FpToFpOp::create(
+            builder, loc, newResTy, op->getOperand(0), fp2fp.getRoundingAttr());
+        return newVal.getDefiningOp();
+      })
+      .Case<mlir::arith::ExtFOp>(
+          [&](auto) { return recreateSimple(mlir::arith::ExtFOp{}); })
+      .Case<mlir::arith::TruncFOp>(
+          [&](auto) { return recreateSimple(mlir::arith::TruncFOp{}); })
+      .Case<mlir::arith::TruncIOp>(
+          [&](auto) { return recreateSimple(mlir::arith::TruncIOp{}); })
+      .Case<mlir::arith::ExtSIOp>(
+          [&](auto) { return recreateSimple(mlir::arith::ExtSIOp{}); })
+      .Case<mlir::arith::ExtUIOp>(
+          [&](auto) { return recreateSimple(mlir::arith::ExtUIOp{}); })
+      .Case<mlir::arith::BitcastOp>(
+          [&](auto) { return recreateSimple(mlir::arith::BitcastOp{}); })
+      .Default([&](Operation *) -> Operation * {
+        op->emitError("unsupported op kind in relayout path");
+        return nullptr;
+      });
+}
+
+static bool collectLinearPathToConvert(Value dotOperand,
+                                       ttg::ConvertLayoutOp &cvtOpOut,
+                                       SmallVectorImpl<Operation *> &pathOut) {
+  Value cur = dotOperand;
+  pathOut.clear();
+
+  while (Operation *def = cur.getDefiningOp()) {
+    // Stop when we reach the convert_layout that produces the dot operand
+    // layout.
+    if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(def)) {
+      cvtOpOut = cvt;
+      return true;
+    }
+
+    // Only allow simple 1-operand/1-result ops that can be trivially rebuilt.
+    if (!isTriviallyRelayoutable(def))
+      return false;
+
+    // Be conservative: only proceed if this value has a single use.
+    // This avoids duplicating ops and changing dominance/ordering
+    // unintentionally.
+    if (!cur.hasOneUse())
+      return false;
+
+    // Record this op and continue walking to its input.
+    pathOut.push_back(def);
+    cur = def->getOperand(0);
+  }
+
+  // Reached a block argument or non-linear chain without finding a convert.
+  return false;
+}
+
+void propagateNewLayoutForward(OpBuilder &builder, ttg::ConvertLayoutOp newCvt,
+                               llvm::ArrayRef<Operation *> path) {
+  Value cur = newCvt.getResult();
+  Attribute targetEnc = cast<RankedTensorType>(cur.getType()).getEncoding();
+
+  for (auto it = path.rbegin(), e = path.rend(); it != e; ++it) {
+    Operation *op = *it;
+
+    // Clone the op at its original position to maintain IR order and dominance.
+    builder.setInsertionPoint(op);
+    Operation *newOp = cloneWithNewEncoding(builder, op, targetEnc);
+    if (!newOp) {
+      op->emitError("Failed to relayout: unsupported op kind encountered");
+    }
+
+    op->getResult(0).replaceAllUsesWith(newOp->getResult(0));
+    op->erase();
+    cur = newOp->getResult(0);
+  }
+}
+
+// Fix kWidth for dot operands that already use MFMA encodings but have
+// a suboptimal kWidth. This pass:
+// - Finds the nearest ConvertLayoutOp that produced the dot operand's layout,
+// - Replaces it with a new ConvertLayoutOp using the desired kWidth,
+// - Clones the intervening trivial ops so their result encodings match,
+// - Rewires the dot to consume the final rebuilt value.
+//
+// kPack (matrix-instruction-size) and arch influence desired kWidth.
+static void fixKWidthOfDotOperand(ModuleOp m, unsigned kPack, StringRef arch) {
+  m.walk([&](mlir::triton::DotOp dotOp) {
+    auto cTy = dotOp.getC().getType();
+    auto mfmaEnc =
+        dyn_cast_or_null<ttg::AMDMfmaEncodingAttr>(cTy.getEncoding());
+    if (!mfmaEnc)
+      return;
+
+    auto kBaseCandidate = getKBase(mfmaEnc);
+    if (failed(kBaseCandidate))
+      return;
+
+    // Find linear chains from A/B back to their nearest convert_layout.
+    ttg::ConvertLayoutOp cvtA, cvtB;
+    SmallVector<Operation *, 8> pathA, pathB;
+    bool okA = collectLinearPathToConvert(dotOp.getA(), cvtA, pathA);
+    bool okB = collectLinearPathToConvert(dotOp.getB(), cvtB, pathB);
+    if (!okA || !okB)
+      return;
+
+    unsigned kBase = *kBaseCandidate;
+    std::optional<unsigned> candidateKWidth =
+        chooseDesiredKWidth(dotOp, kBase, kPack, arch);
+    if (!candidateKWidth.has_value())
+      return;
+    unsigned desiredKWidth = candidateKWidth.value();
+
+    for (int opIdx = 0; opIdx < 2; ++opIdx) {
+      Value operand = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
+      auto rTy = cast<RankedTensorType>(operand.getType());
+      auto dotEnc =
+          dyn_cast_or_null<ttg::DotOperandEncodingAttr>(rTy.getEncoding());
+      if (!dotEnc)
+        continue;
+
+      // Skip only if entire target encoding (parent/opIdx/kWidth) already
+      // matches.
+      bool alreadyDesired = dotEnc.getKWidth() == desiredKWidth &&
+                            dotEnc.getParent() == mfmaEnc &&
+                            dotEnc.getOpIdx() == static_cast<unsigned>(opIdx);
+      if (alreadyDesired)
+        continue;
+
+      ttg::ConvertLayoutOp cvt = (opIdx == 0) ? cvtA : cvtB;
+      SmallVector<Operation *, 8> &path = (opIdx == 0) ? pathA : pathB;
+
+      OpBuilder builder(cvt);
+      builder.setInsertionPoint(cvt);
+
+      auto srcTy = cast<RankedTensorType>(cvt.getSrc().getType());
+      auto newEnc = ttg::DotOperandEncodingAttr::get(
+          builder.getContext(), opIdx, mfmaEnc, desiredKWidth);
+      auto newTy = RankedTensorType::get(srcTy.getShape(),
+                                         srcTy.getElementType(), newEnc);
+
+      auto newCvt = ttg::ConvertLayoutOp::create(builder, cvt.getLoc(), newTy,
+                                                 cvt.getSrc());
+      cvt.getResult().replaceAllUsesWith(newCvt.getResult());
+      cvt->erase();
+
+      (void)propagateNewLayoutForward(builder, newCvt, path);
+    }
+  });
+}
+
 } // namespace
 
 #define GEN_PASS_DEF_TRITONAMDGPUACCELERATEMATMUL
@@ -1868,6 +2075,8 @@ struct TritonAMDGPUAccelerateMatmulPass
     }
     if (applyPatternsGreedily(m, std::move(mfmaPatterns)).failed())
       signalPassFailure();
+
+    fixKWidthOfDotOperand(m, kPack, archGenerationName);
 
     RewritePatternSet patterns(context);
     patterns.add<AccelerateBlocked>(context, archGenerationName, /*benefit=*/1);
