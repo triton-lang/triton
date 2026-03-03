@@ -1674,9 +1674,11 @@ static const std::string kInitFuncArgsRewritten =
 /// extracting the tt.ptr and c0 operands).
 struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
   InitFuncPtrArgs(MLIRContext *context, FatPointers &fatPtrs,
-                  bool enableLargeTensorPtrCanon_)
+                  bool enableLargeTensorPtrCanon_,
+                  bool canonicalizeAllPtrArgs_)
       : OpRewritePattern(context, 0), fatPtrs(fatPtrs),
-        enableLargeTensorPtrCanon(enableLargeTensorPtrCanon_) {}
+        enableLargeTensorPtrCanon(enableLargeTensorPtrCanon_),
+        canonicalizeAllPtrArgs(canonicalizeAllPtrArgs_) {}
 
   LogicalResult matchAndRewrite(tt::FuncOp newOp,
                                 PatternRewriter &rewriter) const override {
@@ -1695,7 +1697,8 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
         bitness = pointerRangeAttr.getInt();
 
       LDBG(idx << "-th argument: " << arg << ", bitness: " << bitness);
-      if (!enableLargeTensorPtrCanon && (bitness == 64)) {
+      if (!enableLargeTensorPtrCanon && !canonicalizeAllPtrArgs &&
+          (bitness == 64)) {
         LDBG("Do not init argument of large-tensor pointer: " << arg);
         continue;
       }
@@ -1717,6 +1720,7 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
 
   FatPointers &fatPtrs;
   bool enableLargeTensorPtrCanon;
+  bool canonicalizeAllPtrArgs;
 };
 
 /// No-op to make conversion framework happy.
@@ -1934,7 +1938,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   FatPointers fatPrs;
   PatternRewriter rewriter(&getContext());
   // Convert tt.func; %1 = unrealize_cast(%arg0: tt.ptr, c0: i32) -> tt.ptr
-  InitFuncPtrArgs pat(&getContext(), fatPrs, enableLargeTensorPtrCanon);
+  InitFuncPtrArgs pat(&getContext(), fatPrs, enableLargeTensorPtrCanon,
+                      canonicalizeAllPtrArgs);
   if (failed(pat.matchAndRewrite(func, rewriter)))
     return signalPassFailure();
 
@@ -1948,7 +1953,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
             func.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
       bitness = pointerRangeAttr.getInt();
 
-    if (!enableLargeTensorPtrCanon && (bitness == 64)) {
+    if (!enableLargeTensorPtrCanon && !canonicalizeAllPtrArgs &&
+        (bitness == 64)) {
       LDBG("ignore " << idx << "-th argument of large-tensor ptr: " << arg);
       continue;
     }

@@ -150,7 +150,12 @@ def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers"
   let options = [
     Option<"enableLargeTensorPtrCanon", "enable-large-tensor-ptr-canon",
            "bool", /*default=*/"false",
-           "Whether to enable canonicalization for pointers pointing to large-tensors (a specialization for tensors over 2GB)">
+           "Whether to enable canonicalization for pointers pointing to large-tensors (a specialization for tensors over 2GB)">,
+    Option<"canonicalizeAllPtrArgs", "canonicalize-all-ptr-args",
+           "bool", /*default=*/"false",
+           "Canonicalize all pointer arguments regardless of tt.pointer_range. "
+           "Needed when the caller (e.g. Inductor) does not set tt.pointer_range "
+           "but buffer ops conversion still requires canonical (base, offset) form.">
   ];
 }
 
