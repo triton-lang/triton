@@ -428,14 +428,26 @@ struct AbsFOpConversion
                                    Location loc) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     if (llvm::isa<IntegerType>(elemTy)) {
-      // Mask out the sign bit
-      auto num_bits =
-          getElementTypeOrSelf(op.getType()).getIntOrFloatBitWidth();
+      auto origElemTy = getElementTypeOrSelf(op.getType());
+      auto num_bits = origElemTy.getIntOrFloatBitWidth();
       assert(num_bits <= 16);
       auto mask = (1u << (num_bits - 1u)) - 1u;
       auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
       auto maskConst = LLVM::ConstantOp::create(rewriter, loc, maskAttr);
-      return {b.and_(operands[0][0], maskConst)};
+      auto result = b.and_(operands[0][0], maskConst);
+
+      // FNUZ float types encode NaN as the sign bit set with all other bits
+      // zero (e.g. 0x80 for 8-bit). Clearing the sign bit would incorrectly
+      // turn NaN into zero, so we must preserve it.
+      if (isa<Float8E4M3FNUZType, Float8E5M2FNUZType,
+             Float8E4M3B11FNUZType>(origElemTy)) {
+        auto nanEncoding =
+            rewriter.getIntegerAttr(elemTy, 1u << (num_bits - 1u));
+        auto nanConst = LLVM::ConstantOp::create(rewriter, loc, nanEncoding);
+        auto isNan = b.icmp_eq(operands[0][0], nanConst);
+        return {b.select(isNan, nanConst, result)};
+      }
+      return {result};
     }
 
     return {LLVM::FAbsOp::create(rewriter, loc, elemTy, operands[0][0])};
