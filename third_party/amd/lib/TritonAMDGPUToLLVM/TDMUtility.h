@@ -31,8 +31,8 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
                                   SmallVector<int64_t> blockShape, int numWarps,
                                   unsigned padInterval, unsigned padAmount,
                                   SmallVector<Value> tensorShape,
-                                  SmallVector<Value> tensorStride,
-                                  Value srcPtr);
+                                  SmallVector<Value> tensorStride, Value srcPtr,
+                                  bool isRowMajor);
 
 // Update the global memory address with offset, and fill the shared memory
 // address and pred in a given TDM descriptor for regular load/store (1D-5D).
@@ -47,7 +47,8 @@ void fillTDMDescriptor(
     std::optional<std::reference_wrapper<SmallVector<Value>>> group3,
     SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
     Value multicastMask, Value barrierPtr,
-    const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore);
+    const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
+    bool isRowMajor);
 
 // Fill TDM descriptor for gather/scatter operations (2D only).
 // Gather reads from non-contiguous rows in global memory to LDS.
@@ -80,7 +81,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       ArrayRef<Value> offset, ArrayRef<Value> dstPtrs,
                       Value pred, Value multicastMask, Type elementType,
                       Value barrierPtr, bool isLoad,
-                      const triton::LinearLayout &sharedLayout, Value ctaId);
+                      const triton::LinearLayout &sharedLayout, Value ctaId,
+                      bool isRowMajor);
 
 // Calculate the number of TDM gather/scatter instructions needed.
 // - numIndices: number of row indices
@@ -123,6 +125,10 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
                                    ArrayRef<Value> offset, Value pred,
                                    Type elementType, Value laneId, Value warpId,
                                    Value ctaId, bool isSpeculative);
+
+// Returns true if the shared memory encoding has is not row-mjaor, requiring
+// the trailing two dimensions to be swapped for TDM.
+bool needsTrailingDimSwapForTDM(ArrayRef<unsigned> sharedOrder);
 
 } // namespace mlir::LLVM::AMD
 
