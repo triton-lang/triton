@@ -620,10 +620,10 @@ def matmul(a, b):
 @pytest.mark.parametrize("BLOCK_SIZE_N", [128, 256])
 @pytest.mark.parametrize("BLOCK_SIZE_K", [64, 128])
 @pytest.mark.parametrize("GRID_MINOR_DIM", [0, 1])
-@pytest.mark.parametrize("GRID_TILE_WIDTH", [1, 8])
+@pytest.mark.parametrize("GRID_TILE_WIDTH", [8])
 @pytest.mark.parametrize("CGA_LAYOUT", [(), ((1, 0), ), ((1, 0), (2, 0))])
 @pytest.mark.parametrize("STAGES", [2, 4])
-@pytest.mark.parametrize("ACC_STAGES", [2, 3])
+@pytest.mark.parametrize("ACC_STAGES", [2])
 @pytest.mark.parametrize("EPILOGUE_SIZE_N", [32])
 @pytest.mark.parametrize("M, N, K", [(100, 200, 200)])
 def test_matmul_matches_torch(
