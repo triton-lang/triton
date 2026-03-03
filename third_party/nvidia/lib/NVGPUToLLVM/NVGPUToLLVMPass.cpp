@@ -540,6 +540,42 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
   return address;
 }
 
+// Static switch to choose how 2CTA TMEM teardown synchronization is lowered.
+// true: mbarrier-based sync (PR #9498 style), false: cluster arrive/wait.
+static constexpr bool kUseMBarrierSyncForTMEMTeardown = true;
+
+static constexpr const char *kTMAllocSharedScratchOffsetAttrName =
+    "ttng.tensor_memory_scratch_offset";
+
+static int getTMAllocSharedScratchOffset(ModuleOp mod) {
+  if (auto offsetAttr =
+          mod->getAttrOfType<IntegerAttr>(kTMAllocSharedScratchOffsetAttrName))
+    return offsetAttr.getInt();
+  return 0;
+}
+
+static Value getTMAllocSharedMBarrierPtr(IRRewriter &rewriter,
+                                         LLVM::LLVMFuncOp func,
+                                         int scratchOffset) {
+  auto b = TritonLLVMOpBuilder(func.getLoc(), rewriter);
+  Value sharedMem = mlir::LLVM::getStackPointer(rewriter, func);
+  Value offset = b.i32_val(scratchOffset);
+  return b.gep(sharedMem.getType(), i8_ty, sharedMem, offset,
+               LLVM::GEPNoWrapFlags::inbounds);
+}
+
+static void mbarrierInit(IRRewriter &rewriter, Location loc, Value barrier) {
+  Value predSingleThread =
+      LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+  PTXBuilder ptxBuilder;
+  std::string ptxString = "@$0 mbarrier.init.shared::cta.b64 [$1], 1;";
+  auto &init = *ptxBuilder.create(ptxString);
+  init({ptxBuilder.newOperand(predSingleThread, "b"),
+        ptxBuilder.newOperand(barrier, "r")},
+       /*onlyAttachMLIRArgs=*/true);
+  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+}
+
 static void createRelinquishAlloc(IRRewriter &rewriter, Location loc,
                                   Value pred, bool twoCTAs) {
   PTXBuilder ptxBuilder;
@@ -550,16 +586,62 @@ static void createRelinquishAlloc(IRRewriter &rewriter, Location loc,
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
+static void mbarrierArrive(OpBuilder &builder, Location loc, Value barrier) {
+  auto b = TritonLLVMOpBuilder(loc, builder);
+  // `shared::cluster` encodes the CTA id in the upper address bits. Flip the
+  // low CTA-group bit so each CTA signals the peer CTA's local barrier.
+  Value barrierInt = b.ptrtoint(builder.getI32Type(), barrier);
+  barrierInt = b.xor_(barrierInt, b.i32_val(1u << 24));
+  Value peerBarrier = b.inttoptr(barrier.getType(), barrierInt);
+  Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, builder);
+  auto ctx = builder.getContext();
+  PTXBuilder ptxBuilder;
+  const std::string ptxString =
+      "@$0 mbarrier.arrive.shared::cluster.b64 _, [$1], 1;";
+  auto &arrive = *ptxBuilder.create(ptxString);
+  arrive({ptxBuilder.newOperand(pred, "b"),
+          ptxBuilder.newOperand(peerBarrier, "r")},
+         /*onlyAttachMLIRArgs=*/true);
+  ptxBuilder.launch(builder, loc, void_ty(ctx));
+}
+
+static void mbarrierWait(OpBuilder &builder, Location loc, Value barrier,
+                         Value pred) {
+  std::string ptxString = R"(
+{
+	@!$1 bra.uni skipWait;
+	.reg .pred complete;
+	waitLoop:
+	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], 0;
+	@!complete bra.uni waitLoop;
+	skipWait:
+}
+)";
+
+  PTXBuilder ptxBuilder;
+  auto &waitLoop = *ptxBuilder.create(ptxString);
+  waitLoop(
+      {ptxBuilder.newOperand(barrier, "r"), ptxBuilder.newOperand(pred, "b")},
+      /*onlyAttachMLIRArgs=*/true);
+  ptxBuilder.launch(builder, loc, void_ty(builder.getContext()));
+}
+
 void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
-                 bool twoCTAs) {
+                 bool twoCTAs, Value syncBarrier) {
   func.walk([&](LLVM::ReturnOp ret) {
     OpBuilder b(ret);
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
-    auto voidTy = void_ty(ctx);
     if (twoCTAs) {
-      NVVM::ClusterArriveOp::create(b, loc, UnitAttr::get(ctx));
-      NVVM::ClusterWaitOp::create(b, loc, UnitAttr::get(ctx));
+      if (kUseMBarrierSyncForTMEMTeardown) {
+        assert(syncBarrier &&
+               "missing mbarrier setup data for 2CTA TMEM teardown");
+        mbarrierArrive(b, loc, syncBarrier);
+        mbarrierWait(b, loc, syncBarrier, pred);
+      } else {
+        NVVM::ClusterArriveOp::create(b, loc, UnitAttr::get(ctx));
+        NVVM::ClusterWaitOp::create(b, loc, UnitAttr::get(ctx));
+      }
     } else {
       NVVM::Barrier0Op::create(b, loc);
     }
@@ -598,14 +680,21 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   }
 
   bool useTwoCTAs = mlir::triton::nvidia_gpu::getModuleTwoCTAs(mod);
+  int tmAllocSharedScratchOffset = getTMAllocSharedScratchOffset(mod);
   // This code is only executed by the default warp group.
   Value threadId = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
   Value pred = b.icmp_ult(threadId, b.i32_val(32));
   Value alloc = createTMAlloc(rewriter, func, size, pred, useTwoCTAs);
+  Value syncBarrier;
+  if (useTwoCTAs && kUseMBarrierSyncForTMEMTeardown) {
+    syncBarrier =
+        getTMAllocSharedMBarrierPtr(rewriter, func, tmAllocSharedScratchOffset);
+    mbarrierInit(rewriter, loc, syncBarrier);
+  }
   createRelinquishAlloc(rewriter, loc, pred, useTwoCTAs);
   // TODO: pred will have a long liverange, we need to check if this is a
   // problem and how it can be fixed.
-  freeTMAlloc(func, alloc, size, pred, useTwoCTAs);
+  freeTMAlloc(func, alloc, size, pred, useTwoCTAs, syncBarrier);
   return alloc;
 }
 
