@@ -513,19 +513,23 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     triton::AMD::TargetInfo targetInfo(arch ? arch->str() : "");
 
     // Replace the old load with multi-buffered loads
-    if (useAsyncCopy && descLoadOp) {
+    if (descLoadOp) {
       loadToStreamOp[descLoadOp] =
           createTDMAsyncCopy(descLoadOp, alloc, extractIdx);
-    } else if (useAsyncCopy && canBeConvertedToAsyncLoad(
-                                   numBuffers, loadOp, info.sharedEncoding,
-                                   axisInfoAnalysis, targetInfo)) {
+      continue;
+    }
+
+    if (useAsyncCopy &&
+        canBeConvertedToAsyncLoad(numBuffers, loadOp, info.sharedEncoding,
+                                  axisInfoAnalysis, targetInfo)) {
       unsigned vec = axisInfoAnalysis.getContiguity(loadOp.getPtr());
       if (auto mask = loadOp.getMask())
         vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
       loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx, vec);
-    } else {
-      loadToStreamOp[loadOp] = createStreamCopy(loadOp, alloc, extractIdx);
+      continue;
     }
+
+    loadToStreamOp[loadOp] = createStreamCopy(loadOp, alloc, extractIdx);
   }
 
   return loadToStreamOp;
