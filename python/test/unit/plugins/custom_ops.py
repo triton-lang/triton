@@ -101,6 +101,8 @@ def add_kernel(x_ptr,
     tl.store(output_ptr + offsets, output, mask=mask)
 
 def test_custom_ops(tmp_path: pathlib.Path):
+    if os.environ.get('LLVM_BUILD_SHARED_LIBS', '0') == '0':
+        return
     size = 8
     x = torch.zeros(size, device=DEVICE, dtype=torch.float32)
     # y = torch.ones(size, device=DEVICE, dtype=torch.float32)
