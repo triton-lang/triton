@@ -174,6 +174,14 @@ LogicalResult InitBarrierOp::verify() {
     return failure();
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
+  auto barrierTy = cast<MemDescType>(getAlloc().getType());
+  // We cannot place cluster barriers inside warp-specialize regions, and we
+  // need to place a relaxed cluster barrier between barrier.init and the first
+  // barrier use.
+  bool crossCTA = barrierTy.getShape()[0] != gpu::lookupNumCTAs(getOperation());
+  if (crossCTA &&
+      getOperation()->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
+    return emitOpError("cannot be used inside `ttg.warp_specialize`");
   return success();
 }
 
@@ -358,6 +366,9 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
     return failure();
   if (failed(verifyTMAMode(*this, isIm2Col, getCoord(), getOffsets())))
     return failure();
+  if (getMulticast() && !hasCGABroadcast(resultType))
+    return emitOpError(
+        "multicast requires the shared layout to broadcast across CTAs");
   return success();
 }
 
@@ -684,6 +695,9 @@ void TCGen5MMAOp::getEffects(
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
                        SharedMemory::get());
+  for (auto &barrierMutable : getBarriersMutable())
+    effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
+                         SharedMemory::get());
 }
 
 bool TCGen5MMAOp::verifyDims() {
@@ -787,6 +801,9 @@ void TCGen5MMAScaledOp::getEffects(
                        TensorMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
                        TensorMemory::get());
+  for (auto &barrierMutable : getBarriersMutable())
+    effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
+                         SharedMemory::get());
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {

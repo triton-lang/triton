@@ -473,8 +473,6 @@ def _matmul_kernel(
     clc_result_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 2],
                                                    gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout))
 
-    if gl.num_ctas() > 1:
-        mbarrier.sync_cluster_init()
     p = PartitionArgs(
         a_desc,
         b_desc,
