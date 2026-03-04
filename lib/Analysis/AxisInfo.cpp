@@ -509,7 +509,8 @@ private:
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
+        rhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().value() != 0)
       return {lhs.getConstantValue().value() / rhs.getConstantValue().value()};
     return {};
   }
@@ -578,7 +579,8 @@ private:
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
+        rhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().value() != 0)
       return {lhs.getConstantValue().value() % rhs.getConstantValue().value()};
     else if (rhs.getConstantValue().has_value() &&
              rhs.getConstantValue().value() == 1)

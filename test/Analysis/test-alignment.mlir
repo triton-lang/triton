@@ -229,6 +229,10 @@ tt.func @div(%arg0: i32 {tt.divisibility = 16 : i32}) {
   %18 = arith.constant dense<2> : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [2], constant_value = <none>}}
   %19 = arith.divsi %0, %18 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [4611686018427387904], constancy = [128], constant_value = 0}}
+  %20 = arith.constant dense<0> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>}}
+  %21 = arith.divsi %1, %20 : tensor<128xi32>
   tt.return
 }
 
@@ -270,6 +274,10 @@ tt.func @rem() {
   %15 = arith.remsi %12, %4 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %16 = arith.remsi %4, %12 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [4611686018427387904], constancy = [128], constant_value = 0}}
+  %17 = arith.constant dense<0> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>}}
+  %18 = arith.remui %1, %17 : tensor<128xi32>
   tt.return
 }
 
