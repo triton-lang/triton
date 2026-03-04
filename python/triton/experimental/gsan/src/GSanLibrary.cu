@@ -7,17 +7,6 @@
 #include <device_launch_parameters.h>
 #include <limits>
 
-// HACK: Because we aren't compiling as cuda, clang doesn't provide these
-// automatically.
-extern "C" [[noreturn]] void __assertfail(const char *__message,
-                                          const char *__file, unsigned __line,
-                                          const char *__function,
-                                          size_t __char_size);
-void __assert_fail(const char *__message, const char *__file, unsigned __line,
-                   const char *__function) {
-  __assertfail(__message, __file, __line, __function, sizeof(char));
-}
-
 namespace gsan {
 
 struct Location {
@@ -76,7 +65,7 @@ __device__ void rwLockReleaseWrite(uint32_t &lock) {
   atom.fetch_and(~writerFlag, cuda::memory_order_release);
 }
 
-inline uintptr_t roundUp(uintptr_t ptr, uintptr_t align) {
+__device__ inline uintptr_t roundUp(uintptr_t ptr, uintptr_t align) {
   return ptr % align == 0 ? ptr : ptr + align - (ptr % align);
 }
 
@@ -296,26 +285,25 @@ __device__ void tensorLoad(ThreadState *state, const char *stackPtr, int nElems,
 } // namespace
 } // namespace gsan
 
-extern "C" void __triton_gsan_load_tensor(void *globalState,
-                                          const char *stackPtr, int numElems,
-                                          int bytesPerElem, const char *file,
-                                          int line) {
+extern "C" __device__ void
+__triton_gsan_load_tensor(void *globalState, const char *stackPtr, int numElems,
+                          int bytesPerElem, const char *file, int line) {
   auto loc = gsan::Location{file, static_cast<unsigned>(line)};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorLoad(threadState, stackPtr, numElems, bytesPerElem, loc);
 }
 
-extern "C" void __triton_gsan_init(void *globalState, const char *file,
-                                   int line) {
+extern "C" __device__ void __triton_gsan_init(void *globalState,
+                                              const char *file, int line) {
   auto loc = gsan::Location{file, static_cast<unsigned>(line)};
   gsan::initThread(reinterpret_cast<gsan::GlobalState *>(globalState), loc);
 }
 
-extern "C" void __triton_gsan_store_tensor(void *globalState,
-                                           const char *stackPtr, int numElems,
-                                           int bytesPerElem, const char *file,
-                                           int line) {
+extern "C" __device__ void
+__triton_gsan_store_tensor(void *globalState, const char *stackPtr,
+                           int numElems, int bytesPerElem, const char *file,
+                           int line) {
   auto loc = gsan::Location{file, static_cast<unsigned>(line)};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
