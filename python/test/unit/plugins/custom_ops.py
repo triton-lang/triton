@@ -73,14 +73,13 @@ def inspect_stages_hook(self=None, stages=None, options=None, language=None, cap
     stage_src = 'from triton._C.libtriton import ir, passes, llvm, amd, nvidia\n' + stage_src
     # Inject plugin pass right after loop unroll in the dynamically loaded stage source
     stage_src = stage_src.replace(
-        "    pm = ir.pass_manager(mod.context)",
-        "    pm = ir.pass_manager(mod.context)\n"
-        "    passes.plugin.plugingpu_farith_conversion(pm, opt.num_warps, 32, opt.num_ctas)\n"
-    )
+        "    pm = ir.pass_manager(mod.context)", "    pm = ir.pass_manager(mod.context)\n"
+        "    passes.plugin.plugingpu_farith_conversion(pm, opt.num_warps, 32, opt.num_ctas)\n")
     exec(stage_src, module.__dict__)
     make_lambda = lambda f: lambda src, metadata: f(src, metadata, options, capability)
     stages["ttir"] = make_lambda(module.make_ttir)
     return get_key(), get_hash()
+
 
 @builtin
 def custom_op(x, sanitize_overflow: tl.constexpr = True, _semantic=None):
@@ -89,6 +88,7 @@ def custom_op(x, sanitize_overflow: tl.constexpr = True, _semantic=None):
     arg_handles = []
     arg_handles.extend(flatten_values_to_ir([x]))
     return tl.tensor(builder.create_custom_op(arg_handles), x.type)
+
 
 @triton.jit
 def add_kernel(x_ptr,
