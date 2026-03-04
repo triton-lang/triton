@@ -497,17 +497,25 @@ public:
   matchAndRewrite(triton::FuncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto converter = getTypeConverter();
-    TypeConverter::SignatureConversion result(op.getNumArguments());
-    auto newOp = rewriter.replaceOpWithNewOp<triton::FuncOp>(
-        op, op.getName(), op.getFunctionType());
+    TypeConverter::SignatureConversion signatureConversion =
+        converter->convertBlockSignature(&op.getBody().front()).value();
+
+    auto newFuncType = FunctionType::get(
+        rewriter.getContext(), signatureConversion.getConvertedTypes(),
+        op.getFunctionType().getResults());
+
+    auto newOp =
+        rewriter.create<triton::FuncOp>(op.getLoc(), op.getName(), newFuncType);
+
     addNamedAttrs(newOp, adaptor.getAttributes());
     rewriter.inlineRegionBefore(op.getBody(), newOp.getBody(),
                                 newOp.getBody().end());
     // Convert just the entry block. The remaining unstructured control flow is
     // converted by br patterns.
     if (!newOp.getBody().empty())
-      rewriter.applySignatureConversion(&newOp.getBody().front(), result,
-                                        converter);
+      rewriter.applySignatureConversion(&newOp.getBody().front(),
+                                        signatureConversion, converter);
+    rewriter.replaceOp(op, newOp);
     return success();
   }
 };
