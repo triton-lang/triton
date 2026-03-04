@@ -1035,7 +1035,7 @@ def test_abs(dtype_x, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4nv, tl.float8e5])
+@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4nv, tl.float8e5, tl.float8e4b8, tl.float8e5b16])
 def test_abs_fp8(in_dtype, device):
     if is_hip():
         pytest.skip('test_abs_fp8 not supported on HIP.')
@@ -1045,6 +1045,8 @@ def test_abs_fp8(in_dtype, device):
             pytest.skip("float8e4b15 not supported on CUDA >= 9.0")
         if in_dtype == tl.float8e4nv and cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
+        if in_dtype in (tl.float8e4b8, tl.float8e5b16):
+            pytest.skip("float8e4b8/float8e5b16 not supported on CUDA")
 
     @triton.jit
     def abs_kernel(X, Z, SIZE: tl.constexpr):
