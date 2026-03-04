@@ -30,6 +30,7 @@ def TritonInstrumentGlobalSanitizer: Pass<"tritoninstrument-global-sanitizer", "
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                            "mlir::triton::instrument::TritonInstrumentDialect"];
 }
 
