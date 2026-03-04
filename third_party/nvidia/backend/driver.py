@@ -289,7 +289,10 @@ class CudaLauncher(object):
 
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
                     kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
-                    profile_scratch, self.arg_annotations, self.kernel_signature, args)
+                    profile_scratch, self.arg_annotations, self.kernel_signature, kernel_args)
+        if self.gsan_enabled:
+            import triton.experimental.gsan._stream_sync as gsan_stream_sync
+            gsan_stream_sync.synchronize_launch_stream(device)
 
 
 class CudaDriver(GPUDriver):
