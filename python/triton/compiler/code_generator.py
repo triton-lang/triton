@@ -471,6 +471,13 @@ class CodeGenerator(ast.NodeVisitor):
 
             if _is_triton_value(live_val):
                 loop_val = self.lscope[name]
+
+                # When a JIT-specialized constexpr is reassigned in the loop
+                # body, relax it to a runtime tensor so it can be carried.
+                if isinstance(live_val, constexpr) and _is_triton_tensor(loop_val):
+                    live_val = self.semantic.to_tensor(_unwrap_if_constexpr(live_val))
+                    liveins[name] = live_val
+
                 self._verify_loop_carried_variable(name, loop_val, live_val)
 
                 live_handles = flatten_values_to_ir([live_val])
