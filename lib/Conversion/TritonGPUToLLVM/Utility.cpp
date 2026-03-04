@@ -278,7 +278,6 @@ Value emitRedundantThreadPredicate(
   return pred;
 }
 
-
 } // namespace triton::gpu
 
 SmallVector<std::pair<StringAttr, Value>>

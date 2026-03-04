@@ -85,13 +85,13 @@ public:
 
     module.walk([&](triton::LoadOp op) {
       OpBuilder b(op);
-      ExperimentalGSanTensorAccessOp::create(
-          b, op.getLoc(), op.getPtr(), op.getMask(), /*isStore=*/false);
+      ExperimentalGSanTensorAccessOp::create(b, op.getLoc(), op.getPtr(),
+                                             op.getMask(), /*isStore=*/false);
     });
     module.walk([&](triton::StoreOp op) {
       OpBuilder b(op);
-      ExperimentalGSanTensorAccessOp::create(
-          b, op.getLoc(), op.getPtr(), op.getMask(), /*isStore=*/true);
+      ExperimentalGSanTensorAccessOp::create(b, op.getLoc(), op.getPtr(),
+                                             op.getMask(), /*isStore=*/true);
     });
   }
 };
