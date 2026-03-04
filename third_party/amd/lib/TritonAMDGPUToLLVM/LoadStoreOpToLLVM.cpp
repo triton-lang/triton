@@ -175,7 +175,8 @@ Value emitRedundantThreadPredicateNonNull(
     const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, Location loc,
     const TargetInfo &targetInfo) {
-  auto res = emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+  auto res =
+      emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
   if (!res) {
     TritonLLVMOpBuilder b(loc, rewriter);
     return b.i1_val(true);
@@ -931,8 +932,8 @@ struct AsyncCopyGlobalToLocalOpConversion
     // shared memory; the multicast mask will be used by the hardware to
     // efficiently broadcast to different CTAs.
     freeVarMasks[rewriter.getStringAttr("block")] = 0;
-    Value threadPred =
-        emitRedundantThreadPredicateNonNull(freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred = emitRedundantThreadPredicateNonNull(
+        freeVarMasks, rewriter, loc, targetInfo);
 
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     auto emitGlobalLoadLds =
@@ -1096,8 +1097,8 @@ struct AsyncCopyLocalToGlobalOpConversion
         rewriter, loc, vec, dstElems, dstPtrTy, maskElements, {}, i1_ty, {});
 
     auto freeVarMasks = getFreeVariableMasks(dstTy);
-    Value threadPred =
-        emitRedundantThreadPredicateNonNull(freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred = emitRedundantThreadPredicateNonNull(
+        freeVarMasks, rewriter, loc, targetInfo);
 
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     auto emitGlobalStoreLds =
@@ -1550,8 +1551,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     auto cacheMod = op.getCache();
     const int numVecs = elemsPerThread / vec;
     auto freeVarMasks = getFreeVariableMasks(valueTy);
-    Value threadPred =
-        emitRedundantThreadPredicateNonNull(freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred = emitRedundantThreadPredicateNonNull(
+        freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       if (!isCanonicalIndex(vecStart, regMask)) {
@@ -1674,8 +1675,8 @@ struct BufferAtomicRMWOpConversion
     auto moduleOp = op->getParentOfType<ModuleOp>();
 
     auto freeVarMasks = getFreeVariableMasks(valueTy);
-    Value threadPred =
-        emitRedundantThreadPredicateNonNull(freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred = emitRedundantThreadPredicateNonNull(
+        freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       if (!isCanonicalIndex(vecStart, regMask)) {
@@ -1788,8 +1789,8 @@ struct BufferAtomicCASOpConversion
     auto hasUsers = !op.getResult().getUsers().empty();
     auto moduleOp = op->getParentOfType<ModuleOp>();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
-    Value threadPred =
-        emitRedundantThreadPredicateNonNull(freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred = emitRedundantThreadPredicateNonNull(
+        freeVarMasks, rewriter, loc, targetInfo);
 
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Type vecTy = LLVM::getVectorType(valueElemTy, vec);
@@ -1883,8 +1884,8 @@ struct BufferStoreOpConversion
     MLIRContext *ctx = rewriter.getContext();
     auto moduleOp = op->getParentOfType<ModuleOp>();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
-    Value threadPred =
-        emitRedundantThreadPredicateNonNull(freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred = emitRedundantThreadPredicateNonNull(
+        freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       if (!isCanonicalIndex(vecStart, regMask)) {
@@ -2172,8 +2173,8 @@ struct AtomicRMWOpConversion
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
 
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
-    Value threadPred =
-        emitRedundantThreadPredicateNonNull(freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred = emitRedundantThreadPredicateNonNull(
+        freeVarMasks, rewriter, loc, targetInfo);
     auto tid = getThreadId(rewriter, loc);
 
     bool needLdsStaging = !tensorTy && !opResult.use_empty();

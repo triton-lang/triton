@@ -420,8 +420,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     const size_t valueElemNBits = dtsize * 8;
 
     auto freeVarMasks = getFreeVariableMasks(ptr.getType());
-    Value threadPred =
-        ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
 
     const int numVecs = elemsPerThread / vec;
@@ -565,8 +565,8 @@ struct AtomicCASOpConversion
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
-    Value threadPred =
-        ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
 
     SmallVector<Value> resultVals(elemsPerThread);
@@ -764,8 +764,8 @@ public:
                        << " numElems = " << numElems;
 
     auto freeVarMasks = getFreeVariableMasks(ptr.getType());
-    Value threadPred =
-        ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
 
     auto packedTy = vec_ty(valueElemTy, packed);
@@ -792,8 +792,9 @@ public:
       }
 
       Value rmwPtr = ptrElements[i];
-      Value pred = llMask ? ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i])
-                          : threadPred;
+      Value pred =
+          llMask ? ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i])
+                 : threadPred;
 
       if (doPTXLDPromotion) {
         Type convertedValueTy =
@@ -1145,8 +1146,8 @@ struct AsyncCopyGlobalToLocalOpConversion
     // is available in each CTAs respective shared memory. Otherwise, we would
     // need an additional broadcast step to copy the data between CTAs.
     freeVarMasks[str_attr("block")] = 0;
-    Value threadPred =
-        ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, targetInfo);
 
     auto emitCpAsync = [&b, threadPred, ptrTy, hasMask = bool(llMask)](
                            RewriterBase &rewriter, Location loc,
