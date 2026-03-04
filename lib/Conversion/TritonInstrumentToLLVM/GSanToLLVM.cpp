@@ -1,9 +1,10 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "llvm/ADT/SmallString.h"
 #include <limits>
 
 namespace tt = mlir::triton;
@@ -11,6 +12,11 @@ namespace tti = mlir::triton::instrument;
 namespace ttg = mlir::triton::gpu;
 
 namespace {
+
+struct GSanSourceLocation {
+  Value file;
+  Value line;
+};
 
 static constexpr StringLiteral kGSanLoadTensorRuntimeFn =
     "__triton_gsan_load_tensor";
@@ -30,15 +36,44 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
   auto *ctx = rewriter.getContext();
   SmallVector<Type> argTys;
   if (funcName == kGSanInitRuntimeFn) {
-    argTys = {ptr_ty(ctx)};
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty};
   } else {
-    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty};
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
   }
   auto funcTy = LLVM::LLVMFunctionType::get(void_ty(ctx), argTys);
   RewriterBase::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(moduleOp.getBody());
   return LLVM::LLVMFuncOp::create(rewriter, UnknownLoc::get(ctx), funcName,
                                   funcTy);
+}
+
+FileLineColLoc extractSourceLocation(Location loc) {
+  if (auto fileLoc = dyn_cast<FileLineColLoc>(loc))
+    return fileLoc;
+  if (auto nameLoc = dyn_cast<NameLoc>(loc))
+    return extractSourceLocation(nameLoc.getChildLoc());
+  if (auto opaqueLoc = dyn_cast<OpaqueLoc>(loc))
+    return extractSourceLocation(opaqueLoc.getFallbackLocation());
+  if (auto fusedLoc = dyn_cast<FusedLoc>(loc))
+    return extractSourceLocation(fusedLoc.getLocations().front());
+  if (auto callSiteLoc = dyn_cast<CallSiteLoc>(loc))
+    return extractSourceLocation(callSiteLoc.getCallee());
+
+  StringAttr unknownFile = StringAttr::get(loc.getContext(), "<unknown>");
+  return FileLineColLoc::get(unknownFile, 0, 0);
+}
+
+GSanSourceLocation
+materializeSourceLocation(ConversionPatternRewriter &rewriter, Location loc) {
+  auto fileLoc = extractSourceLocation(loc);
+  auto *ctx = rewriter.getContext();
+  TritonLLVMOpBuilder b(loc, rewriter);
+
+  llvm::SmallString<64> fileName(fileLoc.getFilename().getValue());
+  fileName.push_back('\0');
+  Value file = LLVM::addStringToModule(UnknownLoc::get(ctx), rewriter,
+                                       "gsanLocation_", fileName);
+  return {file, b.i32_val(fileLoc.getLine())};
 }
 
 ////////////////////////////////////////////
@@ -99,9 +134,10 @@ void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
     gsanGlobalStatePtr = b.addrspacecast(ptr_ty(ctx), gsanGlobalStatePtr);
   }
   Value argsPtr = b.bitcast(argsBuffer, ptr_ty(ctx));
+  auto sourceLoc = materializeSourceLocation(rewriter, loc);
   b.call(runtimeFunc,
          ValueRange{gsanGlobalStatePtr, argsPtr, b.i32_val(ptrElems.size()),
-                    b.i32_val(bytesPerElem)});
+                    b.i32_val(bytesPerElem), sourceLoc.file, sourceLoc.line});
 }
 
 Value getGSanGlobalStateArg(FunctionOpInterface funcOp) {
@@ -126,8 +162,8 @@ public:
   GSanTensorAccessOpConversion(LLVMTypeConverter &typeConverter,
                                const TargetInfoBase &targetInfo,
                                PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(&targetInfo) {
-  }
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
 
   LogicalResult
   matchAndRewrite(tti::ExperimentalGSanTensorAccessOp op, OpAdaptor adaptor,
@@ -153,14 +189,13 @@ public:
              "Expected mask element count to match layout");
     }
 
-    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
-    uint32_t regMask =
-        freeVarMasks.lookup(StringAttr::get(op.getContext(), "reg"));
-    Value threadPred =
-        ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, *targetInfo);
+    auto freeVarMasks = getFreeVariableMasks(ptrTy);
+    auto *ctx = getContext();
+    uint32_t regMask = freeVarMasks.lookup(str_attr("reg"));
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, *targetInfo);
     emitTensorAccessRuntimeCall(rewriter, loc, gsanGlobalStatePtr, ptrElems,
-                                maskElems, regMask, threadPred,
-                                bytesPerElem,
+                                maskElems, regMask, threadPred, bytesPerElem,
                                 op.getIsStore());
 
     rewriter.eraseOp(op);
@@ -175,7 +210,8 @@ public:
       tti::ExperimentalGSanInitOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(tti::ExperimentalGSanInitOp op, [[maybe_unused]] OpAdaptor adaptor,
+  matchAndRewrite(tti::ExperimentalGSanInitOp op,
+                  [[maybe_unused]] OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto func = op->getParentOfType<FunctionOpInterface>();
     Value gsanGlobalStatePtr = getGSanGlobalStateArg(func);
@@ -191,13 +227,15 @@ public:
     if (gsanGlobalStatePtr.getType() != ptr_ty(ctx)) {
       gsanGlobalStatePtr = b.addrspacecast(ptr_ty(ctx), gsanGlobalStatePtr);
     }
-    b.call(runtimeFunc, ValueRange{gsanGlobalStatePtr});
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    b.call(runtimeFunc,
+           ValueRange{gsanGlobalStatePtr, sourceLoc.file, sourceLoc.line});
     rewriter.eraseOp(op);
     return success();
   }
 };
 
-}  // namespace
+} // namespace
 
 void mlir::triton::populateGSanToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
