@@ -128,6 +128,7 @@ protected:
 
   // Profiler
   virtual void doStart() override { pImpl->doStart(); }
+  virtual void doPoll() override { pImpl->doPoll(); }
   virtual void doFlush() override { pImpl->doFlush(); }
   virtual void doStop() override { pImpl->doStop(); }
   virtual void doAddMetrics(
@@ -238,6 +239,7 @@ protected:
     virtual ~GPUProfilerPimplInterface() = default;
 
     virtual void doStart() = 0;
+    virtual void doPoll() = 0;
     virtual void doFlush() = 0;
     virtual void doStop() = 0;
 
