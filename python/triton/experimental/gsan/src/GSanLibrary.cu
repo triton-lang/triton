@@ -17,6 +17,13 @@ void __assert_fail(const char *__message, const char *__file, unsigned __line,
   __assertfail(__message, __file, __line, __function, sizeof(char));
 }
 
+#define assert_msg(cond, msg)                                                  \
+  do {                                                                         \
+    if (!(cond)) {                                                             \
+      __assert_fail((msg), __FILE__, __LINE__, __FUNCTION__);                  \
+    }                                                                          \
+  } while (false)
+
 namespace gsan {
 namespace {
 static constexpr uint32_t writerFlag = 1u << 31;
@@ -113,6 +120,8 @@ __device__ void initThread(GlobalState *globals) {
     // Preserve the synchronized vector clock from prior launches on this
     // stream and advance the local epoch for the new kernel entry.
     auto *clock = state->vectorClock;
+    assert_msg(clock[tid] != std::numeric_limits<epoch_t>::max(),
+               "Vector clock overflowed");
     clock[tid] += 1;
   }
 
@@ -156,11 +165,13 @@ __device__ void doWrite(ThreadState *state, ShadowCell *cell) {
   // Check WAR
   for (int iRead = 0; iRead < ShadowCell::kReadClockSize; ++iRead) {
     auto read = cell->readClocks[iRead];
-    assert(clock[read.threadId] >= read.epoch);
+    assert_msg(clock[read.threadId] >= read.epoch,
+               "Write after read race detected");
   }
   // Check WAW
   auto write = cell->writeClock;
-  assert(clock[write.threadId] >= write.epoch);
+  assert_msg(clock[write.threadId] >= write.epoch,
+             "Write after write race detected");
   // Update write
   auto tid = state->threadId;
   cell->writeClock = ScalarClock{clock[tid], tid, AtomicScope::NonAtomic};
@@ -208,7 +219,8 @@ __device__ void doRead(ThreadState *state, ShadowCell *cell) {
   epoch_t *clock = state->vectorClock;
   // Check RAW
   auto write = cell->writeClock;
-  assert(clock[write.threadId] >= write.epoch);
+  assert_msg(clock[write.threadId] >= write.epoch,
+             "Read after write race detected");
 
   auto tid = state->threadId;
   auto scalarClock = ScalarClock{clock[tid], tid, AtomicScope::NonAtomic};
