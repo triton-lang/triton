@@ -10,7 +10,7 @@ import torch.multiprocessing as mp
 
 from triton._internal_testing import is_cuda
 from triton.experimental.gsan import symmetric_memory
-from triton.experimental.gsan._allocator import get_reserve_pointer, get_reserve_size
+from triton.experimental.gsan._allocator import get_reserve_pointer, get_reserve_size, get_runtime_state_layout
 from triton.experimental.gsan._utils import shadow_region, uint8_cuda_tensor_from_ptr
 
 
@@ -18,6 +18,18 @@ def _get_free_tcp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def _local_vector_clocks(device_index: int) -> tuple[torch.Tensor, dict[str, int]]:
+    layout = get_runtime_state_layout(device_index)
+    region_size = layout["thread_state_stride_bytes"] * layout["num_sms"]
+    region = uint8_cuda_tensor_from_ptr(layout["thread_state_base_ptr"], region_size, device_index)
+    clocks = torch.as_strided(
+        region.view(torch.uint16)[layout["thread_state_header_size_bytes"] // 2:],
+        size=(layout["num_sms"], layout["num_threads"]),
+        stride=(layout["thread_state_stride_bytes"] // 2, 1),
+    )
+    return clocks, layout
 
 
 def _run_symmetric_memory_checks(rank: int, world_size: int) -> None:
@@ -72,6 +84,16 @@ def _run_symmetric_memory_checks(rank: int, world_size: int) -> None:
     hdl.barrier(channel=0)
     if rank == 1:
         assert torch.all(local_shadow == 29).item()
+
+    local_clocks, layout = _local_vector_clocks(rank)
+    local_clocks.zero_()
+    local_tid = rank * layout["num_sms"]
+    peer_tid = peer * layout["num_sms"]
+    local_clocks[0, local_tid] = rank + 11
+    hdl.barrier(channel=0)
+    synced_clocks, _ = _local_vector_clocks(rank)
+    assert torch.all(synced_clocks[:, local_tid] == (rank + 11)).item()
+    assert torch.all(synced_clocks[:, peer_tid] == (peer + 11)).item()
 
     del peer_buf
     del local_shadow
