@@ -216,9 +216,6 @@ SmallVector<int32_t> complementBasis(ArrayRef<int32_t> basis, int32_t dim) {
 
   return comp;
 }
-} // namespace
-
-namespace mlir::triton::gpu {
 
 SmallVector<int32_t> intersectionBasis(ArrayRef<int32_t> b1,
                                        ArrayRef<int32_t> b2, int32_t dim) {
@@ -245,24 +242,55 @@ SmallVector<int32_t> intersectionBasis(ArrayRef<int32_t> b1,
   }
 }
 
+// The bank conflict can be mathematically computed as
+// $|span(tile, inBank) ∩ span(segment)|$ given
+// 1. Shared memory layout has no broadcast.
+// 2. No write conflict aka. multiple threads write to the same memory location
+// in one wavefront.
+int computeBankConflict(ArrayRef<int32_t> tileBases,
+                        ArrayRef<int32_t> smemBases, int32_t bitwidth,
+                        int32_t totalDim) {
+  constexpr int bankWidth = 32;
+  constexpr int bankCount = 32;
+
+  int smemSizeLog2 = smemBases.size();
+  assert(totalDim == smemSizeLog2 && "The bank conflict formula is valid only "
+                                     "if the smem layout is bijective");
+  int smemSize = 1 << smemSizeLog2;
+
+  int inBankBasesSpanSize =
+      std::min(std::max(1, bankWidth / bitwidth), smemSize);
+  int bankBasesSpanSize = std::min(bankCount * bankWidth / bitwidth, smemSize) /
+                          inBankBasesSpanSize;
+  int segmentBasesSpanSize = smemSize / inBankBasesSpanSize / bankBasesSpanSize;
+
+  auto inBankBases = smemBases.take_front(llvm::Log2_32(inBankBasesSpanSize));
+  auto segmentBases = smemBases.take_back(llvm::Log2_32(segmentBasesSpanSize));
+
+  SmallVector<int32_t> tileUnionInBankBases(tileBases);
+  tileUnionInBankBases.append(inBankBases.begin(), inBankBases.end());
+  return (1 << intersectionBasis(segmentBases, tileUnionInBankBases, totalDim)
+                   .size()) -
+         1;
+}
+} // namespace
+
+namespace mlir::triton::gpu {
+
 std::pair<int, int> bankConflicts(ArrayRef<int32_t> tileSrc,
                                   ArrayRef<int32_t> tileDst,
-                                  const LinearLayout &smem) {
+                                  const LinearLayout &smem, int32_t bitwidth) {
   auto *ctx = smem.getOutDimNames().begin()->getContext();
   auto smemFlat = smem.flattenOuts();
   auto inDim = *smem.getInDimNames().begin();
-  // Look at the intersection between the segment bases and the tile bases
-  // We don't need to intersect with the bases that covert the bank (as in
-  // the first 32 / bitwidth bases) because if we hit any of those broadcasting
-  // will avoid the bank conflict
-  auto segment = StringAttr::get(ctx, "segment");
-  auto segmentBases = flatten(smemFlat, segment);
 
+  auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
   int32_t rank = smem.getTotalOutDimSizeLog2();
   // compute conflicts
-  int write = 1 << intersectionBasis(segmentBases, tileSrc, rank).size();
-  int read = 1 << intersectionBasis(segmentBases, tileDst, rank).size();
-  return {read - 1, write - 1};
+  auto smemBases = flatten(smemFlat.flattenIns(), S("vector"));
+  int write = computeBankConflict(tileSrc, smemBases, bitwidth, rank);
+  int read = computeBankConflict(tileDst, smemBases, bitwidth, rank);
+  return {read, write};
 }
 
 std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
@@ -276,11 +304,11 @@ std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
   auto kVec = S("vector");
   auto srcLane = flatten(srcFlat, S("lane"));
   auto dstLane = flatten(dstFlat, S("lane"));
-  auto log2Vec =
+  auto log2Wavefronts =
       llvm::Log2_32(std::max(smem.getInDimSize(kVec) * bitwidth / 32, 1));
-  srcLane.resize(srcLane.size() - log2Vec);
-  dstLane.resize(dstLane.size() - log2Vec);
-  return bankConflicts(srcLane, dstLane, smem);
+  srcLane.resize(srcLane.size() - log2Wavefronts);
+  dstLane.resize(dstLane.size() - log2Wavefronts);
+  return bankConflicts(srcLane, dstLane, smem, bitwidth);
 }
 
 int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
@@ -293,23 +321,16 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
          "register layout must have a register dim");
   auto regNoBroadcast = actionRemoveBroadcastedRegs(reg).apply(reg);
   auto regToShared = regNoBroadcast.invertAndCompose(smem);
-  auto [elemsPerVec, permutation] =
-      largestVectorisation(ctx, regToShared, bitwidth);
-  regNoBroadcast = permutation.apply(regNoBroadcast);
+  auto [elemsPerVec, _] = largestVectorisation(ctx, regToShared, bitwidth);
+  auto log2Wavefronts = llvm::Log2_32(std::max(elemsPerVec * bitwidth / 32, 1));
+  auto regFlat = reg.flattenOuts();
+  auto laneBases = flatten(regFlat, S("lane"));
+  laneBases.resize(laneBases.size() - log2Wavefronts);
 
-  int32_t vecSize = elemsPerVec;
-  int32_t bankSize =
-      std::min(32 * 32 / (vecSize * bitwidth), smem.getTotalInDimSize());
-  int32_t segmentSize = smem.getTotalInDimSize() / (bankSize * vecSize);
-  SmallVector<std::pair<StringAttr, int32_t>> newInDims = {
-      {S("vector"), vecSize},
-      {S("bank"), bankSize},
-      {S("segment"), segmentSize},
-  };
-  auto smemReshaped = smem.reshapeIns(newInDims);
-  return bankConflictsLdSt(regNoBroadcast, regNoBroadcast, smemReshaped,
-                           bitwidth)
-      .first;
+  auto smemFlat = smem.flattenOuts();
+  auto smemBases = flatten(smemFlat.flattenIns(), S("offset"));
+  return computeBankConflict(laneBases, smemBases, bitwidth,
+                             smem.getTotalOutDimSizeLog2());
 }
 
 std::optional<SmallVector<int32_t>> optimalSwizzlingTile(
@@ -713,7 +734,7 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
       auto smem = optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc,
                                    tileDst, blockSrcSet.getArrayRef(),
                                    src.getOutDims(), leaveReps);
-      auto [read, write] = bankConflicts(tileSrc, tileDst, smem);
+      auto [read, write] = bankConflicts(tileSrc, tileDst, smem, bitwidth);
       smems.push_back({read + write, smem, {instrs.first, instrs.second}});
     }
     // Current heuristic: Minimise total bank conflicts

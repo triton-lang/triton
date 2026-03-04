@@ -50,7 +50,8 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
 
 std::pair<int, int> bankConflicts(llvm::ArrayRef<int32_t> tileSrc,
                                   llvm::ArrayRef<int32_t> tileDst,
-                                  const LinearLayout &smem);
+                                  const LinearLayout &smem,
+                                  int32_t bitwidth);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_GENERIC_SWIZZLING_H

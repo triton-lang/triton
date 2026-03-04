@@ -14,6 +14,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <llvm/ADT/SmallSet.h>
+#include <random>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -30,6 +31,86 @@ static std::string attrStr(Attribute a) {
   a.print(os);
   return s;
 }
+
+template <typename IntTy>
+static IntTy sampleInt(std::mt19937 &rng, IntTy lo, IntTy hi) {
+  std::uniform_int_distribution<IntTy> dist(lo, hi);
+  return dist(rng);
+}
+
+static SmallVector<uint32_t> randomColumns(std::mt19937 &rng, unsigned k,
+                                           unsigned n) {
+  assert(k > 0 && "Expected non-empty output space");
+  assert(n >= k && "Surjective map needs enough input bits");
+
+  SmallVector<uint32_t> cols;
+  cols.reserve(n);
+  for (int i = 0; i < k; i++) {
+    cols.push_back(1u << i);
+  }
+
+  for (int iter = 0; iter < 8 * k; iter++) {
+    unsigned i = sampleInt(rng, 0u, k - 1);
+    unsigned j = sampleInt(rng, 0u, k - 1);
+    if (i == j) {
+      continue;
+    }
+    int op = sampleInt(rng, 0, 1);
+    if (op == 0) {
+      std::swap(cols[i], cols[j]);
+    } else {
+      cols[j] ^= cols[i];
+    }
+  }
+
+  for (int i = k; i < n; i++) {
+    unsigned col = sampleInt(rng, 0u, (1u << k) - 1);
+    cols.push_back(col);
+  }
+  return cols;
+}
+
+static std::vector<int32_t> columnToBasis(uint32_t value,
+                                          ArrayRef<unsigned> outDimSizesLog2) {
+  std::vector<int32_t> basis;
+  basis.reserve(outDimSizesLog2.size());
+  int shift = 0;
+  for (auto bits : outDimSizesLog2) {
+    int32_t out = 0;
+    if (bits > 0) {
+      out = static_cast<int32_t>((value >> shift) & ((1u << bits) - 1u));
+    }
+    basis.push_back(out);
+    shift += bits;
+  }
+  return basis;
+}
+
+static LinearLayout
+buildRandomLayout(std::mt19937 &rng,
+                  ArrayRef<std::pair<StringAttr, unsigned>> inDimsBits,
+                  ArrayRef<unsigned> outDimSizesLog2, int totalOutSizeBits,
+                  const SmallVector<std::pair<StringAttr, int32_t>> &outDims) {
+  int n = 0;
+  for (const auto &[_, bits] : inDimsBits) {
+    n += bits;
+  }
+
+  auto columns = randomColumns(rng, totalOutSizeBits, n);
+  int colIdx = 0;
+  std::vector<std::pair<StringAttr, std::vector<std::vector<int32_t>>>> inBases;
+  inBases.reserve(inDimsBits.size());
+  for (const auto &[dim, bits] : inDimsBits) {
+    std::vector<std::vector<int32_t>> bases;
+    bases.reserve(bits);
+    for (int i = 0; i < bits; i++) {
+      bases.push_back(columnToBasis(columns[colIdx++], outDimSizesLog2));
+    }
+    inBases.push_back({dim, std::move(bases)});
+  }
+  return LinearLayout(inBases, outDims, /*requireSurjective=*/true);
+}
+
 class SwizzleTest : public ::testing::Test {
 public:
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
@@ -47,7 +128,7 @@ protected:
 
   MLIRContext ctx;
 
-  using LinearLayout = mlir::triton::LinearLayout;
+  StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
 
   mlir::triton::gpu::BlockedEncodingAttr
   blocked(ArrayRef<unsigned> spt, ArrayRef<unsigned> tpw,
@@ -97,22 +178,17 @@ protected:
     return mlir::triton::gpu::toLinearLayout(shape, attr);
   }
 
-  int computeConflicts(ArrayRef<int64_t> shape, Attribute regAttr,
-                       Attribute sharedAttr, int bitwidth) {
-    auto regLL = toLL(shape, regAttr);
-    auto sharedLL = toLL(shape, sharedAttr);
+  int computeConflicts(const LinearLayout &regLL, const LinearLayout &sharedLL,
+                       int bitwidth) {
     return mlir::triton::gpu::bankConflictsMemDesc(regLL, sharedLL, bitwidth);
   }
 
-  int bruteforceBankConflictsPerWavefront(ArrayRef<int64_t> shape,
-                                          Attribute regAttr,
-                                          Attribute sharedAttr, int bitwidth) {
+  int bruteforceBankConflictsPerWavefront(const LinearLayout &regLL,
+                                          const LinearLayout &sharedLL,
+                                          int bitwidth) {
     // Compute the bank conflicts per wavefront
     // In other words, we compute how many extra memory accesses (bank
     // conflicts) are needed for a given wavefront.
-    auto regLL = toLL(shape, regAttr);
-    auto sharedLL = toLL(shape, sharedAttr);
-
     auto *ctx = sharedLL.getInDimNames().begin()->getContext();
     auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
 
@@ -121,7 +197,8 @@ protected:
     auto kLane = S("lane");
     auto kWarp = S("warp");
     auto regToShared = regLL.invertAndCompose(sharedLL);
-    assert(regToShared.isTrivialOver({S("block")}) && "NYI");
+    auto kBlock = S("block");
+    assert(regToShared.isTrivialOver({kBlock}) && "NYI");
     regToShared = regToShared.sublayout({kReg, kLane, kWarp}, {kOffset});
 
     // Remove broadcasting
@@ -169,6 +246,78 @@ protected:
     // Assert homogeneity
     assert(wavefronts % minWavefronts == 0);
     return wavefronts / minWavefronts - 1;
+  }
+
+  LinearLayout
+  makeSharedLL(std::mt19937 &rng, ArrayRef<unsigned> outDimSizesLog2,
+               int totalOutSizeBits,
+               const SmallVector<std::pair<StringAttr, int32_t>> &outDims) {
+    // Do not allow broadcast for shared memory layout
+    int sharedInBits = totalOutSizeBits;
+    return buildRandomLayout(rng,
+                             {{S("offset"), sharedInBits}, {S("block"), 0}},
+                             outDimSizesLog2, totalOutSizeBits, outDims);
+  }
+
+  LinearLayout
+  makeRegLL(std::mt19937 &rng, ArrayRef<unsigned> outDimSizesLog2,
+            int totalOutSizeBits,
+            const SmallVector<std::pair<StringAttr, int32_t>> &outDims) {
+    int laneBits = 5;
+    int minExtraBits = std::max(0, totalOutSizeBits - laneBits);
+    int regBits = sampleInt(rng, 0, minExtraBits);
+    int warpBits = minExtraBits - regBits;
+    // Add broadcast bases
+    int slack = sampleInt(rng, 0, 2);
+    for (int i = 0; i < slack; i++) {
+      if (sampleInt(rng, 0, 1) == 0) {
+        regBits++;
+      } else {
+        warpBits++;
+      }
+    }
+
+    return buildRandomLayout(rng,
+                             {{S("register"), regBits},
+                              {S("lane"), laneBits},
+                              {S("warp"), warpBits},
+                              {S("block"), 0}},
+                             outDimSizesLog2, totalOutSizeBits, outDims);
+  }
+
+  struct FuzzCase {
+    LinearLayout regLL;
+    LinearLayout sharedLL;
+    SmallVector<std::pair<StringAttr, int32_t>> outDims;
+    int bitwidth;
+  };
+
+  FuzzCase generateFuzzCase(std::mt19937 &rng) {
+    constexpr static int kBitwidthOptions[] = {8, 16, 32};
+    int bitwidth = kBitwidthOptions[sampleInt(rng, 0, 2)];
+
+    int rank = sampleInt(rng, 1, 4);
+    SmallVector<unsigned, 8> outDimSizesLog2(rank);
+    for (int i = 0; i < rank; ++i) {
+      outDimSizesLog2[i] = sampleInt(rng, 0, 5);
+    }
+    int mustBeNonZero = sampleInt(rng, 0, rank - 1);
+    outDimSizesLog2[mustBeNonZero] = sampleInt(rng, 1, 5);
+    int totalOutSizeBits =
+        std::accumulate(outDimSizesLog2.begin(), outDimSizesLog2.end(), 0);
+
+    SmallVector<std::pair<StringAttr, int32_t>> outDims;
+    outDims.reserve(outDimSizesLog2.size());
+    for (int i = 0; i < outDimSizesLog2.size(); i++) {
+      outDims.push_back(
+          {S(("dim" + std::to_string(i)).c_str()), 1 << outDimSizesLog2[i]});
+    }
+
+    auto regLL = makeRegLL(rng, outDimSizesLog2, totalOutSizeBits, outDims);
+    auto sharedLL =
+        makeSharedLL(rng, outDimSizesLog2, totalOutSizeBits, outDims);
+    return {std::move(regLL), std::move(sharedLL), std::move(outDims),
+            bitwidth};
   }
 };
 
@@ -352,14 +501,35 @@ TEST_F(BankConflictTest, bankConflicts) {
   };
 
   for (const auto &c : cases) {
-    EXPECT_EQ(computeConflicts(c.shape, c.reg, c.shared, c.bitwidth),
-              bruteforceBankConflictsPerWavefront(c.shape, c.reg, c.shared,
-                                                  c.bitwidth))
-
-        << toLL(c.shape, c.reg).invertAndCompose(toLL(c.shape, c.shared))
-        << "\nbitwidth=" << c.bitwidth << "\n"
+    auto regLL = toLL(c.shape, c.reg);
+    auto sharedLL = toLL(c.shape, c.shared);
+    EXPECT_EQ(computeConflicts(regLL, sharedLL, c.bitwidth),
+              bruteforceBankConflictsPerWavefront(regLL, sharedLL, c.bitwidth))
+        << regLL.invertAndCompose(sharedLL) << "\nbitwidth=" << c.bitwidth
+        << "\n"
         << attrStr(c.reg) << "\n"
         << attrStr(c.shared);
+  }
+}
+
+TEST_F(BankConflictTest, bankConflictsFuzz) {
+  constexpr int numCases = 512;
+  constexpr uint32_t seed = 0x5f3f8f83U;
+  std::mt19937 rng(seed);
+
+  for (int i = 0; i < numCases; i++) {
+    auto c = generateFuzzCase(rng);
+    ASSERT_TRUE(c.regLL.isSurjective());
+    ASSERT_TRUE(c.sharedLL.isSurjective());
+
+    int computed = computeConflicts(c.regLL, c.sharedLL, c.bitwidth);
+    int brute =
+        bruteforceBankConflictsPerWavefront(c.regLL, c.sharedLL, c.bitwidth);
+    EXPECT_EQ(computed, brute) << "case_idx=" << i << "\n"
+                               << c.regLL.invertAndCompose(c.sharedLL)
+                               << "\nbitwidth=" << c.bitwidth << "\n"
+                               << c.regLL << "\n"
+                               << c.sharedLL;
   }
 }
 
