@@ -115,7 +115,7 @@ void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
         b.gep(ptr_ty(ctx), argsTy, argsBuffer, ValueRange{zero, zero, idx});
     b.store(ptrValue, ptrSlot);
 
-    Value maskValue = maskElems.empty() ? Value{} : maskElems[i];
+    Value maskValue = maskElems.empty() ? b.true_val() : maskElems[i];
     if (!isCanonicalIndex(i, regMask))
       maskValue = b.false_val();
     maskValue = ttg::maybeAnd(rewriter, loc, maskValue, threadPred);
