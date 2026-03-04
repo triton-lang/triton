@@ -1857,7 +1857,8 @@ void init_triton_ir(py::module &&m) {
 
       TritonOpBuilderBinding.def(
           customOpName,
-          [customOpName](TritonOpBuilder &self, std::vector<Value> &args) -> Value {
+          [customOpName](TritonOpBuilder &self,
+                         std::vector<Value> &args) -> Value {
             std::string filename =
                 mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
             TritonPlugin TP(filename);

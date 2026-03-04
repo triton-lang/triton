@@ -35,6 +35,18 @@ void DialectPluginDialect::initialize() {
 
 using namespace mlir;
 
+static void addTritonPluginPass(mlir::PassManager *pm, int num_warps,
+                                int threadsPerWarp, int numCTAs) {
+  pm->addPass(mlir::triton::plugin::createConvertPluginGPUToLLVMPass());
+}
+
+static void registerTritonPluginPass(int num_warps, int threadsPerWarp,
+                                     int numCTAs) {
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::triton::plugin::createConvertPluginGPUToLLVMPass();
+  });
+}
+
 static void addTritonPluginPass2(mlir::PassManager *pm, int num_warps,
                                  int threadsPerWarp, int numCTAs) {
   pm->addPass(mlir::triton::plugin::createConvertPluginGPUToTritonGPUPass(
@@ -46,18 +58,6 @@ static void registerTritonPluginPass2(int num_warps, int threadsPerWarp,
   ::mlir::registerPass([=]() -> std::unique_ptr<::mlir::Pass> {
     return mlir::triton::plugin::createConvertPluginGPUToTritonGPUPass(
         num_warps, threadsPerWarp, numCTAs);
-  });
-}
-
-static void addTritonPluginPass(mlir::PassManager *pm, int num_warps,
-                                int threadsPerWarp, int numCTAs) {
-  pm->addPass(mlir::triton::plugin::createConvertPluginGPUToLLVMPass());
-}
-
-static void registerTritonPluginPass(int num_warps, int threadsPerWarp,
-                                     int numCTAs) {
-  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
-    return mlir::triton::plugin::createConvertPluginGPUToLLVMPass();
   });
 }
 
@@ -137,9 +137,9 @@ TRITON_PLUGIN_API
 tritonAddPluginCustomOp(const char *opName, TritonOpBuilder &self,
                         void **operands) {
   ::mlir::Value *dst = static_cast<::mlir::Value *>(operands[0]);
-  ::mlir::Value *lhs = static_cast<::mlir::Value *>(operands[1]);
+  ::mlir::Value *src = static_cast<::mlir::Value *>(operands[1]);
 
-  *dst = self.create<mlir::triton::plugin::FMagicOp>(*lhs);
+  *dst = self.create<mlir::triton::plugin::FMagicOp>(*src);
   return TP_SUCCESS;
 }
 
