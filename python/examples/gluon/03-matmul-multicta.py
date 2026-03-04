@@ -384,8 +384,8 @@ def matmul_epilogue_partition(p):
     dtype: gl.constexpr = p.c_desc.dtype
 
     acc_state = Counter.create(0, ACC_STAGES)
-    acc_smems = gl.allocate_shared_memory(dtype, [ACC_STAGES, TILE_M, SPLIT_TILE_N], p.c_desc.layout)
-    sub_acc_state = Counter.create(0, ACC_STAGES)
+    acc_smems = gl.allocate_shared_memory(dtype, [SUBTILE_FACTOR, TILE_M, SPLIT_TILE_N], p.c_desc.layout)
+    sub_acc_state = Counter.create(0, SUBTILE_FACTOR)
     scheduler = p.get_clc_consumer()
 
     i = 0
@@ -399,7 +399,7 @@ def matmul_epilogue_partition(p):
             acc_sub = acc_buf.slice(SPLIT_TILE_N * s, SPLIT_TILE_N)
             acc_smem = acc_smems.index(sub_acc_state.index)
             acc = acc_sub.load().to(dtype)
-            tma.store_wait(pendings=1)
+            tma.store_wait(pendings=SUBTILE_FACTOR-1)
             acc_smem.store(acc)
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_TILE_N * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
