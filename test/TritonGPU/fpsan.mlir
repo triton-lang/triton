@@ -1,4 +1,9 @@
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-fp-sanitizer | FileCheck %s
+// RUN: split-file %s %t
+// RUN: triton-opt %t/success.mlir -split-input-file -allow-unregistered-dialect -tritoninstrument-fp-sanitizer | FileCheck %t/success.mlir
+// RUN: not triton-opt %t/fail_ternary.mlir -allow-unregistered-dialect -tritoninstrument-fp-sanitizer 2>&1 | FileCheck %t/fail_ternary.mlir --check-prefix=FAIL
+// RUN: not triton-opt %t/fail_mixed.mlir -allow-unregistered-dialect -tritoninstrument-fp-sanitizer 2>&1 | FileCheck %t/fail_mixed.mlir --check-prefix=FAIL
+
+//--- success.mlir
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
@@ -259,6 +264,51 @@ tt.func public @cast_truncf(%a: tensor<4xf32>) -> tensor<4xf16> {
 
 // -----
 
+// CHECK-LABEL: @extern_unary
+tt.func public @extern_unary(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "__nv_tanf"} : (tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_binary
+tt.func public @extern_binary(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_atan2f"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_abs_skipped
+tt.func public @extern_abs_skipped(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK-NOT: tt.bitcast
+  // CHECK-NOT: arith.xori
+  // CHECK: tt.extern_elementwise %{{.*}} {libname = "", libpath = "", pure = true, symbol = "__nv_fabsf"}
+  %0 = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "__nv_fabsf"} : (tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_copysign_skipped
+tt.func public @extern_copysign_skipped(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK-NOT: tt.bitcast
+  // CHECK-NOT: arith.xori
+  // CHECK: tt.extern_elementwise %{{.*}}, %{{.*}} {libname = "", libpath = "", pure = true, symbol = "__nv_copysignf"}
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_copysignf"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
@@ -275,6 +325,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %val = ttng.tmem_load %view : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
     tt.return
   }
+}
+
+//--- fail_ternary.mlir
+
+// FAIL: FpSanitizer error: Unsupported extern_elementwise: symbol=__nv_fmaf
+tt.func public @extern_ternary_fail(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
+  %0 = tt.extern_elementwise %a, %b, %c {libname = "", libpath = "", pure = true, symbol = "__nv_fmaf"} : (tensor<4xf32>, tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+//--- fail_mixed.mlir
+
+// FAIL: FpSanitizer error: Unsupported extern_elementwise: symbol=__nv_ldexpf
+tt.func public @extern_mixed_fail(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf32> {
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_ldexpf"} : (tensor<4xf32>, tensor<4xi32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
 }
 
 // -----
