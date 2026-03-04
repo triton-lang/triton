@@ -9,18 +9,32 @@
 
 // HACK: Because we aren't compiling as cuda, clang doesn't provide these
 // automatically.
-extern "C" void __assertfail(const char *__message, const char *__file,
-                             unsigned __line, const char *__function,
-                             size_t __char_size);
+extern "C" [[noreturn]] void __assertfail(const char *__message,
+                                          const char *__file, unsigned __line,
+                                          const char *__function,
+                                          size_t __char_size);
 void __assert_fail(const char *__message, const char *__file, unsigned __line,
                    const char *__function) {
   __assertfail(__message, __file, __line, __function, sizeof(char));
 }
 
-#define assert_msg(cond, msg)                                                  \
+namespace gsan {
+
+struct Location {
+  const char *file;
+  unsigned line;
+};
+
+__device__ const char *getSourceFile(Location loc) {
+  return loc.file == nullptr ? "<unknown>" : loc.file;
+}
+
+} // namespace gsan
+
+#define assert_msg(loc, cond, msg)                                             \
   do {                                                                         \
     if (!(cond)) {                                                             \
-      __assert_fail((msg), __FILE__, __LINE__, __FUNCTION__);                  \
+      __assert_fail((msg), gsan::getSourceFile(loc), (loc).line, "");          \
     }                                                                          \
   } while (false)
 
@@ -110,7 +124,7 @@ __device__ ThreadState *getThreadState(GlobalState *globals) {
   return state;
 }
 
-__device__ void initThread(GlobalState *globals) {
+__device__ void initThread(GlobalState *globals, Location loc) {
   auto *state = getThreadState(globals);
 
   if (threadIdx.x == 0) {
@@ -120,7 +134,7 @@ __device__ void initThread(GlobalState *globals) {
     // Preserve the synchronized vector clock from prior launches on this
     // stream and advance the local epoch for the new kernel entry.
     auto *clock = state->vectorClock;
-    assert_msg(clock[tid] != std::numeric_limits<epoch_t>::max(),
+    assert_msg(loc, clock[tid] != std::numeric_limits<epoch_t>::max(),
                "Vector clock overflowed");
     clock[tid] += 1;
   }
@@ -160,25 +174,25 @@ __device__ void releaseShadow(ShadowCell *cell) {
   lock.store(0, cuda::memory_order_release);
 }
 
-__device__ void doWrite(ThreadState *state, ShadowCell *cell) {
+__device__ void doWrite(ThreadState *state, ShadowCell *cell, Location loc) {
   epoch_t *clock = state->vectorClock;
   // Check WAR
   for (int iRead = 0; iRead < ShadowCell::kReadClockSize; ++iRead) {
     auto read = cell->readClocks[iRead];
-    assert_msg(clock[read.threadId] >= read.epoch,
+    assert_msg(loc, clock[read.threadId] >= read.epoch,
                "Write after read race detected");
   }
   // Check WAW
   auto write = cell->writeClock;
-  assert_msg(clock[write.threadId] >= write.epoch,
+  assert_msg(loc, clock[write.threadId] >= write.epoch,
              "Write after write race detected");
   // Update write
   auto tid = state->threadId;
   cell->writeClock = ScalarClock{clock[tid], tid, AtomicScope::NonAtomic};
 }
 
-__device__ void writeRange(ThreadState *state, uintptr_t write_addr,
-                           int nBytes) {
+__device__ void writeRange(ThreadState *state, uintptr_t write_addr, int nBytes,
+                           Location loc) {
   auto range = roundRange(Range{write_addr, write_addr + nBytes});
 
   auto reserveBase = state->reserveBase;
@@ -190,7 +204,7 @@ __device__ void writeRange(ThreadState *state, uintptr_t write_addr,
       continue;
     auto shadowAddr = getShadowAddress(addr);
     auto cell = acquireShadow(shadowAddr);
-    doWrite(state, cell);
+    doWrite(state, cell, loc);
     releaseShadow(cell);
   }
 
@@ -199,18 +213,18 @@ __device__ void writeRange(ThreadState *state, uintptr_t write_addr,
 
 // Handles tl.store(ptrs, values, mask)
 __device__ void tensorStore(ThreadState *state, const char *stackPtr,
-                            int nElems, int bytesPerElem) {
+                            int nElems, int bytesPerElem, Location loc) {
   const uintptr_t *ptrsPtr = reinterpret_cast<const uintptr_t *>(stackPtr);
   const char *maskPtr = stackPtr + nElems * sizeof(uintptr_t);
   for (int i = 0; i < nElems; ++i) {
     auto ptr = ptrsPtr[i];
     auto mask = maskPtr[i];
     if (mask)
-      writeRange(state, ptr, bytesPerElem);
+      writeRange(state, ptr, bytesPerElem, loc);
   }
 }
 
-__device__ void doRead(ThreadState *state, ShadowCell *cell) {
+__device__ void doRead(ThreadState *state, ShadowCell *cell, Location loc) {
   // Update read count
   auto numReads = cell->numReads;
   if (numReads < std::numeric_limits<decltype(cell->numReads)>::max())
@@ -219,7 +233,7 @@ __device__ void doRead(ThreadState *state, ShadowCell *cell) {
   epoch_t *clock = state->vectorClock;
   // Check RAW
   auto write = cell->writeClock;
-  assert_msg(clock[write.threadId] >= write.epoch,
+  assert_msg(loc, clock[write.threadId] >= write.epoch,
              "Read after write race detected");
 
   auto tid = state->threadId;
@@ -246,7 +260,8 @@ __device__ void doRead(ThreadState *state, ShadowCell *cell) {
   cell->readClocks[clockIdx] = scalarClock;
 }
 
-__device__ void readRange(ThreadState *state, uintptr_t read_addr, int nBytes) {
+__device__ void readRange(ThreadState *state, uintptr_t read_addr, int nBytes,
+                          Location loc) {
   auto range = roundRange(Range{read_addr, read_addr + nBytes});
 
   auto reserveBase = state->reserveBase;
@@ -258,7 +273,7 @@ __device__ void readRange(ThreadState *state, uintptr_t read_addr, int nBytes) {
       continue;
     auto shadowAddr = getShadowAddress(addr);
     auto cell = acquireShadow(shadowAddr);
-    doRead(state, cell);
+    doRead(state, cell, loc);
     releaseShadow(cell);
   }
 
@@ -267,14 +282,14 @@ __device__ void readRange(ThreadState *state, uintptr_t read_addr, int nBytes) {
 
 // Handles tl.load(ptrs, mask)
 __device__ void tensorLoad(ThreadState *state, const char *stackPtr, int nElems,
-                           int bytesPerElem) {
+                           int bytesPerElem, Location loc) {
   const uintptr_t *ptrsPtr = reinterpret_cast<const uintptr_t *>(stackPtr);
   const char *maskPtr = stackPtr + nElems * sizeof(uintptr_t);
   for (int i = 0; i < nElems; ++i) {
     auto ptr = ptrsPtr[i];
     auto mask = maskPtr[i];
     if (mask)
-      readRange(state, ptr, bytesPerElem);
+      readRange(state, ptr, bytesPerElem, loc);
   }
 }
 
@@ -283,20 +298,26 @@ __device__ void tensorLoad(ThreadState *state, const char *stackPtr, int nElems,
 
 extern "C" void __triton_gsan_load_tensor(void *globalState,
                                           const char *stackPtr, int numElems,
-                                          int bytesPerElem) {
+                                          int bytesPerElem, const char *file,
+                                          int line) {
+  auto loc = gsan::Location{file, static_cast<unsigned>(line)};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
-  gsan::tensorLoad(threadState, stackPtr, numElems, bytesPerElem);
+  gsan::tensorLoad(threadState, stackPtr, numElems, bytesPerElem, loc);
 }
 
-extern "C" void __triton_gsan_init(void *globalState) {
-  gsan::initThread(reinterpret_cast<gsan::GlobalState *>(globalState));
+extern "C" void __triton_gsan_init(void *globalState, const char *file,
+                                   int line) {
+  auto loc = gsan::Location{file, static_cast<unsigned>(line)};
+  gsan::initThread(reinterpret_cast<gsan::GlobalState *>(globalState), loc);
 }
 
 extern "C" void __triton_gsan_store_tensor(void *globalState,
                                            const char *stackPtr, int numElems,
-                                           int bytesPerElem) {
+                                           int bytesPerElem, const char *file,
+                                           int line) {
+  auto loc = gsan::Location{file, static_cast<unsigned>(line)};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
-  gsan::tensorStore(threadState, stackPtr, numElems, bytesPerElem);
+  gsan::tensorStore(threadState, stackPtr, numElems, bytesPerElem, loc);
 }
