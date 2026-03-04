@@ -93,6 +93,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fuse_nested_loops", createTritonGPUFuseNestedLoops);
   ADD_PASS_WRAPPER_0("add_coalesce_async_copy",
                      createTritonGPUCoalesceAsyncCopy);
+  ADD_PASS_WRAPPER_0("add_global_sanitizer",
+                     createTritonInstrumentGlobalSanitizer);
   ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
                      createTritonInstrumentConcurrencySanitizer);
   ADD_PASS_WRAPPER_0("add_fp_sanitizer", createTritonInstrumentFpSanitizer);
