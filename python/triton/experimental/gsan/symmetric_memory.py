@@ -21,6 +21,7 @@ import torch
 import torch.distributed as dist
 import torch.distributed.distributed_c10d as c10d
 
+from . import _stream_sync
 from ._allocator import (create_mem_pool, export_allocation_handles, export_runtime_state_handle, free_allocation,
                          import_allocation_handles, import_runtime_state_handle)
 from ._utils import uint8_cuda_tensor_from_ptr
@@ -174,6 +175,7 @@ class GSanSymmetricMemoryHandle:
         device_index: int,
         buffer_size: int,
         peer_ptrs: tuple[int, ...],
+        peer_device_indices: tuple[int, ...],
         cache_key: _RendezvousCacheKey | None = None,
     ):
         self._group = group
@@ -182,6 +184,7 @@ class GSanSymmetricMemoryHandle:
         self._device_index = device_index
         self._buffer_size = buffer_size
         self._peer_ptrs = tuple(peer_ptrs)
+        self._peer_device_indices = tuple(int(v) for v in peer_device_indices)
         self._cache_key = cache_key
         self._closed = False
 
@@ -200,6 +203,9 @@ class GSanSymmetricMemoryHandle:
             raise NotImplementedError("Only channel=0 is supported in GSan symmetric memory.")
         _ = timeout_ms
         dist.barrier(group=self._group)
+        if self._world_size > 1:
+            _stream_sync.synchronize_process_group_barrier(self._device_index, self._peer_device_indices)
+            dist.barrier(group=self._group)
 
     def get_buffer(
         self,
@@ -311,6 +317,7 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
             device_index=device_index,
             buffer_size=buffer_size,
             peer_ptrs=(base_ptr, ),
+            peer_device_indices=(int(device_index), ),
             cache_key=cache_key,
         )
         _RENDEZVOUS_CACHE[cache_key] = handle
@@ -372,6 +379,7 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
             runtime_meta_size = meta["runtime_state_alloc_size"]
             if runtime_meta_size is not None and int(runtime_meta_size) <= 0:
                 raise RuntimeError("rendezvous: runtime_state_alloc_size must be > 0 when provided.")
+        peer_device_indices = tuple(int(meta["device_index"]) for meta in metas)
 
         token_holder = [uuid.uuid4().hex if rank == 0 else None]
         dist.broadcast_object_list(token_holder, group=process_group, group_src=0)
@@ -464,6 +472,7 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
         device_index=device_index,
         buffer_size=buffer_size,
         peer_ptrs=peer_ptrs,
+        peer_device_indices=peer_device_indices,
         cache_key=cache_key,
     )
     _RENDEZVOUS_CACHE[cache_key] = handle
