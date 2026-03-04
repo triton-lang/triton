@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 import triton
@@ -61,9 +63,14 @@ def _run_case(case: str) -> None:
 
 
 error_msg = {
-    "raw": "Read after write",
-    "waw": "Write after write",
-    "war": "Write after read",
+    "raw": "Read after write race detected",
+    "war": "Write after read race detected",
+    "waw": "Write after write race detected",
+}
+file_line = {
+    "raw": "test_gsan_failures.py:29",
+    "war": "test_gsan_failures.py:41",
+    "waw": "test_gsan_failures.py:51",
 }
 
 
@@ -76,7 +83,9 @@ def _run_failure_case(case: str) -> None:
     assert isinstance(result.exc, RuntimeError), (f"case={case} completed without the expected GSan failure\n"
                                                   f"exc={result.exc!r}\n"
                                                   f"driver stderr:\n{result.driver_stderr_output}")
-    assert "GSanLibrary.cu" in result.driver_stderr_output
+    assert "GSanLibrary.cu" not in result.driver_stderr_output
+    assert Path(__file__).name in result.driver_stderr_output
+    assert file_line[case] in result.driver_stderr_output
     assert error_msg[case] in result.driver_stderr_output
 
 
