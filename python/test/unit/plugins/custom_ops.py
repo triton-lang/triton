@@ -16,6 +16,7 @@ import inspect
 import sys
 import textwrap
 import os
+from triton.compiler.code_generator import flatten_values_to_ir
 
 T = TypeVar('T')
 TensorTy = TypeVar('TensorTy')
@@ -85,7 +86,9 @@ def inspect_stages_hook(self=None, stages=None, options=None, language=None, cap
 def custom_op(x, sanitize_overflow: tl.constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
     builder = _semantic.getBuilder()
-    return tl.tensor(builder.create_custom_op(x.handle), x.type)
+    arg_handles = []
+    arg_handles.extend(flatten_values_to_ir([x]))
+    return tl.tensor(builder.create_custom_op(arg_handles), x.type)
 
 @triton.jit
 def add_kernel(x_ptr,
