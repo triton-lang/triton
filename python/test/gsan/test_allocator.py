@@ -91,6 +91,7 @@ def test_malloc_fragmentation_reuse_and_coalesce(_direct_allocator):
     assert parent == p0
 
     free(parent)
+    torch.cuda.synchronize()
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
@@ -111,6 +112,7 @@ def test_free_invalid_pointer_and_double_free(_direct_allocator):
     assert p0_reuse == p0
 
     free(p0_reuse)
+    torch.cuda.synchronize()
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
