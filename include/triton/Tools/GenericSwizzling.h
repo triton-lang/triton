@@ -35,18 +35,20 @@ struct LocalMemOpTile {
 std::pair<LinearLayout, std::pair<int32_t, int32_t>>
 optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
                  llvm::ArrayRef<LocalMemOpTile> srcTiles,
-                 llvm::ArrayRef<LocalMemOpTile> dstTiles, int32_t bitwidth);
+                 llvm::ArrayRef<LocalMemOpTile> dstTiles, int32_t bitwidth,
+                 int32_t numBanks = 32);
 
 LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
-                                  const LinearLayout &dst, int32_t bitwidth);
+                                  const LinearLayout &dst, int32_t bitwidth,
+                                  int32_t numBanks);
 
 std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
                                       const LinearLayout &dst,
                                       const LinearLayout &smem,
-                                      int32_t bitwidth);
+                                      int32_t bitwidth, int32_t numBanks);
 
 int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
-                         int32_t bitwidth);
+                         int32_t bitwidth, int32_t numBanks);
 
 std::pair<int, int> bankConflicts(llvm::ArrayRef<int32_t> tileSrc,
                                   llvm::ArrayRef<int32_t> tileDst,

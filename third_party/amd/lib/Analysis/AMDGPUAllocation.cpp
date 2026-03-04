@@ -13,10 +13,10 @@ namespace mlir::triton::AMD {
 constexpr int kMaxShmemVecBitLength = 128;
 
 unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
-                                        RankedTensorType dstTy) {
+                                        RankedTensorType dstTy, int numBanks) {
   if (!cvtNeedsSharedMemory(srcTy, dstTy))
     return 0;
-  unsigned elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
+  unsigned elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy, numBanks);
   return elems * getBitwidth(srcTy) / 8;
 }
 
@@ -25,7 +25,9 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto cvtLayout = dyn_cast<mlir::triton::gpu::ConvertLayoutOp>(op)) {
     auto srcTy = cvtLayout.getSrc().getType();
     auto dstTy = cvtLayout.getType();
-    return getConvertLayoutScratchInBytes(srcTy, dstTy);
+    int numBanks = mlir::triton::gpu::TritonGPUDialect::getNumBanks(
+        op->getParentOfType<ModuleOp>());
+    return getConvertLayoutScratchInBytes(srcTy, dstTy, numBanks);
   }
 
   if (auto ws = dyn_cast<mlir::triton::gpu::WarpSpecializeOp>(op)) {

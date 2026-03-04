@@ -40,14 +40,14 @@ namespace triton {
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,
-                                       int bitwidth) {
+                                       int bitwidth, int numBanks) {
   auto *ctx = srcLayout.getInDimNames().begin()->getContext();
   auto srcLayoutNoBroadcast =
       actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
   auto dstLayoutNoBroadcast =
       actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
-  auto smem = gpu::optimalSwizzlingLdSt(srcLayoutNoBroadcast,
-                                        dstLayoutNoBroadcast, bitwidth);
+  auto smem = gpu::optimalSwizzlingLdSt(
+      srcLayoutNoBroadcast, dstLayoutNoBroadcast, bitwidth, numBanks);
   auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
   // The smem has the same cta layout as the srcLayout, so we use that instead
   // We remove the number of elements that are duplicated in the cta layout
@@ -57,10 +57,10 @@ unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
 }
 
 unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                       RankedTensorType dstTy) {
+                                       RankedTensorType dstTy, int numBanks) {
   return getNumScratchElemsSwizzledCvt(gpu::toLinearLayout(srcTy),
                                        gpu::toLinearLayout(dstTy),
-                                       getBitwidth(srcTy));
+                                       getBitwidth(srcTy), numBanks);
 }
 
 // Both `atomic_cas` and `atomic_rmw` may need scratch memory to store values
@@ -111,8 +111,10 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto dstTy = cvtLayout.getType();
     if (!cvtNeedsSharedMemory(srcTy, dstTy))
       return 0;
+    int numBanks =
+        gpu::TritonGPUDialect::getNumBanks(op->getParentOfType<ModuleOp>());
     // The generic pass uses swizzling
-    auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
+    auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy, numBanks);
     return elems * getBitwidth(srcTy) / 8;
   }
   if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
