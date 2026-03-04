@@ -65,3 +65,8 @@ def get_reserve_size() -> int:
 
 def get_global_state_pointer() -> int:
     return _load_gsan_module().get_global_state_pointer()
+
+
+def get_runtime_state_layout(device: int) -> dict[str, int]:
+    module = _load_gsan_module()
+    return module.get_runtime_state_layout(device)

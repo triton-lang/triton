@@ -110,14 +110,9 @@ __device__ void initThread(GlobalState *globals) {
     auto smid = getSmId();
     auto tid = getDeviceThreadId(globals, smid);
 
-    // Model each kernel entry as an independent logical thread with a fresh
-    // vector clock. This allows sequential unsynchronized kernels to produce
-    // RAW/WAR/WAW violations deterministically.
+    // Preserve the synchronized vector clock from prior launches on this
+    // stream and advance the local epoch for the new kernel entry.
     auto *clock = state->vectorClock;
-    for (int i = 0; i < globals->numThreads; ++i)
-      if (i != tid)
-        clock[i] = 0;
-
     clock[tid] += 1;
   }
 
