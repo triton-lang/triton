@@ -4,6 +4,7 @@ import queue
 import re
 import tempfile
 import numpy as np
+import sys
 import torch
 import triton
 import triton.language as tl
@@ -244,12 +245,12 @@ class ProcessResult:
     driver_stderr_output: str
 
 
-def _run_in_process_worker(client_fn, q, args, kwargs, env):
+def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file):
     if env is not None:
         os.environ.update(env)
 
     # Capture driver/runtime writes to stderr that bypass Python's file objects.
-    with tempfile.TemporaryFile(mode="w+b") as tmp_stderr:
+    with open(stderr_file, "w+b") as tmp_stderr:
         saved_stderr_fd = os.dup(2)
         os.dup2(tmp_stderr.fileno(), 2)
         exc = None
@@ -261,11 +262,10 @@ def _run_in_process_worker(client_fn, q, args, kwargs, env):
         except Exception as e:
             exc = e
         finally:
+            sys.stderr.flush()
             os.dup2(saved_stderr_fd, 2)
             os.close(saved_stderr_fd)
-            tmp_stderr.seek(0)
-            driver_stderr_output = tmp_stderr.read().decode("utf-8", errors="replace")
-            q.put(ProcessResult(exc, driver_stderr_output))
+            q.put(exc)
 
 
 def run_in_process(client_fn, args=(), kwargs=None, env=None):
@@ -274,14 +274,20 @@ def run_in_process(client_fn, args=(), kwargs=None, env=None):
 
     ctx = multiprocessing.get_context("forkserver")
     q = ctx.Queue()
-    process = ctx.Process(target=_run_in_process_worker, args=(client_fn, q, args, kwargs, env))
-    process.start()
-    process.join()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        stderr_file = os.path.join(tmpdir, "err.log")
+        process = ctx.Process(target=_run_in_process_worker, args=(client_fn, q, args, kwargs, env, stderr_file))
+        process.start()
+        process.join()
+        with open(stderr_file, "r") as f:
+            stderr = f.read()
+    exc = None
     try:
-        result = q.get(timeout=1)
+        exc = q.get(timeout=1)
     except queue.Empty:
-        raise RuntimeError(f"child process exited with code {process.exitcode} without returning a result")
-    return result
+        print(stderr, file=sys.stderr)
+        raise RuntimeError(f"child process exited with code {process.exitcode} without returning a result") from None
+    return ProcessResult(exc, stderr)
 
 
 def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
