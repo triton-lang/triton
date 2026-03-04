@@ -28,31 +28,6 @@ SmallVector<unsigned> getWarpDistribution(ArrayRef<int64_t> blockShape,
   return SmallVector<unsigned>(warps.begin(), warps.end());
 }
 
-// Given a shared memory layout that maps (offset, block, ...) -> (dim0, dim1,
-// ...), extract just the block -> dims mapping by factoring out all other input
-// dimensions. This is done by:
-//   1. Taking the sublayout over every input dimension except "block"
-//   2. Resetting its out-dim sizes (making it surjective) so that
-//      divideLeft can match the bases against the full layout
-//   3. divideLeft(sharedLayout, nonBlockLayout) to isolate the block component
-//   4. Projecting the result down to just the "block" input dimension
-LinearLayout extractCGALayout(const LinearLayout &sharedLayout,
-                              StringAttr kBlock) {
-  auto nonBlockDims = to_vector(
-      llvm::make_filter_range(sharedLayout.getInDimNames(),
-                              [&](StringAttr dim) { return dim != kBlock; }));
-  auto nonBlockLayout = sharedLayout.sublayout(
-      nonBlockDims, to_vector(sharedLayout.getOutDimNames()));
-  nonBlockLayout = LinearLayout(nonBlockLayout.getBases(),
-                                to_vector(nonBlockLayout.getOutDimNames()));
-
-  auto maybeCgaLayout = divideLeft(sharedLayout, nonBlockLayout);
-  assert(maybeCgaLayout.has_value() &&
-         "sharedLayout must be divisible by its non-block sublayout");
-  return maybeCgaLayout->sublayout({kBlock},
-                                   to_vector(maybeCgaLayout->getOutDimNames()));
-}
-
 } // namespace
 
 SmallVector<Value> TDMDescriptor::getAllGroups() const {
@@ -434,7 +409,7 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
 void fillTDMDescriptor(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> blockShape, int numWarps, unsigned padInterval,
+    SmallVector<int64_t> shapePerCTA, int numWarps, unsigned padInterval,
     unsigned padAmount, SmallVector<Value> &group0, SmallVector<Value> &group1,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group2,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group3,
@@ -469,10 +444,14 @@ void fillTDMDescriptor(
   auto kOffset = str_attr("offset");
   auto kPartition = str_attr("partition");
 
-  auto cgaLayout = extractCGALayout(sharedLayout, kBlock);
-  auto warpsPerCTA = getWarpDistribution(blockShape, numWarps);
+  auto cgaLayout = triton::gpu::SharedLinearEncodingAttr::get(
+                       ctx, sharedLayout, /*layoutAlignment=*/16)
+                       .getCGALayout()
+                       .getLinearLayout();
+
+  auto warpsPerCTA = getWarpDistribution(shapePerCTA, numWarps);
   auto tdmLayout =
-      triton::gpu::getTDMLinearLayout(blockShape, warpsPerCTA, cgaLayout);
+      triton::gpu::getTDMLinearLayout(shapePerCTA, warpsPerCTA, cgaLayout);
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
@@ -765,7 +744,7 @@ void fillTDMDescriptorForGatherScatter(
 // Emit a TDM load or store operation for regular (non-scatter) transfers.
 void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const LLVMTypeConverter *typeConverter,
-                      ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
+                      ArrayRef<Value> desc, ArrayRef<int64_t> shapePerCTA,
                       int numWarps, unsigned padInterval, unsigned padAmount,
                       ArrayRef<Value> offset, ArrayRef<Value> dstPtrs,
                       Value pred, Value multicastMask, Type elementType,
@@ -773,19 +752,19 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const triton::LinearLayout &sharedLayout, Value ctaId) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  assert(blockShape.size() <= 5);
+  assert(shapePerCTA.size() <= 5);
 
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
   Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
 
-  if (blockShape.size() > 2) {
+  if (shapePerCTA.size() > 2) {
     auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
     auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.begin() + 12);
     auto group2Vec = SmallVector<Value>(desc.begin() + 12, desc.begin() + 16);
     auto group3Vec = SmallVector<Value>(desc.begin() + 16, desc.end());
 
     fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      to_vector(blockShape), numWarps, padInterval, padAmount,
+                      to_vector(shapePerCTA), numWarps, padInterval, padAmount,
                       group0Vec, group1Vec, std::ref(group2Vec),
                       std::ref(group3Vec), to_vector(offset), dstPtrs, pred,
                       multicastMask, barrierPtr, sharedLayout, ctaId, !isLoad);
@@ -805,7 +784,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
     auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
 
     fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      to_vector(blockShape), numWarps, padInterval, padAmount,
+                      to_vector(shapePerCTA), numWarps, padInterval, padAmount,
                       group0Vec, group1Vec, std::nullopt, std::nullopt,
                       to_vector(offset), dstPtrs, pred, multicastMask,
                       barrierPtr, sharedLayout, ctaId, !isLoad);

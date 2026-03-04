@@ -75,7 +75,7 @@ void fillTDMDescriptorForGatherScatter(
 // - isLoad: true for global->LDS, false for LDS->global
 void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const LLVMTypeConverter *typeConverter,
-                      ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
+                      ArrayRef<Value> desc, ArrayRef<int64_t> shapePerCTA,
                       int numWarps, unsigned padInterval, unsigned padAmount,
                       ArrayRef<Value> offset, ArrayRef<Value> dstPtrs,
                       Value pred, Value multicastMask, Type elementType,
