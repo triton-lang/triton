@@ -584,8 +584,7 @@ error:
 }
 
 extern "C" void gsanFree(void *void_ptr, [[maybe_unused]] ssize_t size,
-                         [[maybe_unused]] int device,
-                         [[maybe_unused]] void *stream) {
+                         [[maybe_unused]] int device, void *stream) {
   LOGF("gsanFree: %p, 0x%zx", void_ptr, size);
   auto ptr = reinterpret_cast<CUdeviceptr>(void_ptr);
   if (!ptr)
@@ -602,10 +601,17 @@ extern "C" void gsanFree(void *void_ptr, [[maybe_unused]] ssize_t size,
     return;
   }
 
+  // Wait for outstanding work on the deallocation stream, including the
+  // allocator's own async shadow memset from gsanMalloc, before unmapping.
+  auto cuStream = reinterpret_cast<CUstream>(stream);
+  CUresult err = cuStreamSynchronize(cuStream);
+  if (err != CUDA_SUCCESS)
+    printCUDAError(err);
+
   const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
   const auto shadowSize = getShadowSize(node->allocSize);
 
-  CUresult err = cuMemUnmap(node->virtualAddress, node->allocSize);
+  err = cuMemUnmap(node->virtualAddress, node->allocSize);
   if (err != CUDA_SUCCESS)
     printCUDAError(err);
 

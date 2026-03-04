@@ -4,8 +4,6 @@ import subprocess
 import triton
 import ctypes
 import sys
-from pathlib import Path
-import re
 from triton import knobs
 from triton.runtime.build import compile_module_from_file
 from triton.runtime import _allocation
