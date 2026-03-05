@@ -5,6 +5,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/PluginUtils.h"
+#include <cstdlib>
 
 using namespace mlir;
 using namespace mlir::triton::plugin;
@@ -78,12 +79,11 @@ static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME,
 TRITON_PLUGIN_API
 tritonAddPluginPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
   int num_warps, threadsPerWarp, numCTAs;
-  auto args = *argsPtr;
-  num_warps = static_cast<int>(args[0]);
-  threadsPerWarp = static_cast<int>(args[1]);
-  numCTAs = static_cast<int>(args[2]);
+  num_warps = std::atoi(args[0].c_str());
+  threadsPerWarp = std::atoi(args[1].c_str());
+  numCTAs = std::atoi(args[2].c_str());
 
-  std::string passNameStr(passName);
+  std::string passNameStr(handle);
   if (passMap.find(passNameStr) == passMap.end())
     return TP_GENERIC_FAILURE;
   passMap[passNameStr](pm, num_warps, threadsPerWarp, numCTAs);
@@ -93,12 +93,11 @@ tritonAddPluginPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
 TRITON_PLUGIN_API
 tritonRegisterPluginPass(TRITON_PLUGIN_PASS_ARGS) {
   int num_warps, threadsPerWarp, numCTAs;
-  auto args = *argsPtr;
-  num_warps = static_cast<int>(args[0]);
-  threadsPerWarp = static_cast<int>(args[1]);
-  numCTAs = static_cast<int>(args[2]);
+  num_warps = std::atoi(args[0].c_str());
+  threadsPerWarp = std::atoi(args[1].c_str());
+  numCTAs = std::atoi(args[2].c_str());
 
-  std::string passNameStr(passName);
+  std::string passNameStr(handle);
   if (registryMap.find(passNameStr) == registryMap.end())
     return TP_GENERIC_FAILURE;
   registryMap[passNameStr](num_warps, threadsPerWarp, numCTAs);
@@ -143,10 +142,11 @@ tritonEnumeratePluginCustomOps(TRITON_PLUGIN_ENUMERATOR_ARGS) {
 
 TRITON_PLUGIN_API
 tritonAddPluginCustomOp(TRITON_PLUGIN_CUSTOM_OP_ARGS) {
-  ::mlir::Value *dst = static_cast<::mlir::Value *>(operands[0]);
-  ::mlir::Value *src = static_cast<::mlir::Value *>(operands[1]);
+  ::mlir::Value &dst = operands[0];
+  ::mlir::Value &src = operands[1];
 
-  *dst = self.create<mlir::triton::plugin::FMagicOp>(*src);
+  dst = self.create<mlir::triton::plugin::FMagicOp>(src);
+  operands[0] = dst;
   return TP_SUCCESS;
 }
 

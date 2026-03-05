@@ -159,19 +159,17 @@ TritonPlugin::getCustomOpHandles(std::vector<const char *> &customOpNames) {
 }
 
 llvm::Expected<TritonPluginResult>
-TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle,
-                      const std::vector<uint64_t> *argsPtr) {
+TritonPlugin::addPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
   if (auto Err = loadPlugin())
     return Err;
-  return checkAPIResult(addPassAPI(pm, passHandle, argsPtr), passHandle);
+  return checkAPIResult(addPassAPI(pm, handle, args), handle);
 }
 
 llvm::Expected<TritonPluginResult>
-TritonPlugin::registerPass(const char *passHandle,
-                           const std::vector<uint64_t> *argsPtr) {
+TritonPlugin::registerPass(TRITON_PLUGIN_PASS_ARGS) {
   if (auto Err = loadPlugin())
     return Err;
-  return checkAPIResult(registerPassAPI(passHandle, argsPtr), passHandle);
+  return checkAPIResult(registerPassAPI(handle, args), handle);
 }
 
 llvm::Expected<::mlir::DialectPluginLibraryInfo>
@@ -182,15 +180,9 @@ TritonPlugin::getDialectPluginInfo(const char *dialectName) {
 }
 
 llvm::Expected<TritonPluginResult>
-TritonPlugin::addCustomOp(const char *customOpHandle, TritonOpBuilder &self,
-                          std::vector<mlir::Value> &values) {
+TritonPlugin::addCustomOp(TRITON_PLUGIN_CUSTOM_OP_ARGS) {
   if (auto Err = loadPlugin())
     return Err;
-  std::vector<void *> opaqueValues;
-  opaqueValues.resize(values.size());
-  for (unsigned i = 0; i < values.size(); ++i) {
-    opaqueValues[i] = &values.data()[i];
-  }
-  addCustomOpAPI(customOpHandle, self, opaqueValues.data());
+  addCustomOpAPI(handle, self, operands);
   return TP_SUCCESS;
 }
