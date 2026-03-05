@@ -92,9 +92,7 @@ public:
   llvm::Expected<TritonPluginResult> addPass(mlir::PassManager *pm,
                                              TRITON_PLUGIN_PASS_ARGS);
 
-  llvm::Expected<TritonPluginResult>
-  addCustomOp(const char *customOpHandle, TritonOpBuilder &self,
-              std::vector<mlir::Value> &values);
+  llvm::Expected<TritonPluginResult> addCustomOp(TRITON_PLUGIN_CUSTOM_OP_ARGS);
 
   llvm::Expected<TritonPluginResult> registerPass(TRITON_PLUGIN_PASS_ARGS);
 
