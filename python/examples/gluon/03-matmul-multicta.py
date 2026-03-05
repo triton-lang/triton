@@ -357,8 +357,7 @@ def matmul_clc_partition(p):
         packed_pid = (pid_m.to(gl.int64) << 32) | (pid_n.to(gl.int64) & 0xFFFFFFFF)
         planar_slot = p.clc_planar_pid_buffers.index(state.index)
         planar_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]] * (gl.num_ctas().bit_length() - 1))
-        planar_slot.store(
-            gl.full([1], packed_pid, gl.int64, layout=planar_layout).reshape([]))
+        planar_slot.store(gl.full([1], packed_pid, gl.int64, layout=planar_layout))
         mbarrier.arrive(p.clc_planar_ready_bars.index(state.index))
         state = state.next()
         consumed_state = consumed_state.next()
