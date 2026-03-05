@@ -95,8 +95,7 @@ tritonEnumeratePluginCustomOps(TRITON_PLUGIN_ENUMERATOR_ARGS) {
 }
 
 TRITON_PLUGIN_API
-tritonAddPluginCustomOp(const char *opName, TritonOpBuilder &self,
-                        void **operands) {
+tritonAddPluginCustomOp(TRITON_PLUGIN_CUSTOM_OP_ARGS) {
   ::mlir::Value *dst = static_cast<::mlir::Value *>(operands[0]);
   ::mlir::Value *lhs = static_cast<::mlir::Value *>(operands[1]);
   ::mlir::Value *rhs = static_cast<::mlir::Value *>(operands[2]);
