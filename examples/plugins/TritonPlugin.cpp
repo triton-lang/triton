@@ -49,8 +49,7 @@ static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME};
 // Key APIs:
 
 TRITON_PLUGIN_API
-tritonAddPluginPass(mlir::PassManager *pm, const char *passName,
-                    const std::vector<uint64_t> *argsPtr) {
+tritonAddPluginPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
   std::string passNameStr(passName);
   if (passMap.find(passNameStr) == passMap.end())
     return TP_GENERIC_FAILURE;
@@ -59,8 +58,7 @@ tritonAddPluginPass(mlir::PassManager *pm, const char *passName,
 }
 
 TRITON_PLUGIN_API
-tritonRegisterPluginPass(const char *passName,
-                         const std::vector<uint64_t> *argsPtr) {
+tritonRegisterPluginPass(TRITON_PLUGIN_PASS_ARGS) {
   std::string passNameStr(passName);
   if (registryMap.find(passNameStr) == registryMap.end())
     return TP_GENERIC_FAILURE;
@@ -69,30 +67,30 @@ tritonRegisterPluginPass(const char *passName,
 }
 
 TRITON_PLUGIN_API
-tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
-  if (!passCount)
+tritonEnumeratePluginPasses(TRITON_PLUGIN_ENUMERATOR_ARGS) {
+  if (!count)
     return TP_GENERIC_FAILURE;
-  auto count = passMap.size();
-  assert(count == registryMap.size() &&
+  auto _count = passMap.size();
+  assert(_count == registryMap.size() &&
          "Expected register and add passes map size to match");
-  *passCount = count;
-  if (!passNames)
+  *count = _count;
+  if (!handles)
     return TP_SUCCESS;
   unsigned i = 0;
   for (auto passName : passNamesTable) {
-    passNames[i++] = passName;
+    handles[i++] = passName;
   }
   return TP_SUCCESS;
 }
 
 TRITON_PLUGIN_API
-tritonEnumeratePluginCustomOps(uint32_t *opCount, const char **opNames) {
-  if (!opCount)
+tritonEnumeratePluginCustomOps(TRITON_PLUGIN_ENUMERATOR_ARGS) {
+  if (!count)
     return TP_GENERIC_FAILURE;
-  *opCount = 1;
-  if (!opNames)
+  *count = 1;
+  if (!handles)
     return TP_SUCCESS;
-  opNames[0] = "create_custom_fadd2";
+  handles[0] = "create_custom_fadd2";
   return TP_SUCCESS;
 }
 
