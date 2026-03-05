@@ -78,10 +78,14 @@ static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME,
 
 TRITON_PLUGIN_API
 tritonAddPluginPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
-  int num_warps, threadsPerWarp, numCTAs;
-  num_warps = std::atoi(args[0].c_str());
-  threadsPerWarp = std::atoi(args[1].c_str());
-  numCTAs = std::atoi(args[2].c_str());
+  int num_warps = 0;
+  int threadsPerWarp = 0;
+  int numCTAs = 0;
+  if (args.size() > 0) {
+    num_warps = std::atoi(args[0].c_str());
+    threadsPerWarp = std::atoi(args[1].c_str());
+    numCTAs = std::atoi(args[2].c_str());
+  }
 
   std::string passNameStr(handle);
   if (passMap.find(passNameStr) == passMap.end())
@@ -92,10 +96,14 @@ tritonAddPluginPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
 
 TRITON_PLUGIN_API
 tritonRegisterPluginPass(TRITON_PLUGIN_PASS_ARGS) {
-  int num_warps, threadsPerWarp, numCTAs;
-  num_warps = std::atoi(args[0].c_str());
-  threadsPerWarp = std::atoi(args[1].c_str());
-  numCTAs = std::atoi(args[2].c_str());
+  int num_warps = 0;
+  int threadsPerWarp = 0;
+  int numCTAs = 0;
+  if (args.size() > 0) {
+    num_warps = std::atoi(args[0].c_str());
+    threadsPerWarp = std::atoi(args[1].c_str());
+    numCTAs = std::atoi(args[2].c_str());
+  }
 
   std::string passNameStr(handle);
   if (registryMap.find(passNameStr) == registryMap.end())
