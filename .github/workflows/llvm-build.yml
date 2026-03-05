@@ -122,7 +122,7 @@ jobs:
         -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
-        -DLLVM_ENABLE_PROJECTS="mlir;lld"
+        -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang"
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
@@ -146,7 +146,7 @@ jobs:
         -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
-        -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld"
+        -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang"
         -DLLVM_ENABLE_DIA_SDK=OFF
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
@@ -188,7 +188,7 @@ jobs:
         echo $LINKER
         cmake -GNinja -Bllvm-project/build \
         -DCMAKE_BUILD_TYPE=Release \
-        -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld" \
+        -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang" \
         -DLLVM_BUILD_UTILS=ON \
         -DLLVM_TABLEGEN=$HOST_TOOLS/llvm-tblgen \
         -DMLIR_TABLEGEN=$HOST_TOOLS/mlir-tblgen \
@@ -238,7 +238,7 @@ jobs:
         -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
-        -DLLVM_ENABLE_PROJECTS="mlir;lld"
+        -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang"
         -DLLVM_ENABLE_ZSTD=OFF
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU"
@@ -281,7 +281,7 @@ jobs:
         docker rm "${CONTAINER_ID}"
 
     - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: llvm-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
         path: |
