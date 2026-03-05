@@ -1,7 +1,5 @@
 // RUN: split-file %s %t
 // RUN: triton-opt %t/success.mlir -split-input-file -tritoninstrument-fp-sanitizer | FileCheck %t/success.mlir
-// RUN: not triton-opt %t/fail_ternary.mlir -tritoninstrument-fp-sanitizer 2>&1 | FileCheck %t/fail_ternary.mlir --check-prefix=FAIL
-// RUN: not triton-opt %t/fail_mixed.mlir -tritoninstrument-fp-sanitizer 2>&1 | FileCheck %t/fail_mixed.mlir --check-prefix=FAIL
 
 //--- success.mlir
 
@@ -213,38 +211,24 @@ tt.func public @extern_binary(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4x
 
 // -----
 
-// CHECK-LABEL: @extern_abs_skipped
-tt.func public @extern_abs_skipped(%a: tensor<4xf32>) -> tensor<4xf32> {
-  // CHECK-NOT: tt.bitcast
-  // CHECK-NOT: arith.xori
-  // CHECK: tt.extern_elementwise %{{.*}} {libname = "", libpath = "", pure = true, symbol = "__nv_fabsf"}
-  %0 = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "__nv_fabsf"} : (tensor<4xf32>) -> tensor<4xf32>
+// CHECK-LABEL: @extern_ternary
+tt.func public @extern_ternary(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b, %c {libname = "", libpath = "", pure = true, symbol = "__nv_fmaf"} : (tensor<4xf32>, tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
   tt.return %0 : tensor<4xf32>
 }
 
 // -----
 
-// CHECK-LABEL: @extern_copysign_skipped
-tt.func public @extern_copysign_skipped(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
-  // CHECK-NOT: tt.bitcast
-  // CHECK-NOT: arith.xori
-  // CHECK: tt.extern_elementwise %{{.*}}, %{{.*}} {libname = "", libpath = "", pure = true, symbol = "__nv_copysignf"}
-  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_copysignf"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
-  tt.return %0 : tensor<4xf32>
-}
-
-//--- fail_ternary.mlir
-
-// FAIL: FpSanitizer error: Unsupported extern_elementwise: symbol=__nv_fmaf
-tt.func public @extern_ternary_fail(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
-  %0 = tt.extern_elementwise %a, %b, %c {libname = "", libpath = "", pure = true, symbol = "__nv_fmaf"} : (tensor<4xf32>, tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
-  tt.return %0 : tensor<4xf32>
-}
-
-//--- fail_mixed.mlir
-
-// FAIL: FpSanitizer error: Unsupported extern_elementwise: symbol=__nv_ldexpf
-tt.func public @extern_mixed_fail(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf32> {
+// CHECK-LABEL: @extern_mixed
+tt.func public @extern_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
   %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_ldexpf"} : (tensor<4xf32>, tensor<4xi32>) -> tensor<4xf32>
   tt.return %0 : tensor<4xf32>
 }
