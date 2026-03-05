@@ -76,8 +76,13 @@ static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME,
 // Key APIs:
 
 TRITON_PLUGIN_API
-tritonAddPluginPass(mlir::PassManager *pm, const char *passName, int num_warps,
-                    int threadsPerWarp, int numCTAs) {
+tritonAddPluginPass(mlir::PassManager *pm, const char *passName, const std::vector<uint64_t> *argsPtr) {
+  int num_warps, threadsPerWarp, numCTAs;
+  auto args = *argsPtr;
+  num_warps = static_cast<int>(args[0]);
+  threadsPerWarp = static_cast<int>(args[1]);
+  numCTAs = static_cast<int>(args[2]);
+
   std::string passNameStr(passName);
   if (passMap.find(passNameStr) == passMap.end())
     return TP_GENERIC_FAILURE;
@@ -86,8 +91,13 @@ tritonAddPluginPass(mlir::PassManager *pm, const char *passName, int num_warps,
 }
 
 TRITON_PLUGIN_API
-tritonRegisterPluginPass(const char *passName, int num_warps,
-                         int threadsPerWarp, int numCTAs) {
+tritonRegisterPluginPass(const char *passName, const std::vector<uint64_t> *argsPtr) {
+  int num_warps, threadsPerWarp, numCTAs;
+  auto args = *argsPtr;
+  num_warps = static_cast<int>(args[0]);
+  threadsPerWarp = static_cast<int>(args[1]);
+  numCTAs = static_cast<int>(args[2]);
+
   std::string passNameStr(passName);
   if (registryMap.find(passNameStr) == registryMap.end())
     return TP_GENERIC_FAILURE;
