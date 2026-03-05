@@ -21,6 +21,7 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | 32-bit signless integer |
 
 
+
 ### `nvg.ld_acquire` (triton::nvgpu::LoadAcquireOp)
 
 Syntax:
@@ -55,6 +56,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::Defa
 | `result` | floating-point or integer |
 
 
+
 ### `nvg.tensor_memory_base` (triton::nvgpu::TensorMemoryBaseAddress)
 
 Syntax:
@@ -77,6 +79,7 @@ Effects: `MemoryEffects::Effect{}`
 | Result | Description |
 | :----: | ----------- |
 | `result` | LLVM pointer in address space 6 |
+
 
 
 ### `nvg.wgmma` (triton::nvgpu::WGMMAOp)
@@ -117,6 +120,7 @@ operation ::= `nvg.wgmma` $opA `,` $opB `,` $useC (`,` $opC^)? attr-dict `:` fun
 | `res` | LLVM structure type |
 
 
+
 ### `nvg.wgmma_wait_group` (triton::nvgpu::WGMMAWaitGroupOp)
 
 Syntax:
@@ -145,4 +149,5 @@ Interfaces: `InferTypeOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `output` | LLVM structure type |
+
 

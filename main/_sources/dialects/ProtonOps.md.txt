@@ -37,3 +37,4 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::Defa
 <tr><td><code>name</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
 </table>
 
+

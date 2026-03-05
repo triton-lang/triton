@@ -43,6 +43,7 @@ Interfaces: `InferTypeOpInterface`
 | `result` | 32-bit signless integer |
 
 
+
 ### `amdg.async_copy_local_to_global` (triton::amdgpu::AsyncCopyLocalToGlobalOp)
 
 _Copy data from local memory to global memory asynchronously_
@@ -88,6 +89,7 @@ Interfaces: `InferTypeOpInterface`
 | `token` | async token type |
 
 
+
 ### `amdg.async_copy_mbarrier_arrive` (triton::amdgpu::AsyncCopyMbarrierArriveOp)
 
 _Arrive on mbarrier once all previously issued copies are completed_
@@ -107,6 +109,7 @@ If the pending count becomes zero, the phase changes (is decremented in a wrapar
 | Operand | Description |
 | :-----: | ----------- |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
 
 
 ### `amdg.async_tdm_copy_global_to_local` (triton::amdgpu::AsyncTDMCopyGlobalToLocalOp)
@@ -150,6 +153,7 @@ Interfaces: `InferTypeOpInterface`
 | `token` | async token type |
 
 
+
 ### `amdg.async_tdm_copy_local_to_global` (triton::amdgpu::AsyncTDMCopyLocalToGlobalOp)
 
 _Copy data based on descriptor from local memory to global memory asynchronously_
@@ -179,6 +183,7 @@ Traits: `AttrSizedOperandSegments`
 | `indices` | variadic of 32-bit signless integer |
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
 
 
 ### `amdg.async_tdm_gather` (triton::amdgpu::AsyncTDMGatherOp)
@@ -225,6 +230,7 @@ Interfaces: `InferTypeOpInterface`
 | `token` | async token type |
 
 
+
 ### `amdg.async_tdm_intrinsic_wait` (triton::amdgpu::AsyncTDMIntrinsicWait)
 
 _Wait until there are less than or equal to the given number of outstanding TDM intrinsics_
@@ -267,6 +273,7 @@ Interfaces: `InferTypeOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `retToken` | async token type |
+
 
 
 ### `amdg.async_tdm_scatter` (triton::amdgpu::AsyncTDMScatterOp)
@@ -313,6 +320,7 @@ Interfaces: `InferTypeOpInterface`
 | `retToken` | async token type |
 
 
+
 ### `amdg.async_tdm_wait` (triton::amdgpu::AsyncTDMWait)
 
 _Wait until there are less than or equal to the given number of outstanding TDM operations_
@@ -355,6 +363,7 @@ Interfaces: `InferTypeOpInterface`
 | `retToken` | async token type |
 
 
+
 ### `amdg.async_wait` (triton::amdgpu::AsyncWaitOp)
 
 _Wait until there are less than or equal to the given number of outstanding async intrinsics_
@@ -391,6 +400,7 @@ Interfaces: `InferTypeOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `retToken` | async token type |
+
 
 
 ### `amdg.buffer_atomic_cas` (triton::amdgpu::BufferAtomicCASOp)
@@ -440,6 +450,7 @@ Interfaces: `BufferOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values |
+
 
 
 ### `amdg.buffer_atomic_rmw` (triton::amdgpu::BufferAtomicRMWOp)
@@ -492,6 +503,7 @@ Interfaces: `BufferOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values |
+
 
 
 ### `amdg.buffer_load` (triton::amdgpu::BufferLoadOp)
@@ -551,6 +563,7 @@ Interfaces: `BufferOpInterface`
 | `result` | ranked tensor of floating-point or integer or ptr values |
 
 
+
 ### `amdg.buffer_load_to_local` (triton::amdgpu::BufferLoadToLocalOp)
 
 _Load from a scalar base pointer and a tensor offset to shared memory_
@@ -595,6 +608,7 @@ Interfaces: `BufferOpInterface`, `InferTypeOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `token` | async token type |
+
 
 
 ### `amdg.buffer_store` (triton::amdgpu::BufferStoreOp)
@@ -648,6 +662,7 @@ Interfaces: `BufferOpInterface`
 | `mask` | ranked tensor of 1-bit signless integer values |
 
 
+
 ### `amdg.cluster_barrier_arrive` (triton::amdgpu::ClusterBarrierArriveOp)
 
 _Arrive at a cluster barrier_
@@ -663,6 +678,7 @@ Signals that the cluster has arrived at a barrier, used to synchronizing CTAs wi
 See ClusterBarrierWaitOp for how to wait on the arrived cluster barrier.
 
 
+
 ### `amdg.cluster_barrier_wait` (triton::amdgpu::ClusterBarrierWaitOp)
 
 _Wait on a cluster barrier_
@@ -676,6 +692,7 @@ operation ::= `amdg.cluster_barrier_wait` attr-dict
 Waits for all CTAs of the same cluster to have arrived at a cluster barrier.
 Arrive and wait operations must come in pairs. Waiting before arriving or arriving
 more than once without a corresponding wait will result in undefined behavior.
+
 
 
 ### `amdg.concat` (triton::amdgpu::ConcatOp)
@@ -762,6 +779,7 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | ranked tensor of any type values |
 
 
+
 ### `amdg.cond_barrier` (triton::amdgpu::CondBarrierOp)
 
 _Conditionally set barriers to synchronize partial threads in a block_
@@ -785,6 +803,7 @@ NB. This doesn't set any memory fence.
 | Operand | Description |
 | :-----: | ----------- |
 | `pred` | 1-bit signless integer |
+
 
 
 ### `amdg.extract_slice` (triton::amdgpu::ExtractSliceOp)
@@ -904,6 +923,7 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | ranked tensor of any type values |
 
 
+
 ### `amdg.in_thread_transpose` (triton::amdgpu::InThreadTransposeOp)
 
 _Perform transpose of register values belonging to each threads_
@@ -947,6 +967,7 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | ranked tensor of floating-point or integer or ptr values |
 
 
+
 ### `amdg.init_barrier` (triton::amdgpu::InitBarrierOp)
 
 _Initialize a barrier in the given shared memory allocation._
@@ -975,6 +996,7 @@ number of arrives expected by the barrier.
 | `alloc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
+
 ### `amdg.instruction_sched_hint` (triton::amdgpu::InstructionSchedHint)
 
 _A placeholder op for instruction scheduling hints within a basic block_
@@ -1000,6 +1022,7 @@ interleave for better instruction level parallelism.
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>variant</code></td><td>::mlir::triton::amdgpu::SchedHintAttr</td><td>Instruction Scheduling Hints for AMD GPUs</td></tr>
 </table>
+
 
 
 ### `amdg.local_load_packed_tranposed` (triton::amdgpu::LocalLoadPackedTransposedOp)
@@ -1030,6 +1053,7 @@ Traits: `LocalLoadTrait`
 | Result | Description |
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values |
+
 
 
 ### `amdg.masked_load` (triton::amdgpu::MaskedLoadOp)
@@ -1073,6 +1097,7 @@ data to multiple CTAs in the cluster.
 | `result` | LLVM dialect-compatible type |
 
 
+
 ### `amdg.masked_store` (triton::amdgpu::MaskedStoreOp)
 
 _Masked Store operation_
@@ -1105,6 +1130,7 @@ Store operation with masking support. If the mask is true, Store from the given 
 | `mask` | 1-bit signless integer |
 
 
+
 ### `amdg.memory_counter_wait` (triton::amdgpu::MemoryCounterWaitOp)
 
 _Wait for specified hardware counters_
@@ -1130,6 +1156,7 @@ counters into one.
 <tr><td><code>store</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>ds</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
+
 
 
 ### `amdg.scaled_upcast_fp4` (triton::amdgpu::ScaledUpcastFp4Op)
@@ -1180,6 +1207,7 @@ Effects: `MemoryEffects::Effect{}`
 | `output` | ranked tensor of 16-bit float or bfloat16 type or 32-bit float values |
 
 
+
 ### `amdg.scaled_upcast_fp8` (triton::amdgpu::ScaledUpcastFp8Op)
 
 _Upcast Fp8 and then multiply scale_
@@ -1213,6 +1241,7 @@ Effects: `MemoryEffects::Effect{}`
 | Result | Description |
 | :----: | ----------- |
 | `output` | ranked tensor of 16-bit float or bfloat16 type or 32-bit float values |
+
 
 
 ### `amdg.tdm_prefetch` (triton::amdgpu::TDMPrefetchOp)
@@ -1260,6 +1289,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::amd::L2C
 | `maybeOffsets` | ranked tensor of floating-point or integer or ptr values |
 
 
+
 ### `amdg.upcast_mxfp` (triton::amdgpu::UpcastMXFPOp)
 
 _Convert an mxfp tensor to bf16/fp16_
@@ -1301,6 +1331,7 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | ranked tensor of floating-point or integer or ptr values |
 
 
+
 ### `amdg.wait_barrier` (triton::amdgpu::WaitBarrierOp)
 
 _Wait until the mbarrier phase completes._
@@ -1320,4 +1351,5 @@ its current phase.
 | :-----: | ----------- |
 | `alloc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `phase` | 32-bit signless integer |
+
 

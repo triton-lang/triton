@@ -32,6 +32,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `condition` | 1-bit signless integer |
 
 
+
 ### `tti.experimental_buffer_descriptors` (triton::instrument::ExperimentalBufferDescriptorsOp)
 
 _Define an array of buffer descriptors_
@@ -67,6 +68,7 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | ranked tensor of floating-point or integer or ptr values |
 
 
+
 ### `tti.experimental_lock_acquire` (triton::instrument::ExperimentalLockAcquireOp)
 
 _Acquire a lock._
@@ -91,6 +93,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `pred` | 1-bit signless integer |
 
 
+
 ### `tti.experimental_lock_release` (triton::instrument::ExperimentalLockReleaseOp)
 
 _Release a lock._
@@ -113,6 +116,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | :-----: | ----------- |
 | `lock` | ptr or ranked tensor of ptr values |
 | `pred` | 1-bit signless integer |
+
 
 
 ### `tti.experimental_memdesc_to_i32` (triton::instrument::ExperimentalMemDescToI32Op)
@@ -146,4 +150,5 @@ Effects: `MemoryEffects::Effect{}`
 | Result | Description |
 | :----: | ----------- |
 | `result` | 32-bit signless integer |
+
 

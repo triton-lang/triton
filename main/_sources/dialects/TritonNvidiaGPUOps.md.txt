@@ -41,6 +41,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 | `pred` | 1-bit signless integer |
 
 
+
 ### `ttng.async_copy_mbarrier_arrive` (triton::nvidia_gpu::AsyncCopyMbarrierArriveOp)
 
 _Arrive on mbarrier once all previously issued copies are completed_
@@ -65,6 +66,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 | Operand | Description |
 | :-----: | ----------- |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
 
 
 ### `ttng.async_tma_copy_global_to_local` (triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp)
@@ -123,6 +125,7 @@ Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLa
 | `pred` | 1-bit signless integer |
 
 
+
 ### `ttng.async_tma_copy_local_to_global` (triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp)
 
 _Copy data based on descriptor from local memory to global memory asynchronously_
@@ -149,6 +152,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 | `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 | `coord` | variadic of 32-bit signless integer |
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
 
 
 ### `ttng.async_tma_gather` (triton::nvidia_gpu::AsyncTMAGatherOp)
@@ -178,6 +182,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `pred` | 1-bit signless integer |
+
 
 
 ### `ttng.async_tma_reduce` (triton::nvidia_gpu::AsyncTMAReduceOp)
@@ -218,6 +223,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
+
 ### `ttng.async_tma_scatter` (triton::nvidia_gpu::AsyncTMAScatterOp)
 
 _Scatter data from local memory into global memory based on a descriptor asynchronously_
@@ -245,6 +251,31 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 | `x_offsets` | ranked tensor of 32-bit signless integer values |
 | `y_offset` | 32-bit signless integer |
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+
+
+### `ttng.async_tma_store_wait` (triton::nvidia_gpu::TMAStoreWaitOp)
+
+_Wait until all the inputs are read._
+
+Syntax:
+
+```
+operation ::= `ttng.async_tma_store_wait` attr-dict
+```
+
+Wait until all the read operations are done from the associated store operations.
+This is needed before the shared memory can be written to.
+
+Traits: `MemWaitOpTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>pendings</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
 
 
 ### `ttng.barrier_expect` (triton::nvidia_gpu::BarrierExpectOp)
@@ -275,6 +306,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 | :-----: | ----------- |
 | `alloc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `pred` | 1-bit signless integer |
+
 
 
 ### `ttng.clc_get_program_id` (triton::nvidia_gpu::CLCGetProgramIdOp)
@@ -316,6 +348,7 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | 32-bit signless integer |
 
 
+
 ### `ttng.clc_is_canceled` (triton::nvidia_gpu::CLCIsCanceledOp)
 
 _Check if CLC response indicates successful cancellation_
@@ -348,6 +381,7 @@ Effects: `MemoryEffects::Effect{}`
 | `is_canceled` | 1-bit signless integer |
 
 
+
 ### `ttng.clc_load_result` (triton::nvidia_gpu::CLCLoadResultOp)
 
 _Load CLC response from shared memory into registers_
@@ -377,6 +411,7 @@ Interfaces: `InferTypeOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `clcResult` | 128-bit signless integer |
+
 
 
 ### `ttng.clc_try_cancel` (triton::nvidia_gpu::CLCTryCancelOp)
@@ -415,6 +450,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 | `mbarrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
+
 ### `ttng.cluster_arrive` (triton::nvidia_gpu::ClusterArriveOp)
 
 Syntax:
@@ -431,6 +467,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>relaxed</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
+
 
 
 ### `ttng.cluster_barrier` (triton::nvidia_gpu::ClusterBarrierOp)
@@ -459,6 +496,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 </table>
 
 
+
 ### `ttng.cluster_wait` (triton::nvidia_gpu::ClusterWaitOp)
 
 Syntax:
@@ -468,6 +506,7 @@ operation ::= `ttng.cluster_wait` attr-dict
 ```
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
 
 
 ### `ttng.fence_async_shared` (triton::nvidia_gpu::FenceAsyncSharedOp)
@@ -490,6 +529,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 </table>
 
 
+
 ### `ttng.fence_mbarrier_init_release_cluster` (triton::nvidia_gpu::FenceMBarrierInitReleaseClusterOp)
 
 _Fence mbarrier init release.cluster_
@@ -501,6 +541,7 @@ operation ::= `ttng.fence_mbarrier_init_release_cluster` attr-dict
 ```
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
 
 
 ### `ttng.init_barrier` (triton::nvidia_gpu::InitBarrierOp)
@@ -535,6 +576,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 | `alloc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
+
 ### `ttng.inval_barrier` (triton::nvidia_gpu::InvalBarrierOp)
 
 _Invalidate a barrier allocation._
@@ -557,6 +599,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 | Operand | Description |
 | :-----: | ----------- |
 | `alloc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
 
 
 ### `ttng.reinterpret_tensor_descriptor` (triton::nvidia_gpu::ReinterpretTensorDescOp)
@@ -589,6 +632,7 @@ Effects: `MemoryEffects::Effect{}`
 | Result | Description |
 | :----: | ----------- |
 | `result` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
+
 
 
 ### `ttng.tc_gen5_commit` (triton::nvidia_gpu::TCGen5CommitOp)
@@ -635,6 +679,7 @@ Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLa
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `pred` | 1-bit signless integer |
 | `descs` | variadic of memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
 
 
 ### `ttng.tc_gen5_mma` (triton::nvidia_gpu::TCGen5MMAOp)
@@ -691,6 +736,7 @@ Interfaces: `DotOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `token` | async token type |
+
 
 
 ### `ttng.tc_gen5_mma_scaled` (triton::nvidia_gpu::TCGen5MMAScaledOp)
@@ -755,27 +801,73 @@ Interfaces: `DotOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`
 | `token` | async token type |
 
 
-### `ttng.async_tma_store_wait` (triton::nvidia_gpu::TMAStoreWaitOp)
 
-_Wait until all the inputs are read._
+### `ttng.tensormap_create` (triton::nvidia_gpu::TensormapCreateOp)
+
+_Create a new TMA descriptor on device_
 
 Syntax:
 
 ```
-operation ::= `ttng.async_tma_store_wait` attr-dict
+operation ::= `ttng.tensormap_create` $desc_ptr `,` $global_address `,`
+              `[` $box_dim `]` `,`
+              `[` $global_dim `]` `,`
+              `[` $global_stride `]` `,`
+              `[` $element_stride `]`
+              attr-dict `:` functional-type(operands, results)
 ```
 
-Wait until all the read operations are done from the associated store operations.
-This is needed before the shared memory can be written to.
+Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Traits: `MemWaitOpTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Attributes:
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>pendings</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>elem_type</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 15</td></tr>
+<tr><td><code>interleave_layout</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 2</td></tr>
+<tr><td><code>swizzle_mode</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 3</td></tr>
+<tr><td><code>fill_mode</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 1</td></tr>
 </table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
+| `global_address` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
+| `box_dim` | variadic of 32-bit signless integer |
+| `global_dim` | variadic of 32-bit signless integer |
+| `global_stride` | variadic of 64-bit signless integer |
+| `element_stride` | variadic of 32-bit signless integer |
+
+
+
+### `ttng.tensormap_fenceproxy_acquire` (triton::nvidia_gpu::TensormapFenceproxyAcquireOp)
+
+_Acquire fence on a tensormap object_
+
+Syntax:
+
+```
+operation ::= `ttng.tensormap_fenceproxy_acquire` $desc_ptr attr-dict `:` qualified(type($desc_ptr))
+```
+
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
+
 
 
 ### `ttng.tmem_alloc` (triton::nvidia_gpu::TMEMAllocOp)
@@ -810,6 +902,7 @@ Interfaces: `MemoryEffectOpInterface`
 | :----: | ----------- |
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `token` | async token type |
+
 
 
 ### `ttng.tmem_copy` (triton::nvidia_gpu::TMEMCopyOp)
@@ -876,6 +969,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
 
 
 ### `ttng.tmem_load` (triton::nvidia_gpu::TMEMLoadOp)
@@ -957,6 +1051,7 @@ Traits: `AttrSizedResultSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLay
 | `red` | ranked tensor of floating-point or integer or ptr values |
 
 
+
 ### `ttng.tmem_store` (triton::nvidia_gpu::TMEMStoreOp)
 
 _Store a distributed tensor into a buffer in tensor memory_
@@ -990,6 +1085,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 | Result | Description |
 | :----: | ----------- |
 | `token` | async token type |
+
 
 
 ### `ttng.tmem_subslice` (triton::nvidia_gpu::TMEMSubSliceOp)
@@ -1033,71 +1129,6 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
-### `ttng.tensormap_create` (triton::nvidia_gpu::TensormapCreateOp)
-
-_Create a new TMA descriptor on device_
-
-Syntax:
-
-```
-operation ::= `ttng.tensormap_create` $desc_ptr `,` $global_address `,`
-              `[` $box_dim `]` `,`
-              `[` $global_dim `]` `,`
-              `[` $global_stride `]` `,`
-              `[` $element_stride `]`
-              attr-dict `:` functional-type(operands, results)
-```
-
-Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>elem_type</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 15</td></tr>
-<tr><td><code>interleave_layout</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 2</td></tr>
-<tr><td><code>swizzle_mode</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 3</td></tr>
-<tr><td><code>fill_mode</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 1</td></tr>
-</table>
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
-| `global_address` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
-| `box_dim` | variadic of 32-bit signless integer |
-| `global_dim` | variadic of 32-bit signless integer |
-| `global_stride` | variadic of 64-bit signless integer |
-| `element_stride` | variadic of 32-bit signless integer |
-
-
-### `ttng.tensormap_fenceproxy_acquire` (triton::nvidia_gpu::TensormapFenceproxyAcquireOp)
-
-_Acquire fence on a tensormap object_
-
-Syntax:
-
-```
-operation ::= `ttng.tensormap_fenceproxy_acquire` $desc_ptr attr-dict `:` qualified(type($desc_ptr))
-```
-
-Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
-
 
 ### `ttng.wait_barrier` (triton::nvidia_gpu::WaitBarrierOp)
 
@@ -1132,6 +1163,7 @@ Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLa
 | `phase` | 32-bit signless integer |
 | `pred` | 1-bit signless integer |
 | `deps` | variadic of memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
 
 
 ### `ttng.warp_group_dot` (triton::nvidia_gpu::WarpGroupDotOp)
@@ -1176,6 +1208,7 @@ Interfaces: `DotOpInterface`, `InferTypeOpInterface`, `MemoryEffectOpInterface`
 | `d` | ranked tensor of floating-point or integer values |
 
 
+
 ### `ttng.warp_group_dot_wait` (triton::nvidia_gpu::WarpGroupDotWaitOp)
 
 _Warp group dot wait_
@@ -1214,4 +1247,5 @@ Interfaces: `InferTypeOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `outputs` | variadic of TensorOrMemDesc instance |
+
 

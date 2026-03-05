@@ -34,6 +34,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::Defa
 | `counter` | 32-bit signless integer or 64-bit signless integer |
 
 
+
 ### `proton_gpu.finalize` (triton::proton::gpu::FinalizeOp)
 
 _Finalize the intra kernel profiler_
@@ -58,6 +59,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 | :-----: | ----------- |
 | `segment` | A segment in the internal buffer |
 | `scratchPtr` | ptr |
+
 
 
 ### `proton_gpu.init_ctx` (triton::proton::gpu::InitCtxOp)
@@ -85,6 +87,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `scratchPtr` | ptr |
 
 
+
 ### `proton_gpu.initialize` (triton::proton::gpu::InitializeOp)
 
 _Initialize the intra kernel profiler_
@@ -107,6 +110,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | Operand | Description |
 | :-----: | ----------- |
 | `scratchPtr` | ptr |
+
 
 
 ### `proton_gpu.read_counter` (triton::proton::gpu::ReadCounterOp)
@@ -143,6 +147,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::Defa
 | `counter` | 32-bit signless integer or 64-bit signless integer |
 
 
+
 ### `proton_gpu.restore_ctx` (triton::proton::gpu::RestoreCtxOp)
 
 _Restore the current warp-level context_
@@ -168,6 +173,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 | `scratchPtr` | ptr |
 
 
+
 ### `proton_gpu.save_ctx` (triton::proton::gpu::SaveCtxOp)
 
 _Save the current warp-level context_
@@ -191,6 +197,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | :-----: | ----------- |
 | `segment` | A segment in the internal buffer |
 | `scratchPtr` | ptr |
+
 
 
 ### `proton_gpu.segment_alloc` (triton::proton::gpu::SegmentAllocOp)
@@ -223,4 +230,5 @@ Effects: `MemoryEffects::Effect{}`
 | Result | Description |
 | :----: | ----------- |
 | `segment` | A segment in the internal buffer |
+
 

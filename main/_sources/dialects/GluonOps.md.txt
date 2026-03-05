@@ -24,3 +24,4 @@ Traits: `SameOperandsAndResultElementType`, `SameOperandsAndResultShape`, `Verif
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values |
 
+
