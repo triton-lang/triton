@@ -123,7 +123,7 @@ tritonEnumeratePluginPasses(TRITON_PLUGIN_ENUMERATOR_ARGS) {
 
 TRITON_PLUGIN_API
 tritonEnumeratePluginDialects(TRITON_PLUGIN_ENUMERATOR_ARGS) {
-  *count = 0;
+  *count = 1;
   if (!handles)
     return TP_SUCCESS;
   handles[0] = "DialectPlugin";
