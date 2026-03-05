@@ -166,9 +166,7 @@ TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle,
                       const std::vector<uint64_t> *argsPtr) {
   if (auto Err = loadPlugin())
     return Err;
-  return checkAPIResult(
-      addPassAPI(pm, passHandle, argsPtr),
-      passHandle);
+  return checkAPIResult(addPassAPI(pm, passHandle, argsPtr), passHandle);
 }
 
 llvm::Expected<TritonPluginResult>

@@ -45,8 +45,10 @@ private:
   using AddPassCType = TritonPluginResult (*)(mlir::PassManager *, const char *,
                                               const std::vector<uint64_t> *);
 
-  using RegisterPassType = std::function<TritonPluginResult(const char *, const std::vector<uint64_t> *)>;
-  using RegisterPassCType = TritonPluginResult (*)(const char *, const std::vector<uint64_t> *);
+  using RegisterPassType = std::function<TritonPluginResult(
+      const char *, const std::vector<uint64_t> *)>;
+  using RegisterPassCType =
+      TritonPluginResult (*)(const char *, const std::vector<uint64_t> *);
 
   using DialectPluginInfoType =
       std::function<::mlir::DialectPluginLibraryInfo(const char *)>;
@@ -92,16 +94,16 @@ public:
   llvm::Expected<TritonPluginResult>
   getCustomOpHandles(std::vector<const char *> &handles);
 
-  llvm::Expected<TritonPluginResult> addPass(mlir::PassManager *pm,
-                                             const char *passHandle,
-                                             const std::vector<uint64_t> *argsPtr);
+  llvm::Expected<TritonPluginResult>
+  addPass(mlir::PassManager *pm, const char *passHandle,
+          const std::vector<uint64_t> *argsPtr);
 
   llvm::Expected<TritonPluginResult>
   addCustomOp(const char *customOpHandle, TritonOpBuilder &self,
               std::vector<mlir::Value> &values);
 
-  llvm::Expected<TritonPluginResult> registerPass(const char *passHandle,
-                                                  const std::vector<uint64_t> *argsPtr);
+  llvm::Expected<TritonPluginResult>
+  registerPass(const char *passHandle, const std::vector<uint64_t> *argsPtr);
 
   llvm::Expected<::mlir::DialectPluginLibraryInfo>
   getDialectPluginInfo(const char *dialectName);
