@@ -5,7 +5,6 @@ import triton.language as tl
 from triton._C.libtriton import ir
 from triton.language.core import builtin
 from typing import TypeVar, Type
-from functools import wraps
 import builtins
 import os
 from triton import knobs
@@ -35,22 +34,6 @@ def _unwrap_if_constexpr(o):
     if isinstance(o, tuple):
         return tuple(_unwrap_if_constexpr(x) for x in o)
     return o.value if isinstance(o, tl.constexpr) else o
-
-
-def builtin(fn: T) -> T:
-    """Mark a function as a builtin."""
-    assert callable(fn)
-
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if "_semantic" not in kwargs or kwargs["_semantic"] is None:
-            raise ValueError("Did you forget to add @triton.jit ? "
-                             "(`_semantic` argument must be provided outside of JIT functions.)")
-        return fn(*args, **kwargs)
-
-    setattr(wrapper, TRITON_BUILTIN, True)
-
-    return wrapper
 
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
