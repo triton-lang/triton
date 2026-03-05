@@ -1606,30 +1606,17 @@ class TritonSemantic(Generic[TensorTy]):
 
     def deduce_scale_factor(self, lhs, lhs_scale, lhs_format, lhs_k_pack, rhs, rhs_scale, rhs_format, rhs_k_pack):
 
-        def deduce_by_shape(operand, scale, op_idx, format, k_pack):
-            # Skip cases where we can't get shape information from the scale
-            if scale is None or isinstance(scale, tl.constexpr) or scale.numel.value == 1:
-                return 0
+        def _to_scale_handle(scale):
+            if scale is None or isinstance(scale, tl.constexpr):
+                return None
 
-            op_shape = operand.type.shape
-            scale_shape = scale.type.shape
+            return scale.handle
 
-            unpack_factor = 2 if format == "e2m1" and k_pack else 1
-            kdim = op_shape[-1 if op_idx == 0 else -2] * unpack_factor
-            scale_factor = kdim // scale_shape[-1]
-            assert scale_factor in (16, 32), f"scale factor must be 16 or 32. Got {scale_factor}"
-            return scale_factor
-
-        scale_factor_a = deduce_by_shape(lhs, lhs_scale, 0, lhs_format, lhs_k_pack)
-        scale_factor_b = deduce_by_shape(rhs, rhs_scale, 1, rhs_format, rhs_k_pack)
-        if scale_factor_a == 0 and scale_factor_b == 0:
-            # Default to scale32, i.e. 32 elements of operand share one scale element
-            return 32
-        elif scale_factor_a != 0 and scale_factor_b != 0:
-            assert scale_factor_a == scale_factor_b, f"Operands must have the same scale factor; (lhs: {scale_factor_a} vs rhs: {scale_factor_b})"
-            return scale_factor_a
-        else:
-            return scale_factor_a if scale_factor_a != 0 else scale_factor_b
+        lhs_format_str = lhs_format.value if hasattr(lhs_format, 'value') else lhs_format
+        rhs_format_str = rhs_format.value if hasattr(rhs_format, 'value') else rhs_format
+        return ir.deduce_scale_factor(lhs.handle, _to_scale_handle(lhs_scale), self._str_to_fp_type(lhs_format_str),
+                                      lhs_k_pack, rhs.handle, _to_scale_handle(rhs_scale),
+                                      self._str_to_fp_type(rhs_format_str), rhs_k_pack)
 
     def verify_scaled_shape(self, M, N, K, lhs_scale, rhs_scale, scale_factor):
         if lhs_scale is not None:
@@ -1697,8 +1684,7 @@ class TritonSemantic(Generic[TensorTy]):
                                  None if rhs_scale_is_none else rhs_scale, scale_factor)
         return self.tensor(
             self.builder.create_dot_scaled(lhs.handle, lhs_scale_handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
-                                           rhs_format_enum, fast_math, lhs_k_pack, rhs_k_pack, acc_handle,
-                                           scale_factor), ret_ty)
+                                           rhs_format_enum, fast_math, lhs_k_pack, rhs_k_pack, acc_handle), ret_ty)
 
 # ===----------------------------------------------------------------------===//
 #                               Indexing

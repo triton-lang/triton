@@ -781,6 +781,21 @@ void init_triton_ir(py::module &&m) {
       },
       ret::take_ownership);
 
+  m.def("deduce_scale_factor",
+        [](Value &lhs, std::optional<Value> &lhsScale,
+           ScaleDotElemType lhsFormat, bool lhsKPack, Value &rhs,
+           std::optional<Value> &rhsScale, ScaleDotElemType rhsFormat,
+           bool rhsKPack) -> int32_t {
+          int32_t scaleFactor = 0;
+          std::string errMsg;
+          if (failed(DotScaledOp::deduceScaleFactor(
+                  lhs, lhsScale.value_or(Value()), lhsFormat, lhsKPack, rhs,
+                  rhsScale.value_or(Value()), rhsFormat, rhsKPack, scaleFactor,
+                  errMsg)))
+            throw std::runtime_error(errMsg);
+          return scaleFactor;
+        });
+
   py::class_<FuncOp, OpState>(m, "function", py::module_local())
       // .def_property_readonly("attrs", &ir::function::attrs)
       // .def("add_attr", &ir::function::add_attr);
@@ -1684,12 +1699,11 @@ void init_triton_ir(py::module &&m) {
               ScaleDotElemType lhs_format, mlir::Value &rhs,
               std::optional<mlir::Value> &rhs_scale,
               ScaleDotElemType rhs_format, bool fast_math, bool lhs_k_pack,
-              bool rhs_k_pack, mlir::Value &c,
-              unsigned scale_factor) -> mlir::Value {
+              bool rhs_k_pack, mlir::Value &c) -> mlir::Value {
              return self.create<DotScaledOp>(
                  c.getType(), lhs, rhs, c, lhs_scale.value_or(Value()),
                  rhs_scale.value_or(Value()), lhs_format, rhs_format, fast_math,
-                 lhs_k_pack, rhs_k_pack, scale_factor);
+                 lhs_k_pack, rhs_k_pack);
            })
       .def("create_floor",
            [](TritonOpBuilder &self, Value &val) -> Value {

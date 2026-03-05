@@ -534,7 +534,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   int kBaseB = isFp4B ? kBase / 2 : kBase;
   int kDimB = isFp4B ? kDim / 2 : kDim;
 
-  unsigned scaleFactor = op.getScaleFactor();
+  unsigned scaleFactor = op.deduceScaleFactor();
   int kDimScale = kDim / scaleFactor;
 
   bool isFp6A = (aElemType == triton::ScaleDotElemType::E2M3) ||

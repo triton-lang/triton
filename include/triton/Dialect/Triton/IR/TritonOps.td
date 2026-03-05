@@ -722,17 +722,28 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
       TT_ScaleDotElemTypeAttr:$b_elem_type,
       BoolAttr:$fastMath,
       DefaultValuedAttr<BoolAttr, "true">:$lhs_k_pack,
-      DefaultValuedAttr<BoolAttr, "true">:$rhs_k_pack,
-      DefaultValuedAttr<I32Attr, "32">:$scale_factor
+      DefaultValuedAttr<BoolAttr, "true">:$rhs_k_pack
     );
 
     let results = (outs TT_FloatTensor:$d);
 
     let assemblyFormat = [{
       $a (`scale` $a_scale^)? `,` $b (`scale` $b_scale^)? `,` $c
-      `lhs` `=` $a_elem_type `rhs` `=` $b_elem_type (`scale_factor` `=` $scale_factor^)? attr-dict
+      `lhs` `=` $a_elem_type `rhs` `=` $b_elem_type attr-dict
       `:` type($a) (`,` type($a_scale)^)? `*` type($b) (`,` type($b_scale)^)? `->` type($d)
     }];
+    let extraClassDeclaration = [{
+      static LogicalResult deduceScaleFactor(Value lhs, Value lhsScale,
+                                             ScaleDotElemType lhsFormat,
+                                             bool lhsKPack, Value rhs,
+                                             Value rhsScale,
+                                             ScaleDotElemType rhsFormat,
+                                             bool rhsKPack,
+                                             int32_t &scaleFactor,
+                                             std::string &errMsg);
+      int32_t deduceScaleFactor();
+    }];
+
     let hasVerifier = 1;
 }
 

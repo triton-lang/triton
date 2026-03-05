@@ -1312,7 +1312,7 @@ public:
       return rewriter.notifyMatchFailure(dotOp, "Not supported yet mxfp type");
     }
 
-    unsigned scaleFactor = dotOp.getScaleFactor();
+    unsigned scaleFactor = dotOp.deduceScaleFactor();
 
     MLIRContext *ctx = dotOp.getContext();
 
@@ -1432,7 +1432,7 @@ public:
     auto newDot = triton::DotScaledOp::create(
         rewriter, dotOp.getLoc(), newRetType, a, b, newAcc, newAScale,
         newBScale, aElemType, bElemType, dotOp.getFastMath(),
-        dotOp.getLhsKPack(), dotOp.getRhsKPack(), scaleFactor);
+        dotOp.getLhsKPack(), dotOp.getRhsKPack());
 
     auto m = dotOp->getParentOfType<ModuleOp>();
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
