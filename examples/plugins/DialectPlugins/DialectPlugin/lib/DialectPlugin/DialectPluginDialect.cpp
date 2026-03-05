@@ -76,7 +76,8 @@ static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME,
 // Key APIs:
 
 TRITON_PLUGIN_API
-tritonAddPluginPass(mlir::PassManager *pm, const char *passName, const std::vector<uint64_t> *argsPtr) {
+tritonAddPluginPass(mlir::PassManager *pm, const char *passName,
+                    const std::vector<uint64_t> *argsPtr) {
   int num_warps, threadsPerWarp, numCTAs;
   auto args = *argsPtr;
   num_warps = static_cast<int>(args[0]);
@@ -91,7 +92,8 @@ tritonAddPluginPass(mlir::PassManager *pm, const char *passName, const std::vect
 }
 
 TRITON_PLUGIN_API
-tritonRegisterPluginPass(const char *passName, const std::vector<uint64_t> *argsPtr) {
+tritonRegisterPluginPass(const char *passName,
+                         const std::vector<uint64_t> *argsPtr) {
   int num_warps, threadsPerWarp, numCTAs;
   auto args = *argsPtr;
   num_warps = static_cast<int>(args[0]);
