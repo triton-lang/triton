@@ -744,9 +744,8 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                     bool toFp16, Value packedVec,
                                     ISAFamily isaFamily, Value scale) {
-  assert((isa<triton::amdgpu::UpcastMXFPOp, triton::gpu::Fp4ToFpOp,
-              triton::amdgpu::ScaledUpcastFp4Op>(op)) &&
-         "Expected UpcastMXFPOp, Fp4ToFpOp or ScaledUpcastFp4Op");
+  assert((isa<triton::gpu::Fp4ToFpOp, triton::amdgpu::ScaledUpcastFp4Op>(op)) &&
+         "Expected Fp4ToFpOp or ScaledUpcastFp4Op");
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto permU32FnTy =
