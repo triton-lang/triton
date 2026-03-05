@@ -202,8 +202,7 @@ class ClcTileSchedulerConsumer:
     GRID_TILE_WIDTH: gl.constexpr
     clc_result_buffers: gl.shared_memory_descriptor
     clc_barriers: gl.shared_memory_descriptor
-    clc_planar_pid_m_buffers: gl.shared_memory_descriptor
-    clc_planar_pid_n_buffers: gl.shared_memory_descriptor
+    clc_planar_pid_buffers: gl.shared_memory_descriptor
     clc_planar_ready_bars: gl.shared_memory_descriptor
     clc_consumed_bars: gl.shared_memory_descriptor
     counter: Counter
@@ -211,8 +210,8 @@ class ClcTileSchedulerConsumer:
 
     @gluon.jit
     def initialize(M, N, TILE_M: gl.constexpr, TILE_N: gl.constexpr, MINOR_DIM: gl.constexpr,
-                   GRID_TILE_WIDTH: gl.constexpr, clc_result_buffers, clc_barriers, clc_planar_pid_m_buffers,
-                   clc_planar_pid_n_buffers, clc_planar_ready_bars, clc_consumed_bars):
+                   GRID_TILE_WIDTH: gl.constexpr, clc_result_buffers, clc_barriers, clc_planar_pid_buffers,
+                   clc_planar_ready_bars, clc_consumed_bars):
         tile_id = gl.program_id(axis=0)
         num_pid_m = gl.cdiv(M, TILE_M)
         num_pid_n = gl.cdiv(N, TILE_N)
@@ -233,8 +232,7 @@ class ClcTileSchedulerConsumer:
             GRID_TILE_WIDTH,
             clc_result_buffers,
             clc_barriers,
-            clc_planar_pid_m_buffers,
-            clc_planar_pid_n_buffers,
+            clc_planar_pid_buffers,
             clc_planar_ready_bars,
             clc_consumed_bars,
             counter,
@@ -261,10 +259,10 @@ class ClcTileSchedulerConsumer:
         mbarrier.wait(barrier, counter.phase)
         clc_res = clc.load_result(result)
         mbarrier.wait(self.clc_planar_ready_bars.index(counter.index), counter.phase)
-        planar_slot_m = self.clc_planar_pid_m_buffers.index(counter.index)
-        planar_slot_n = self.clc_planar_pid_n_buffers.index(counter.index)
-        pid_m = planar_slot_m.load(gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]])).reshape([])
-        pid_n = planar_slot_n.load(gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]])).reshape([])
+        planar_slot = self.clc_planar_pid_buffers.index(counter.index)
+        packed_pid = planar_slot.load(gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]])).reshape([])
+        pid_m = ((packed_pid >> 32) & 0xFFFFFFFF).to(gl.int32)
+        pid_n = (packed_pid & 0xFFFFFFFF).to(gl.int32)
         has_work = clc_res.is_canceled()
         tile_id = self.tile_id
         if has_work:
@@ -282,8 +280,7 @@ class ClcTileSchedulerConsumer:
             self.GRID_TILE_WIDTH,
             self.clc_result_buffers,
             self.clc_barriers,
-            self.clc_planar_pid_m_buffers,
-            self.clc_planar_pid_n_buffers,
+            self.clc_planar_pid_buffers,
             self.clc_planar_ready_bars,
             self.clc_consumed_bars,
             counter.next(),
@@ -305,8 +302,7 @@ class PartitionArgs:
     acc_ready_bars: gl.shared_memory_descriptor
     clc_result_buffers: gl.shared_memory_descriptor
     clc_barriers: gl.shared_memory_descriptor
-    clc_planar_pid_m_buffers: gl.shared_memory_descriptor
-    clc_planar_pid_n_buffers: gl.shared_memory_descriptor
+    clc_planar_pid_buffers: gl.shared_memory_descriptor
     clc_planar_ready_bars: gl.shared_memory_descriptor
     clc_consumed_bars: gl.shared_memory_descriptor
     MINOR_DIM: gl.constexpr
@@ -324,8 +320,7 @@ class PartitionArgs:
             self.GRID_TILE_WIDTH,
             self.clc_result_buffers,
             self.clc_barriers,
-            self.clc_planar_pid_m_buffers,
-            self.clc_planar_pid_n_buffers,
+            self.clc_planar_pid_buffers,
             self.clc_planar_ready_bars,
             self.clc_consumed_bars,
         )
@@ -358,12 +353,10 @@ def matmul_clc_partition(p):
         if has_work:
             tile_id = clc_res.program_id(0)
             pid_m, pid_n = _planar_snake(tile_id, num_pid_m, num_pid_n, p.MINOR_DIM, p.GRID_TILE_WIDTH)
-        planar_slot_m = p.clc_planar_pid_m_buffers.index(state.index)
-        planar_slot_n = p.clc_planar_pid_n_buffers.index(state.index)
-        planar_slot_m.store(
-            gl.full([1], pid_m, gl.int32, layout=gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]])))
-        planar_slot_n.store(
-            gl.full([1], pid_n, gl.int32, layout=gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]])))
+        packed_pid = (pid_m.to(gl.int64) << 32) | (pid_n.to(gl.int64) & 0xFFFFFFFF)
+        planar_slot = p.clc_planar_pid_buffers.index(state.index)
+        planar_slot.store(
+            gl.full([1], packed_pid, gl.int64, layout=gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]])))
         mbarrier.arrive(p.clc_planar_ready_bars.index(state.index))
         state = state.next()
         consumed_state = consumed_state.next()
@@ -526,8 +519,7 @@ def _matmul_kernel(
     cga_layout: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
     clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout)
     clc_result_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 2], clc_layout)
-    clc_planar_pid_m_buffers = gl.allocate_shared_memory(gl.int32, [clc_barriers.shape[0], 1], clc_layout)
-    clc_planar_pid_n_buffers = gl.allocate_shared_memory(gl.int32, [clc_barriers.shape[0], 1], clc_layout)
+    clc_planar_pid_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 1], clc_layout)
 
     p = PartitionArgs(
         a_desc,
@@ -542,8 +534,7 @@ def _matmul_kernel(
         acc_ready_bars,
         clc_result_buffers,
         clc_barriers,
-        clc_planar_pid_m_buffers,
-        clc_planar_pid_n_buffers,
+        clc_planar_pid_buffers,
         clc_planar_ready_bars,
         clc_consumed_bars,
         GRID_MINOR_DIM,
