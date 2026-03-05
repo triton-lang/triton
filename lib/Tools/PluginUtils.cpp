@@ -163,19 +163,20 @@ TritonPlugin::getCustomOpHandles(std::vector<const char *> &customOpNames) {
 
 llvm::Expected<TritonPluginResult>
 TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle,
-                      int num_warps, int threadsPerWarp, int numCTAs) {
+                      const std::vector<uint64_t> *argsPtr) {
   if (auto Err = loadPlugin())
     return Err;
   return checkAPIResult(
-      addPassAPI(pm, passHandle, num_warps, threadsPerWarp, numCTAs),
+      addPassAPI(pm, passHandle, argsPtr),
       passHandle);
 }
 
 llvm::Expected<TritonPluginResult>
-TritonPlugin::registerPass(const char *passHandle) {
+TritonPlugin::registerPass(const char *passHandle,
+                           const std::vector<uint64_t> *argsPtr) {
   if (auto Err = loadPlugin())
     return Err;
-  return checkAPIResult(registerPassAPI(passHandle), passHandle);
+  return checkAPIResult(registerPassAPI(passHandle, argsPtr), passHandle);
 }
 
 llvm::Expected<::mlir::DialectPluginLibraryInfo>
