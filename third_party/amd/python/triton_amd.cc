@@ -90,13 +90,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUPrepareIfCombining());
   });
-  m.def("add_canonicalize_pointers",
-        [](mlir::PassManager &pm, bool canonicalizeAllPtrArgs) {
-          pm.addNestedPass<mlir::triton::FuncOp>(
-              mlir::createTritonAMDGPUCanonicalizePointers(
-                  {/*enableLargeTensorPtrCanon=*/false,
-                   canonicalizeAllPtrArgs}));
-        });
+  m.def("add_canonicalize_pointers", [](mlir::PassManager &pm) {
+    pm.addNestedPass<mlir::triton::FuncOp>(
+        mlir::createTritonAMDGPUCanonicalizePointers());
+  });
   m.def("add_move_up_prologue_loads", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUMoveUpPrologueLoads());

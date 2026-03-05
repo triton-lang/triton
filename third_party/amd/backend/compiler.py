@@ -273,7 +273,7 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
 
         if knobs.amd.use_buffer_ops:
-            amd.passes.ttgpuir.add_canonicalize_pointers(pm, True)
+            amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
             amd.passes.ttgpuir.add_convert_to_buffer_ops(
                 pm,
