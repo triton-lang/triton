@@ -109,10 +109,9 @@ TRITON_PLUGIN_API
 tritonEnumeratePluginPasses(TRITON_PLUGIN_ENUMERATOR_ARGS) {
   if (!count)
     return TP_GENERIC_FAILURE;
-  auto _count = passMap.size();
-  assert(_count == registryMap.size() &&
+  assert(passMap.size() == registryMap.size() &&
          "Expected register and add passes map size to match");
-  *count = _count;
+  *count = passMap.size();
   if (!handles)
     return TP_SUCCESS;
   unsigned i = 0;
