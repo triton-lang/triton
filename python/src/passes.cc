@@ -122,7 +122,7 @@ void init_plugin_passes(py::module &&m) {
             TritonPlugin TP(filename);
             if (auto result = TP.addPass(&pm, passName, &args); !result)
               throw TP.err2exp(result.takeError());
-          });
+          }, py::arg("pm"), py::arg("args") = std::vector<uint64_t>());
   }
 }
 
