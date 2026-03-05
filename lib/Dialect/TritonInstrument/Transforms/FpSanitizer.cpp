@@ -10,7 +10,6 @@
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/StringSwitch.h"
 #include <cassert>
 
 namespace mlir {
@@ -451,15 +450,6 @@ Value fpsanUnaryTagged(PatternRewriter &rewriter, Location loc, Value input,
   return bitcastToFloat(rewriter, loc, outI, input.getType());
 }
 
-Value fpsanUnaryTaggedHash(PatternRewriter &rewriter, Location loc, Value input,
-                           uint64_t hash) {
-  auto inI = bitcastToInt(rewriter, loc, input);
-  auto hashVal = getIntConstantLike(rewriter, loc, inI.getType(),
-                                    static_cast<int64_t>(hash));
-  auto outI = arith::XOrIOp::create(rewriter, loc, inI, hashVal);
-  return bitcastToFloat(rewriter, loc, outI, input.getType());
-}
-
 Value fpsanFDiv(PatternRewriter &rewriter, Location loc, Value num, Value den) {
   auto numI = bitcastToInt(rewriter, loc, num);
   auto inv = bitcastToInt(
@@ -477,19 +467,16 @@ Value fpsanSRem(PatternRewriter &rewriter, Location loc, Value num, Value den) {
   return bitcastToFloat(rewriter, loc, resI, num.getType());
 }
 
-// Skip over the operations that have the same semantics in fp and int domains.
-// We don't want to raise an error if kernel implements them in a different
-// but equivalent way.
-bool isSkippedExternSymbol(StringRef symbol) {
-  return llvm::StringSwitch<bool>(symbol)
-      .Cases({"__nv_fabsf", "__nv_fabs", "__nv_copysignf", "__nv_copysign"},
-             true)
-      .Default(false);
+bool isIntLike(Type ty) { return isa<IntegerType>(getElementType(ty)); }
+
+bool isNumericLike(Type ty) {
+  Type elemTy = getElementType(ty);
+  return isa<FloatType>(elemTy) || isa<IntegerType>(elemTy);
 }
 
-bool externHasFloatLikeOperands(tt::ExternElementwiseOp op) {
+bool externHasNumericOperands(tt::ExternElementwiseOp op) {
   return llvm::all_of(op.getOperands(), [](Value operand) {
-    return isFloatLike(operand.getType());
+    return isNumericLike(operand.getType());
   });
 }
 
@@ -500,15 +487,32 @@ bool externInvolvesFloatLike(tt::ExternElementwiseOp op) {
          });
 }
 
-Value fpsanBinaryExternTagged(PatternRewriter &rewriter, Location loc,
-                              Value lhs, Value rhs, Type resultTy,
-                              uint64_t hash) {
+Value castExternOperandToResultInt(PatternRewriter &rewriter, Location loc,
+                                   Value operand, Type resultIntTy) {
+  if (isFloatLike(operand.getType())) {
+    return castIntValueToType(
+        rewriter, loc, bitcastToInt(rewriter, loc, operand), resultIntTy);
+  }
+  if (isIntLike(operand.getType())) {
+    return castIntValueToType(rewriter, loc, operand, resultIntTy);
+  }
+  return Value();
+}
+
+Value fpsanVariadicExternTagged(PatternRewriter &rewriter, Location loc,
+                                tt::ExternElementwiseOp op, uint64_t hash) {
+  Type resultTy = op.getType();
   Type resultIntTy = getIntTypeLike(resultTy);
-  auto lhsI = castIntValueToType(rewriter, loc,
-                                 bitcastToInt(rewriter, loc, lhs), resultIntTy);
-  auto rhsI = castIntValueToType(rewriter, loc,
-                                 bitcastToInt(rewriter, loc, rhs), resultIntTy);
-  auto sumI = arith::AddIOp::create(rewriter, loc, lhsI, rhsI);
+
+  Value sumI = getIntConstantLike(rewriter, loc, resultIntTy, 0);
+  for (Value operand : op.getOperands()) {
+    Value operandI =
+        castExternOperandToResultInt(rewriter, loc, operand, resultIntTy);
+    if (!operandI)
+      return Value();
+    sumI = arith::AddIOp::create(rewriter, loc, sumI, operandI);
+  }
+
   auto hashVal = getIntConstantLike(rewriter, loc, resultIntTy,
                                     static_cast<int64_t>(hash));
   auto outI = arith::XOrIOp::create(rewriter, loc, sumI, hashVal);
@@ -1165,28 +1169,15 @@ struct ExternElementwisePattern
   LogicalResult matchAndRewrite(tt::ExternElementwiseOp op,
                                 PatternRewriter &rewriter) const override {
     if (!op.getPure() || !isFloatLike(op.getType()) ||
-        !externHasFloatLikeOperands(op))
+        op.getNumOperands() == 0 || !externHasNumericOperands(op))
       return failure();
 
-    StringRef symbol = op.getSymbol();
-    if (isSkippedExternSymbol(symbol))
+    uint64_t hash = stableStringHash(op.getSymbol());
+    Value result = fpsanVariadicExternTagged(rewriter, op.getLoc(), op, hash);
+    if (!result)
       return failure();
-
-    auto loc = op.getLoc();
-    uint64_t hash = stableStringHash(symbol);
-    switch (op.getNumOperands()) {
-    case 1:
-      rewriter.replaceOp(
-          op, fpsanUnaryTaggedHash(rewriter, loc, op.getOperand(0), hash));
-      return success();
-    case 2:
-      rewriter.replaceOp(
-          op, fpsanBinaryExternTagged(rewriter, loc, op.getOperand(0),
-                                      op.getOperand(1), op.getType(), hash));
-      return success();
-    default:
-      return failure();
-    }
+    rewriter.replaceOp(op, result);
+    return success();
   }
 };
 
@@ -1239,7 +1230,7 @@ public:
     }
 
     getOperation()->walk([&](tt::ExternElementwiseOp op) {
-      if (!externInvolvesFloatLike(op) || isSkippedExternSymbol(op.getSymbol()))
+      if (!externInvolvesFloatLike(op))
         return WalkResult::advance();
 
       hasUnsupportedOperations = true;
