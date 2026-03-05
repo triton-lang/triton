@@ -22,6 +22,8 @@ enum TritonPluginResult {
 #define TRITON_PLUGIN_PASS_ARGS                                                \
   const char *passName, const std::vector<uint64_t> *argsPtr
 #define TRITON_PLUGIN_ENUMERATOR_ARGS uint32_t *count, const char **handles
+#define TRITON_PLUGIN_CUSTOM_OP_ARGS                                           \
+  const char *opName, TritonOpBuilder &self, void **operands
 
 struct TritonPlugin {
   TritonPlugin() = delete;
