@@ -382,6 +382,9 @@ def matmul_epilogue_partition(p):
     TILE_M: gl.constexpr = p.a_desc.block_shape[0]
     TILE_N: gl.constexpr = p.b_desc.block_shape[1]
     SPLIT_TILE_N: gl.constexpr = p.c_desc.block_shape[1]
+    # Separate knobs: SUBTILE_STAGES controls shared-memory usage,
+    # and SUBTILE_FACTOR is the maximum number of subtiles into which we can split the tile,
+    # which might be too large to fit within shared-memory limits.
     SUBTILE_FACTOR: gl.constexpr = TILE_N // SPLIT_TILE_N
     SUBTILE_STAGES: gl.constexpr = p.SUBTILE_STAGES
     ACC_STAGES: gl.constexpr = p.acc_empty_bars.shape[0]
