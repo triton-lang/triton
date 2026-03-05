@@ -6,6 +6,7 @@ import triton
 import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
+from triton.experimental.gluon.language.nvidia.ampere import async_copy as ampere_async_copy
 from triton.experimental.gluon.language.nvidia.blackwell import fence_async_shared, mbarrier, tma
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
@@ -22,6 +23,10 @@ def with_gsan(fresh_knobs):
     pool = create_mem_pool()
     with torch.cuda.use_mem_pool(pool):
         yield
+
+
+def _is_ampere_or_newer() -> bool:
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 8
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
@@ -85,6 +90,22 @@ def test_implicit_stream_ordering(with_gsan, capfd):
 
     assert scratch.sum().item() == size
     assert "GSanLibrary.cu" not in capfd.readouterr()
+
+
+@gluon.jit
+def _gluon_async_copy_masked_kernel(out_ptr, in_ptr, n_elements, start_idx, BLOCK: gl.constexpr):
+    smem_layout: gl.constexpr = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+    block_layout: gl.constexpr = gl.BlockedLayout([2], [32], [2], [0])
+    smem = gl.allocate_shared_memory(in_ptr.dtype.element_ty, [BLOCK], smem_layout)
+
+    offsets = start_idx + gl.arange(0, BLOCK, block_layout)
+    mask = offsets < n_elements
+    ampere_async_copy.async_copy_global_to_shared(smem, in_ptr + offsets, mask=mask)
+    ampere_async_copy.commit_group()
+    ampere_async_copy.wait_group(0)
+
+    values = smem.load(block_layout)
+    gl.store(out_ptr + offsets, values, mask=mask)
 
 
 @triton.jit
@@ -180,6 +201,35 @@ def _make_gather_scatter_descriptor(tensor: torch.Tensor, block_x: int, block_y:
     gl_dtype = getattr(gl, str(tensor.dtype).split(".")[1])
     layout = gl.NVMMASharedLayout.get_default_for([block_x, block_y], gl_dtype)
     return GluonTensorDescriptor.from_tensor(tensor, [1, block_y], layout)
+
+
+@pytest.mark.skipif(not _is_ampere_or_newer(), reason="Requires Ampere or newer")
+def test_gluon_async_copy_updates_shadow(with_gsan, capfd):
+    block = 128
+    start_idx = 5
+    n_elements = 117
+    padded = 160
+    inp = torch.arange(padded, dtype=torch.float32, device="cuda")
+    out = torch.zeros_like(inp)
+
+    valid_addr = inp[start_idx].data_ptr()
+    masked_addr = inp[n_elements].data_ptr()
+
+    valid0 = shadow_cell_from_address(valid_addr)
+    masked0 = shadow_cell_from_address(masked_addr)
+
+    _gluon_async_copy_masked_kernel[(1, )](out, inp, n_elements, start_idx, BLOCK=block, num_warps=2)
+
+    expected = torch.zeros_like(out)
+    expected[start_idx:n_elements] = inp[start_idx:n_elements]
+    torch.testing.assert_close(out, expected)
+
+    valid1 = shadow_cell_from_address(valid_addr)
+    masked1 = shadow_cell_from_address(masked_addr)
+    assert _shadow_cell_state(valid1) != _shadow_cell_state(valid0)
+    assert _shadow_cell_state(masked1) == _shadow_cell_state(masked0)
+    assert out[n_elements].item() == 0
+    assert n_elements - start_idx < block
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")

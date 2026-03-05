@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 #include <algorithm>
 #include <optional>
@@ -389,31 +390,41 @@ public:
       callOp.erase();
     }
 
-    module.walk([&](tt::LoadOp op) {
+    module.walk([&](Operation *op) {
       OpBuilder b(op);
-      ExperimentalGSanTensorAccessOp::create(b, op.getLoc(), op.getPtr(),
-                                             op.getMask(), /*isStore=*/false);
+      mlir::TypeSwitch<Operation *>(op)
+          .Case([&](tt::LoadOp op) {
+            ExperimentalGSanTensorAccessOp::create(
+                b, op.getLoc(), op.getPtr(), op.getMask(), /*isStore=*/false);
+          })
+          .Case([&](tt::StoreOp op) {
+            ExperimentalGSanTensorAccessOp::create(
+                b, op.getLoc(), op.getPtr(), op.getMask(), /*isStore=*/true);
+          })
+          .Case([&](ttg::AsyncCopyGlobalToLocalOp op) {
+            ExperimentalGSanTensorAccessOp::create(
+                b, op.getLoc(), op.getSrc(), op.getMask(), /*isStore=*/false);
+          })
+          .Case([&](ttng::AsyncTMACopyGlobalToLocalOp op) {
+            instrumentAsyncTMALoad(op);
+          })
+          .Case(
+              [&](ttng::AsyncTMAGatherOp op) { instrumentAsyncTMAGather(op); })
+          .Case([&](ttng::AsyncTMACopyLocalToGlobalOp op) {
+            instrumentAsyncTMAStore(op, op.getDesc(),
+                                    op.getSrc().getType().getShape(),
+                                    op.getCoord());
+          })
+          .Case([&](ttng::AsyncTMAReduceOp op) {
+            // FIXME: This is just plain wrong. TMA reduce is atomic.
+            instrumentAsyncTMAStore(op, op.getDesc(),
+                                    op.getSrc().getType().getShape(),
+                                    op.getCoord());
+          })
+          .Case([&](ttng::AsyncTMAScatterOp op) {
+            instrumentAsyncTMAScatter(op);
+          });
     });
-    module.walk([&](tt::StoreOp op) {
-      OpBuilder b(op);
-      ExperimentalGSanTensorAccessOp::create(b, op.getLoc(), op.getPtr(),
-                                             op.getMask(), /*isStore=*/true);
-    });
-    module.walk([](ttng::AsyncTMACopyGlobalToLocalOp op) {
-      instrumentAsyncTMALoad(op);
-    });
-    module.walk(
-        [](ttng::AsyncTMAGatherOp op) { instrumentAsyncTMAGather(op); });
-    module.walk([](ttng::AsyncTMACopyLocalToGlobalOp op) {
-      instrumentAsyncTMAStore(op, op.getDesc(),
-                              op.getSrc().getType().getShape(), op.getCoord());
-    });
-    module.walk([](ttng::AsyncTMAReduceOp op) {
-      instrumentAsyncTMAStore(op, op.getDesc(),
-                              op.getSrc().getType().getShape(), op.getCoord());
-    });
-    module.walk(
-        [](ttng::AsyncTMAScatterOp op) { instrumentAsyncTMAScatter(op); });
   }
 };
 
