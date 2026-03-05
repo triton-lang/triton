@@ -758,6 +758,11 @@ bool TargetInfo::supportsCvtPkScalePk8() const {
   return getISAFamily() == ISAFamily::GFX1250;
 }
 
+bool TargetInfo::supportsHwScaledUpcast() const {
+  return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::GFX1250;
+}
+
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                        Operation *llLoadOp) const {
   if (requiresAliasInfoForAsyncOps())

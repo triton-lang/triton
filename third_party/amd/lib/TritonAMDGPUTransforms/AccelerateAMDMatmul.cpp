@@ -802,12 +802,9 @@ public:
     auto loc = dotOp.getLoc();
     bool isFp4 = (elemType == ScaleDotElemType::E2M1);
 
-    auto isaFamily = targetInfo.getISAFamily();
-
     // On architectures without hardware scaled upcast instructions (CDNA3 and
     // earlier), fall back to the software emulation path.
-    if (isaFamily != AMD::ISAFamily::CDNA4 &&
-        isaFamily != AMD::ISAFamily::GFX1250) {
+    if (!targetInfo.supportsHwScaledUpcast()) {
       return ttg::DecomposeScaledBlocked::scaleArg(rewriter, dotOp, opIdx,
                                                    computeType);
     }
@@ -819,14 +816,10 @@ public:
                                    BoolAttr::get(rewriter.getContext(), true));
 
     Value reshapeScale;
-    if (isaFamily == AMD::ISAFamily::CDNA4) {
-      // Cast scale to bf16, broadcast it and convert the layout
-      FloatType bf16Type = rewriter.getBF16Type();
-      reshapeScale = extendAndBroadcastScale(
-          rewriter, dotOp, scale, bf16Type, scaleType16.clone(bf16Type), opIdx);
-    } else {
-      // On GFX1250, the scale type is int8, required by hardware instruction
-      // so type should not be converted.
+    if (targetInfo.supportsCvtPkScalePk8()) {
+      // On architectures with CvtPkScalePk8 (e.g., GFX1250), the scale type
+      // is int8, required by hardware instruction so type should not be
+      // converted.
       if (opIdx == 1) {
         auto order = getTransposeOrder(rank);
         scale = TransOp::create(rewriter, loc, scale, order);
@@ -840,6 +833,11 @@ public:
           scale.getType().getElementType(), vType.getEncoding());
       reshapeScale = mlir::triton::gpu::ConvertLayoutOp::create(
           rewriter, loc, newScaleType, reshapeScale);
+    } else {
+      // Cast scale to bf16, broadcast it and convert the layout
+      FloatType bf16Type = rewriter.getBF16Type();
+      reshapeScale = extendAndBroadcastScale(
+          rewriter, dotOp, scale, bf16Type, scaleType16.clone(bf16Type), opIdx);
     }
 
     // Upcast with scale
