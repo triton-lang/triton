@@ -73,6 +73,7 @@ def matmul_get_configs(pre_hook=None):
                 "STAGES": stages,
                 "ACC_STAGES": acc_stages,
                 "EPILOGUE_SIZE_N": get_epilogue_size_n(BM, BN, cga_layout),
+                "SUBTILE_STAGES": subtile_stages,
                 "CGA_LAYOUT": cga_layout,
             },
             num_warps=4,
@@ -86,6 +87,7 @@ def matmul_get_configs(pre_hook=None):
         for grid_tile_width in (4, 8, 16)
         for stages in (2, 4, 6)
         for acc_stages in (2, )
+        for subtile_stages in (4, )
         for cga_layout in ((), ((1, 0), ), ((1, 0), (2, 0)))
         if BN // get_split_dim(cga_layout, 1) <= 256
         # Trim some configs with too large a tile
@@ -285,6 +287,7 @@ class PartitionArgs:
     clc_consumed_bars: gl.shared_memory_descriptor
     MINOR_DIM: gl.constexpr
     GRID_TILE_WIDTH: gl.constexpr
+    SUBTILE_STAGES: gl.constexpr
 
     @gluon.jit
     def get_clc_consumer(self):
@@ -379,13 +382,17 @@ def matmul_epilogue_partition(p):
     TILE_M: gl.constexpr = p.a_desc.block_shape[0]
     TILE_N: gl.constexpr = p.b_desc.block_shape[1]
     SPLIT_TILE_N: gl.constexpr = p.c_desc.block_shape[1]
+    # Separate knobs: SUBTILE_STAGES controls shared-memory usage,
+    # and SUBTILE_FACTOR is the maximum number of subtiles into which we can split the tile,
+    # which might be too large to fit within shared-memory limits.
     SUBTILE_FACTOR: gl.constexpr = TILE_N // SPLIT_TILE_N
+    SUBTILE_STAGES: gl.constexpr = p.SUBTILE_STAGES
     ACC_STAGES: gl.constexpr = p.acc_empty_bars.shape[0]
     dtype: gl.constexpr = p.c_desc.dtype
 
     acc_state = Counter.create(0, ACC_STAGES)
-    acc_smems = gl.allocate_shared_memory(dtype, [ACC_STAGES, TILE_M, SPLIT_TILE_N], p.c_desc.layout)
-    sub_acc_state = Counter.create(0, ACC_STAGES)
+    acc_smems = gl.allocate_shared_memory(dtype, [SUBTILE_STAGES, TILE_M, SPLIT_TILE_N], p.c_desc.layout)
+    sub_acc_state = Counter.create(0, SUBTILE_STAGES)
     scheduler = p.get_clc_consumer()
 
     i = 0
@@ -399,7 +406,7 @@ def matmul_epilogue_partition(p):
             acc_sub = acc_buf.slice(SPLIT_TILE_N * s, SPLIT_TILE_N)
             acc_smem = acc_smems.index(sub_acc_state.index)
             acc = acc_sub.load().to(dtype)
-            tma.store_wait(pendings=1)
+            tma.store_wait(pendings=SUBTILE_STAGES - 1)
             acc_smem.store(acc)
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_TILE_N * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
@@ -427,6 +434,7 @@ def _matmul_kernel(
     ACC_STAGES: gl.constexpr,
     CGA_LAYOUT: gl.constexpr,
     EPILOGUE_SIZE_N: gl.constexpr,
+    SUBTILE_STAGES: gl.constexpr,
 ):
     BLOCK_M: gl.constexpr = a_desc.block_shape[0]
     BLOCK_N: gl.constexpr = b_desc.block_shape[1]
@@ -489,6 +497,7 @@ def _matmul_kernel(
         clc_consumed_bars,
         GRID_MINOR_DIM,
         GRID_TILE_WIDTH,
+        SUBTILE_STAGES,
     )
 
     gl.warp_specialize([
@@ -519,6 +528,7 @@ def matmul_with_config(
     acc_stages,
     cga_layout,
     epilogue_size_n,
+    subtile_stages,
 ):
     if block_size_n // get_split_dim(cga_layout, 1) > 256:
         raise ValueError(
@@ -581,6 +591,7 @@ def matmul_with_config(
         acc_stages,
         cga_layout,
         epilogue_size_n,
+        subtile_stages,
         num_warps=4,
         num_ctas=2**len(cga_layout),
     )
@@ -623,6 +634,7 @@ def matmul(a, b):
 @pytest.mark.parametrize("STAGES", [2, 4])
 @pytest.mark.parametrize("ACC_STAGES", [2])
 @pytest.mark.parametrize("EPILOGUE_SIZE_N", [32])
+@pytest.mark.parametrize("SUBTILE_STAGES", [4])
 @pytest.mark.parametrize("M, N, K", [(100, 200, 200)])
 def test_matmul_matches_torch(
     M,
@@ -637,6 +649,7 @@ def test_matmul_matches_torch(
     STAGES,
     ACC_STAGES,
     EPILOGUE_SIZE_N,
+    SUBTILE_STAGES,
 ):
     # To support epilogue splitting we need to be able to split within a CTA
     EPILOGUE_SIZE_N = get_epilogue_size_n(BLOCK_SIZE_M, BLOCK_SIZE_N, CGA_LAYOUT)
@@ -658,6 +671,7 @@ def test_matmul_matches_torch(
             acc_stages=ACC_STAGES,
             cga_layout=CGA_LAYOUT,
             epilogue_size_n=EPILOGUE_SIZE_N,
+            subtile_stages=SUBTILE_STAGES,
         )
     except triton.OutOfResources:
         pytest.skip("Out of resources")
@@ -707,6 +721,7 @@ def get_benchmark_kernel_config():
         "acc_stages": 2,
         "cga_layout": ((1, 0), ),
         "epilogue_tile_n": 32,
+        "subtile_stages": 4,
     }
 
 
@@ -732,6 +747,7 @@ def make_gluon_runner(a, b, c_triton, cfg, use_autotuned=False):
             acc_stages=cfg["acc_stages"],
             cga_layout=cfg["cga_layout"],
             epilogue_size_n=cfg["epilogue_tile_n"],
+            subtile_stages=cfg["subtile_stages"],
         )
 
     return run_gluon
