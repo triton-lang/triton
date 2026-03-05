@@ -808,7 +808,9 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<OpBuilder::InsertPoint>(m, "InsertPoint", py::module_local());
 
-  py::class_<TritonOpBuilder> TritonOpBuilderBinding = py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
+  py::class_<TritonOpBuilder> TritonOpBuilderBinding =
+  // clang-format off
+  py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
                               py::dynamic_attr())
       .def(py::init<MLIRContext *>())
       .def("get_op_builder", &TritonOpBuilder::getBuilder, ret::reference)
@@ -1860,6 +1862,7 @@ void init_triton_ir(py::module &&m) {
                                                   tensorShape, isSignedInteger,
                                                   paddingOption);
            });
+  // clang-format on
 
   if (std::string filename =
       mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
