@@ -2,7 +2,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._C.libtriton import ir, passes
+from triton._C.libtriton import ir
 from triton.language.core import builtin
 from typing import TypeVar, Type
 from functools import wraps
@@ -15,7 +15,6 @@ import importlib
 import inspect
 import sys
 import textwrap
-import os
 from triton.compiler.code_generator import flatten_values_to_ir
 
 T = TypeVar('T')
@@ -27,6 +26,7 @@ builder: ir.builder
 
 TRITON_BUILTIN = "__triton_builtin__"
 
+
 def _unwrap_if_constexpr(o):
     if isinstance(o, list):
         return [_unwrap_if_constexpr(x) for x in o]
@@ -35,6 +35,7 @@ def _unwrap_if_constexpr(o):
     if isinstance(o, tuple):
         return tuple(_unwrap_if_constexpr(x) for x in o)
     return o.value if isinstance(o, tl.constexpr) else o
+
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
@@ -52,8 +53,8 @@ def builtin(fn: T) -> T:
     return wrapper
 
 
-
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
 
 def get_key():
     return pathlib.Path(__file__).read_text()
@@ -61,6 +62,7 @@ def get_key():
 
 def get_hash():
     return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
+
 
 def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
     if all(arg is None for arg in (stages, options, language, capability)):
@@ -91,11 +93,12 @@ def custom_op(x, sanitize_overflow: tl.constexpr = True, _semantic=None):
 
 
 @triton.jit
-def add_kernel(x_ptr,
-               output_ptr,
-               n_elements,
-               BLOCK_SIZE: tl.constexpr,
-               ):
+def add_kernel(
+    x_ptr,
+    output_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -103,6 +106,7 @@ def add_kernel(x_ptr,
     x = tl.load(x_ptr + offsets, mask=mask)
     output = custom_op(x)
     tl.store(output_ptr + offsets, output, mask=mask)
+
 
 def test_custom_ops(tmp_path: pathlib.Path):
     if os.environ.get('LLVM_BUILD_SHARED_LIBS', '0') == '0':
