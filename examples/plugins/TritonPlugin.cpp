@@ -50,7 +50,7 @@ static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME};
 
 TRITON_PLUGIN_API
 tritonAddPluginPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
-  std::string passNameStr(passName);
+  std::string passNameStr(handle);
   if (passMap.find(passNameStr) == passMap.end())
     return TP_GENERIC_FAILURE;
   passMap[passNameStr](pm);
@@ -59,7 +59,7 @@ tritonAddPluginPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
 
 TRITON_PLUGIN_API
 tritonRegisterPluginPass(TRITON_PLUGIN_PASS_ARGS) {
-  std::string passNameStr(passName);
+  std::string passNameStr(handle);
   if (registryMap.find(passNameStr) == registryMap.end())
     return TP_GENERIC_FAILURE;
   registryMap[passNameStr]();
@@ -96,9 +96,10 @@ tritonEnumeratePluginCustomOps(TRITON_PLUGIN_ENUMERATOR_ARGS) {
 
 TRITON_PLUGIN_API
 tritonAddPluginCustomOp(TRITON_PLUGIN_CUSTOM_OP_ARGS) {
-  ::mlir::Value *dst = static_cast<::mlir::Value *>(operands[0]);
-  ::mlir::Value *lhs = static_cast<::mlir::Value *>(operands[1]);
-  ::mlir::Value *rhs = static_cast<::mlir::Value *>(operands[2]);
-  *dst = self.create<::mlir::arith::AddFOp>(*lhs, *rhs);
+  ::mlir::Value &dst = operands[0];
+  ::mlir::Value &lhs = operands[1];
+  ::mlir::Value &rhs = operands[2];
+  dst = self.create<::mlir::arith::AddFOp>(lhs, rhs);
+  operands[0] = dst;
   return TP_SUCCESS;
 }
