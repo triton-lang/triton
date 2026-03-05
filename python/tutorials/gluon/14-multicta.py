@@ -87,9 +87,18 @@ from triton.language.core import _aggregate as aggregate
 t8 = importlib.import_module("08-warp-specialization")
 
 
-def is_blackwell():
+def is_hopper_or_newer():
+    if not torch.cuda.is_available():
+        return False
     target = triton.runtime.driver.active.get_current_target()
-    return target.backend == "cuda" and torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 10
+    return target.backend == "cuda" and torch.cuda.get_device_capability()[0] >= 9
+
+
+def is_blackwell():
+    if not torch.cuda.is_available():
+        return False
+    target = triton.runtime.driver.active.get_current_target()
+    return target.backend == "cuda" and torch.cuda.get_device_capability()[0] == 10
 
 
 if __name__ == "__main__" and not is_blackwell():
@@ -127,7 +136,7 @@ def multicta_reduction_kernel(x_ptr, out_ptr, BLOCK_M: gl.constexpr):
     gl.store(out_ptr, row_sum)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_multicta_reduction():
     x = torch.randn(2**16, device="cuda", dtype=torch.float32)
 
@@ -396,7 +405,7 @@ def run_tma_multicast_copy(inp, out):
     tma_multicast_copy_kernel[(1, )](in_desc, out_desc, num_warps=4, num_ctas=2)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_tma_multicast_copy():
     M, N = 128, 128
     inp = torch.randn((M, N), device="cuda", dtype=torch.float16)
