@@ -19,6 +19,10 @@ enum TritonPluginResult {
 #define TRITON_PLUGIN_API_TYPE(_TYPE)                                          \
   extern "C" __attribute__((visibility("default"))) _TYPE
 
+#define TRITON_PLUGIN_PASS_ARGS                                                \
+  const char *passName, const std::vector<uint64_t> *argsPtr
+#define TRITON_PLUGIN_ENUMERATOR_ARGS uint32_t *count, const char **handles
+
 struct TritonPlugin {
   TritonPlugin() = delete;
   TritonPlugin(std::string filename) : filename(filename) {}
