@@ -297,8 +297,10 @@ class PartitionArgs:
     c_desc: tma.tensor_descriptor
     a_bufs: gl.shared_memory_descriptor
     b_bufs: gl.shared_memory_descriptor
-    load_empty_bars: gl.shared_memory_descriptor
-    load_ready_bars: gl.shared_memory_descriptor
+    load_empty_a_bars: gl.shared_memory_descriptor
+    load_ready_a_bars: gl.shared_memory_descriptor
+    load_empty_b_bars: gl.shared_memory_descriptor
+    load_ready_b_bars: gl.shared_memory_descriptor
     acc_bufs: tensor_memory_descriptor
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
@@ -367,11 +369,11 @@ def matmul_clc_partition(p):
 
 
 @gluon.jit
-def matmul_load_partition(p):
+def matmul_load_a_partition(p):
     BLOCK_K: gl.constexpr = p.a_desc.block_shape[1]
     K = p.a_desc.shape[1]
 
-    concurrent_loads: gl.constexpr = p.load_ready_bars.shape[0]
+    concurrent_loads: gl.constexpr = p.load_ready_a_bars.shape[0]
     state = Counter.create(1, concurrent_loads)
     scheduler = p.get_clc_consumer()
 
@@ -380,10 +382,32 @@ def matmul_load_partition(p):
         off_m, off_n = scheduler.get_offsets()
         for k in range(0, K, BLOCK_K):
             pred = (i > 0) or (k >= BLOCK_K * concurrent_loads)
-            mbarrier.wait(p.load_empty_bars.index(state.index), state.phase, pred=pred)
-            bar = p.load_ready_bars.index(state.index)
-            mbarrier.expect(bar, p.a_desc.nbytes_per_cta + p.b_desc.nbytes_per_cta)
+            mbarrier.wait(p.load_empty_a_bars.index(state.index), state.phase, pred=pred)
+            bar = p.load_ready_a_bars.index(state.index)
+            mbarrier.expect(bar, p.a_desc.nbytes_per_cta)
             tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index), multicast=True)
+            state = state.next()
+        scheduler = scheduler.step(i)
+        i += 1
+
+
+@gluon.jit
+def matmul_load_b_partition(p):
+    BLOCK_K: gl.constexpr = p.b_desc.block_shape[0]
+    K = p.b_desc.shape[0]
+
+    concurrent_loads: gl.constexpr = p.load_ready_b_bars.shape[0]
+    state = Counter.create(1, concurrent_loads)
+    scheduler = p.get_clc_consumer()
+
+    i = 0
+    while scheduler.has_work:
+        off_m, off_n = scheduler.get_offsets()
+        for k in range(0, K, BLOCK_K):
+            pred = (i > 0) or (k >= BLOCK_K * concurrent_loads)
+            mbarrier.wait(p.load_empty_b_bars.index(state.index), state.phase, pred=pred)
+            bar = p.load_ready_b_bars.index(state.index)
+            mbarrier.expect(bar, p.b_desc.nbytes_per_cta)
             tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index), multicast=True)
             state = state.next()
         scheduler = scheduler.step(i)
@@ -396,7 +420,7 @@ def matmul_mma_partition(p):
     K = p.a_desc.shape[1]
     ACC_STAGES: gl.constexpr = p.acc_empty_bars.shape[0]
 
-    load_state = Counter.create(0, p.load_empty_bars.shape[0])
+    load_state = Counter.create(0, p.load_empty_a_bars.shape[0])
     acc_state = Counter.create(1, ACC_STAGES)
     scheduler = p.get_clc_consumer()
 
@@ -406,9 +430,14 @@ def matmul_mma_partition(p):
         mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase, pred=(i >= ACC_STAGES))
         use_acc = False
         for k in range(0, K, BLOCK_K):
-            mbarrier.wait(p.load_ready_bars.index(load_state.index), load_state.phase)
+            mbarrier.wait(p.load_ready_a_bars.index(load_state.index), load_state.phase)
+            mbarrier.wait(p.load_ready_b_bars.index(load_state.index), load_state.phase)
             tcgen05_mma(p.a_bufs.index(load_state.index), p.b_bufs.index(load_state.index), acc_buf, use_acc=use_acc,
-                        multicast=True, mbarriers=[p.load_empty_bars.index(load_state.index)])
+                        multicast=True,
+                        mbarriers=[
+                            p.load_empty_a_bars.index(load_state.index),
+                            p.load_empty_b_bars.index(load_state.index),
+                        ])
             load_state = load_state.next()
             use_acc = True
         tcgen05_commit(p.acc_ready_bars.index(acc_state.index), descs=[p.a_bufs.index(0), p.b_bufs.index(0)])
@@ -479,7 +508,7 @@ def _matmul_kernel(
     BLOCK_M: gl.constexpr = a_desc.block_shape[0]
     BLOCK_N: gl.constexpr = b_desc.block_shape[1]
     TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
-    N_PARTITIONS: gl.constexpr = 4
+    N_PARTITIONS: gl.constexpr = 5
 
     dtype: gl.constexpr = a_desc.dtype
     a_bufs = gl.allocate_shared_memory(dtype, [STAGES] + a_desc.block_shape, a_desc.layout)
@@ -488,12 +517,17 @@ def _matmul_kernel(
     mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count([a_bufs.index(0), b_bufs.index(0)], multicast=True)
 
     # Equiv. consumed_barrier. Barrier TCGEN05 MMA -> Load TMA
-    load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
-    # Equiv. ab_tma_barrier. Barrier Load TMA -> TCGEN05 MMA
-    load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=TWO_CTAS)
+    load_empty_a_bars = mbarrier.allocate_mbarrier(batch=STAGES)
+    # Equiv. ab_tma_barrier. Barrier A-load TMA -> TCGEN05 MMA
+    load_ready_a_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=TWO_CTAS)
+    load_empty_b_bars = mbarrier.allocate_mbarrier(batch=STAGES)
+    # Equiv. ab_tma_barrier. Barrier B-load TMA -> TCGEN05 MMA
+    load_ready_b_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=TWO_CTAS)
     for i in gl.static_range(STAGES):
-        mbarrier.init(load_empty_bars.index(i), count=mma_barrier_count)
-        mbarrier.init(load_ready_bars.index(i), count=1)
+        mbarrier.init(load_empty_a_bars.index(i), count=mma_barrier_count)
+        mbarrier.init(load_ready_a_bars.index(i), count=1)
+        mbarrier.init(load_empty_b_bars.index(i), count=mma_barrier_count)
+        mbarrier.init(load_ready_b_bars.index(i), count=1)
 
     tmem_layout: gl.constexpr = TensorMemoryLayout(
         [BLOCK_SIZE_M, BLOCK_N // get_split_dim(CGA_LAYOUT, 1)],
@@ -530,8 +564,10 @@ def _matmul_kernel(
         c_desc,
         a_bufs,
         b_bufs,
-        load_empty_bars,
-        load_ready_bars,
+        load_empty_a_bars,
+        load_ready_a_bars,
+        load_empty_b_bars,
+        load_ready_b_bars,
         acc_bufs,
         acc_empty_bars,
         acc_ready_bars,
@@ -547,10 +583,11 @@ def _matmul_kernel(
 
     gl.warp_specialize([
         (matmul_epilogue_partition, (p, )),
-        (matmul_load_partition, (p, )),
+        (matmul_load_a_partition, (p, )),
+        (matmul_load_b_partition, (p, )),
         (matmul_mma_partition, (p, )),
         (matmul_clc_partition, (p, )),
-    ], [1, 1, 1], [24, 24, 24])
+    ], [1, 1, 1, 1], [24, 24, 24, 24])
 
 
 matmul_kernel = triton.autotune(
