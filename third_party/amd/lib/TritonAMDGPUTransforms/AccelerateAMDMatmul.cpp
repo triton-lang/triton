@@ -802,13 +802,6 @@ public:
     auto loc = dotOp.getLoc();
     bool isFp4 = (elemType == ScaleDotElemType::E2M1);
 
-    // On architectures without hardware scaled upcast instructions (CDNA3 and
-    // earlier), fall back to the software emulation path.
-    if (!targetInfo.supportsHwScaledUpcast()) {
-      return ttg::DecomposeScaledBlocked::scaleArg(rewriter, dotOp, opIdx,
-                                                   computeType);
-    }
-
     RankedTensorType scaleType16 = getScaleType(vType16, kDim, isFp4);
 
     // Mark scale to simplify pattern matching during deducing TilesPerWarp

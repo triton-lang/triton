@@ -10,10 +10,48 @@ using namespace mlir;
 using namespace mlir::triton;
 using mlir::LLVM::AMD::upcast4xMxfp8_HW;
 using mlir::LLVM::AMD::upcast8xMxfp4_HW;
+using mlir::LLVM::AMD::upcast8xMxfp4_SW;
 using mlir::LLVM::AMD::upcast8xMxfp8fp4_HW;
 
 // TODO: using if-then-else to repalce ternary operator on template
 namespace {
+
+// Software conversion of a single OCP E4M3FN value (i8) to f16.
+static Value convertE4M3FNToF16(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
+                                Value fp8Val) {
+  Value a = b.undef(vec_ty(i8_ty, 2));
+  a = b.insert_element(a, b.i8_val(0), b.i32_val(0));
+  a = b.insert_element(a, fp8Val, b.i32_val(1));
+  a = b.bitcast(a, i16_ty);
+
+  Value sign = b.and_(a, b.i16_val(0x8000));
+  a = b.and_(a, b.i16_val(0x7FFF));
+  a = b.lshr(a, b.i16_val(1));
+  a = b.add(a, b.i16_val(0x2000));
+
+  Value vAbs = b.and_(fp8Val, b.i8_val(0x7F));
+  a = b.select(b.icmp_eq(vAbs, b.i8_val(0x7F)), b.i16_val(0x7E00), a);
+
+  static constexpr int16_t denormsAndZeroLut[8] = {
+      0x0000, 0x1800, 0x1C00, 0x1E00, 0x2000, 0x2100, 0x2200, 0x2300};
+  for (int i = 0; i < 8; i++)
+    a = b.select(b.icmp_eq(vAbs, b.i8_val(i)), b.i16_val(denormsAndZeroLut[i]),
+                 a);
+
+  a = b.or_(a, sign);
+  return b.bitcast(a, f16_ty);
+}
+
+// Software conversion of a single fp8 value (i8) to f16.
+// Handles both E4M3FN and E5M2 formats.
+static Value convertFp8ToF16(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
+                             Value fp8Val, bool isE4M3FN) {
+  if (isE4M3FN)
+    return convertE4M3FNToF16(rewriter, b, fp8Val);
+  // E5M2 has the same exponent format as f16 (5-bit, bias 15).
+  Value i16Val = b.shl(b.zext(i16_ty, fp8Val), b.i16_val(8));
+  return b.bitcast(i16Val, f16_ty);
+}
 struct ScaledUpcastFp4OpPattern
     : ConvertOpToLLVMPattern<amdgpu::ScaledUpcastFp4Op> {
 
@@ -49,7 +87,7 @@ struct ScaledUpcastFp4OpPattern
 
         results.append(converted.begin(), converted.end());
       }
-    } else {
+    } else if (targetInfo.supportsHwScaledUpcast()) {
       for (int i = 0; i < inputVals.size(); i += 4) {
         SmallVector<Value, 4> v4i32 =
             elemType.isF16()
@@ -63,6 +101,46 @@ struct ScaledUpcastFp4OpPattern
           Value elements = b.bitcast(v4i32[j], vec_ty(elemType, 2));
           results.push_back(b.extract_element(elements, b.i32_val(0)));
           results.push_back(b.extract_element(elements, b.i32_val(1)));
+        }
+      }
+    } else {
+      // Software emulation: upcast fp4 via LUT, then multiply by scale.
+      bool toFp16 = elemType.isF16();
+      auto isaFamily = targetInfo.getISAFamily();
+      for (size_t i = 0; i < inputVals.size(); i += 4) {
+        Value packedVec = b.undef(vec_ty(i8_ty, 4));
+        for (int j : llvm::seq(4))
+          packedVec =
+              b.insert_element(packedVec, inputVals[i + j], b.i32_val(j));
+
+        SmallVector<Value> v8vals =
+            upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec, isaFamily);
+
+        // The bf16 scale was left-shifted by 7 (scaleTo16); shift by 16 more
+        // to get f32.
+        Value scaleBf16 = scaleVals[i * 2];
+        Value scaleF32 = b.bitcast(
+            b.shl(b.zext(i32_ty, b.bitcast(scaleBf16, i16_ty)), b.i32_val(16)),
+            f32_ty);
+
+        for (int j = 0; j < 8; j++) {
+          Value vF32;
+          if (toFp16) {
+            vF32 = b.fpext(f32_ty, v8vals[j]);
+          } else {
+            // bf16 → f32 via bit manipulation (gfx9 lacks native bf16 VALU)
+            vF32 = b.bitcast(b.shl(b.zext(i32_ty, b.bitcast(v8vals[j], i16_ty)),
+                                   b.i32_val(16)),
+                             f32_ty);
+          }
+          Value mulF32 = b.fmul(vF32, scaleF32);
+          if (toFp16) {
+            results.push_back(b.fptrunc(f16_ty, mulF32));
+          } else {
+            Value mulI16 = b.trunc(
+                i16_ty, b.lshr(b.bitcast(mulF32, i32_ty), b.i32_val(16)));
+            results.push_back(b.bitcast(mulI16, bf16_ty));
+          }
         }
       }
     }
@@ -117,7 +195,7 @@ struct ScaledUpcastFp8OpPattern
 
         results.append(converted.begin(), converted.end());
       }
-    } else {
+    } else if (targetInfo.supportsHwScaledUpcast()) {
       for (int i = 0; i < inputVals.size(); i += 4) {
         SmallVector<Value, 2> v2i32 =
             elemType.isF16()
@@ -139,6 +217,32 @@ struct ScaledUpcastFp8OpPattern
           Value elements = b.bitcast(v2i32[j], vec_ty(elemType, 2));
           results.push_back(b.extract_element(elements, b.i32_val(0)));
           results.push_back(b.extract_element(elements, b.i32_val(1)));
+        }
+      }
+    } else {
+      // Software emulation: convert fp8 to f16, then scale via f32.
+      bool isE4M3FN = isa<Float8E4M3FNType>(fp8ElemType);
+      bool toFp16 = elemType.isF16();
+      for (size_t i = 0; i < inputVals.size(); i += 4) {
+        // The bf16 scale was left-shifted by 7 (scaleTo16); shift by 16 more
+        // to get f32.
+        Value scaleBf16 = scaleVals[i];
+        Value scaleF32 = b.bitcast(
+            b.shl(b.zext(i32_ty, b.bitcast(scaleBf16, i16_ty)), b.i32_val(16)),
+            f32_ty);
+
+        for (int j = 0; j < 4; j++) {
+          Value f16Val =
+              convertFp8ToF16(rewriter, b, inputVals[i + j], isE4M3FN);
+          Value f32Val = b.fpext(f32_ty, f16Val);
+          Value mulF32 = b.fmul(f32Val, scaleF32);
+          if (toFp16) {
+            results.push_back(b.fptrunc(f16_ty, mulF32));
+          } else {
+            Value mulI16 = b.trunc(
+                i16_ty, b.lshr(b.bitcast(mulF32, i32_ty), b.i32_val(16)));
+            results.push_back(b.bitcast(mulI16, bf16_ty));
+          }
         }
       }
     }
