@@ -298,10 +298,10 @@ public:
   }
 
   /// Retrieves the data associated with a function
-  T *getFuncData(FunctionOpInterface funcOp) {
-    if (funcMap.count(funcOp)) {
-      return &funcMap[funcOp];
-    }
+  const T *getFuncData(FunctionOpInterface funcOp) const {
+    auto it = funcMap.find(funcOp);
+    if (it != funcMap.end())
+      return &it->second;
     return nullptr;
   }
 
