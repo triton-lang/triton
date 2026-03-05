@@ -418,12 +418,13 @@ LogicalResult DotScaledOp::deduceScaleFactor(
     int64_t kdim =
         opShape[opIdx == 0 ? opShape.size() - 1 : opShape.size() - 2] *
         unpackFactor;
-    int32_t sf = kdim / scaleShape[scaleShape.size() - 1];
-    if (sf != 16 && sf != 32) {
-      errMsg = "scale factor must be 16 or 32. Got " + std::to_string(sf);
+    int32_t scaleFactor = kdim / scaleShape[scaleShape.size() - 1];
+    if (scaleFactor != 16 && scaleFactor != 32) {
+      errMsg =
+          "scale factor must be 16 or 32. Got " + std::to_string(scaleFactor);
       return 0;
     }
-    return sf;
+    return scaleFactor;
   };
 
   errMsg.clear();
