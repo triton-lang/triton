@@ -9,6 +9,7 @@
 #include <array>
 
 namespace mlir::triton::instrument {
+class ConSanTargetHooks;
 class FunctionBuilder;
 
 constexpr int numMemTypes = getMaxEnumValForMemType() + 1;
@@ -36,6 +37,7 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   Location loc, int64_t val,
                                                   RankedTensorType tensorType,
                                                   bool isSigned = false);
+uint32_t getMemDescLength(Value buf);
 FuncOp getEntryPoint(ModuleOp module);
 gpu::DistributedEncodingTrait
 getSingleDimSliceEncoding(gpu::DistributedEncodingTrait encoding, int dim);
@@ -87,7 +89,8 @@ struct AuxDataMap {
   std::array<bool, numMemTypes> hasNonTrivialAliasing{};
 
   void populateAndPassToWarpSpecialize(ModuleOp module,
-                                       FunctionBuilder &funcBuilder);
+                                       FunctionBuilder &funcBuilder,
+                                       const ConSanTargetHooks *hooks);
 
 private:
   void getBuffersAndBarriers(
