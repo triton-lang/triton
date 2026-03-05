@@ -360,8 +360,10 @@ def matmul_clc_partition(p):
             pid_m, pid_n = _planar_snake(tile_id, num_pid_m, num_pid_n, p.MINOR_DIM, p.GRID_TILE_WIDTH)
         planar_slot_m = p.clc_planar_pid_m_buffers.index(state.index)
         planar_slot_n = p.clc_planar_pid_n_buffers.index(state.index)
-        planar_slot_m.store(gl.full([1], pid_m, gl.int32, layout=gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]])))
-        planar_slot_n.store(gl.full([1], pid_n, gl.int32, layout=gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]])))
+        planar_slot_m.store(
+            gl.full([1], pid_m, gl.int32, layout=gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]])))
+        planar_slot_n.store(
+            gl.full([1], pid_n, gl.int32, layout=gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]])))
         mbarrier.arrive(p.clc_planar_ready_bars.index(state.index))
         state = state.next()
         consumed_state = consumed_state.next()
