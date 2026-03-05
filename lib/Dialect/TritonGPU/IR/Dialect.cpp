@@ -2173,9 +2173,12 @@ PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
   auto outDimNames = standardOutDimNames(context, shape.size());
   StringAttr kOffset = StringAttr::get(context, "offset");
 
+  SmallVector<int64_t> shapePerCTA =
+      getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
+
   // Create identity mapping based on shape and order
-  LinearLayout linearComponent =
-      identityStandardND(kOffset, SmallVector<unsigned>(shape), order);
+  LinearLayout linearComponent = identityStandardND(
+      kOffset, llvm::to_vector_of<unsigned>(shapePerCTA), order);
   linearComponent = combineCtaCgaWithShape(linearComponent, cgaLayout, shape);
 
   return get(context, intervalPads, std::move(linearComponent));
@@ -3380,7 +3383,7 @@ struct TritonGPUInferLayoutInterface
       newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
                      newOrder.end());
       // Remove last dimension from ctall.
-      ctall = ctall.unsqueezeOut(to_vector(ctall.getOutDimNames()).back());
+      ctall = ctall.squeezeOuts(to_vector(ctall.getOutDimNames()).back());
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), //
           ArrayRef(enc.getSizePerThread()).drop_back(1),

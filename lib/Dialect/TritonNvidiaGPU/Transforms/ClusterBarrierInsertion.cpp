@@ -6,8 +6,12 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -69,6 +73,244 @@ static bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
 
   return hasDistributedDependency(blockInfo.syncReadSlices, /*isRead=*/true) ||
          hasDistributedDependency(blockInfo.syncWriteSlices, /*isRead=*/false);
+}
+
+static bool isCrossCTAMBarrier(ttng::InitBarrierOp initBarrierOp, int numCTAs) {
+  auto barrierTy = cast<ttg::MemDescType>(initBarrierOp.getAlloc().getType());
+  return barrierTy.getShape()[0] != numCTAs;
+}
+
+static bool valueAliasesTrackedBuffers(Value value,
+                                       const Allocation::BufferIdSetT &tracked,
+                                       Allocation *allocation) {
+  for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
+    if (bufferId != Allocation::InvalidBufferId && tracked.contains(bufferId))
+      return true;
+  }
+  return false;
+}
+
+static bool
+usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
+                                       const Allocation::BufferIdSetT &tracked,
+                                       Allocation *allocation) {
+  auto aliasesTracked = [&](Value value) {
+    return value && valueAliasesTrackedBuffers(value, tracked, allocation);
+  };
+
+  if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+    return mma.getTwoCtas() && llvm::any_of(mma.getBarriers(), aliasesTracked);
+  }
+  if (auto mmaScaled = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
+    return mmaScaled.getTwoCtas() &&
+           llvm::any_of(mmaScaled.getBarriers(), aliasesTracked);
+  }
+  if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
+    return ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier());
+  }
+  if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+    return tma.getMulticast() && aliasesTracked(tma.getBarrier());
+  }
+  return false;
+}
+
+static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
+                                             FunctionOpInterface funcOp,
+                                             Allocation *allocation,
+                                             int numCTAs) {
+  // Barrier init sync is needed for barriers that are themselves cross-CTA,
+  // and also for per-CTA barriers consumed by multi-CTA ops that multicast or
+  // otherwise fan out barrier state across the cluster.
+  if (isCrossCTAMBarrier(initBarrierOp, numCTAs))
+    return true;
+
+  Allocation::BufferIdSetT initBarrierBuffers;
+  for (auto bufferId :
+       allocation->getAllBufferIdsWithAliases(initBarrierOp.getAlloc())) {
+    assert(bufferId != Allocation::InvalidBufferId);
+    initBarrierBuffers.insert(bufferId);
+  }
+
+  // Or if it's used by a multi-CTA consumer that broadcasts barrier state
+  // across CTAs even though the barrier allocation itself looks per-CTA.
+  return funcOp
+      ->walk<WalkOrder::PreOrder>([&](Operation *op) {
+        if (usesTrackedBarrierInCrossCTAConsumerOp(op, initBarrierBuffers,
+                                                   allocation)) {
+          return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      })
+      .wasInterrupted();
+}
+
+static bool nestedOpUsesTrackedMBarrier(Operation *op,
+                                        const Allocation::BufferIdSetT &tracked,
+                                        Allocation *allocation) {
+  if (isa<ttng::InitBarrierOp, ttg::LocalAllocOp>(op))
+    return false;
+
+  if (auto memEffects = dyn_cast<MemoryEffectOpInterface>(op)) {
+    SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effects;
+    memEffects.getEffects(effects);
+    for (const auto &effect : effects) {
+      Value value = effect.getValue();
+      if (value && valueAliasesTrackedBuffers(value, tracked, allocation))
+        return true;
+    }
+  }
+  return false;
+}
+
+static bool opUsesTrackedMBarrier(Operation *op,
+                                  const Allocation::BufferIdSetT &tracked,
+                                  Allocation *allocation) {
+  return op
+      ->walk<WalkOrder::PreOrder>([&](Operation *nestedOp) {
+        if (nestedOpUsesTrackedMBarrier(nestedOp, tracked, allocation))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      })
+      .wasInterrupted();
+}
+
+static LogicalResult
+insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
+                                          Allocation *allocation, int numCTAs,
+                                          OpBuilder &builder) {
+  if (!funcOp || funcOp->getNumRegions() != 1) {
+    return funcOp.emitOpError(
+        "cross-CTA mbarrier init sync insertion requires a single function "
+        "top-level region");
+  }
+  Region &topLevelRegion = funcOp->getRegion(0);
+  llvm::SetVector<Operation *> crossCTAInitAnchors;
+  Allocation::BufferIdSetT trackedBarrierBuffers;
+
+  // Find all cross-CTA mbarrier.init ops and map each
+  // one to the containing top-level op that bounds the insertion window.
+  funcOp.walk([&](ttng::InitBarrierOp initBarrierOp) {
+    if (!requiresCrossCTAMBarrierInitSync(initBarrierOp, funcOp, allocation,
+                                          numCTAs))
+      return;
+    Operation *topLevelAnchor =
+        topLevelRegion.findAncestorOpInRegion(*initBarrierOp.getOperation());
+    assert(topLevelAnchor && "init op must be inside the function region");
+    crossCTAInitAnchors.insert(topLevelAnchor);
+    for (auto bufferId :
+         allocation->getAllBufferIdsWithAliases(initBarrierOp.getAlloc())) {
+      assert(bufferId != Allocation::InvalidBufferId);
+      trackedBarrierBuffers.insert(bufferId);
+    }
+  });
+  // Nothing to do
+  if (crossCTAInitAnchors.empty())
+    return success();
+
+  llvm::SetVector<Operation *> trackedUseAnchors;
+  for (Block &block : topLevelRegion) {
+    for (Operation &op : block) {
+      if (opUsesTrackedMBarrier(&op, trackedBarrierBuffers, allocation))
+        trackedUseAnchors.insert(&op);
+    }
+  }
+  if (trackedUseAnchors.empty()) {
+    return funcOp.emitOpError("found at least one mbarrier.init op but could "
+                              "not find any mbarrier use");
+  }
+
+  // Find the earliest insertion point that postdominates every tracked init.
+  PostDominanceInfo postDomInfo(funcOp);
+  llvm::SmallPtrSet<Block *, 8> initBlocks;
+  for (Operation *crossCTAInitAnchor : crossCTAInitAnchors)
+    initBlocks.insert(crossCTAInitAnchor->getBlock());
+  Block *firstInsertionBlock =
+      postDomInfo.findNearestCommonDominator(initBlocks);
+  if (!firstInsertionBlock) {
+    return funcOp.emitOpError(
+        "could not find a common post-dominating insertion block for "
+        "cross-CTA mbarrier.init");
+  }
+
+  Operation *lastInitInInsertionBlock = nullptr;
+  for (Operation *crossCTAInitAnchor : crossCTAInitAnchors) {
+    if (crossCTAInitAnchor->getBlock() != firstInsertionBlock)
+      continue;
+    if (!lastInitInInsertionBlock ||
+        lastInitInInsertionBlock->isBeforeInBlock(crossCTAInitAnchor)) {
+      lastInitInInsertionBlock = crossCTAInitAnchor;
+    }
+  }
+  Operation *firstInsertionAnchor =
+      lastInitInInsertionBlock ? lastInitInInsertionBlock->getNextNode()
+                               : &firstInsertionBlock->front();
+
+  // Find the latest insertion point that still dominates every tracked use.
+  DominanceInfo domInfo(funcOp);
+  llvm::SmallPtrSet<Block *, 8> useBlocks;
+  for (Operation *trackedUseAnchor : trackedUseAnchors)
+    useBlocks.insert(trackedUseAnchor->getBlock());
+  Block *lastInsertionBlock = domInfo.findNearestCommonDominator(useBlocks);
+  if (!lastInsertionBlock) {
+    return funcOp.emitOpError(
+        "could not find a common insertion block that dominates all tracked "
+        "mbarrier uses");
+  }
+
+  Operation *firstTrackedUseInInsertionBlock = nullptr;
+  for (Operation *trackedUseAnchor : trackedUseAnchors) {
+    if (trackedUseAnchor->getBlock() != lastInsertionBlock)
+      continue;
+    if (!firstTrackedUseInInsertionBlock ||
+        trackedUseAnchor->isBeforeInBlock(firstTrackedUseInInsertionBlock)) {
+      firstTrackedUseInInsertionBlock = trackedUseAnchor;
+    }
+  }
+  Operation *lastInsertionAnchor = firstTrackedUseInInsertionBlock
+                                       ? firstTrackedUseInInsertionBlock
+                                       : lastInsertionBlock->getTerminator();
+
+  if (!domInfo.dominates(firstInsertionAnchor, lastInsertionAnchor)) {
+    return funcOp.emitOpError(
+        "could not find an insertion point between cross-CTA mbarrier.init "
+        "ops and tracked mbarrier uses");
+  }
+
+  // Reuse the latest cluster barrier that lies between the init-side and
+  // use-side insertion boundaries.
+  ttng::ClusterBarrierOp reusedClusterBarrier;
+  for (Block &block : topLevelRegion) {
+    for (Operation &op : block) {
+      auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(&op);
+      if (!clusterBarrier)
+        continue;
+      if (!postDomInfo.postDominates(clusterBarrier.getOperation(),
+                                     firstInsertionAnchor))
+        continue;
+      if (!domInfo.dominates(clusterBarrier.getOperation(),
+                             lastInsertionAnchor))
+        continue;
+      if (!reusedClusterBarrier ||
+          domInfo.properlyDominates(reusedClusterBarrier.getOperation(),
+                                    clusterBarrier.getOperation())) {
+        reusedClusterBarrier = clusterBarrier;
+      }
+    }
+  }
+
+  OpBuilder::InsertionGuard guard(builder);
+  Operation *fenceInsertionPoint =
+      reusedClusterBarrier && reusedClusterBarrier.getRelaxed()
+          ? reusedClusterBarrier.getOperation()
+          : lastInsertionAnchor;
+  builder.setInsertionPoint(fenceInsertionPoint);
+  Location loc = lastInitInInsertionBlock
+                     ? lastInitInInsertionBlock->getLoc()
+                     : crossCTAInitAnchors.front()->getLoc();
+  ttng::FenceMBarrierInitReleaseClusterOp::create(builder, loc);
+  if (!reusedClusterBarrier)
+    ttng::ClusterBarrierOp::create(builder, loc, /*relaxed=*/true);
+  return success();
 }
 
 class ClusterBarrierAnalysis : public MembarOrFenceAnalysis {
@@ -207,6 +449,32 @@ void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
   ModuleMembarOrFenceAnalysis<ClusterBarrierAnalysis> analysis(
       &moduleAllocation, filterFn);
   analysis.run();
+}
+
+LogicalResult
+runCrossCTAMBarrierInitSyncInsertion(ModuleAllocation &moduleAllocation,
+                                     int computeCapability) {
+  ModuleOp mod = moduleAllocation.getModuleOp();
+  if (computeCapability < 90)
+    return success();
+  int numCTAs = ttg::TritonGPUDialect::getNumCTAs(mod);
+  if (numCTAs == 1)
+    return success();
+
+  LogicalResult status = success();
+  moduleAllocation.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+      [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
+      [&](FunctionOpInterface funcOp) {
+        if (failed(status))
+          return;
+        auto *allocation = moduleAllocation.getFuncData(funcOp);
+        OpBuilder builder(funcOp);
+        if (failed(insertCrossCTAMBarrierInitSyncForFunction(
+                funcOp, allocation, numCTAs, builder))) {
+          status = failure();
+        }
+      });
+  return status;
 }
 
 } // namespace nvidia_gpu

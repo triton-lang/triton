@@ -14,7 +14,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_mma_scaled,
 )
 from triton.experimental.gluon.language.nvidia.blackwell import tma as tma_blackwell
-from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared, mbarrier, tma
+from triton.experimental.gluon.language.nvidia.hopper import mbarrier, tma
 from triton.language.core import _unwrap_if_constexpr
 
 
@@ -159,7 +159,6 @@ def tl_dot_blackwell(
     else:
         acc_temp = ttgl.zeros([M, N], out_dtype, layout=tmem_reg_layout)
     acc_tmem.store(acc_temp)
-    fence_async_shared()
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
     tcgen05_mma(a_smem, b_smem, acc_tmem, use_acc=True)
@@ -470,7 +469,6 @@ def tl_dot_scaled_blackwell(
     else:
         acc_temp = ttgl.zeros([M, N], out_dtype, layout=tmem_reg_layout)
     acc_tmem.store(acc_temp)
-    fence_async_shared()
 
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
@@ -578,7 +576,6 @@ def tl_obj_scatter(obj, value, x_offsets, y_offset):
         desc = obj
         desc_shape: ttgl.constexpr = [x_offsets.shape[0], desc.block_shape[1]]
         alloc = ttgl.allocate_shared_memory(desc.dtype, desc_shape, desc.layout, value)
-        fence_async_shared()
         x_offsets_layout: ttgl.constexpr = ttgl.SliceLayout(
             0,
             ttgl.BlockedLayout([1, 4], [get_num_threads_per_warp(), 1], [1, ttgl.num_warps()], [1, 0]),
@@ -599,7 +596,6 @@ def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option=
 @gluon.jit
 def tl_store_tensor_descriptor(desc, offsets, value):
     alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
-    fence_async_shared()
     tma.async_copy_shared_to_global(desc, offsets, alloc)
     tma.store_wait(0)
     alloc._keep_alive()
