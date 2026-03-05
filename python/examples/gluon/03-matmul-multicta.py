@@ -85,12 +85,11 @@ def matmul_get_configs(pre_hook=None):
         for BK in (64, 128)
         for minor_dim in (0, 1)
         for grid_tile_width in (4, 8, 16)
-        for stages in (4, 5, 6)
+        for stages in (2, 4, 6)
         for acc_stages in (2, )
-        for subtile_stages in (1, 2, 4)
+        for subtile_stages in (4, )
         for cga_layout in ((), ((1, 0), ), ((1, 0), (2, 0)))
         if BN // get_split_dim(cga_layout, 1) <= 256
-        if subtile_stages <= BN // get_epilogue_size_n(BM, BN, cga_layout)
         # Trim some configs with too large a tile
         if BN == 512 and len(cga_layout) == 0
     ]
