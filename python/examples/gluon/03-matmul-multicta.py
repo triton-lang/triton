@@ -715,7 +715,7 @@ def get_benchmark_kernel_config():
         "tile_k": 64,
         "grid_minor_dim": 0,
         "grid_tile_width": 16,
-        "stages": 5,
+        "stages": 6,
         "acc_stages": 2,
         "cga_layout": ((1, 0), ),
         "epilogue_tile_n": 32,
