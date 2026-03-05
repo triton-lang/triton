@@ -43,6 +43,30 @@ tt.func @test_combine_dot_add_pattern() -> (tensor<128x128xf32>) {
 }
 
 
+// CHECK-LABEL: @test_combine_scale_dot_add_pattern
+tt.func @test_combine_scale_dot_add_pattern() -> (tensor<128x128xf32>) {
+    // CHECK-DAG: %[[a:.*]] = arith.constant dense<1.000000e+00> : tensor<128x128xf8E5M2>
+    // CHECK-DAG: %[[sa:.*]] = arith.constant dense<1> : tensor<128x4xi8>
+    // CHECK-DAG: %[[b:.*]] = arith.constant dense<2.000000e+00> : tensor<128x128xf8E5M2>
+    // CHECK-DAG: %[[sb:.*]] = arith.constant dense<2> : tensor<128x4xi8>
+    // CHECK-DAG: %[[d:.*]] = arith.constant dense<3.000000e+00> : tensor<128x128xf32>
+    %a = arith.constant dense<1.0> : tensor<128x128xf8E5M2>
+    %sa = arith.constant dense<1> : tensor<128x4xi8>
+    %b = arith.constant dense<2.0> : tensor<128x128xf8E5M2>
+    %sb = arith.constant dense<2> : tensor<128x4xi8>
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32>
+    %d = arith.constant dense<3.0> : tensor<128x128xf32>
+
+    %dot_out = tt.dot_scaled %a scale %sa, %b scale %sb, %zero lhs = e5m2 rhs = e5m2 {fastMath = false}
+      : tensor<128x128xf8E5M2>, tensor<128x4xi8> * tensor<128x128xf8E5M2>, tensor<128x4xi8> -> tensor<128x128xf32>
+
+    // CHECK-NEXT: %[[res:.*]] = tt.dot_scaled %[[a]] scale %[[sa]], %[[b]] scale %[[sb]], %[[d]] lhs = e5m2 rhs = e5m2 {fastMath = false} : tensor<128x128xf8E5M2>, tensor<128x4xi8> * tensor<128x128xf8E5M2>, tensor<128x4xi8> -> tensor<128x128xf32>
+    // CHECK-NEXT: tt.return %[[res]] : tensor<128x128xf32>
+    %res = arith.addf %dot_out, %d : tensor<128x128xf32>
+    tt.return %res : tensor<128x128xf32>
+}
+
+
 // CHECK-LABEL: @test_combine_dot_add_rev_pattern
 tt.func @test_combine_dot_add_rev_pattern() -> (tensor<128x128xf32>) {
     // CHECK-DAG: %[[d:.*]] = arith.constant dense<3.000000e+00> : tensor<128x128xf32>

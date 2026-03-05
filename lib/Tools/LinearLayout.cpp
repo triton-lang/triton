@@ -1117,7 +1117,7 @@ LinearLayout LinearLayout::pseudoinvert() const {
   return identity.invertAndCompose(*this);
 }
 
-LinearLayout LinearLayout::unsqueezeIn(StringAttr dim) const {
+LinearLayout LinearLayout::squeezeIns(StringAttr dim) const {
   assert(getInDimSize(dim) == 1);
   SmallVector<std::pair<StringAttr, int32_t>> newInDims;
   for (auto inDim : getInDimNames()) {
@@ -1128,7 +1128,7 @@ LinearLayout LinearLayout::unsqueezeIn(StringAttr dim) const {
   return reshapeIns(newInDims);
 }
 
-LinearLayout LinearLayout::unsqueezeOut(StringAttr dim) const {
+LinearLayout LinearLayout::squeezeOuts(StringAttr dim) const {
   assert(getOutDimSize(dim) == 1);
   SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
   for (auto [outDim, outDimSize] : getOutDims()) {
@@ -1136,7 +1136,7 @@ LinearLayout LinearLayout::unsqueezeOut(StringAttr dim) const {
       newOutDims.push_back({outDim, outDimSize});
     }
   }
-  return LinearLayout(bases, newOutDims, isSurjective());
+  return reshapeOuts(newOutDims);
 }
 
 llvm::MapVector<StringAttr, int32_t>

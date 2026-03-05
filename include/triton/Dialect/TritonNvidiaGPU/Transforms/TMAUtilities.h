@@ -27,6 +27,8 @@ triton::gpu::SharedEncodingTrait
 getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
                           Value desc);
 
+bool hasCGABroadcast(gpu::MemDescType memDescType);
+
 inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
                                              ArrayRef<int64_t> shapePerCTA,
                                              bool packedSize,
