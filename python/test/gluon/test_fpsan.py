@@ -147,6 +147,46 @@ def _expected_extern_binary_tag_i32(x_i32: np.ndarray, y_i32: np.ndarray, symbol
     return _u32_to_i32(out_u32)
 
 
+UNARY_EXTERN_SYMBOLS = {
+    "cuda": [
+        ("tan", "__nv_tanf"),
+        ("tanh", "__nv_tanhf"),
+        ("log1p", "__nv_log1pf"),
+        ("cbrt", "__nv_cbrtf"),
+        ("round", "__nv_roundf"),
+    ],
+    "hip": [
+        ("tan", "__ocml_tan_f32"),
+        ("tanh", "__ocml_tanh_f32"),
+        ("log1p", "__ocml_log1p_f32"),
+        ("round", "__ocml_round_f32"),
+    ],
+}
+
+BINARY_EXTERN_SYMBOLS = {
+    "cuda": [
+        ("atan2", "__nv_atan2f"),
+        ("hypot", "__nv_hypotf"),
+        ("pow", "__nv_powf"),
+    ],
+    "hip": [
+        ("atan2", "__ocml_atan2_f32"),
+        ("hypot", "__ocml_hypot_f32"),
+        ("pow", "__ocml_pow_f32"),
+    ],
+}
+
+
+def _extern_backend_name() -> str:
+    if is_hip():
+        return "hip"
+    return "cuda"
+
+
+EXTERN_UNARY_CASES = UNARY_EXTERN_SYMBOLS[_extern_backend_name()]
+EXTERN_BINARY_CASES = BINARY_EXTERN_SYMBOLS[_extern_backend_name()]
+
+
 def _as_payload_np_i32(x) -> np.ndarray:
     if isinstance(x, torch.Tensor):
         x = x.detach().cpu().numpy()
@@ -357,13 +397,7 @@ def _extern_unary_math_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOC
 
 @pytest.mark.parametrize(
     "op,symbol",
-    [
-        ("tan", "__nv_tanf"),
-        ("tanh", "__nv_tanhf"),
-        ("log1p", "__nv_log1pf"),
-        ("cbrt", "__nv_cbrtf"),
-        ("round", "__nv_roundf"),
-    ],
+    EXTERN_UNARY_CASES,
 )
 def test_extern_unary_payload_semantics(device, op, symbol, fresh_knobs):
     _require_cuda_backend(device)
@@ -416,11 +450,7 @@ def _extern_binary_math_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constex
 
 @pytest.mark.parametrize(
     "op,symbol",
-    [
-        ("atan2", "__nv_atan2f"),
-        ("hypot", "__nv_hypotf"),
-        ("pow", "__nv_powf"),
-    ],
+    EXTERN_BINARY_CASES,
 )
 def test_extern_binary_payload_semantics(device, op, symbol, fresh_knobs):
     _require_cuda_backend(device)
