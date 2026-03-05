@@ -91,7 +91,7 @@ def matmul_get_configs(pre_hook=None):
         for cga_layout in ((), ((1, 0), ), ((1, 0), (2, 0)))
         if BN // get_split_dim(cga_layout, 1) <= 256
         # Trim some configs with too large a tile
-        if BN == 512 and len(cga_layout) == 0
+        if not (BN == 512 and len(cga_layout) == 0)
     ]
 
 
@@ -260,7 +260,8 @@ class ClcTileSchedulerConsumer:
         clc_res = clc.load_result(result)
         mbarrier.wait(self.clc_planar_ready_bars.index(counter.index), counter.phase)
         planar_slot = self.clc_planar_pid_buffers.index(counter.index)
-        packed_pid = planar_slot.load(gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]])).reshape([])
+        planar_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]] * gl.num_ctas().bit_length() - 1)
+        packed_pid = planar_slot.load(planar_layout).reshape([])
         pid_m = ((packed_pid >> 32) & 0xFFFFFFFF).to(gl.int32)
         pid_n = (packed_pid & 0xFFFFFFFF).to(gl.int32)
         has_work = clc_res.is_canceled()
@@ -355,8 +356,9 @@ def matmul_clc_partition(p):
             pid_m, pid_n = _planar_snake(tile_id, num_pid_m, num_pid_n, p.MINOR_DIM, p.GRID_TILE_WIDTH)
         packed_pid = (pid_m.to(gl.int64) << 32) | (pid_n.to(gl.int64) & 0xFFFFFFFF)
         planar_slot = p.clc_planar_pid_buffers.index(state.index)
+        planar_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]] * gl.num_ctas().bit_length() - 1)
         planar_slot.store(
-            gl.full([1], packed_pid, gl.int64, layout=gl.BlockedLayout([1], [32], [gl.num_warps()], [0], [[0]])))
+            gl.full([1], packed_pid, gl.int64, layout=planar_layout)),
         mbarrier.arrive(p.clc_planar_ready_bars.index(state.index))
         state = state.next()
         consumed_state = consumed_state.next()
