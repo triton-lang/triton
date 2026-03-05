@@ -125,8 +125,6 @@ private:
   bool processBroadcast(triton::BroadcastOp broadcast, Attribute layout);
   bool processExpandDimsBackward(triton::ExpandDimsOp expandDims,
                                  ttg::DistributedEncodingTrait newResultLayout);
-  bool processExpandDimsForward(triton::ExpandDimsOp expandDims,
-                                ttg::DistributedEncodingTrait newSrcLayout);
 
   bool processConvertLayoutBackward(ttg::ConvertLayoutOp convertLayout,
                                     CastOp cast);
@@ -718,13 +716,6 @@ bool CTAPlanner::processExpandDimsBackward(
   auto newSrcLayout = ttg::SliceEncodingAttr::get(
       newResultLayout.getContext(), expandDims.getAxis(), newResultLayout);
   insertCasts(expandDims.getOperation(), {newSrcLayout}, {newResultLayout});
-  return true;
-}
-
-bool CTAPlanner::processExpandDimsForward(
-    triton::ExpandDimsOp expandDims,
-    ttg::DistributedEncodingTrait newSrcLayout) {
-  llvm::report_fatal_error("processExpandDimsForward not implemented yet");
   return true;
 }
 

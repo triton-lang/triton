@@ -8,9 +8,8 @@ def composition(cls):
         if name in self.__dict__:
             return object.__getattribute__(self, name)
         for member in self.__dict__.values():
-            if getattr(member, "__triton_aggregate__", False) and not hasattr(member, name):
-                continue
-            return getattr(member, name)
+            if getattr(member, "__triton_aggregate__", False) and hasattr(member, name):
+                return getattr(member, name)
         raise AttributeError(f"{type(self).__name__} object has no attribute '{name}'")
 
     cls.__getattr__ = __getattr__

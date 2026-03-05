@@ -43,7 +43,7 @@ def test_sort(M, N, k, descending, dtype_str, device):
         if k is None or x.numel < k:
             z = tl.sort(x, descending=descending)
         else:
-            z = tl.topk(x, k)
+            z = tl.topk(x, k, descending=descending)
         offs_z = offs_m[:, None] * stride_zm + offs_z_n[None, :]
         tl.store(Z + offs_z, z)
 
@@ -54,7 +54,7 @@ def test_sort(M, N, k, descending, dtype_str, device):
     if k is None or x.numel() < k:
         y = torch.sort(x, descending=descending)[0]
     else:
-        y = torch.topk(x, k=k).values
+        y = torch.topk(x, k=k, largest=descending).values
     sort_kernel[(1, )](x, x.stride(0), z, z.stride(0), M, N, k, descending, num_warps=8)
     assert (y == z).all(), (y, z)
 

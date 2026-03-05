@@ -354,7 +354,6 @@ void CuptiPCSampling::start(CUcontext context) {
 void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
                                             const DataToEntryMap &dataToEntry) {
   auto *pcSamplingData = &configureData->pcSamplingData;
-  auto &profiler = CuptiProfiler::instance();
   // In the first round, we need to call getPCSamplingData to get the unsynced
   // data from the hardware buffer
   bool firstRound = true;
@@ -380,7 +379,8 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
         if (!configureData->stallReasonIndexToMetricIndex.count(
                 stallReason->pcSamplingStallReasonIndex))
           throw std::runtime_error("[PROTON] Invalid stall reason index");
-        for (auto [data, entry] : dataToEntry) {
+        for (const auto &[data, baseEntry] : dataToEntry) {
+          auto entry = baseEntry;
           if (lineInfo.fileName.size())
             entry =
                 data->addOp(entry.phase, entry.id,

@@ -685,6 +685,35 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
+// Verify that for SM_120 with mixed fp16/fp8 inputs, tt.dot_scaled falls back
+// to decomposition instead of native dot_scaled MMAv2 lowering.
+
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked3_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @sm120_dot_scaled_fp16_fp8_fallback
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.dot
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func public @sm120_dot_scaled_fp16_fp8_fallback(
+    %a: tensor<128x32xf16, #blocked3_k>,
+    %scale_a: tensor<128x1xi8, #blocked3>,
+    %b: tensor<32x128xf8E4M3FN, #blocked3>,
+    %scale_b: tensor<128x1xi8, #blocked3>
+  ) -> tensor<128x128xf32, #blocked3> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked3>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = fp16 rhs = e4m3 {fastMath = false}
+      : tensor<128x32xf16, #blocked3_k>, tensor<128x1xi8, #blocked3>
+        * tensor<32x128xf8E4M3FN, #blocked3>, tensor<128x1xi8, #blocked3>
+        -> tensor<128x128xf32, #blocked3>
+    tt.return %d : tensor<128x128xf32, #blocked3>
+  }
+}
+
+// -----
+
 // Verify that for SM_100 (Blackwell), tt.dot_scaled uses the specialized
 // MMAv5 path with tensor memory and tc_gen5_mma_scaled instruction.
 

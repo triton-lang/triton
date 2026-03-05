@@ -13,4 +13,16 @@ def TritonInstrumentConcurrencySanitizer: Pass<"tritoninstrument-concurrency-san
                            "mlir::triton::instrument::TritonInstrumentDialect"];
 }
 
+def TritonInstrumentFpSanitizer: Pass<"tritoninstrument-fp-sanitizer", "mlir::ModuleOp"> {
+  let summary = "Replace floating-point ops with integer-payload equivalents";
+
+  let description = "Rewrite selected floating-point operations to use integer payload semantics for fpsan.";
+
+  let dependentDialects = ["mlir::arith::ArithDialect",
+                           "mlir::math::MathDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::triton::instrument::TritonInstrumentDialect"];
+}
+
 #endif // TRITON_INSTRUMENT_PASSES

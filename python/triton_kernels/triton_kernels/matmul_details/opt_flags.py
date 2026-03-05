@@ -191,7 +191,7 @@ def make_default_opt_flags_nvidia(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = {"block_m", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps"}
+    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps"}
     unsupported = set(constraints.keys()) - constraints_supported
     assert not unsupported, f"Given unsupported constraint: {unsupported}"
     # tokens per expert
@@ -228,7 +228,13 @@ def make_default_opt_flags_nvidia(
             block_m = max(16, min(triton.next_power_of_2(slice_size), 128))
     # block n
     arch = None
-    block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
+    if constraints.get("block_n", None) is not None:
+        # A single block_n constraint should apply consistently to both the
+        # regular and persistent/TMA paths.
+        block_n = constraints["block_n"]
+        block_n_tma = constraints["block_n"]
+    else:
+        block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
     # is_persistent
     grid_size_tma = opt_flags_nvidia.compute_grid_size(routing_data, batch_size, m, n, block_m, block_n_tma)
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
@@ -248,7 +254,7 @@ def make_default_opt_flags_nvidia(
         is_persistent = True
     else:
         has_simple_epilogue = precision_config.max_num_imprecise_acc is None
-        is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.bitwidth <= 8) and out_dtype.bitwidth < 32
+        is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.bitwidth <= 8) and (out_dtype.bitwidth < 32 or lhs_dtype.bitwidth == 32 or rhs_dtype.bitwidth == 32)
         # TMA is slower for batched matmuls with small m/n/k.
         if m * n * k < 131072:
             is_persistent = False

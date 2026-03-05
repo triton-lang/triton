@@ -103,8 +103,6 @@ void init_triton_proton(py::module &&m) {
                      const std::string &);
   ADD_PASS_WRAPPER_0("add_allocate_proton_shared_memory",
                      proton::gpu::createAllocateProtonSharedMemoryPass);
-  ADD_PASS_WRAPPER_0("add_allocate_proton_global_scratch_buffer",
-                     proton::gpu::createAllocateProtonGlobalScratchBufferPass);
   ADD_PASS_WRAPPER_0("add_schedule_buffer_store",
                      proton::gpu::createScheduleBufferStorePass);
   ADD_PASS_WRAPPER_0("add_sched_barriers",

@@ -3,6 +3,7 @@ add_triton_library(TritonGPUIR
   LinearLayoutConversions.cpp
   Ops.cpp
   Types.cpp
+  Traits.cpp
 
   DEPENDS
   TritonGPUCGAAttrIncGen

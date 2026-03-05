@@ -766,9 +766,9 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
 
 bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
   for (StringAttr dim : dimNames) {
-    if (!llvm::is_contained(getInDimNames(), dim) &&
-        !llvm::is_contained(getOutDimNames(), dim)) {
-      return false;
+    if (!hasInDim(dim) || !hasOutDim(dim)) {
+      llvm::report_fatal_error(
+          ("dim " + dim.str() + " must be present in the layout").c_str());
     }
   }
 
@@ -800,6 +800,10 @@ bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
 
 std::optional<LinearLayout>
 LinearLayout::quotient(ArrayRef<StringAttr> dimNames) const {
+  if (llvm::any_of(dimNames,
+                   [this](StringAttr dim) { return !hasInDim(dim); })) {
+    return std::nullopt;
+  }
   if (!isTrivialOver(dimNames)) {
     return std::nullopt;
   }
@@ -1113,7 +1117,7 @@ LinearLayout LinearLayout::pseudoinvert() const {
   return identity.invertAndCompose(*this);
 }
 
-LinearLayout LinearLayout::unsqueezeIn(StringAttr dim) const {
+LinearLayout LinearLayout::squeezeIns(StringAttr dim) const {
   assert(getInDimSize(dim) == 1);
   SmallVector<std::pair<StringAttr, int32_t>> newInDims;
   for (auto inDim : getInDimNames()) {
@@ -1124,7 +1128,7 @@ LinearLayout LinearLayout::unsqueezeIn(StringAttr dim) const {
   return reshapeIns(newInDims);
 }
 
-LinearLayout LinearLayout::unsqueezeOut(StringAttr dim) const {
+LinearLayout LinearLayout::squeezeOuts(StringAttr dim) const {
   assert(getOutDimSize(dim) == 1);
   SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
   for (auto [outDim, outDimSize] : getOutDims()) {
@@ -1132,7 +1136,7 @@ LinearLayout LinearLayout::unsqueezeOut(StringAttr dim) const {
       newOutDims.push_back({outDim, outDimSize});
     }
   }
-  return LinearLayout(bases, newOutDims, isSurjective());
+  return reshapeOuts(newOutDims);
 }
 
 llvm::MapVector<StringAttr, int32_t>

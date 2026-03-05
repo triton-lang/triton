@@ -365,7 +365,7 @@ def link_aot_kernels(dir):
 
 def generate_matmul_test_data(dir, M, N, K):
     a = np.random.randn(M * K).astype(np.float16).reshape((M, K))
-    b = np.random.randn(M * K).astype(np.float16).reshape((K, N))
+    b = np.random.randn(N * K).astype(np.float16).reshape((K, N))
     a_path = os.path.join(dir, "a.csv")
     b_path = os.path.join(dir, "b.csv")
     c_path = os.path.join(dir, "c.csv")

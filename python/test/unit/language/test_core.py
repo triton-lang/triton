@@ -1382,7 +1382,9 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     # atom.add.bf16 is unsupported prior to Hopper so instead we generate an
     # atom.cas add loop on Ampere and prior
     if dst_type == 'bfloat16' and torch.cuda.get_device_capability()[0] < 9:
-        assert f"atom.{sem_str}.gpu.global.cas" in h.asm["ptx"]
+        assert "atom.relaxed.gpu.global.cas" in h.asm["ptx"]
+        if sem_str != "relaxed":
+            assert "fence.acq_rel.gpu" in h.asm["ptx"]
         return
 
     assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
@@ -2781,8 +2783,10 @@ def test_histogram(M, N, device):
     # https://github.com/pytorch/pytorch/issues/74236
     # This is a workload by converting the input to float
     z_torch = torch.histc(x.float(), bins=N, min=0, max=N - 1)
-    histogram_kernel[(1, )](x, z, M=M, N=N)
+    h = histogram_kernel[(1, )](x, z, M=M, N=N)
     assert (z_torch == z).all()
+    if is_cuda() and not is_interpreter():
+        assert "ATOMS.POPC.INC" in h.asm["sass"]
 
 
 @pytest.mark.interpreter

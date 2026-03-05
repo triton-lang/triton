@@ -1432,13 +1432,11 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     auto D = dotOp.getD();
     OpBuilder builder(dotOp);
     Type AElType = dotOp.getA().getType().getElementType();
+    Type BElType = dotOp.getB().getType().getElementType();
+    auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
+                                BElType.getIntOrFloatBitWidth());
     Type promoteType;
     if (isa<ttg::AMDMfmaEncodingAttr>(D.getType().getEncoding())) {
-      Type BElType = dotOp.getB().getType().getElementType();
-
-      auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
-                                  BElType.getIntOrFloatBitWidth());
-
       // TODO check mfma tensor core version compatibility
       if (maxBitWidth == 8)
         return;
@@ -1451,7 +1449,8 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
       else if (maxBitWidth <= 32)
         promoteType = builder.getF32Type();
     } else if (isa<ttg::AMDWmmaEncodingAttr>(D.getType().getEncoding())) {
-      Type BElType = dotOp.getB().getType().getElementType();
+      if (maxBitWidth == 8)
+        return;
 
       if (AElType == BElType)
         return;
@@ -1571,12 +1570,14 @@ public:
     // get WMMA encoding for the given number of warps
     int numWarps = ttg::lookupNumWarps(dotOp);
 
-    ttg::AMDWmmaEncodingAttr wmmaEnc;
+    ttg::AMDWmmaEncodingAttr wmmaEnc, wmmaEncA, wmmaEncB;
 
     auto warpsPerTile =
         warpsPerTileWMMA(dotOp, retShape, numWarps, {mDim, nDim});
 
     auto CGALayout = ttg::getCGALayout(oldRetEncoding);
+    auto CGALayoutA = ttg::getCGALayout(oldAType.getEncoding());
+    auto CGALayoutB = ttg::getCGALayout(oldBType.getEncoding());
 
     // Use transposed wmma layout to enable larger vectorization for global
     // store instructions.
@@ -1588,6 +1589,12 @@ public:
     wmmaEnc =
         ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, ctaLayout, isTransposed,
                                       CGALayout, {mDim, nDim, kDim});
+    wmmaEncA =
+        ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, ctaLayout, isTransposed,
+                                      CGALayoutA, {mDim, nDim, kDim});
+    wmmaEncB =
+        ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, ctaLayout, isTransposed,
+                                      CGALayoutB, {mDim, nDim, kDim});
 
     auto newRetType = RankedTensorType::get(retShape, operandTypes[3], wmmaEnc);
 
@@ -1606,10 +1613,10 @@ public:
     }
     auto newAType = RankedTensorType::get(
         aShape, operandTypes[0],
-        ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEnc, kWidth));
+        ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEncA, kWidth));
     auto newBType = RankedTensorType::get(
         bShape, operandTypes[1],
-        ttg::DotOperandEncodingAttr::get(ctx, 1, wmmaEnc, kWidth));
+        ttg::DotOperandEncodingAttr::get(ctx, 1, wmmaEncB, kWidth));
 
     Value castedA = convertAndCastTensor(rewriter, a, newAType.getEncoding(),
                                          operandTypes[0]);

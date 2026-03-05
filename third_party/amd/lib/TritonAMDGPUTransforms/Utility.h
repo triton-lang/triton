@@ -26,4 +26,10 @@ composePaddedLayout(const triton::AMD::TargetInfo &targetInfo,
                     triton::gpu::TensorOrMemDesc srcTy,
                     ArrayRef<unsigned> sharedOrder, bool useAsyncCopy);
 
+triton::gpu::PaddedSharedEncodingAttr
+getPaddedEncodingForDotOp(mlir::MLIRContext *context, int opIdx,
+                          ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
+                          triton::gpu::CGAEncodingAttr CGALayout,
+                          unsigned typeWidthInBit);
+
 #endif

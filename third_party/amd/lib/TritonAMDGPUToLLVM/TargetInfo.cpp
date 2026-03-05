@@ -1,4 +1,5 @@
 #include "TargetInfo.h"
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "Utility.h"
@@ -116,10 +117,8 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
     return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
 
   // We dispatch only along x; return the workgroup id x
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                         "llvm.amdgcn.cluster.workgroup.id.x",
-                                         {rewriter.getI32Type()}, {})
-      .getResult(0);
+  return ROCDL::ClusterWorkgroupIdXOp::create(rewriter, loc,
+                                              rewriter.getI32Type());
 }
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -131,6 +130,11 @@ void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   b.barrier(targets);
+}
+
+void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter) const {
+  triton::amdgpu::ClusterBarrierArriveOp::create(rewriter, loc);
+  triton::amdgpu::ClusterBarrierWaitOp::create(rewriter, loc);
 }
 
 void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
@@ -313,11 +317,11 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
 // threads. The output acc has the final accumulated values.
 //
 // Two special cases are supported:
-// When numLaneToReduce == 2 && interleave == 32:
+// When reduceLaneIdMask == 32:
 //   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
 //           the row 0 and 1 of the copy of acc
 //   step 2: apply reduction to the result values to get final result
-// When numLaneToReduce == 4 && interleave == 16:
+// When reduceLaneIdMask == (16 | 32):
 //   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
 //           the row 0 and 1 of the copy of acc
 //   step 2: apply reduction to the result values to get the partial result
@@ -326,14 +330,13 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
 //   step 4: apply reduction to get the final results
 static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
                                  SmallVector<Value> &acc, triton::ReduceOp op,
-                                 unsigned numLaneToReduce,
-                                 unsigned interleave) {
+                                 unsigned reduceLaneIdMask) {
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
     return false;
 
-  bool mfma32Case = numLaneToReduce == 2 && interleave == 32;
-  bool mfma16Case = numLaneToReduce == 4 && interleave == 16;
+  bool mfma32Case = reduceLaneIdMask == 32;
+  bool mfma16Case = reduceLaneIdMask == (16 | 32);
   if (!(mfma32Case || mfma16Case))
     return false;
 
@@ -358,12 +361,12 @@ static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
 
 static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
                              SmallVector<Value> &acc, triton::ReduceOp op,
-                             unsigned numLaneToReduce, unsigned interleave) {
+                             unsigned reduceLaneIdMask) {
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
     return false;
 
-  bool mfma16Case = numLaneToReduce == 2 && interleave == 16;
+  bool mfma16Case = reduceLaneIdMask == 16;
   if (!mfma16Case)
     return false;
 
@@ -381,17 +384,16 @@ static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce,
-                            unsigned interleave) const {
+                            unsigned reduceLaneIdMask) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   if (getISAFamily() == ISAFamily::CDNA4 &&
-      warpReduceSwap16or32(rewriter, loc, acc, op, numLaneToReduce, interleave))
+      warpReduceSwap16or32(rewriter, loc, acc, op, reduceLaneIdMask))
     return true;
   if ((getISAFamily() == ISAFamily::GFX1250) &&
-      warpReduceSwap16(rewriter, loc, acc, op, numLaneToReduce, interleave))
+      warpReduceSwap16(rewriter, loc, acc, op, reduceLaneIdMask))
     return true;
-  if (numLaneToReduce != getWarpSize())
+  if (reduceLaneIdMask != (getWarpSize() - 1))
     return false;
   if (isCDNA(getISAFamily()) && getISAFamily() == ISAFamily::CDNA1)
     return false;
@@ -671,6 +673,12 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
+bool TargetInfo::supportBitwidth16Elementwise() const { return true; }
+
+bool TargetInfo::supportBitwidth32Elementwise() const {
+  return getISAFamily() == ISAFamily::GFX1250;
+}
+
 bool TargetInfo::supportsDirectToLDSScattering() const {
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
@@ -729,6 +737,11 @@ bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
     return llvm::is_contained({128, 64, 32, 8}, bitWidth);
   }
   return false;
+}
+
+bool TargetInfo::supportsBufferLoadToLocal() const {
+  return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                            getISAFamily());
 }
 
 bool TargetInfo::supportsWaveId() const {

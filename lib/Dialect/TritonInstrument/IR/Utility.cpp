@@ -162,14 +162,11 @@ Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
   int numEls = product(tensor.getType().getShape());
   int64_t sizeInBytes = numEls * elSize;
   Type ptrType = triton::getPointerType(elType);
-  // Allocate scratch buffers with 16-byte alignment so global loads and stores
-  // can be vectorized if possible.
   auto alloc =
-      GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, /*alignment=*/16);
+      createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, sizeInBytes, elSize);
   createStoreScratchMemory(b, b.getLoc(), alloc, tensor, tensor.getType());
   return alloc;
 }
-
 Value createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
                                 int bitWidth, FunctionBuilder &funcBuilder) {
   SmallVector<int64_t> shape = {m};
@@ -185,8 +182,8 @@ Value createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
   Type ptrType = triton::getPointerType(elType);
   // Allocate scratch buffers with 16-byte alignment so global loads and stores
   // can be vectorized if possible.
-  auto alloc =
-      GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, /*alignment=*/16);
+  auto alloc = createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, sizeInBytes,
+                                            /*alignment=*/16);
   Value cstZero = arith::ConstantIntOp::create(b, 0, bitWidth);
   funcBuilder.createFillGlobalTensorCall(b, alloc, type, cstZero);
   return alloc;
@@ -248,7 +245,7 @@ bool hasTMAStore(ModuleOp module) {
 
 Value createLockVariable(ImplicitLocOpBuilder &b) {
   Type ptrType = triton::getPointerType(b.getI32Type());
-  auto alloc = GlobalScratchAllocOp::create(b, ptrType, 4, 4);
+  auto alloc = createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, 4, 4);
   Value zero = arith::ConstantOp::create(b, b.getLoc(), b.getI32Type(),
                                          b.getI32IntegerAttr(0));
   triton::AtomicRMWOp::create(b, b.getI32Type(), RMWOp::XCHG, alloc, zero,
@@ -260,6 +257,13 @@ Value createLockVariable(ImplicitLocOpBuilder &b) {
 } // namespace
 
 namespace mlir::triton::instrument {
+
+gpu::GlobalScratchAllocOp
+createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
+                             int64_t sizeInBytes, int64_t alignment) {
+  return gpu::GlobalScratchAllocOp::create(b, loc, ptrType, sizeInBytes,
+                                           alignment, b.getUnitAttr());
+}
 
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
                           StringRef message) {

@@ -1,5 +1,6 @@
 add_triton_library(TritonInstrumentTransforms
   ConcurrencySanitizer.cpp
+  FpSanitizer.cpp
 
   DEPENDS
   TritonInstrumentTransformsIncGen

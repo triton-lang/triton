@@ -10,7 +10,7 @@ from .state import exit_state, enter_state, COMPUTE_METADATA_SCOPE_NAME
 @triton.jit
 def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_id: tl.uint64, metric_value_ptr,
                          metric_value_size: tl.uint64):
-    BLOCK_SIZE: tl.constexpr = 256
+    BLOCK_SIZE: tl.constexpr = 128
     device_offset = tl.load(device_offset_ptr)
     tl.store(device_ptr + device_offset, metric_id)
     device_offset = (device_offset + 1) % size
@@ -40,7 +40,12 @@ def scalar_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_
 def _get_kernel(kernel_fn, *args):
     kernel = kernel_fn.warmup(*args, grid=(1, ), num_warps=1)
     kernel._init_handles()
-    return kernel.function
+    target = getattr(kernel.metadata, "target", None)
+    warp_size = getattr(target, "warp_size", None)
+    if warp_size is None:
+        warp_size = driver.active.get_current_target().warp_size
+    num_threads = kernel.metadata.num_warps * warp_size
+    return kernel.function, num_threads, kernel.metadata.shared
 
 
 def set_metric_kernels():
@@ -48,7 +53,7 @@ def set_metric_kernels():
     mock_metric_id = 0
     mock_size = 1
     mock_metric_value_size = 1
-    tensor_metric_kernel_fn = _get_kernel(
+    tensor_metric_kernel_fn, tensor_metric_kernel_num_threads, tensor_metric_kernel_shared = _get_kernel(
         tensor_metric_kernel,
         mock_ptr,
         mock_ptr,
@@ -57,7 +62,7 @@ def set_metric_kernels():
         mock_ptr,
         mock_metric_value_size,
     )
-    scalar_metric_kernel_fn = _get_kernel(
+    scalar_metric_kernel_fn, scalar_metric_kernel_num_threads, scalar_metric_kernel_shared = _get_kernel(
         scalar_metric_kernel,
         mock_ptr,
         mock_ptr,
@@ -67,7 +72,15 @@ def set_metric_kernels():
     )
     device = driver.active.get_current_device()
     stream = driver.active.get_current_stream(device)
-    libproton.set_metric_kernels(tensor_metric_kernel_fn, scalar_metric_kernel_fn, stream)
+    libproton.set_metric_kernels(
+        tensor_metric_kernel_fn,
+        scalar_metric_kernel_fn,
+        stream,
+        tensor_metric_kernel_num_threads,
+        tensor_metric_kernel_shared,
+        scalar_metric_kernel_num_threads,
+        scalar_metric_kernel_shared,
+    )
 
 
 class _TensorMetric(libproton.TensorMetric):

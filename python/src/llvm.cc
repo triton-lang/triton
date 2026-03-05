@@ -133,7 +133,6 @@ createTargetMachine(llvm::Module *module, std::string proc,
   bool disableLLVMOpt = mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (enable_fp_fusion)
     opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
-  opt.NoInfsFPMath = false;
   opt.NoNaNsFPMath = true;
   opt.TrapUnreachable = true;
   opt.MCOptions.AsmVerbose = true;
@@ -406,12 +405,11 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   return result;
 }
 
-std::string translateMIRToASM(const std::string &mirPath,
-                              const std::string &triple,
-                              const std::string &proc,
-                              const std::string &features,
-                              const std::vector<std::string> &flags,
-                              bool enable_fp_fusion, bool isObject) {
+std::string
+translateMIRToASM(const std::string &mirPath, const std::string &triple,
+                  const std::string &proc, const std::string &features,
+                  const std::vector<std::string> &flags, bool enable_fp_fusion,
+                  bool isObject, bool enableMISched) {
   using namespace mlir;
 
   // We need to start before machine-scheduler and disable it instead of simply
@@ -421,8 +419,9 @@ std::string translateMIRToASM(const std::string &mirPath,
   // Use RAII to set options and restore them when scope exits
   ScopedLLVMOption<std::string> startBeforeGuard("start-before",
                                                  "machine-scheduler");
-  ScopedLLVMOption<bool> enableMISchedGuard("enable-misched", false);
-  ScopedLLVMOption<bool> enablePostMISchedGuard("enable-post-misched", false);
+  ScopedLLVMOption<bool> enableMISchedGuard("enable-misched", enableMISched);
+  ScopedLLVMOption<bool> enablePostMISchedGuard("enable-post-misched",
+                                                enableMISched);
 
   if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
     setLLVMOption<bool>("print-after-all", true);
@@ -843,18 +842,22 @@ void init_triton_llvm(py::module &&m) {
       "translate_mir_to_asm",
       [](std::string mirPath, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion, bool isObject) -> py::object {
+         bool enable_fp_fusion, bool isObject,
+         bool enableMISched) -> py::object {
         std::string result;
         {
           py::gil_scoped_release allow_threads;
           result = translateMIRToASM(mirPath, triple, proc, features, flags,
-                                     enable_fp_fusion, isObject);
+                                     enable_fp_fusion, isObject, enableMISched);
         }
         if (isObject)
           return py::bytes(result);
         else
           return py::str(result);
       },
+      py::arg("mirPath"), py::arg("triple"), py::arg("proc"),
+      py::arg("features"), py::arg("flags"), py::arg("enable_fp_fusion"),
+      py::arg("isObject"), py::arg("enableMISched") = false,
       ret::take_ownership);
 
   m.def("init_targets", []() {

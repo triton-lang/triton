@@ -5,6 +5,7 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
 
 
 def _is_layout_applicable(layout) -> bool:
@@ -127,6 +128,105 @@ def test_scan_blocked_broadcast_layout_multiblock(device):
     scan_kernel[(1, )](x, y, M, 1, src_layout, 0, num_warps=2)
 
     torch.testing.assert_close(y, torch.cumsum(x, dim=0))
+
+
+def _funky_reduce_layouts():
+
+    def ilog2(x):
+        return x.bit_length() - 1
+
+    # Broadcasting here and there and bases in a weird order
+    layouts = [
+        # Funky layout where the warp bases fit in the lane bases
+        ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 8], [1, 0], [0, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+            lane_bases=[[0, 1], [0, 0], [64, 0], [0, 2], [0, 4]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
+            warp_bases=[[32, 0], [0, 16]],
+            block_bases=[],
+            shape=[128, 32],
+        ),
+        # Another funky layout for good measure
+        ttgl.DistributedLinearLayout(
+            reg_bases=[[1, 0], [2, 0]],
+            lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 4]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
+            warp_bases=[[16, 0], [32, 0]],
+            block_bases=[],
+            shape=[64, 8],
+        ),
+        # Funky layout where warp bases do *not* fit in the lane bases
+        ttgl.DistributedLinearLayout(
+            reg_bases=[[1, 0], [2, 0]],
+            lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 4]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
+            warp_bases=[[16, 0], [32, 0], [64, 0]],
+            block_bases=[],
+            shape=[128, 8],
+        ),
+        # Basic funky layout with block bases. They fit in the lane bases
+        ttgl.DistributedLinearLayout(
+            reg_bases=[[1, 0], [2, 0]],
+            lane_bases=[[0, 1], [4, 0], [0, 2], [8, 0], [0, 0]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
+            warp_bases=[[16, 0], [32, 0]],
+            block_bases=[[64, 0]],
+            shape=[128, 4],
+        ),
+        # Funky layout with two convert_layouts with block_bases
+        ttgl.DistributedLinearLayout(
+            reg_bases=[],
+            lane_bases=[[0, 1], [0, 4], [0, 2], [1, 0], [0, 0]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
+            warp_bases=[[4, 0], [8, 0]],
+            block_bases=[[2, 0]],
+            shape=[16, 8],
+        ),
+        # Three convert_layouts
+        ttgl.DistributedLinearLayout(
+            reg_bases=[],
+            lane_bases=[[0, 1], [0, 4], [0, 2], [1, 0], [0, 0]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
+            warp_bases=[[4, 0], [8, 0], [16, 0], [128, 0], [512, 0]],
+            block_bases=[[2, 0], [32, 0], [64, 0], [256, 0]],
+            shape=[1024, 8],
+        ),
+    ]
+    for axis in [0, 1]:
+        for layout in layouts:
+            yield (layout, axis)
+
+
+@pytest.mark.parametrize("src_layout, axis", list(_funky_reduce_layouts()))
+def test_reduce_funky_layout(src_layout, axis, device):
+
+    shape = tuple(src_layout.shape)
+    num_warps = 2**len(src_layout.warp_bases)
+    num_ctas = 2**len(src_layout.block_bases)
+    # TODO: Remove this once AMD supports num_ctas > 1
+    if num_ctas > 1 and not is_hopper_or_newer():
+        pytest.skip("num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
+
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    y = torch.empty(shape[1 - axis], dtype=torch.float32, device=device)
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, shape: ttgl.constexpr, axis: ttgl.constexpr, layout: ttgl.constexpr):
+        x_offs_m = ttgl.arange(0, shape[0], layout=ttgl.SliceLayout(1, layout))[:, None]
+        x_offs_n = ttgl.arange(0, shape[1], layout=ttgl.SliceLayout(0, layout))[None, :]
+        x = ttgl.load(x_ptr + x_offs_m * shape[1] + x_offs_n)
+        y = ttgl.sum(x, axis=axis)
+        y_offs = ttgl.arange(0, shape[1 - axis])
+        ttgl.store(y_ptr + y_offs, y)
+
+    pm = kernel[(1, )](x, y, shape, axis, src_layout, num_warps=num_warps, num_ctas=num_ctas)
+
+    torch.testing.assert_close(y, torch.sum(x, dim=axis))
+
+    def bases_along_axis(bases, axis):
+        return sum(basis[axis] != 0 for basis in bases)
+
+    axis_warps = bases_along_axis(src_layout.warp_bases, axis)
+    axis_blocks = bases_along_axis(src_layout.block_bases, axis)
+
+    # warp-sync
+    if is_cuda() and axis_warps + axis_blocks == 0:
+        assert pm.asm["ptx"].count("bar.sync") == 0
 
 
 def _reduce_linear_layouts():
@@ -1248,3 +1348,101 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
 
     out_ref = torch.arange(0, M * N, device=device).reshape((M, N)).to(torch.float16)
     torch.testing.assert_close(out, out_ref, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(is_cuda(), reason="PartitionedSharedLayout is not supported in NV backend")
+@pytest.mark.parametrize("M, K", [(64, 32), (128, 64)])
+@pytest.mark.parametrize("num_partitions", [2, 4])
+@pytest.mark.parametrize("num_groups", [1, 2])
+@pytest.mark.parametrize("partition_dim", [0, 1])
+@pytest.mark.parametrize("partition_layout_type", ["swizzled", "padded"])
+def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_dim, partition_layout_type):
+    """
+    Test that PartitionedSharedLayout works correctly with various configurations.
+
+    This test allocates shared memory with partitioned layout, performs a
+    round-trip copy (global -> shared -> global), and verifies data integrity.
+
+    Parameters:
+    - M, K: Tensor dimensions
+    - num_partitions: Number of physical memory partitions (2 or 4)
+    - num_groups: Number of groups (1 or 2)
+    - partition_dim: Dimension along which to partition (0=rows, 1=cols)
+    - partition_layout_type: Layout within each piece ("swizzled" or "padded")
+    """
+
+    blocked_layout = ttgl.BlockedLayout(
+        size_per_thread=[1, 8],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[4, 1],
+        order=[1, 0],
+    )
+
+    @gluon.jit
+    def partitioned_copy_kernel(
+        input_ptr,
+        output_ptr,
+        M: ttgl.constexpr,
+        K: ttgl.constexpr,
+        blocked: ttgl.constexpr,
+        partitioned_layout: ttgl.constexpr,
+    ):
+        # Create 2D indices
+        row_idx = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, blocked))[:, None]
+        col_idx = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, blocked))[None, :]
+        offsets = row_idx * K + col_idx
+
+        # Load data from global memory
+        data = ttgl.load(input_ptr + offsets)
+
+        # Allocate partitioned shared memory and store data
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [M, K], partitioned_layout, data)
+
+        # Load from shared memory
+        loaded = smem.load(blocked)
+
+        # Store back to global memory
+        ttgl.store(output_ptr + offsets, loaded)
+
+    # Create partition layout
+    if partition_layout_type == "swizzled":
+        inner_layout = ttgl.SwizzledSharedLayout(
+            vec=4,
+            per_phase=2,
+            max_phase=8,
+            order=[1, 0],
+        )
+    elif partition_layout_type == "padded":
+        inner_layout = ttgl.PaddedSharedLayout.with_identity_for(
+            interval_padding_pairs=[[16, 4]],
+            shape=[M, K],
+            order=[1, 0],
+        )
+    else:
+        raise ValueError(f"Unknown partition_layout_type: {partition_layout_type}")
+
+    # Create partitioned layout
+    partitioned_layout = PartitionedSharedLayout(
+        num_partitions=num_partitions,
+        num_groups=num_groups,
+        partition_dim=partition_dim,
+        partition_layout=inner_layout,
+    )
+
+    # Create input/output tensors
+    input_tensor = torch.randn((M, K), device="cuda", dtype=torch.float16)
+    output_tensor = torch.empty_like(input_tensor)
+
+    # Run the kernel
+    partitioned_copy_kernel[(1, )](
+        input_tensor,
+        output_tensor,
+        M,
+        K,
+        blocked_layout,
+        partitioned_layout,
+        num_warps=4,
+    )
+
+    # Verify output matches input
+    torch.testing.assert_close(output_tensor, input_tensor, atol=0, rtol=0)

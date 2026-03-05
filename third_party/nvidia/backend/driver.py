@@ -2,13 +2,12 @@ import functools
 import os
 import subprocess
 import triton
-import re
 from pathlib import Path
 from triton import knobs
 from triton.runtime.build import compile_module_from_src
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver
+from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
@@ -81,6 +80,7 @@ class CudaUtils(object):
         ARG_KERNEL = mod.ARG_KERNEL
         ARG_TUPLE = mod.ARG_TUPLE
         self.load_binary = mod.load_binary
+        self.unload_module = mod.unload_module
         self.get_device_properties = mod.get_device_properties
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = mod.set_printf_fifo_size
@@ -118,47 +118,6 @@ def ty_to_cpp(ty):
         "fp64": "double",
         "nvTmaDesc": "CUtensorMap",
     }[ty]
-
-
-def expand_signature(signature, tensordesc_meta):
-    output = []
-    tensordesc_idx = 0
-    # Expand tensor descriptor arguments into either nvTmaDesc, shape and
-    # strides, or base pointer, shape and strides depending on whether the
-    # kernel was lowered to use the nvTmaDesc or not.
-    for sig in signature:
-        if isinstance(sig, str) and sig.startswith("tensordesc"):
-            meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
-            tensordesc_idx += 1
-
-            match = re.match("tensordesc<([^[>]*)\\[([^]]*)\\]", sig)
-            dtype = match.group(1)
-            shape = match.group(2)
-            ndim = shape.count(",") + 1
-
-            if meta is None:
-                output.append("*" + dtype)
-                # Currently the host side tensor descriptors get passed in as a
-                # tensor desc, shape, and strides. We have no way to use these
-                # shape and strides when processing tensor descriptors which is
-                # why we provide our own decomposition above. Sadly this means
-                # we have to pass the shape and strides twice.
-                for _ in range(2 * ndim):
-                    output.append("i64")
-                output.append("i1")
-                output.append("i1")
-            else:
-                output.append("nvTmaDesc")
-
-            for _ in range(ndim):
-                output.append("i32")
-            for _ in range(ndim):
-                output.append("i64")
-        else:
-            output.append(sig)
-
-    assert not tensordesc_meta or tensordesc_idx == len(tensordesc_meta)
-    return output
 
 
 def make_kernel_signature(signature):
@@ -207,29 +166,16 @@ TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 TMA_TF32 = 11
 
 
-def make_tensordesc_arg(arg, metadata):
+def make_tensordesc_arg(arg, metadata, _):
     if metadata is None:
-        # Currently the host side tensor descriptors get decomposed in
-        # the frontend to tensor desc, shape, and strides. We have no
-        # way to use these shape and strides when processing tensor
-        # descriptors which is why we provide our own decomposition
-        # above. Sadly this means we have to pass the shape and strides
-        # twice.
-        return [
-            arg.base,
-            *arg.shape,
-            *arg.strides,
-            arg.padding == "nan",
-            arg.round_f32_to_tf32,
-            *arg.shape,
-            *arg.strides,
-        ]
+        return decompose_descriptor(arg)
 
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]
     elem_type = metadata["elem_type"]
     block_size = metadata["block_size"]
     fp4_padded = metadata["fp4_padded"]
+    is_im2col = metadata.get("is_im2col", False)
 
     shape = arg.shape
     strides = arg.strides
@@ -245,47 +191,41 @@ def make_tensordesc_arg(arg, metadata):
     if arg.round_f32_to_tf32:
         elem_type = TMA_TF32
 
-    cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor_tiled(
-        arg.base.data_ptr(),
-        swizzle,
-        elem_size,
-        TMA_DTYPE_DEVICE_TO_HOST[elem_type],
-        block_size,
-        expanded_shape,
-        strides,
-        padding,
-    )
+    if is_im2col:
+        # Im2col mode - use im2col descriptor fill function
+        # block_size from metadata is [pixelsPerColumn, channelsPerPixel] (possibly clamped)
+        element_strides = arg.element_strides if arg.element_strides is not None else [1] * len(shape)
+        cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor_im2col(
+            arg.base.data_ptr(),
+            swizzle,
+            elem_size,
+            TMA_DTYPE_DEVICE_TO_HOST[elem_type],
+            block_size,
+            expanded_shape,
+            strides,
+            padding,
+            arg.pixel_box_lower_corner,
+            arg.pixel_box_upper_corner,
+            element_strides,
+        )
+    else:
+        # Tiled mode - use existing tiled descriptor fill function
+        cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor_tiled(
+            arg.base.data_ptr(),
+            swizzle,
+            elem_size,
+            TMA_DTYPE_DEVICE_TO_HOST[elem_type],
+            block_size,
+            expanded_shape,
+            strides,
+            padding,
+        )
 
     return [cu_tensor_map, *shape, *strides]
 
 
 def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
-    has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
-    if not has_tensor_desc_arg:
-        return launcher
-
-    tensordesc_indices = set(
-        [i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
-    assert not tensordesc_meta or len(tensordesc_meta) == len(tensordesc_indices)
-    if not tensordesc_meta:
-        tensordesc_meta = [None] * len(tensordesc_indices)
-
-    def inner(*args):
-        base_args = args[:-1]
-        kernel_args = args[-1]
-
-        final_kernel_args = []
-        tensordesc_idx = 0
-        for i, arg in enumerate(kernel_args):
-            if i in tensordesc_indices:
-                final_kernel_args.extend(make_tensordesc_arg(arg, tensordesc_meta[tensordesc_idx]))
-                tensordesc_idx += 1
-            else:
-                final_kernel_args.append(arg)
-
-        return launcher(*base_args, final_kernel_args)
-
-    return inner
+    return wrap_handle_tensordesc_impl(launcher, signature, tensordesc_meta, make_tensordesc_arg)
 
 
 class CudaLauncher(object):
@@ -298,7 +238,7 @@ class CudaLauncher(object):
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
 
         launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta)
+        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "nvTmaDesc")
         self.arg_annotations = annotate_arguments(expanded_signature)
         self.kernel_signature = make_kernel_signature(expanded_signature)
         self.num_ctas = getattr(metadata, "num_ctas", 1)
@@ -312,6 +252,7 @@ class CudaLauncher(object):
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
+        active_driver = triton.runtime.driver.active
 
         def allocate_scratch(size, align, allocator):
             if size > 0:
@@ -321,9 +262,19 @@ class CudaLauncher(object):
                 return alloc_fn(alloc_size, align, stream)
             return None
 
+        def allocate_default_profile_scratch(size, align):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                return active_driver.allocate_default_profile_scratch(alloc_size, align, stream)
+            return None
+
         global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
-        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
-                                           _allocation._profile_allocator)
+        if _allocation.has_profile_allocator():
+            profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                               _allocation._profile_allocator)
+        else:
+            profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
 
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
                     kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,

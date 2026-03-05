@@ -95,11 +95,11 @@ jobs:
         if: env.enable_integration == 'true'
         run: |
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
-            echo '::set-output name=matrix-NVIDIA::[["nvidia-a100"], ["nvidia-h100"], ["nvidia-gb200"]]'
+            echo '::set-output name=matrix-NVIDIA::[{"name":"nvidia-a100","runner_type":"nvidia-a100","runs_on":["nvidia-a100"]},{"name":"nvidia-h100","runner_type":"nvidia-h100","runs_on":["nvidia-h100"]},{"name":"nvidia-gb200","runner_type":"nvidia-gb200","runs_on":{"group":"gb200-runner-set"}}]'
             echo '::set-output name=matrix-AMD::[["self-hosted", "gfx90a"], ["amd-gfx942"], ["amd-gfx950"]]'
             echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           else
-            echo '::set-output name=matrix-NVIDIA::["ubuntu-latest"]'
+            echo '::set-output name=matrix-NVIDIA::[{"name":"ubuntu-latest","runner_type":"ubuntu-latest","runs_on":"ubuntu-latest"}]'
             echo '::set-output name=matrix-AMD::["ubuntu-latest"]'
             echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           fi

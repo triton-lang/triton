@@ -21,7 +21,7 @@ def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _s
     """
     _check(pointer.type.is_block(), lambda: "expected ptr to be a tensor")
     _check(isinstance(pointer.type.layout, DistributedLayout),
-           lambda: "expected ptr type layout to be BlockedLayout or SliceLayout")
+           lambda: "expected ptr type layout to be a DistributedLayout")
     _check(
         smem.shape == pointer.shape, lambda:
         f"expected smem shape to match pointer shape but got smem.shape = {smem.shape}, pointer.shape = {pointer.shape}"
@@ -54,7 +54,7 @@ def shared_to_global(pointer, smem, mask=None, cache_modifier="", _semantic=None
     """
     _check(pointer.type.is_block(), lambda: "expected ptr to be a tensor")
     _check(isinstance(pointer.type.layout, DistributedLayout),
-           lambda: "expected ptr type layout to be BlockedLayout or SliceLayout")
+           lambda: "expected ptr type layout to be a DistributedLayout")
     _check(
         smem.shape == pointer.shape, lambda:
         f"expected smem shape to match pointer shape but got smem.shape = {smem.shape}, pointer.shape = {pointer.shape}"

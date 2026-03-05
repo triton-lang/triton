@@ -64,7 +64,7 @@ public:
   std::shared_ptr<CircularLayoutParserResult> getResult();
 
 private:
-  void parseMetadata();
+  bool parseMetadata();
   void parseProfileEvents();
   void parseSegment(int byteSize, CircularLayoutParserResult::Trace &trace);
   void parseBlock();

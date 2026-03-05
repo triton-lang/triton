@@ -6,8 +6,8 @@ import triton.language as tl
 import pytest
 from triton.tools.tensor_descriptor import TensorDescriptor
 
-from triton.tools.triton_to_gluon_translater.translator import convert_triton_to_gluon
-from triton.tools.triton_to_gluon_translater.translator_helpers import convert_host_descriptor
+from triton.tools.triton_to_gluon_translator.translator import convert_triton_to_gluon
+from triton.tools.triton_to_gluon_translator.translator_helpers import convert_host_descriptor
 from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda
 
 

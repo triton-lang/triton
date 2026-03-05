@@ -6,6 +6,7 @@
 #include "PhaseStore.h"
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -15,6 +16,7 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -22,41 +24,66 @@ namespace proton {
 
 enum class OutputFormat { Hatchet, HatchetMsgPack, ChromeTrace, Count };
 
+class Data;
+
 /// An "entry" is a data specific unit of operation, e.g., a node in a tree
 /// data structure or an event in a trace data structure.
 struct DataEntry {
-  /// `entryId` is a unique identifier for the entry in the data.
+  using MetricMap = std::map<MetricKind, std::unique_ptr<Metric>>;
+  using FlexibleMetricMap = std::map<std::string, FlexibleMetric>;
+  using LinkedMetricMap = std::unordered_map<size_t, MetricMap>;
+  using LinkedFlexibleMetricMap = std::unordered_map<size_t, FlexibleMetricMap>;
+  struct MetricSet {
+    // Direct metrics associated with this entry.
+    MetricMap metrics{};
+    // Direct flexible metrics associated with this entry.
+    FlexibleMetricMap flexibleMetrics{};
+    // Metrics associated with linked entries.
+    LinkedMetricMap linkedMetrics{};
+    // Flexible metrics associated with linked entries.
+    LinkedFlexibleMetricMap linkedFlexibleMetrics{};
+  };
+
+  /// `id` is a unique identifier for the entry in the data.
+  /// When `phase` is a virtual phase, `id` refers to the linked entry id
+  /// for the node entry.
   size_t id{Scope::DummyScopeId};
   /// `phase` indicates which phase the entry belongs to.
   size_t phase{0};
-  /// `metrics` is a map from metric kind to metric accumulator associated
-  /// with the entry.
-  /// Flexible metrics cannot be directly stored here since they maybe added by
-  /// both the frontend and the backend.
-  /// Use `Data::addMetrics` and `Data::addMetrics` to add flexible
-  /// metrics.
-  std::reference_wrapper<std::map<MetricKind, std::unique_ptr<Metric>>> metrics;
+  /// Per-entry storage for direct and linked metric maps.
+  std::reference_wrapper<MetricSet> metricSet;
 
-  explicit DataEntry(size_t id, size_t phase,
-                     std::map<MetricKind, std::unique_ptr<Metric>> &metrics)
-      : id(id), phase(phase), metrics(metrics) {}
+  explicit DataEntry(size_t id, size_t phase, MetricSet &metricSet)
+      : id(id), phase(phase), metricSet(metricSet) {}
 
-  void upsertMetric(std::unique_ptr<Metric> metric) {
-    if (!metric)
-      return;
-    auto &metricsMap = metrics.get();
-    auto it = metricsMap.find(metric->getKind());
-    if (it == metricsMap.end()) {
-      metricsMap.emplace(metric->getKind(), std::move(metric));
-    } else {
-      it->second->updateMetric(*metric);
-    }
-  }
+  void upsertMetric(std::unique_ptr<Metric> metric) const;
+
+  void upsertLinkedMetric(std::unique_ptr<Metric> metric,
+                          size_t linkedId) const;
+
+  void upsertFlexibleMetric(const std::string &metricName,
+                            const MetricValueType &metricValue) const;
+
+  void upsertFlexibleMetrics(
+      const std::map<std::string, MetricValueType> &metrics) const;
+
+  void upsertLinkedFlexibleMetric(const std::string &metricName,
+                                  const MetricValueType &metricValue,
+                                  size_t linkedId) const;
+
+  void upsertLinkedFlexibleMetrics(
+      const std::map<std::string, MetricValueType> &metrics,
+      size_t linkedId) const;
 };
 
 class Data : public ScopeInterface {
 public:
   static constexpr size_t kNoCompletePhase = std::numeric_limits<size_t>::max();
+  // A special phase used for virtual/captured graph metadata.
+  static constexpr size_t kVirtualPhase =
+      std::numeric_limits<size_t>::max() - 1;
+  // Sentinel root id used when adding an op from the root.
+  static constexpr size_t kRootEntryId = Scope::DummyScopeId;
 
   struct PhaseInfo {
     size_t current{0};
@@ -67,7 +94,7 @@ public:
     }
   };
 
-  Data(const std::string &path, ContextSource *contextSource = nullptr)
+  Data(const std::string &path, ContextSource *contextSource)
       : path(path), contextSource(contextSource) {}
   virtual ~Data() = default;
 
@@ -100,7 +127,7 @@ public:
   /// If `opName` is empty, just use the current context as is.
   /// Otherwise obtain the current context and append `opName` to it. Return the
   /// entry id of the added op.
-  virtual DataEntry addOp(const std::string &opName = {}) = 0;
+  DataEntry addOp(const std::string &opName = {});
 
   /// Add an op with custom contexts to the data.
   /// This is often used when context source is not available or when
@@ -122,17 +149,6 @@ public:
   /// `metrics` is a map from metric name to value to be applied to `scopeId`.
   virtual void
   addMetrics(size_t scopeId,
-             const std::map<std::string, MetricValueType> &metrics) = 0;
-
-  /// Record a batch of named metrics for an entry.
-  ///
-  /// This is primarily intended for user-defined metrics defined in Python and
-  /// added lazily by the backend profiler.
-  /// `metrics` is a map from metric name to value to be applied to `entryId`.
-  ///
-  /// The same as `addOp`, `phase` is important for asynchronous profilers.
-  virtual void
-  addMetrics(size_t phase, size_t entryId,
              const std::map<std::string, MetricValueType> &metrics) = 0;
 
   /// To Json
@@ -172,6 +188,16 @@ protected:
     return lock;
   }
 
+  [[nodiscard]] std::unique_lock<std::shared_mutex>
+  lockIfCurrentOrVirtualPhase(size_t phase) {
+    std::unique_lock<std::shared_mutex> lock(mutex, std::defer_lock);
+    const auto currentPhaseValue = currentPhase.load(std::memory_order_relaxed);
+    if (phase == currentPhaseValue || phase == kVirtualPhase) {
+      lock.lock();
+    }
+    return lock;
+  }
+
   std::atomic<std::size_t> currentPhase{0};
   std::size_t completeUpToPhase{kNoCompletePhase};
   std::set<size_t> activePhases{};
@@ -185,7 +211,7 @@ private:
   void *currentPhasePtr{};
 };
 
-typedef std::map<Data *, DataEntry> DataToEntryMap;
+using DataToEntryMap = std::map<Data *, DataEntry>;
 
 OutputFormat parseOutputFormat(const std::string &outputFormat);
 

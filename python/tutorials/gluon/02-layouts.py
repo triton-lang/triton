@@ -93,13 +93,13 @@ tiling of the block. The block is tiled according to `order=[1, 0]` by adding
 more registers to each thread:
 
 ```
-[[B0, B1, B2, B3],
- [B4, B5, B6, B7]]
+[[ B0,  B1,  B2,  B3,  B4,  B5,  B6,  B7],
+ [ B8,  B9, B10, B11, B12, B13, B14, B15]]
 ```
 
 In each block, each thread owns 8 registers. Thus over the whole tensor, each
-thread owns `8 * 8 = 64` registers. Knowing how many registers a tensor uses is
-important for managing register pressure and budget in the kernel.
+thread owns `8 * 16 = 128` registers. Knowing how many registers a tensor uses
+is important for managing register pressure and budget in the kernel.
 
 Consider a smaller tensor, say `32x8xf32`. The number of tiles at each level of
 the block does not change, thus even though the tensor has only `32 * 8 = 256`

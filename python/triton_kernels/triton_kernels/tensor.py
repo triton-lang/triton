@@ -94,6 +94,10 @@ class Tensor:
             return self.shape
         return self.shape[i]
 
+        @property
+        def specialization_key(self):
+            return (tuple(self.data.shape), self.data.dtype)
+
 
 def is_tma_compliant(tensor):
     storage = tensor.storage

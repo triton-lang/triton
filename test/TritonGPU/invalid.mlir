@@ -1,12 +1,23 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32} {
+  tt.func public @subslice_non_broadcast_cga_dim(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+      // expected-error @+1 {{CTA dimensions}}
+      %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x8xf32, #shared, #smem>
+      tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32} {
-  tt.func public @non_trivial_block(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-      %zero = arith.constant 0 : i32
-      // expected-error @+1 {{non-trivial block}}
-      %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x8xf32, #shared, #smem>
+  tt.func public @subslice_broadcasted_cga_output(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+      // expected-error @+1 {{broadcasted CTA outputs}}
+      %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<4x16xf32, #shared, #smem>
       tt.return
   }
 }
@@ -97,17 +108,16 @@ tt.func public @result_1d_to_1d(%arg0: !ttg.memdesc<8xf32, #shared, #smem>) {
     tt.return
 }
 
+
 // -----
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory
-tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-    %zero = arith.constant 0 : i32
+tt.func public @subview_along_swizzling_pattern(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
     // expected-error @+1 {{swizzling pattern}}
     %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x4xf32, #shared, #smem>
     tt.return
 }
-
 
 // -----
 
@@ -124,10 +134,10 @@ tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #shared1d = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0]}>
 #smem = #ttg.shared_memory
-tt.func public @result_dim_too_large(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+tt.func public @result_dim_too_large(%arg0: !ttg.memdesc<8x16xf32, #shared1d, #smem>) {
     %zero = arith.constant 0 : i32
     // expected-error @+1 {{result shape}}
-    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<32xf32, #shared1d, #smem>
+    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<8x16xf32, #shared1d, #smem> -> !ttg.memdesc<32xf32, #shared1d, #smem>
     tt.return
 }
 

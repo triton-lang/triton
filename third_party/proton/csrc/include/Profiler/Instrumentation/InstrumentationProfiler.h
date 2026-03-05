@@ -37,6 +37,7 @@ protected:
       const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
       const std::vector<std::pair<size_t, size_t>> &scopeIdParentIds,
       const std::string &metadataPath) override;
+  void destroyFunctionMetadata(uint64_t functionId) override;
   void enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
                            uint8_t *buffer, size_t size) override;
   void exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
@@ -69,7 +70,7 @@ private:
   std::map<uint64_t, std::string> functionNames;
   // functionId -> metadata
   std::map<uint64_t, InstrumentationMetadata> functionMetadata;
-  // data -> scopeId
+  // Active per-data entries for the current op.
   DataToEntryMap dataToEntryMap;
 };
 

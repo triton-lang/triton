@@ -545,7 +545,7 @@ def TT_JoinOp : TT_Op<"join", [
 
 def TT_SplitOp : TT_Op<"split", [
   Pure,
-  InferTypeOpWithLayoutEquivalence,
+  InferTensorTypeOpWithLayoutEquivalence,
   TypesMatchWith<"outLHS and outRHS types match",
                   "outLHS", "outRHS", "$_self">,
 ]> {
@@ -565,7 +565,7 @@ def TT_SplitOp : TT_Op<"split", [
 
 def TT_TransOp : TT_Op<"trans", [Pure,
                                  TransposeOpInterface,
-                                 InferTypeOpWithLayoutEquivalence,
+                                 InferTensorTypeOpWithLayoutEquivalence,
                                  SameOperandsAndResultElementType]> {
 
     let summary = "rearrange the dimensions of a tensor";

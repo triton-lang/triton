@@ -84,33 +84,29 @@ public:
   // Rewrite the IR for a region.
   void rewriteRegion(Region &R);
   // Rewrite an op based on the layout picked by the analysis.
-  Operation *rewriteOp(Operation *op);
+  void rewriteOp(Operation *op);
   // Rewrite a for op based on the layout picked by the analysis.
-  Operation *rewriteForOp(scf::ForOp forOp);
-  Operation *rewriteWhileOp(scf::WhileOp whileOp);
-  Operation *rewriteIfOp(scf::IfOp ifOp);
+  void rewriteForOp(scf::ForOp forOp);
+  void rewriteWhileOp(scf::WhileOp whileOp);
+  void rewriteIfOp(scf::IfOp ifOp);
   void rewriteYieldOp(scf::YieldOp yieldOp);
   void rewriteConditionOp(scf::ConditionOp conditionOp);
   void rewriteReduceToScalar(Operation *reduceOp);
   void rewriteAssertOp(AssertOp assertOp);
-  Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
-                              Attribute encoding);
-  // Map the original value to the rewritten one.
-  void map(Value old, Value newV);
+  Attribute getEncodingBeforeRewrite(Value value) const;
+  void setEncodingInPlace(Value value, Attribute encoding);
+  void rewriteGenericOpInPlace(Operation *op, Attribute encoding);
   // Return the mapped value in the given encoding. This will insert a convert
   // if the encoding is different than the encoding decided at resolve time.
   Value getValueAs(Value value, Attribute encoding);
-  // Return the original value mapped to the new desired encoding.
-  Value getRewrittenValue(Value value);
   // Dump the current stage of layout information.
   void dump();
 
 private:
   // map from value to layout information.
   llvm::MapVector<Value, LayoutInfo> layouts;
-  // map of the values rewrite based on their encoding.
-  DenseMap<std::pair<Value, Attribute>, Value> rewriteMapping;
-  SetVector<Operation *> opToDelete;
+  // original encodings of tensor values rewritten in place.
+  DenseMap<Value, Attribute> originalEncodings;
   FuncOp funcOp;
 };
 
@@ -409,8 +405,8 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         needRewrite = true;
       }
       if (needRewrite) {
-        Operation *newOp = rewriteOp(&op);
-        for (Region &R : newOp->getRegions())
+        rewriteOp(&op);
+        for (Region &R : op.getRegions())
           queue.push_back(&R);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(&op)) {
         rewriteYieldOp(yieldOp);
@@ -427,8 +423,7 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           auto it = layouts.find(operand.get());
           if (it == layouts.end())
             continue;
-          Attribute encoding =
-              cast<RankedTensorType>(operand.get().getType()).getEncoding();
+          Attribute encoding = getEncodingBeforeRewrite(operand.get());
           Value newOperand = getValueAs(operand.get(), encoding);
           op.setOperand(operand.getOperandNumber(), newOperand);
         }
@@ -437,61 +432,48 @@ void LayoutPropagation::rewriteRegion(Region &region) {
       }
     }
   }
-  for (Operation *op : llvm::reverse(opToDelete))
-    op->erase();
-}
-
-void LayoutPropagation::map(Value old, Value newV) {
-  rewriteMapping[{old, cast<RankedTensorType>(newV.getType()).getEncoding()}] =
-      newV;
-}
-
-Value LayoutPropagation::getRewrittenValue(Value value) {
-  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorType)
-    return value;
-  auto layoutIt = layouts.find(value);
-  if (layoutIt == layouts.end()) {
-    return value;
-  }
-  assert(layoutIt->second.encodings.size() == 1 &&
-         "we should have resolved to a single encoding");
-  Attribute encodingPicked = *(layoutIt->second.encodings.begin());
-  if (encodingPicked == tensorType.getEncoding())
-    return value;
-  return rewriteMapping.at({value, encodingPicked});
 }
 
 Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
   if (auto tensorType = dyn_cast<RankedTensorType>(value.getType())) {
-    Value rewrittenValue = getRewrittenValue(value);
-    if (cast<RankedTensorType>(rewrittenValue.getType()).getEncoding() ==
-        encoding)
-      return rewrittenValue;
+    if (cast<RankedTensorType>(value.getType()).getEncoding() == encoding)
+      return value;
     OpBuilder rewriter(value.getContext());
-    rewriter.setInsertionPointAfterValue(rewrittenValue);
+    rewriter.setInsertionPointAfterValue(value);
     auto tmpType = tensorType.cloneWithEncoding(encoding);
-    Value converted = ConvertLayoutOp::create(rewriter, value.getLoc(), tmpType,
-                                              rewrittenValue);
+    Value converted =
+        ConvertLayoutOp::create(rewriter, value.getLoc(), tmpType, value);
     // TODO: we could cache the conversion.
     return converted;
   }
   return value;
 }
 
-Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
-                                               Operation *op,
-                                               Attribute encoding) {
-  Operation *newOp = rewriter.clone(*op);
+Attribute LayoutPropagation::getEncodingBeforeRewrite(Value value) const {
+  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorType)
+    return {};
+  if (auto it = originalEncodings.find(value); it != originalEncodings.end())
+    return it->second;
+  return tensorType.getEncoding();
+}
 
+void LayoutPropagation::setEncodingInPlace(Value value, Attribute encoding) {
+  auto tensorType = cast<RankedTensorType>(value.getType());
+  if (!originalEncodings.count(value))
+    originalEncodings[value] = tensorType.getEncoding();
+  value.setType(tensorType.cloneWithEncoding(encoding));
+}
+
+void LayoutPropagation::rewriteGenericOpInPlace(Operation *op,
+                                                Attribute encoding) {
   Attribute operandEnc;
   if (op->getNumOperands() > 0) {
-    for (auto operand : op->getOperands()) {
-      auto ty =
-          dyn_cast<RankedTensorType>(getRewrittenValue(operand).getType());
-      if (!ty)
+    for (Value operand : op->getOperands()) {
+      auto it = layouts.find(operand);
+      if (it == layouts.end())
         continue;
-      auto enc = ty.getEncoding();
+      Attribute enc = it->second.encodings[0];
       if (inferDstEncoding(op, enc) == encoding) {
         operandEnc = enc;
         break;
@@ -501,144 +483,67 @@ Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
       operandEnc = inferSrcEncoding(op, encoding);
     assert(operandEnc);
   }
-
   for (OpOperand &operand : op->getOpOperands()) {
-    newOp->setOperand(operand.getOperandNumber(),
-                      getValueAs(operand.get(), operandEnc));
+    op->setOperand(operand.getOperandNumber(),
+                   getValueAs(operand.get(), operandEnc));
   }
-
-  for (unsigned i = 0, e = op->getNumResults(); i < e; ++i) {
-    auto origType = dyn_cast<RankedTensorType>(op->getResult(i).getType());
-    if (!origType)
+  for (Value result : op->getResults()) {
+    auto tensorType = dyn_cast<RankedTensorType>(result.getType());
+    if (!tensorType)
       continue;
-    auto newType = origType.cloneWithEncoding(encoding);
-    newOp->getResult(i).setType(newType);
+    setEncodingInPlace(result, encoding);
   }
-  return newOp;
 }
 
-Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
-  SmallVector<Value> operands;
-  OpBuilder rewriter(forOp);
-  for (auto [operand, result] :
-       llvm::zip(forOp.getInitArgs(), forOp.getResults())) {
-    Value convertedOperand = operand;
-    if (layouts.count(result))
-      convertedOperand =
-          getValueAs(operand, *layouts[result].encodings.begin());
-    operands.push_back(convertedOperand);
-  }
-  auto newForOp =
-      scf::ForOp::create(rewriter, forOp.getLoc(), forOp.getLowerBound(),
-                         forOp.getUpperBound(), forOp.getStep(), operands);
-  newForOp->setAttrs(forOp->getAttrs());
-  newForOp.getBody()->getOperations().splice(
-      newForOp.getBody()->getOperations().begin(),
-      forOp.getBody()->getOperations());
-
-  for (auto [oldResult, newResult] :
-       llvm::zip(forOp.getResults(), newForOp.getResults())) {
-    if (oldResult.getType() == newResult.getType()) {
-      oldResult.replaceAllUsesWith(newResult);
+void LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
+  for (auto [i, operand, result, regionArg] :
+       llvm::enumerate(forOp.getInitArgs(), forOp.getResults(),
+                       forOp.getRegionIterArgs())) {
+    auto resultTy = dyn_cast<RankedTensorType>(result.getType());
+    if (!resultTy)
       continue;
-    }
-    map(oldResult, newResult);
-  }
-
-  for (auto [oldArg, newArg] : llvm::zip(forOp.getBody()->getArguments(),
-                                         newForOp.getBody()->getArguments())) {
-    if (oldArg.getType() == newArg.getType()) {
-      oldArg.replaceAllUsesWith(newArg);
-      continue;
-    }
-    map(oldArg, newArg);
-  }
-  return newForOp.getOperation();
-}
-
-Operation *LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
-  SmallVector<Value> operands;
-  SmallVector<Type> returnTypes;
-  OpBuilder rewriter(whileOp);
-  for (auto [operand, arg] :
-       llvm::zip(whileOp->getOperands(), whileOp.getBeforeArguments())) {
-    Value convertedOperand = operand;
-    if (layouts.count(arg))
-      convertedOperand = getValueAs(operand, *layouts[arg].encodings.begin());
-    operands.push_back(convertedOperand);
-  }
-  for (Value ret : whileOp.getResults()) {
-    auto it = layouts.find(ret);
-    if (it == layouts.end()) {
-      returnTypes.push_back(ret.getType());
-      continue;
-    }
-    auto origType = dyn_cast<RankedTensorType>(ret.getType());
-    auto newType = origType.cloneWithEncoding(it->second.encodings[0]);
-    returnTypes.push_back(newType);
-  }
-
-  auto newWhileOp =
-      scf::WhileOp::create(rewriter, whileOp.getLoc(), returnTypes, operands);
-  SmallVector<Type> argsTypesBefore;
-  for (Value operand : operands)
-    argsTypesBefore.push_back(operand.getType());
-  SmallVector<Location> bbArgLocsBefore(argsTypesBefore.size(),
-                                        whileOp.getLoc());
-  SmallVector<Location> bbArgLocsAfter(returnTypes.size(), whileOp.getLoc());
-  rewriter.createBlock(&newWhileOp.getBefore(), {}, argsTypesBefore,
-                       bbArgLocsBefore);
-  rewriter.createBlock(&newWhileOp.getAfter(), {}, returnTypes, bbArgLocsAfter);
-
-  for (int i = 0; i < whileOp.getNumRegions(); ++i) {
-    newWhileOp->getRegion(i).front().getOperations().splice(
-        newWhileOp->getRegion(i).front().getOperations().begin(),
-        whileOp->getRegion(i).front().getOperations());
-  }
-
-  auto remapArg = [&](Value oldVal, Value newVal) {
-    if (oldVal.getType() == newVal.getType())
-      oldVal.replaceAllUsesWith(newVal);
-    else
-      map(oldVal, newVal);
-  };
-  for (auto [oldResult, newResult] :
-       llvm::zip(whileOp.getResults(), newWhileOp.getResults()))
-    remapArg(oldResult, newResult);
-  for (auto [oldArg, newArg] :
-       llvm::zip(whileOp.getBeforeArguments(), newWhileOp.getBeforeArguments()))
-    remapArg(oldArg, newArg);
-  for (auto [oldArg, newArg] :
-       llvm::zip(whileOp.getAfterArguments(), newWhileOp.getAfterArguments()))
-    remapArg(oldArg, newArg);
-  return newWhileOp.getOperation();
-}
-
-Operation *LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
-  SmallVector<Value> operands;
-  OpBuilder rewriter(ifOp);
-  SmallVector<Type> newResultTypes(ifOp->getResultTypes());
-  for (unsigned i = 0, e = ifOp->getNumResults(); i < e; ++i) {
-    auto it = layouts.find(ifOp->getResult(i));
+    auto it = layouts.find(result);
     if (it == layouts.end())
       continue;
-    auto origType = cast<RankedTensorType>(ifOp->getResult(i).getType());
-    Attribute encoding = *(it->second.encodings.begin());
-    newResultTypes[i] = origType.cloneWithEncoding(encoding);
+    Attribute encoding = it->second.encodings[0];
+    Value convertedOperand = getValueAs(operand, encoding);
+    forOp.getInitArgsMutable()[i].assign(convertedOperand);
+    setEncodingInPlace(result, encoding);
+    setEncodingInPlace(regionArg, encoding);
   }
-  auto newIfOp = scf::IfOp::create(rewriter, ifOp.getLoc(), newResultTypes,
-                                   ifOp.getCondition(), true, true);
-  newIfOp.getThenRegion().takeBody(ifOp.getThenRegion());
-  newIfOp.getElseRegion().takeBody(ifOp.getElseRegion());
-  for (auto [oldResult, newResult] :
-       llvm::zip(ifOp.getResults(), newIfOp.getResults())) {
-    if (oldResult.getType() == newResult.getType()) {
-      oldResult.replaceAllUsesWith(newResult);
+}
+
+void LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
+  for (auto [i, operand, beforeArg] :
+       llvm::enumerate(whileOp->getOperands(), whileOp.getBeforeArguments())) {
+    auto it = layouts.find(beforeArg);
+    if (it == layouts.end())
       continue;
-    }
-    map(oldResult, newResult);
+    Attribute encoding = it->second.encodings[0];
+    Value convertedOperand = getValueAs(operand, encoding);
+    whileOp->setOperand(i, convertedOperand);
+    setEncodingInPlace(beforeArg, encoding);
   }
-  return newIfOp.getOperation();
+
+  for (auto [result, afterArg] :
+       llvm::zip(whileOp.getResults(), whileOp.getAfterArguments())) {
+    auto it = layouts.find(result);
+    if (it == layouts.end())
+      continue;
+    Attribute encoding = it->second.encodings[0];
+    setEncodingInPlace(result, encoding);
+    setEncodingInPlace(afterArg, encoding);
+  }
+}
+
+void LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
+  for (unsigned i = 0, e = ifOp->getNumResults(); i < e; ++i) {
+    auto it = layouts.find(ifOp.getResult(i));
+    if (it == layouts.end())
+      continue;
+    Attribute encoding = *(it->second.encodings.begin());
+    setEncodingInPlace(ifOp.getResult(i), encoding);
+  }
 }
 
 void LayoutPropagation::rewriteYieldOp(scf::YieldOp yieldOp) {
@@ -703,54 +608,27 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
   assertOp->setOperand(0, newOperand);
 }
 
-Operation *LayoutPropagation::rewriteOp(Operation *op) {
-  opToDelete.insert(op);
+void LayoutPropagation::rewriteOp(Operation *op) {
   if (auto forOp = dyn_cast<scf::ForOp>(op))
-    return rewriteForOp(forOp);
-  if (auto whileOp = dyn_cast<scf::WhileOp>(op))
-    return rewriteWhileOp(whileOp);
-  if (auto ifOp = dyn_cast<scf::IfOp>(op))
-    return rewriteIfOp(ifOp);
-  OpBuilder rewriter(op);
-  Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
-  if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
-    Attribute srcEncoding = convertOp.getSrc().getType().getEncoding();
-    auto it = layouts.find(convertOp.getSrc());
-    if (it != layouts.end())
-      srcEncoding = *(it->second.encodings.begin());
-    Value src = getValueAs(convertOp.getSrc(), srcEncoding);
-    auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
-    auto newType = tensorType.cloneWithEncoding(encoding);
-    auto cvt = ConvertLayoutOp::create(rewriter, op->getLoc(), newType, src);
-    map(op->getResult(0), cvt.getResult());
-    return cvt.getOperation();
-  }
-  if (canFoldIntoConversion(op, encoding)) {
-    Operation *newOp = rewriter.clone(*op);
-    auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
-    auto newType = tensorType.cloneWithEncoding(encoding);
-    auto cvt = ConvertLayoutOp::create(rewriter, op->getLoc(), newType,
-                                       newOp->getResult(0));
-    map(op->getResult(0), cvt.getResult());
-    return cvt.getOperation();
-  }
-  if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
-      op->hasTrait<OpTrait::Elementwise>() ||
-      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
-          ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
-    Operation *newOp = cloneElementwise(rewriter, op, encoding);
-    for (auto [oldResult, newResult] :
-         llvm::zip(op->getResults(), newOp->getResults())) {
-      if (oldResult.getType() == newResult.getType()) {
-        oldResult.replaceAllUsesWith(newResult);
-        continue;
-      }
-      map(oldResult, newResult);
+    rewriteForOp(forOp);
+  else if (auto whileOp = dyn_cast<scf::WhileOp>(op))
+    rewriteWhileOp(whileOp);
+  else if (auto ifOp = dyn_cast<scf::IfOp>(op))
+    rewriteIfOp(ifOp);
+  else {
+    Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
+    if (canUseResultEncoding(op, encoding)) {
+      setEncodingInPlace(op->getResult(0), encoding);
+    } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+               op->hasTrait<OpTrait::Elementwise>() ||
+               isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
+                   GatherOp, ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(
+                   op)) {
+      rewriteGenericOpInPlace(op, encoding);
+    } else {
+      llvm::report_fatal_error("unexpected op in rewrite");
     }
-    return newOp;
   }
-  llvm::report_fatal_error("unexpected op in rewrite");
-  return nullptr;
 }
 
 bool canBeRemat(Operation *op) {
@@ -1139,42 +1017,32 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
     }
   }
 
-  // Compute single-use operations
-  DenseMap<Operation *, bool> isSingleUse;
-  std::function<bool(Operation *)> isOpSingleUse;
-  isOpSingleUse = [&](Operation *op) -> bool {
-    // lookup in memoization array:
-    auto it = isSingleUse.find(op);
-    if (it != isSingleUse.end()) {
-      return it->second;
+  // Determine which values used by operations outside the slice. We can use
+  // this to determine whether they will actually survive and therefore need to
+  // contribute to the cost.
+  SetVector<Value> nonSliceOnlyValues;
+
+  // Identify values that directly have uses outside the slice.
+  for (Value v : slice) {
+    for (auto &use : v.getUses()) {
+      auto *user = use.getOwner();
+      if (user == convertOp || sliceOps.contains(user))
+        continue;
+      nonSliceOnlyValues.insert(v);
+      break;
     }
+  }
 
-    bool singleUse = true;
-
-    for (Value result : op->getResults()) {
-      for (Operation *user : result.getUsers()) {
-        if (user == convertOp) {
-          continue;
-        }
-        if (sliceOps.contains(user)) {
-          if (!isOpSingleUse(user)) {
-            singleUse = false;
-            break;
-          }
-        } else {
-          singleUse = false;
-          break;
-        }
-      }
-      if (!singleUse) {
-        break;
-      }
+  // Expand the set to all transitive operands in the slice.
+  for (size_t i = 0; i < nonSliceOnlyValues.size(); ++i) {
+    Value v = nonSliceOnlyValues[i];
+    if (auto *op = v.getDefiningOp()) {
+      for (auto operand : op->getOperands())
+        if (slice.contains(operand))
+          nonSliceOnlyValues.insert(operand);
     }
-
-    // insert into memoization array:
-    isSingleUse[op] = singleUse;
-    return singleUse;
-  };
+    // TODO: Handle block arguments.
+  }
 
   int64_t convertLayoutCost = getConvertCost(convertOp.getSrc());
   int64_t rematerialisationCost = newCvtCost;
@@ -1182,11 +1050,16 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
   // Evaluate single-use status for every operation in slice
   for (Operation *op : sliceOps) {
     auto dialect = op->getDialect();
-    if (isOpSingleUse(op)) {
-      // when we rematerialise, this operation does not get duplicated
-      // so it does not contribute to our cost model:
+    // If all of the results of the op are only used within the slice, when we
+    // rematerialise, this operation does not get duplicated so it does not
+    // contribute to our cost model.
+    bool isOpUsedOutsideSlice = llvm::any_of(op->getResults(), [&](Value v) {
+      return nonSliceOnlyValues.contains(v);
+    });
+    if (!isOpUsedOutsideSlice)
       continue;
-    } else if (isa<arith::ConstantOp>(op)) {
+
+    if (isa<arith::ConstantOp>(op)) {
       // special-case: arith.constant has zero cost
       continue;
     } else if (isa<LoadOp>(op) || isa<LocalLoadOp>(op)) {

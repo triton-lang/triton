@@ -14,6 +14,11 @@
 
 #include <unordered_map>
 
+namespace mlir {
+class AsmParser;
+class AsmPrinter;
+} // namespace mlir
+
 // LinearLayoutCache Utils
 using CacheKey = std::tuple<std::vector<int64_t>, mlir::Attribute>;
 
@@ -210,6 +215,11 @@ inline SmallVector<unsigned> getThreadOrder(RankedTensorType type) {
                         type.getShape());
 }
 
+std::optional<CGAEncodingAttr> parseCGAAttr(AsmParser &parser, Attribute attr,
+                                            unsigned rank);
+
+void printCGAAttr(AsmPrinter &printer, CGAEncodingAttr layout);
+
 CGAEncodingAttr getCGALayout(Attribute layout);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
@@ -294,14 +304,21 @@ bool isInnermostContiguous(MemDescType type, unsigned numElems);
 LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
                                       ArrayRef<int64_t> dstShape);
 
+// TMA tensor access modes
+enum class TMAMode {
+  Tiled, // Regular tiled tensor memory access
+  Im2Col // Im2col mode for convolution-friendly access patterns
+};
+
 FailureOr<SmallVector<int64_t>>
 getTMABlockShape(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
                  int swizzleBytes, bool fp4Padded, bool isTransposed,
-                 bool packedSize, function_ref<InFlightDiagnostic()> emitError);
+                 bool packedSize, function_ref<InFlightDiagnostic()> emitError,
+                 TMAMode mode);
 SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
                                       int elementBitWidth, int swizzleBytes,
                                       bool fp4Padded, bool isTransposed,
-                                      bool packedSize);
+                                      bool packedSize, TMAMode mode);
 
 // Verify the types of operations that operate on memory.
 LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
@@ -315,6 +332,21 @@ SetVector<int> getPartitionIds(OpOperand *use);
 bool hasPartition(Operation *op);
 bool hasWarpSpecializeTag(Operation *op);
 std::optional<int> getWarpSpecializeTag(Operation *op);
+/// Returns the size in bytes of a scalar type when stored in shared memory.
+size_t getSharedMemorySize(Type type);
+
+// Extract the PaddedSharedEncodingAttr from an encoding, whether standalone
+// or wrapped inside a PartitionedSharedEncodingAttr. Returns nullptr if the
+// encoding does not involve padding.
+PaddedSharedEncodingAttr getPaddedEncoding(Attribute encoding);
+
+// Returns true if the encoding is a PaddedSharedEncodingAttr, or a
+// PartitionedSharedEncodingAttr wrapping a PaddedSharedEncodingAttr.
+bool isPaddedEncoding(Attribute encoding);
+
+// Returns the minInterval for a padded encoding (standalone or
+// wrapped in partitioned).
+unsigned getMinInterval(Attribute encoding);
 
 } // namespace mlir::triton::gpu
 

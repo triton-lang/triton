@@ -10,8 +10,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // We need the splat to allow the AxisAnalysis to work during lowering
     %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
     // Each thread needs to load 8 elements and we load 1 (sizePerThread) per global.load.lds
-    // CHECK-COUNT-8: llvm.amdgcn.global.load.async.to.lds.b32
-    // CHECK-NOT: llvm.amdgcn.global.load.async.to.lds
+    // CHECK-COUNT-8: rocdl.global.load.async.to.lds.b32
+    // CHECK-NOT: rocdl.global.load.async.to.lds
     %2 = ttg.async_copy_global_to_local %1, %arg2 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -27,8 +27,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func public @async_load_strided_into_lds_with_swizzle(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
                                 %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
     // Each thread loads 256 contiguous bits so we split into 2 128bit loads. This was not possible on GFX9
-    // CHECK-COUNT-2: llvm.amdgcn.global.load.async.to.lds.b128
-    // CHECK-NOT: llvm.amdgcn.global.load.async.to.lds
+    // CHECK-COUNT-2: rocdl.global.load.async.to.lds.b128
+    // CHECK-NOT: rocdl.global.load.async.to.lds
     %6 = ttg.async_copy_global_to_local %arg0, %arg1 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -46,8 +46,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // We need the splat to allow the AxisAnalysis to work during lowering
     %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
     // Each thread needs to load 8 elements and we load 1 (sizePerThread) per global.load.lds
-    // CHECK-COUNT-8: llvm.amdgcn.global.load.async.to.lds.b32
-    // CHECK-NOT: llvm.amdgcn.global.load.async.to.lds
+    // CHECK-COUNT-8: rocdl.global.load.async.to.lds.b32
+    // CHECK-NOT: rocdl.global.load.async.to.lds
     %2 = ttg.async_copy_global_to_local %1, %arg2 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -64,7 +64,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func public @async_load_multicast_to_all_ctas(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
                                 %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
     // CHECK: %[[GROUP_MASK:.*]] = llvm.mlir.constant(15 : i32) : i32
-    // CHECK: llvm.amdgcn.cluster.load.async.to.lds{{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[GROUP_MASK]]
+    // CHECK: rocdl.cluster.load.async.to.lds{{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[GROUP_MASK]]
 
     %6 = ttg.async_copy_global_to_local %arg0, %arg1 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
@@ -81,12 +81,12 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: async_load_multicast_to_half_ctas
   tt.func public @async_load_multicast_to_half_ctas(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
                                 %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
-    // CHECK: %[[CTA_ID:.*]] = {{.*}}llvm.amdgcn.cluster.workgroup.id.x
+    // CHECK: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
     // CHECK: %[[NON_FREE_BITS:.*]] = llvm.mlir.constant(-7 : i32) : i32
     // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[NON_FREE_BITS]]
     // CHECK: %[[GROUP_MASK:.*]] = llvm.mlir.constant(85 : i32) : i32
     // CHECK: %[[CTA_MASK:.*]] = llvm.shl %[[GROUP_MASK]], %[[SHIFT_AMOUNT]]
-    // CHECK: llvm.amdgcn.cluster.load.async.to.lds{{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[CTA_MASK]]
+    // CHECK: rocdl.cluster.load.async.to.lds{{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[CTA_MASK]]
     %6 = ttg.async_copy_global_to_local %arg0, %arg1 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -103,12 +103,12 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, ttg.sha
   tt.func public @async_load_multicast_group_of_2_strided_by_8(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
                                 %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
     // Skip the first cluster id because it's emitted for address calculation
-    // CHECK: %[[CTA_ID:.*]] = {{.*}}llvm.amdgcn.cluster.workgroup.id.x
+    // CHECK: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
     // CHECK: %[[NON_FREE_BITS:.*]] = llvm.mlir.constant(-9 : i32) : i32
     // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[NON_FREE_BITS]]
     // CHECK: %[[GROUP_MASK:.*]] = llvm.mlir.constant(257 : i32) : i32
     // CHECK: %[[CTA_MASK:.*]] = llvm.shl %[[GROUP_MASK]], %[[SHIFT_AMOUNT]]
-    // CHECK: llvm.amdgcn.cluster.load.async.to.lds{{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[CTA_MASK]]
+    // CHECK: rocdl.cluster.load.async.to.lds{{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[CTA_MASK]]
     %6 = ttg.async_copy_global_to_local %arg0, %arg1 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -124,9 +124,9 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, ttg.sha
   // CHECK-LABEL: async_load_multi_cta_but_not_data_sharing
   tt.func public @async_load_multi_cta_but_not_data_sharing(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
                                 %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
-    // CHECK-NOT: llvm.amdgcn.cluster.load.async.to.lds
-    // CHECK: llvm.amdgcn.global.load.async.to.lds.b64
-    // CHECK-NOT: llvm.amdgcn.cluster.load.async.to.lds
+    // CHECK-NOT: rocdl.cluster.load.async.to.lds
+    // CHECK: rocdl.global.load.async.to.lds.b64
+    // CHECK-NOT: rocdl.cluster.load.async.to.lds
     %6 = ttg.async_copy_global_to_local %arg0, %arg1 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -144,12 +144,12 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, ttg.sha
   tt.func public @async_load_multi_cta_linear_layout(%arg0: tensor<32x32x!tt.ptr<f32>, #linear> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
                                 %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
     // Skip the first cluster id because it's emitted for address calculation
-    // CHECK: %[[CTA_ID:.*]] = {{.*}}llvm.amdgcn.cluster.workgroup.id.x
+    // CHECK: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
     // CHECK: %[[NON_FREE_BITS:.*]] = llvm.mlir.constant(-9 : i32) : i32
     // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[NON_FREE_BITS]]
     // CHECK: %[[GROUP_MASK:.*]] = llvm.mlir.constant(257 : i32) : i32
     // CHECK: %[[CTA_MASK:.*]] = llvm.shl %[[GROUP_MASK]], %[[SHIFT_AMOUNT]]
-    // CHECK: llvm.amdgcn.cluster.load.async.to.lds{{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[CTA_MASK]]
+    // CHECK: rocdl.cluster.load.async.to.lds{{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[CTA_MASK]]
     %6 = ttg.async_copy_global_to_local %arg0, %arg1 : tensor<32x32x!tt.ptr<f32>, #linear> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -204,8 +204,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
                                                     %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
     %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
     // Each thread loads 8 elements with 32-bit loads
-    // CHECK-COUNT-8: llvm.amdgcn.global.load.async.to.lds.b32
-    // CHECK-NOT: llvm.amdgcn.global.load.async.to.lds
+    // CHECK-COUNT-8: rocdl.global.load.async.to.lds.b32
+    // CHECK-NOT: rocdl.global.load.async.to.lds
     %2 = ttg.async_copy_global_to_local %1, %arg1 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -246,8 +246,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
                                                                 %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
     // minInterval=2 limits vectorization to 2 elements (64 bits)
     // Each thread handles 8 elements -> 4 x 64-bit loads
-    // CHECK-COUNT-4: llvm.amdgcn.global.load.async.to.lds.b64
-    // CHECK-NOT: llvm.amdgcn.global.load.async.to.lds
+    // CHECK-COUNT-4: rocdl.global.load.async.to.lds.b64
+    // CHECK-NOT: rocdl.global.load.async.to.lds
     %2 = ttg.async_copy_global_to_local %arg0, %arg1 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }

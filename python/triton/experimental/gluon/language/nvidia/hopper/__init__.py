@@ -62,6 +62,9 @@ class warpgroup_mma_accumulator(_core.base_value):
         self.handle = handle
         self.type = warpgroup_mma_accumulator_type(tensor_type)
 
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
+
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
 
