@@ -63,6 +63,12 @@ llvm::DenseSet<Value> getBarrierOperands(Operation *op) {
   if (auto initBarrierOp = dyn_cast<ttng::InitBarrierOp>(op)) {
     return {initBarrierOp.getOperand()};
   }
+  if (auto waitBarrierOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
+    return {waitBarrierOp.getAlloc()};
+  }
+  if (auto arriveBarrierOp = dyn_cast<ttng::ArriveBarrierOp>(op)) {
+    return {arriveBarrierOp.getAlloc()};
+  }
   if (auto barrierExpectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
     return {barrierExpectOp.getAlloc()};
   }
@@ -269,7 +275,8 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   if (auto tmemSubsliceOp = dyn_cast<ttng::TMEMSubSliceOp>(op)) {
     RegionInfo in = operands[0]->getValue();
     uint32_t subBufferSize = getMemDescSize(tmemSubsliceOp.getType());
-    uint32_t relativeOffset = tmemSubsliceOp.getN();
+    uint32_t relativeOffset = ttng::getTMemSubSliceOffset(
+        tmemSubsliceOp.getType(), tmemSubsliceOp.getN());
     for (auto &region : in.regions) {
       regionInfo.regions.insert(
           {region.baseOffset + relativeOffset, subBufferSize});
@@ -326,8 +333,8 @@ bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
           ttng::TMEMStoreOp, ttg::AsyncCopyGlobalToLocalOp,
           ttng::AsyncTMACopyGlobalToLocalOp, ttng::AsyncTMACopyLocalToGlobalOp,
           ttng::AsyncTMAGatherOp, ttng::AsyncTMAScatterOp, ttng::InitBarrierOp,
-          ttng::BarrierExpectOp, ttng::InvalBarrierOp, ttng::WaitBarrierOp>(
-          op)) {
+          ttng::BarrierExpectOp, ttng::InvalBarrierOp, ttng::WaitBarrierOp,
+          ttng::ArriveBarrierOp>(op)) {
     return true;
   }
   // Allocations with operands write to the memory.

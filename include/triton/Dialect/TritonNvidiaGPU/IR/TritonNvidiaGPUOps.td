@@ -445,6 +445,9 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
                    CArg<"triton::CacheModifier", "triton::CacheModifier::NONE">:$cache,
                    CArg<"triton::EvictionPolicy", "triton::EvictionPolicy::NORMAL">:$evict,
                    CArg<"bool", "false">:$isVolatile), [{
+      multicast &= ::mlir::triton::nvidia_gpu::hasCGABroadcast(
+                                   ::mlir::cast<::mlir::triton::gpu::MemDescType>(
+                                       result.getType()));
       build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
             result, pred, multicast, cache, evict, isVolatile);
     }]>
@@ -896,7 +899,8 @@ def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [DeclareOpInterfaceMethods<MemoryEf
   }];
 }
 
-def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure]> {
+def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
+                                                    MemDescViewTrait]> {
   let summary = "Take a subslice of a tensor memory allocation";
   let description = [{
     This operation takes a subslice of a tensor memory allocation and returns a new descriptor
@@ -969,7 +973,7 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
     Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
-    Optional<TTG_MemDescType>:$barrier
+    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
   );
 
   let assemblyFormat = [{$src `,` $dst (`,` $barrier^)? attr-dict `:` qualified(type(operands))}];

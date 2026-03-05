@@ -67,11 +67,10 @@ struct TCGen5MMAScaleSharedToTmemConversion
     auto numElems = product(oldType.getShape());
     Type elType = oldType.getElementType();
     ttg::CGAEncodingAttr CGALayout = ttg::getCGALayout(oldType.getEncoding());
-    auto CTASplitNum = CGALayout.getCTASplitNum();
     // Distribute the scales across the rows of the MMA operation.
     SmallVector<int64_t> shape = {rows, numElems / rows};
-    Attribute scaleEncoding = TensorMemoryScalesEncodingAttr::get(
-        context, CTASplitNum[0], CTASplitNum[1]);
+    Attribute scaleEncoding =
+        TensorMemoryScalesEncodingAttr::get(context, CGALayout);
     Type scaleAType =
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);
@@ -88,6 +87,11 @@ struct TCGen5MMAScaleSharedToTmemConversion
     MLIRContext *context = op->getContext();
     auto aScaleType = op.getAScale().getType();
     auto bScaleType = op.getBScale().getType();
+    if (aScaleType.getShape() != aScaleType.getAllocShape() ||
+        bScaleType.getShape() != bScaleType.getAllocShape()) {
+      op.emitError("subviews NYI");
+      return failure();
+    }
     int blockM = op.getBlockM();
     int blockN = op.getBlockN();
     bool anyChanged = false;

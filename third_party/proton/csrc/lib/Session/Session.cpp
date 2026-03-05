@@ -303,12 +303,11 @@ void SessionManager::addMetrics(
   });
 }
 
-void SessionManager::setMetricKernels(void *tensorMetricKernel,
-                                      void *scalarMetricKernel, void *stream) {
+void SessionManager::setMetricKernels(
+    const MetricKernelLaunchState &metricKernelLaunchState) {
   std::lock_guard<std::mutex> lock(mutex);
   executeInterface(metricInterfaceCounts, [&](auto *metricInterface) {
-    metricInterface->setMetricKernels(tensorMetricKernel, scalarMetricKernel,
-                                      stream);
+    metricInterface->setMetricKernels(metricKernelLaunchState);
   });
 }
 
