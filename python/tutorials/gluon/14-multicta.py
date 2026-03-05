@@ -109,8 +109,20 @@ def tflops(ms, M, N, K):
     return 2 * M * N * K * 1e-12 / (ms * 1e-3)
 
 
-def tbps(ms, num_bytes):
-    return ((num_bytes >> 30) / 1024) / (ms * 1e-3)
+def gbps(ms, num_bytes):
+    return num_bytes * 1e-9 / (ms * 1e-3)
+
+
+def pick_multicta_softmax_config(n_cols):
+    warp_thresholds = [(3072, 1), (6144, 2)]
+    cluster_thresholds = [(16 * 1024, 1), (32 * 1024, 2), (64 * 1024, 4), (128 * 1024, 8)]
+
+    num_warps = next((v for limit, v in warp_thresholds if n_cols <= limit), 4)
+    cluster_n = next((v for limit, v in cluster_thresholds if n_cols <= limit), 16)
+    return {
+        "num_warps": num_warps,
+        "num_ctas": cluster_n,
+    }
 
 
 # %%
@@ -121,31 +133,111 @@ def tbps(ms, num_bytes):
 # clusters automatically when the source and destination layouts shard the CTA dimension
 # differently.
 #
-# The kernel below shows a reduction split across 8 CTAs.
-# It's an example of how, through the use of CGAs, we can have a much larger tile than
-# a on single CTA.
-# Without CGAs, we would need to switch to an iterative reduction or a two-kernel approach.
+# The kernel below shards one row across multiple CTAs and uses the automatic
+# cross-CTA reductions in `gl.max` and `gl.sum` to compute a numerically stable
+# row-wise softmax.
+#
+# Without CGAs, we would need to switch to an iterative reduction or a
+# multi-kernel approach once the row becomes too wide for a single CTA.
 
 
 @gluon.jit
-def multicta_reduction_kernel(x_ptr, out_ptr, BLOCK_M: gl.constexpr):
-    layout: gl.constexpr = gl.BlockedLayout([4], [32], [16], [0], cga_layout=[[1], [2], [4]])
-    offs_m = gl.arange(0, BLOCK_M, layout)
-    x = gl.load(x_ptr + offs_m)
-    row_sum = gl.sum(x, axis=0)
-    gl.store(out_ptr, row_sum)
+def multicta_softmax_kernel(
+    x_ptr,
+    out_ptr,
+    x_row_stride,
+    out_row_stride,
+    BLOCK_N: gl.constexpr,
+):
+    pid = gl.program_id(0)
+    cga_layout: gl.constexpr = ((1, ), (2, ), (4, ), (8, ), (16, ))[:gl.num_ctas().bit_length() - 1]
+    layout: gl.constexpr = gl.BlockedLayout([4], [32], [gl.num_warps()], [0], cga_layout=cga_layout)
+    offs_n = gl.arange(0, BLOCK_N, layout)
+    mask = offs_n < BLOCK_N
+    row_start = pid * x_row_stride
+    out_row_start = pid * out_row_stride
+    x = gl.load(x_ptr + row_start + offs_n, mask=mask, other=-float("inf"))
+    row_max = gl.max(x, axis=0)
+    y = gl.exp(x - row_max)
+    row_sum = gl.sum(y, axis=0)
+    z = y * (1.0 / row_sum)
+    gl.store(out_ptr + out_row_start + offs_n, z, mask=mask)
+
+
+def multicta_softmax_f32(x, out=None):
+    M, N = x.shape
+    cfg = pick_multicta_softmax_config(N)
+    if out is None:
+        out = torch.empty_like(x)
+
+    multicta_softmax_kernel[(M, )](
+        x,
+        out,
+        x.stride(0),
+        out.stride(0),
+        BLOCK_N=N,
+        num_warps=cfg["num_warps"],
+        num_ctas=cfg["num_ctas"],
+    )
+    return out
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
-def test_multicta_reduction():
-    x = torch.randn(2**16, device="cuda", dtype=torch.float32)
-
-    out = torch.empty(1, device=x.device, dtype=x.dtype)
-    multicta_reduction_kernel[(1, )](x, out, BLOCK_M=x.shape[0], num_warps=16, num_ctas=8)
-
-    ref = x.sum(dim=0).reshape(1)
+@pytest.mark.parametrize("M, N", [(64, 64), (64, 256), (16, 2**16)])
+def test_multicta_softmax_f32(M, N):
+    x = torch.randn((M, N), device="cuda", dtype=torch.float32)
+    out = multicta_softmax_f32(x)
+    ref = torch.softmax(x, dim=1)
     torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
 
+
+def benchmark_multicta_softmax_f32():
+    if not is_hopper_or_newer():
+        raise RuntimeError("softmax benchmark requires Hopper or newer")
+
+    SOFTMAX_BENCH_SHAPES = [
+        (2**15, 2**8),
+        (2**15, 2**9),
+        (2**15, 2**10),
+        (2**15, 2**11),
+        (2**15, 2**12),
+        (2**15, 2**13),
+        (2**15, 2**14),
+        (2**15, 2**15),
+        (2**15, 2**16),
+        (2**14, 2**17),
+        (2**13, 2**18),
+    ]
+    print("Benchmarking multicta_softmax")
+    print("============================")
+    print("  shape         CTAs  warps  time (ms)  bandwidth (GB/s)")
+    for M, N in SOFTMAX_BENCH_SHAPES:
+        cfg = pick_multicta_softmax_config(N)
+        x = torch.empty((M, N), device="cuda", dtype=torch.float32).uniform_(-1, 1)
+        out = torch.empty_like(x)
+        ms = triton.testing.do_bench_cudagraph(lambda: multicta_softmax_f32(x, out))
+        num_bytes = 2 * x.numel() * x.element_size()
+        print(f"{M:>6} x {N:<6}  {cfg['num_ctas']:>4}  {cfg['num_warps']:>5}  {ms:>9.3f}  {gbps(ms, num_bytes):>16.2f}")
+
+
+benchmark_multicta_softmax_f32()
+
+# %%
+# Softmax benchmark results
+# Benchmarking multicta_softmax
+# ============================
+#   shape         CTAs  warps  time (ms)  bandwidth (GB/s)
+#  32768 x 256        1      1      0.018           3661.46
+#  32768 x 512        1      1      0.020           6746.45
+#  32768 x 1024       1      1      0.040           6740.50
+#  32768 x 2048       1      1      0.078           6920.01
+#  32768 x 4096       1      2      0.152           7065.25
+#  32768 x 8192       1      4      0.301           7136.76
+#  32768 x 16384      1      4      0.600           7157.74
+#  32768 x 32768      2      4      1.312           6545.11
+#  32768 x 65536      4      4      2.836           6057.26
+#  16384 x 131072     8      4      3.142           5468.66
+#   8192 x 262144    16      4      3.627           4736.15
 
 # %%
 # Multi-CTA synchronization
