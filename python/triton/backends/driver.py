@@ -34,12 +34,6 @@ def wrap_handle_tensordesc_impl(launcher, signature, tensordesc_meta, make_tenso
     def inner(*args):
         base_args = args[:-1]
         kernel_args = args[-1]
-        signature_len = len(signature)
-        # Instrumentation can append hidden runtime arguments after the user
-        # kernel arguments; keep them out of descriptor flattening and restore
-        # them afterwards.
-        extra_args = kernel_args[signature_len:]
-        kernel_args = kernel_args[:signature_len]
         wrapped = make_tensordesc_args(
             kernel_args,
             signature,
@@ -48,8 +42,6 @@ def wrap_handle_tensordesc_impl(launcher, signature, tensordesc_meta, make_tenso
             base_args,
             make_tensordesc_arg,
         )
-        if extra_args:
-            wrapped.extend(extra_args)
         return launcher(*base_args, wrapped)
 
     return inner

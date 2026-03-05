@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 #include <algorithm>
 #include <optional>
@@ -51,13 +52,6 @@ static SmallVector<Value> castToI64(OpBuilder &builder, Location loc,
   return result;
 }
 
-static bool isByteAddressableTensorDesc(tt::TensorDescInterface descTy) {
-  auto elemTy = descTy.getSignlessBlockType().getElementType();
-  if (!elemTy.isIntOrFloat())
-    return false;
-  return (elemTy.getIntOrFloatBitWidth() % 8) == 0;
-}
-
 static ttg::BlockedEncodingAttr
 getInstrumentationEncoding(OpBuilder &builder, ArrayRef<int64_t> shape,
                            Type elemType) {
@@ -92,11 +86,14 @@ static Value expandAllSlicedDims(OpBuilder &builder, Location loc,
   return tensor;
 }
 
-static std::optional<DescriptorInfo> getDescriptorInfo(Value desc,
-                                                       OpBuilder &builder) {
-  auto descTy = dyn_cast<tt::TensorDescInterface>(desc.getType());
-  if (!descTy || !isByteAddressableTensorDesc(descTy))
-    return std::nullopt;
+static DescriptorInfo getDescriptorInfo(Value desc, OpBuilder &builder) {
+  if (!isa<tt::TensorDescType>(desc.getType())) {
+    std::string msg;
+    llvm::raw_string_ostream stream(msg);
+    stream << "GSan: Unsupported descriptor type" << desc.getType();
+    llvm::report_fatal_error(msg.c_str());
+  }
+  auto descTy = cast<tt::TensorDescType>(desc.getType());
 
   auto elemTy = descTy.getSignlessBlockType().getElementType();
   auto basePtrTy = tt::getPointerType(elemTy);
@@ -204,7 +201,7 @@ static Value createPtrFromRanges(OpBuilder &builder, Location loc,
   return ptr;
 }
 
-static std::optional<std::pair<Value, Value>>
+static std::pair<Value, Value>
 createTiledAccess(OpBuilder &builder, Location loc, const DescriptorInfo &desc,
                   ArrayRef<int64_t> blockShape, ValueRange offsets,
                   std::optional<Value> pred) {
@@ -233,7 +230,7 @@ createTiledAccess(OpBuilder &builder, Location loc, const DescriptorInfo &desc,
   return std::make_pair(ptr, mask);
 }
 
-static std::optional<std::pair<Value, Value>> createGatherScatterAccess(
+static std::pair<Value, Value> createGatherScatterAccess(
     OpBuilder &builder, Location loc, const DescriptorInfo &desc,
     ArrayRef<int64_t> blockShape, Value xOffsets, Value yOffset) {
   auto encoding = getInstrumentationEncoding(
@@ -263,17 +260,13 @@ static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
 
   OpBuilder builder(op);
   auto desc = getDescriptorInfo(op.getDesc(), builder);
-  if (!desc)
-    return;
 
   auto offsets = castToI64(builder, op.getLoc(), op.getCoord());
-  auto access = createTiledAccess(builder, op.getLoc(), *desc,
+  auto access = createTiledAccess(builder, op.getLoc(), desc,
                                   op.getResult().getType().getShape(), offsets,
                                   op.getPred());
-  if (!access)
-    return;
-  ExperimentalGSanTensorAccessOp::create(builder, op.getLoc(), access->first,
-                                         access->second, /*isStore=*/false);
+  ExperimentalGSanTensorAccessOp::create(builder, op.getLoc(), access.first,
+                                         access.second, /*isStore=*/false);
 }
 
 static void instrumentAsyncTMAStore(Operation *op, Value descValue,
@@ -281,51 +274,39 @@ static void instrumentAsyncTMAStore(Operation *op, Value descValue,
                                     ValueRange coords) {
   OpBuilder builder(op);
   auto desc = getDescriptorInfo(descValue, builder);
-  if (!desc)
-    return;
 
   auto offsets = castToI64(builder, op->getLoc(), coords);
-  auto access = createTiledAccess(builder, op->getLoc(), *desc, blockShape,
+  auto access = createTiledAccess(builder, op->getLoc(), desc, blockShape,
                                   offsets, std::nullopt);
-  if (!access)
-    return;
-  ExperimentalGSanTensorAccessOp::create(builder, op->getLoc(), access->first,
-                                         access->second, /*isStore=*/true);
+  ExperimentalGSanTensorAccessOp::create(builder, op->getLoc(), access.first,
+                                         access.second, /*isStore=*/true);
 }
 
 static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op) {
   OpBuilder builder(op);
   auto desc = getDescriptorInfo(op.getDesc(), builder);
-  if (!desc)
-    return;
 
-  auto access = createGatherScatterAccess(builder, op.getLoc(), *desc,
+  auto access = createGatherScatterAccess(builder, op.getLoc(), desc,
                                           op.getResult().getType().getShape(),
                                           op.getXOffsets(), op.getYOffset());
-  if (!access)
-    return;
-  auto maskType = cast<RankedTensorType>(access->second.getType());
+  auto maskType = cast<RankedTensorType>(access.second.getType());
   Value predTensor =
       tt::SplatOp::create(builder, op.getLoc(), maskType, op.getPred());
   Value mask =
-      arith::AndIOp::create(builder, op.getLoc(), access->second, predTensor);
-  ExperimentalGSanTensorAccessOp::create(builder, op.getLoc(), access->first,
+      arith::AndIOp::create(builder, op.getLoc(), access.second, predTensor);
+  ExperimentalGSanTensorAccessOp::create(builder, op.getLoc(), access.first,
                                          mask, /*isStore=*/false);
 }
 
 static void instrumentAsyncTMAScatter(ttng::AsyncTMAScatterOp op) {
   OpBuilder builder(op);
   auto desc = getDescriptorInfo(op.getDesc(), builder);
-  if (!desc)
-    return;
 
-  auto access = createGatherScatterAccess(builder, op.getLoc(), *desc,
+  auto access = createGatherScatterAccess(builder, op.getLoc(), desc,
                                           op.getSrc().getType().getShape(),
                                           op.getXOffsets(), op.getYOffset());
-  if (!access)
-    return;
-  ExperimentalGSanTensorAccessOp::create(builder, op.getLoc(), access->first,
-                                         access->second, /*isStore=*/true);
+  ExperimentalGSanTensorAccessOp::create(builder, op.getLoc(), access.first,
+                                         access.second, /*isStore=*/true);
 }
 
 class GlobalSanitizerPass
@@ -388,31 +369,41 @@ public:
       callOp.erase();
     }
 
-    module.walk([&](tt::LoadOp op) {
+    module.walk([&](Operation *op) {
       OpBuilder b(op);
-      ExperimentalGSanTensorAccessOp::create(b, op.getLoc(), op.getPtr(),
-                                             op.getMask(), /*isStore=*/false);
+      mlir::TypeSwitch<Operation *>(op)
+          .Case([&](tt::LoadOp op) {
+            ExperimentalGSanTensorAccessOp::create(
+                b, op.getLoc(), op.getPtr(), op.getMask(), /*isStore=*/false);
+          })
+          .Case([&](tt::StoreOp op) {
+            ExperimentalGSanTensorAccessOp::create(
+                b, op.getLoc(), op.getPtr(), op.getMask(), /*isStore=*/true);
+          })
+          .Case([&](ttg::AsyncCopyGlobalToLocalOp op) {
+            ExperimentalGSanTensorAccessOp::create(
+                b, op.getLoc(), op.getSrc(), op.getMask(), /*isStore=*/false);
+          })
+          .Case([&](ttng::AsyncTMACopyGlobalToLocalOp op) {
+            instrumentAsyncTMALoad(op);
+          })
+          .Case(
+              [&](ttng::AsyncTMAGatherOp op) { instrumentAsyncTMAGather(op); })
+          .Case([&](ttng::AsyncTMACopyLocalToGlobalOp op) {
+            instrumentAsyncTMAStore(op, op.getDesc(),
+                                    op.getSrc().getType().getShape(),
+                                    op.getCoord());
+          })
+          .Case([&](ttng::AsyncTMAReduceOp op) {
+            // FIXME: This is just plain wrong. TMA reduce is atomic.
+            instrumentAsyncTMAStore(op, op.getDesc(),
+                                    op.getSrc().getType().getShape(),
+                                    op.getCoord());
+          })
+          .Case([&](ttng::AsyncTMAScatterOp op) {
+            instrumentAsyncTMAScatter(op);
+          });
     });
-    module.walk([&](tt::StoreOp op) {
-      OpBuilder b(op);
-      ExperimentalGSanTensorAccessOp::create(b, op.getLoc(), op.getPtr(),
-                                             op.getMask(), /*isStore=*/true);
-    });
-    module.walk([](ttng::AsyncTMACopyGlobalToLocalOp op) {
-      instrumentAsyncTMALoad(op);
-    });
-    module.walk(
-        [](ttng::AsyncTMAGatherOp op) { instrumentAsyncTMAGather(op); });
-    module.walk([](ttng::AsyncTMACopyLocalToGlobalOp op) {
-      instrumentAsyncTMAStore(op, op.getDesc(),
-                              op.getSrc().getType().getShape(), op.getCoord());
-    });
-    module.walk([](ttng::AsyncTMAReduceOp op) {
-      instrumentAsyncTMAStore(op, op.getDesc(),
-                              op.getSrc().getType().getShape(), op.getCoord());
-    });
-    module.walk(
-        [](ttng::AsyncTMAScatterOp op) { instrumentAsyncTMAScatter(op); });
   }
 };
 

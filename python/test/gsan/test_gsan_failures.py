@@ -7,14 +7,10 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-from triton.experimental import gluon
-from triton.experimental.gluon import language as gl
-from triton.experimental.gluon.language.nvidia.blackwell import fence_async_shared, mbarrier, tma
-from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
 from triton._internal_testing import is_blackwell, is_cuda, run_in_process
 from triton.experimental.gsan import create_mem_pool
-from triton.tools.tensor_descriptor import TensorDescriptor as TLTensorDescriptor
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 pytestmark = pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 
@@ -81,59 +77,37 @@ def _host_tma_war_kernel(target_ptr, target_desc, scratch_desc, row_idx, col_idx
         tl.store(target_ptr + row_idx * stride_0 + col_idx, 1)
 
 
-@gluon.jit
+@triton.jit
 def _host_tma_gather_war_kernel(target_ptr, target_desc, x_offsets_ptr, scratch_ptr, row_idx, y_offset, stride_0,
-                                scratch_stride_0, scratch_stride_1, BLOCK_X: gl.constexpr):
-    BLOCK_Y: gl.constexpr = target_desc.block_type.shape[1]
-    pid = gl.program_id(0)
+                                scratch_stride_0, scratch_stride_1, BLOCK_X: tl.constexpr):
+    BLOCK_Y: tl.constexpr = target_desc.block_shape[1]
+    pid = tl.program_id(0)
     if pid == 0:
-        coalesced_1d_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0])
-        x_offsets = gl.load(x_offsets_ptr + gl.arange(0, BLOCK_X, coalesced_1d_layout))
-        offsets_layout: gl.constexpr = gl.SliceLayout(0, gl.BlockedLayout([1, 4], [32, 1], [1, gl.num_warps()], [1, 0]))
-        x_offsets = gl.convert_layout(x_offsets, offsets_layout)
-
-        smem_dest = gl.allocate_shared_memory(target_desc.dtype, [BLOCK_X, BLOCK_Y], target_desc.layout)
-        bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-        mbarrier.init(bar, count=1)
-        mbarrier.expect(bar, BLOCK_X * target_desc.block_type.nbytes)
-        tma.async_gather(target_desc, x_offsets, y_offset, barrier=bar, result=smem_dest)
-        mbarrier.wait(bar, phase=0)
-        mbarrier.invalidate(bar)
-
-        coalesced_2d_layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, gl.num_warps()], [1, 0])
-        values = smem_dest.load(coalesced_2d_layout)
-        indices_x = gl.arange(0, BLOCK_X, gl.SliceLayout(1, coalesced_2d_layout))[:, None] * scratch_stride_0
-        indices_y = gl.arange(0, BLOCK_Y, gl.SliceLayout(0, coalesced_2d_layout))[None, :] * scratch_stride_1
-        gl.store(scratch_ptr + indices_x + indices_y, values)
+        x_offsets = tl.load(x_offsets_ptr + tl.arange(0, BLOCK_X))
+        values = target_desc.gather(x_offsets, y_offset)
+        indices_x = tl.arange(0, BLOCK_X)[:, None] * scratch_stride_0
+        indices_y = tl.arange(0, BLOCK_Y)[None, :] * scratch_stride_1
+        tl.store(scratch_ptr + indices_x + indices_y, values)
     else:
         nanosleep(500_000)
-        gl.store(target_ptr + row_idx * stride_0 + y_offset, 1)
+        tl.store(target_ptr + row_idx * stride_0 + y_offset, 1)
 
 
-@gluon.jit
+@triton.jit
 def _host_tma_scatter_war_kernel(target_ptr, target_desc, x_offsets_ptr, src_ptr, src_stride_0, src_stride_1,
-                                 scratch_ptr, row_idx, y_offset, stride_0, BLOCK_X: gl.constexpr):
-    BLOCK_Y: gl.constexpr = target_desc.block_type.shape[1]
-    pid = gl.program_id(0)
+                                 scratch_ptr, row_idx, y_offset, stride_0, BLOCK_X: tl.constexpr):
+    BLOCK_Y: tl.constexpr = target_desc.block_shape[1]
+    pid = tl.program_id(0)
     if pid == 0:
-        value = gl.load(target_ptr + row_idx * stride_0 + y_offset)
-        gl.store(scratch_ptr, value)
+        value = tl.load(target_ptr + row_idx * stride_0 + y_offset)
+        tl.store(scratch_ptr, value)
     else:
         nanosleep(500_000)
-        coalesced_1d_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0])
-        x_offsets = gl.load(x_offsets_ptr + gl.arange(0, BLOCK_X, coalesced_1d_layout))
-        offsets_layout: gl.constexpr = gl.SliceLayout(0, gl.BlockedLayout([1, 4], [32, 1], [1, gl.num_warps()], [1, 0]))
-        x_offsets = gl.convert_layout(x_offsets, offsets_layout)
-
-        coalesced_2d_layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, gl.num_warps()], [1, 0])
-        indices_x = gl.arange(0, BLOCK_X, gl.SliceLayout(1, coalesced_2d_layout))[:, None] * src_stride_0
-        indices_y = gl.arange(0, BLOCK_Y, gl.SliceLayout(0, coalesced_2d_layout))[None, :] * src_stride_1
-        values = gl.load(src_ptr + indices_x + indices_y)
-        smem_src = gl.allocate_shared_memory(target_desc.dtype, [BLOCK_X, BLOCK_Y], target_desc.layout)
-        smem_src.store(values)
-        fence_async_shared()
-        tma.async_scatter(target_desc, x_offsets, y_offset, smem_src)
-        tma.store_wait(0)
+        indices_x = tl.arange(0, BLOCK_X)[:, None] * src_stride_0
+        indices_y = tl.arange(0, BLOCK_Y)[None, :] * src_stride_1
+        values = tl.load(src_ptr + indices_x + indices_y)
+        x_offsets = tl.load(x_offsets_ptr + tl.arange(0, BLOCK_X))
+        target_desc.scatter(values, x_offsets, y_offset)
 
 
 def _run_case(case: str) -> None:
@@ -168,14 +142,12 @@ def _run_case(case: str) -> None:
             scratch_storage = torch.zeros_like(target_storage)
             target = target_storage[:, :n_size]
             scratch = scratch_storage[:, :n_size]
-            target_desc = TLTensorDescriptor.from_tensor(target, [block, block])
-            scratch_desc = TLTensorDescriptor.from_tensor(scratch, [block, block])
+            target_desc = TensorDescriptor.from_tensor(target, [block, block])
+            scratch_desc = TensorDescriptor.from_tensor(scratch, [block, block])
         elif case in {"host_tma_gather_war", "host_tma_scatter_war"}:
             target_storage = torch.zeros((gather_padded_m, gather_padded_n), dtype=torch.int32, device="cuda")
             target = target_storage[:gather_m_size, :gather_n_size]
-            gl_dtype = getattr(gl, str(target.dtype).split(".")[1])
-            layout = gl.NVMMASharedLayout.get_default_for([gather_block_x, gather_block_y], gl_dtype)
-            target_desc = GluonTensorDescriptor.from_tensor(target, [1, gather_block_y], layout)
+            target_desc = TensorDescriptor.from_tensor(target, [1, gather_block_y])
             x_offsets = torch.tensor(gather_x_offsets, dtype=torch.int32, device="cuda")
             if case == "host_tma_gather_war":
                 scratch = torch.zeros((gather_block_x, gather_block_y), dtype=torch.int32, device="cuda")
@@ -232,23 +204,31 @@ CASE_INFO = {
     "host_tma_gather_war": {
         "error": "Write after read race detected",
         "function": _host_tma_gather_war_kernel.fn,
-        "marker": "gl.store(target_ptr + row_idx * stride_0 + y_offset, 1)",
+        "marker": "tl.store(target_ptr + row_idx * stride_0 + y_offset, 1)",
     },
     "host_tma_scatter_war": {
         "error": "Write after read race detected",
         "function": _host_tma_scatter_war_kernel.fn,
-        "marker": "tma.async_scatter(target_desc, x_offsets, y_offset, smem_src)",
+        "marker": "target_desc.scatter(values, x_offsets, y_offset)",
     },
 }
 
 
 def _expected_file_line(case: str) -> str:
     source_lines, starting_line = inspect.getsourcelines(CASE_INFO[case]["function"])
-    marker = CASE_INFO[case]["marker"]
-    for line_offset, line in enumerate(source_lines):
-        if marker in line:
-            return f"{Path(__file__).name}:{starting_line + line_offset}"
-    raise AssertionError(f"Could not find marker {marker!r} for case {case!r}")
+    markers = CASE_INFO[case]["marker"]
+    if isinstance(markers, str):
+        markers = (markers, )
+
+    matches = []
+    for marker in markers:
+        for line_offset, line in enumerate(source_lines):
+            if marker in line:
+                matches.append(f"{Path(__file__).name}:{starting_line + line_offset}")
+                break
+        else:
+            raise AssertionError(f"Could not find marker {marker!r} for case {case!r}")
+    return matches[0] if len(matches) == 1 else tuple(matches)
 
 
 def _run_failure_case(case: str) -> None:
