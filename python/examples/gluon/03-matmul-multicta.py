@@ -91,7 +91,7 @@ def matmul_get_configs(pre_hook=None):
         for cga_layout in ((), ((1, 0), ), ((1, 0), (2, 0)))
         if BN // get_split_dim(cga_layout, 1) <= 256
         # Trim some configs with too large a tile
-        if BN == 512 and len(cga_layout) == 0
+        if not (BN == 512 and len(cga_layout) == 0)
     ]
 
 
@@ -192,6 +192,8 @@ class Counter:
 class ClcTileSchedulerConsumer:
     has_work: gl.tensor
     tile_id: gl.tensor
+    pid_m: gl.tensor
+    pid_n: gl.tensor
     num_pid_m: gl.tensor
     num_pid_n: gl.tensor
     TILE_M: gl.constexpr
@@ -200,22 +202,28 @@ class ClcTileSchedulerConsumer:
     GRID_TILE_WIDTH: gl.constexpr
     clc_result_buffers: gl.shared_memory_descriptor
     clc_barriers: gl.shared_memory_descriptor
+    clc_planar_pid_buffers: gl.shared_memory_descriptor
+    clc_planar_ready_bars: gl.shared_memory_descriptor
     clc_consumed_bars: gl.shared_memory_descriptor
     counter: Counter
     consumed_counter: Counter
 
     @gluon.jit
     def initialize(M, N, TILE_M: gl.constexpr, TILE_N: gl.constexpr, MINOR_DIM: gl.constexpr,
-                   GRID_TILE_WIDTH: gl.constexpr, clc_result_buffers, clc_barriers, clc_consumed_bars):
+                   GRID_TILE_WIDTH: gl.constexpr, clc_result_buffers, clc_barriers, clc_planar_pid_buffers,
+                   clc_planar_ready_bars, clc_consumed_bars):
         tile_id = gl.program_id(axis=0)
         num_pid_m = gl.cdiv(M, TILE_M)
         num_pid_n = gl.cdiv(N, TILE_N)
+        pid_m, pid_n = _planar_snake(tile_id, num_pid_m, num_pid_n, MINOR_DIM, GRID_TILE_WIDTH)
         has_work = gl.to_tensor(True)
         counter = Counter.create(0, clc_barriers.shape[0])
         consumed_counter = Counter.create(0, clc_barriers.shape[0])
         return ClcTileSchedulerConsumer(
             has_work,
             tile_id,
+            pid_m,
+            pid_n,
             num_pid_m,
             num_pid_n,
             TILE_M,
@@ -224,6 +232,8 @@ class ClcTileSchedulerConsumer:
             GRID_TILE_WIDTH,
             clc_result_buffers,
             clc_barriers,
+            clc_planar_pid_buffers,
+            clc_planar_ready_bars,
             clc_consumed_bars,
             counter,
             consumed_counter,
@@ -231,8 +241,7 @@ class ClcTileSchedulerConsumer:
 
     @gluon.jit
     def get_offsets(self):
-        pid_m, pid_n = _planar_snake(self.tile_id, self.num_pid_m, self.num_pid_n, self.MINOR_DIM, self.GRID_TILE_WIDTH)
-        return pid_m * self.TILE_M, pid_n * self.TILE_N
+        return self.pid_m * self.TILE_M, self.pid_n * self.TILE_N
 
     @gluon.jit
     def step(self, iteration):
@@ -249,6 +258,13 @@ class ClcTileSchedulerConsumer:
         result = self.clc_result_buffers.index(counter.index)
         mbarrier.wait(barrier, counter.phase)
         clc_res = clc.load_result(result)
+        mbarrier.wait(self.clc_planar_ready_bars.index(counter.index), counter.phase)
+        planar_slot = self.clc_planar_pid_buffers.index(counter.index)
+        planar_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0],
+                                                       [[0]] * (gl.num_ctas().bit_length() - 1))
+        packed_pid = planar_slot.load(planar_layout).reshape([])
+        pid_m = ((packed_pid >> 32) & 0xFFFFFFFF).to(gl.int32)
+        pid_n = (packed_pid & 0xFFFFFFFF).to(gl.int32)
         has_work = clc_res.is_canceled()
         tile_id = self.tile_id
         if has_work:
@@ -256,6 +272,8 @@ class ClcTileSchedulerConsumer:
         return ClcTileSchedulerConsumer(
             has_work,
             tile_id,
+            pid_m,
+            pid_n,
             self.num_pid_m,
             self.num_pid_n,
             self.TILE_M,
@@ -264,6 +282,8 @@ class ClcTileSchedulerConsumer:
             self.GRID_TILE_WIDTH,
             self.clc_result_buffers,
             self.clc_barriers,
+            self.clc_planar_pid_buffers,
+            self.clc_planar_ready_bars,
             self.clc_consumed_bars,
             counter.next(),
             consumed_counter,
@@ -284,6 +304,8 @@ class PartitionArgs:
     acc_ready_bars: gl.shared_memory_descriptor
     clc_result_buffers: gl.shared_memory_descriptor
     clc_barriers: gl.shared_memory_descriptor
+    clc_planar_pid_buffers: gl.shared_memory_descriptor
+    clc_planar_ready_bars: gl.shared_memory_descriptor
     clc_consumed_bars: gl.shared_memory_descriptor
     MINOR_DIM: gl.constexpr
     GRID_TILE_WIDTH: gl.constexpr
@@ -300,13 +322,19 @@ class PartitionArgs:
             self.GRID_TILE_WIDTH,
             self.clc_result_buffers,
             self.clc_barriers,
+            self.clc_planar_pid_buffers,
+            self.clc_planar_ready_bars,
             self.clc_consumed_bars,
         )
 
 
 @gluon.jit
 def matmul_clc_partition(p):
+    TILE_M: gl.constexpr = p.a_desc.block_shape[0]
+    TILE_N: gl.constexpr = p.b_desc.block_shape[1]
     has_work = gl.to_tensor(True)
+    num_pid_m = gl.cdiv(p.c_desc.shape[0], TILE_M)
+    num_pid_n = gl.cdiv(p.c_desc.shape[1], TILE_N)
     state = Counter.create(0, p.clc_barriers.shape[0])
     consumed_state = Counter.create(1, p.clc_barriers.shape[0])
     ACC_STAGES: gl.constexpr = p.clc_barriers.shape[0]
@@ -320,7 +348,19 @@ def matmul_clc_partition(p):
         mbarrier.expect(barrier, 16)
         clc.try_cancel(result, barrier, multicast=True)
         mbarrier.wait(barrier, state.phase)
-        has_work = clc.load_result(result).is_canceled()
+        clc_res = clc.load_result(result)
+        has_work = clc_res.is_canceled()
+        pid_m = gl.to_tensor(0)
+        pid_n = gl.to_tensor(0)
+        if has_work:
+            tile_id = clc_res.program_id(0)
+            pid_m, pid_n = _planar_snake(tile_id, num_pid_m, num_pid_n, p.MINOR_DIM, p.GRID_TILE_WIDTH)
+        packed_pid = (pid_m.to(gl.int64) << 32) | (pid_n.to(gl.int64) & 0xFFFFFFFF)
+        planar_slot = p.clc_planar_pid_buffers.index(state.index)
+        planar_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0],
+                                                       [[0]] * (gl.num_ctas().bit_length() - 1))
+        planar_slot.store(gl.full([1], packed_pid, gl.int64, layout=planar_layout))
+        mbarrier.arrive(p.clc_planar_ready_bars.index(state.index))
         state = state.next()
         consumed_state = consumed_state.next()
         i += 1
@@ -471,15 +511,18 @@ def _matmul_kernel(
         mbarrier.init(acc_ready_bars.index(i), count=mma_barrier_count)
 
     clc_barriers = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
+    clc_planar_ready_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     clc_consumed_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=TWO_CTAS)
     for i in gl.static_range(ACC_STAGES):
         mbarrier.init(clc_barriers.index(i), count=1)
+        mbarrier.init(clc_planar_ready_bars.index(i), count=1)
         # Every partition but itself arrives on the barrier
         mbarrier.init(clc_consumed_bars.index(i), count=N_PARTITIONS - 1)
 
     cga_layout: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
-    clc_result_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 2],
-                                                   gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout))
+    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout)
+    clc_result_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 2], clc_layout)
+    clc_planar_pid_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 1], clc_layout)
 
     p = PartitionArgs(
         a_desc,
@@ -494,6 +537,8 @@ def _matmul_kernel(
         acc_ready_bars,
         clc_result_buffers,
         clc_barriers,
+        clc_planar_pid_buffers,
+        clc_planar_ready_bars,
         clc_consumed_bars,
         GRID_MINOR_DIM,
         GRID_TILE_WIDTH,
