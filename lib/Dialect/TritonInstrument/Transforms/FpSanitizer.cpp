@@ -477,6 +477,9 @@ Value fpsanSRem(PatternRewriter &rewriter, Location loc, Value num, Value den) {
   return bitcastToFloat(rewriter, loc, resI, num.getType());
 }
 
+// Skip over the operations that have the same semantics in fp and int domains.
+// We don't want to raise an error if kernel implements them in a different
+// but equivalent way.
 bool isSkippedExternSymbol(StringRef symbol) {
   return llvm::StringSwitch<bool>(symbol)
       .Cases({"__nv_fabsf", "__nv_fabs", "__nv_copysignf", "__nv_copysign"},
