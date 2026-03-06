@@ -1,4 +1,7 @@
-// RUN: triton-opt %s -split-input-file -tritoninstrument-fp-sanitizer | FileCheck %s
+// RUN: split-file %s %t
+// RUN: triton-opt %t/success.mlir -split-input-file -tritoninstrument-fp-sanitizer | FileCheck %t/success.mlir
+
+//--- success.mlir
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
@@ -113,4 +116,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %0 = arith.truncf %a : tensor<4xf32> to tensor<4xf16>
     tt.return %0 : tensor<4xf16>
   }
+}
+
+// -----
+
+// CHECK-LABEL: @extern_unary
+tt.func public @extern_unary(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "__nv_tanf"} : (tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_binary
+tt.func public @extern_binary(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_atan2f"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_ternary
+tt.func public @extern_ternary(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b, %c {libname = "", libpath = "", pure = true, symbol = "__nv_fmaf"} : (tensor<4xf32>, tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_mixed
+tt.func public @extern_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_ldexpf"} : (tensor<4xf32>, tensor<4xi32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
 }

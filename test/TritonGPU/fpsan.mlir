@@ -1,4 +1,7 @@
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-fp-sanitizer | FileCheck %s
+// RUN: split-file %s %t
+// RUN: triton-opt %t/success.mlir -split-input-file -allow-unregistered-dialect -tritoninstrument-fp-sanitizer | FileCheck %t/success.mlir
+
+//--- success.mlir
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
@@ -255,6 +258,53 @@ tt.func public @cast_truncf(%a: tensor<4xf32>) -> tensor<4xf16> {
   // CHECK-NOT: arith.truncf
   %0 = arith.truncf %a : tensor<4xf32> to tensor<4xf16>
   tt.return %0 : tensor<4xf16>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_unary
+tt.func public @extern_unary(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "__nv_tanf"} : (tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_binary
+tt.func public @extern_binary(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_atan2f"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_ternary
+tt.func public @extern_ternary(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b, %c {libname = "", libpath = "", pure = true, symbol = "__nv_fmaf"} : (tensor<4xf32>, tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_mixed
+tt.func public @extern_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf32> {
+  // CHECK: tt.bitcast
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_ldexpf"} : (tensor<4xf32>, tensor<4xi32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
 }
 
 // -----
