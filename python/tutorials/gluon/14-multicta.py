@@ -238,7 +238,9 @@ benchmark_multicta_softmax_f32()
 #  32768 x 65536      4      4      2.836           6057.26
 #  16384 x 131072     8      4      3.142           5468.66
 #   8192 x 262144    16      4      3.627           4736.15
-
+#
+# We see that here using multiCTA we are able to get very good performance across the board.
+#
 # %%
 # Multi-CTA synchronization
 # -------------------------
@@ -296,6 +298,14 @@ benchmark_multicta_softmax_f32()
 #                     to the lead CTA.
 # - `mbarrier.arrive` every CTA in a group arrives on the lead CTA
 # - `mbarrier.wait` just the lead CTA waits for the barrier
+#
+# Final note on synchronization.
+# cluster.arrive / cluster.wait (i.e., CGA barriers, the cluster equivalent of bar.sync for CTAs) must be
+# executed by all threads in the kernel. As a result, they cannot be used inside a warp_specialize block.
+#
+# Moreover, operations such as convert_layout, reduce, sum, max, etc., emit CGA barriers when they cross CTAs.
+# Therefore, these operations are also not allowed inside a warp_specialize block whenever they may span multiple
+# CTAs.
 #
 # 2CTA TCGen5MMA
 # --------------
