@@ -146,29 +146,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // Each thread needs to load 4 elements and we load 1 (sizePerThread) per buffer load instruction
     // Note that mask/other alignment is 1 so we need 4 conditionals
 
+    // Make sure we have a select to mask by write OOB
+    // COMMON: llvm.select
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: llvm.cond_br
+    // COMMON: llvm.select
     // COMMON: llvm.store
 
-    // Make sure branch condition is set properly when there is other value.
-    // COMMON: [[AND:%.*]] = llvm.and
-    // COMMON: llvm.cond_br [[AND]]
-
+    // COMMON: llvm.select
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: llvm.cond_br
+    // COMMON: llvm.select
     // COMMON: llvm.store
 
+    // COMMON: llvm.select
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: llvm.cond_br
+    // COMMON: llvm.select
     // COMMON: llvm.store
 
+    // COMMON: llvm.select
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: llvm.cond_br
+    // COMMON: llvm.select
     // COMMON: llvm.store
 
     // COMMON-NOT: rocdl.raw.ptr.buffer.load.lds
     // COMMON-NOT: _predicated_store
-    // COMMON-NOT: llvm.cond_br
+    // COMMON-NOT: llvm.select
     // COMMON-NOT: llvm.store
 
     amdg.buffer_load_to_local %arg1[%arg2] mask=%67 other=%cst_0 into %arg3 : <f32>[tensor<32x32xi32, #blocked>] tensor<32x32xf32, #blocked>  -> <32x32xf32, #shared, #smem, mutable>
@@ -187,6 +188,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
                                 %arg2: !ttg.memdesc<64xf32, #shared, #smem, mutable>) {
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
     // The first constant 0 skips the LDS offset which is also 0
+    // COMMON: llvm.select
     // COMMON: %[[VOFFSET:.*]] = llvm.select
     // COMMON-NEXT: %[[IMM0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COMMON-NEXT: %[[aux_ca:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -267,25 +269,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: llvm.cond_br
+    // COMMON: llvm.select
     // COMMON: llvm.store
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: llvm.cond_br
+    // COMMON: llvm.select
     // COMMON: llvm.store
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: llvm.cond_br
+    // COMMON: llvm.select
     // COMMON: llvm.store
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: llvm.cond_br
+    // COMMON: llvm.select
     // COMMON: llvm.store
 
     // COMMON-NOT: rocdl.ds_bpermute

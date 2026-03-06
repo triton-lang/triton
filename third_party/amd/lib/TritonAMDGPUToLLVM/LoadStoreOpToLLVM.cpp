@@ -527,7 +527,15 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       if (requiresSrcPtrSwizzling)
         ldsAddr = b.gep(ptrTy, vecTy, ldsAddr, swizzleLaneOffset);
     }
-    llStore(rewriter, loc, ldsAddr, storeVal, b.icmp_ne(mask, b.true_val()),
+
+    // Heuristic: Instead of masking via a branch we mask by setting the address
+    // out of range which tells the HW to drop the store.
+    Value cond = b.icmp_ne(mask, b.true_val());
+    Value outOfRangeAddress =
+        b.inttoptr(shmemAddr.getType(), b.i32_val(0xFFFFFFFF));
+    Value predicatedAddress = b.select(cond, ldsAddr, outOfRangeAddress);
+
+    llStore(rewriter, loc, predicatedAddress, storeVal, b.true_val(),
             CacheModifier::NONE, targetInfo.requiresAliasInfoForAsyncOps());
   }
 };
@@ -838,7 +846,12 @@ struct BufferLoadToLocalOpConversion
       Value cond =
           hasOther ? b.and_(threadPred, maybeSwizzledMaskElem) : threadPred;
 
-      auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, cond);
+      // Note: we cannot emit a branch because that would affect the waitcnt, so
+      // instead we set the LDS address to be out of range which tells the HW to
+      // drop the load before fetching data.
+      Value outOfRangeAddress =
+          b.inttoptr(shmemAddr.getType(), b.i32_val(0xFFFFFFFF));
+      Value predicatedAddress = b.select(cond, shmemAddr, outOfRangeAddress);
 
       auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
           vecTy, vecBytesVal, rsrcDesc, offsetElem, shmemAddr,
@@ -851,8 +864,6 @@ struct BufferLoadToLocalOpConversion
                        otherElems, shmemAddr, laneId, requiresSrcPtrSwizzling,
                        swizzleLaneOffset);
       }
-
-      rewriter.setInsertionPointToStart(afterLoadBlock);
 
       return {};
     };
@@ -973,12 +984,16 @@ struct AsyncCopyGlobalToLocalOpConversion
 
       // Predicate load based on threadPred && swizzledMask
       auto cond = b.and_(threadPred, maybeSwizzledMaskElem);
-      auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, cond);
 
-      emitAsyncLoad(rewriter, loc, targetInfo, vecBits, srcElem, shmemAddr,
-                    op.getCache(), multicastMask);
+      // Note: we cannot emit a branch because that would affect the waitcnt, so
+      // instead we set the LDS address to be out of range which tells the HW to
+      // drop the load.
+      Value outOfRangeAddress =
+          b.inttoptr(shmemAddr.getType(), b.i32_val(0xFFFFFFFF));
+      Value predicatedAddress = b.select(cond, shmemAddr, outOfRangeAddress);
 
-      rewriter.setInsertionPointToStart(afterLoadBlock);
+      emitAsyncLoad(rewriter, loc, targetInfo, vecBits, srcElem,
+                    predicatedAddress, op.getCache(), multicastMask);
 
       if (hasOther) {
         emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy, maskElem,
