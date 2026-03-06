@@ -32,9 +32,6 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
                                                 Type type, int numWarps);
 
-// Return true if the Load uses block pointer.
-bool isLoadFromTensorPtr(triton::LoadOp op);
-
 // Gets the order of a tensor from its contiguity. Places the dimensions with
 // the largest contiguity as the inner most dimension. If the contiguity is
 // all ones, returns the order {dim - 1, dim - 2, ..., 0}
