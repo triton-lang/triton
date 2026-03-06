@@ -61,6 +61,7 @@ private:
 
   void *workspace = nullptr;
   size_t workspaceSize = 0;
+  cudaStream_t stream = 0;
 
   cublasLtMatmulPreference_t preference = NULL;
 
@@ -173,7 +174,7 @@ private:
     successOrExit(cublasLtMatmul(ltHandle, matmulDesc, &alpha, (void *)A, Adesc,
                                  (void *)B, Bdesc, &beta, (void *)C, Cdesc,
                                  (void *)D, Ddesc, &heuristicResult.algo,
-                                 (void *)workspace, workspaceSize, 0));
+                                 (void *)workspace, workspaceSize, stream));
     if (Ddesc)
       successOrExit(cublasLtMatrixLayoutDestroy(Ddesc));
     if (Cdesc)
@@ -292,7 +293,7 @@ private:
     successOrExit(cublasLtMatmul(ltHandle, matmulDesc, &alpha, (void *)A, Adesc,
                                  (void *)B, Bdesc, &beta, (void *)D_out, Cdesc,
                                  (void *)D_out, Cdesc, &heuristicResult.algo,
-                                 workspace, workspaceSize, 0));
+                                 workspace, workspaceSize, stream));
 
     // Cleanup
     if (Cdesc)
@@ -316,6 +317,8 @@ public:
         preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspaceSize,
         sizeof(workspaceSize)));
   }
+  void set_stream(uint64_t s) { stream = reinterpret_cast<cudaStream_t>(s); }
+
   ~CublasLtInstance() {
     if (preference)
       successOrExit(cublasLtMatmulPreferenceDestroy(preference));
