@@ -135,8 +135,8 @@ bool isFuncArgWith32bitPtrRange(mlir::Value value) {
 bool canUseBufferOps(Value ptr,
                      const DenseMap<Value, SetVector<Operation *>> &assumptions,
                      std::shared_ptr<DataFlowSolver> solver,
-                     bool analyzeSmallTensorOfst,
-                     PatternRewriter &rewriter, Location loc) {
+                     bool analyzeSmallTensorOfst, PatternRewriter &rewriter,
+                     Location loc) {
   // 1. Check if the pointer is uniform: i.e., if it comes from a uniform
   // pointer(splatted) and non-uniform offset addition
 
@@ -174,9 +174,8 @@ bool canUseBufferOps(Value ptr,
   //    we've proven the byte offset fits in 32 bits.
   if (ofstBit == 64) {
     auto offsetTy = cast<RankedTensorType>(offset.getType());
-    auto i32Ty = RankedTensorType::get(offsetTy.getShape(),
-                                       rewriter.getI32Type(),
-                                       offsetTy.getEncoding());
+    auto i32Ty = RankedTensorType::get(
+        offsetTy.getShape(), rewriter.getI32Type(), offsetTy.getEncoding());
     Value truncated = arith::TruncIOp::create(rewriter, loc, i32Ty, offset);
     addPtrOp.getOffsetMutable().assign(truncated);
   }
