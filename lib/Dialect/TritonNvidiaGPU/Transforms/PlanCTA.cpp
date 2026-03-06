@@ -331,11 +331,15 @@ bool CTAPlanner::processReduce(triton::FuncOp &funcOp) {
     auto newSrcLayout =
         replaceCGALayout(cast<ttg::DistributedEncodingTrait>(srcLayout),
                          srcShape, numWarps, CGALayout);
-    auto newResultLayout =
-        ttg::SliceEncodingAttr::get(context, axis, newSrcLayout);
     unsigned numOperands = reduce.getNumOperands();
+    unsigned numResults = reduce.getNumResults();
     SmallVector<Attribute> newSrcLayoutVec(numOperands, newSrcLayout);
-    SmallVector<Attribute> newResultLayoutVec(numOperands, newResultLayout);
+    Attribute newResultLayout;
+    if (rank > 1) {
+      newResultLayout =
+          ttg::SliceEncodingAttr::get(context, axis, newSrcLayout);
+    }
+    SmallVector<Attribute> newResultLayoutVec(numResults, newResultLayout);
 
     insertCasts(reduce.getOperation(), newSrcLayoutVec, newResultLayoutVec);
   });
