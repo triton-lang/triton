@@ -315,13 +315,13 @@ bool CTAPlanner::processReduce(triton::FuncOp &funcOp) {
 
     llvm::SmallVector<unsigned> CTASplitNum = CTAsPerCGA;
 
-    // If numCTAs > 1 and the only dimension is the reduced dimension, after the
-    // above two for-loops, CTAsPerCGA = [0] and remainingCTAs = numCTAs. We set
-    // CTAsPerCGA[0] = numCTAs and keep CTASplitNum[0] = 1 to ensure that no
-    // cross-CTA reduction is required, although this will introduce duplicated
-    // calculation
-    if (remainingCTAs > 0)
+    // If numCTAs > 1 and the only dimension is the reduced dimension, the
+    // loops above leave all CTAs unassigned. Put the remaining CTAs on that
+    // dimension so that they all collaborate in the reduction.
+    if (remainingCTAs > 0) {
       CTAsPerCGA[order[rank - 1]] *= remainingCTAs;
+      CTASplitNum[order[rank - 1]] = CTAsPerCGA[order[rank - 1]];
+    }
 
     auto numWarps = ttg::lookupNumWarps(reduce);
     auto CGALayout = ttg::CGAEncodingAttr::fromSplitParams(
@@ -331,11 +331,15 @@ bool CTAPlanner::processReduce(triton::FuncOp &funcOp) {
     auto newSrcLayout =
         replaceCGALayout(cast<ttg::DistributedEncodingTrait>(srcLayout),
                          srcShape, numWarps, CGALayout);
-    auto newResultLayout =
-        ttg::SliceEncodingAttr::get(context, axis, newSrcLayout);
     unsigned numOperands = reduce.getNumOperands();
+    unsigned numResults = reduce.getNumResults();
     SmallVector<Attribute> newSrcLayoutVec(numOperands, newSrcLayout);
-    SmallVector<Attribute> newResultLayoutVec(numOperands, newResultLayout);
+    Attribute newResultLayout;
+    if (rank > 1) {
+      newResultLayout =
+          ttg::SliceEncodingAttr::get(context, axis, newSrcLayout);
+    }
+    SmallVector<Attribute> newResultLayoutVec(numResults, newResultLayout);
 
     insertCasts(reduce.getOperation(), newSrcLayoutVec, newResultLayoutVec);
   });
