@@ -21,7 +21,7 @@ class GFX1250MXScaleLayout(Layout):
     def swizzle_block_shape(self, block_shape):
         SCALE_K = block_shape[-2]
         N = block_shape[-1]
-        return block_shape[:-2] + [N // 128, SCALE_K * 128]
+        return block_shape[:-2] + [N // NON_K_PRESHUFFLE_BLOCK_SIZE, SCALE_K * NON_K_PRESHUFFLE_BLOCK_SIZE]
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ class GFX1250MXScaleLayoutTransformation(LayoutTransformation):
         *leading_shape, K_SCALE, N = self.shape
         B = math.prod(leading_shape)
         ALIGN_K_SCALE = 4 if K_SCALE > 4 else K_SCALE
-        ALIGN_N = 128
+        ALIGN_N = NON_K_PRESHUFFLE_BLOCK_SIZE
         K_SCALE_pad = math.ceil(K_SCALE / ALIGN_K_SCALE) * ALIGN_K_SCALE
         N_pad = math.ceil(N / ALIGN_N) * ALIGN_N
         object.__setattr__(self, "leading_shape", leading_shape)
