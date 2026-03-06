@@ -59,7 +59,7 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   using namespace mlir;
   using namespace mlir::triton::gpu;
   using namespace mlir::triton::instrument;
-  ADD_PASS_WRAPPER_0("add_coalesce", createTritonGPUCoalesce);
+  ADD_PASS_OPTION_WRAPPER_1("add_coalesce", createTritonGPUCoalesce, unsigned);
   ADD_PASS_WRAPPER_0("add_optimize_thread_locality",
                      createTritonGPUOptimizeThreadLocality);
   ADD_PASS_OPTION_WRAPPER_1("add_hoist_tmem_alloc",

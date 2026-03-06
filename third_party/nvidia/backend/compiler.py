@@ -259,7 +259,9 @@ class CUDABackend(BaseBackend):
         emuTF32 = (capability // 10 >= 8)
         passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", opt.num_warps, 32, opt.num_ctas)
         # optimize TTGIR
-        passes.ttgpuir.add_coalesce(pm)
+        ptx_version = get_ptx_version_from_options(opt, capability)
+        max_vec_bits = 256 if capability >= 100 and ptx_version >= 88 else 128
+        passes.ttgpuir.add_coalesce(pm, max_vec_bits)
         passes.ttgpuir.add_f32_dot_tc(pm, emuTF32)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
         nvidia.passes.ttnvgpuir.add_plan_cta(pm)
