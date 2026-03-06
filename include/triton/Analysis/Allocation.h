@@ -21,10 +21,10 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,
-                                       int bitwidth);
+                                       int bitwidth, int numBanks);
 
 unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                       RankedTensorType dstTy);
+                                       RankedTensorType dstTy, int numBanks);
 
 } // namespace triton
 

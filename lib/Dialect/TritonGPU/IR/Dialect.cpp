@@ -4148,6 +4148,15 @@ int TritonGPUDialect::getThreadsPerWarp(ModuleOp module) {
   return 32;
 }
 
+int TritonGPUDialect::getNumBanks(ModuleOp module) {
+  if (auto attr = module->getAttrOfType<StringAttr>(AttrTargetName)) {
+    StringRef targetAttr = attr.getValue();
+    if (targetAttr.contains("gfx950"))
+      return 64;
+  }
+  return 32;
+}
+
 std::optional<int> triton::gpu::maybeLookupNumWarps(Operation *op) {
   if (isa<ModuleOp, FuncOp>(op)) {
     if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNumWarpsName))

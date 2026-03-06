@@ -592,7 +592,7 @@ def barrier(*, cluster: bool = False, _semantic=None):
 
 
 @builtin
-def bank_conflicts(distr_ty, shared_ty, _semantic=None) -> int:
+def bank_conflicts(distr_ty, shared_ty, num_banks=32, _semantic=None) -> int:
     """
     Count the bank conflicts per wavefront of each instruction generated when
     reading/writing the distributed tensor from/to the shared memory descriptor
@@ -605,13 +605,15 @@ def bank_conflicts(distr_ty, shared_ty, _semantic=None) -> int:
     Args:
         distr_ty (distributed_type): The distributed tensor.
         shared_ty (shared_memory_descriptor_type): The shared memory descriptor.
+        num_banks (int): Number of shared memory banks.
 
     Returns:
         int: The number of bank conflicts.
     """
     distr_ty = _unwrap_if_constexpr(distr_ty)
     shared_ty = _unwrap_if_constexpr(shared_ty)
-    return _semantic.bank_conflicts(distr_ty, shared_ty)
+    num_banks = _unwrap_if_constexpr(num_banks)
+    return _semantic.bank_conflicts(distr_ty, shared_ty, num_banks)
 
 
 @builtin
