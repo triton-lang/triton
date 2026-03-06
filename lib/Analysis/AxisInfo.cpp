@@ -1209,6 +1209,8 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
   if (triton::PointerType ty = dyn_cast<triton::PointerType>(value.getType()))
     if (TensorType elemTy = dyn_cast<TensorType>(ty.getPointeeType()))
       rank = elemTy.getRank();
+  if (auto descTy = dyn_cast<triton::TensorDescInterface>(value.getType()))
+    rank = descTy.getBlockType().getRank();
 
   DimVectorT knownContiguity(rank, 1);
   DimVectorT knownDivisibility(rank, 1);
