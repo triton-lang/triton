@@ -19,6 +19,7 @@ from triton_kernels.tensor_details.layout import GFX1250MXScaleLayout
 )
 def test_mxfp4_scale_roundtrip(shape):
     x = torch.randint(0, 256, shape, dtype=torch.uint8).cuda()
-    layout = GFX1250MXScaleLayout(x.shape)
-    res = layout.unswizzle_data(layout.swizzle_data(x))
+    layout = GFX1250MXScaleLayout()
+    transformation = layout.make_transformation(x.shape, is_fp4=False)
+    res = transformation.unswizzle_data(transformation.swizzle_data(x))
     assert (res == x).all()
