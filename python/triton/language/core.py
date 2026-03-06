@@ -1724,17 +1724,18 @@ def _canonicalize_block_ptr_dynamic_tuple(values, name: str, _semantic) -> tuple
 
 
 def _canonicalize_block_ptr_boundary_check(boundary_check, rank: int) -> builtins.tuple[int, ...]:
+    checked = set()
     if boundary_check is None:
-        return ()
-    checked = []
+        return checked
+
     for dim in _as_list_like(boundary_check):
         dim = _unwrap_if_constexpr(dim)
         if not isinstance(dim, int) or not (0 <= dim < rank):
             raise ValueError(f"Expected `boundary_check` to contain dimensions in [0, {rank})")
-        checked.append(dim)
-    if len(set(checked)) != len(checked):
+        checked.add(dim)
+    if len(checked) != len(boundary_check):
         raise ValueError("Duplicate dimension in `boundary_check`")
-    return builtins.tuple(sorted(checked))
+    return checked
 
 
 @_aggregate
@@ -1753,8 +1754,6 @@ class _block_ptr:
             raise ValueError("Expected `base` to be a scalar pointer type")
         if isinstance(base.type.element_ty, block_type):
             raise ValueError("Expected `base` to point to a scalar element type")
-        if base.type.element_ty == int1:
-            base = _semantic.cast(base, pointer_type(int8, base.type.address_space))
 
         self.base = base
         self.shape = _canonicalize_block_ptr_dynamic_tuple(shape, "shape", _semantic)
@@ -1817,11 +1816,7 @@ class _block_ptr:
         volatile = _unwrap_if_constexpr(volatile)
         if padding_option is None:
             padding_option = ""
-        checked_dims = _canonicalize_block_ptr_boundary_check(boundary_check, len(self.block_shape))
-        ptrs, generated_mask = self._materialize(checked_dims, _semantic=_semantic)
-        if not checked_dims:
-            return load(ptrs, cache_modifier=cache_modifier, eviction_policy=eviction_policy, volatile=volatile,
-                        _semantic=_semantic)
+        ptrs, mask = self._materialize(boundary_check, _semantic=_semantic)
 
         if padding_option == "":
             generated_other = None
@@ -1834,7 +1829,7 @@ class _block_ptr:
         else:
             raise ValueError(f"Padding option {padding_option} not supported")
 
-        return load(ptrs, mask=generated_mask, other=generated_other, cache_modifier=cache_modifier,
+        return load(ptrs, mask=mask, other=generated_other, cache_modifier=cache_modifier,
                     eviction_policy=eviction_policy, volatile=volatile, _semantic=_semantic)
 
     def store(self, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _semantic=None):
@@ -1843,12 +1838,8 @@ class _block_ptr:
 
         cache_modifier = _unwrap_if_constexpr(cache_modifier)
         eviction_policy = _unwrap_if_constexpr(eviction_policy)
-        checked_dims = _canonicalize_block_ptr_boundary_check(boundary_check, len(self.block_shape))
-        ptrs, generated_mask = self._materialize(checked_dims, _semantic=_semantic)
-        if not checked_dims:
-            return store(ptrs, value, cache_modifier=cache_modifier, eviction_policy=eviction_policy,
-                         _semantic=_semantic)
-        return store(ptrs, value, mask=generated_mask, cache_modifier=cache_modifier, eviction_policy=eviction_policy,
+        ptrs, mask = self._materialize(boundary_check, _semantic=_semantic)
+        return store(ptrs, value, mask=mask, cache_modifier=cache_modifier, eviction_policy=eviction_policy,
                      _semantic=_semantic)
 
 
