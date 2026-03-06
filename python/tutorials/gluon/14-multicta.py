@@ -682,6 +682,8 @@ def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width
 class ClcTileSchedulerConsumer:
     has_work: gl.tensor
     tile_id: gl.tensor
+    pid_m: gl.tensor
+    pid_n: gl.tensor
     num_pid_m: gl.tensor
     num_pid_n: gl.tensor
     TILE_M: gl.constexpr
@@ -690,19 +692,25 @@ class ClcTileSchedulerConsumer:
     GRID_TILE_WIDTH: gl.constexpr
     clc_result_buffers: gl.shared_memory_descriptor
     clc_barriers: gl.shared_memory_descriptor
+    clc_planar_pid_buffers: gl.shared_memory_descriptor
+    clc_planar_ready_bars: gl.shared_memory_descriptor
     clc_consumed_bars: gl.shared_memory_descriptor
     counter: Counter
     consumed_counter: Counter
 
     @gluon.jit
     def initialize(M, N, TILE_M: gl.constexpr, TILE_N: gl.constexpr, MINOR_DIM: gl.constexpr,
-                   GRID_TILE_WIDTH: gl.constexpr, clc_result_buffers, clc_barriers, clc_consumed_bars):
+                   GRID_TILE_WIDTH: gl.constexpr, clc_result_buffers, clc_barriers, clc_planar_pid_buffers,
+                   clc_planar_ready_bars, clc_consumed_bars):
         tile_id = gl.program_id(axis=0)
         num_pid_m = gl.cdiv(M, TILE_M)
         num_pid_n = gl.cdiv(N, TILE_N)
+        pid_m, pid_n = _planar_snake(tile_id, num_pid_m, num_pid_n, MINOR_DIM, GRID_TILE_WIDTH)
         return ClcTileSchedulerConsumer(
             gl.to_tensor(True),
             tile_id,
+            pid_m,
+            pid_n,
             num_pid_m,
             num_pid_n,
             TILE_M,
@@ -711,6 +719,8 @@ class ClcTileSchedulerConsumer:
             GRID_TILE_WIDTH,
             clc_result_buffers,
             clc_barriers,
+            clc_planar_pid_buffers,
+            clc_planar_ready_bars,
             clc_consumed_bars,
             Counter.create(0, clc_barriers.shape[0]),
             Counter.create(0, clc_barriers.shape[0]),
@@ -718,8 +728,7 @@ class ClcTileSchedulerConsumer:
 
     @gluon.jit
     def get_offsets(self):
-        pid_m, pid_n = _planar_snake(self.tile_id, self.num_pid_m, self.num_pid_n, self.MINOR_DIM, self.GRID_TILE_WIDTH)
-        return pid_m * self.TILE_M, pid_n * self.TILE_N
+        return self.pid_m * self.TILE_M, self.pid_n * self.TILE_N
 
     @gluon.jit
     def step(self, iteration):
@@ -733,6 +742,13 @@ class ClcTileSchedulerConsumer:
         result = self.clc_result_buffers.index(counter.index)
         mbarrier.wait(barrier, counter.phase)
         clc_res = clc.load_result(result)
+        mbarrier.wait(self.clc_planar_ready_bars.index(counter.index), counter.phase)
+        planar_slot = self.clc_planar_pid_buffers.index(counter.index)
+        planar_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0],
+                                                       [[0]] * (gl.num_ctas().bit_length() - 1))
+        packed_pid = planar_slot.load(planar_layout).reshape([])
+        pid_m = ((packed_pid >> 32) & 0xFFFFFFFF).to(gl.int32)
+        pid_n = (packed_pid & 0xFFFFFFFF).to(gl.int32)
         has_work = clc_res.is_canceled()
         tile_id = self.tile_id
         if has_work:
@@ -740,6 +756,8 @@ class ClcTileSchedulerConsumer:
         return ClcTileSchedulerConsumer(
             has_work,
             tile_id,
+            pid_m,
+            pid_n,
             self.num_pid_m,
             self.num_pid_n,
             self.TILE_M,
@@ -748,6 +766,8 @@ class ClcTileSchedulerConsumer:
             self.GRID_TILE_WIDTH,
             self.clc_result_buffers,
             self.clc_barriers,
+            self.clc_planar_pid_buffers,
+            self.clc_planar_ready_bars,
             self.clc_consumed_bars,
             counter.next(),
             consumed_counter,
@@ -768,9 +788,12 @@ class MatmulPartitionArgs:
     acc_ready_bars: gl.shared_memory_descriptor
     clc_result_buffers: gl.shared_memory_descriptor
     clc_barriers: gl.shared_memory_descriptor
+    clc_planar_pid_buffers: gl.shared_memory_descriptor
+    clc_planar_ready_bars: gl.shared_memory_descriptor
     clc_consumed_bars: gl.shared_memory_descriptor
     MINOR_DIM: gl.constexpr
     GRID_TILE_WIDTH: gl.constexpr
+    SUBTILE_STAGES: gl.constexpr
 
     @gluon.jit
     def get_clc_consumer(self):
@@ -783,13 +806,19 @@ class MatmulPartitionArgs:
             self.GRID_TILE_WIDTH,
             self.clc_result_buffers,
             self.clc_barriers,
+            self.clc_planar_pid_buffers,
+            self.clc_planar_ready_bars,
             self.clc_consumed_bars,
         )
 
 
 @gluon.jit
 def matmul_clc_partition(p):
+    tile_m: gl.constexpr = p.a_desc.block_shape[0]
+    tile_n: gl.constexpr = p.b_desc.block_shape[1]
     has_work = gl.to_tensor(True)
+    num_pid_m = gl.cdiv(p.c_desc.shape[0], tile_m)
+    num_pid_n = gl.cdiv(p.c_desc.shape[1], tile_n)
     state = Counter.create(0, p.clc_barriers.shape[0])
     consumed_state = Counter.create(1, p.clc_barriers.shape[0])
     acc_stages: gl.constexpr = p.clc_barriers.shape[0]
@@ -801,7 +830,19 @@ def matmul_clc_partition(p):
         mbarrier.expect(barrier, 16)
         clc.try_cancel(result, barrier, multicast=True)
         mbarrier.wait(barrier, state.phase)
-        has_work = clc.load_result(result).is_canceled()
+        clc_res = clc.load_result(result)
+        has_work = clc_res.is_canceled()
+        pid_m = gl.to_tensor(0)
+        pid_n = gl.to_tensor(0)
+        if has_work:
+            tile_id = clc_res.program_id(0)
+            pid_m, pid_n = _planar_snake(tile_id, num_pid_m, num_pid_n, p.MINOR_DIM, p.GRID_TILE_WIDTH)
+        packed_pid = (pid_m.to(gl.int64) << 32) | (pid_n.to(gl.int64) & 0xFFFFFFFF)
+        planar_slot = p.clc_planar_pid_buffers.index(state.index)
+        planar_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0],
+                                                       [[0]] * (gl.num_ctas().bit_length() - 1))
+        planar_slot.store(gl.full([1], packed_pid, gl.int64, layout=planar_layout))
+        mbarrier.arrive(p.clc_planar_ready_bars.index(state.index))
         state = state.next()
         consumed_state = consumed_state.next()
         i += 1
@@ -869,13 +910,16 @@ def matmul_epilogue_partition(p):
     tile_m: gl.constexpr = p.a_desc.block_shape[0]
     tile_n: gl.constexpr = p.b_desc.block_shape[1]
     split_tile_n: gl.constexpr = p.c_desc.block_shape[1]
+    # Separate knobs: SUBTILE_STAGES controls shared-memory usage,
+    # and SUBTILE_FACTOR is the maximum number of subtiles into which we can split the tile.
     subtile_factor: gl.constexpr = tile_n // split_tile_n
+    subtile_stages: gl.constexpr = p.SUBTILE_STAGES
     acc_stages: gl.constexpr = p.acc_empty_bars.shape[0]
     dtype: gl.constexpr = p.c_desc.dtype
 
     acc_state = Counter.create(0, acc_stages)
-    acc_smems = gl.allocate_shared_memory(dtype, [acc_stages, tile_m, split_tile_n], p.c_desc.layout)
-    sub_acc_state = Counter.create(0, acc_stages)
+    acc_smems = gl.allocate_shared_memory(dtype, [subtile_stages, tile_m, split_tile_n], p.c_desc.layout)
+    sub_acc_state = Counter.create(0, subtile_stages)
     scheduler = p.get_clc_consumer()
 
     i = 0
@@ -888,7 +932,7 @@ def matmul_epilogue_partition(p):
             acc_sub = acc_buf.slice(split_tile_n * s, split_tile_n)
             acc_smem = acc_smems.index(sub_acc_state.index)
             acc = acc_sub.load().to(dtype)
-            tma.store_wait(pendings=1)
+            tma.store_wait(pendings=subtile_stages - 1)
             acc_smem.store(acc)
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + split_tile_n * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
@@ -915,6 +959,7 @@ def matmul_multicta_kernel(
     ACC_STAGES: gl.constexpr,
     CGA_LAYOUT: gl.constexpr,
     EPILOGUE_SIZE_N: gl.constexpr,
+    SUBTILE_STAGES: gl.constexpr,
 ):
     block_m: gl.constexpr = a_desc.block_shape[0]
     block_n: gl.constexpr = b_desc.block_shape[1]
@@ -946,17 +991,21 @@ def matmul_multicta_kernel(
         mbarrier.init(acc_ready_bars.index(i), count=mma_barrier_count)
 
     clc_barriers = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
+    clc_planar_ready_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     clc_consumed_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=two_ctas)
     for i in gl.static_range(ACC_STAGES):
         mbarrier.init(clc_barriers.index(i), count=1)
+        mbarrier.init(clc_planar_ready_bars.index(i), count=1)
         mbarrier.init(clc_consumed_bars.index(i), count=n_partitions - 1)
 
-    clc_layout: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
+    cga_layout: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
+    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout)
     clc_result_buffers = gl.allocate_shared_memory(
         gl.int64,
         [clc_barriers.shape[0], 2],
-        gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=clc_layout),
+        clc_layout,
     )
+    clc_planar_pid_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 1], clc_layout)
 
     p = MatmulPartitionArgs(
         a_desc,
@@ -971,9 +1020,12 @@ def matmul_multicta_kernel(
         acc_ready_bars,
         clc_result_buffers,
         clc_barriers,
+        clc_planar_pid_buffers,
+        clc_planar_ready_bars,
         clc_consumed_bars,
         GRID_MINOR_DIM,
         GRID_TILE_WIDTH,
+        SUBTILE_STAGES,
     )
 
     gl.warp_specialize([
@@ -998,6 +1050,7 @@ def matmul_multicta(
         acc_stages=2,
         cga_layout=((1, 0), ),
         epilogue_size_n=32,
+        subtile_stages=4,
 ):
     if block_size_n // get_split_dim(cga_layout, 1) > 256:
         raise ValueError(
@@ -1051,6 +1104,7 @@ def matmul_multicta(
         acc_stages,
         cga_layout,
         epilogue_size_n,
+        subtile_stages,
         num_warps=4,
         num_ctas=2**len(cga_layout),
     )
@@ -1079,6 +1133,7 @@ if __name__ == "__main__" and is_blackwell():
         "acc_stages": 2,
         "cga_layout": ((1, 0), ),
         "epilogue_size_n": 32,
+        "subtile_stages": 4,
     }
 
     M, N = 8192, 8192
@@ -1088,21 +1143,21 @@ if __name__ == "__main__" and is_blackwell():
         A = torch.randn((M, K), device="cuda", dtype=torch.float16)
         B = torch.randn((K, N), device="cuda", dtype=torch.float16)
         BT = B.T.contiguous()
-        r0 = tflops(triton.testing.do_bench(lambda: matmul_multicta(A, B, out=C, **cfg)), M, N, K)
-        r1 = tflops(triton.testing.do_bench(lambda: cublas.matmul(A, BT, C)), M, N, K)
+        r0 = tflops(triton.testing.do_bench(lambda: matmul_multicta(A, B, out=C, **cfg), warmup=200, rep=1000), M, N, K)
+        r1 = tflops(triton.testing.do_bench(lambda: cublas.matmul(A, BT, C), warmup=200, rep=1000), M, N, K)
         print(f"{K:>5} {r0:>17.2f} {r1:>9.2f}")
 
 # %%
 # Benchmarking matmul_multicta
 # ============================
 #     K         multi-CTA    cublas
-#   512           1086.56   1208.74
-#  1024           1283.91   1280.70
-#  2048           1428.54   1407.84
-#  4096           1419.04   1418.98
-#  8192           1314.50   1306.87
-# 16384           1207.88   1329.74
+#   512           1096.31   1190.98
+#  1024           1306.07   1344.48
+#  2048           1379.80   1374.48
+#  4096           1444.26   1431.93
+#  8192           1302.33   1347.82
+# 16384           1292.40   1371.82
 #
-# We are able to beat cublas in quite a range of relevant Ks for this particular
-# configuration. If we chose different configurations for different shapes we would
-# be able to beat cublas in a wider range of shapes.
+# We are able to be competitive with cublas and even beating them in quite a range
+# of relevant Ks for this particular configuration. If we chose different configurations
+# for different shapes we would be able to beat cublas in a wider range of shapes.
