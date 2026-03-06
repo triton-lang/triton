@@ -3383,7 +3383,7 @@ struct TritonGPUInferLayoutInterface
       newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
                      newOrder.end());
       // Remove last dimension from ctall.
-      ctall = ctall.unsqueezeOut(to_vector(ctall.getOutDimNames()).back());
+      ctall = ctall.squeezeOuts(to_vector(ctall.getOutDimNames()).back());
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), //
           ArrayRef(enc.getSizePerThread()).drop_back(1),

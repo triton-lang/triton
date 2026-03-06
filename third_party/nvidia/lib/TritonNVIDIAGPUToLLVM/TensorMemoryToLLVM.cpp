@@ -412,29 +412,6 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
     }
   }
 
-  // Combine partial reductions into one value per thread
-  if (redvalVals.size() > 1) {
-    auto isMin = *redOp == TMEMLoadReduceModifier::MIN;
-    auto applyMinMax = [&](Value lhs, Value rhs) {
-      return useNaN ? (isMin ? LLVM::MinimumOp::create(rewriter, loc, lhs, rhs)
-                             : LLVM::MaximumOp::create(rewriter, loc, lhs, rhs))
-                          ->getResult(0)
-                    : (isMin ? LLVM::MinNumOp::create(rewriter, loc, lhs, rhs)
-                             : LLVM::MaxNumOp::create(rewriter, loc, lhs, rhs))
-                          ->getResult(0);
-    };
-    // Use tree reduction: pair up elements at each level
-    while (redvalVals.size() > 1) {
-      SmallVector<Value> reduced;
-      assert(redvalVals.size() % 2 == 0 &&
-             "redvalVals must be a multiple of 2");
-      for (size_t i = 0; i < redvalVals.size(); i += 2) {
-        reduced.push_back(applyMinMax(redvalVals[i], redvalVals[i + 1]));
-      }
-      redvalVals = std::move(reduced);
-    }
-  }
-
   return {resultVals, redvalVals};
 }
 
@@ -519,6 +496,34 @@ static std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdStFromTypes(
                                vals, tmemBase, redOp, useAbs, useNaN);
 }
 
+// Combine partial reductions into one value per thread via tree reduction.
+static void combinePartialReductions(Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     SmallVector<Value> &redvalVals,
+                                     TMEMLoadReduceModifier redOp,
+                                     bool useNaN) {
+  if (redvalVals.size() <= 1)
+    return;
+  auto isMin = redOp == TMEMLoadReduceModifier::MIN;
+  auto applyMinMax = [&](Value lhs, Value rhs) {
+    return useNaN ? (isMin ? LLVM::MinimumOp::create(rewriter, loc, lhs, rhs)
+                           : LLVM::MaximumOp::create(rewriter, loc, lhs, rhs))
+                        ->getResult(0)
+                  : (isMin ? LLVM::MinNumOp::create(rewriter, loc, lhs, rhs)
+                           : LLVM::MaxNumOp::create(rewriter, loc, lhs, rhs))
+                        ->getResult(0);
+  };
+  // Use tree reduction: pair up elements at each level
+  while (redvalVals.size() > 1) {
+    SmallVector<Value> reduced;
+    assert(redvalVals.size() % 2 == 0 && "redvalVals must be a multiple of 2");
+    for (size_t i = 0; i < redvalVals.size(); i += 2) {
+      reduced.push_back(applyMinMax(redvalVals[i], redvalVals[i + 1]));
+    }
+    redvalVals = std::move(reduced);
+  }
+}
+
 struct TensorMemoryLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMLoadOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -555,6 +560,10 @@ struct TensorMemoryLoadOpConversion
         packLLElements(loc, getTypeConverter(), resultVals, rewriter, structTy);
     // Wait insertion could be moved to the TTGIR level if needed.
     NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::LOAD);
+
+    // tcgen05.ld.red is async, redval registers aren't valid until the wait
+    if (redOp)
+      combinePartialReductions(loc, rewriter, redvalVals, *redOp, useNaN);
 
     // Handle reduction output if present
     SmallVector<Value> results = {resultStruct};
