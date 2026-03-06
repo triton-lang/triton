@@ -41,6 +41,9 @@ struct TestMembarPass
               targetInfo));
       triton::nvidia_gpu::runClusterBarrierInsertion(allocation,
                                                      computeCapability);
+      if (failed(triton::nvidia_gpu::runCrossCTAMBarrierInitSyncInsertion(
+              allocation, computeCapability)))
+        return signalPassFailure();
     }
     ModuleMembarAnalysis membarPass(&allocation,
                                     mlir::triton::NVIDIA::canSkipBarSync);

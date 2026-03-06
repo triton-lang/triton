@@ -95,6 +95,9 @@ struct ConvertTritonGPUToLLVM
                  targetInfo));
     mlir::triton::nvidia_gpu::runClusterBarrierInsertion(allocation,
                                                          computeCapability);
+    if (failed(mlir::triton::nvidia_gpu::runCrossCTAMBarrierInitSyncInsertion(
+            allocation, computeCapability)))
+      return signalPassFailure();
     ModuleMembarAnalysis membarPass(&allocation, canSkipBarSync);
     membarPass.run();
 
