@@ -121,7 +121,7 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
-    lowerLoops(moduleOp, useAsyncCopy, usePingpong);
+    lowerLoops(moduleOp, useAsyncCopy, usePingpong, useLdsPrefetch);
     expandLoops(moduleOp);
 
     if (useAsyncCopy) {

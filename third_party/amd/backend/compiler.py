@@ -36,6 +36,10 @@ def is_fpsan_supported(arch):
     return arch in ["gfx942", "gfx950", "gfx1250"]
 
 
+def is_lds_prefetch_enabled(arch):
+    return (False if knobs.amd.use_lds_prefetch is None else knobs.amd.use_lds_prefetch)
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -253,9 +257,12 @@ class HIPBackend(BaseBackend):
 
         use_async_copy = is_async_copy_enabled(options.arch)
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
-
+        use_lds_prefetch = is_lds_prefetch_enabled(options.arch)
         amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
-        amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong)
+        amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong, use_lds_prefetch)
+        if use_lds_prefetch:
+            passes.ttgpuir.add_prefetch(pm)
+
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         amd.passes.ttgpuir.add_convert_to_tensor_ops(pm)
