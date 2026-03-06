@@ -58,7 +58,8 @@ def inspect_stages_hook(self=None, stages=None, options=None, language=None, cap
     stage_src = 'from triton._C.libtriton import ir, passes, llvm, amd, nvidia\n' + stage_src
     # Inject plugin pass right after loop unroll in the dynamically loaded stage source
     stage_src = stage_src.replace(
-        "    pm = ir.pass_manager(mod.context)", "    pm = ir.pass_manager(mod.context)\n"
+        "    pm = ir.pass_manager(mod.context)",
+        "    pm = ir.pass_manager(mod.context)\n"
         "    passes.plugin.plugingpu_farith_conversion(pm, [ str(opt.num_warps), '32', str(opt.num_ctas) ])\n")
     exec(stage_src, module.__dict__)
     make_lambda = lambda f: lambda src, metadata: f(src, metadata, options, capability)
