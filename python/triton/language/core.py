@@ -2358,6 +2358,7 @@ def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _s
     :param block_shape: The shape of the block
     :param order: The order of the original data format
     """
+    warn("tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.")
     return _semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order)
 
 
