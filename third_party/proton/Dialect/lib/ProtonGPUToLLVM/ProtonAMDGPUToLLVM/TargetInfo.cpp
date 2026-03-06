@@ -8,25 +8,6 @@
 
 namespace mlir::triton::proton::gpu::AMD {
 
-Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
-                        bool isClock64) const {
-  // NV has both a 32 bit and 64 bit clock intrinsic. On AMD we only have
-  // s_memtime which is 64 bit. However truncating the 64 bit version
-  // in cases of requesting 32 bit should be fine, since in 64 bits,
-  // after 0x0000.0000.ffff.ffff comes 0x0000.0001.0000.0000, and
-  // truncating that to 32 bits gives zero, effectively wrapping from
-  // 0xffff.ffff to 0x0000.0000.
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  StringRef clock64IntrinsicName = "llvm.amdgcn.s.memtime";
-  Value clockVal = LLVM::createLLVMIntrinsicCallOp(
-                       rewriter, loc, clock64IntrinsicName, i64_ty, {})
-                       .getResult(0);
-  if (!isClock64)
-    clockVal = LLVM::TruncOp::create(rewriter, loc, i32_ty, clockVal);
-
-  return clockVal;
-}
-
 Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
                              Location loc) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
