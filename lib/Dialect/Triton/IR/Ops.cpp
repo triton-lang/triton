@@ -1,3 +1,5 @@
+#include <sstream>
+
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -411,17 +413,18 @@ LogicalResult DotScaledOp::deduceScaleFactor(
     if (scaleTy.getNumElements() == 1)
       return 0;
 
-    auto opShape = cast<RankedTensorType>(operand.getType()).getShape();
+    auto operandShape = cast<RankedTensorType>(operand.getType()).getShape();
     auto scaleShape = scaleTy.getShape();
 
     int64_t unpackFactor = (format == ScaleDotElemType::E2M1 && kPack) ? 2 : 1;
-    int64_t kdim =
-        opShape[opIdx == 0 ? opShape.size() - 1 : opShape.size() - 2] *
-        unpackFactor;
+    int64_t kdim = operandShape[opIdx == 0 ? operandShape.size() - 1
+                                           : operandShape.size() - 2] *
+                   unpackFactor;
     int32_t scaleFactor = kdim / scaleShape[scaleShape.size() - 1];
     if (scaleFactor != 16 && scaleFactor != 32) {
-      errMsg =
-          "scale factor must be 16 or 32. Got " + std::to_string(scaleFactor);
+      std::ostringstream oss;
+      oss << "scale factor must be 16 or 32. Got " << scaleFactor;
+      errMsg = oss.str();
       return 0;
     }
     return scaleFactor;
@@ -441,9 +444,10 @@ LogicalResult DotScaledOp::deduceScaleFactor(
   }
   if (scaleFactorA != 0 && scaleFactorB != 0) {
     if (scaleFactorA != scaleFactorB) {
-      errMsg = "Operands must have the same scale factor; (lhs: " +
-               std::to_string(scaleFactorA) +
-               " vs rhs: " + std::to_string(scaleFactorB) + ")";
+      std::ostringstream oss;
+      oss << "Operands must have the same scale factor; (lhs: " << scaleFactorA
+          << " vs rhs: " << scaleFactorB << ")";
+      errMsg = oss.str();
       return failure();
     }
     scaleFactor = scaleFactorA;

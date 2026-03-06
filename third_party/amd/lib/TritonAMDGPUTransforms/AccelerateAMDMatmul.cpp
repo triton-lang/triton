@@ -1380,7 +1380,7 @@ public:
 
       if (aElemType == ScaleDotElemType::E2M1 &&
           bElemType == ScaleDotElemType::E2M1) {
-        // Fp4 x Fp4 requries to use the same scale dtype for both operands.
+        // Fp4 x Fp4 requires to use the same scale dtype for both operands.
         TensorValue otherScale = idx == 0 ? bScale : aScale;
         Type f8Ty = otherScale.getType().getElementType();
         return {f8Ty, FloatAttr::get(f8Ty, 1.0)};
