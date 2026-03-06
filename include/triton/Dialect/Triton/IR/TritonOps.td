@@ -732,6 +732,18 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
       `lhs` `=` $a_elem_type `rhs` `=` $b_elem_type attr-dict
       `:` type($a) (`,` type($a_scale)^)? `*` type($b) (`,` type($b_scale)^)? `->` type($d)
     }];
+    let extraClassDeclaration = [{
+      static LogicalResult deduceScaleFactor(Value lhs, Value lhsScale,
+                                             ScaleDotElemType lhsFormat,
+                                             bool lhsKPack, Value rhs,
+                                             Value rhsScale,
+                                             ScaleDotElemType rhsFormat,
+                                             bool rhsKPack,
+                                             int32_t &scaleFactor,
+                                             std::string &errMsg);
+      int32_t deduceScaleFactor();
+    }];
+
     let hasVerifier = 1;
 }
 

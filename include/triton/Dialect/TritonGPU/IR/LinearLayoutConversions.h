@@ -139,6 +139,7 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
 LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<int64_t> dotOperandShape,
                                          unsigned wmmaMDim,
+                                         unsigned scaleFactor,
                                          LinearLayout ctaLayout,
                                          CGAEncodingAttr cgaLayout);
 
