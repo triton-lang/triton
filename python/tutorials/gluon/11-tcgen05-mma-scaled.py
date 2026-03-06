@@ -69,6 +69,7 @@ import triton.experimental.gluon.language as gl
 from dataclasses import replace
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.language.core import _aggregate as aggregate
+from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
@@ -240,7 +241,7 @@ def simple_mma_scaled_kernel(a_desc, b_desc, c_desc, a_scale_ptr, a_scale_stride
     tma.store_wait(0)
 
 
-def make_operand_descriptor(value: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, MIXED_PREC: bool):
+def make_operand_descriptor(value: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, MIXED_PREC: bool, cga_layout=None):
     # If the operand dtype is fp4, they will be packed into uint8.
     IS_FP4 = value.dtype == torch.uint8
     ELEM_PER_BYTE = 2 if IS_FP4 else 1
@@ -252,14 +253,15 @@ def make_operand_descriptor(value: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, MI
         [BLOCK_MN, BLOCK_K // ELEM_PER_BYTE],
         gl.uint8 if IS_FP4 else gl.float8e4nv,
         fp4_padded=IS_MIXED_PREC_FP4,
+        cga_layout=cga_layout,
     )
     return TensorDescriptor.from_tensor(value, [BLOCK_MN, BLOCK_K // ELEM_PER_BYTE], layout)
 
 
-def make_output_descriptor(M: int, N: int, dtype: torch.dtype, BLOCK_M: int, BLOCK_N: int):
+def make_output_descriptor(M: int, N: int, dtype: torch.dtype, BLOCK_M: int, BLOCK_N: int, cga_layout=None):
     C = torch.empty(M, N, device="cuda", dtype=dtype)
     C_dtype = getattr(gl, str(dtype).split('.')[1])
-    C_desc_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], C_dtype)
+    C_desc_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], C_dtype, cga_layout=cga_layout)
     return TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], C_desc_layout)
 
 
@@ -646,7 +648,7 @@ def swizzle_scales_packed_block(scales: torch.Tensor, VEC_SIZE: int):
     return scales.contiguous()
 
 
-def make_scales_descriptor(scales: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, VEC_SIZE: int):
+def make_scales_descriptor(scales: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, VEC_SIZE: int, cga_layout=None):
     # Note that this 5D swizzling scheme has minimum block size requirements
     # of BLOCK_N >= 128 and BLOCK_K >= VEC_SIZE * 4 (64 for nvfp4 and 128 for MX).
     REP_MN = BLOCK_MN // 128
@@ -658,7 +660,8 @@ def make_scales_descriptor(scales: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, VE
     block_shape = [1, REP_MN, REP_K, 2, 256]
     scales = scales.reshape(1, scales.shape[0], scales.shape[1], 2, 256)
     IS_NVFP4 = scales.dtype == torch.float8_e4m3fn
-    layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.float8e4nv if IS_NVFP4 else gl.uint8)
+    layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.float8e4nv if IS_NVFP4 else gl.uint8,
+                                                  cga_layout=cga_layout)
     return TensorDescriptor.from_tensor(scales, block_shape, layout)
 
 
@@ -1139,9 +1142,11 @@ def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, 
 
     # We don't need to hoist the scales tensor memory allocations outside of the loop,
     # so we can pull them into this helper function.
-    scale_layout: gl.constexpr = TensorMemoryScalesLayout()
-    a_scale_tmem = allocate_tensor_memory(a_scale.dtype, a_scale.type.shape, scale_layout)
-    b_scale_tmem = allocate_tensor_memory(b_scale.dtype, b_scale.type.shape, scale_layout)
+    two_ctas: gl.constexpr = acc_tmem.type.layout.two_ctas
+    a_scale_layout: gl.constexpr = TensorMemoryScalesLayout(cga_layout=[[1, 0]] if two_ctas else [])
+    b_scale_layout: gl.constexpr = TensorMemoryScalesLayout(cga_layout=[[0, 0]] if two_ctas else [])
+    a_scale_tmem = allocate_tensor_memory(a_scale.dtype, a_scale.type.shape, a_scale_layout)
+    b_scale_tmem = allocate_tensor_memory(b_scale.dtype, b_scale.type.shape, b_scale_layout)
     tcgen05_copy(a_scale, a_scale_tmem)
     tcgen05_copy(b_scale, b_scale_tmem)
 
@@ -1161,7 +1166,7 @@ def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, 
 # clean, as pipelining can get messy.
 @gluon.jit
 def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale_desc, a_bufs, b_bufs, a_scale_bufs,
-                b_scale_bufs, bars, pred):
+                b_scale_bufs, bars, pred, multicast_b_scale: gl.constexpr = False):
     A_ELEM_PER_BYTE: gl.constexpr = 2 if a_desc.dtype == gl.uint8 else 1
     B_ELEM_PER_BYTE: gl.constexpr = 2 if b_desc.dtype == gl.uint8 else 1
     BLOCK_M: gl.constexpr = a_desc.block_type.shape[0]
@@ -1184,14 +1189,14 @@ def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale
     index = producer.index
     bar = bars.index(index)
     mbarrier.expect(
-        bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + a_scale_desc.block_type.nbytes +
-        b_scale_desc.block_type.nbytes, pred)
+        bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta + a_scale_desc.nbytes_per_cta + b_scale_desc.nbytes_per_cta,
+        pred)
     tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_bufs.index(index), pred)
     tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_bufs.index(index), pred)
     tma.async_copy_global_to_shared(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar,
                                     a_scale_bufs.index(index), pred)
     tma.async_copy_global_to_shared(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar,
-                                    b_scale_bufs.index(index), pred)
+                                    b_scale_bufs.index(index), pred, multicast=multicast_b_scale)
     return producer.next(pred)
 
 
@@ -1207,7 +1212,7 @@ def issue_mma(consumer, c_bars, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs, prod
 
 @gluon.jit
 def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, num_buffers: gl.constexpr,
-                                SchedulerImpl: gl.constexpr):
+                                num_acc_buffers: gl.constexpr, SchedulerImpl: gl.constexpr):
     A_ELEM_PER_BYTE: gl.constexpr = 2 if a_desc.dtype == gl.uint8 else 1
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
@@ -1230,10 +1235,6 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
         mbarrier.init(load_bars.index(i), count=1)
     load_producer = t8.Counter.create(0, num_buffers)
     load_consumer = t8.Counter.create(0, num_buffers)
-
-    # If BLOCK_N=256, double-buffering the accumulator will use all 512 columns
-    # of tensor memory, which leaves no room for the scales' tensor memory.
-    num_acc_buffers: gl.constexpr = 2 if BLOCK_N < 256 else 1
     tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
     acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
     acc_idx = 0
@@ -1353,6 +1354,7 @@ class PartitionArgs:
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
     SchedulerImpl: gl.constexpr
+    multicast_b_scale: gl.constexpr
 
     BLOCK_M: gl.constexpr
     BLOCK_N: gl.constexpr
@@ -1371,7 +1373,8 @@ def mma_scaled_load_partition(p):
         for k in range(0, p.K, p.BLOCK_K):
             mbarrier.wait(p.load_empty_bars.index(state.index), state.phase)
             state = issue_loads(state, pid_m, pid_n, k, p.a_desc, p.b_desc, p.a_scale_desc, p.b_scale_desc, p.a_bufs,
-                                p.b_bufs, p.a_scale_bufs, p.b_scale_bufs, p.load_ready_bars, pred=True)
+                                p.b_bufs, p.a_scale_bufs, p.b_scale_bufs, p.load_ready_bars, pred=True,
+                                multicast_b_scale=p.multicast_b_scale)
 
 
 @gluon.jit
@@ -1412,7 +1415,7 @@ def mma_scaled_epilogue_partition(p):
 
 @gluon.jit
 def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, num_buffers: gl.constexpr,
-                                       SchedulerImpl: gl.constexpr):
+                                       num_acc_buffers: gl.constexpr, SchedulerImpl: gl.constexpr):
     A_ELEM_PER_BYTE: gl.constexpr = 2 if a_desc.dtype == gl.uint8 else 1
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
@@ -1432,8 +1435,6 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
     for i in gl.static_range(num_buffers):
         mbarrier.init(load_empty_bars.index(i), count=1)
         mbarrier.init(load_ready_bars.index(i), count=1)
-
-    num_acc_buffers: gl.constexpr = 2 if BLOCK_N < 256 else 1
     tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
     acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
     acc_empty_bars = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], mbarrier.MBarrierLayout())
@@ -1443,7 +1444,7 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
         mbarrier.init(acc_ready_bars.index(i), count=1)
 
     p = PartitionArgs(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs,
-                      load_empty_bars, load_ready_bars, acc_bufs, acc_empty_bars, acc_ready_bars, SchedulerImpl,
+                      load_empty_bars, load_ready_bars, acc_bufs, acc_empty_bars, acc_ready_bars, SchedulerImpl, False,
                       BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
     gl.warp_specialize([
         (mma_scaled_epilogue_partition, (p, )),
@@ -1452,10 +1453,14 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
     ], [1, 1], [24, 24])
 
 
-def mma_scaled(A, B, A_scale, B_scale, VEC_SIZE, impl_kernel, GROUP_SIZE_M=8, out_dtype=torch.float16):
-    BLOCK_M = 128
-    BLOCK_N = 256
-    BLOCK_K = 128 if torch.float8_e4m3fn in [A.dtype, B.dtype] else 256
+def mma_scaled(A, B, A_scale, B_scale, VEC_SIZE, impl_kernel, GROUP_SIZE_M=8, out_dtype=torch.float16, BLOCK_M=128,
+               BLOCK_N=256, BLOCK_K=None, num_buffers=3, acc_buffers=None):
+    if BLOCK_K is None:
+        BLOCK_K = 128 if torch.float8_e4m3fn in [A.dtype, B.dtype] else 256
+    if acc_buffers is None:
+        # If BLOCK_N=256, double-buffering the accumulator will use all 512 columns
+        # of tensor memory, which leaves no room for the scales' tensor memory.
+        acc_buffers = 2 if BLOCK_N < 256 else 1
     SchedulerImpl = t7.GroupedPersistentTileScheduler(GROUP_SIZE_M)
     M, N = A.shape[0], B.shape[0]
     MIXED_PREC = A.dtype != B.dtype
@@ -1474,8 +1479,7 @@ def mma_scaled(A, B, A_scale, B_scale, VEC_SIZE, impl_kernel, GROUP_SIZE_M=8, ou
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
     grid = (min(num_sms, num_pid), )
-    # mma_scaled_pipelined_kernel[grid](A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, 3, SchedulerImpl)
-    impl_kernel[grid](A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, 3, SchedulerImpl)
+    impl_kernel[grid](A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, num_buffers, acc_buffers, SchedulerImpl)
     return C_desc.base
 
 
@@ -1548,7 +1552,215 @@ if __name__ == "__main__":
 # We also showed how, with `tcgen05_copy`, we can abstract the MMA scaled into
 # an async MMA operation and pipeline or warp-specialize it the same way as `tcgen05_mma`.
 #
-# The main takeaways from this tutorial:
+# The main takeaways from this tutorial so far:
 # - The global memory layout of the scales is important and drastically affects
 #   performance.
 # - `tcgen05_copy` is a great way to copy the scales into tensor memory.
+#
+#
+# %% 2CTA warp-specialized block-scale MMA
+# ------------------------------------------
+#
+# On Blackwell, a pair of CTAs (a "CGA group") can cooperate to compute a
+# single MMA tile.  This provides two complementary benefits:
+#
+# 1. **Higher arithmetic intensity**: 2CTA mode doubles arithmetic intensity
+#    (FLOPs per byte loaded) compared to 1CTA mode. In 2CTA mode, the B
+#    operand is loaded once and shared by two CTAs to compute one Block_M =
+#    256 tile compared to 1CTA mode where each CTA must load B separately to
+#    compute two Block_M = 128 tiles.
+#
+# 2. **Deeper pipelines**: The B operand is split along N with each CTA
+#    holding half of B and reading the other half through distributed
+#    shared memory (DSMEM).  This reduces per-CTA SMEM cost, freeing up
+#    budget for additional pipeline stages.
+#
+# The 2CTA kernel reuses the same warp-specialization structure as the 1CTA
+# version (load, MMA, and epilogue partitions), adapted for CGA-aware barrier
+# layouts and operand splitting.
+
+
+def make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, two_cta_dim):
+    ctas_per_cga = list(ctas_per_cga)
+    cta_split = list(cta_split)
+    assert cta_split[two_cta_dim] > 1
+    cta_split[two_cta_dim] //= 2
+    ctas_per_cga[two_cta_dim] //= 2
+    aux_cga_layout = make_cga_layout(ctas_per_cga, cta_split, cta_order)
+    assert two_cta_dim in (0, 1)
+    basis = [0, 0]
+    basis[two_cta_dim] = 1
+    for b in aux_cga_layout:
+        b[two_cta_dim] *= 2
+    cga_layout = [basis] + aux_cga_layout
+    return cga_layout
+
+
+@gluon.jit
+def mma_scaled_warp_specialized_kernel_2cta(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc,
+                                            num_buffers: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr,
+                                            BLOCK_K: gl.constexpr, num_acc_buffers: gl.constexpr,
+                                            SchedulerImpl: gl.constexpr, block_layout_c: gl.constexpr):
+    A_ELEM_PER_BYTE: gl.constexpr = 2 if a_desc.dtype == gl.uint8 else 1
+    M = c_desc.shape[0]
+    N = c_desc.shape[1]
+    K = a_desc.shape[1] * A_ELEM_PER_BYTE
+
+    a_bufs = gl.allocate_shared_memory(a_desc.dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
+    b_bufs = gl.allocate_shared_memory(b_desc.dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
+    a_scale_bufs = gl.allocate_shared_memory(a_scale_desc.dtype, [num_buffers] + a_scale_desc.block_type.shape,
+                                             a_scale_desc.layout)
+    b_scale_bufs = gl.allocate_shared_memory(b_scale_desc.dtype, [num_buffers] + b_scale_desc.block_type.shape,
+                                             b_scale_desc.layout)
+    num_ctas: gl.constexpr = 2
+    two_ctas: gl.constexpr = True
+    two_cta_mbarrier_layout: gl.constexpr = mbarrier.MBarrierLayout.multicta(num_ctas=num_ctas, two_cta=two_ctas)
+    lead_cta_mbarrier_layout: gl.constexpr = mbarrier.MBarrierLayout.multicta(num_ctas=num_ctas, two_cta=False)
+    load_empty_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, num_ctas], lead_cta_mbarrier_layout)
+    load_ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], two_cta_mbarrier_layout)
+    for i in gl.static_range(num_buffers):
+        mbarrier.init(load_empty_bars.index(i), count=1)
+        mbarrier.init(load_ready_bars.index(i), count=1)
+    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M // num_ctas, BLOCK_N], col_stride=1,
+                                                   cga_layout=block_layout_c.cga_layout, two_ctas=two_ctas)
+    acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
+    acc_empty_bars = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], two_cta_mbarrier_layout)
+    acc_ready_bars = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, num_ctas], lead_cta_mbarrier_layout)
+    for i in gl.static_range(num_acc_buffers):
+        mbarrier.init(acc_empty_bars.index(i), count=1)
+        mbarrier.init(acc_ready_bars.index(i), count=1)
+
+    p = PartitionArgs(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs,
+                      load_empty_bars, load_ready_bars, acc_bufs, acc_empty_bars, acc_ready_bars, SchedulerImpl, True,
+                      BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
+    gl.warp_specialize([
+        (mma_scaled_epilogue_partition, (p, )),
+        (mma_scaled_mma_partition, (p, )),
+        (mma_scaled_load_partition, (p, )),
+    ], [1, 1], [24, 24])
+
+
+def mma_scaled_warp_specialized_2cta(A, B, A_scale, B_scale, VEC_SIZE, GROUP_SIZE_M=8, out_dtype=torch.float16,
+                                     BLOCK_M=256, BLOCK_N=256, BLOCK_K=None, num_buffers=3, acc_buffers=None):
+    """2CTA warp-specialized block-scale MMA."""
+    if BLOCK_K is None:
+        BLOCK_K = 128 if torch.float8_e4m3fn in [A.dtype, B.dtype] else 256
+    if acc_buffers is None:
+        # If BLOCK_N=256, double-buffering the accumulator will use all 512 columns
+        # of tensor memory, which leaves no room for the scales' tensor memory.
+        acc_buffers = 2 if BLOCK_N < 256 else 1
+    warps = [4, 1]
+    ctas_per_cga = (2, 1)
+    cta_order = (1, 0)
+    cta_split = (2, 1)
+    cga_layout_a = make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, 0)
+    cga_layout_b = make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, 0)
+    cga_layout_c = make_2cta_cga_layout(ctas_per_cga, ctas_per_cga, cta_order, 0)
+    cga_layout_a_scale = [[0, 1, 0, 0, 0]]
+    cga_layout_b_scale = [[0, 0, 0, 0, 0]]
+
+    SchedulerImpl = t7.GroupedPersistentTileScheduler(GROUP_SIZE_M)
+    M, N = A.shape[0], B.shape[0]
+    MIXED_PREC = A.dtype != B.dtype
+
+    A_desc = make_operand_descriptor(A, BLOCK_M, BLOCK_K, MIXED_PREC, cga_layout=cga_layout_a)
+    B_desc = make_operand_descriptor(B, BLOCK_N, BLOCK_K, MIXED_PREC, cga_layout=cga_layout_b)
+    C_desc = make_output_descriptor(M, N, out_dtype, BLOCK_M, BLOCK_N, cga_layout=cga_layout_c)
+    A_scale_desc = make_scales_descriptor(A_scale, BLOCK_M, BLOCK_K, VEC_SIZE, cga_layout=cga_layout_a_scale)
+    B_scale_desc = make_scales_descriptor(B_scale, BLOCK_N, BLOCK_K, VEC_SIZE, cga_layout=cga_layout_b_scale)
+
+    no_swizzle_layout_a = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
+                                               cga_layout=cga_layout_a_scale)
+    no_swizzle_layout_b = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
+                                               cga_layout=cga_layout_b_scale)
+    A_scale_desc = replace(A_scale_desc, layout=no_swizzle_layout_a)
+    B_scale_desc = replace(B_scale_desc, layout=no_swizzle_layout_b)
+
+    block_layout_c = gl.BlockedLayout([1, 8], [1, 32], warps_per_cta=warps, order=[1, 0], cga_layout=cga_layout_c)
+
+    num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
+    num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
+    grid = (min(num_sms, num_pid), )
+    mma_scaled_warp_specialized_kernel_2cta[grid](
+        A_desc,
+        B_desc,
+        C_desc,
+        A_scale_desc,
+        B_scale_desc,
+        num_buffers,
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
+        acc_buffers,
+        SchedulerImpl,
+        block_layout_c,
+        num_ctas=2,
+    )
+    return C_desc.base
+
+
+@pytest.mark.parametrize("K", [128, 640, 704, 1152, 4096])
+@pytest.mark.parametrize("M, N", [(2048, 2048), (500, 600), (256, 256), (8192, 8192)])
+@pytest.mark.parametrize("a_format, b_format",
+                         list(itertools.product(["mxfp8", "mxfp4"], repeat=2)) + [("nvfp4", "nvfp4")])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_mma_scaled_warp_specialized_2cta(M, N, K, a_format, b_format):
+    if a_format != b_format and K % 128 != 0:
+        pytest.skip("fp4 packed tensor descriptor requires K to be a multiple of 128")
+    torch.manual_seed(0)
+    A, A_scale, A_ref = random_quantized_tensor(M, K, a_format)
+    B, B_scale, B_ref = random_quantized_tensor(N, K, b_format)
+    VEC_SIZE = 16 if a_format == "nvfp4" else 32
+    A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
+    B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
+    C_ref = A_ref @ B_ref.T
+    C = mma_scaled_warp_specialized_2cta(A, B, A_scale, B_scale, VEC_SIZE)
+    torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
+
+
+if __name__ == "__main__":
+    M, N, K = 8192, 8192, 8192
+    flops = 2 * M * N * K
+    formats = [("mxfp8", "mxfp8"), ("mxfp4", "mxfp4"), ("mxfp8", "mxfp4"), ("nvfp4", "nvfp4")]
+
+    print(f"Benchmarking 1CTA vs 2CTA warp-specialized ({M=}, {N=}, {K=})")
+    print("===================================================================")
+    print("|     format     | 1CTA WS tflops/s | 2CTA WS tflops/s |  speedup |")
+    print("|----------------|------------------|------------------|----------|")
+    for a_format, b_format in formats:
+        A, A_scale, A_ref = random_quantized_tensor(M, K, a_format)
+        B, B_scale, B_ref = random_quantized_tensor(N, K, b_format)
+        VEC_SIZE = 16 if a_format == "nvfp4" else 32
+        A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
+        B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
+        BLOCK_K = 128 if torch.float8_e4m3fn in [A.dtype, B.dtype] else 256
+
+        # 1CTA: BLOCK_M=128, 3 pipeline stages
+        ms_1cta = triton.testing.do_bench_cudagraph(
+            lambda: mma_scaled(A, B, A_scale, B_scale, VEC_SIZE, mma_scaled_warp_specialized_kernel, BLOCK_M=128,
+                               BLOCK_N=256, BLOCK_K=BLOCK_K, num_buffers=3))
+        tflops_1cta = flops * 1e-12 / (ms_1cta * 1e-3)
+
+        # 2CTA: BLOCK_M=256, 4 pipeline stages
+        ms_2cta = triton.testing.do_bench_cudagraph(lambda: mma_scaled_warp_specialized_2cta(
+            A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M=256, BLOCK_N=256, BLOCK_K=BLOCK_K, num_buffers=4))
+        tflops_2cta = flops * 1e-12 / (ms_2cta * 1e-3)
+
+        speedup = tflops_2cta / tflops_1cta
+        print(
+            f"| {a_format + ' x ' + b_format:<14s} | {tflops_1cta:>16.2f} | {tflops_2cta:>16.2f} |  {speedup:>6.2f}x |")
+    print()
+
+# %%
+#
+# |     format     | 1CTA WS tflops/s | 2CTA WS tflops/s |  speedup |
+# |----------------|------------------|------------------|----------|
+# | mxfp8 x mxfp8  |          2462.04 |          3165.25 |   1.29x |
+# | mxfp4 x mxfp4  |          5177.82 |          6020.60 |   1.16x |
+# | mxfp8 x mxfp4  |          2727.41 |          3363.34 |   1.23x |
+# | nvfp4 x nvfp4  |          4957.22 |          5926.27 |   1.20x |
+#
+# The 2CTA kernel achieves a 16-29% speedup over 1CTA across all formats.
+# Sharing the B operand between CTAs doubles arithmetic intensity (FLOPs
+# per byte loaded), while splitting B along N via DSMEM halves per-CTA
+# SMEM, enabling deeper pipelines (3->4 stages).
