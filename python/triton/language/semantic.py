@@ -990,8 +990,11 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError(f"Memory semantic {scope_option} not supported")
         return scope
 
-    def _load_legacy(self, ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile):
-        # Load by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
+    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], boundary_check: Tuple,
+             padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool) -> TensorTy:
+        cache = self._str_to_load_cache_modifier(cache_modifier)
+        eviction = self._str_to_eviction_policy(eviction_policy)
+        padding = self._str_to_padding_option(padding_option)
         if not ptr.type.scalar.is_ptr():
             raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`")
 
@@ -1049,14 +1052,6 @@ class TritonSemantic(Generic[TensorTy]):
         if is_bool:
             ret = self.cast(ret, tl.int1)
         return ret
-
-    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], boundary_check: Tuple,
-             padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool) -> TensorTy:
-        # Cache, eviction and padding options
-        cache = self._str_to_load_cache_modifier(cache_modifier)
-        eviction = self._str_to_eviction_policy(eviction_policy)
-        padding = self._str_to_padding_option(padding_option)
-        return self._load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile)
 
     def descriptor_load(self, desc: tl.tensor_descriptor_base, offsets, cache_modifier: str,
                         eviction_policy: str) -> TensorTy:
@@ -1178,7 +1173,13 @@ class TritonSemantic(Generic[TensorTy]):
         self.builder.create_descriptor_scatter(desc.handle, value.handle, x_offsets.handle, y_offset)
         return self.tensor(None, tl.void)
 
-    def _store_legacy(self, ptr, val, mask, boundary_check, cache, eviction):
+    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], boundary_check, cache_modifier: str,
+              eviction_policy: str) -> TensorTy:
+        cache = self._str_to_store_cache_modifier(cache_modifier)
+        eviction = self._str_to_eviction_policy(eviction_policy)
+        if ptr.type.is_const() or ptr.type.scalar.is_const():
+            raise ValueError("Cannot store to a constant pointer")
+
         # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
         if not ptr.type.scalar.is_ptr():
             raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.store`")
@@ -1225,16 +1226,6 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError("Mask must have boolean scalar type")
         return self.tensor(self.builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction),
                            tl.void)
-
-    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], boundary_check, cache_modifier: str,
-              eviction_policy: str) -> TensorTy:
-        # Cache and eviction options
-        cache = self._str_to_store_cache_modifier(cache_modifier)
-        eviction = self._str_to_eviction_policy(eviction_policy)
-
-        if ptr.type.is_const() or ptr.type.scalar.is_const():
-            raise ValueError("Cannot store to a constant pointer")
-        return self._store_legacy(ptr, val, mask, boundary_check, cache, eviction)
 
 #########
 # atomic
