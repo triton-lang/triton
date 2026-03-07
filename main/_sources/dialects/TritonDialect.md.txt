@@ -23,16 +23,13 @@ Dependent Dialects:
 ### ptr
 
 
-### ptr
-
-
 ## Types
 
 ### PointerType
 
 _Pointer type (`::mlir::triton::PointerType`) in Triton IR type system_
 
-Pointer type in Triton IR type system, which could be pointing to scalars or tensors.
+Pointer type in Triton IR type system. Pointer types may only point to scalar element types.
 
 #### Parameters:
 

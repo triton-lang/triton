@@ -71,7 +71,6 @@
 <li class="toctree-l2 current"><a class="current reference internal" href="#">‘tt’ Dialect</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#type-constraints">Type constraints</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#ptr">ptr</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id1">ptr</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#types">Types</a><ul>
@@ -162,16 +161,13 @@
 <section id="ptr">
 <h3>ptr<a class="headerlink" href="#ptr" title="Link to this heading">¶</a></h3>
 </section>
-<section id="id1">
-<h3>ptr<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
-</section>
 </section>
 <section id="types">
 <h2>Types<a class="headerlink" href="#types" title="Link to this heading">¶</a></h2>
 <section id="pointertype">
 <h3>PointerType<a class="headerlink" href="#pointertype" title="Link to this heading">¶</a></h3>
 <p><em>Pointer type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::PointerType</span></code>) in Triton IR type system</em></p>
-<p>Pointer type in Triton IR type system, which could be pointing to scalars or tensors.</p>
+<p>Pointer type in Triton IR type system. Pointer types may only point to scalar element types.</p>
 <section id="parameters">
 <h4>Parameters:<a class="headerlink" href="#parameters" title="Link to this heading">¶</a></h4>
 <table class="docutils align-default">
@@ -207,8 +203,8 @@
 This is the base tensor descriptor type for tiled tensor memory access.</p>
 <p>For specialized access patterns like im2col, see TensorDescIm2ColType
 in the TritonNvidiaGPU dialect.</p>
-<section id="id2">
-<h4>Parameters:<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
+<section id="id1">
+<h4>Parameters:<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Parameter</p></th>

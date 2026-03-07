@@ -29,37 +29,6 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
-### `tt.advance` (triton::AdvanceOp)
-
-_Advance a tensor pointer by offsets_
-
-Syntax:
-
-```
-operation ::= `tt.advance` $ptr `,` `[` $offsets `]` attr-dict `:` type($result)
-```
-
-Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{}`
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `ptr` | ptr |
-| `offsets` | variadic of 32-bit signless integer |
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `result` | ptr |
-
-
-
 ### `tt.assert` (triton::AssertOp)
 
 _Device-side assert, as in CUDA for correctness checking_
@@ -128,14 +97,14 @@ Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSi
 | Operand | Description |
 | :-----: | ----------- |
 | `ptr` | ptr or ranked tensor of ptr values |
-| `cmp` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
-| `val` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `cmp` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `val` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 
 
@@ -170,14 +139,14 @@ Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSi
 | Operand | Description |
 | :-----: | ----------- |
 | `ptr` | ptr or ranked tensor of ptr values |
-| `val` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `val` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 | `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 
 
@@ -201,13 +170,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `src` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 
 
@@ -682,13 +651,13 @@ Interfaces: `ConditionallySpeculatable`, `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `args` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `args` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `result` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 
 
@@ -758,13 +727,13 @@ Interfaces: `ConditionallySpeculatable`, `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `srcs` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `srcs` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 
 
@@ -1079,7 +1048,7 @@ Effects: `MemoryEffects::Effect{}`
 
 ### `tt.load` (triton::LoadOp)
 
-_Load from a tensor of pointers or from a tensor pointer_
+_Load from a pointer or tensor of pointers_
 
 Syntax:
 
@@ -1100,8 +1069,6 @@ Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>boundaryCheck</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
-<tr><td><code>padding</code></td><td>::mlir::triton::PaddingOptionAttr</td><td>allowed 32-bit signless integer cases: 1, 2</td></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
 <tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 <tr><td><code>isVolatile</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
@@ -1111,15 +1078,15 @@ Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `ptr` | ptr or ranked tensor of ptr values or ptr |
+| `ptr` | ptr or ranked tensor of ptr values |
 | `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
-| `other` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `other` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 
 
@@ -1198,49 +1165,6 @@ Effects: `MemoryEffects::Effect{}`
 | Result | Description |
 | :----: | ----------- |
 | `result` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
-
-
-
-### `tt.make_tensor_ptr` (triton::MakeTensorPtrOp)
-
-_Make a tensor pointer type with meta information of the parent tensor and the block specified_
-
-Syntax:
-
-```
-operation ::= `tt.make_tensor_ptr` $base `,` `[` $shape `]` `,` `[` $strides `]` `,` `[` $offsets `]` attr-dict `:` type($result)
-```
-
-`tt.make_tensor_ptr` takes both meta information of the parent tensor and the block tensor, then it returns a
-pointer to the block tensor, e.g. returns a type of `tt.ptr<tensor<8x8xf16>>`.
-
-Traits: `AlwaysSpeculatableImplTrait`, `SameVariadicOperandSize`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{}`
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>order</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
-</table>
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `base` | ptr |
-| `shape` | variadic of 64-bit signless integer |
-| `strides` | variadic of 64-bit signless integer |
-| `offsets` | variadic of 32-bit signless integer |
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `result` | ptr |
 
 
 
@@ -1425,7 +1349,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 
 | Operand | Description |
 | :-----: | ----------- |
-| `args` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `args` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 
 
@@ -1486,7 +1410,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `result` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 
 
@@ -1674,7 +1598,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `src` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 #### Results:
 
@@ -1723,7 +1647,7 @@ Effects: `MemoryEffects::Effect{}`
 
 ### `tt.store` (triton::StoreOp)
 
-_Store by a tensor of pointers or by a tensor pointer_
+_Store through a pointer or tensor of pointers_
 
 Syntax:
 
@@ -1739,7 +1663,6 @@ Traits: `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`, `TensorSi
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>boundaryCheck</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
 <tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
@@ -1748,8 +1671,8 @@ Traits: `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`, `TensorSi
 
 | Operand | Description |
 | :-----: | ----------- |
-| `ptr` | ptr or ranked tensor of ptr values or ptr |
-| `value` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `ptr` | ptr or ranked tensor of ptr values |
+| `value` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 | `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
 
 
@@ -1843,6 +1766,6 @@ Effects: `MemoryEffects::Effect{}`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 

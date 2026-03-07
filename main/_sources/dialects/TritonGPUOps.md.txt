@@ -77,7 +77,7 @@ Interfaces: `InferTypeOpInterface`
 | `src` | ranked tensor of ptr values |
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `mask` | tensor of 1-bit signless integer values |
-| `other` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr |
+| `other` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 #### Results:
 
