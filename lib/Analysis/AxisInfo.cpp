@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/bit.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -705,6 +706,102 @@ public:
   }
 };
 
+class ReshapeOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::ReshapeOp> {
+public:
+  using AxisInfoVisitorImpl<triton::ReshapeOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::ReshapeOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    AxisInfo srcInfo = operands[0]->getValue();
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+    auto dstTy = cast<RankedTensorType>(op.getType());
+    auto dstShape = dstTy.getShape();
+
+    // Constant tensor stays constant
+    if (srcInfo.getConstantValue().has_value()) {
+      AxisInfo::DimVectorT contiguity(dstTy.getRank(), 1);
+      AxisInfo::DimVectorT divisibility(
+          dstTy.getRank(),
+          highestPowOf2Divisor(srcInfo.getConstantValue().value()));
+      AxisInfo::DimVectorT constancy(dstShape.begin(), dstShape.end());
+      return AxisInfo(contiguity, divisibility, constancy,
+                      srcInfo.getConstantValue());
+    }
+
+    auto srcShape = srcTy.getShape();
+    // `suffixProducts[d + 1]` is the flat stride of axis `d` in row-major
+    // order.
+    auto getSuffixProducts = [](ArrayRef<int64_t> shape) {
+      SmallVector<int64_t> suffixProducts(shape.size() + 1, 1);
+      for (int d = shape.size() - 1; d >= 0; --d)
+        suffixProducts[d] = suffixProducts[d + 1] * shape[d];
+      return suffixProducts;
+    };
+    auto srcSuffixProducts = getSuffixProducts(srcShape);
+    auto dstSuffixProducts = getSuffixProducts(dstShape);
+
+    AxisInfo::DimVectorT contiguity(dstTy.getRank(), 1);
+    AxisInfo::DimVectorT divisibility(dstTy.getRank(), 1);
+    AxisInfo::DimVectorT constancy(dstTy.getRank(), 1);
+
+    for (int dstDim = 0; dstDim < dstTy.getRank(); ++dstDim) {
+      if (dstShape[dstDim] == 1)
+        continue;
+
+      int64_t dstStride = dstSuffixProducts[dstDim + 1];
+      // Find the source axis whose flat-stride interval [srcStride, srcExtent)
+      // contains this destination stride.
+      int srcDim = 0;
+      for (; srcDim < srcTy.getRank(); ++srcDim) {
+        int64_t srcStride = srcSuffixProducts[srcDim + 1];
+        if (srcStride <= dstStride && dstStride < srcSuffixProducts[srcDim])
+          break;
+      }
+      assert(srcDim < srcTy.getRank());
+
+      int64_t srcStride = srcSuffixProducts[srcDim + 1];
+      int64_t srcContiguity = srcInfo.getContiguity(srcDim);
+      int64_t srcDivisibility = srcInfo.getDivisibility(srcDim);
+      int64_t srcConstancy = srcInfo.getConstancy(srcDim);
+
+      if (srcContiguity > 1) {
+        // Contiguity only survives when reshape lands on the low boundary of
+        // the source axis. Starting inside the axis loses the unit-stride run.
+        if (dstStride == srcStride) {
+          int64_t dstContiguity = llvm::bit_floor<uint64_t>(
+              std::min(srcContiguity, dstShape[dstDim]));
+          contiguity[dstDim] = dstContiguity;
+          divisibility[dstDim] = dstContiguity == srcContiguity
+                                     ? srcDivisibility
+                                     : gcd(srcDivisibility, dstContiguity);
+        } else {
+          divisibility[dstDim] = 1;
+        }
+        continue;
+      }
+
+      // A constant source axis can stay constant after splitting; the constant
+      // block shrinks according to how much of it this destination stride uses.
+      int64_t constancyEnd = srcStride * srcConstancy;
+      if (dstStride <= constancyEnd) {
+        int64_t dstConstancy = llvm::bit_floor<uint64_t>(
+            std::min<int64_t>(dstShape[dstDim], constancyEnd / dstStride));
+        constancy[dstDim] = dstConstancy;
+        divisibility[dstDim] = srcDivisibility;
+        continue;
+      }
+
+      if (dstStride < srcSuffixProducts[srcDim])
+        divisibility[dstDim] = srcDivisibility;
+    }
+
+    return AxisInfo(contiguity, divisibility, constancy,
+                    srcInfo.getConstantValue());
+  }
+};
+
 template <typename OpTy>
 class CmpOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
 public:
@@ -1105,6 +1202,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
   visitors.append<BroadcastOpAxisInfoVisitor>();
   visitors.append<SplatOpAxisInfoVisitor>();
   visitors.append<ExpandDimsOpAxisInfoVisitor>();
+  visitors.append<ReshapeOpAxisInfoVisitor>();
   visitors.append<CmpOpAxisInfoVisitor<arith::CmpIOp>>();
   visitors.append<LogicalOpAxisInfoVisitor<arith::AndIOp>,
                   LogicalOpAxisInfoVisitor<arith::OrIOp>,

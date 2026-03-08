@@ -289,6 +289,30 @@ tt.func @expanddims() {
 
 // -----
 
+tt.func @reshape(%arg0: tensor<8xi32> {tt.contiguity = 1 : i32, tt.divisibility = 8 : i32, tt.constancy = 4 : i32}) {
+  // expected-remark @below {{contiguity = [4], divisibility = [4], constancy = [1], constant_value = <none>}}
+  %0 = tt.make_range {end = 8 : i32, start = 4 : i32} : tensor<4xi32>
+  // expected-remark @below {{contiguity = [1, 1, 4], divisibility = [1, 1, 4], constancy = [1, 1, 1], constant_value = <none>}}
+  %1 = tt.reshape %0 : tensor<4xi32> -> tensor<1x1x4xi32>
+  // expected-remark @below {{contiguity = [16], divisibility = [4], constancy = [1], constant_value = <none>}}
+  %2 = tt.make_range {end = 20 : i32, start = 4 : i32} : tensor<16xi32>
+  // expected-remark @below {{contiguity = [1, 4], divisibility = [1, 4], constancy = [1, 1], constant_value = <none>}}
+  %3 = tt.reshape %2 : tensor<16xi32> -> tensor<4x4xi32>
+  // expected-remark @below {{contiguity = [4], divisibility = [4], constancy = [1], constant_value = <none>}}
+  %4 = tt.reshape %3 : tensor<4x4xi32> -> tensor<16xi32>
+  // expected-remark @below {{contiguity = [4, 1], divisibility = [4, 1], constancy = [1, 1], constant_value = <none>}}
+  %5 = tt.trans %3 {order = array<i32: 1, 0>} : tensor<4x4xi32> -> tensor<4x4xi32>
+  // expected-remark @below {{contiguity = [1, 2, 1], divisibility = [1, 2, 1], constancy = [1, 1, 1], constant_value = <none>}}
+  %6 = tt.reshape %5 : tensor<4x4xi32> -> tensor<2x2x4xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %7 = tt.reshape %5 : tensor<4x4xi32> -> tensor<16xi32>
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [8, 8], constancy = [2, 2], constant_value = <none>}}
+  %8 = tt.reshape %arg0 : tensor<8xi32> -> tensor<4x2xi32>
+  tt.return
+}
+
+// -----
+
 tt.func @broadcast() {
   // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [128], constant_value = 64}}
   %0 = arith.constant dense<64> : tensor<128xi32>
