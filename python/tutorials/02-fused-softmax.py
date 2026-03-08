@@ -146,12 +146,6 @@ def softmax(x):
     # Allocate output
     y = torch.empty_like(x)
 
-    # On Blackwell (compute capability >= 10), enable 256-bit vectorized loads/stores
-    # by providing pointer alignment hints when the data is 32-byte aligned.
-    is_blackwell = torch.cuda.is_available() and torch.cuda.get_device_capability(x.device)[0] >= 10
-    ptrs_aligned = all(t.data_ptr() % 32 == 0 for t in [x, y])
-    strides_aligned = (x.stride(0) * x.element_size()) % 32 == 0
-
     # Another trick we can use is to ask the compiler to use more threads per row by
     # increasing the number of warps (`num_warps`) over which each row is distributed.
     # You will see in the next tutorial how to auto-tune this value in a more natural
@@ -161,11 +155,17 @@ def softmax(x):
     # Number of software pipelining stages.
     num_stages = 4 if SIZE_SMEM > 200000 else 2
 
+    # On Blackwell (sm >= 100), when the base pointers are 32-byte aligned
+    # and the non-contiguous dimension stride is 32-element aligned, enable
+    # 256-bit vectorized loads/stores and bypass software pipelining to use
+    # ld.global instead of cp.async.
+    MAX_DIVISIBILITY = 1
+    is_blackwell = torch.cuda.is_available() and torch.cuda.get_device_capability(x.device)[0] >= 10
+    ptrs_aligned = x.data_ptr() % 32 == 0 and y.data_ptr() % 32 == 0
+    strides_aligned = x.stride(0) % 32 == 0 and y.stride(0) % 32 == 0
     if is_blackwell and ptrs_aligned and strides_aligned:
         MAX_DIVISIBILITY = 32
         num_stages = 1  # bypass cp.async to enable 256-bit ld.global
-    else:
-        MAX_DIVISIBILITY = 1
 
     # pre-compile kernel to get register usage and compute thread occupancy.
     kernel = softmax_kernel.warmup(
