@@ -308,6 +308,18 @@ tt.func @reshape(%arg0: tensor<8xi32> {tt.contiguity = 1 : i32, tt.divisibility 
   %7 = tt.reshape %5 : tensor<4x4xi32> -> tensor<16xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [8, 8], constancy = [2, 2], constant_value = <none>}}
   %8 = tt.reshape %arg0 : tensor<8xi32> -> tensor<4x2xi32>
+  // expected-remark @below {{contiguity = [8], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %9 = tt.make_range {end = 24 : i32, start = 16 : i32} : tensor<8xi32>
+  // expected-remark @below {{contiguity = [1, 8], divisibility = [1, 16], constancy = [1, 1], constant_value = <none>}}
+  %10 = tt.reshape %9 : tensor<8xi32> -> tensor<1x8xi32>
+  // expected-remark @below {{contiguity = [4], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %11 = tt.make_range {end = 5 : i32, start = 1 : i32} : tensor<4xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [2], constancy = [4], constant_value = 2}}
+  %12 = arith.constant dense<2> : tensor<4xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [2], constancy = [1], constant_value = <none>}}
+  %13 = arith.muli %11, %12 : tensor<4xi32>
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [2, 2], constancy = [1, 1], constant_value = <none>}}
+  %14 = tt.reshape %13 : tensor<4xi32> -> tensor<1x4xi32>
   tt.return
 }
 

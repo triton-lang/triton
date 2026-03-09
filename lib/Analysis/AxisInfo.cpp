@@ -747,19 +747,28 @@ public:
     AxisInfo::DimVectorT constancy(dstTy.getRank(), 1);
 
     for (int dstDim = 0; dstDim < dstTy.getRank(); ++dstDim) {
-      if (dstShape[dstDim] == 1)
-        continue;
-
       int64_t dstStride = dstSuffixProducts[dstDim + 1];
-      // Find the source axis whose flat-stride interval [srcStride, srcExtent)
-      // contains this destination stride.
+      // Main idea:
+      // Let m = dstDim, and Q = dstSuffixProducts, P = srcSuffixProducts
+      // Q[m + 1] \in [P[i + 1], P[i]).
+      // This means that dimension m is splitting dimension i, so it often
+      // inherits the properties of this dimension
+      // Note that the "off by one" indexing comes from the fact that the
+      // stride for dimension m is in Q[m + 1].
       int srcDim = 0;
       for (; srcDim < srcTy.getRank(); ++srcDim) {
         int64_t srcStride = srcSuffixProducts[srcDim + 1];
         if (srcStride <= dstStride && dstStride < srcSuffixProducts[srcDim])
           break;
       }
-      assert(srcDim < srcTy.getRank());
+
+      if (srcDim == srcTy.getRank()) {
+        // If there are 1-sized axes at the beginning, we do not have
+        // dstStride < srcSuffixProducts[srcDim] but we can still reuse
+        // the outermost source axis.
+        assert(dstShape[dstDim] == 1);
+        srcDim = 0;
+      }
 
       int64_t srcStride = srcSuffixProducts[srcDim + 1];
       int64_t srcContiguity = srcInfo.getContiguity(srcDim);
@@ -770,31 +779,29 @@ public:
         // Contiguity only survives when reshape lands on the low boundary of
         // the source axis. Starting inside the axis loses the unit-stride run.
         if (dstStride == srcStride) {
-          int64_t dstContiguity = llvm::bit_floor<uint64_t>(
-              std::min(srcContiguity, dstShape[dstDim]));
+          int64_t dstContiguity = std::min(srcContiguity, dstShape[dstDim]);
           contiguity[dstDim] = dstContiguity;
+          // If the whole contiguous run survives, the group bases are
+          // unchanged. When the run is truncated, later group bases can start
+          // inside the original run, so divisibility must be clamped
+          // accordingly.
           divisibility[dstDim] = dstContiguity == srcContiguity
                                      ? srcDivisibility
-                                     : gcd(srcDivisibility, dstContiguity);
-        } else {
-          divisibility[dstDim] = 1;
+                                     : std::min(srcDivisibility, dstContiguity);
         }
         continue;
       }
 
-      // A constant source axis can stay constant after splitting; the constant
-      // block shrinks according to how much of it this destination stride uses.
       int64_t constancyEnd = srcStride * srcConstancy;
       if (dstStride <= constancyEnd) {
-        int64_t dstConstancy = llvm::bit_floor<uint64_t>(
-            std::min<int64_t>(dstShape[dstDim], constancyEnd / dstStride));
-        constancy[dstDim] = dstConstancy;
-        divisibility[dstDim] = srcDivisibility;
-        continue;
+        // If we land inside a constant axis, the constancy is the minimum
+        // between the shape and how much constancy survives
+        constancy[dstDim] =
+            std::min<int64_t>(dstShape[dstDim], constancyEnd / dstStride);
       }
-
-      if (dstStride < srcSuffixProducts[srcDim])
-        divisibility[dstDim] = srcDivisibility;
+      // Divisibility stays the same when the constant block is split
+      // even for constancy == 1
+      divisibility[dstDim] = srcDivisibility;
     }
 
     return AxisInfo(contiguity, divisibility, constancy,
