@@ -146,13 +146,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // Each thread needs to load 4 elements and we load 1 (sizePerThread) per buffer load instruction
     // Note that mask/other alignment is 1 so we need 4 conditionals
 
-    // Make sure we have a select to mask by write OOB
-    // COMMON: llvm.select
     // COMMON: rocdl.raw.ptr.buffer.load.lds
     // COMMON: llvm.cond_br
     // COMMON: llvm.store
 
-    // Make sure select condition is set properly when there is other value.
+    // Check for select condition when there is other value.
     // COMMON: [[AND:%.*]] = llvm.and
     // COMMON: llvm.select [[AND]]
 
