@@ -180,22 +180,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
     // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK: llvm.select
+    // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
     // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK: llvm.select
+    // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
     // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK: llvm.select
+    // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
     // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK: llvm.select
+    // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
     %2 = ttg.async_copy_global_to_local %1, %arg2 mask %67 other %cst_0 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
@@ -240,28 +240,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: rocdl.ballot
     // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK: llvm.select
+    // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
     // CHECK: rocdl.ds_bpermute
     // CHECK: rocdl.ballot
     // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK: llvm.select
+    // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
     // CHECK: rocdl.ds_bpermute
     // CHECK: rocdl.ballot
     // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK: llvm.select
+    // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
     // CHECK: rocdl.ds_bpermute
     // CHECK: rocdl.ballot
     // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK: llvm.select
+    // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
     %2 = ttg.async_copy_global_to_local %1, %arg2 mask %67 other %cst_0 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>

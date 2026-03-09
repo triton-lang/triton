@@ -528,14 +528,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
         ldsAddr = b.gep(ptrTy, vecTy, ldsAddr, swizzleLaneOffset);
     }
 
-    // Heuristic: Instead of masking via a branch we mask by setting the address
-    // out of range which tells the HW to drop the store.
-    Value cond = b.icmp_ne(mask, b.true_val());
-    Value outOfRangeAddress =
-        b.inttoptr(shmemAddr.getType(), b.i32_val(0xFFFFFFFF));
-    Value predicatedAddress = b.select(cond, ldsAddr, outOfRangeAddress);
-
-    llStore(rewriter, loc, predicatedAddress, storeVal, b.true_val(),
+    llStore(rewriter, loc, ldsAddr, storeVal, b.icmp_ne(mask, b.true_val()),
             CacheModifier::NONE, targetInfo.requiresAliasInfoForAsyncOps());
   }
 };
@@ -840,21 +833,20 @@ struct BufferLoadToLocalOpConversion
         applySwizzling(rewriter, loc, offsetElem, maybeSwizzledMaskElem, laneId,
                        swizzleLaneOffset);
 
-      // If other=0.0 we remove other in canonicalizePointers and we can use out
-      // of bounds to store 0 to LDS. So if we have other values we need to
-      // predicate to not overwrite the other stores
+      // If other=0.0 we remove other in canonicalizePointers and we can use a
+      // out of bounds buffer address to store 0 to LDS. However if we have
+      // other values we need to predicate to not overwrite other buffer loads
+      // to local
       Value cond =
           hasOther ? b.and_(threadPred, maybeSwizzledMaskElem) : threadPred;
-
-      // Note: we cannot emit a branch because that would affect the waitcnt, so
-      // instead we set the LDS address to be out of range which tells the HW to
-      // drop the load before fetching data.
+      // Use out-of-range shmemAddr instead of branching to not influence the
+      // waitcnt. GFX9 and GFX1250 will drop the load if LDS is out of range.
       Value outOfRangeAddress =
           b.inttoptr(shmemAddr.getType(), b.i32_val(0xFFFFFFFF));
       Value predicatedAddress = b.select(cond, shmemAddr, outOfRangeAddress);
 
       auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
-          vecTy, vecBytesVal, rsrcDesc, offsetElem, shmemAddr,
+          vecTy, vecBytesVal, rsrcDesc, offsetElem, predicatedAddress,
           hasOther ? b.true_val() : maybeSwizzledMaskElem, op.getCache());
       if (targetInfo.requiresAliasInfoForAsyncOps())
         AMD::addAsyncCopyAliasScope(bufferLoadToLds);
@@ -985,9 +977,8 @@ struct AsyncCopyGlobalToLocalOpConversion
       // Predicate load based on threadPred && swizzledMask
       auto cond = b.and_(threadPred, maybeSwizzledMaskElem);
 
-      // Note: we cannot emit a branch because that would affect the waitcnt, so
-      // instead we set the LDS address to be out of range which tells the HW to
-      // drop the load.
+      // Use out-of-range shmemAddr instead of branching to not influence the
+      // waitcnt. GFX9 and GFX1250 will drop the load if LDS is out of range.
       Value outOfRangeAddress =
           b.inttoptr(shmemAddr.getType(), b.i32_val(0xFFFFFFFF));
       Value predicatedAddress = b.select(cond, shmemAddr, outOfRangeAddress);
