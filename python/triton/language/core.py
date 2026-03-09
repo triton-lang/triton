@@ -1785,9 +1785,10 @@ class _block_ptr:
         mask = None
         for dim, extent in enumerate(tile_shape):
             coord = add(self.offsets[dim], arange(0, extent, _semantic=_semantic), _semantic=_semantic)
-            reshape_shape = [1] * len(tile_shape)
-            reshape_shape[dim] = extent
-            coord = reshape(coord, reshape_shape, _semantic=_semantic)
+            for _ in builtins.range(dim):
+                coord = expand_dims(coord, 0, _semantic=_semantic)
+            for _ in builtins.range(dim + 1, len(tile_shape)):
+                coord = expand_dims(coord, -1, _semantic=_semantic)
             coord = broadcast_to(coord, tile_shape, _semantic=_semantic)
             ptrs = add(ptrs, mul(coord, self.strides[dim], _semantic=_semantic), _semantic=_semantic)
             if dim in checked_dims:
