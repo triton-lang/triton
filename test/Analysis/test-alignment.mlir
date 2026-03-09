@@ -325,6 +325,18 @@ tt.func @reshape(%arg0: tensor<8xi32> {tt.contiguity = 1 : i32, tt.divisibility 
 
 // -----
 
+tt.func @reshape_refined_piece_merge(
+    %arg0: tensor<4x4xi32> {tt.contiguity = dense<[1, 1]> : tensor<2xi32>, tt.divisibility = dense<[1, 1]> : tensor<2xi32>, tt.constancy = dense<[2, 4]> : tensor<2xi32>},
+    %arg1: tensor<2x2x2xi32> {tt.contiguity = dense<[1, 1, 2]> : tensor<3xi32>, tt.divisibility = dense<[1, 1, 1]> : tensor<3xi32>, tt.constancy = dense<[2, 2, 1]> : tensor<3xi32>}) {
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [8], constant_value = <none>}}
+  %0 = tt.reshape %arg0 : tensor<4x4xi32> -> tensor<16xi32>
+  // expected-remark @below {{contiguity = [1, 2], divisibility = [1, 1], constancy = [4, 1], constant_value = <none>}}
+  %1 = tt.reshape %arg1 : tensor<2x2x2xi32> -> tensor<4x2xi32>
+  tt.return
+}
+
+// -----
+
 tt.func @broadcast() {
   // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [128], constant_value = 64}}
   %0 = arith.constant dense<64> : tensor<128xi32>

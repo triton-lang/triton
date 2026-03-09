@@ -795,12 +795,28 @@ public:
       int64_t constancyEnd = srcStride * srcConstancy;
       if (dstStride <= constancyEnd) {
         // If we land inside a constant axis, the constancy is the minimum
-        // between the shape and how much constancy survives
-        constancy[dstDim] =
+        // between the shape and how much constancy survives.
+        int64_t dstConstancy =
             std::min<int64_t>(dstShape[dstDim], constancyEnd / dstStride);
+
+        // Several constant dimensions can merge into a single constant
+        // dimension
+        int64_t remainingSize = dstShape[dstDim] / dstConstancy;
+        for (int dim = srcDim - 1;
+             srcConstancy == srcShape[srcDim] && dim >= 0 && remainingSize > 1;
+             --dim) {
+          int64_t pieceSize = std::min(srcShape[dim], remainingSize);
+          int64_t pieceConstancy =
+              std::min(srcInfo.getConstancy(dim), pieceSize);
+          dstConstancy *= pieceConstancy;
+          if (pieceConstancy < pieceSize)
+            break;
+          remainingSize /= pieceSize;
+        }
+        constancy[dstDim] = dstConstancy;
       }
       // Divisibility stays the same when the constant block is split
-      // even for constancy == 1
+      // even for constancy == 1.
       divisibility[dstDim] = srcDivisibility;
     }
 
