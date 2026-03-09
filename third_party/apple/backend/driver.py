@@ -83,12 +83,26 @@ class MPSLauncher:
         self.signature  = dict(src.signature)
         self.constants  = getattr(src, "constants", {})
 
-        # Build arg_casts for scalar (non-pointer, non-constant) args
-        self.arg_casts = {
-            i: _SCALAR_CAST[ty]
-            for i, ty in self.signature.items()
-            if ty[0] != '*' and i not in self.constants and ty in _SCALAR_CAST
-        }
+        # Constexpr args appear in Python *args but NOT in the compiled IR.
+        # We strip them before passing to _mps_MetalKernel so Metal buffer slots
+        # match IR arg positions exactly. self.constexpr_py_slots is the set of
+        # Python *args indices that are constexpr (to be stripped at launch).
+        self.constexpr_py_slots = frozenset(
+            i for i, (k, ty) in enumerate(self.signature.items())
+            if ty == 'constexpr'
+        )
+
+        # Build arg_casts: after stripping constexprs, the remaining args are
+        # passed sequentially to Metal. arg_casts key = index in the *filtered*
+        # args list (= IR slot index) → cast type for scalar args.
+        slot = 0  # IR slot after constexpr removal
+        self.arg_casts = {}
+        for py_idx, (k, ty) in enumerate(self.signature.items()):
+            if ty == 'constexpr':
+                continue
+            if ty[0] != '*' and ty in _SCALAR_CAST:
+                self.arg_casts[slot] = _SCALAR_CAST[ty]
+            slot += 1
 
         # Threadgroup size: num_warps * 32 threads, capped at 1024
         warp_size = 32
@@ -105,11 +119,19 @@ class MPSLauncher:
 
         # _mps_MetalKernel.__call__ signature:
         #   (*args, threads=[gx,gy,gz], group_size=[lx,ly,lz], arg_casts=dict|None)
+        # Strip constexpr args — they're not in the compiled IR, so Metal slots
+        # must be contiguous over non-constexpr args only.
+        filtered_args = tuple(
+            a for i, a in enumerate(args) if i not in self.constexpr_py_slots
+        )
+        import os as _os
+        if _os.environ.get('TRITON_MPS_DEBUG'):
+            print(f'[MPS] filtered_args={filtered_args} arg_casts={self.arg_casts}')
         function(
-            *args,
+            *filtered_args,
             threads    =[gridX * self.lx, gridY * self.ly, gridZ * self.lz],
             group_size =[self.lx, self.ly, self.lz],
-            arg_casts  = self.arg_casts or None,
+            arg_casts  = self.arg_casts if self.arg_casts else None,
         )
 
         if launch_exit_hook:
@@ -142,6 +164,9 @@ class MPSDriver(DriverBase):
 
     def get_current_device(self):
         return 0
+
+    def get_current_stream(self, device):
+        return 0  # MPS manages its own stream internally
 
     def get_benchmarker(self):
         from triton.testing import do_bench
