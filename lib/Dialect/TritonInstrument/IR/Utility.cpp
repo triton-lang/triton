@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
+#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 
@@ -223,26 +224,6 @@ bool hasCpAsync(ModuleOp module) {
   return hasCpAsync;
 }
 
-bool hasWGMMA(ModuleOp module) {
-  bool hasWGMMA = false;
-  module.walk([&](Operation *op) {
-    if (isa<WarpGroupDotOp, WarpGroupDotWaitOp>(op)) {
-      hasWGMMA = true;
-    }
-  });
-  return hasWGMMA;
-}
-
-bool hasTMAStore(ModuleOp module) {
-  bool hasTMAStore = false;
-  module.walk([&](Operation *op) {
-    if (isa<AsyncTMACopyLocalToGlobalOp, TMAStoreWaitOp>(op)) {
-      hasTMAStore = true;
-    }
-  });
-  return hasTMAStore;
-}
-
 Value createLockVariable(ImplicitLocOpBuilder &b) {
   Type ptrType = triton::getPointerType(b.getI32Type());
   auto alloc = createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, 4, 4);
@@ -257,6 +238,18 @@ Value createLockVariable(ImplicitLocOpBuilder &b) {
 } // namespace
 
 namespace mlir::triton::instrument {
+
+uint32_t getMemDescLength(Value buf) {
+  auto memDescType = cast<MemDescType>(buf.getType());
+  if (isa<SharedEncodingTrait>(memDescType.getEncoding())) {
+    unsigned elSize = memDescType.getElementType().getIntOrFloatBitWidth() / 8;
+    return static_cast<uint32_t>(product(memDescType.getShape()) * elSize);
+  }
+  if (isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace())) {
+    return getTmemAllocSizes(memDescType).numCols;
+  }
+  llvm_unreachable("Unsupported memory space for memdesc");
+}
 
 gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
@@ -437,8 +430,8 @@ Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
   return nullptr;
 }
 
-void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module,
-                                                 FunctionBuilder &fb) {
+void AuxDataMap::populateAndPassToWarpSpecialize(
+    ModuleOp module, FunctionBuilder &fb, const ConSanTargetHooks *hooks) {
   SmallVector<SmallVector<BufferRegion>, numMemTypes> bufRegions(numMemTypes);
   SmallVector<BufferRegion> barrierRegions;
   getBuffersAndBarriers(module, bufRegions, barrierRegions);
@@ -573,13 +566,11 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module,
     createCommitTensor(CommitKind::AsyncCp);
   }
 
-  // Create reads commits tensor for wgmma
-  if (hasWGMMA(module)) {
-    createCommitTensor(CommitKind::Wgmma);
-  }
-
-  if (hasTMAStore(module)) {
-    createCommitTensor(CommitKind::TmaStore);
+  if (hooks) {
+    for (auto kind : hooks->getRequiredCommitKinds(module)) {
+      if (commits[kind].empty())
+        createCommitTensor(kind);
+    }
   }
 }
 

@@ -186,18 +186,6 @@ Value createBufferDescriptor(ImplicitLocOpBuilder &b, Value offsetI32,
   return arith::OrIOp::create(b, lengthShifted, offsetI64);
 }
 
-uint32_t getMemDescLength(Value buf) {
-  auto memDescType = cast<ttg::MemDescType>(buf.getType());
-  if (isa<ttg::SharedEncodingTrait>(memDescType.getEncoding())) {
-    unsigned elSize = memDescType.getElementType().getIntOrFloatBitWidth() / 8;
-    return static_cast<uint32_t>(product(memDescType.getShape()) * elSize);
-  }
-  if (isa<ttng::TensorMemorySpaceAttr>(memDescType.getMemorySpace())) {
-    return ttng::getTmemAllocSizes(memDescType).numCols;
-  }
-  llvm_unreachable("Unsupported memory space for memdesc");
-}
-
 std::tuple<Block *, Block *, Block *> createIfBlock(ImplicitLocOpBuilder &b,
                                                     Value cnd) {
   // #prevBlock

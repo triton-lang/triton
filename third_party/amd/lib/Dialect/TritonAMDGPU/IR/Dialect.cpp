@@ -722,7 +722,26 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
 
   auto paddedEnc =
       llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
-  if (!paddedEnc && !swizzledEnc)
+
+  // Check for PartitionedSharedEncodingAttr and validate its inner layout
+  auto partitionedEnc =
+      llvm::dyn_cast<gpu::PartitionedSharedEncodingAttr>(smemTy.getEncoding());
+  if (partitionedEnc) {
+    auto partitionLayout = partitionedEnc.getPartitionLayout();
+    auto innerSwizzled =
+        llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(partitionLayout);
+    if (innerSwizzled && innerSwizzled.getMaxPhase() != 1)
+      return emitOpError(
+          "TDM does not support swizzling in partitioned layout");
+
+    auto innerPadded =
+        llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(partitionLayout);
+    if (!innerPadded && !innerSwizzled)
+      return emitOpError(
+          "Invalid inner layout for partitioned shared memory in TDM");
+  }
+
+  if (!paddedEnc && !swizzledEnc && !partitionedEnc)
     return emitOpError("Invalid shared memory layout for TDM");
 
   Type elementType = smemTy.getElementType();
