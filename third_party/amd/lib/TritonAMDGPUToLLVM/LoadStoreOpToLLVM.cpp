@@ -840,11 +840,11 @@ struct BufferLoadToLocalOpConversion
       // Use out-of-range *shmemAddr* instead of a branch to not influence the
       // waitcnt. GFX9 and GFX1250 will drop the load if LDS is out of range.
       Value int32MaxVal = b.i32_val(std::numeric_limits<int32_t>::max());
-      Value outOfRangeAddress = b.inttoptr(shmemAddr.getType(), int32MaxVal);
-      Value predicatedAddress = b.select(cond, shmemAddr, outOfRangeAddress);
+      Value outOfRangeAddr = b.inttoptr(shmemAddr.getType(), int32MaxVal);
+      Value maskedShmemAddr = b.select(cond, shmemAddr, outOfRangeAddr);
 
       auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
-          vecTy, vecBytesVal, rsrcDesc, offsetElem, predicatedAddress,
+          vecTy, vecBytesVal, rsrcDesc, offsetElem, maskedShmemAddr,
           hasOther ? b.true_val() : maybeSwizzledMaskElem, op.getCache());
       if (targetInfo.requiresAliasInfoForAsyncOps())
         AMD::addAsyncCopyAliasScope(bufferLoadToLds);
@@ -978,11 +978,11 @@ struct AsyncCopyGlobalToLocalOpConversion
       // Use out-of-range *shmemAddr* instead of a branch to not influence the
       // waitcnt. GFX9 and GFX1250 will drop the load if LDS is out of range.
       Value int32MaxVal = b.i32_val(std::numeric_limits<int32_t>::max());
-      Value outOfRangeAddress = b.inttoptr(shmemAddr.getType(), int32MaxVal);
-      Value predicatedAddress = b.select(cond, shmemAddr, outOfRangeAddress);
+      Value outOfRangeAddr = b.inttoptr(shmemAddr.getType(), int32MaxVal);
+      Value maskedShmemAddr = b.select(cond, shmemAddr, outOfRangeAddr);
 
       emitAsyncLoad(rewriter, loc, targetInfo, vecBits, srcElem,
-                    predicatedAddress, op.getCache(), multicastMask);
+                    maskedShmemAddr, op.getCache(), multicastMask);
 
       if (hasOther) {
         emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy, maskElem,
