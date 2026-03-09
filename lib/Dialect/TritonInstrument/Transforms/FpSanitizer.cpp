@@ -508,7 +508,7 @@ Value fpsanVariadicExternTagged(PatternRewriter &rewriter, Location loc,
         castExternOperandToResultInt(rewriter, loc, operand, resultIntTy);
     if (!operandI)
       return Value();
-    sumI = arith::AddIOp::create(rewriter, loc, sumI, operandI);
+    sumI = arith::SubIOp::create(rewriter, loc, sumI, operandI);
   }
 
   auto hashVal = getIntConstantLike(rewriter, loc, resultIntTy,
