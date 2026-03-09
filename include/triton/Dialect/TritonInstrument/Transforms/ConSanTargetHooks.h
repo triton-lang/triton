@@ -2,6 +2,7 @@
 #define TRITONINSTRUMENT_CONSAN_TARGET_HOOKS_H
 
 #include "mlir/IR/BuiltinOps.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include <functional>
 #include <memory>
@@ -74,7 +75,38 @@ public:
   virtual std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const = 0;
 
   virtual std::optional<MemEffectsOpInfo>
-  getMemEffectsOpInfo(Operation *op) const = 0;
+  getMemEffectsOpInfo(Operation *op) const {
+    namespace ttg = triton::gpu;
+    std::optional<MemEffectsOpInfo> info;
+    if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
+      info->commitKind = CommitKind::AsyncCp;
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                        copyOp.getResult());
+    }
+    if (auto loadOp = dyn_cast<ttg::LocalLoadOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
+                                        loadOp.getSrc());
+    }
+    if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                        storeOp.getDst());
+    }
+    if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
+      if (allocOp.getSrc()) {
+        info.emplace();
+        info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+        info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                          allocOp.getResult());
+      }
+    }
+    return info;
+  }
 
   virtual SmallVector<CommitKind::Kind>
   getRequiredCommitKinds(ModuleOp module) const = 0;
