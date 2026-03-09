@@ -893,8 +893,6 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
     capture1 = session1_replay_frame["children"][0]
 
     foo_frame0 = get_frame_by_name(capture0, "foo_with_metric")
-    bar_frame0 = get_frame_by_name(capture0, "bar_without_metric")
-    foo_frame1 = get_frame_by_name(capture1, "foo_with_metric")
     bar_frame1 = get_frame_by_name(capture1, "bar_without_metric")
 
     assert foo_frame0["metrics"]["sum_metric"] == float(foo_iters * x.numel())
