@@ -588,6 +588,56 @@ def test_preload(device, fresh_triton_cache) -> None:
         kernel_add.preload(specialization_data_unknown_target)
 
 
+@triton.jit
+def sequence_offset(idx, offsets: tl.constexpr):
+    tl.static_assert(len(offsets) == 2)
+    tl.static_assert(len(offsets[0]) == 2)
+    tl.static_assert(len(offsets[1]) == 1)
+    return idx + offsets[0][0] + offsets[0][1] + offsets[1][0]
+
+
+@triton.jit
+def tuple_call_kernel(out_ptr, offsets: tl.constexpr):
+    tl.static_assert(len(offsets) == 2)
+    idx = tl.arange(0, 1)
+    tl.store(out_ptr + idx, sequence_offset(idx, offsets))
+
+
+def test_preload_constexpr_tuple_arg(device, fresh_triton_cache, fresh_knobs) -> None:
+    device = getattr(torch, device).current_device()
+    offsets = ((2, 3), (5, ))
+    specialization_data = None
+
+    def cache_hook(*args, **kwargs):
+        nonlocal specialization_data
+        specialization_data = kwargs["compile"]["specialization_data"]
+
+    fresh_knobs.runtime.jit_cache_hook = cache_hook
+    tuple_call_kernel.device_caches[device][0].clear()
+    pre_compile = tuple_call_kernel.warmup(torch.int32, offsets, grid=(1, ))
+    hash = pre_compile.hash
+    assert specialization_data is not None
+
+    shutil.rmtree(fresh_triton_cache)
+    tuple_call_kernel.device_caches[device][0].clear()
+
+    kernel_preload = tuple_call_kernel.preload(specialization_data)
+    assert kernel_preload.hash == hash
+    assert len(tuple_call_kernel.device_caches[device][0]) == 1
+
+    counter = 0
+
+    def inc_counter(*args, **kwargs):
+        nonlocal counter
+        counter += 1
+
+    fresh_knobs.runtime.jit_cache_hook = inc_counter
+    final_kernel = tuple_call_kernel.warmup(torch.int32, offsets, grid=(1, ))
+    assert counter == 0
+    assert len(tuple_call_kernel.device_caches[device][0]) == 1
+    assert final_kernel.hash == hash
+
+
 def test_hooks(device, fresh_triton_cache) -> None:
 
     @triton.jit
@@ -801,6 +851,27 @@ def test_async_compile(device, fresh_triton_cache):
         assert a[0, 0] == 2
 
 
+def test_async_compile_error(fresh_triton_cache):
+
+    @triton.jit
+    def fn(x: tl.constexpr):
+        tl.static_assert(x == 2)
+
+    with pytest.raises(triton.compiler.errors.CompileTimeAssertionFailure):
+        with (
+                ThreadPoolExecutor(2) as pool,
+                triton.AsyncCompileMode(pool),
+        ):
+            assert triton.runtime._async_compile.active_mode.get() is not None
+            fn.warmup(1, grid=(1, ))
+
+            assert len(fn.device_caches[0][0]) == 1
+
+    # After the AsyncCompileMode context manager exits, the active mode should
+    # be set to None again, even if there was an error.
+    assert triton.runtime._async_compile.active_mode.get() is None
+
+
 def test_higher_order_kernel(device, fresh_triton_cache, capsys):
 
     @triton.jit
@@ -905,17 +976,17 @@ def test_module_load_unload(device, fresh_knobs):
     def kernel(out_ptr, val) -> None:
         tl.store(out_ptr, val)
 
-    # we should hit the module unload call to decrese the counter from 1 to 0
+    # we should hit the kernel unload call to decrese the counter from 1 to 0
     counter = 1
 
-    def module_unload(*args, **kwargs):
+    def kernel_unload(*args, **kwargs):
         nonlocal counter
         counter -= 1
 
     # turn off python garbage collector, so the callback is not called
     # in the garbage collector
     gc.disable()
-    triton.knobs.runtime.module_unload_hook.add(module_unload)
+    triton.knobs.runtime.kernel_unload_hook.add(kernel_unload)
 
     out = torch.randn(1, dtype=torch.float32, device=device)
     pre_compile = kernel.warmup(out, 1, grid=(1, ))

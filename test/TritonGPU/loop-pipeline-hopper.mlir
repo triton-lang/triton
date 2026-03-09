@@ -616,8 +616,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // COMMON-LABEL: dot_prologue_epilogue
-  // COMMON: {{.*}}, {{.*}}, %[[EXT:.*]]: i32, {{.*}}
+  // CHECK-LABEL: dot_prologue_epilogue
+  // CHECK: {{.*}}, {{.*}}, %[[EXT:.*]]: i32, {{.*}}
   tt.func @dot_prologue_epilogue(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ext: i32, %inc: tensor<64x16xi32, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>}) -> tensor<128x16xf32, #mma1> {
     %cst = arith.constant dense<0> : tensor<64x16xi32, #blocked>
     %cst2 = arith.constant dense<0> : tensor<128x64xi32, #blocked1>
@@ -640,17 +640,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %14 = tt.broadcast %10 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
-    // COMMON: %[[C0:.*]] = arith.constant 0 : i32
-    // COMMON: scf.for %[[IND_VAR:.*]] = %[[C0]]
-    // COMMON-NOT: load
-    // COMMON: %[[CND:.*]] = arith.cmpi slt, %[[IND_VAR]], %[[EXT]]
-    // COMMON: scf.if %[[CND]]
-    // COMMON: dot
-    // COMMON: scf.if %[[CND]]
-    // COMMON:   arith.mulf
-    // COMMON:   scf.yield
-    // COMMON-NOT: tt.addptr
-    // COMMON: scf.yield
+    // CHECK: %[[C0:.*]] = arith.constant 0 : i32
+    // CHECK: scf.for %[[IND_VAR:.*]] = %[[C0]]
+    // CHECK-NOT: load
+    // CHECK: %[[CND:.*]] = arith.cmpi slt, %[[IND_VAR]], %[[EXT]]
+    // CHECK: scf.if %[[CND]]
+    // CHECK: dot
+    // CHECK: scf.if %[[CND]]
+    // CHECK:   arith.mulf
+    // CHECK:   scf.yield
+    // CHECK-NOT: tt.addptr
+    // CHECK: scf.yield
     %17:3 = scf.for %arg3 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg4 = %cst_2, %arg5 = %16, %arg6 = %8) -> (tensor<128x16xf32, #mma1>, tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<128x64x!tt.ptr<f16>, #blocked1>)  : i32 {
       %9 = tt.load %arg6 : tensor<128x64x!tt.ptr<f16>, #blocked1>
       %cnd = arith.cmpi slt, %arg3, %ext : i32

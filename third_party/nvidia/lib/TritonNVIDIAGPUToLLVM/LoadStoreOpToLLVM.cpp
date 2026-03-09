@@ -192,9 +192,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     LDBG("Lower LoadOp for " << ptr);
 
     // adaptor values
-    assert(!isTensorPointerType(ptr.getType()) &&
-           "Cannot convert load with a tensor pointer into LLVM; "
-           "this case should be transformed to normal load before lowering");
     Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
     Value llOther = adaptor.getOther();
@@ -1357,12 +1354,12 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto zero = b.i32_val(0);
     auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
     // We multicast if the flag is on and the block layout has broadcasting
-    uint32_t maskCGABroadcast =
-        smemLayout.getFreeVariableMasks().lookup(kBlock);
-    bool multicast = op.getMulticast() && maskCGABroadcast != 0;
+    bool multicast = op.getMulticast();
     Value multicastMask;
     Value barrierPtr = barrierMemObj.getBase();
     if (multicast) {
+      uint32_t maskCGABroadcast =
+          smemLayout.getFreeVariableMasks().lookup(kBlock);
       multicastMask =
           LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, maskCGABroadcast);
       // If we multicast, we emit the full message from the representative CTA

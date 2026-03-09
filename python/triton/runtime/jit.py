@@ -24,6 +24,8 @@ from triton._C.libtriton import get_cache_invalidating_env_vars, native_speciali
 TRITON_MODULE = "triton.language"
 GLUON_MODULE = "triton.experimental.gluon.language"
 
+INDENT_PATTERN = re.compile(r"^(?P<indent>[ \t]*)def\s+\w+\s*\(", re.MULTILINE)
+
 T = TypeVar("T")
 
 # -----------------------------------------------------------------------------
@@ -467,7 +469,14 @@ class JITCallable:
         self._hash_lock = threading.RLock()
 
         # function source code (without decorators)
-        src = textwrap.dedent("".join(self.raw_src))
+        raw_src_str = "".join(self.raw_src)
+
+        # get file name, starting line number and starting col number
+        self.file_name = fn.__code__.co_filename
+        self.def_file_line_number = get_def_line_number(self.raw_src, self.starting_line_number)
+        self.def_file_col_number = get_def_col_number(raw_src_str)
+
+        src = textwrap.dedent(raw_src_str)
         src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
         self._src = src
         self.hash = None
@@ -826,13 +835,13 @@ class JITFunction(JITCallable, KernelInterface[T]):
                 return tl.dtype(value)
             if isinstance(value, dict):
                 if 'constexpr' in value:
-                    return tl.constexpr(value['constexpr'])
+                    return tl.constexpr(convert_to_tuple_if_list(value['constexpr']))
                 if 'jit_function' in value:
                     jf_key = value['jit_function']
                     if jf_key in _triton_jit_function_registry:
                         return _triton_jit_function_registry[jf_key]
                     raise RuntimeError(f"Unable to resolve JITFunction {jf_key} for preload")
-            return value
+            return convert_to_tuple_if_list(value)
 
         constexprs = {key: _decode_constant(value) for key, value in zip(constant_keys, constant_vals)}
         attrs_keys = map(tuple, deserialized_obj['attrs_keys'])
@@ -1064,22 +1073,30 @@ def reinterpret(tensor, dtype):
         raise TypeError(f"Cannot reinterpret a {type(tensor)}.")
 
 
-def get_jit_fn_file_line(fn):
-    base_fn = fn
-    while not isinstance(base_fn, JITCallable):
-        base_fn = base_fn.fn
-    file_name = base_fn.fn.__code__.co_filename
-    begin_line = base_fn.starting_line_number
+def get_def_line_number(raw_src, starting_line_number):
+    def_file_line_number = starting_line_number
     # Match the following pattern:
     # @triton.autotune(...) <- foo.__code__.co_firstlineno
     # @triton.heuristics(...)
     # @triton.jit
     # def foo(...): <- this line is the first line
-    for idx, line in enumerate(base_fn.raw_src):
+    for idx, line in enumerate(raw_src):
         if line.strip().startswith("def "):
-            begin_line += idx
+            def_file_line_number += idx
             break
-    return file_name, begin_line
+    return def_file_line_number
+
+
+def get_def_col_number(raw_src_str):
+    # Find the amount of indenting to use in the source location information.
+    indented_def = INDENT_PATTERN.search(raw_src_str)
+    if not indented_def:
+        raise ValueError("No function definition found for kernel")
+    # Consider spaces and tabs as single characters to match the ast
+    def_file_col_number = len(indented_def.group("indent"))
+    # Columns start at 1
+    def_file_col_number += 1
+    return def_file_col_number
 
 
 class BoundConstexprFunction(JITCallable):

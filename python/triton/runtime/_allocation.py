@@ -62,3 +62,7 @@ def set_profile_allocator(allocator: Optional[Allocator]) -> None:
     that require additional global memory workspace.
     """
     _profile_allocator.set(allocator if allocator is not None else _NULL_ALLOCATOR)
+
+
+def has_profile_allocator() -> bool:
+    return not isinstance(_profile_allocator.get(), NullAllocator)

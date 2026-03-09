@@ -10,6 +10,10 @@ import triton
 import triton.language as tl
 import triton.profiler as proton
 import triton.profiler.language as pl
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
+from triton.experimental.gluon.language.nvidia.blackwell import clc
+from triton.experimental.gluon.language.nvidia.hopper import mbarrier
 from triton._internal_testing import (
     is_cuda,
     is_hip,
@@ -429,8 +433,12 @@ def test_multi_session(tmp_path: pathlib.Path):
 
     with open(temp_file_driver, "rb") as f:
         data = json.load(f)
-        kernel_frame = data[0]["children"][0]
-        assert "add_kernel" == kernel_frame["frame"]["name"]
+        kernel_frame = None
+        for child in data[0]["children"]:
+            if child["frame"]["name"] == "add_kernel":
+                kernel_frame = child
+                break
+        assert kernel_frame is not None
         assert "time (ns)" in kernel_frame["metrics"]
 
     with open(temp_file_restart, "rb") as f:
@@ -741,14 +749,20 @@ def test_overhead(tmp_path: pathlib.Path):
         data = json.load(f)
     root = data[0]
 
+    def non_metadata_children(node):
+        return [child for child in node.get("children", []) if child["frame"]["name"] != "metadata"]
+
     def session_kernel_time(session_name: str) -> Tuple[int, int]:
-        session_node = next(child for child in root["children"] if child["frame"]["name"] == session_name)
-        single_node = next(child for child in session_node["children"] if child["frame"]["name"] == "single")
-        loop_node = next(child for child in session_node["children"] if child["frame"]["name"] == "loop")
-        kernel_node = single_node["children"][0]
-        single_time = kernel_node["metrics"]["time (ns)"]
-        kernel_node = loop_node["children"][0]
-        loop_time = kernel_node["metrics"]["time (ns)"]
+        session_node = next(child for child in non_metadata_children(root) if child["frame"]["name"] == session_name)
+        session_children = non_metadata_children(session_node)
+        single_node = next(child for child in session_children if child["frame"]["name"] == "single")
+        loop_node = next(child for child in session_children if child["frame"]["name"] == "loop")
+        single_kernel_node = next(child for child in non_metadata_children(single_node)
+                                  if child["frame"]["name"] == "kernel")
+        loop_kernel_node = next(child for child in non_metadata_children(loop_node)
+                                if child["frame"]["name"] == "kernel")
+        single_time = single_kernel_node["metrics"]["time (ns)"]
+        loop_time = loop_kernel_node["metrics"]["time (ns)"]
         return single_time, loop_time
 
     session0_single_time, session0_loop_time = session_kernel_time("session0")
@@ -938,6 +952,93 @@ def test_threaded_kernel_call(tmp_path: pathlib.Path):
         assert len(events) > 0
         kernel_events = [e for e in events if e["name"] == "kernel"]
         assert len(kernel_events) > 0
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability(0)[0] < 10, reason="Requires Blackwell")
+@pytest.mark.parametrize(
+    "profile_data,file_suffix",
+    [
+        ("tree", ".hatchet"),
+        ("trace", ".chrome_trace"),
+    ],
+)
+def test_gluon_clc_profile(tmp_path: pathlib.Path, profile_data: str, file_suffix: str):
+
+    @gluon.jit
+    def gluon_clc_vector_add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: gl.constexpr):
+        tile_id = gl.program_id(0)
+        has_work = gl.to_tensor(True)
+        phase = gl.to_tensor(0)
+
+        layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0])
+        clc_result = gl.allocate_shared_memory(gl.int64, [2], layout)
+        clc_bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(clc_bar, count=1)
+
+        while has_work:
+            with pl.scope("clc_add_step"):
+                offsets = tile_id * BLOCK_SIZE + gl.arange(0, BLOCK_SIZE, gl.BlockedLayout([1], [32], [4], [0]))
+                mask = offsets < n_elements
+                x = gl.load(x_ptr + offsets, mask)
+                y = gl.load(y_ptr + offsets, mask)
+                gl.store(out_ptr + offsets, x + y, mask)
+
+            clc.try_cancel(clc_result, clc_bar, multicast=True)
+            mbarrier.expect(clc_bar, 16)
+            mbarrier.wait(clc_bar, phase)
+
+            clc_response = clc.load_result(clc_result)
+            has_work = clc_response.is_canceled()
+            tile_id = clc_response.program_id(0)
+            phase = phase ^ 1
+
+    block_size = 256
+    num_tiles = torch.cuda.get_device_properties(0).multi_processor_count * 8
+    n_elements = block_size * num_tiles
+
+    x = torch.rand((n_elements, ), device="cuda", dtype=torch.float32)
+    y = torch.rand((n_elements, ), device="cuda", dtype=torch.float32)
+    out = torch.empty_like(x)
+    expected = x + y
+
+    temp_file = tmp_path / f"test_gluon_clc_vector_add_{profile_data}{file_suffix}"
+    start_kwargs = {"backend": "instrumentation"}
+    if profile_data == "trace":
+        start_kwargs["data"] = "trace"
+    proton.start(str(temp_file.with_suffix("")), **start_kwargs)
+    gluon_clc_vector_add_kernel[(num_tiles, )](x, y, out, n_elements, BLOCK_SIZE=block_size, num_warps=4)
+    proton.finalize()
+
+    torch.testing.assert_close(out, expected)
+
+    def find_frames(node, predicate):
+        results = []
+        if predicate(node):
+            results.append(node)
+        for child in node.get("children", []):
+            results.extend(find_frames(child, predicate))
+        return results
+
+    with temp_file.open("rb") as f:
+        data = json.load(f)
+        if profile_data == "tree":
+            root = data[0]
+            kernel_nodes = find_frames(root, lambda node: "gluon_clc_vector_add_kernel" in node["frame"]["name"])
+            clc_scope_nodes = find_frames(root, lambda node: node["frame"]["name"] == "clc_add_step")
+
+            assert len(kernel_nodes) > 0
+            assert len(clc_scope_nodes) > 0
+            assert clc_scope_nodes[0]["metrics"]["cycles"] > 0
+        else:
+            events = data["traceEvents"]
+            assert len(events) > 0
+            clc_scope_events = [event for event in events if event["name"] == "clc_add_step"]
+            kernel_category_events = [
+                event for event in events if "gluon_clc_vector_add_kernel" in event.get("cat", "")
+            ]
+            assert len(clc_scope_events) > 0
+            assert len(kernel_category_events) > 0
+            assert all(event["dur"] > 0 for event in clc_scope_events)
 
 
 @pytest.mark.parametrize("num_ctas", [1, 2])

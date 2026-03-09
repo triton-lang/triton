@@ -69,8 +69,8 @@ class ClcTileScheduler:
         has_work = gl.to_tensor(True)
         starting_tile_id = gl.program_id(0)
 
-        clc_result_buffer = gl.allocate_shared_memory(gl.int64, [2], gl.SwizzledSharedLayout(1, 1, 1, [0]))
         barrier = mbarrier.allocate_mbarrier()
+        clc_result_buffer = gl.allocate_shared_memory(gl.int64, [2], gl.SwizzledSharedLayout(1, 1, 1, [0]))
         mbarrier.init(barrier, count=1)
         phase = gl.to_tensor(0)
         return ClcTileScheduler(has_work, starting_tile_id, clc_result_buffer, barrier, phase)

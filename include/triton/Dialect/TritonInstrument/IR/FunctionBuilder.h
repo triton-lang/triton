@@ -93,10 +93,23 @@ public:
   // matching barrier phases.
   void createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b, int activeMask,
                                        Value pred, Operation *insertPoint);
+  // verifyBarrierCanInit: ensure the barrier is currently invalidated before
+  // initializing it again.
+  void createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b, Value mbar,
+                                      Operation *insertPoint);
+  // verifyBarrierInitialized: ensure the barrier has been initialized and not
+  // invalidated before it is used.
+  void createVerifyBarrierInitializedCall(ImplicitLocOpBuilder &b, Value mbar,
+                                          Value pred, Operation *insertPoint);
   // initBarrierState: Initialize the tracked barrier state to phase 0 and set
-  // both the initial and current arrival counts.
+  // both the initial and current arrival counts. A zero state denotes an
+  // invalidated/uninitialized barrier.
   void createInitBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                   int count, Operation *insertPoint);
+  // invalidateBarrierState: clear the tracked barrier lifecycle state and any
+  // waiting bits for the barrier.
+  void createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
+                                        Operation *insertPoint);
   // verifyBarrierArrive: Check that applying the arrive count would not drive
   // the tracked current count negative. Triggers an assertion on failure.
   void createVerifyBarrierArriveCall(ImplicitLocOpBuilder &b, Value mbar,
@@ -145,6 +158,16 @@ public:
   void createTrackVisibleReadsCall(ImplicitLocOpBuilder &b, Value mbar,
                                    int thread, Value pred, MemType memType,
                                    Operation *insertPoint);
+  // clearBarrierWriteTracking: clear all write tracking associated with the
+  // given barrier row.
+  void createClearBarrierWriteTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
+                                           Value pred, MemType memType,
+                                           Operation *insertPoint);
+  // clearBarrierReadTracking: clear all read tracking associated with the
+  // given barrier row.
+  void createClearBarrierReadTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
+                                          Value pred, MemType memType,
+                                          Operation *insertPoint);
   // transferVisibleWrites: transfer write visibility tracked by a barrier to
   // all threads in threadMask.
   void createTransferVisibleWritesCall(ImplicitLocOpBuilder &b, Value mbar,

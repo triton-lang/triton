@@ -8,8 +8,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton import language as tl
 from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_interpreter
-from triton.experimental.gluon.language.nvidia.blackwell import (TensorMemoryLayout, allocate_tensor_memory, mbarrier,
-                                                                 tcgen05_mma, get_tmem_reg_layout)
+from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory, mbarrier, tcgen05_mma
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
@@ -469,11 +468,6 @@ def test_dot_fma(device, fresh_knobs):
     B = 16
     BLOCK = gl.constexpr(B)
 
-    def allocator(size: int, alignment: int, stream):
-        return torch.empty(size, device="cuda", dtype=torch.int32)
-
-    triton.set_allocator(allocator)
-
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     @gluon.jit
@@ -528,11 +522,6 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
     B = 64
     BLOCK = gl.constexpr(B)
 
-    def allocator(size: int, alignment: int, stream):
-        return torch.empty(size, device="cuda", dtype=torch.int32)
-
-    triton.set_allocator(allocator)
-
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     @gluon.jit
@@ -559,8 +548,8 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
         smem_b.store(b_tile)
 
         tmem_layout: gl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
-        acc_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK, BLOCK), tmem_layout, gl.num_warps())
         acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK, BLOCK], layout=tmem_layout)
+        acc_reg_layout: gl.constexpr = acc_tmem.get_reg_layout()
         if USE_ACC:
             c_tile = gl.load(c_ptr + out_offs)
             acc_init = gl.convert_layout(c_tile, acc_reg_layout)
@@ -575,7 +564,7 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
         mbarrier.wait(bar, phase=0, deps=[smem_a, smem_b])
         mbarrier.invalidate(bar)
 
-        out = acc_tmem.load(acc_reg_layout)
+        out = acc_tmem.load()
         out = gl.convert_layout(out, layout)
         gl.store(out_ptr + out_offs, out)
 
@@ -608,11 +597,6 @@ def test_tmem_index_subslice(device, fresh_knobs):
     BLOCK = gl.constexpr(B)
     SLICE_N = gl.constexpr(32)
 
-    def allocator(size: int, alignment: int, stream):
-        return torch.empty(size, device="cuda", dtype=torch.int32)
-
-    triton.set_allocator(allocator)
-
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     @gluon.jit
@@ -629,11 +613,10 @@ def test_tmem_index_subslice(device, fresh_knobs):
         view = tmem.index(1)
         sub = view.slice(0, SLICE_N)
 
-        sub_layout: gl.constexpr = TensorMemoryLayout((BLOCK, SLICE_N), col_stride=1)
-        sub_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK, SLICE_N), sub_layout, gl.num_warps())
+        sub_reg_layout: gl.constexpr = sub.get_reg_layout()
         x_reg = gl.convert_layout(x, sub_reg_layout)
         sub.store(x_reg)
-        out = sub.load(sub_reg_layout)
+        out = sub.load()
         out = gl.convert_layout(out, layout)
         gl.store(out_ptr + offs, out)
 
@@ -673,11 +656,6 @@ def test_reduction(device, fresh_knobs):
     c1 = torch.empty((1, ), dtype=torch.float32).to('cuda')
     c2 = torch.empty((1, ), dtype=torch.float32).to('cuda')
 
-    def alloc_fn(size: int, alignment: int, stream):
-        return torch.empty(size, device="cuda", dtype=torch.int8)
-
-    triton.set_allocator(alloc_fn)
-
     reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
     reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
     assert not _payload_equal(c1, c2)
@@ -687,3 +665,116 @@ def test_reduction(device, fresh_knobs):
     reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
     reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
     assert _payload_equal(c1, c2)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+def test_mfma_dot(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    M, N, K = 16, 16, 32
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    cdna_version = 3 if is_hip_cdna3() else 4
+    nonkdim = 32
+    kdim = 8 if cdna_version == 3 else 16
+    k_width_val = 4 if cdna_version == 3 else 8
+
+    blocked = gl.BlockedLayout([4, 4], [4, 16], [4, 1], [1, 0])
+    mfma_layout = gl.amd.AMDMFMALayout(cdna_version, [nonkdim, nonkdim, kdim], True, [4, 1])
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr,
+               blocked: gl.constexpr, k_width: gl.constexpr, mfma_layout: gl.constexpr):
+        dot_a_layout: gl.constexpr = gl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=k_width)
+        dot_b_layout: gl.constexpr = gl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=k_width)
+
+        offs_am = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, blocked))
+        offs_bn = gl.arange(0, BLOCK_N, layout=gl.SliceLayout(0, blocked))
+        offs_ak = gl.arange(0, BLOCK_K, layout=gl.SliceLayout(0, blocked))
+        offs_bk = gl.arange(0, BLOCK_K, layout=gl.SliceLayout(1, blocked))
+
+        a = gl.load(a_ptr + offs_am[:, None] * BLOCK_K + offs_ak[None, :])
+        b = gl.load(b_ptr + offs_bk[:, None] * BLOCK_N + offs_bn[None, :])
+        c = gl.load(c_ptr + offs_am[:, None] * BLOCK_N + offs_bn[None, :])
+
+        a1 = gl.convert_layout(a, layout=dot_a_layout)
+        b1 = gl.convert_layout(b, layout=dot_b_layout)
+        c_acc = gl.convert_layout(c, layout=mfma_layout)
+
+        result = gl.amd.cdna3.mfma(a1, b1, c_acc)
+        result = gl.convert_layout(result, layout=blocked)
+        gl.store(out_ptr + offs_am[:, None] * BLOCK_N + offs_bn[None, :], result)
+
+    rs = np.random.RandomState(0)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(M, K), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(K, N), dtype=np.int32)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(M, N), dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
+    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
+    out = torch.empty((M, N), device="cuda", dtype=torch.int32)
+
+    aw = triton.TensorWrapper(a, dtype=torch.float32)
+    bw = triton.TensorWrapper(b, dtype=torch.float32)
+    cw = triton.TensorWrapper(c, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    kernel[(1, )](aw, bw, cw, outw, BLOCK_M=M, BLOCK_N=N, BLOCK_K=K, blocked=blocked, k_width=k_width_val,
+                  mfma_layout=mfma_layout)
+
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+def test_wmma_dot(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    B = 32
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, BLOCK: gl.constexpr, INSTR_SHAPE_K: gl.constexpr, K_WIDTH: gl.constexpr):
+        blocked: gl.constexpr = gl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+        wmma: gl.constexpr = gl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, INSTR_SHAPE_K])
+
+        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, blocked))[:, None]
+        offs_k = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, blocked))[None, :]
+        offs_bk = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, blocked))[:, None]
+        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, blocked))[None, :]
+
+        a = gl.load(a_ptr + offs_m * BLOCK + offs_k)
+        b = gl.load(b_ptr + offs_bk * BLOCK + offs_n)
+        c = gl.load(c_ptr + offs_m * BLOCK + offs_n)
+        c = gl.convert_layout(c, wmma)
+
+        a = gl.convert_layout(a, gl.DotOperandLayout(0, wmma, K_WIDTH))
+        b = gl.convert_layout(b, gl.DotOperandLayout(1, wmma, K_WIDTH))
+        acc = gl.amd.gfx1250.wmma(a, b, c)
+
+        out_layout: gl.constexpr = gl.SliceLayout(1, wmma)
+        offs_cm = gl.arange(0, BLOCK, layout=out_layout)[:, None]
+        offs_cn = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, wmma))[None, :]
+        gl.store(out_ptr + offs_cm * BLOCK + offs_cn, acc)
+
+    rs = np.random.RandomState(0)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
+    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
+    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+
+    aw = triton.TensorWrapper(a, dtype=torch.float32)
+    bw = triton.TensorWrapper(b, dtype=torch.float32)
+    cw = triton.TensorWrapper(c, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    kernel[(1, )](aw, bw, cw, outw, BLOCK=B, INSTR_SHAPE_K=4, K_WIDTH=2)
+
+    _assert_payload_equal(out, exp_bits)

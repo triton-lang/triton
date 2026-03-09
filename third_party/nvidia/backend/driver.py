@@ -2,13 +2,14 @@ import functools
 import os
 import subprocess
 import triton
-import re
+import ctypes
+import sys
 from pathlib import Path
 from triton import knobs
 from triton.runtime.build import compile_module_from_src
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver
+from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
@@ -50,6 +51,40 @@ def library_dirs():
     return [libdevice_dir, *libcuda_dirs()]
 
 
+def _cuda_driver_is_active():
+    candidates = ["libcuda.so.1"]
+    try:
+        candidates.extend([os.path.join(path, "libcuda.so.1") for path in libcuda_dirs()])
+    except Exception:
+        pass
+
+    libcuda = None
+    for candidate in candidates:
+        try:
+            libcuda = ctypes.CDLL(candidate)
+            break
+        except OSError:
+            continue
+
+    if libcuda is None:
+        return False
+
+    cu_init = libcuda.cuInit
+    cu_init.argtypes = [ctypes.c_uint]
+    cu_init.restype = ctypes.c_int
+    if cu_init(0) != 0:
+        return False
+
+    cu_device_get_count = libcuda.cuDeviceGetCount
+    cu_device_get_count.argtypes = [ctypes.POINTER(ctypes.c_int)]
+    cu_device_get_count.restype = ctypes.c_int
+    count = ctypes.c_int()
+    if cu_device_get_count(ctypes.byref(count)) != 0:
+        return False
+
+    return count.value > 0
+
+
 # ------------------------
 # Utils
 # ------------------------
@@ -82,6 +117,10 @@ class CudaUtils(object):
         ARG_TUPLE = mod.ARG_TUPLE
         self.load_binary = mod.load_binary
         self.unload_module = mod.unload_module
+        self.get_current_device = mod.get_current_device
+        self.set_current_device = mod.set_current_device
+        self.get_default_stream = mod.get_default_stream
+        self.get_device_capability = mod.get_device_capability
         self.get_device_properties = mod.get_device_properties
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = mod.set_printf_fifo_size
@@ -119,60 +158,6 @@ def ty_to_cpp(ty):
         "fp64": "double",
         "nvTmaDesc": "CUtensorMap",
     }[ty]
-
-
-def expand_signature(signature, tensordesc_meta):
-    output = []
-    tensordesc_idx = 0
-    # Expand tensor descriptor arguments into either nvTmaDesc, shape and
-    # strides, or base pointer, shape and strides depending on whether the
-    # kernel was lowered to use the nvTmaDesc or not.
-    for sig in signature:
-        if isinstance(sig, str) and sig.startswith("tensordesc"):
-            meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
-            tensordesc_idx += 1
-
-            # Parse tensordesc signature with optional input_rank for im2col mode
-            # Format: tensordesc<dtype[block_shape],...> or tensordesc_im2col<dtype[block_shape],input_rank=N,...>
-            is_im2col = sig.startswith("tensordesc_im2col")
-            match = re.match(r"tensordesc(?:_im2col)?<([^[>]*)\[([^\]]*)\]", sig)
-            dtype = match.group(1)
-            block_shape = match.group(2)
-            block_ndim = block_shape.count(",") + 1
-
-            # For im2col, look for input_rank=N in the type string
-            tensor_rank = None
-            if is_im2col:
-                rank_match = re.search(r",input_rank=(\d+)", sig)
-                assert rank_match, "Expected tensordesc_im2col to have input_rank"
-                tensor_rank = int(rank_match.group(1))
-
-            # For im2col with input_rank, use tensor's rank; otherwise use block_shape ndim
-            ndim = tensor_rank if tensor_rank else block_ndim
-
-            if meta is None:
-                output.append("*" + dtype)
-                # Currently the host side tensor descriptors get passed in as a
-                # tensor desc, shape, and strides. We have no way to use these
-                # shape and strides when processing tensor descriptors which is
-                # why we provide our own decomposition above. Sadly this means
-                # we have to pass the shape and strides twice.
-                for _ in range(2 * ndim):
-                    output.append("i64")
-                output.append("i1")
-                output.append("i1")
-            else:
-                output.append("nvTmaDesc")
-
-            for _ in range(ndim):
-                output.append("i32")
-            for _ in range(ndim):
-                output.append("i64")
-        else:
-            output.append(sig)
-
-    assert not tensordesc_meta or tensordesc_idx == len(tensordesc_meta)
-    return output
 
 
 def make_kernel_signature(signature):
@@ -221,23 +206,9 @@ TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 TMA_TF32 = 11
 
 
-def make_tensordesc_arg(arg, metadata):
+def make_tensordesc_arg(arg, metadata, _):
     if metadata is None:
-        # Currently the host side tensor descriptors get decomposed in
-        # the frontend to tensor desc, shape, and strides. We have no
-        # way to use these shape and strides when processing tensor
-        # descriptors which is why we provide our own decomposition
-        # above. Sadly this means we have to pass the shape and strides
-        # twice.
-        return [
-            arg.base,
-            *arg.shape,
-            *arg.strides,
-            arg.padding == "nan",
-            arg.round_f32_to_tf32,
-            *arg.shape,
-            *arg.strides,
-        ]
+        return decompose_descriptor(arg)
 
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]
@@ -294,32 +265,7 @@ def make_tensordesc_arg(arg, metadata):
 
 
 def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
-    has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
-    if not has_tensor_desc_arg:
-        return launcher
-
-    tensordesc_indices = set(
-        [i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
-    assert not tensordesc_meta or len(tensordesc_meta) == len(tensordesc_indices)
-    if not tensordesc_meta:
-        tensordesc_meta = [None] * len(tensordesc_indices)
-
-    def inner(*args):
-        base_args = args[:-1]
-        kernel_args = args[-1]
-
-        final_kernel_args = []
-        tensordesc_idx = 0
-        for i, arg in enumerate(kernel_args):
-            if i in tensordesc_indices:
-                final_kernel_args.extend(make_tensordesc_arg(arg, tensordesc_meta[tensordesc_idx]))
-                tensordesc_idx += 1
-            else:
-                final_kernel_args.append(arg)
-
-        return launcher(*base_args, final_kernel_args)
-
-    return inner
+    return wrap_handle_tensordesc_impl(launcher, signature, tensordesc_meta, make_tensordesc_arg)
 
 
 class CudaLauncher(object):
@@ -332,7 +278,7 @@ class CudaLauncher(object):
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
 
         launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta)
+        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "nvTmaDesc")
         self.arg_annotations = annotate_arguments(expanded_signature)
         self.kernel_signature = make_kernel_signature(expanded_signature)
         self.num_ctas = getattr(metadata, "num_ctas", 1)
@@ -346,6 +292,7 @@ class CudaLauncher(object):
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
+        active_driver = triton.runtime.driver.active
 
         def allocate_scratch(size, align, allocator):
             if size > 0:
@@ -355,9 +302,19 @@ class CudaLauncher(object):
                 return alloc_fn(alloc_size, align, stream)
             return None
 
+        def allocate_default_profile_scratch(size, align):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                return active_driver.allocate_default_profile_scratch(alloc_size, align, stream)
+            return None
+
         global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
-        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
-                                           _allocation._profile_allocator)
+        if _allocation.has_profile_allocator():
+            profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                               _allocation._profile_allocator)
+        else:
+            profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
 
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
                     kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
@@ -369,7 +326,45 @@ class CudaDriver(GPUDriver):
     def __init__(self):
         self.utils = CudaUtils()  # TODO: make static
         self.launcher_cls = CudaLauncher
-        super().__init__()
+        self.get_device_capability = self._get_device_capability
+        self.get_current_stream = self._get_current_stream
+        self.get_current_device = self._get_current_device
+        self.set_current_device = self._set_current_device
+
+    @staticmethod
+    def _get_loaded_torch():
+        torch = sys.modules.get("torch")
+        if torch is None:
+            return None
+        return torch
+
+    def _get_device_capability(self, device):
+        torch = self._get_loaded_torch()
+        if torch is not None:
+            return torch.cuda.get_device_capability(device)
+        return self.utils.get_device_capability(device)
+
+    def _get_current_stream(self, device):
+        torch = self._get_loaded_torch()
+        if torch is not None:
+            return torch.cuda.current_stream(device).cuda_stream
+        # The CUDA driver API does not expose PyTorch's notion of the current
+        # stream. In torch-free launches we fall back to the device's default
+        # stream after making that device's primary context current.
+        return self.utils.get_default_stream(device)
+
+    def _get_current_device(self):
+        torch = self._get_loaded_torch()
+        if torch is not None:
+            return torch.cuda.current_device()
+        return self.utils.get_current_device()
+
+    def _set_current_device(self, device):
+        torch = self._get_loaded_torch()
+        if torch is not None:
+            torch.cuda.set_device(device)
+            return
+        self.utils.set_current_device(device)
 
     def get_current_target(self):
         device = self.get_current_device()
@@ -388,11 +383,7 @@ class CudaDriver(GPUDriver):
 
     @staticmethod
     def is_active():
-        try:
-            import torch
-            return torch.cuda.is_available() and (torch.version.hip is None)
-        except ImportError:
-            return False
+        return _cuda_driver_is_active()
 
     def map_python_to_cpp_type(self, ty: str) -> str:
         return ty_to_cpp(ty)

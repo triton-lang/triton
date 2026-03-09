@@ -116,6 +116,7 @@ public:
       const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
       const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
       const std::string &metadataPath);
+  void destroyFunctionMetadata(uint64_t functionId);
 
   void enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
                            uint8_t *buffer, size_t size);
@@ -127,8 +128,7 @@ public:
                   const std::map<std::string, MetricValueType> &scalarMetrics,
                   const std::map<std::string, TensorMetric> &tensorMetrics);
 
-  void setMetricKernels(void *tensorMetricKernel, void *scalarMetricKernel,
-                        void *stream);
+  void setMetricKernels(const MetricKernelLaunchState &metricKernelLaunchState);
 
   void setState(std::optional<Context> context);
 

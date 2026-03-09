@@ -188,6 +188,14 @@ Value getLeaderAddress(Location loc, ConversionPatternRewriter &rewriter,
   return b.inttoptr(barrierPtr.getType(), barrierInt);
 }
 
+Value createLeadCTAPredicate(Location loc, RewriterBase &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value leftClusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+  leftClusterId = b.and_(leftClusterId, b.i32_val(1));
+  Value cluster0 = b.icmp_eq(leftClusterId, b.i32_val(0));
+  return cluster0;
+}
+
 LogicalResult lowerLdStMatrix(
     Location loc, LinearLayout cvt, bool transpose,
     SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix

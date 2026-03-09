@@ -525,15 +525,14 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
   let summary = "allocate a global memory buffer";
   let description = [{
     This operation allocates a buffer in global memory that is private to the current program.
-    The `backend` attribute specifies the backend to use for allocation.
-    The `default` backend is used by TritonGPU passes.
-    Downstream Triton tools and compilers can register a different backend and use a different allocation policy.
+    A custom third-party allocation can be marked using the optional
+    `third_party_allocation` unit attribute.
   }];
   let arguments = (
     ins
     I32Attr:$nbytes,
     I32Attr:$alignment,
-    DefaultValuedAttr<StrAttr, "\"default\"">:$backend
+    OptionalAttr<UnitAttr>:$third_party_allocation
   );
   let results = (outs Arg<TT_Ptr, "", [MemAlloc<GlobalMemory>]>:$result);
 

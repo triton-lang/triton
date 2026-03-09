@@ -433,8 +433,8 @@ public:
   }
 
   // Remove a dimension of size 1 from the layout.
-  [[nodiscard]] LinearLayout unsqueezeIn(StringAttr dim) const;
-  [[nodiscard]] LinearLayout unsqueezeOut(StringAttr dim) const;
+  [[nodiscard]] LinearLayout squeezeIns(StringAttr dim) const;
+  [[nodiscard]] LinearLayout squeezeOuts(StringAttr dim) const;
 
   const BasesT &getBases() const { return bases; }
 
@@ -593,9 +593,6 @@ public:
   // `sublayout`, which slices a layout from a larger one.
   [[nodiscard]] LinearLayout concatIns(const LinearLayout &other) const;
   [[nodiscard]] LinearLayout concatOuts(const LinearLayout &other) const;
-
-  // Remove all the bases that equal to 0 for the given input dimension.
-  [[nodiscard]] LinearLayout unsqueezeIns(StringAttr dim) const;
 
   // Computes the direct sum of two layouts.
   // https://en.wikipedia.org/wiki/Direct_sum#Direct_sum_of_matrices

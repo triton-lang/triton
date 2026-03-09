@@ -169,8 +169,11 @@ struct GlobalScratchAllocOpConversion
     if (!funcOp) {
       return failure();
     }
-    Value ptr = LLVM::getGlobalScratchPtr(loc, rewriter, *targetInfo, funcOp,
-                                          b.i32_val(opOffset));
+    Value ptr = op->hasAttr("third_party_allocation")
+                    ? LLVM::getProfileScratchPtr(loc, rewriter, *targetInfo,
+                                                 funcOp, b.i32_val(opOffset))
+                    : LLVM::getGlobalScratchPtr(loc, rewriter, *targetInfo,
+                                                funcOp, b.i32_val(opOffset));
 
     rewriter.replaceOp(op, ptr);
     return success();

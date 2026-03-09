@@ -14,6 +14,11 @@
 
 #include <unordered_map>
 
+namespace mlir {
+class AsmParser;
+class AsmPrinter;
+} // namespace mlir
+
 // LinearLayoutCache Utils
 using CacheKey = std::tuple<std::vector<int64_t>, mlir::Attribute>;
 
@@ -209,6 +214,11 @@ inline SmallVector<unsigned> getThreadOrder(RankedTensorType type) {
   return getThreadOrder(cast<DistributedEncodingTrait>(type.getEncoding()),
                         type.getShape());
 }
+
+std::optional<CGAEncodingAttr> parseCGAAttr(AsmParser &parser, Attribute attr,
+                                            unsigned rank);
+
+void printCGAAttr(AsmPrinter &printer, CGAEncodingAttr layout);
 
 CGAEncodingAttr getCGALayout(Attribute layout);
 
