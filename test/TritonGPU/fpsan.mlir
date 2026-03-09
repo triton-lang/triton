@@ -134,7 +134,7 @@ tt.func public @extern_unary(%a: tensor<4xf32>) -> tensor<4xf32> {
 // CHECK-LABEL: @extern_binary
 tt.func public @extern_binary(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: tt.bitcast
-  // CHECK: arith.addi
+  // CHECK: arith.subi
   // CHECK: arith.xori
   // CHECK-NOT: tt.extern_elementwise
   %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_atan2f"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
@@ -146,7 +146,7 @@ tt.func public @extern_binary(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4x
 // CHECK-LABEL: @extern_ternary
 tt.func public @extern_ternary(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: tt.bitcast
-  // CHECK: arith.addi
+  // CHECK: arith.subi
   // CHECK: arith.xori
   // CHECK-NOT: tt.extern_elementwise
   %0 = tt.extern_elementwise %a, %b, %c {libname = "", libpath = "", pure = true, symbol = "__nv_fmaf"} : (tensor<4xf32>, tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
@@ -158,7 +158,7 @@ tt.func public @extern_ternary(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<
 // CHECK-LABEL: @extern_mixed
 tt.func public @extern_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf32> {
   // CHECK: tt.bitcast
-  // CHECK: arith.addi
+  // CHECK: arith.subi
   // CHECK: arith.xori
   // CHECK-NOT: tt.extern_elementwise
   %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_ldexpf"} : (tensor<4xf32>, tensor<4xi32>) -> tensor<4xf32>
