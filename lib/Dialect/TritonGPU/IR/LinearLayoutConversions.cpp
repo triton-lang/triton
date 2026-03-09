@@ -1725,4 +1725,23 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   return mfmaLL.compose(swapLL);
 }
 
+LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
+                                ArrayRef<unsigned> warpsPerCTA,
+                                const LinearLayout &cgaLayout) {
+  int numDims = blockShape.size();
+  auto ctx = cgaLayout.getOutDimNames().begin()->getContext();
+
+  assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors");
+  assert(static_cast<int>(warpsPerCTA.size()) == numDims);
+
+  SmallVector<unsigned> messageShape(numDims);
+  for (int i = 0; i < numDims; ++i)
+    messageShape[i] = blockShape[i] / warpsPerCTA[i];
+
+  auto order = getMatrixOrder(numDims, /*rowMajor=*/false);
+
+  return identityStandardND(S("message"), messageShape, order) *
+         identityStandardND(S("warp"), warpsPerCTA, order) * cgaLayout;
+}
+
 } // namespace mlir::triton::gpu

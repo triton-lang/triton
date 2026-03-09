@@ -1081,9 +1081,11 @@ CGAEncodingAttr linearToCGAEncodingAttr(const LinearLayout &ll,
     shape[i].second /= cgaLogicalShape[i];
   }
   auto inDims = to_vector(ll.getInDimNames());
-  auto kBlock = inDims.back();
-  assert(kBlock.str() == "block");
-  inDims.pop_back();
+  auto *ctx = inDims[0].getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
+  assert(llvm::is_contained(inDims, kBlock) &&
+         "layout must have a 'block' dim");
+  llvm::erase(inDims, kBlock);
   auto outDims = to_vector(ll.getOutDimNames());
   auto subLl = ll.sublayout(inDims, outDims);
   // sublayout returns the same output size. We trim it to the
@@ -1093,7 +1095,6 @@ CGAEncodingAttr linearToCGAEncodingAttr(const LinearLayout &ll,
   // the layout in a single CTA.
   auto maybeCgaLayout = divideLeft(ll, subLl);
   assert(maybeCgaLayout.has_value());
-  auto *ctx = inDims[0].getContext();
   auto cgaLayout = maybeCgaLayout->sublayout({kBlock}, outDims);
   return CGAEncodingAttr::get(ctx, std::move(cgaLayout));
 }
