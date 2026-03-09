@@ -338,6 +338,8 @@ class CMakeBuild(build_ext):
             "TRITON_OFFLINE_BUILD",
             "TRITON_LLVM_SYSTEM_SUFFIX",
             "LLVM_SYSPATH",
+            "LLVM_DIR",
+            "MLIR_DIR",
             "JSON_SYSPATH",
             "TRITON_CUDACRT_PATH",
             "TRITON_CUDART_PATH",
@@ -370,7 +372,8 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
 
-backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
+_codegen_backends = os.environ.get("TRITON_CODEGEN_BACKENDS", "apple,nvidia,amd").split(",")
+backends = [*BackendInstaller.copy([b for b in ["apple", "nvidia", "amd"] if b in _codegen_backends]), *BackendInstaller.copy_externals()]
 
 
 def get_package_dirs():

@@ -216,7 +216,13 @@ if(NOT LLD_DIR)
 endif()
 
 # MLIR
-find_package(MLIR REQUIRED CONFIG PATHS ${MLIR_DIR})
+if(EXISTS "${MLIR_DIR}/MLIRConfig.cmake")
+  find_package(MLIR REQUIRED CONFIG PATHS ${MLIR_DIR})
+else()
+  message(STATUS "MLIR cmake config not found, using LLVM_SYSPATH headers directly")
+  list(APPEND CMAKE_MODULE_PATH "/opt/homebrew/Cellar/llvm/22.1.0/lib/cmake/mlir")
+  list(APPEND CMAKE_MODULE_PATH "/opt/homebrew/Cellar/llvm/22.1.0/lib/cmake/llvm")
+endif()
 
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
@@ -224,6 +230,9 @@ list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 include(TableGen) # required by AddMLIR
 include(AddLLVM)
 include(AddMLIR)
+if(NOT TARGET mlir-doc)
+  add_custom_target(mlir-doc)
+endif()
 
 # Utilities
 function(add_triton_object name)
