@@ -292,7 +292,7 @@ private:
   void instrumentMemEffects(ImplicitLocOpBuilder &b, Operation *op, int thread,
                             tti::FunctionBuilder &funcBuilder) {
     int baseThread = getBaseThread(thread);
-    std::optional<MemEffectsOpInfo> opInfo = getMemEffectsOpInfo(op);
+    std::optional<MemEffectsOpInfo> opInfo = hooks->getMemEffectsOpInfo(op);
     if (!opInfo) {
       return;
     }
@@ -412,10 +412,6 @@ private:
           b, buf, length, getBaseThread(thread), "async_copy_shared_to_global",
           pred, memType, CommitKind::TmaStore, op);
     }
-  }
-
-  std::optional<MemEffectsOpInfo> getMemEffectsOpInfo(Operation *op) {
-    return hooks->getMemEffectsOpInfo(op);
   }
 
   ModuleOp module;
