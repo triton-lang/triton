@@ -145,7 +145,7 @@ def _expected_extern_variadic_tag_i32(args_i32: list[np.ndarray], symbol: str) -
     tag = np.uint64(stable_string_hash_u64(symbol) & np.uint64(0xFFFFFFFF))
     total_u64 = np.zeros_like(_as_u32(args_i32[0]), dtype=np.uint64)
     for arg in args_i32:
-        total_u64 = total_u64 + _as_u32(arg).astype(np.uint64)
+        total_u64 = total_u64 - _as_u32(arg).astype(np.uint64)
     out_u32 = (total_u64 ^ tag).astype(np.uint32)
     return _u32_to_i32(out_u32)
 
