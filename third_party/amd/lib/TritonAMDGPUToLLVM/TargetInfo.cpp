@@ -72,6 +72,7 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
 
 int TargetInfo::getWarpSize() const {
   switch (getISAFamily()) {
+  case ISAFamily::GCN5_1:
   case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
@@ -395,10 +396,10 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     return true;
   if (reduceLaneIdMask != (getWarpSize() - 1))
     return false;
-  if (isCDNA(getISAFamily()) && getISAFamily() == ISAFamily::CDNA1)
-    return false;
-  if (isRDNA(getISAFamily()) &&
-      llvm::is_contained({ISAFamily::RDNA1, ISAFamily::RDNA2}, getISAFamily()))
+  // DPP warp reduce requires gfx90a+ (CDNA2+) or gfx11+ (RDNA3+).
+  // Pre-CDNA2 GFX9 (gfx906/gfx908) and GFX10 (RDNA1/2) are excluded.
+  auto v = getIsaVersion();
+  if (!((v.Major == 9 && (v.Minor > 0 || v.Stepping >= 0xa)) || v.Major >= 11))
     return false;
 
   Operation *reduxOp = op.getSingleCombiner();
@@ -766,6 +767,7 @@ void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
 
 bool TargetInfo::supportDppBroadcast() const {
   switch (getISAFamily()) {
+  case ISAFamily::GCN5_1:
   case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:

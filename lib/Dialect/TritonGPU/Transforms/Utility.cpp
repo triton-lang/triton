@@ -86,10 +86,6 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
   }
 }
 
-bool isLoadFromTensorPtr(triton::LoadOp op) {
-  return mlir::triton::isTensorPointerType(op.getPtr().getType());
-}
-
 SmallVector<unsigned, 4>
 getOrderFromContiguity(const SmallVector<int64_t> &arr) {
   SmallVector<unsigned, 4> ret(arr.size());
@@ -590,15 +586,10 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
-  // Case 1: Pointer of tensor is always expensive
-  auto operandType = op->getOperand(0).getType();
-  if (triton::isTensorPointerType(operandType))
-    return true;
-  // Case 2a: A size 1 tensor is not expensive since all threads will load the
-  // same
+  // size 1 tensor is not expensive since all threads will load the same
   if (isSingleValue(op->getOperand(0)))
     return false;
-  // Case 2b: Tensor of pointers has more threads than elements
+  // Tensor of pointers has more threads than elements
   // we can presume a high hit-rate that makes it cheap to load
   auto ptrType = cast<RankedTensorType>(op->getOperand(0).getType());
   auto mod = op->getParentOfType<ModuleOp>();
@@ -1200,9 +1191,6 @@ static bool skipOperand(Operation *op, unsigned operandNumber) {
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
   OpBuilder builder(op);
   // Convert operands
-  // For load/store with tensor pointers, we don't have to change the
-  // operands' type, we do this by changing the outputs' type of
-  // `make_tensor_ptr`
   SmallVector<Value, 4> newArgs;
   for (auto &opOperand : op->getOpOperands()) {
     Value operand = opOperand.get();

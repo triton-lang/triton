@@ -160,7 +160,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @dot_emulation
   tt.func public @dot_emulation() -> tensor<16x16xf32, #blocked> {
+    // CHECK: ttg.barrier global_read|global_write
     // CHECK: scf.for
+    // CHECK: ttg.barrier global_read|global_write
     // CHECK-NOT: tt.dot
     // CHECK-NOT: ttg.convert_layout
     %cst = arith.constant 1.000000e+00 : f16
