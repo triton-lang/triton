@@ -841,8 +841,8 @@ struct BufferLoadToLocalOpConversion
           hasOther ? b.and_(threadPred, maybeSwizzledMaskElem) : threadPred;
       // Use out-of-range shmemAddr instead of branching to not influence the
       // waitcnt. GFX9 and GFX1250 will drop the load if LDS is out of range.
-      Value outOfRangeAddress =
-          b.inttoptr(shmemAddr.getType(), b.i32_val(0xFFFFFFFF));
+      Value int32MaxVal = b.i32_val(std::numeric_limits<int32_t>::max());
+      Value outOfRangeAddress = b.inttoptr(shmemAddr.getType(), int32MaxVal);
       Value predicatedAddress = b.select(cond, shmemAddr, outOfRangeAddress);
 
       auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
@@ -979,8 +979,8 @@ struct AsyncCopyGlobalToLocalOpConversion
 
       // Use out-of-range shmemAddr instead of branching to not influence the
       // waitcnt. GFX9 and GFX1250 will drop the load if LDS is out of range.
-      Value outOfRangeAddress =
-          b.inttoptr(shmemAddr.getType(), b.i32_val(0xFFFFFFFF));
+      Value int32MaxVal = b.i32_val(std::numeric_limits<int32_t>::max());
+      Value outOfRangeAddress = b.inttoptr(shmemAddr.getType(), int32MaxVal);
       Value predicatedAddress = b.select(cond, shmemAddr, outOfRangeAddress);
 
       emitAsyncLoad(rewriter, loc, targetInfo, vecBits, srcElem,
