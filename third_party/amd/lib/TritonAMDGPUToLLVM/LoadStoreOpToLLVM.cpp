@@ -527,7 +527,6 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       if (requiresSrcPtrSwizzling)
         ldsAddr = b.gep(ptrTy, vecTy, ldsAddr, swizzleLaneOffset);
     }
-
     llStore(rewriter, loc, ldsAddr, storeVal, b.icmp_ne(mask, b.true_val()),
             CacheModifier::NONE, targetInfo.requiresAliasInfoForAsyncOps());
   }
@@ -833,13 +832,12 @@ struct BufferLoadToLocalOpConversion
         applySwizzling(rewriter, loc, offsetElem, maybeSwizzledMaskElem, laneId,
                        swizzleLaneOffset);
 
-      // If other=0.0 we remove other in canonicalizePointers and we can use a
-      // out of bounds buffer address to store 0 to LDS. However if we have
-      // other values we need to predicate to not overwrite other buffer loads
-      // to local
+      // If `other=0.0`, canonicalizePointers drops `other`, so we can use an
+      // out-of-bounds *buffer* address to write 0 to LDS. For non-zero `other`,
+      // we must predicate to avoid overwriting redundant buffer loads to local.
       Value cond =
           hasOther ? b.and_(threadPred, maybeSwizzledMaskElem) : threadPred;
-      // Use out-of-range shmemAddr instead of branching to not influence the
+      // Use out-of-range *shmemAddr* instead of a branch to not influence the
       // waitcnt. GFX9 and GFX1250 will drop the load if LDS is out of range.
       Value int32MaxVal = b.i32_val(std::numeric_limits<int32_t>::max());
       Value outOfRangeAddress = b.inttoptr(shmemAddr.getType(), int32MaxVal);
@@ -977,7 +975,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       // Predicate load based on threadPred && swizzledMask
       auto cond = b.and_(threadPred, maybeSwizzledMaskElem);
 
-      // Use out-of-range shmemAddr instead of branching to not influence the
+      // Use out-of-range *shmemAddr* instead of a branch to not influence the
       // waitcnt. GFX9 and GFX1250 will drop the load if LDS is out of range.
       Value int32MaxVal = b.i32_val(std::numeric_limits<int32_t>::max());
       Value outOfRangeAddress = b.inttoptr(shmemAddr.getType(), int32MaxVal);
