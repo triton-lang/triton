@@ -784,7 +784,7 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     Variadic<I32>:$indices,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     I32:$pred,
-    Optional<TTG_MemDescType>:$barrier
+    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
   );
 
   let results = (outs TTG_AsyncToken:$token);
@@ -824,7 +824,7 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global",
     Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
     Variadic<I32>:$indices,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
-    Optional<TTG_MemDescType>:$barrier
+    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
   );
 
   let assemblyFormat = [{
@@ -863,7 +863,7 @@ def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter"> {
     TensorOf<[I16, I32]>:$dst_row_indices,
     I32:$dst_col_offset,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
-    Optional<TTG_MemDescType>:$barrier
+    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
   );
   let results = (outs TTG_AsyncToken:$retToken);
 
@@ -903,7 +903,7 @@ def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather", [MemAsyncLocalStoreOpTra
     TensorOf<[I16, I32]>:$src_row_indices,
     I32:$src_col_offset,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
-    Optional<TTG_MemDescType>:$barrier
+    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
   );
   let results = (outs TTG_AsyncToken:$token);
 

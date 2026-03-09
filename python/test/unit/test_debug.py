@@ -142,4 +142,4 @@ def test_sanitize_int_sub_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
     def _kernel_sub(X, Y, Z):
         tl.store(Z, tl.load(X) - tl.load(Y))
 
-    _test_overflow(x, y, x_dtype, y_dtype, should_overflow, debug, _kernel_sub, lambda x, y: x - y, device)
+    _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, _kernel_sub, lambda x, y: x - y, device)

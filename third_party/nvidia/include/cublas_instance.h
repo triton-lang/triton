@@ -200,8 +200,8 @@ private:
   //   - scale_A, scale_B: scale factors for block scaling
   //   - Output D: (M, N) in FP16
   //
-  // Note: cuBLAS uses column-major layout. This function internally swaps
-  // A and B operands and applies transposes to handle the conversion.
+  // Note: cuBLAS uses column-major layout. Similar to gemm_impl(), callers
+  // should swap row-major operands and dimensions before invoking this helper.
   void block_scaled_matmul(int m, int n, int k, uint64_t A, uint64_t B,
                            uint64_t D_out, uint64_t scale_A, uint64_t scale_B,
                            bool is_mxfp8) {
@@ -248,17 +248,15 @@ private:
         matmulDesc, CUBLASLT_MATMUL_DESC_B_SCALE_MODE, &ab_scale_type,
         sizeof(ab_scale_type)));
 
-    // Set scale POINTERS
-    // NOTE: A and B matrices are swapped in cublasLtMatmul call to handle
-    // row-major vs column-major conversion.
+    // Scale pointers follow the logical A/B operands that were passed in.
     void *scale_A_ptr = (void *)scale_A;
     void *scale_B_ptr = (void *)scale_B;
     successOrExit(cublasLtMatmulDescSetAttribute(
-        matmulDesc, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &scale_B_ptr,
-        sizeof(scale_B_ptr))); // Swapped
+        matmulDesc, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &scale_A_ptr,
+        sizeof(scale_A_ptr)));
     successOrExit(cublasLtMatmulDescSetAttribute(
-        matmulDesc, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &scale_A_ptr,
-        sizeof(scale_A_ptr))); // Swapped
+        matmulDesc, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &scale_B_ptr,
+        sizeof(scale_B_ptr)));
 
     // Create matrix layouts
     // MXFP8: CUDA_R_8F_E4M3, NVFP4: CUDA_R_4F_E2M1
@@ -289,10 +287,10 @@ private:
           (is_mxfp8 ? "mxfp8" : "nvfp4"));
     }
 
-    // Execute matmul with the selected algorithm
-    // B and A are swapped for row-major to col-major conversion
-    successOrExit(cublasLtMatmul(ltHandle, matmulDesc, &alpha, (void *)B, Bdesc,
-                                 (void *)A, Adesc, &beta, (void *)D_out, Cdesc,
+    // Execute matmul with the selected algorithm using the already-swapped
+    // row-major operands.
+    successOrExit(cublasLtMatmul(ltHandle, matmulDesc, &alpha, (void *)A, Adesc,
+                                 (void *)B, Bdesc, &beta, (void *)D_out, Cdesc,
                                  (void *)D_out, Cdesc, &heuristicResult.algo,
                                  workspace, workspaceSize, 0));
 
@@ -346,13 +344,15 @@ public:
   void block_scaled_matmul_mxfp8(int m, int n, int k, uint64_t A, uint64_t B,
                                  uint64_t D_out, uint64_t scale_A,
                                  uint64_t scale_B) {
-    block_scaled_matmul(m, n, k, A, B, D_out, scale_A, scale_B, true);
+    // Match gemm_impl()'s row-major handling by swapping operands and output
+    // dimensions before calling into cuBLASLt's column-major API.
+    block_scaled_matmul(n, m, k, B, A, D_out, scale_B, scale_A, true);
   }
 
   void block_scaled_matmul_nvfp4(int m, int n, int k, uint64_t A, uint64_t B,
                                  uint64_t D_out, uint64_t scale_A,
                                  uint64_t scale_B) {
-    block_scaled_matmul(m, n, k, A, B, D_out, scale_A, scale_B, false);
+    block_scaled_matmul(n, m, k, B, A, D_out, scale_B, scale_A, false);
   }
 };
 

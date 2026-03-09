@@ -6,7 +6,9 @@
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: @dot_emulation
   tt.func public @dot_emulation() -> tensor<16x16xf32, #blocked> {
+    // CHECK: ttg.barrier global_read|global_write
     // CHECK: scf.for
+    // CHECK: ttg.barrier global_read|global_write
     // CHECK-NOT: tt.dot
     // CHECK-NOT: ttg.convert_layout
     %cst = arith.constant 1.000000e+00 : f16
@@ -15,6 +17,72 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %b = tt.splat %cst : f16 -> tensor<16x16xf16, #dot_operand_b>
     %out = tt.dot %a, %b, %zero : tensor<16x16xf16, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<16x16xf32, #blocked>
     tt.return %out : tensor<16x16xf32, #blocked>
+  }
+}
+
+// -----
+
+#mfma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 2], instrShape = [16, 16, 16], isTransposed = true}>
+#mfma_dot_a = #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth = 4}>
+#mfma_dot_b = #ttg.dot_op<{opIdx = 1, parent = #mfma, kWidth = 4}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @mfma_cdna3_dot_emulation
+  tt.func public @mfma_cdna3_dot_emulation() -> tensor<32x32xf32, #mfma> {
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK: scf.for
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NOT: tt.dot
+    // CHECK-NOT: ttg.convert_layout
+    %cst = arith.constant 1.000000e+00 : f16
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mfma>
+    %a = tt.splat %cst : f16 -> tensor<32x32xf16, #mfma_dot_a>
+    %b = tt.splat %cst : f16 -> tensor<32x32xf16, #mfma_dot_b>
+    %out = tt.dot %a, %b, %zero : tensor<32x32xf16, #mfma_dot_a> * tensor<32x32xf16, #mfma_dot_b> -> tensor<32x32xf32, #mfma>
+    tt.return %out : tensor<32x32xf32, #mfma>
+  }
+}
+
+// -----
+
+#mfma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 2], instrShape = [16, 16, 32], isTransposed = true}>
+#mfma_dot_a = #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth = 8}>
+#mfma_dot_b = #ttg.dot_op<{opIdx = 1, parent = #mfma, kWidth = 8}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @mfma_cdna4_dot_emulation
+  tt.func public @mfma_cdna4_dot_emulation() -> tensor<32x32xf32, #mfma> {
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK: scf.for
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NOT: tt.dot
+    // CHECK-NOT: ttg.convert_layout
+    %cst = arith.constant 1.000000e+00 : f16
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mfma>
+    %a = tt.splat %cst : f16 -> tensor<32x32xf16, #mfma_dot_a>
+    %b = tt.splat %cst : f16 -> tensor<32x32xf16, #mfma_dot_b>
+    %out = tt.dot %a, %b, %zero : tensor<32x32xf16, #mfma_dot_a> * tensor<32x32xf16, #mfma_dot_b> -> tensor<32x32xf32, #mfma>
+    tt.return %out : tensor<32x32xf32, #mfma>
+  }
+}
+
+// -----
+
+#wmma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
+#wmma_dot_a = #ttg.dot_op<{opIdx = 0, parent = #wmma, kWidth = 8}>
+#wmma_dot_b = #ttg.dot_op<{opIdx = 1, parent = #wmma, kWidth = 8}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @wmma_dot_emulation
+  tt.func public @wmma_dot_emulation() -> tensor<32x32xf32, #wmma> {
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK: scf.for
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NOT: tt.dot
+    // CHECK-NOT: ttg.convert_layout
+    %cst = arith.constant 1.000000e+00 : f16
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #wmma>
+    %a = tt.splat %cst : f16 -> tensor<32x32xf16, #wmma_dot_a>
+    %b = tt.splat %cst : f16 -> tensor<32x32xf16, #wmma_dot_b>
+    %out = tt.dot %a, %b, %zero : tensor<32x32xf16, #wmma_dot_a> * tensor<32x32xf16, #wmma_dot_b> -> tensor<32x32xf32, #wmma>
+    tt.return %out : tensor<32x32xf32, #wmma>
   }
 }
 

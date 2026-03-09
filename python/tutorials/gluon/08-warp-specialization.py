@@ -35,7 +35,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     tensor_memory_descriptor,
     allocate_tensor_memory,
-    get_tmem_reg_layout,
     tcgen05_mma,
     tcgen05_commit,
 )
@@ -510,13 +509,6 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
     acc_empty_bars = p.acc_empty_bars
     acc_ready_bars = p.acc_ready_bars
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
-    acc_tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
-    acc_layout: gl.constexpr = get_tmem_reg_layout(
-        dtype,
-        (BLOCK_M, BLOCK_N),
-        acc_tmem_layout,
-        p.num_warps,
-    )
     SPLIT_N: gl.constexpr = BLOCK_N // p.SUBTILE_FACTOR
     acc_smem = gl.allocate_shared_memory(dtype, [BLOCK_M, SPLIT_N], p.c_desc.layout)
 
@@ -529,7 +521,7 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
         # Wait for the accumulator. Since BLOCK_N=256, we need to interleave
         # the TMEM loads with the SMEM stores to avoid spilling.
         mbarrier.wait(acc_ready_bars.index(acc_state.index), acc_state.phase)
-        acc = p.acc_bufs.index(acc_state.index).load(acc_layout)
+        acc = p.acc_bufs.index(acc_state.index).load()
         acc_state = acc_state.next()
 
         accs = _split_n(acc, p.SUBTILE_FACTOR)
@@ -635,19 +627,19 @@ if __name__ == "__main__" and is_blackwell():
         A = torch.randn(M, K, device="cuda", dtype=torch.float16)
         B = torch.randn(K, N, device="cuda", dtype=torch.float16)
         BT = B.T.contiguous()
-        r0 = as_flops(triton.testing.do_bench_cudagraph(lambda: matmul_warp_specialized(A, B, C, **args)))
+        r0 = as_flops(triton.testing.do_bench(lambda: matmul_warp_specialized(A, B, C, **args)))
         r1 = as_flops(triton.testing.do_bench(lambda: cublas.matmul(A, BT, C)))
         print(f"{K:>5} {r0:>17.2f} {r1:>9.2f}")
 
 # %%
 #     K  warp-specialized    cublas
-#   512           1160.28   1130.67
-#  1024           1249.69   1148.52
-#  2048           1347.18   1261.59
-#  4096           1390.95   1299.38
-#  8192           1350.01   1401.10
-# 16384           1448.14   1508.76
+#   512           1004.18   1191.77
+#  1024           1182.61   1334.85
+#  2048           1313.71   1400.35
+#  4096           1317.58   1432.32
+#  8192           1291.56   1301.11
+# 16384           1256.74   1335.24
 #
-# Much better! We are beating cublas on small K, even though there is still lots
-# of tuning we can do to improve performance. On Blackwell, warp specialization
-# is critical for achieving peak performance.
+# Much better! We are now quite competitive with cublas.
+# We will show in tutorial 14-multicta.py how we can use multicta and a few other
+# tricks to consistently beat cublas in a wide range of shapes.

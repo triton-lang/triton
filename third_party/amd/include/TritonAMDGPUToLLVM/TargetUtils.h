@@ -8,6 +8,7 @@ namespace mlir::triton::AMD {
 // A list of ISA families we care about.
 enum class ISAFamily {
   Unknown,
+  GCN5_1,
   CDNA1,
   CDNA2,
   CDNA3,

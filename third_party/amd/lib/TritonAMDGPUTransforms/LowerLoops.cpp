@@ -513,19 +513,23 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     triton::AMD::TargetInfo targetInfo(arch ? arch->str() : "");
 
     // Replace the old load with multi-buffered loads
-    if (useAsyncCopy && descLoadOp) {
+    if (descLoadOp) {
       loadToStreamOp[descLoadOp] =
           createTDMAsyncCopy(descLoadOp, alloc, extractIdx);
-    } else if (useAsyncCopy && canBeConvertedToAsyncLoad(
-                                   numBuffers, loadOp, info.sharedEncoding,
-                                   axisInfoAnalysis, targetInfo)) {
+      continue;
+    }
+
+    if (useAsyncCopy &&
+        canBeConvertedToAsyncLoad(numBuffers, loadOp, info.sharedEncoding,
+                                  axisInfoAnalysis, targetInfo)) {
       unsigned vec = axisInfoAnalysis.getContiguity(loadOp.getPtr());
       if (auto mask = loadOp.getMask())
         vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
       loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx, vec);
-    } else {
-      loadToStreamOp[loadOp] = createStreamCopy(loadOp, alloc, extractIdx);
+      continue;
     }
+
+    loadToStreamOp[loadOp] = createStreamCopy(loadOp, alloc, extractIdx);
   }
 
   return loadToStreamOp;
@@ -776,7 +780,7 @@ void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
 void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
                     tt::CoarseSchedule &schedule,
                     triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                    int numStages, bool useAsyncCopy, bool waitAtTail) {
+                    bool useAsyncCopy, bool waitAtTail) {
   LDBG("SingleDotSchedule::updateSchedule");
   Stages stages;
   Clusters clusters;
@@ -787,8 +791,8 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   }
 
   int numBuffers = 1;
-  if (failed(initSchedule(maxDist, stages, numStages, numBuffers, useAsyncCopy,
-                          waitAtTail, clusters, schedule)))
+  if (failed(initSchedule(maxDist, stages, schedule.getNumStages(), numBuffers,
+                          useAsyncCopy, waitAtTail, clusters, schedule)))
     return;
 
   // Convert the loads into shared memory allocations and loads from them.
@@ -991,7 +995,7 @@ void lowerLoop(scf::ForOp forOp,
                                        axisInfoAnalysis, useAsyncCopy);
   } else {
     SingleDotSchedule::updateSchedule(forOp, loadToInfo, schedule,
-                                      axisInfoAnalysis, numStages, useAsyncCopy,
+                                      axisInfoAnalysis, useAsyncCopy,
                                       waitAtTail);
   }
 
