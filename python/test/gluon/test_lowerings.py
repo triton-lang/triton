@@ -7,6 +7,8 @@ from triton.experimental.gluon import language as ttgl
 from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
 
+THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
+
 
 def _is_layout_applicable(layout) -> bool:
     if isinstance(layout, (ttgl.BlockedLayout, ttgl.SwizzledSharedLayout, ttgl.DistributedLinearLayout)):
@@ -25,7 +27,8 @@ def _is_layout_applicable(layout) -> bool:
     elif is_hip():
         if layout in ["padded_shared_layout_single_interval", "padded_shared_layout_multi_interval"]:
             return True
-        # TODO: Add other amd layouts
+        if THREADS_PER_WARP == 32:
+            return isinstance(layout, ttgl.amd.AMDWMMALayout)
         return isinstance(layout, ttgl.amd.AMDMFMALayout)
     else:
         return True
@@ -33,9 +36,6 @@ def _is_layout_applicable(layout) -> bool:
 
 def _filter_layouts(layouts):
     return [l for l in layouts if _is_layout_applicable(l)]
-
-
-THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
 
 @gluon.jit
@@ -287,7 +287,7 @@ def _reduce_layouts():
     rets = []
     for (M, N) in shapes:
         for layout in layouts:
-            if isinstance(layout, (ttgl.amd.AMDMFMALayout, ttgl.NVMMADistributedLayout)):
+            if isinstance(layout, (ttgl.amd.AMDMFMALayout, ttgl.amd.AMDWMMALayout, ttgl.NVMMADistributedLayout)):
                 instr_shape = layout.instr_shape
                 if M < instr_shape[0] or N < instr_shape[1]:
                     continue
