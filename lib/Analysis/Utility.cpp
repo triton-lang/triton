@@ -770,6 +770,11 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   int m = mixedTranspositions.size();
   int nPackPrelim = llvm::Log2_32(std::clamp(32 / bitwidth, 1, 4));
   int nPack = std::min(nPackPrelim, nRegBases - m);
+  // TODO: getTranspositionSelectors incorrectly lowers some conversions with
+  // multiple mixed transpositions. This path has not be extensively tested, so
+  // disable packing for multiple mixed transpositions until we are confident.
+  if (m > 1)
+    nPack = 0;
   auto processedTranspos =
       getTranspositionSelectors(mixedTranspositions, regBases, nPack);
 
