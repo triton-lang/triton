@@ -14,33 +14,34 @@ namespace mlir::triton {
 LogicalResult
 FuncArgRenamer::apply(Type type, FunctionOpInterface funcOp, int index,
                       TypeConverter::SignatureConversion &conversion) const {
-  if (auto mapping = conversion.getInputMapping(index)) {
-    for (auto &renamer : llvm::reverse(renamers)) {
-      llvm::SmallVector<std::string, 8> out_suffix;
-      if (std::optional<LogicalResult> result = renamer(type, out_suffix)) {
-        if (failed(*result)) {
-          return failure();
-        }
-        int newIndex = mapping->inputNo;
-        auto loc = funcOp.getArgument(newIndex).getLoc();
-        std::string baseName;
-        if (isa<NameLoc>(loc)) {
-          baseName = cast<NameLoc>(loc).getName().getValue();
-        } else {
-          baseName = "arg_" + std::to_string(index);
-        }
-        assert(out_suffix.size() == mapping->size);
-        for (auto [i, suffix] : llvm::enumerate(out_suffix)) {
-          if (!suffix.empty()) {
-            auto newLoc =
-                NameLoc::get(StringAttr::get(funcOp.getContext(),
-                                             baseName + delimiter + suffix),
-                             loc);
-            funcOp.getArgument(newIndex + i).setLoc(newLoc);
-          }
-        }
-        return success(); // early return
+  auto mapping = conversion.getInputMapping(index);
+  if (!mapping)
+    return success();
+
+  for (auto &renamer : llvm::reverse(renamers)) {
+    llvm::SmallVector<std::string, 8> out_suffix;
+    if (std::optional<LogicalResult> result = renamer(type, out_suffix)) {
+      if (failed(*result)) {
+        return failure();
       }
+      int newIndex = mapping->inputNo;
+      auto loc = funcOp.getArgument(newIndex).getLoc();
+      std::string baseName;
+      if (isa<NameLoc>(loc)) {
+        baseName = cast<NameLoc>(loc).getName().getValue();
+      } else {
+        baseName = "arg_" + std::to_string(index);
+      }
+      assert(out_suffix.size() == mapping->size);
+      for (auto [i, suffix] : llvm::enumerate(out_suffix)) {
+        if (suffix.empty())
+          continue;
+        auto newLoc = NameLoc::get(
+            StringAttr::get(funcOp.getContext(), baseName + delimiter + suffix),
+            loc);
+        funcOp.getArgument(newIndex + i).setLoc(newLoc);
+      }
+      return success(); // early return
     }
   }
   return success();
