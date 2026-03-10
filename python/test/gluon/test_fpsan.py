@@ -124,6 +124,102 @@ def _expected_unary_tag_i32(x_i32: np.ndarray, op: str) -> np.ndarray:
     return _u32_to_i32(out_u32)
 
 
+def stable_string_hash_u64(s: str) -> np.uint64:
+    with np.errstate(over="ignore"):
+        h = np.uint64(14695981039346656037)
+        for c in s.encode("utf-8"):
+            h ^= np.uint64(c)
+            h = np.uint64(h * np.uint64(1099511628211))
+        return h
+
+
+def _expected_extern_unary_tag_i32(x_i32: np.ndarray, symbol: str) -> np.ndarray:
+    return _expected_extern_variadic_tag_i32([x_i32], symbol)
+
+
+def _expected_extern_binary_tag_i32(x_i32: np.ndarray, y_i32: np.ndarray, symbol: str) -> np.ndarray:
+    return _expected_extern_variadic_tag_i32([x_i32, y_i32], symbol)
+
+
+def _rotl_u32(x_u32: np.ndarray, amount: int) -> np.ndarray:
+    amount = amount & 31
+    if amount == 0:
+        return x_u32
+    x = x_u32.astype(np.uint64)
+    out_u32 = ((x << np.uint64(amount)) | (x >> np.uint64(32 - amount))) & np.uint64(0xFFFFFFFF)
+    return out_u32.astype(np.uint32)
+
+
+def _expected_extern_variadic_tag_i32(args_i32: list[np.ndarray], symbol: str) -> np.ndarray:
+    tag = np.uint64(stable_string_hash_u64(symbol) & np.uint64(0xFFFFFFFF))
+    total_u64 = np.zeros_like(_as_u32(args_i32[0]), dtype=np.uint64)
+    for i, arg in enumerate(args_i32):
+        rotated = _rotl_u32(_as_u32(arg), i).astype(np.uint64)
+        total_u64 = (total_u64 + rotated) & np.uint64(0xFFFFFFFF)
+    out_u32 = (total_u64 ^ tag).astype(np.uint32)
+    return _u32_to_i32(out_u32)
+
+
+UNARY_EXTERN_SYMBOLS = {
+    "cuda": [
+        ("tan", "__nv_tanf"),
+        ("tanh", "__nv_tanhf"),
+        ("log1p", "__nv_log1pf"),
+        ("cbrt", "__nv_cbrtf"),
+        ("round", "__nv_roundf"),
+    ],
+    "hip": [
+        ("tan", "__ocml_tan_f32"),
+        ("tanh", "__ocml_tanh_f32"),
+        ("log1p", "__ocml_log1p_f32"),
+        ("round", "__ocml_round_f32"),
+    ],
+}
+
+BINARY_EXTERN_SYMBOLS = {
+    "cuda": [
+        ("atan2", "__nv_atan2f"),
+        ("hypot", "__nv_hypotf"),
+        ("pow", "__nv_powf"),
+    ],
+    "hip": [
+        ("atan2", "__ocml_atan2_f32"),
+        ("hypot", "__ocml_hypot_f32"),
+        ("pow", "__ocml_pow_f32"),
+    ],
+}
+
+TERNARY_EXTERN_SYMBOLS = {
+    "cuda": [
+        ("fma", "__nv_fmaf"),
+    ],
+    "hip": [
+        ("fma", "__ocml_fma_f32"),
+    ],
+}
+
+MIXED_EXTERN_SYMBOLS = {
+    "cuda": [
+        ("ldexp", "__nv_ldexpf"),
+    ],
+    "hip": [
+        ("ldexp", "__ocml_ldexp_f32"),
+    ],
+}
+
+
+def _extern_backend_name() -> str:
+    if is_hip():
+        return "hip"
+    return "cuda"
+
+
+EXTERN_UNARY_CASES = UNARY_EXTERN_SYMBOLS[_extern_backend_name()]
+EXTERN_BINARY_CASES = BINARY_EXTERN_SYMBOLS[_extern_backend_name()]
+EXTERN_TERNARY_CASES = TERNARY_EXTERN_SYMBOLS[_extern_backend_name()]
+EXTERN_MIXED_CASES = MIXED_EXTERN_SYMBOLS[_extern_backend_name()]
+
+
 def _as_payload_np_i32(x) -> np.ndarray:
     if isinstance(x, torch.Tensor):
         x = x.detach().cpu().numpy()
@@ -305,6 +401,221 @@ def test_unary_math_identity(device, op, fresh_knobs):
     )
 
     exp_bits = _expected_unary_tag_i32(x_bits, op)
+    _assert_payload_equal(out, exp_bits)
+
+
+@gluon.jit
+def _extern_unary_math_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
+                              THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    if OP == "tan":
+        z = gl.extra.libdevice.tan(x)
+    elif OP == "tanh":
+        z = gl.extra.libdevice.tanh(x)
+    elif OP == "log1p":
+        z = gl.extra.libdevice.log1p(x)
+    elif OP == "cbrt":
+        z = gl.extra.libdevice.cbrt(x)
+    elif OP == "round":
+        z = gl.extra.libdevice.round(x)
+    else:
+        gl.static_assert(False, "unsupported OP")
+    gl.store(out_ptr + offs, z, mask=mask)
+
+
+@pytest.mark.parametrize(
+    "op,symbol",
+    EXTERN_UNARY_CASES,
+)
+def test_extern_unary_payload_semantics(device, op, symbol, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    rs = np.random.RandomState(11)
+    xf = rs.randn(n_elements).astype(np.float32)
+    x_bits = xf.view(np.int32)
+
+    x = torch.tensor(x_bits, dtype=torch.int32, device="cuda")
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _extern_unary_math_kernel[grid](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        n_elements,
+        OP=op,
+        BLOCK=BLOCK,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+
+    exp_bits = _expected_extern_unary_tag_i32(x_bits, symbol)
+    _assert_payload_equal(out, exp_bits)
+
+
+@gluon.jit
+def _extern_binary_math_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
+                               THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offs, mask=mask, other=0.0)
+    if OP == "atan2":
+        z = gl.extra.libdevice.atan2(x, y)
+    elif OP == "hypot":
+        z = gl.extra.libdevice.hypot(x, y)
+    elif OP == "pow":
+        z = gl.extra.libdevice.pow(x, y)
+    else:
+        gl.static_assert(False, "unsupported OP")
+    gl.store(out_ptr + offs, z, mask=mask)
+
+
+@gluon.jit
+def _extern_ternary_math_kernel(x_ptr, y_ptr, z_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
+                                THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offs, mask=mask, other=0.0)
+    z = gl.load(z_ptr + offs, mask=mask, other=0.0)
+    if OP == "fma":
+        out = gl.extra.libdevice.fma(x, y, z)
+    else:
+        gl.static_assert(False, "unsupported OP")
+    gl.store(out_ptr + offs, out, mask=mask)
+
+
+@gluon.jit
+def _extern_mixed_math_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
+                              THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offs, mask=mask, other=0)
+    if OP == "ldexp":
+        out = gl.extra.libdevice.ldexp(x, y)
+    else:
+        gl.static_assert(False, "unsupported OP")
+    gl.store(out_ptr + offs, out, mask=mask)
+
+
+@pytest.mark.parametrize(
+    "op,symbol",
+    EXTERN_BINARY_CASES,
+)
+def test_extern_binary_payload_semantics(device, op, symbol, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    g = torch.Generator(device="cuda")
+    g.manual_seed(23)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    yw = triton.TensorWrapper(y, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _extern_binary_math_kernel[grid](xw, yw, outw, n_elements, OP=op, BLOCK=BLOCK, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    exp_bits = _expected_extern_binary_tag_i32(
+        x.cpu().numpy().astype(np.int32, copy=False),
+        y.cpu().numpy().astype(np.int32, copy=False),
+        symbol,
+    )
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.parametrize(
+    "op,symbol",
+    EXTERN_TERNARY_CASES,
+)
+def test_extern_ternary_payload_semantics(device, op, symbol, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    g = torch.Generator(device="cuda")
+    g.manual_seed(29)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    z = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    yw = triton.TensorWrapper(y, dtype=torch.float32)
+    zw = triton.TensorWrapper(z, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _extern_ternary_math_kernel[grid](xw, yw, zw, outw, n_elements, OP=op, BLOCK=BLOCK,
+                                      THREADS_PER_WARP=THREADS_PER_WARP)
+
+    exp_bits = _expected_extern_variadic_tag_i32(
+        [
+            x.cpu().numpy().astype(np.int32, copy=False),
+            y.cpu().numpy().astype(np.int32, copy=False),
+            z.cpu().numpy().astype(np.int32, copy=False),
+        ],
+        symbol,
+    )
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.parametrize(
+    "op,symbol",
+    EXTERN_MIXED_CASES,
+)
+def test_extern_mixed_payload_semantics(device, op, symbol, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    g = torch.Generator(device="cuda")
+    g.manual_seed(31)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _extern_mixed_math_kernel[grid](xw, y, outw, n_elements, OP=op, BLOCK=BLOCK, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    exp_bits = _expected_extern_variadic_tag_i32(
+        [
+            x.cpu().numpy().astype(np.int32, copy=False),
+            y.cpu().numpy().astype(np.int32, copy=False),
+        ],
+        symbol,
+    )
     _assert_payload_equal(out, exp_bits)
 
 
