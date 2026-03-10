@@ -900,6 +900,34 @@ class JITFunction(JITCallable, KernelInterface[T]):
     def __call__(self, *args, **kwargs):
         raise RuntimeError("Cannot call @triton.jit'd outside of the scope of a kernel")
 
+    def as_numba_kernel(self, signature, constexprs=None):
+        """Create a NumbaTritonKernel for calling this kernel from @numba.njit.
+
+        Parameters
+        ----------
+        signature : dict
+            Mapping from parameter names to Triton type strings.
+            Example: {'x_ptr': '*fp32', 'y_ptr': '*fp32', 'out_ptr': '*fp32', 'n': 'i32'}
+        constexprs : dict, optional
+            Mapping from parameter names to constant values.
+            Example: {'BLOCK_SIZE': 1024}
+
+        Returns
+        -------
+        NumbaTritonKernel
+            An object whose ``.launch`` property is an @njit function.
+            Extract it into a module-level variable before using inside @njit::
+
+                numba_add = add_kernel.as_numba_kernel(signature=..., constexprs=...)
+                launch_add = numba_add.launch  # extract @njit function
+
+                @numba.njit
+                def f(x_ptr, y_ptr, out_ptr, n, stream):
+                    launch_add(gridX, gridY, gridZ, stream, x_ptr, y_ptr, out_ptr, n)
+        """
+        from triton.runtime.numba_compat import NumbaTritonKernel
+        return NumbaTritonKernel(self, signature, constexprs or {})
+
     def __repr__(self):
         return f"JITFunction({self.module}:{self.fn.__qualname__})"
 
