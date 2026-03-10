@@ -2,8 +2,8 @@
 
 llvm::Error TritonPlugin::checkLibraryValid(const std::string &error) const {
   if (!library.isValid()) {
-    auto msg = llvm::Twine("Failed to load plugin library: " + error + "\n");
-    return llvm::createStringError(msg);
+    return llvm::createStringError(
+        llvm::Twine("Failed to load plugin library: ") + error);
   }
   return llvm::Error::success();
 }
@@ -14,8 +14,8 @@ TritonPlugin::getAddressOfSymbol(const std::string &symbol) const {
     return isValid;
   intptr_t getDetailsFn = (intptr_t)library.getAddressOfSymbol(symbol.c_str());
   if (!getDetailsFn) {
-    auto msg = llvm::Twine("Failed to get symbol: " + symbol + "\n");
-    return llvm::createStringError(msg);
+    return llvm::createStringError(llvm::Twine("Failed to get symbol: ") +
+                                   symbol);
   }
   return getDetailsFn;
 }
@@ -25,11 +25,9 @@ TritonPlugin::checkAPIResult(TritonPluginResult result,
                              const char *handle) const {
   if (result == TP_SUCCESS)
     return TP_SUCCESS;
-  std::string msg;
-  llvm::raw_string_ostream os(msg);
-  os << "Failed to add/register plugin pass (" << handle
-     << ") to pass manager, error code: " << result;
-  return llvm::createStringError(msg);
+  return llvm::createStringError(
+      llvm::Twine("Failed to add/register a plugin pass (") + handle +
+      "), error code: " + std::to_string(result));
 }
 
 std::runtime_error TritonPlugin::err2exp(llvm::Error Err) {
@@ -108,10 +106,9 @@ llvm::Expected<TritonPluginResult> TritonPlugin::enumeratePyBindHandles(
 
   if (result == TP_SUCCESS)
     return TP_SUCCESS;
-  std::string msg;
-  llvm::raw_string_ostream os(msg);
-  os << "Failed to retrive plugin pass handles, error code: " << result;
-  return llvm::createStringError(msg);
+  return llvm::createStringError(
+      llvm::Twine("Failed to retrieve plugin pass handles, error code: ") +
+      std::to_string(result));
 }
 
 llvm::Expected<TritonPluginResult>
