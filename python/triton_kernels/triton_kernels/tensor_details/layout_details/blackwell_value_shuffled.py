@@ -1,8 +1,11 @@
 import math
+from dataclasses import dataclass
 import torch
-from .base import Layout
+from .base import Layout, LayoutTransformation
 
 
+# ------------------- Blackwell MX4 Value Shuffled Layout -------------------
+@dataclass(frozen=True)
 class BlackwellMX4ValueShuffledLayout(Layout):
     """
     Shuffled weight layout for MX4 matmul on Blackwell GPUs.
@@ -22,85 +25,16 @@ class BlackwellMX4ValueShuffledLayout(Layout):
     The inner dimensions [tile_n, tile_k_packed] match the baseline TMA block
     shape after swapping, so no transpose is needed after TMA load.
     """
-    name: str = "BLACKWELL_MX4_VALUE_SHUFFLED"
+    block_k: int = 256
+    block_n: int = 128
 
-    def __init__(self, shape, block_k: int = 256, block_n: int = 128) -> None:
-        """
-        Args:
-            shape: Physical packed shape [E, K_packed, N]
-            block_k: Logical block size for K dimension (default 256)
-            block_n: Block size for N dimension (default 128)
-        """
-        super().__init__(shape)
-        self.shape = shape
-        self.block_k = block_k
-        self.block_n = block_n
-        # Logical-to-physical: 2 FP4 values are packed per byte
-        self.packed_block_k = block_k // 2
+    @property
+    def name(self):
+        return "BLACKWELL_MX4_VALUE_SHUFFLED"
 
-        self.tile_k_packed = self.packed_block_k
-        self.tile_n = block_n
-
-        # Physical packed shape is [E, K_packed, N] where K_packed = K // 2
-        self.E = shape[0]
-        self.K_packed = shape[1]
-        self.N = shape[2]
-
-        # lcm(128, tile_k_packed): 128 is the TMA alignment requirement in bytes
-        align_k = (128 * self.tile_k_packed) // math.gcd(128, self.tile_k_packed)
-        self.padded_K_packed = ((self.K_packed + align_k - 1) // align_k) * align_k
-        self.num_tiles_k = (self.padded_K_packed + self.tile_k_packed - 1) // self.tile_k_packed
-        self.num_tiles_n = (self.N + self.tile_n - 1) // self.tile_n
-        self.padded_N = self.num_tiles_n * self.tile_n
-        self.num_total_tiles = self.E * self.num_tiles_k * self.num_tiles_n
-
-    def swizzle_data(self, data: torch.Tensor) -> torch.Tensor:
-        """
-        Convert data from physical [E, K_packed, N] to 5D shuffled layout.
-
-        Target layout: [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
-        This matches the baseline TMA block shape [block_n, packed_block_k] after swapping.
-        """
-        E, K_packed, N = data.shape
-
-        # Pad to tile boundaries if needed (in original [E, K_packed, N] space)
-        if K_packed != self.padded_K_packed or N != self.padded_N:
-            padded = torch.zeros((E, self.padded_K_packed, self.padded_N),
-                                 dtype=data.dtype, device=data.device)
-            padded[:, :K_packed, :N] = data
-            data = padded
-
-        # Transpose to swapped view: [E, K_packed, N] -> [E, N, K_packed]
-        data = data.transpose(1, 2).contiguous()
-
-        # [E, N, K_packed] -> [E, num_tiles_n, tile_n, num_tiles_k, tile_k_packed]
-        data = data.view(E, self.num_tiles_n, self.tile_n,
-                         self.num_tiles_k, self.tile_k_packed)
-
-        # Permute to [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
-        # This puts K tiles first (for inner loop locality) and arranges
-        # inner dims as [tile_n, tile_k_packed] to match baseline TMA block.
-        return data.permute(0, 3, 1, 2, 4).contiguous()
-
-    def unswizzle_data(self, data: torch.Tensor) -> torch.Tensor:
-        """
-        Convert data from shuffled back to physical [E, K_packed, N].
-
-        Input layout: [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
-        """
-        # Inverse of permute(0, 3, 1, 2, 4) is permute(0, 2, 3, 1, 4)
-        # [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed] ->
-        # [E, num_tiles_n, tile_n, num_tiles_k, tile_k_packed]
-        data = data.permute(0, 2, 3, 1, 4).contiguous()
-
-        # Back to swapped view [E, padded_N, padded_K_packed]
-        data = data.view(self.E, self.padded_N, self.padded_K_packed)
-
-        # Transpose back to physical [E, padded_K_packed, padded_N]
-        data = data.transpose(1, 2).contiguous()
-
-        # Trim padding back to original shape
-        return data[:, :self.K_packed, :self.N].contiguous()
+    def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
+        return BlackwellMX4ValueShuffledTransformation(shape, is_fp4,
+                                                       block_k=self.block_k, block_n=self.block_n)
 
     def swizzle_block_shape(self, block_shape):
         """
@@ -116,6 +50,85 @@ class BlackwellMX4ValueShuffledLayout(Layout):
         if block_k != self.block_k:
             raise ValueError(
                 f"block_k={block_k} does not match layout block_k={self.block_k}")
-        packed_block_k = block_k // 2
-        return [1, 1, 1, block_n, packed_block_k]
+        # Return block_k un-halved; make_dense_tma will halve it for FP4 packing
+        return [1, 1, 1, block_n, block_k]
 
+
+# ------------------- Blackwell MX4 Value Shuffled Transformation -------------------
+@dataclass(frozen=True)
+class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
+    """Transformation for the shuffled MX4 weight layout."""
+
+    block_k: int = 256
+    block_n: int = 128
+
+    def _compute_params(self, E, K_packed, N):
+        """Compute tiling parameters from the physical shape."""
+        packed_block_k = self.block_k // 2
+        tile_k_packed = packed_block_k
+        tile_n = self.block_n
+
+        # lcm(128, tile_k_packed): 128 is the TMA alignment requirement in bytes
+        align_k = (128 * tile_k_packed) // math.gcd(128, tile_k_packed)
+        padded_K_packed = ((K_packed + align_k - 1) // align_k) * align_k
+        num_tiles_k = (padded_K_packed + tile_k_packed - 1) // tile_k_packed
+        num_tiles_n = (N + tile_n - 1) // tile_n
+        padded_N = num_tiles_n * tile_n
+
+        return tile_k_packed, tile_n, padded_K_packed, padded_N, num_tiles_k, num_tiles_n
+
+    def swizzle_data(self, data: torch.Tensor) -> torch.Tensor:
+        """
+        Convert data from physical [E, K_packed, N] to 5D shuffled layout.
+
+        Target layout: [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
+        This matches the baseline TMA block shape [block_n, packed_block_k] after swapping.
+        """
+        E, K_packed, N = data.shape
+        tile_k_packed, tile_n, padded_K_packed, padded_N, num_tiles_k, num_tiles_n = \
+            self._compute_params(E, K_packed, N)
+
+        # Pad to tile boundaries if needed (in original [E, K_packed, N] space)
+        if K_packed != padded_K_packed or N != padded_N:
+            padded = torch.zeros((E, padded_K_packed, padded_N),
+                                 dtype=data.dtype, device=data.device)
+            padded[:, :K_packed, :N] = data
+            data = padded
+
+        # Transpose to swapped view: [E, K_packed, N] -> [E, N, K_packed]
+        data = data.transpose(1, 2).contiguous()
+
+        # [E, N, K_packed] -> [E, num_tiles_n, tile_n, num_tiles_k, tile_k_packed]
+        data = data.view(E, num_tiles_n, tile_n, num_tiles_k, tile_k_packed)
+
+        # Permute to [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
+        # This puts K tiles first (for inner loop locality) and arranges
+        # inner dims as [tile_n, tile_k_packed] to match baseline TMA block.
+        return data.permute(0, 3, 1, 2, 4).contiguous()
+
+    def unswizzle_data(self, data: torch.Tensor) -> torch.Tensor:
+        """
+        Convert data from shuffled back to physical [E, K_packed, N].
+
+        Input layout: [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
+        """
+        E = data.shape[0]
+        # Recover original shape from self.shape (the logical shape passed to convert_layout)
+        orig_K_packed = self.shape[-2] // 2 if self.is_fp4 else self.shape[-2]
+        orig_N = self.shape[-1]
+        tile_k_packed, tile_n, padded_K_packed, padded_N, num_tiles_k, num_tiles_n = \
+            self._compute_params(E, orig_K_packed, orig_N)
+
+        # Inverse of permute(0, 3, 1, 2, 4) is permute(0, 2, 3, 1, 4)
+        # [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed] ->
+        # [E, num_tiles_n, tile_n, num_tiles_k, tile_k_packed]
+        data = data.permute(0, 2, 3, 1, 4).contiguous()
+
+        # Back to swapped view [E, padded_N, padded_K_packed]
+        data = data.view(E, padded_N, padded_K_packed)
+
+        # Transpose back to physical [E, padded_K_packed, padded_N]
+        data = data.transpose(1, 2).contiguous()
+
+        # Trim padding back to original shape
+        return data[:, :orig_K_packed, :orig_N].contiguous()

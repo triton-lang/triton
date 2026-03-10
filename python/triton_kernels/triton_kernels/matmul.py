@@ -467,7 +467,7 @@ def matmul(a, b, bias,
         b_tensor_or_tma.round_f32_to_tf32 = True
     # create tma descriptor for w_scale
     b_scale_has_tma = opt_flags.is_persistent and b_scale is not None
-    b_transpose = b.storage.data.stride()[-2] == 1
+    b_transpose = b_is_shuffled or b.storage.data.stride()[-2] == 1
     if b_scale_has_tma:
         scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
         b_scale_storage = b_scale.storage
