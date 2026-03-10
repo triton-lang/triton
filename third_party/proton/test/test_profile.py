@@ -968,15 +968,11 @@ def test_trace_keeps_flexible_metric_writes_separate(tmp_path: pathlib.Path, dev
     with temp_file.open() as f:
         data = json.load(f)
     trace_events = data["traceEvents"]
-    metric_bars = [
-        event
-        for event in trace_events
-        if event["cat"] == "call_path" and event["name"] == "metric_scope"
-    ]
+    metric_bars = [event for event in trace_events if event["cat"] == "call_path" and event["name"] == "metric_scope"]
 
     assert len(metric_bars) == 2
     assert {bar["args"]["score"] for bar in metric_bars} == {1.0, 2.0}
-    assert {tuple(bar["args"]["call_stack"]) for bar in metric_bars} == {("metric_scope",)}
+    assert {tuple(bar["args"]["call_stack"]) for bar in metric_bars} == {("metric_scope", )}
     assert len({(bar["ts"], bar["dur"]) for bar in metric_bars}) == 1
 
 

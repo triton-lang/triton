@@ -46,6 +46,9 @@ public:
   };
 
   struct TraceEvent {
+    using FlexibleMetricBatch = std::map<std::string, MetricValueType>;
+    using FlexibleMetricBatches = std::vector<FlexibleMetricBatch>;
+
     TraceEvent() = default;
     TraceEvent(size_t id, size_t contextId, size_t parentEventId)
         : id(id), contextId(contextId), parentEventId(parentEventId) {}
@@ -55,6 +58,7 @@ public:
     size_t parentEventId = DummyId;
     // Direct and linked metrics emitted for this trace event.
     DataEntry::MetricSet metricSet{};
+    FlexibleMetricBatches flexibleMetricBatches{};
 
     const static inline size_t DummyId = std::numeric_limits<size_t>::max();
   };
@@ -153,8 +157,9 @@ void TraceData::enterScope(const Scope &scope) {
   else
     contexts.push_back(scope.name);
   auto &scopeEventStack = activeScopeEventIds[std::this_thread::get_id()];
-  const auto parentEventId = scopeEventStack.empty() ? Trace::TraceEvent::DummyId
-                                                     : scopeEventStack.back();
+  const auto parentEventId = scopeEventStack.empty()
+                                 ? Trace::TraceEvent::DummyId
+                                 : scopeEventStack.back();
   auto eventId = currentTrace->addEvent(currentTrace->addContexts(contexts),
                                         parentEventId);
   currentTrace->getEvent(eventId).scopeId = scope.scopeId;
@@ -169,9 +174,8 @@ void TraceData::exitScope(const Scope &scope) {
       eventIt != scopeIdToEventId.end()) {
     if (threadIt != activeScopeEventIds.end()) {
       auto &scopeEventStack = threadIt->second;
-      auto stackIt =
-          std::find(scopeEventStack.rbegin(), scopeEventStack.rend(),
-                    eventIt->second);
+      auto stackIt = std::find(scopeEventStack.rbegin(), scopeEventStack.rend(),
+                               eventIt->second);
       if (stackIt != scopeEventStack.rend()) {
         scopeEventStack.erase(std::next(stackIt).base());
       }
@@ -212,7 +216,7 @@ void TraceData::addMetrics(
   auto *currentTrace = currentPhasePtrAs<Trace>();
   auto eventId = scopeIdToEventId.at(scopeId);
   auto &event = currentTrace->getEvent(eventId);
-  event.metricSet.flexibleMetricBatches.push_back(metrics);
+  event.flexibleMetricBatches.push_back(metrics);
 }
 
 std::string TraceData::toJsonString(size_t phase) const {
@@ -235,7 +239,8 @@ json metricValueToJson(const MetricValueType &value) {
   return std::visit([](const auto &v) { return json(v); }, value);
 }
 
-json flexibleMetricBatchToJson(const DataEntry::FlexibleMetricBatch &metrics) {
+json flexibleMetricBatchToJson(
+    const TraceData::Trace::TraceEvent::FlexibleMetricBatch &metrics) {
   json args = json::object();
   for (const auto &[metricName, metricValue] : metrics) {
     args[metricName] = metricValueToJson(metricValue);
@@ -275,8 +280,7 @@ struct KernelMetricWithContext {
   std::vector<Context> contexts;
 
   KernelMetricWithContext(const KernelMetric *metric, size_t sourceEventId,
-                          size_t linkedTargetEventId,
-                          std::vector<Context> ctx)
+                          size_t linkedTargetEventId, std::vector<Context> ctx)
       : kernelMetric(metric), sourceEventId(sourceEventId),
         linkedTargetEventId(linkedTargetEventId), contexts(std::move(ctx)) {}
 };
@@ -300,11 +304,13 @@ struct TimeSpanNs {
   }
 };
 
-void appendCallPathBars(
-    std::vector<CallPathBarRecord> &bars, const std::vector<Context> &contexts,
-    const DataEntry::FlexibleMetricBatches &metricBatches, uint64_t minTimeStamp,
-    const TimeSpanNs &span) {
-  if (contexts.size() <= 1 || span.start == std::numeric_limits<uint64_t>::max() ||
+void appendCallPathBars(std::vector<CallPathBarRecord> &bars,
+                        const std::vector<Context> &contexts,
+                        const TraceData::Trace::TraceEvent::FlexibleMetricBatches
+                            &metricBatches,
+                        uint64_t minTimeStamp, const TimeSpanNs &span) {
+  if (contexts.size() <= 1 ||
+      span.start == std::numeric_limits<uint64_t>::max() ||
       span.end <= span.start) {
     return;
   }
@@ -721,8 +727,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
         for (const auto &[scopeEventId, span] : directScopeSpans) {
           const auto &scopeEvent = trace->getEvent(scopeEventId);
           appendCallPathBars(bars, trace->getContexts(scopeEvent.contextId),
-                             scopeEvent.metricSet.flexibleMetricBatches,
-                             minTimeStamp, span);
+                             scopeEvent.flexibleMetricBatches, minTimeStamp,
+                             span);
         }
 
         if (virtualTrace != nullptr) {
@@ -730,35 +736,39 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
             const auto &[sourceEventId, virtualEventId] = key;
             const auto &sourceEvent = trace->getEvent(sourceEventId);
             auto contexts = trace->getContexts(sourceEvent.contextId);
-            auto virtualContexts =
-                virtualTrace->getContexts(
-                    virtualTrace->getEvent(virtualEventId).contextId);
+            auto virtualContexts = virtualTrace->getContexts(
+                virtualTrace->getEvent(virtualEventId).contextId);
             if (!virtualContexts.empty()) {
               virtualContexts.erase(virtualContexts.begin());
             }
             contexts.insert(contexts.end(), virtualContexts.begin(),
                             virtualContexts.end());
-            DataEntry::FlexibleMetricBatches metricBatches;
-            if (const auto linkedBatchIt =
-                sourceEvent.metricSet.linkedFlexibleMetricBatches.find(
-                    virtualEventId);
-                linkedBatchIt !=
-                sourceEvent.metricSet.linkedFlexibleMetricBatches.end()) {
-              metricBatches = linkedBatchIt->second;
+            TraceData::Trace::TraceEvent::FlexibleMetricBatches metricBatches;
+            if (const auto linkedFlexibleIt =
+                    sourceEvent.metricSet.linkedFlexibleMetrics.find(
+                        virtualEventId);
+                linkedFlexibleIt !=
+                sourceEvent.metricSet.linkedFlexibleMetrics.end()) {
+              TraceData::Trace::TraceEvent::FlexibleMetricBatch metricBatch;
+              for (const auto &[metricName, metric] : linkedFlexibleIt->second) {
+                metricBatch.emplace(metricName, metric.getValue(0));
+              }
+              metricBatches.push_back(std::move(metricBatch));
             }
             appendCallPathBars(bars, contexts, metricBatches, minTimeStamp,
                                span);
           }
         }
 
-        std::sort(bars.begin(), bars.end(),
-                  [](const CallPathBarRecord &lhs,
-                     const CallPathBarRecord &rhs) {
-                    return std::tie(lhs.ts, lhs.depth, lhs.name, lhs.dur) <
-                           std::tie(rhs.ts, rhs.depth, rhs.name, rhs.dur);
-                  });
+        std::sort(
+            bars.begin(), bars.end(),
+            [](const CallPathBarRecord &lhs, const CallPathBarRecord &rhs) {
+              return std::tie(lhs.ts, lhs.depth, lhs.name, lhs.dur) <
+                     std::tie(rhs.ts, rhs.depth, rhs.name, rhs.dur);
+            });
 
-        std::set<std::tuple<std::string, std::vector<std::string>, double, double>>
+        std::set<
+            std::tuple<std::string, std::vector<std::string>, double, double>>
             barsWithMetrics;
         for (const auto &bar : bars) {
           if (!bar.args.empty()) {
