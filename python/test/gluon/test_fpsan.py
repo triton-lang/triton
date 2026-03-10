@@ -141,11 +141,21 @@ def _expected_extern_binary_tag_i32(x_i32: np.ndarray, y_i32: np.ndarray, symbol
     return _expected_extern_variadic_tag_i32([x_i32, y_i32], symbol)
 
 
+def _rotl_u32(x_u32: np.ndarray, amount: int) -> np.ndarray:
+    amount = amount & 31
+    if amount == 0:
+        return x_u32
+    x = x_u32.astype(np.uint64)
+    out_u32 = ((x << np.uint64(amount)) | (x >> np.uint64(32 - amount))) & np.uint64(0xFFFFFFFF)
+    return out_u32.astype(np.uint32)
+
+
 def _expected_extern_variadic_tag_i32(args_i32: list[np.ndarray], symbol: str) -> np.ndarray:
     tag = np.uint64(stable_string_hash_u64(symbol) & np.uint64(0xFFFFFFFF))
     total_u64 = np.zeros_like(_as_u32(args_i32[0]), dtype=np.uint64)
-    for arg in args_i32:
-        total_u64 = total_u64 - _as_u32(arg).astype(np.uint64)
+    for i, arg in enumerate(args_i32):
+        rotated = _rotl_u32(_as_u32(arg), i).astype(np.uint64)
+        total_u64 = (total_u64 + rotated) & np.uint64(0xFFFFFFFF)
     out_u32 = (total_u64 ^ tag).astype(np.uint32)
     return _u32_to_i32(out_u32)
 

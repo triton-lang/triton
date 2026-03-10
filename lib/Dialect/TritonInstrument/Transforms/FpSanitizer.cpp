@@ -497,18 +497,38 @@ Value castExternOperandToResultInt(PatternRewriter &rewriter, Location loc,
   return Value();
 }
 
+Value rotateLeftIntByAmount(PatternRewriter &rewriter, Location loc,
+                            Value value, unsigned amount) {
+  unsigned bitWidth = getIntBitwidth(value.getType());
+  if (bitWidth == 0)
+    return value;
+  amount %= bitWidth;
+  if (amount == 0)
+    return value;
+
+  auto leftShift = getIntConstantLike(rewriter, loc, value.getType(),
+                                      static_cast<int64_t>(amount));
+  auto rightShift = getIntConstantLike(rewriter, loc, value.getType(),
+                                       static_cast<int64_t>(bitWidth - amount));
+  auto left = arith::ShLIOp::create(rewriter, loc, value, leftShift);
+  auto right = arith::ShRUIOp::create(rewriter, loc, value, rightShift);
+  return arith::OrIOp::create(rewriter, loc, left, right);
+}
+
 Value fpsanVariadicExternTagged(PatternRewriter &rewriter, Location loc,
                                 tt::ExternElementwiseOp op, uint64_t hash) {
   Type resultTy = op.getType();
   Type resultIntTy = getIntTypeLike(resultTy);
 
   Value sumI = getIntConstantLike(rewriter, loc, resultIntTy, 0);
-  for (Value operand : op.getOperands()) {
+  for (auto [argIdx, operand] : llvm::enumerate(op.getOperands())) {
     Value operandI =
         castExternOperandToResultInt(rewriter, loc, operand, resultIntTy);
     if (!operandI)
       return Value();
-    sumI = arith::SubIOp::create(rewriter, loc, sumI, operandI);
+    Value rotated = rotateLeftIntByAmount(rewriter, loc, operandI,
+                                          static_cast<unsigned>(argIdx));
+    sumI = arith::AddIOp::create(rewriter, loc, sumI, rotated);
   }
 
   auto hashVal = getIntConstantLike(rewriter, loc, resultIntTy,
