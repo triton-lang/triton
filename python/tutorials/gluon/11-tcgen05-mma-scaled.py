@@ -69,7 +69,7 @@ import triton.experimental.gluon.language as gl
 from dataclasses import replace
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.language.core import _aggregate as aggregate
-from triton._C.libtriton.gluon_ir import make_cga_layout
+
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
@@ -633,7 +633,7 @@ def align_to(a, b):
     return triton.cdiv(a, b) * b
 
 
-def swizzle_scales_packed_block(scales: torch.Tensor, VEC_SIZE: int):
+def swizzle_scales_packed_block(scales: torch.Tensor):
     # When the scale tensor is not an even multiple of [128, 4], we need to pad
     # the scale tensor so it can use the packed block format.
     PAD_MN = align_to(scales.shape[0], 128) - scales.shape[0]
@@ -804,8 +804,8 @@ def test_mma_scaled_packed_block(M, N, K, a_format, b_format, BLOCK_N, BLOCK_K):
     B, B_scale, B_ref = random_quantized_tensor(N, K, b_format)
     BLOCK_M = 128
     VEC_SIZE = 16 if a_format == "nvfp4" else 32
-    A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
-    B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
+    A_scale = swizzle_scales_packed_block(A_scale)
+    B_scale = swizzle_scales_packed_block(B_scale)
     C_ref = A_ref @ B_ref.T
     C = mma_scaled_packed_block(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K)
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
@@ -825,8 +825,8 @@ if __name__ == "__main__":
         BLOCK_K = 256 if "fp4" in a_format and "fp4" in b_format else 128
         VEC_SIZE = 16 if a_format == "nvfp4" else 32
 
-        A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
-        B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
+        A_scale = swizzle_scales_packed_block(A_scale)
+        B_scale = swizzle_scales_packed_block(B_scale)
 
         ms = triton.testing.do_bench_cudagraph(
             lambda: mma_scaled_packed_block(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K))
@@ -885,7 +885,7 @@ if __name__ == "__main__":
     BLOCK_M, BLOCK_K = 128, 256
     VEC_SIZE = 32
     scales = torch.empty(M, K, device="cuda", dtype=torch.uint8)
-    scales = swizzle_scales_packed_block(scales, VEC_SIZE)
+    scales = swizzle_scales_packed_block(scales)
     scales_desc = make_scales_descriptor(scales, BLOCK_M, BLOCK_K, VEC_SIZE)
     # Invoke warmup to compile the kernel and resolve constexprs. Pass
     # TRITON_ALWAYS_COMPILE=1 to force recompilation as warmup will not run if
@@ -1080,8 +1080,8 @@ def test_mma_scaled_tcgen05_copy(M, N, K, a_format, b_format, BLOCK_N, BLOCK_K):
     B, B_scale, B_ref = random_quantized_tensor(N, K, b_format)
     BLOCK_M = 128
     VEC_SIZE = 16 if a_format == "nvfp4" else 32
-    A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
-    B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
+    A_scale = swizzle_scales_packed_block(A_scale)
+    B_scale = swizzle_scales_packed_block(B_scale)
     C_ref = A_ref @ B_ref.T
     C = mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K)
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
@@ -1101,8 +1101,8 @@ if __name__ == "__main__":
         BLOCK_K = 256 if "fp4" in a_format and "fp4" in b_format else 128
         VEC_SIZE = 16 if a_format == "nvfp4" else 32
 
-        A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
-        B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
+        A_scale = swizzle_scales_packed_block(A_scale)
+        B_scale = swizzle_scales_packed_block(B_scale)
 
         ms = triton.testing.do_bench_cudagraph(
             lambda: mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K))
@@ -1497,8 +1497,8 @@ def test_mma_scaled_pipelined(M, N, K, a_format, b_format, impl_kernel):
     A, A_scale, A_ref = random_quantized_tensor(M, K, a_format)
     B, B_scale, B_ref = random_quantized_tensor(N, K, b_format)
     VEC_SIZE = 16 if a_format == "nvfp4" else 32
-    A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
-    B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
+    A_scale = swizzle_scales_packed_block(A_scale)
+    B_scale = swizzle_scales_packed_block(B_scale)
     C_ref = A_ref @ B_ref.T
     C = mma_scaled(A, B, A_scale, B_scale, VEC_SIZE, impl_kernel)
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
@@ -1517,8 +1517,8 @@ if __name__ == "__main__":
         BLOCK_K = 256 if "fp4" in a_format and "fp4" in b_format else 128
         VEC_SIZE = 16 if a_format == "nvfp4" else 32
 
-        A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
-        B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
+        A_scale = swizzle_scales_packed_block(A_scale)
+        B_scale = swizzle_scales_packed_block(B_scale)
 
         ms = triton.testing.do_bench_cudagraph(
             lambda: mma_scaled(A, B, A_scale, B_scale, VEC_SIZE, mma_scaled_pipelined_kernel))
@@ -1580,22 +1580,6 @@ if __name__ == "__main__":
 # layouts and operand splitting.
 
 
-def make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, two_cta_dim):
-    ctas_per_cga = list(ctas_per_cga)
-    cta_split = list(cta_split)
-    assert cta_split[two_cta_dim] > 1
-    cta_split[two_cta_dim] //= 2
-    ctas_per_cga[two_cta_dim] //= 2
-    aux_cga_layout = make_cga_layout(ctas_per_cga, cta_split, cta_order)
-    assert two_cta_dim in (0, 1)
-    basis = [0, 0]
-    basis[two_cta_dim] = 1
-    for b in aux_cga_layout:
-        b[two_cta_dim] *= 2
-    cga_layout = [basis] + aux_cga_layout
-    return cga_layout
-
-
 @gluon.jit
 def mma_scaled_warp_specialized_kernel_2cta(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc,
                                             num_buffers: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr,
@@ -1650,22 +1634,20 @@ def mma_scaled_warp_specialized_2cta(A, B, A_scale, B_scale, VEC_SIZE, GROUP_SIZ
         # of tensor memory, which leaves no room for the scales' tensor memory.
         acc_buffers = 2 if BLOCK_N < 256 else 1
     warps = [4, 1]
-    ctas_per_cga = (2, 1)
-    cta_order = (1, 0)
-    cta_split = (2, 1)
-    cga_layout_a = make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, 0)
-    cga_layout_b = make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, 0)
-    cga_layout_c = make_2cta_cga_layout(ctas_per_cga, ctas_per_cga, cta_order, 0)
-    cga_layout_a_scale = [[0, 1, 0, 0, 0]]
-    cga_layout_b_scale = [[0, 0, 0, 0, 0]]
+    # split along dim 0
+    # Split along N for B [N, K]
+    # Split along M for A [M, K] and C [M, N]
+    cga_layout = [[1, 0]]
+    cga_layout_a_scale = [[0, 1, 0, 0, 0]]  # split A scales along M across CTAs
+    cga_layout_b_scale = [[0, 0, 0, 0, 0]]  # broadcast B scales to both CTAs
 
     SchedulerImpl = t7.GroupedPersistentTileScheduler(GROUP_SIZE_M)
     M, N = A.shape[0], B.shape[0]
     MIXED_PREC = A.dtype != B.dtype
 
-    A_desc = make_operand_descriptor(A, BLOCK_M, BLOCK_K, MIXED_PREC, cga_layout=cga_layout_a)
-    B_desc = make_operand_descriptor(B, BLOCK_N, BLOCK_K, MIXED_PREC, cga_layout=cga_layout_b)
-    C_desc = make_output_descriptor(M, N, out_dtype, BLOCK_M, BLOCK_N, cga_layout=cga_layout_c)
+    A_desc = make_operand_descriptor(A, BLOCK_M, BLOCK_K, MIXED_PREC, cga_layout=cga_layout)
+    B_desc = make_operand_descriptor(B, BLOCK_N, BLOCK_K, MIXED_PREC, cga_layout=cga_layout)
+    C_desc = make_output_descriptor(M, N, out_dtype, BLOCK_M, BLOCK_N, cga_layout=cga_layout)
     A_scale_desc = make_scales_descriptor(A_scale, BLOCK_M, BLOCK_K, VEC_SIZE, cga_layout=cga_layout_a_scale)
     B_scale_desc = make_scales_descriptor(B_scale, BLOCK_N, BLOCK_K, VEC_SIZE, cga_layout=cga_layout_b_scale)
 
@@ -1676,7 +1658,7 @@ def mma_scaled_warp_specialized_2cta(A, B, A_scale, B_scale, VEC_SIZE, GROUP_SIZ
     A_scale_desc = replace(A_scale_desc, layout=no_swizzle_layout_a)
     B_scale_desc = replace(B_scale_desc, layout=no_swizzle_layout_b)
 
-    block_layout_c = gl.BlockedLayout([1, 8], [1, 32], warps_per_cta=warps, order=[1, 0], cga_layout=cga_layout_c)
+    block_layout_c = gl.BlockedLayout([1, 8], [1, 32], warps_per_cta=warps, order=[1, 0], cga_layout=cga_layout)
 
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
@@ -1711,8 +1693,8 @@ def test_mma_scaled_warp_specialized_2cta(M, N, K, a_format, b_format):
     A, A_scale, A_ref = random_quantized_tensor(M, K, a_format)
     B, B_scale, B_ref = random_quantized_tensor(N, K, b_format)
     VEC_SIZE = 16 if a_format == "nvfp4" else 32
-    A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
-    B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
+    A_scale = swizzle_scales_packed_block(A_scale)
+    B_scale = swizzle_scales_packed_block(B_scale)
     C_ref = A_ref @ B_ref.T
     C = mma_scaled_warp_specialized_2cta(A, B, A_scale, B_scale, VEC_SIZE)
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
@@ -1731,8 +1713,8 @@ if __name__ == "__main__":
         A, A_scale, A_ref = random_quantized_tensor(M, K, a_format)
         B, B_scale, B_ref = random_quantized_tensor(N, K, b_format)
         VEC_SIZE = 16 if a_format == "nvfp4" else 32
-        A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
-        B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
+        A_scale = swizzle_scales_packed_block(A_scale)
+        B_scale = swizzle_scales_packed_block(B_scale)
         BLOCK_K = 128 if torch.float8_e4m3fn in [A.dtype, B.dtype] else 256
 
         # 1CTA: BLOCK_M=128, 3 pipeline stages
