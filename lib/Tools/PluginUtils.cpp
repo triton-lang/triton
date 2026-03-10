@@ -155,6 +155,14 @@ TritonPlugin::getDialectHandles(std::vector<const char *> &dialectNames) {
 
 llvm::Expected<TritonPluginResult>
 TritonPlugin::getCustomOpHandles(std::vector<const char *> &customOpNames) {
+  if (auto Err = loadPlugin())
+    return Err;
+  // Do a check to see if the enumerate-custom-ops api symbol is present, bail
+  // as if there are 0 custom ops if not
+  intptr_t isCustomOpSymbolPresent =
+      (intptr_t)library.getAddressOfSymbol(ENUMERATE_CUSTOMOPS);
+  if (!isCustomOpSymbolPresent)
+    return TP_SUCCESS;
   return enumeratePyBindHandles(enumerateCustomOpAPI, customOpNames);
 }
 
