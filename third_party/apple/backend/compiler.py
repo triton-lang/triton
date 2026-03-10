@@ -18,8 +18,8 @@ Status:
   [x] Build + fix compile errors
   [x] Metal IR emission (simdgroup intrinsic → .ll)
   [x] metal-as + metallib integration
-  [ ] MetalASM integration for in-process metallib
-  [ ] driver.py (MTLDevice dispatch)
+  [x] MetalASM integration for in-process metallib
+  [x] driver.py (MTLDevice dispatch)
 """
 
 from dataclasses import dataclass
@@ -212,7 +212,8 @@ class MPSBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        open('/tmp/raw_pre.ll', 'w').write(str(llvm_mod))
+        if os.environ.get('TRITON_MPS_DEBUG'):
+            open('/tmp/raw_pre.ll', 'w').write(str(llvm_mod))
         return llvm_mod
 
     # ── Stage 4: LLVM IR → metallib ───────────────────────────────────────
@@ -220,22 +221,24 @@ class MPSBackend(BaseBackend):
         # Emit LLVM IR text
         llvm_ir = str(llvm_mod)
 
-        # Extract kernel name (first void function = kernel entry)
+        # Extract kernel name (first defined void function = kernel entry)
         for line in llvm_ir.splitlines():
             if line.startswith('define void @'):
                 metadata["name"] = line[len('define void @'):].split('(')[0]
                 break
 
-        kname = metadata.get("name", "unknown")
-        open(f'/tmp/dot_kernel_{kname}.ll', 'w').write(llvm_ir)
-        open('/tmp/dot_kernel_final.ll', 'w').write(llvm_ir)
+        debug = os.environ.get('TRITON_MPS_DEBUG')
 
-        # MetalASM: handles all Air transforms (MMA ptrs, TG GEPs, barrier rename,
+        if debug:
+            kname = metadata["name"]
+            open(f'/tmp/dot_kernel_{kname}.ll', 'w').write(llvm_ir)
+
+        # MetalASM: handles all AIR transforms (MMA ptrs, TG GEPs, barrier rename,
         # system-value lowering, !air.kernel metadata) in-process.
         if _metalasm_compile:
             result = _metalasm_compile(llvm_ir)
-            open(f'/tmp/dot_kernel_{kname}.metallib', 'wb').write(result)
-            open('/tmp/dot_kernel_final.metallib', 'wb').write(result)
+            if debug:
+                open(f'/tmp/dot_kernel_{kname}.metallib', 'wb').write(result)
             return result
 
         # Fallback: xcrun metal-as + metallib (requires sequential SSA numbering)

@@ -191,6 +191,127 @@ print(f'  [dbg] out[48:52]={out[48:52].tolist()}, sum50={out[:50].sum().item()},
 check('masked load', out[:50].sum().item() == 50. and out[50:].sum().item() == 0.)
 
 
+# ── 11. Reduce sum (single warp, 32 elements) ────────────────────────────────
+@triton.jit
+def reduce_sum_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(input_ptr + offsets, mask=mask, other=0.0)
+    result = tl.sum(x, axis=0)
+    tl.store(output_ptr + pid, result)
+
+x = torch.ones(32, device=DEVICE)
+out = torch.zeros(1, device=DEVICE)
+reduce_sum_kernel[(1,)](x, out, 32, BLOCK_SIZE=32)
+check('reduce sum', out.item() == 32.0, f'got {out.item()}')
+
+
+# ── 12. Reduce max (single warp, 32 elements) ────────────────────────────────
+@triton.jit
+def reduce_max_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(input_ptr + offsets, mask=mask, other=float('-inf'))
+    result = tl.max(x, axis=0)
+    tl.store(output_ptr + pid, result)
+
+x = torch.arange(32, device=DEVICE, dtype=torch.float32)
+out = torch.zeros(1, device=DEVICE)
+reduce_max_kernel[(1,)](x, out, 32, BLOCK_SIZE=32)
+check('reduce max', out.item() == 31.0, f'got {out.item()}')
+
+
+# ── 13. Reduce min (single warp, 32 elements) ────────────────────────────────
+@triton.jit
+def reduce_min_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(input_ptr + offsets, mask=mask, other=float('inf'))
+    result = tl.min(x, axis=0)
+    tl.store(output_ptr + pid, result)
+
+x = torch.arange(32, device=DEVICE, dtype=torch.float32)
+out = torch.zeros(1, device=DEVICE)
+reduce_min_kernel[(1,)](x, out, 32, BLOCK_SIZE=32)
+check('reduce min', out.item() == 0.0, f'got {out.item()}')
+
+
+# ── 14. Reduce sum multi-warp (128 elements, 4 warps) ──────────────────────
+x = torch.ones(128, device=DEVICE)
+out = torch.zeros(1, device=DEVICE)
+try:
+    reduce_sum_kernel[(1,)](x, out, 128, BLOCK_SIZE=128)
+    check('reduce sum (multi-warp)', out.item() == 128.0, f'got {out.item()}')
+except Exception as e:
+    check('reduce sum (multi-warp)', False, str(e)[:200])
+
+
+# ── 15. Reduce stress: random inputs, sum/max/min, multi-warp ─────────────
+torch.manual_seed(42)
+
+# Sum: random floats, multi-warp, check against torch.sum
+x = torch.randn(128, device=DEVICE)
+out = torch.zeros(1, device=DEVICE)
+reduce_sum_kernel[(1,)](x, out, 128, BLOCK_SIZE=128)
+expected = x.sum().item()
+check('reduce sum (random, multi-warp)',
+      abs(out.item() - expected) < 1e-3,
+      f'got {out.item()}, expected {expected}')
+
+# Max: random floats, multi-warp
+@triton.jit
+def reduce_max_mw_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(input_ptr + offsets, mask=mask, other=float('-inf'))
+    result = tl.max(x, axis=0)
+    tl.store(output_ptr + pid, result)
+
+x = torch.randn(128, device=DEVICE)
+out = torch.full((1,), float('-inf'), device=DEVICE)
+reduce_max_mw_kernel[(1,)](x, out, 128, BLOCK_SIZE=128)
+expected = x.max().item()
+check('reduce max (random, multi-warp)',
+      abs(out.item() - expected) < 1e-5,
+      f'got {out.item()}, expected {expected}')
+
+# Min: random floats, multi-warp
+@triton.jit
+def reduce_min_mw_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(input_ptr + offsets, mask=mask, other=float('inf'))
+    result = tl.min(x, axis=0)
+    tl.store(output_ptr + pid, result)
+
+x = torch.randn(128, device=DEVICE)
+out = torch.full((1,), float('inf'), device=DEVICE)
+reduce_min_mw_kernel[(1,)](x, out, 128, BLOCK_SIZE=128)
+expected = x.min().item()
+check('reduce min (random, multi-warp)',
+      abs(out.item() - expected) < 1e-5,
+      f'got {out.item()}, expected {expected}')
+
+# Sum: multi-block reduction (4 blocks × 128 threads each)
+x = torch.randn(512, device=DEVICE)
+out = torch.zeros(4, device=DEVICE)
+reduce_sum_kernel[(4,)](x, out, 512, BLOCK_SIZE=128)
+for i in range(4):
+    expected = x[i*128:(i+1)*128].sum().item()
+    ok = abs(out[i].item() - expected) < 1e-2
+    if not ok:
+        check('reduce sum (multi-block)', False,
+              f'block {i}: got {out[i].item()}, expected {expected}')
+        break
+else:
+    check('reduce sum (multi-block)', True, '')
+
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 passed = sum(1 for _, ok in results if ok)
 total = len(results)

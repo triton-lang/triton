@@ -422,6 +422,24 @@ struct ConvertTritonAppleGPUToLLVMPass
         TargetInfo targetInfo;
         TritonGPUToLLVMTypeConverter typeConverter(ctx, targetInfo);
 
+        // Create global_smem for shared memory (threadgroup addrspace 3).
+        // Size comes from ttg.shared attribute set by allocate-shared-memory pass.
+        {
+            int64_t smemSize = 0;
+            if (auto attr = mod->getAttrOfType<IntegerAttr>("ttg.shared"))
+                smemSize = attr.getValue().getZExtValue();
+            if (smemSize > 0) {
+                OpBuilder b(mod.getBodyRegion());
+                auto loc = mod.getLoc();
+                auto elemTy = typeConverter.convertType(b.getIntegerType(8));
+                auto arrayTy = LLVM::LLVMArrayType::get(elemTy, smemSize);
+                LLVM::GlobalOp::create(
+                    b, loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::Internal,
+                    "global_smem", /*value=*/Attribute(), /*alignment=*/16,
+                    /*addrSpace=*/3u);
+            }
+        }
+
         RewritePatternSet patterns(ctx);
         ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
@@ -443,6 +461,8 @@ struct ConvertTritonAppleGPUToLLVMPass
             typeConverter, patterns, targetInfo, patternBenefitDefault);
         mlir::triton::populateConvertLayoutOpToLLVMPatterns(
             typeConverter, targetInfo, patterns, patternBenefitDefault);
+        mlir::triton::populateReduceOpToLLVMPatterns(
+            typeConverter, patterns, targetInfo, patternBenefitDefault);
 
         // Apple-specific patterns
         populateDotOpToLLVMPatterns(typeConverter, patterns,
