@@ -176,6 +176,56 @@ float_ops_kernel[(1,)](x, out, 32)
 check('float_ops', (out - 1.25).abs().max().item() < 1e-5)
 
 
+# ── 4b. Math intrinsics ───────────────────────────────────────────────────────
+@triton.jit
+def math_exp_kernel(x_ptr, out_ptr, N: tl.constexpr):
+    offs = tl.arange(0, N)
+    tl.store(out_ptr + offs, tl.exp(tl.load(x_ptr + offs)))
+
+@triton.jit
+def math_log_kernel(x_ptr, out_ptr, N: tl.constexpr):
+    offs = tl.arange(0, N)
+    tl.store(out_ptr + offs, tl.log(tl.load(x_ptr + offs)))
+
+@triton.jit
+def math_sqrt_kernel(x_ptr, out_ptr, N: tl.constexpr):
+    offs = tl.arange(0, N)
+    tl.store(out_ptr + offs, tl.sqrt(tl.load(x_ptr + offs)))
+
+@triton.jit
+def math_sin_kernel(x_ptr, out_ptr, N: tl.constexpr):
+    offs = tl.arange(0, N)
+    tl.store(out_ptr + offs, tl.sin(tl.load(x_ptr + offs)))
+
+@triton.jit
+def math_cos_kernel(x_ptr, out_ptr, N: tl.constexpr):
+    offs = tl.arange(0, N)
+    tl.store(out_ptr + offs, tl.cos(tl.load(x_ptr + offs)))
+
+@triton.jit
+def math_abs_kernel(x_ptr, out_ptr, N: tl.constexpr):
+    offs = tl.arange(0, N)
+    tl.store(out_ptr + offs, tl.abs(tl.load(x_ptr + offs)))
+
+torch.manual_seed(0)
+x_rand = torch.randn(32, device=DEVICE)
+x_pos = torch.rand(32, device=DEVICE) + 0.1
+
+for name, kern, x, ref_fn in [
+    ('exp',  math_exp_kernel,  x_rand, torch.exp),
+    ('log',  math_log_kernel,  x_pos,  torch.log),
+    ('sqrt', math_sqrt_kernel, x_pos,  torch.sqrt),
+    ('sin',  math_sin_kernel,  x_rand, torch.sin),
+    ('cos',  math_cos_kernel,  x_rand, torch.cos),
+    ('abs',  math_abs_kernel,  x_rand, torch.abs),
+]:
+    out = torch.zeros(32, device=DEVICE)
+    kern[(1,)](x, out, 32)
+    ref = ref_fn(x)
+    ok = torch.allclose(out, ref, atol=1e-3, rtol=1e-3)
+    check(f'math_{name}', ok, f'max_err={(out-ref).abs().max().item():.6f}' if not ok else '')
+
+
 # ── 5. Masked load/store (scalar runtime arg) ─────────────────────────────────
 @triton.jit
 def masked_load_kernel(x, out, N: tl.constexpr, sz):
