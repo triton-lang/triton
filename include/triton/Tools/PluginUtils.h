@@ -18,10 +18,11 @@ enum TritonPluginResult {
 #define TRITON_PLUGIN_API_TYPE(_TYPE)                                          \
   extern "C" __attribute__((visibility("default"))) _TYPE
 
-#define TRITON_PLUGIN_PASS_ARGS const char *handle
+using PassArgsType = std::vector<std::string>;
+#define TRITON_PLUGIN_PASS_ARGS const char *handle, const PassArgsType &args
 #define TRITON_PLUGIN_ENUMERATOR_ARGS uint32_t *count, const char **handles
 
-#define TRITON_PLUGIN_PASS_ARG_NAMES handle
+#define TRITON_PLUGIN_PASS_ARG_NAMES handle, args
 
 struct TritonPlugin {
   TritonPlugin() = delete;
