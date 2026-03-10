@@ -286,7 +286,8 @@ class MXFPGEMMProgramBase:
             scale_a = a_scale_buffer_slice.load(layout=cfg.layout_a_scale)
         else:
             # Use a placeholder to make compiler happy
-            scale_a = gl.constexpr(0)
+            scale_a = 0
+            scale_a = scale_a.to(gl.uint8)
         scale_b = b_scale_buffer_slice.load(layout=cfg.layout_b_scale)
         return a, b, scale_a, scale_b
 
@@ -774,7 +775,8 @@ class MXFPGEMMSliceNKProgram:
             a_scale_buffer_slice = a_scale_buffer_slice.slice(subtile_start // cfg.SCALE_BLOCK, SUBTILE_LEN_SCALE, 1)
             scale_a = a_scale_buffer_slice.load(layout=cfg.layout_a_scale)
         else:
-            scale_a = gl.constexpr(0)
+            scale_a = 0
+            scale_a = scale_a.to(gl.uint8)
 
         b_scale_buffer_slice = b_scale_buffer_slice.slice(subtile_start // cfg.SCALE_BLOCK, SUBTILE_LEN_SCALE, 1)
         scale_b = b_scale_buffer_slice.load(layout=cfg.layout_b_scale)
@@ -799,7 +801,8 @@ class MXFPGEMMSliceNKProgram:
                     cfg.SCALE_KWIDTH)).permute((0, 3, 2, 1, 4)).reshape((cfg.BLOCK_M // NUM_SUBTILES_M, BLOCK_K_SCALE))
             scale_a = a_scale_buffer_slice.load(layout=cfg.layout_a_scale)
         else:
-            scale_a = gl.constexpr(0)
+            scale_a = 0
+            scale_a = scale_a.to(gl.uint8)
         return a, scale_a
 
     @gluon.jit

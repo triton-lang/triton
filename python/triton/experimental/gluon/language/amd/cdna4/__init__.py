@@ -57,16 +57,17 @@ _get_mfma_scale_layout_impl.__triton_builtin__ = True
 
 
 @constexpr_function
-def get_mfma_scale_layout(dot_operand_layout, shape):
+def get_mfma_scale_layout(dot_operand_layout, shape, scale_factor=32):
     """ Get the scale layout for MFMA scaled operands.
 
     Args:
         dot_operand_layout (DotOperandLayout): The dot operand layout.
         shape (List[int]): The shape of the scale tensor.
-
+        scale_factor (int): The scale factor.
     Return:
         layout (DistributedLinearLayout): The scale layout.
     """
+    assert scale_factor == 32, "Only scale factor 32 is supported for CDNA4 Scaled MFMA"
     op_idx = dot_operand_layout.operand_index
     parent = dot_operand_layout.parent
     assert isinstance(parent, AMDMFMALayout), "Expected parent to be an instance of AMDMFMALayout"
