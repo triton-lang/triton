@@ -705,6 +705,8 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
                                              int32_t &scaleFactor,
                                              std::string &errMsg);
       int32_t deduceScaleFactor();
+      Type getAElemMLIRType();
+      Type getBElemMLIRType();
     }];
 
     let hasVerifier = 1;

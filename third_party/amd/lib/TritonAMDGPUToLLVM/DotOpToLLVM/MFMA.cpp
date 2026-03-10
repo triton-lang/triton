@@ -32,7 +32,6 @@ using namespace mlir::triton;
 
 namespace {
 
-using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
 using ::mlir::LLVM::AMD::shuffleXor;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -627,6 +626,9 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
       llvm::report_fatal_error("unsuported data type\n");
     }
 
+    Type aElemMLIRType = op.getAElemMLIRType();
+    Type bElemMLIRType = op.getBElemMLIRType();
+
     const bool isAFP6 = aElemType == ScaleDotElemType::E2M3 ||
                         aElemType == ScaleDotElemType::E3M2;
     const bool isBFP6 = bElemType == ScaleDotElemType::E2M3 ||
@@ -638,8 +640,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     constexpr bool allowXF32 = false;
     FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
         MfmaIntrinsic::get(op.getLoc(), mfmaVersion, mDim, nDim, kDim,
-                           scaleDotElemTypeToMLIRType(ctx, aElemType),
-                           scaleDotElemTypeToMLIRType(ctx, bElemType),
+                           aElemMLIRType, bElemMLIRType,
                            /*withScale=*/true, allowXF32);
     if (failed(maybeMfmaIntrinsic))
       return op.emitError("no matching matrix core intrinsic ")

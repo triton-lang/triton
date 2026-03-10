@@ -93,8 +93,6 @@ unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass);
 unsigned getVectorSize(Value ptr, Value offset,
                        ModuleAxisInfoAnalysis &axisAnalysisPass);
 
-Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t);
-
 // Returns true if we can perform coalesced write from the source encoding to
 // the destination encoding for a given vec size.
 bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,

@@ -247,8 +247,6 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
                                                int mfmaVersion, int nonKDim) {
-  using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
-
   auto ctx = dot.getContext();
   int64_t inputKDim = dot.getA().getType().getShape().back();
   if (dot.getAElemType() == ScaleDotElemType::E2M1 && dot.getLhsKPack()) {
@@ -256,8 +254,8 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
     // need to multiply it by 2.
     inputKDim *= 2;
   }
-  Type aElemType = scaleDotElemTypeToMLIRType(ctx, dot.getAElemType());
-  Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getBElemType());
+  Type aElemType = dot.getAElemMLIRType();
+  Type bElemType = dot.getBElemMLIRType();
   return chooseMfmaInstruction(dot.getLoc(), mfmaVersion, dot.getC().getType(),
                                aElemType, bElemType, inputKDim, nonKDim,
                                /*withScale=*/true, /*allowXF32=*/false);
