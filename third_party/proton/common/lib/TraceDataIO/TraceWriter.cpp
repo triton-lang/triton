@@ -9,8 +9,6 @@ using namespace proton;
 using json = nlohmann::json;
 
 namespace {
-using BlockTraceVec =
-    std::vector<const CircularLayoutParserResult::BlockTrace *>;
 
 uint64_t getMinInitTime(const std::vector<KernelTrace> &streamTrace) {
   uint64_t minInitTime = std::numeric_limits<uint64_t>::max();
@@ -22,6 +20,55 @@ uint64_t getMinInitTime(const std::vector<KernelTrace> &streamTrace) {
     }
   return minInitTime;
 }
+
+} // namespace
+
+StreamTraceWriter::StreamTraceWriter(
+    const std::vector<KernelTrace> &streamTrace, const std::string &path)
+    : streamTrace(streamTrace), path(path) {}
+
+void StreamTraceWriter::dump() {
+  std::ofstream outfile;
+
+  if (path.empty()) {
+    std::cerr << "Trace file path can't be empty!";
+    return;
+  }
+
+  outfile.open(path);
+  if (!outfile.is_open()) {
+    std::cerr << "Failed to open trace file: " << path << std::endl;
+    return;
+  }
+
+  write(outfile);
+
+  outfile.close();
+}
+
+StreamChromeTraceWriter::StreamChromeTraceWriter(
+    const std::vector<KernelTrace> &streamTrace, const std::string &path)
+    : StreamTraceWriter(streamTrace, path) {}
+
+void StreamChromeTraceWriter::write(std::ostream &outfile) {
+  if (streamTrace.empty()) {
+    std::cerr << "Failed to write the trace file: empty trace!" << std::endl;
+    return;
+  }
+
+  json object = {{"displayTimeUnit", "ns"}, {"traceEvents", json::array()}};
+
+  const auto minInitTime = getMinInitTime(streamTrace);
+
+  for (const auto &kernelTrace : streamTrace) {
+    writeKernel(object, kernelTrace, minInitTime);
+  }
+  outfile << object.dump() << "\n";
+}
+
+namespace {
+using BlockTraceVec =
+    std::vector<const CircularLayoutParserResult::BlockTrace *>;
 
 void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
                        std::map<int, uint64_t> &blockToMinCycle,
@@ -112,49 +159,6 @@ std::vector<int> assignLineIds(
 }
 
 } // namespace
-
-StreamTraceWriter::StreamTraceWriter(
-    const std::vector<KernelTrace> &streamTrace, const std::string &path)
-    : streamTrace(streamTrace), path(path) {}
-
-void StreamTraceWriter::dump() {
-  std::ofstream outfile;
-
-  if (path.empty()) {
-    std::cerr << "Trace file path can't be empty!";
-    return;
-  }
-
-  outfile.open(path);
-  if (!outfile.is_open()) {
-    std::cerr << "Failed to open trace file: " << path << std::endl;
-    return;
-  }
-
-  write(outfile);
-
-  outfile.close();
-}
-
-StreamChromeTraceWriter::StreamChromeTraceWriter(
-    const std::vector<KernelTrace> &streamTrace, const std::string &path)
-    : StreamTraceWriter(streamTrace, path) {}
-
-void StreamChromeTraceWriter::write(std::ostream &outfile) {
-  if (streamTrace.empty()) {
-    std::cerr << "Failed to write the trace file: empty trace!" << std::endl;
-    return;
-  }
-
-  json object = {{"displayTimeUnit", "ns"}, {"traceEvents", json::array()}};
-
-  const auto minInitTime = getMinInitTime(streamTrace);
-
-  for (const auto &kernelTrace : streamTrace) {
-    writeKernel(object, kernelTrace, minInitTime);
-  }
-  outfile << object.dump() << "\n";
-}
 
 void StreamChromeTraceWriter::writeKernel(json &object,
                                           const KernelTrace &kernelTrace,
