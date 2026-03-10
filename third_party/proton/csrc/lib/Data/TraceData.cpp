@@ -202,6 +202,11 @@ using FlexibleMetricMap = std::map<std::string, FlexibleMetric>;
 using StreamPathMetricMap = std::map<size_t, std::map<PathKey, FlexibleMetricMap>>;
 using PathStreamMap = std::map<PathKey, std::set<size_t>>;
 
+struct CallPathFrame {
+  std::string name;
+  json args = json::object();
+};
+
 struct CallPathBar {
   std::string name;
   json args = json::object();
@@ -482,7 +487,6 @@ convertToTimelineTrace(std::vector<CycleMetricWithContext> &cycleEvents) {
         getStringValue(kernelEvent.cycleMetric, CycleMetric::KernelName);
     metadata->scopeName = scopeIdToName;
     metadata->callStack = std::move(callStack);
-    metadata->callPathFrames = kernelEvent.callPathFrames;
     if (timeShiftCost > 0)
       timeShift(timeShiftCost, parserResult);
     results.emplace_back(parserResult, metadata);

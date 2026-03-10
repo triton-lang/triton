@@ -12,16 +12,10 @@
 
 namespace proton {
 
-struct CallPathFrame {
-  std::string name;
-  nlohmann::json args = nlohmann::json::object();
-};
-
 struct KernelMetadata {
   std::map<int, std::string> scopeName;
   std::string kernelName;
   std::vector<std::string> callStack;
-  std::vector<CallPathFrame> callPathFrames;
 };
 
 using KernelTrace = std::pair<std::shared_ptr<CircularLayoutParserResult>,
