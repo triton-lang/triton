@@ -287,7 +287,7 @@ struct DotOpMFMAConversionHelper {
     intrinsicName = maybeMfmaIntrinsic->name;
 
     // If we are using XF32, the kWidth (and kBase) is double that of F32.
-    if (aTensorTy.getElementType().isF32() && allowXF32)
+    if (elemTyA.isF32() && allowXF32)
       kWidth *= 2;
 
     const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
@@ -324,11 +324,11 @@ struct DotOpMFMAConversionHelper {
 
     bool preserveBF16 = intrinsicName.contains(".bf16") && mfmaVersion >= 4;
     auto operandA = getValuesFromDotOperandLayoutStruct(
-        loadedA, numRepB, numRepM, numRepKA, kWidth, kBase,
-        aTensorTy.getElementType(), allowXF32, preserveBF16);
+        loadedA, numRepB, numRepM, numRepKA, kWidth, kBase, elemTyA, nullptr,
+        allowXF32, preserveBF16);
     auto operandB = getValuesFromDotOperandLayoutStruct(
-        loadedB, numRepB, numRepN, numRepKB, kWidth, kBase,
-        bTensorTy.getElementType(), allowXF32, preserveBF16);
+        loadedB, numRepB, numRepN, numRepKB, kWidth, kBase, elemTyB, nullptr,
+        allowXF32, preserveBF16);
 
     int warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
     int elemsPerVec = mDim * nDim / warpSize;
@@ -408,27 +408,29 @@ struct DotOpMFMAConversionHelper {
   /// rawElems is a vector of kBase elements. Each element is of the raw
   /// element type from the input. We need to prepare a vector of kBase
   /// elements of appropriate element type required by mfma instructions.
-  Value prepareOperands(Value rawElems, int kBase, Type type, bool preserveBF16,
-                        bool isConstantScale = false,
-                        bool isFP6 = false) const {
+  Value prepareOperands(Value rawElems, Type rawType, Type underlyingType,
+                        int kBase, bool preserveBF16,
+                        bool isConstantScale = false) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value results;
 
-    // Construct a vector type of kBase elements with desired type
+    const bool isFP6 = isa<Float6E2M3FNType, Float6E3M2FNType>(underlyingType);
+
+    // Construct a vector raw type of kBase elements with desired type
     if (isFP6)
-      assert(type.getIntOrFloatBitWidth() == 8);
+      assert(rawType.getIntOrFloatBitWidth() == 8);
     const int vecSize = isFP6 ? (kBase * 3) / 4 : kBase;
 
-    auto vecTy = vec_ty(type, vecSize);
-    if (type.isBF16() && !preserveBF16)
+    auto vecTy = vec_ty(rawType, vecSize);
+    if (rawType.isBF16() && !preserveBF16)
       vecTy = vec_ty(i16_ty, vecSize);
     Value vec = b.undef(vecTy);
 
     // For each element in rawElems, extract the element as the desired type,
     // bitcast it if needed, and insert it into vec.
     for (int elemId = 0, counter = 0; elemId < kBase; ++elemId) {
-      auto val = b.extract_element(type, rawElems, b.i32_val(elemId));
-      if (type.isBF16() && !preserveBF16) {
+      auto val = b.extract_element(rawType, rawElems, b.i32_val(elemId));
+      if (rawType.isBF16() && !preserveBF16) {
         // rocdl.mfma.f32.32x32x8bf16.1k calls for input of i16 type
         auto cast = b.bitcast(val, i16_ty);
         vec = b.insert_element(vecTy, vec, cast, b.i32_val(elemId));
@@ -441,7 +443,7 @@ struct DotOpMFMAConversionHelper {
 
     // Now we have a vector of kBase elements of desired type.
     // Then we need to prepare vec for results.
-    if (type.getIntOrFloatBitWidth() == 8) {
+    if (rawType.getIntOrFloatBitWidth() == 8) {
       if (vecSize == 1) {
         // This is only for the scale operands of scaled mfma on CDNA4
         results = b.zext(i32_ty, b.bitcast(vec, i8_ty));
@@ -467,11 +469,15 @@ struct DotOpMFMAConversionHelper {
   }
 
   /// Converts dot operand structure to value table and converts types
-  /// appropriate for mfma instructions
+  /// appropriate for mfma instructions.
+  /// Note, for many case, underlyingType and wrappedType are the same.
+  /// These are different for FP4 and FP6 because they are packed into
+  /// larger types.
   virtual ValueTable getValuesFromDotOperandLayoutStruct(
       Value value, int batch, int nonKRep, int kRepInKWidth, int kWidth,
-      int kBase, Type type, bool allowXF32, bool preserveBF16,
-      bool isConstantScale = false, bool isFP6 = false) const {
+      int kBase, Type underlyingType, Type wrappedType, bool allowXF32,
+      bool preserveBF16, bool isConstantScale = false) const {
+    wrappedType = wrappedType == nullptr ? underlyingType : wrappedType;
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto elems = unpackLLElements(loc, value, rewriter);
     // number of kBase-element vectors
@@ -493,33 +499,36 @@ struct DotOpMFMAConversionHelper {
           // Step 1: construct each kBase-element vector by
           //         - extracting kBase elements from elems and
           //         - putting them into a kBase-element vector, i.e. rawElems
-          Type elemTy = typeConverter->convertType(type);
-          Type ty = vec_ty(elemTy, kBase);
-          Value rawElems = tb.undef(ty);
+          Type wrappedElemTy = typeConverter->convertType(wrappedType);
+          Type wrappedTy = vec_ty(wrappedElemTy, kBase);
+          Value rawElems = tb.undef(wrappedTy);
           for (int k = 0; k < kBase; ++k) {
             auto index = linearize({b, nonK, kBaseVec, k}, strides);
-            rawElems =
-                tb.insert_element(ty, rawElems, elems[index], tb.i32_val(k));
+            rawElems = tb.insert_element(wrappedTy, rawElems, elems[index],
+                                         tb.i32_val(k));
           }
 
-          // Step 2: process rawElems based on element type
+          // Step 2: process rawElems based on element wrapped type
           // Note that for f32/fp64 input and XF32 is not allowed, nothing needs
           // to be done and rawElems is inserted into the ValueTable directly
-          if ((type.isF32() || type.isF64()) && !allowXF32) {
+          if ((wrappedType.isF32() || wrappedType.isF64()) && !allowXF32) {
             dotOpVals[{b, nonK, kBaseVec}] =
-                tb.extract_element(type, rawElems, tb.i32_val(0));
+                tb.extract_element(wrappedType, rawElems, tb.i32_val(0));
           } else {
             Value vals;
-            if (type.isF32() && allowXF32) {
-              vals = prepareOperands(rawElems, kBase, f32_ty, preserveBF16);
-            } else if (type.getIntOrFloatBitWidth() == 8) {
-              vals = prepareOperands(rawElems, kBase, i8_ty, preserveBF16,
-                                     isConstantScale, isFP6);
-            } else if (type.isBF16()) {
-              vals = prepareOperands(rawElems, kBase, bf16_ty, preserveBF16);
+            if (wrappedType.isF32() && allowXF32) {
+              vals = prepareOperands(rawElems, f32_ty, underlyingType, kBase,
+                                     preserveBF16);
+            } else if (wrappedType.getIntOrFloatBitWidth() == 8) {
+              vals = prepareOperands(rawElems, i8_ty, underlyingType, kBase,
+                                     preserveBF16, isConstantScale);
+            } else if (wrappedType.isBF16()) {
+              vals = prepareOperands(rawElems, bf16_ty, underlyingType, kBase,
+                                     preserveBF16);
             } else {
-              assert(type.isF16() && "Unsupported data type");
-              vals = prepareOperands(rawElems, kBase, f16_ty, preserveBF16);
+              assert(wrappedType.isF16() && "Unsupported data type");
+              vals = prepareOperands(rawElems, f16_ty, underlyingType, kBase,
+                                     preserveBF16);
             }
 
             // Step 3: Insert the processed vals into the ValueTable
@@ -629,11 +638,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     Type aElemMLIRType = op.getAElemMLIRType();
     Type bElemMLIRType = op.getBElemMLIRType();
 
-    const bool isAFP6 = aElemType == ScaleDotElemType::E2M3 ||
-                        aElemType == ScaleDotElemType::E3M2;
-    const bool isBFP6 = bElemType == ScaleDotElemType::E2M3 ||
-                        bElemType == ScaleDotElemType::E3M2;
-
     int64_t kDimOperandSize = aTensorTy.getShape().back();
 
     auto ctx = op.getContext();
@@ -704,13 +708,11 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     int bNonKPackedVals = scaleBKBase / bkPackedVals;
 
     auto operandA = getValuesFromDotOperandLayoutStruct(
-        loadedA, numRepB, numRepM, numRepK, aKWidth, aKBase,
-        aTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false, false,
-        isAFP6);
+        loadedA, numRepB, numRepM, numRepK, aKWidth, aKBase, aElemMLIRType,
+        elemTyA, allowXF32, /*preserveBF16=*/false, false);
     auto operandB = getValuesFromDotOperandLayoutStruct(
-        loadedB, numRepB, numRepN, numRepK, bKWidth, bKBase,
-        bTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false, false,
-        isBFP6);
+        loadedB, numRepB, numRepN, numRepK, bKWidth, bKBase, bElemMLIRType,
+        elemTyB, allowXF32, /*preserveBF16=*/false, false);
 
     // Scales have the same replica distributions as their corresponding
     // operands.
@@ -718,15 +720,17 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     ValueTable operandBScale;
     if (existBothScales) {
       auto aScaleTensorTy = cast<RankedTensorType>(aScale.getType());
+      auto aScaleElemTy = aScaleTensorTy.getElementType();
       operandAScale = getValuesFromDotOperandLayoutStruct(
           loadedAScale, numRepB, numRepM, numRepK, scaleKWidth, scaleAKBase,
-          aScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false,
+          aScaleElemTy, nullptr, allowXF32, /*preserveBF16=*/false,
           isAScaleConstant);
 
       auto bScaleTensorTy = cast<RankedTensorType>(bScale.getType());
+      auto bScaleElemTy = bScaleTensorTy.getElementType();
       operandBScale = getValuesFromDotOperandLayoutStruct(
           loadedBScale, numRepB, numRepN, numRepK, scaleKWidth, scaleBKBase,
-          bScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false,
+          bScaleElemTy, nullptr, allowXF32, /*preserveBF16=*/false,
           isBScaleConstant);
     }
 
