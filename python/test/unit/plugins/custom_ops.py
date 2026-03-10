@@ -7,13 +7,8 @@ from triton.language.core import builtin
 from typing import TypeVar, Type
 import builtins
 import os
-from triton import knobs
 import pathlib
 import hashlib
-import importlib
-import inspect
-import sys
-import textwrap
 from triton.compiler.code_generator import flatten_values_to_ir
 
 T = TypeVar('T')
@@ -45,26 +40,6 @@ def get_key():
 
 def get_hash():
     return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
-
-
-def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
-    if all(arg is None for arg in (stages, options, language, capability)):
-        return get_key(), get_hash()
-    module_name = 'dynamic_module'
-    spec = importlib.util.spec_from_loader(module_name, loader=None)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    stage_src = textwrap.dedent(inspect.getsource(self.make_ttir))
-    stage_src = 'from triton._C.libtriton import ir, passes, llvm, amd, nvidia\n' + stage_src
-    # Inject plugin pass right after loop unroll in the dynamically loaded stage source
-    stage_src = stage_src.replace(
-        "    pm = ir.pass_manager(mod.context)",
-        "    pm = ir.pass_manager(mod.context)\n"
-        "    passes.plugin.plugingpu_farith_conversion(pm, [ str(opt.num_warps), '32', str(opt.num_ctas) ])\n")
-    exec(stage_src, module.__dict__)
-    make_lambda = lambda f: lambda src, metadata: f(src, metadata, options, capability)
-    stages["ttir"] = make_lambda(module.make_ttir)
-    return get_key(), get_hash()
 
 
 @builtin
@@ -100,8 +75,7 @@ def test_custom_ops(tmp_path: pathlib.Path):
     output_triton = torch.empty_like(x)
     n_elements = output_triton.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
-    knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
     h = add_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=32)
 
     src = h.asm["source"]
-    assert "plugin.fmagic" in src
+    assert "arith.addf" in src
