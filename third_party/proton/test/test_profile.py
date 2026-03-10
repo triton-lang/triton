@@ -866,9 +866,84 @@ def test_trace(tmp_path: pathlib.Path, device: str):
     with temp_file.open() as f:
         data = json.load(f)
         trace_events = data["traceEvents"]
-        assert len(trace_events) == 3
-        assert trace_events[-1]["name"] == "foo"
-        assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
+        foo_event = next(event for event in trace_events if event["cat"] == "kernel" and event["name"] == "foo")
+        test_bar = next(event for event in trace_events if event["cat"] == "call_path" and event["name"] == "test")
+        assert foo_event["args"]["call_stack"] == ["ROOT", "test", "foo"]
+        assert test_bar["args"]["call_stack"] == ["test"]
+        assert test_bar["pid"] == foo_event["pid"]
+        assert test_bar["ts"] <= foo_event["ts"]
+        assert test_bar["ts"] + test_bar["dur"] >= foo_event["ts"] + foo_event["dur"]
+
+
+def test_trace_merges_call_path_siblings(tmp_path: pathlib.Path, device: str):
+
+    @triton.jit
+    def foo0(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    @triton.jit
+    def foo1(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs) + 1)
+
+    x = torch.ones((1024, ), device=device, dtype=torch.float32)
+    y = torch.zeros_like(x)
+    foo0[(1, )](x, y, x.size()[0], num_warps=4)
+    foo1[(1, )](x, y, x.size()[0], num_warps=4)
+
+    temp_file = tmp_path / "test_trace_merge.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), data="trace")
+    with proton.scope("a"):
+        with proton.scope("b"):
+            foo0[(1, )](x, y, x.size()[0], num_warps=4)
+            foo1[(1, )](x, y, x.size()[0], num_warps=4)
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+    trace_events = data["traceEvents"]
+    kernel_events = [event for event in trace_events if event["cat"] == "kernel" and event["name"] in {"foo0", "foo1"}]
+    assert len(kernel_events) == 2
+
+    a_bars = [event for event in trace_events if event["cat"] == "call_path" and event["name"] == "a"]
+    b_bars = [event for event in trace_events if event["cat"] == "call_path" and event["name"] == "b"]
+    assert len(a_bars) == 1
+    assert len(b_bars) == 1
+
+    kernel_start = min(event["ts"] for event in kernel_events)
+    kernel_end = max(event["ts"] + event["dur"] for event in kernel_events)
+    b_bar = b_bars[0]
+    assert b_bar["args"]["call_stack"] == ["a", "b"]
+    assert b_bar["ts"] <= kernel_start
+    assert b_bar["ts"] + b_bar["dur"] >= kernel_end
+
+
+def test_trace_flexible_metrics_render_on_call_path_bars(tmp_path: pathlib.Path, device: str):
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.ones((1024, ), device=device, dtype=torch.float32)
+    y = torch.zeros_like(x)
+    foo[(1, )](x, y, x.size()[0], num_warps=4)
+
+    temp_file = tmp_path / "test_trace_flexible_metrics.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), data="trace")
+    with proton.scope("metric_scope", metrics={"score": 7.0}):
+        foo[(1, )](x, y, x.size()[0], num_warps=4)
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+    trace_events = data["traceEvents"]
+    metric_bar = next(event for event in trace_events if event["cat"] == "call_path" and event["name"] == "metric_scope")
+    foo_event = next(event for event in trace_events if event["cat"] == "kernel" and event["name"] == "foo")
+
+    assert metric_bar["args"]["score"] == 7.0
+    assert "score" not in foo_event["args"]
 
 
 def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):

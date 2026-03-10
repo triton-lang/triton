@@ -9,6 +9,27 @@ using namespace proton;
 using json = nlohmann::json;
 
 namespace {
+using PathKey = std::vector<std::string>;
+using BlockTraceVec =
+    std::vector<const CircularLayoutParserResult::BlockTrace *>;
+
+struct TimeSpan {
+  double start = std::numeric_limits<double>::max();
+  double end = std::numeric_limits<double>::lowest();
+
+  bool valid() const { return start <= end; }
+
+  void include(double ts, double dur) {
+    start = std::min(start, ts);
+    end = std::max(end, ts + dur);
+  }
+};
+
+struct CallPathBar {
+  std::string name;
+  json args = json::object();
+  TimeSpan span;
+};
 
 uint64_t getMinInitTime(const std::vector<KernelTrace> &streamTrace) {
   uint64_t minInitTime = std::numeric_limits<uint64_t>::max();
@@ -20,55 +41,6 @@ uint64_t getMinInitTime(const std::vector<KernelTrace> &streamTrace) {
     }
   return minInitTime;
 }
-
-} // namespace
-
-StreamTraceWriter::StreamTraceWriter(
-    const std::vector<KernelTrace> &streamTrace, const std::string &path)
-    : streamTrace(streamTrace), path(path) {}
-
-void StreamTraceWriter::dump() {
-  std::ofstream outfile;
-
-  if (path.empty()) {
-    std::cerr << "Trace file path can't be empty!";
-    return;
-  }
-
-  outfile.open(path);
-  if (!outfile.is_open()) {
-    std::cerr << "Failed to open trace file: " << path << std::endl;
-    return;
-  }
-
-  write(outfile);
-
-  outfile.close();
-}
-
-StreamChromeTraceWriter::StreamChromeTraceWriter(
-    const std::vector<KernelTrace> &streamTrace, const std::string &path)
-    : StreamTraceWriter(streamTrace, path) {}
-
-void StreamChromeTraceWriter::write(std::ostream &outfile) {
-  if (streamTrace.empty()) {
-    std::cerr << "Failed to write the trace file: empty trace!" << std::endl;
-    return;
-  }
-
-  json object = {{"displayTimeUnit", "ns"}, {"traceEvents", json::array()}};
-
-  const auto minInitTime = getMinInitTime(streamTrace);
-
-  for (const auto &kernelTrace : streamTrace) {
-    writeKernel(object, kernelTrace, minInitTime);
-  }
-  outfile << object.dump() << "\n";
-}
-
-namespace {
-using BlockTraceVec =
-    std::vector<const CircularLayoutParserResult::BlockTrace *>;
 
 void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
                        std::map<int, uint64_t> &blockToMinCycle,
@@ -158,7 +130,129 @@ std::vector<int> assignLineIds(
   return result;
 }
 
+json buildCallStackJson(const std::vector<std::string> &callStack) {
+  json result = json::array();
+  for (const auto &frame : callStack) {
+    result.push_back(frame);
+  }
+  return result;
+}
+
+TimeSpan getKernelSpan(const KernelTrace &kernelTrace,
+                       const uint64_t minInitTime) {
+  auto result = kernelTrace.first;
+  std::map<int, uint64_t> blockToMinCycle;
+  std::map<int, BlockTraceVec> procToBlockTraces;
+  populateTraceInfo(result, blockToMinCycle, procToBlockTraces);
+
+  constexpr double freq = 1000.0;
+  TimeSpan span;
+  for (auto &[procId, blockVec] : procToBlockTraces) {
+    (void)procId;
+    for (auto *bt : blockVec) {
+      const int ctaId = bt->blockId;
+      const int64_t cycleAdjust =
+          static_cast<int64_t>(bt->initTime - minInitTime) -
+          static_cast<int64_t>(blockToMinCycle[ctaId]);
+      for (auto &trace : bt->traces) {
+        for (auto &event : trace.profileEvents) {
+          const int64_t ts =
+              static_cast<int64_t>(event.first->cycle) + cycleAdjust;
+          const int64_t dur =
+              static_cast<int64_t>(event.second->cycle) - event.first->cycle;
+          span.include(static_cast<double>(ts) / freq,
+                       static_cast<double>(dur) / freq);
+        }
+      }
+    }
+  }
+  return span;
+}
+
+std::map<PathKey, CallPathBar>
+collectCallPathBars(const std::vector<KernelTrace> &streamTrace,
+                    const uint64_t minInitTime) {
+  std::map<PathKey, CallPathBar> bars;
+  for (const auto &kernelTrace : streamTrace) {
+    const auto span = getKernelSpan(kernelTrace, minInitTime);
+    if (!span.valid()) {
+      continue;
+    }
+
+    PathKey path;
+    for (const auto &frame : kernelTrace.second->callPathFrames) {
+      path.push_back(frame.name);
+      auto &bar = bars[path];
+      bar.name = frame.name;
+      if (!frame.args.empty()) {
+        bar.args = frame.args;
+      }
+      bar.span.include(span.start, span.end - span.start);
+    }
+  }
+  return bars;
+}
+
 } // namespace
+
+StreamTraceWriter::StreamTraceWriter(
+    const std::vector<KernelTrace> &streamTrace, const std::string &path)
+    : streamTrace(streamTrace), path(path) {}
+
+void StreamTraceWriter::dump() {
+  std::ofstream outfile;
+
+  if (path.empty()) {
+    std::cerr << "Trace file path can't be empty!";
+    return;
+  }
+
+  outfile.open(path);
+  if (!outfile.is_open()) {
+    std::cerr << "Failed to open trace file: " << path << std::endl;
+    return;
+  }
+
+  write(outfile);
+
+  outfile.close();
+}
+
+StreamChromeTraceWriter::StreamChromeTraceWriter(
+    const std::vector<KernelTrace> &streamTrace, const std::string &path)
+    : StreamTraceWriter(streamTrace, path) {}
+
+void StreamChromeTraceWriter::write(std::ostream &outfile) {
+  if (streamTrace.empty()) {
+    std::cerr << "Failed to write the trace file: empty trace!" << std::endl;
+    return;
+  }
+
+  json object = {{"displayTimeUnit", "ns"}, {"traceEvents", json::array()}};
+
+  const auto minInitTime = getMinInitTime(streamTrace);
+  const auto callPathBars = collectCallPathBars(streamTrace, minInitTime);
+
+  for (const auto &[path, bar] : callPathBars) {
+    json element;
+    element["cname"] = kChromeColor[(path.size() - 1) % kChromeColor.size()];
+    element["name"] = bar.name;
+    element["cat"] = "call_path";
+    element["ph"] = "X";
+    element["pid"] = "Kernel Call Path";
+    element["tid"] = "path " + std::to_string(path.size() - 1);
+    element["ts"] = bar.span.start;
+    element["dur"] = bar.span.end - bar.span.start;
+    element["args"] = bar.args;
+    element["args"]["call_stack"] = buildCallStackJson(path);
+    object["traceEvents"].push_back(element);
+  }
+
+  for (const auto &kernelTrace : streamTrace) {
+    writeKernel(object, kernelTrace, minInitTime);
+  }
+  outfile << object.dump() << "\n";
+}
 
 void StreamChromeTraceWriter::writeKernel(json &object,
                                           const KernelTrace &kernelTrace,
@@ -166,10 +260,7 @@ void StreamChromeTraceWriter::writeKernel(json &object,
   auto result = kernelTrace.first;
   auto metadata = kernelTrace.second;
 
-  json callStack = json::array();
-  for (auto const &frame : metadata->callStack) {
-    callStack.push_back(frame);
-  }
+  const auto callStack = buildCallStackJson(metadata->callStack);
 
   int curColorIndex = 0;
   // scope id -> color index in chrome color
