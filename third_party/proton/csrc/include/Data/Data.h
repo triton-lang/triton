@@ -31,17 +31,25 @@ class Data;
 struct DataEntry {
   using MetricMap = std::map<MetricKind, std::unique_ptr<Metric>>;
   using FlexibleMetricMap = std::map<std::string, FlexibleMetric>;
+  using FlexibleMetricBatch = std::map<std::string, MetricValueType>;
+  using FlexibleMetricBatches = std::vector<FlexibleMetricBatch>;
   using LinkedMetricMap = std::unordered_map<size_t, MetricMap>;
   using LinkedFlexibleMetricMap = std::unordered_map<size_t, FlexibleMetricMap>;
+  using LinkedFlexibleMetricBatches =
+      std::unordered_map<size_t, FlexibleMetricBatches>;
   struct MetricSet {
     // Direct metrics associated with this entry.
     MetricMap metrics{};
     // Direct flexible metrics associated with this entry.
     FlexibleMetricMap flexibleMetrics{};
+    // Unaggregated direct flexible-metric writes associated with this entry.
+    FlexibleMetricBatches flexibleMetricBatches{};
     // Metrics associated with linked entries.
     LinkedMetricMap linkedMetrics{};
     // Flexible metrics associated with linked entries.
     LinkedFlexibleMetricMap linkedFlexibleMetrics{};
+    // Unaggregated linked flexible-metric writes keyed by linked entry id.
+    LinkedFlexibleMetricBatches linkedFlexibleMetricBatches{};
   };
 
   /// `id` is a unique identifier for the entry in the data.

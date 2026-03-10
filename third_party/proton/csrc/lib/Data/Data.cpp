@@ -34,6 +34,7 @@ void DataEntry::upsertLinkedMetric(std::unique_ptr<Metric> metric,
 void DataEntry::upsertFlexibleMetric(const std::string &metricName,
                                      const MetricValueType &metricValue) const {
   auto &flexibleMetrics = metricSet.get().flexibleMetrics;
+  metricSet.get().flexibleMetricBatches.push_back({{metricName, metricValue}});
   auto it = flexibleMetrics.find(metricName);
   if (it == flexibleMetrics.end()) {
     flexibleMetrics.emplace(metricName,
@@ -45,8 +46,16 @@ void DataEntry::upsertFlexibleMetric(const std::string &metricName,
 
 void DataEntry::upsertFlexibleMetrics(
     const std::map<std::string, MetricValueType> &metrics) const {
+  metricSet.get().flexibleMetricBatches.push_back(metrics);
   for (const auto &[metricName, metricValue] : metrics) {
-    upsertFlexibleMetric(metricName, metricValue);
+    auto &flexibleMetrics = metricSet.get().flexibleMetrics;
+    auto it = flexibleMetrics.find(metricName);
+    if (it == flexibleMetrics.end()) {
+      flexibleMetrics.emplace(metricName,
+                              FlexibleMetric(metricName, metricValue));
+    } else {
+      it->second.updateValue(metricValue);
+    }
   }
 }
 
@@ -54,6 +63,8 @@ void DataEntry::upsertLinkedFlexibleMetric(const std::string &metricName,
                                            const MetricValueType &metricValue,
                                            size_t linkedId) const {
   auto &linkedFlexibleMetrics = metricSet.get().linkedFlexibleMetrics;
+  metricSet.get().linkedFlexibleMetricBatches[linkedId].push_back(
+      {{metricName, metricValue}});
   auto &linkedFlexibleMetricMap = linkedFlexibleMetrics[linkedId];
   auto it = linkedFlexibleMetricMap.find(metricName);
   if (it == linkedFlexibleMetricMap.end()) {
@@ -67,8 +78,17 @@ void DataEntry::upsertLinkedFlexibleMetric(const std::string &metricName,
 void DataEntry::upsertLinkedFlexibleMetrics(
     const std::map<std::string, MetricValueType> &metrics,
     size_t linkedId) const {
+  metricSet.get().linkedFlexibleMetricBatches[linkedId].push_back(metrics);
   for (const auto &[metricName, metricValue] : metrics) {
-    upsertLinkedFlexibleMetric(metricName, metricValue, linkedId);
+    auto &linkedFlexibleMetrics = metricSet.get().linkedFlexibleMetrics;
+    auto &linkedFlexibleMetricMap = linkedFlexibleMetrics[linkedId];
+    auto it = linkedFlexibleMetricMap.find(metricName);
+    if (it == linkedFlexibleMetricMap.end()) {
+      linkedFlexibleMetricMap.emplace(metricName,
+                                      FlexibleMetric(metricName, metricValue));
+    } else {
+      it->second.updateValue(metricValue);
+    }
   }
 }
 

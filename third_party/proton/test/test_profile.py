@@ -916,7 +916,7 @@ def test_trace_merges_call_path_siblings(tmp_path: pathlib.Path, device: str):
     b_bar = b_bars[0]
     assert b_bar["args"]["call_stack"] == ["a", "b"]
     assert b_bar["ts"] <= kernel_start
-    assert b_bar["ts"] + b_bar["dur"] >= kernel_end
+    assert b_bar["ts"] + b_bar["dur"] == pytest.approx(kernel_end)
 
 
 def test_trace_flexible_metrics_render_on_call_path_bars(tmp_path: pathlib.Path, device: str):
@@ -945,6 +945,39 @@ def test_trace_flexible_metrics_render_on_call_path_bars(tmp_path: pathlib.Path,
 
     assert metric_bar["args"]["score"] == 7.0
     assert "score" not in foo_event["args"]
+
+
+def test_trace_keeps_flexible_metric_writes_separate(tmp_path: pathlib.Path, device: str):
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.ones((1024, ), device=device, dtype=torch.float32)
+    y = torch.zeros_like(x)
+    foo[(1, )](x, y, x.size()[0], num_warps=4)
+
+    temp_file = tmp_path / "test_trace_flexible_metric_batches.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), data="trace")
+    proton.enter_scope("metric_scope", metrics={"score": 1.0})
+    foo[(1, )](x, y, x.size()[0], num_warps=4)
+    proton.exit_scope(metrics={"score": 2.0})
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+    trace_events = data["traceEvents"]
+    metric_bars = [
+        event
+        for event in trace_events
+        if event["cat"] == "call_path" and event["name"] == "metric_scope"
+    ]
+
+    assert len(metric_bars) == 2
+    assert {bar["args"]["score"] for bar in metric_bars} == {1.0, 2.0}
+    assert {tuple(bar["args"]["call_stack"]) for bar in metric_bars} == {("metric_scope",)}
+    assert len({(bar["ts"], bar["dur"]) for bar in metric_bars}) == 1
 
 
 def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
