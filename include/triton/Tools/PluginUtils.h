@@ -18,6 +18,11 @@ enum TritonPluginResult {
 #define TRITON_PLUGIN_API_TYPE(_TYPE)                                          \
   extern "C" __attribute__((visibility("default"))) _TYPE
 
+#define TRITON_PLUGIN_PASS_ARGS const char *handle
+#define TRITON_PLUGIN_ENUMERATOR_ARGS uint32_t *count, const char **handles
+
+#define TRITON_PLUGIN_PASS_ARG_NAMES handle
+
 struct TritonPlugin {
   TritonPlugin() = delete;
   TritonPlugin(std::string filename) : filename(filename) {}
@@ -32,17 +37,18 @@ public:
 
 private:
   using EnumeratePyBindHandlesType =
-      std::function<TritonPluginResult(uint32_t *, const char **)>;
-  using EnumeratePyBindHandlesCType = TritonPluginResult (*)(uint32_t *,
-                                                             const char **);
+      std::function<TritonPluginResult(TRITON_PLUGIN_ENUMERATOR_ARGS)>;
+  using EnumeratePyBindHandlesCType =
+      TritonPluginResult (*)(TRITON_PLUGIN_ENUMERATOR_ARGS);
 
-  using AddPassType =
-      std::function<TritonPluginResult(mlir::PassManager *, const char *)>;
+  using AddPassType = std::function<TritonPluginResult(
+      mlir::PassManager *, TRITON_PLUGIN_PASS_ARGS)>;
   using AddPassCType = TritonPluginResult (*)(mlir::PassManager *,
-                                              const char *);
+                                              TRITON_PLUGIN_PASS_ARGS);
 
-  using RegisterPassType = std::function<TritonPluginResult(const char *)>;
-  using RegisterPassCType = TritonPluginResult (*)(const char *);
+  using RegisterPassType =
+      std::function<TritonPluginResult(TRITON_PLUGIN_PASS_ARGS)>;
+  using RegisterPassCType = TritonPluginResult (*)(TRITON_PLUGIN_PASS_ARGS);
 
   using DialectPluginInfoType =
       std::function<::mlir::DialectPluginLibraryInfo(const char *)>;
@@ -79,9 +85,9 @@ public:
   getDialectHandles(std::vector<const char *> &handles);
 
   llvm::Expected<TritonPluginResult> addPass(mlir::PassManager *pm,
-                                             const char *passHandle);
+                                             TRITON_PLUGIN_PASS_ARGS);
 
-  llvm::Expected<TritonPluginResult> registerPass(const char *passHandle);
+  llvm::Expected<TritonPluginResult> registerPass(TRITON_PLUGIN_PASS_ARGS);
 
   llvm::Expected<::mlir::DialectPluginLibraryInfo>
   getDialectPluginInfo(const char *dialectName);
