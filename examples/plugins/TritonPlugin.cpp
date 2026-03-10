@@ -49,8 +49,8 @@ static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME};
 // Key APIs:
 
 TRITON_PLUGIN_API
-tritonAddPluginPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
-  std::string passNameStr(handle);
+tritonAddPluginPass(mlir::PassManager *pm, const char *passName) {
+  std::string passNameStr(passName);
   if (passMap.find(passNameStr) == passMap.end())
     return TP_GENERIC_FAILURE;
   passMap[passNameStr](pm);
@@ -58,8 +58,8 @@ tritonAddPluginPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
 }
 
 TRITON_PLUGIN_API
-tritonRegisterPluginPass(TRITON_PLUGIN_PASS_ARGS) {
-  std::string passNameStr(handle);
+tritonRegisterPluginPass(const char *passName) {
+  std::string passNameStr(passName);
   if (registryMap.find(passNameStr) == registryMap.end())
     return TP_GENERIC_FAILURE;
   registryMap[passNameStr]();
@@ -67,38 +67,18 @@ tritonRegisterPluginPass(TRITON_PLUGIN_PASS_ARGS) {
 }
 
 TRITON_PLUGIN_API
-tritonEnumeratePluginPasses(TRITON_PLUGIN_ENUMERATOR_ARGS) {
-  if (!count)
+tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
+  if (!passCount)
     return TP_GENERIC_FAILURE;
-  assert(passMap.size() == registryMap.size() &&
+  auto count = passMap.size();
+  assert(count == registryMap.size() &&
          "Expected register and add passes map size to match");
-  *count = passMap.size();
-  if (!handles)
+  *passCount = count;
+  if (!passNames)
     return TP_SUCCESS;
   unsigned i = 0;
   for (auto passName : passNamesTable) {
-    handles[i++] = passName;
+    passNames[i++] = passName;
   }
-  return TP_SUCCESS;
-}
-
-TRITON_PLUGIN_API
-tritonEnumeratePluginCustomOps(TRITON_PLUGIN_ENUMERATOR_ARGS) {
-  if (!count)
-    return TP_GENERIC_FAILURE;
-  *count = 1;
-  if (!handles)
-    return TP_SUCCESS;
-  handles[0] = "create_custom_fadd2";
-  return TP_SUCCESS;
-}
-
-TRITON_PLUGIN_API
-tritonAddPluginCustomOp(TRITON_PLUGIN_CUSTOM_OP_ARGS) {
-  ::mlir::Value &dst = operands[0];
-  ::mlir::Value &lhs = operands[1];
-  ::mlir::Value &rhs = operands[2];
-  dst = self.create<::mlir::arith::AddFOp>(lhs, rhs);
-  operands[0] = dst;
   return TP_SUCCESS;
 }

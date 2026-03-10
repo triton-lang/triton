@@ -159,17 +159,17 @@ TritonPlugin::getCustomOpHandles(std::vector<const char *> &customOpNames) {
 }
 
 llvm::Expected<TritonPluginResult>
-TritonPlugin::addPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
+TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle) {
   if (auto Err = loadPlugin())
     return Err;
-  return checkAPIResult(addPassAPI(pm, handle, args), handle);
+  return checkAPIResult(addPassAPI(pm, passHandle), passHandle);
 }
 
 llvm::Expected<TritonPluginResult>
-TritonPlugin::registerPass(TRITON_PLUGIN_PASS_ARGS) {
+TritonPlugin::registerPass(const char *passHandle) {
   if (auto Err = loadPlugin())
     return Err;
-  return checkAPIResult(registerPassAPI(handle, args), handle);
+  return checkAPIResult(registerPassAPI(passHandle), passHandle);
 }
 
 llvm::Expected<::mlir::DialectPluginLibraryInfo>

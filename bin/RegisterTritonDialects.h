@@ -158,9 +158,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
     if (auto result = TP.getPassHandles(passNames); !result)
       llvm::report_fatal_error(result.takeError());
 
-    std::vector<std::string> args;
     for (const char *passName : passNames)
-      if (auto result = TP.registerPass(passName, args); !result)
+      if (auto result = TP.registerPass(passName); !result)
         llvm::report_fatal_error(result.takeError());
 
     std::vector<const char *> dialectNames;

@@ -42,7 +42,7 @@ test-unit: all
 	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libTritonPluginsTestLib.so \
 		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
 	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
-		$(PYTEST) -s -vvv python/test/unit/plugins/test_dialect_plugin.py
+		$(PYTEST) -vvv python/test/unit/plugins/test_dialect_plugin.py
 	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
 		$(PYTEST) -s -vvv python/test/unit/plugins/custom_ops.py
 

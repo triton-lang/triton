@@ -1,11 +1,6 @@
 #include "DialectPlugin/DialectPluginDialect.h"
 #include "DialectPlugin/DialectPluginOps.h"
 #include "DialectPlugin/DialectPluginTypes.h"
-#include "mlir/Dialect/Vector/IR/VectorOps.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Tools/PluginUtils.h"
-#include <cstdlib>
 
 using namespace mlir;
 using namespace mlir::triton::plugin;
@@ -24,12 +19,13 @@ void DialectPluginDialect::initialize() {
   registerTypes();
 }
 
-#include "DialectPlugin/DialectPluginDialect.h"
-#include "DialectPlugin/DialectPluginPasses.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/Tools/Plugins/DialectPlugin.h"
+
+#include "DialectPlugin/DialectPluginDialect.h"
+#include "DialectPlugin/DialectPluginPasses.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Tools/Plugins/PassPlugin.h"
 #include "triton/Tools/PluginUtils.h"
 #include "llvm/Config/llvm-config.h"
@@ -56,8 +52,8 @@ static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME};
 // Key APIs:
 
 TRITON_PLUGIN_API
-tritonAddPluginPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
-  std::string passNameStr(handle);
+tritonAddPluginPass(mlir::PassManager *pm, const char *passName) {
+  std::string passNameStr(passName);
   if (passMap.find(passNameStr) == passMap.end())
     return TP_GENERIC_FAILURE;
   passMap[passNameStr](pm);
@@ -65,8 +61,8 @@ tritonAddPluginPass(mlir::PassManager *pm, TRITON_PLUGIN_PASS_ARGS) {
 }
 
 TRITON_PLUGIN_API
-tritonRegisterPluginPass(TRITON_PLUGIN_PASS_ARGS) {
-  std::string passNameStr(handle);
+tritonRegisterPluginPass(const char *passName) {
+  std::string passNameStr(passName);
   if (registryMap.find(passNameStr) == registryMap.end())
     return TP_GENERIC_FAILURE;
   registryMap[passNameStr]();
@@ -74,28 +70,39 @@ tritonRegisterPluginPass(TRITON_PLUGIN_PASS_ARGS) {
 }
 
 TRITON_PLUGIN_API
-tritonEnumeratePluginPasses(TRITON_PLUGIN_ENUMERATOR_ARGS) {
-  if (!count)
+tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
+  if (!passCount)
     return TP_GENERIC_FAILURE;
-  assert(passMap.size() == registryMap.size() &&
+  auto count = passMap.size();
+  assert(count == registryMap.size() &&
          "Expected register and add passes map size to match");
-  *count = passMap.size();
-  if (!handles)
+  *passCount = count;
+  if (!passNames)
     return TP_SUCCESS;
   unsigned i = 0;
   for (auto passName : passNamesTable) {
-    handles[i++] = passName;
+    passNames[i] = passName;
   }
   return TP_SUCCESS;
 }
 
 TRITON_PLUGIN_API
-tritonEnumeratePluginDialects(TRITON_PLUGIN_ENUMERATOR_ARGS) {
-  *count = 1;
-  if (!handles)
+tritonEnumeratePluginDialects(uint32_t *dialectCount,
+                              const char **dialectNames) {
+  *dialectCount = 1;
+  if (!dialectNames)
     return TP_SUCCESS;
-  handles[0] = "DialectPlugin";
+  dialectNames[0] = "DialectPlugin";
   return TP_SUCCESS;
+}
+
+TRITON_PLUGIN_API_TYPE(DialectPluginLibraryInfo)
+tritonGetDialectPluginInfo(const char *name) {
+  return {MLIR_PLUGIN_API_VERSION, "DialectPlugin", LLVM_VERSION_STRING,
+          [](DialectRegistry *registry) {
+            registry->insert<mlir::triton::plugin::DialectPluginDialect>();
+            mlir::triton::plugin::registerpluginPasses();
+          }};
 }
 
 TRITON_PLUGIN_API
@@ -117,13 +124,4 @@ tritonAddPluginCustomOp(TRITON_PLUGIN_CUSTOM_OP_ARGS) {
   dst = self.create<arith::AddFOp>(src, src);
   operands[0] = dst;
   return TP_SUCCESS;
-}
-
-TRITON_PLUGIN_API_TYPE(DialectPluginLibraryInfo)
-tritonGetDialectPluginInfo(const char *name) {
-  return {MLIR_PLUGIN_API_VERSION, "DialectPlugin", LLVM_VERSION_STRING,
-          [](DialectRegistry *registry) {
-            registry->insert<mlir::triton::plugin::DialectPluginDialect>();
-            mlir::triton::plugin::registerpluginPasses();
-          }};
 }
