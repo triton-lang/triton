@@ -3,7 +3,6 @@
 
 #include "Data.h"
 #include <memory>
-#include <thread>
 #include <unordered_map>
 
 namespace proton {
@@ -46,7 +45,6 @@ private:
   PhaseStore<Trace> tracePhases;
   // ScopeId -> EventId
   std::unordered_map<size_t, size_t> scopeIdToEventId;
-  std::unordered_map<std::thread::id, std::vector<size_t>> activeScopeEventIds;
 };
 
 } // namespace proton

@@ -119,6 +119,10 @@ public:
     return traceEvents.find(eventId) != traceEvents.end();
   }
 
+  bool hasEvent(size_t eventId) const {
+    return traceEvents.find(eventId) != traceEvents.end();
+  }
+
   TraceEvent &getEvent(size_t eventId) {
     auto it = traceEvents.find(eventId);
     if (it == traceEvents.end()) {
@@ -147,6 +151,25 @@ private:
   std::map<size_t, TraceContext> traceContextMap;
 };
 
+namespace {
+size_t findParentEventId(const TraceData::Trace &trace,
+                         const std::unordered_map<size_t, size_t> &scopeIdToEventId,
+                         size_t parentContextId) {
+  size_t parentEventId = TraceData::Trace::TraceEvent::DummyId;
+  for (const auto &[_, eventId] : scopeIdToEventId) {
+    if (!trace.hasEvent(eventId)) {
+      continue;
+    }
+    if (trace.getEvent(eventId).contextId == parentContextId &&
+        (parentEventId == TraceData::Trace::TraceEvent::DummyId ||
+         eventId > parentEventId)) {
+      parentEventId = eventId;
+    }
+  }
+  return parentEventId;
+}
+} // namespace
+
 void TraceData::enterScope(const Scope &scope) {
   // enterOp and addMetric maybe called from different threads
   std::unique_lock<std::shared_mutex> lock(mutex);
@@ -156,55 +179,43 @@ void TraceData::enterScope(const Scope &scope) {
     contexts = contextSource->getContexts();
   else
     contexts.push_back(scope.name);
-  auto &scopeEventStack = activeScopeEventIds[std::this_thread::get_id()];
-  const auto parentEventId = scopeEventStack.empty()
-                                 ? Trace::TraceEvent::DummyId
-                                 : scopeEventStack.back();
+  auto parentEventId = Trace::TraceEvent::DummyId;
+  if (contexts.size() > 1) {
+    std::vector<Context> parentContexts(contexts.begin(), contexts.end() - 1);
+    const auto parentContextId = currentTrace->addContexts(parentContexts);
+    parentEventId =
+        findParentEventId(*currentTrace, scopeIdToEventId, parentContextId);
+  }
   auto eventId = currentTrace->addEvent(currentTrace->addContexts(contexts),
                                         parentEventId);
   currentTrace->getEvent(eventId).scopeId = scope.scopeId;
   scopeIdToEventId[scope.scopeId] = eventId;
-  scopeEventStack.push_back(eventId);
 }
 
 void TraceData::exitScope(const Scope &scope) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto threadIt = activeScopeEventIds.find(std::this_thread::get_id());
-  if (auto eventIt = scopeIdToEventId.find(scope.scopeId);
-      eventIt != scopeIdToEventId.end()) {
-    if (threadIt != activeScopeEventIds.end()) {
-      auto &scopeEventStack = threadIt->second;
-      auto stackIt = std::find(scopeEventStack.rbegin(), scopeEventStack.rend(),
-                               eventIt->second);
-      if (stackIt != scopeEventStack.rend()) {
-        scopeEventStack.erase(std::next(stackIt).base());
-      }
-      if (scopeEventStack.empty()) {
-        activeScopeEventIds.erase(threadIt);
-      }
-    }
-    scopeIdToEventId.erase(eventIt);
-  }
+  scopeIdToEventId.erase(scope.scopeId);
 }
 
 DataEntry TraceData::addOp(size_t phase, size_t eventId,
                            const std::vector<Context> &contexts) {
   auto lock = lockIfCurrentOrVirtualPhase(phase);
   auto *trace = phasePtrAs<Trace>(phase);
-  auto parentContextId = 0;
   auto parentEventId = Trace::TraceEvent::DummyId;
+  auto contextId = Trace::TraceContext::RootId;
   if (eventId == Data::kRootEntryId) {
-    parentContextId = Trace::TraceContext::RootId;
-    if (auto scopeIt = activeScopeEventIds.find(std::this_thread::get_id());
-        scopeIt != activeScopeEventIds.end() && !scopeIt->second.empty()) {
-      parentEventId = scopeIt->second.back();
+    if (contexts.size() > 1) {
+      std::vector<Context> parentContexts(contexts.begin(), contexts.end() - 1);
+      const auto parentContextId = trace->addContexts(parentContexts);
+      parentEventId = findParentEventId(*trace, scopeIdToEventId,
+                                        parentContextId);
     }
+    contextId = trace->addContexts(contexts);
   } else {
     auto &event = trace->getEvent(eventId);
-    parentContextId = event.contextId;
     parentEventId = eventId;
+    contextId = trace->addContexts(contexts, event.contextId);
   }
-  const auto contextId = trace->addContexts(contexts, parentContextId);
   const auto newEventId = trace->addEvent(contextId, parentEventId);
   auto &newEvent = trace->getEvent(newEventId);
   return DataEntry(newEventId, phase, newEvent.metricSet);
@@ -304,11 +315,10 @@ struct TimeSpanNs {
   }
 };
 
-void appendCallPathBars(std::vector<CallPathBarRecord> &bars,
-                        const std::vector<Context> &contexts,
-                        const TraceData::Trace::TraceEvent::FlexibleMetricBatches
-                            &metricBatches,
-                        uint64_t minTimeStamp, const TimeSpanNs &span) {
+void appendCallPathBars(
+    std::vector<CallPathBarRecord> &bars, const std::vector<Context> &contexts,
+    const TraceData::Trace::TraceEvent::FlexibleMetricBatches &metricBatches,
+    uint64_t minTimeStamp, const TimeSpanNs &span) {
   if (contexts.size() <= 1 ||
       span.start == std::numeric_limits<uint64_t>::max() ||
       span.end <= span.start) {
@@ -750,7 +760,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
                 linkedFlexibleIt !=
                 sourceEvent.metricSet.linkedFlexibleMetrics.end()) {
               TraceData::Trace::TraceEvent::FlexibleMetricBatch metricBatch;
-              for (const auto &[metricName, metric] : linkedFlexibleIt->second) {
+              for (const auto &[metricName, metric] :
+                   linkedFlexibleIt->second) {
                 metricBatch.emplace(metricName, metric.getValue(0));
               }
               metricBatches.push_back(std::move(metricBatch));
