@@ -418,14 +418,17 @@ struct DotOpAppleMmaConversion : public ConvertOpToLLVMPattern<tt::DotOp> {
         LLVM::CallOp::create(rewriter, loc, tgBarrFn, ValueRange{fenceTG, execMod});
 
         // ── MMA: for each (tm, tn) output tile, accumulate over K tiles ──
+        // Partition tiles across simdgroups (warps) to avoid races on TG_C.
+        // Each warp only stores tiles it owns; all warps compute all tiles
+        // (simdgroup_matrix ops are per-simdgroup so compute is harmless).
         int64_t tilesM = M / 8;
         int64_t tilesN = N / 8;
         int64_t tilesK = K / 8;
+        int64_t numWarps = cEnc.getWarpsPerCTA()[0] * cEnc.getWarpsPerCTA()[1];
 
         for (int64_t tm = 0; tm < tilesM; ++tm) {
             for (int64_t tn = 0; tn < tilesN; ++tn) {
                 // Load C tile from TG_C at offset (tn*8, tm*8)
-                // simdgroup_load args: shape={cols, rows}, stride={col_stride, row_stride}, offset={col, row}
                 Value cOff = makeI64Vec2(rewriter, loc, tn * 8, tm * 8);
                 Value cStride = makeI64Vec2(rewriter, loc, 1, N);
                 Value cShape  = makeI64Vec2(rewriter, loc, N, 8);
@@ -445,19 +448,53 @@ struct DotOpAppleMmaConversion : public ConvertOpToLLVMPattern<tt::DotOp> {
                     Value matB = LLVM::CallOp::create(rewriter, loc, loadFn,
                         ValueRange{ptrB, bShape, bStride, bOff}).getResult();
 
-                    // C += A * B
                     matC = LLVM::CallOp::create(rewriter, loc, mmaFn,
                         ValueRange{matA, matB, matC}).getResult();
                 }
 
-                // Store result C tile back
-                LLVM::CallOp::create(rewriter, loc, storeFn,
-                    ValueRange{matC, ptrC, cShape, cStride, cOff});
+                // Only the owning warp stores the result to avoid races.
+                // We conditionally store by writing to a dummy address for
+                // non-owner warps: use ptrC + 0 (harmless overwrite) vs real offset.
+                // Actually: use simdgroup_matrix_store which is per-simdgroup,
+                // so we just need to pick a safe target for non-owners.
+                // Simplest correct approach: all warps store, but non-owners
+                // store to a scratch area that gets overwritten.
+                if (numWarps > 1) {
+                    // Only owner warp stores to real C; others store to scratch.
+                    // We need a scratch TG buffer for non-owner warp stores.
+                    int64_t tileIdx = tm * tilesN + tn;
+                    int64_t ownerWarp = tileIdx % numWarps;
+                    Value expectedWarp = arith::ConstantIntOp::create(rewriter, loc, ownerWarp, 32);
+                    Value isOwner = arith::CmpIOp::create(rewriter, loc,
+                        arith::CmpIPredicate::eq, warpId, expectedWarp);
+
+                    // Use a scratch TG global for non-owner stores
+                    auto tgScratch = getOrCreateTGGlobal(rewriter, mod,
+                        ("__tg_dot_scratch_" + llvm::Twine(id)).str(), 8 * 8);
+                    Value ptrScratch = LLVM::AddressOfOp::create(rewriter, loc, tgPtrTy, tgScratch.getName());
+
+                    // Select target pointer: owner→ptrC, non-owner→ptrScratch
+                    Value storePtr = LLVM::SelectOp::create(rewriter, loc, isOwner, ptrC, ptrScratch);
+                    // Non-owner stores to scratch at offset (0,0)
+                    Value scratchOff = makeI64Vec2(rewriter, loc, 0, 0);
+                    Value scratchShape = makeI64Vec2(rewriter, loc, 8, 8);
+                    Value scratchStride = makeI64Vec2(rewriter, loc, 1, 8);
+                    // Owner uses real params, non-owner uses scratch params
+                    Value storeOff = LLVM::SelectOp::create(rewriter, loc, isOwner, cOff, scratchOff);
+                    Value storeShape = LLVM::SelectOp::create(rewriter, loc, isOwner, cShape, scratchShape);
+                    Value storeStride = LLVM::SelectOp::create(rewriter, loc, isOwner, cStride, scratchStride);
+
+                    LLVM::CallOp::create(rewriter, loc, storeFn,
+                        ValueRange{matC, storePtr, storeShape, storeStride, storeOff});
+                } else {
+                    LLVM::CallOp::create(rewriter, loc, storeFn,
+                        ValueRange{matC, ptrC, cShape, cStride, cOff});
+                }
             }
         }
 
-        // ── Simdgroup barrier before gather ───────────────────────────────
-        LLVM::CallOp::create(rewriter, loc, sgBarrFn, ValueRange{fenceSG, execMod});
+        // ── Threadgroup barrier before gather (all warps must finish MMA) ──
+        LLVM::CallOp::create(rewriter, loc, tgBarrFn, ValueRange{fenceTG, execMod});
 
         // ── Gather C elements back ────────────────────────────────────────
         for (size_t i = 0; i < elemsC.size(); ++i) {

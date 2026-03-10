@@ -56,6 +56,9 @@ class MPSUtils:
         function = getattr(module, name)
         return module, function, 0, 0, 1024
 
+    def unload_module(self, module):
+        del module
+
     def get_device_properties(self, device):
         return {
             "warpSize":            32,
@@ -121,8 +124,10 @@ class MPSLauncher:
         #   (*args, threads=[gx,gy,gz], group_size=[lx,ly,lz], arg_casts=dict|None)
         # Strip constexpr args — they're not in the compiled IR, so Metal slots
         # must be contiguous over non-constexpr args only.
+        from triton.runtime.jit import TensorWrapper
         filtered_args = tuple(
-            a for i, a in enumerate(args) if i not in self.constexpr_py_slots
+            (a.base if isinstance(a, TensorWrapper) else a)
+            for i, a in enumerate(args) if i not in self.constexpr_py_slots
         )
         import os as _os
         if _os.environ.get('TRITON_MPS_DEBUG'):

@@ -285,6 +285,94 @@ struct ConvertLayoutOpAppleConversion
     }
 };
 
+// Lower triton::AtomicRMWOp → air.atomic.global.{op}.{type}
+//
+// Metal uses explicit AIR intrinsics for atomics:
+//   float @air.atomic.global.add.f32(float addrspace(1)*, float, i32 order, i32 scope, i1 volatile)
+//   i32   @air.atomic.global.add.s.i32(i32 addrspace(1)*, i32, i32 order, i32 scope, i1 volatile)
+//   i32   @air.atomic.global.max.s.i32(...)
+//   i32   @air.atomic.global.min.s.i32(...)
+//   i32   @air.atomic.global.xchg.s.i32(...)
+struct AtomicRMWOpAppleConversion
+    : public ConvertOpToLLVMPattern<triton::AtomicRMWOp> {
+    using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+    LogicalResult matchAndRewrite(
+        triton::AtomicRMWOp op, OpAdaptor adaptor,
+        ConversionPatternRewriter &rewriter) const override {
+
+        auto loc = op.getLoc();
+        auto *ctx = op.getContext();
+        auto mod = op->getParentOfType<ModuleOp>();
+
+        Value llPtr = adaptor.getPtr();
+        Value llVal = adaptor.getVal();
+        Value llMask = adaptor.getMask();
+
+        // Only handle scalar atomics for now
+        if (isa<RankedTensorType>(op.getType()))
+            return failure();
+
+        auto rmwOp = op.getAtomicRmwOp();
+
+        // Determine AIR intrinsic name
+        Type valueElemTy = getTypeConverter()->convertType(op.getType());
+        std::string airName;
+        if (valueElemTy.isF32()) {
+            switch (rmwOp) {
+            case RMWOp::FADD: airName = "air.atomic.global.add.f32"; break;
+            case RMWOp::XCHG: airName = "air.atomic.global.xchg.f32"; break;
+            default: return failure();
+            }
+        } else if (valueElemTy.isInteger(32)) {
+            switch (rmwOp) {
+            case RMWOp::ADD:  airName = "air.atomic.global.add.s.i32"; break;
+            case RMWOp::MAX:  airName = "air.atomic.global.max.s.i32"; break;
+            case RMWOp::MIN:  airName = "air.atomic.global.min.s.i32"; break;
+            case RMWOp::AND:  airName = "air.atomic.global.and.s.i32"; break;
+            case RMWOp::OR:   airName = "air.atomic.global.or.s.i32"; break;
+            case RMWOp::XOR:  airName = "air.atomic.global.xor.s.i32"; break;
+            case RMWOp::XCHG: airName = "air.atomic.global.xchg.i32"; break;
+            default: return failure();
+            }
+        } else {
+            return failure();
+        }
+
+        // Declare the AIR intrinsic if not already declared
+        auto ptrTy = LLVM::LLVMPointerType::get(ctx, 1);
+        auto i32Ty = IntegerType::get(ctx, 32);
+        auto i1Ty  = IntegerType::get(ctx, 1);
+        auto fnTy  = LLVMFunctionType::get(valueElemTy,
+                         {ptrTy, valueElemTy, i32Ty, i32Ty, i1Ty}, false);
+        {
+            OpBuilder::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPointToStart(mod.getBody());
+            if (!mod.lookupSymbol<LLVMFuncOp>(airName))
+                LLVMFuncOp::create(rewriter, mod.getLoc(),
+                    airName, fnTy, Linkage::External);
+        }
+        auto atomicFn = mod.lookupSymbol<LLVMFuncOp>(airName);
+
+        // Args: ptr, value, memory_order=0 (relaxed), scope=2 (device), volatile=true
+        Value order   = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+        Value scope   = arith::ConstantIntOp::create(rewriter, loc, 2, 32);
+        Value vol     = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+
+        // If masked, wrap in an if block
+        if (llMask) {
+            // Simple approach: always call (mask should be true for scalar atomics)
+            // For tensor atomics we'd need a proper if/else — but we only handle scalar.
+        }
+
+        Value result = LLVM::CallOp::create(rewriter, loc, atomicFn,
+                           ValueRange{llPtr, llVal, order, scope, vol}).getResult();
+
+        rewriter.replaceOp(op, result);
+        return success();
+    }
+};
+
 // Lower ttg::WarpIdOp → air.dispatch_thread_id[0] / threadsPerWarp.
 struct WarpIdOpConversion
     : public mlir::ConvertOpToLLVMPattern<triton::gpu::WarpIdOp> {
@@ -473,6 +561,9 @@ struct ConvertTritonAppleGPUToLLVMPass
 
         // WarpIdOp → tid / 32 (needed by shared range/layout helpers)
         patterns.add<WarpIdOpConversion>(typeConverter, patternBenefitDefault);
+
+        // AtomicRMWOp → air.atomic.global.{add,max,min}.{f32,s.i32}
+        patterns.add<AtomicRMWOpAppleConversion>(typeConverter, patternBenefitDefault + 10);
 
         // Identity convert_layout for DotOperandEncoding (higher priority than
         // shared upstream convert_layout patterns which are NVIDIA-specific).

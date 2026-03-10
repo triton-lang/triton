@@ -128,6 +128,9 @@ def check_type_supported(dtype, device):
             pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
         if cc[0] < 9 and dtype in {tl.float8e4nv, "float8e4nv", "float8_e4m3fn"}:
             pytest.skip("float8e4nv is only supported on NVGPU with cc >= 90")
+    if device == 'mps':
+        if dtype in [tl.float64, "float64", torch.float64]:
+            pytest.skip("float64 is not supported on MPS")
     if is_interpreter():
         if dtype in [tl.bfloat16, "bfloat16", torch.bfloat16]:
             pytest.skip("bfloat16 is not supported in the interpreter")
@@ -294,6 +297,8 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
             z_ref = z_ref.astype(dtype_z)
 
         # triton result
+        if device == 'mps' and z_ref.dtype == np.float64:
+            pytest.skip("MPS does not support float64 output")
         x_tri = x if x_is_scalar else to_triton(x, device=device, dst_type=dtype_x)
         y_tri = y if y_is_scalar else to_triton(y, device=device, dst_type=dtype_y)
         z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
@@ -4636,6 +4641,8 @@ def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr, device):
     z = np.array(eval(f"{x_str} {op} {y_str}"))
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
+    if device == 'mps' and z.dtype == np.float64:
+        pytest.skip("MPS does not support float64 output")
     z_tri = to_triton(np.empty((1, ), dtype=z.dtype), device=device)
     kernel[(1, )](z_tri, x_tri, y_tri)
     np.testing.assert_allclose(z, to_numpy(z_tri), rtol=1e-3)

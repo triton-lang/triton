@@ -68,6 +68,15 @@ struct AddPtrOpConversion : public ConvertOpToLLVMPattern<triton::AddPtrOp> {
         }
         if (!elemTy) return failure();
 
+        // Scalar addptr: bare pointer + scalar offset → single GEP.
+        if (!isa<LLVMStructType>(base.getType())) {
+            Value gep = LLVM::GEPOp::create(rewriter, loc,
+                base.getType(), elemTy, base,
+                ArrayRef<LLVM::GEPArg>{offset});
+            rewriter.replaceOp(op, gep);
+            return success();
+        }
+
         auto basePtrs   = unpackElems(base,   rewriter, loc);
         auto offsets    = unpackElems(offset, rewriter, loc);
 
@@ -97,9 +106,24 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp> {
         Type resultTy = getTypeConverter()->convertType(op.getType());
         if (!resultTy) return failure();
 
+        // Scalar load: ptr is a bare LLVM pointer, result is a scalar type.
+        if (!isa<LLVMStructType>(ptr.getType())) {
+            Value val = LLVM::LoadOp::create(rewriter, loc, resultTy, ptr);
+            Value maskOperand  = adaptor.getMask();
+            Value otherOperand = adaptor.getOther();
+            if (maskOperand) {
+                Value other = otherOperand
+                    ? otherOperand
+                    : LLVM::UndefOp::create(rewriter, loc, resultTy);
+                val = LLVM::SelectOp::create(rewriter, loc, maskOperand, val, other);
+            }
+            rewriter.replaceOp(op, val);
+            return success();
+        }
+
         auto ptrs = unpackElems(ptr, rewriter, loc);
 
-        // resultTy is always a struct (even 1-element tensors → struct<(f32)>).
+        // Tensor load: resultTy is a struct (even 1-element tensors → struct<(f32)>).
         auto sTy = dyn_cast<LLVMStructType>(resultTy);
         if (!sTy || sTy.getBody().size() != ptrs.size())
             return failure();
