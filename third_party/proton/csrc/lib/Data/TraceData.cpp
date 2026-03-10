@@ -309,12 +309,9 @@ struct CycleMetricWithContext {
   const CycleMetric *cycleMetric;
   // Full call path captured for this cycle metric event.
   std::vector<Context> contexts;
-  std::vector<CallPathFrame> callPathFrames;
 
-  CycleMetricWithContext(const CycleMetric *metric, std::vector<Context> ctx,
-                         std::vector<CallPathFrame> callPathFrames)
-      : cycleMetric(metric), contexts(std::move(ctx)),
-        callPathFrames(std::move(callPathFrames)) {}
+  CycleMetricWithContext(const CycleMetric *metric, std::vector<Context> ctx)
+      : cycleMetric(metric), contexts(std::move(ctx)) {}
 };
 
 struct KernelMetricWithContext {
@@ -728,10 +725,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
               cycleIt != metrics.end()) {
             auto *cycleMetric =
                 static_cast<CycleMetric *>(cycleIt->second.get());
-            auto callPathFrames =
-                buildCallPathFrames(contexts, pathMetrics, streamPathMetrics,
-                                    pathStreams);
-            cycleEvents.emplace_back(cycleMetric, contexts, callPathFrames);
+            cycleEvents.emplace_back(cycleMetric, contexts);
             hasCycleMetrics = true;
           }
         };
