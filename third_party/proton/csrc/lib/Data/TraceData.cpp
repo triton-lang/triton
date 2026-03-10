@@ -199,7 +199,8 @@ std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
 namespace {
 using PathKey = std::vector<std::string>;
 using FlexibleMetricMap = std::map<std::string, FlexibleMetric>;
-using StreamPathMetricMap = std::map<size_t, std::map<PathKey, FlexibleMetricMap>>;
+using StreamPathMetricMap =
+    std::map<size_t, std::map<PathKey, FlexibleMetricMap>>;
 using PathStreamMap = std::map<PathKey, std::set<size_t>>;
 
 struct CallPathFrame {
@@ -578,7 +579,8 @@ void dumpKernelMetricTrace(
       element["ts"] = ts;
       element["dur"] = dur;
       element["tid"] = "kernels";
-      element["args"]["call_stack"] = buildCallStackJson(contextsToNames(contexts));
+      element["args"]["call_stack"] =
+          buildCallStackJson(contextsToNames(contexts));
 
       object["traceEvents"].push_back(element);
     }
@@ -657,7 +659,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
 
       if (auto kernelIt = event.metricSet.metrics.find(MetricKind::Kernel);
           kernelIt != event.metricSet.metrics.end()) {
-        auto *kernelMetric = static_cast<KernelMetric *>(kernelIt->second.get());
+        auto *kernelMetric =
+            static_cast<KernelMetric *>(kernelIt->second.get());
         const auto streamId =
             std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId));
         recordPathStreams(streamId, baseContexts);
@@ -674,14 +677,15 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
         if (auto linkedFlexibleIt =
                 event.metricSet.linkedFlexibleMetrics.find(targetEntryId);
             linkedFlexibleIt != event.metricSet.linkedFlexibleMetrics.end()) {
-          recordFlexibleMetrics(pathMetrics, linkedFlexibleIt->second, contexts);
+          recordFlexibleMetrics(pathMetrics, linkedFlexibleIt->second,
+                                contexts);
         }
         if (auto kernelIt = linkedMetrics.find(MetricKind::Kernel);
             kernelIt != linkedMetrics.end()) {
           auto *kernelMetric =
               static_cast<KernelMetric *>(kernelIt->second.get());
-          const auto streamId =
-              std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId));
+          const auto streamId = std::get<uint64_t>(
+              kernelMetric->getValue(KernelMetric::StreamId));
           recordPathStreams(streamId, contexts);
           recordFlexibleMetrics(streamPathMetrics[streamId],
                                 event.metricSet.flexibleMetrics, baseContexts);

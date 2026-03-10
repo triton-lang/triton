@@ -939,7 +939,8 @@ def test_trace_flexible_metrics_render_on_call_path_bars(tmp_path: pathlib.Path,
     with temp_file.open() as f:
         data = json.load(f)
     trace_events = data["traceEvents"]
-    metric_bar = next(event for event in trace_events if event["cat"] == "call_path" and event["name"] == "metric_scope")
+    metric_bar = next(event for event in trace_events
+                      if event["cat"] == "call_path" and event["name"] == "metric_scope")
     foo_event = next(event for event in trace_events if event["cat"] == "kernel" and event["name"] == "foo")
 
     assert metric_bar["args"]["score"] == 7.0
