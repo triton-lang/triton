@@ -10,8 +10,17 @@ namespace mlir::triton::applegpu {
 // Lower AppleMmaEncoding tt.dot → simdgroup_multiply_accumulate LLVM calls
 std::unique_ptr<mlir::Pass> createConvertTritonAppleGPUToLLVMPass();
 
+// Lower remaining gpu.thread_id / gpu.block_dim → air intrinsics / constants
+std::unique_ptr<mlir::Pass> createLowerGPUToAirPass();
+
 // Populate just the dot op patterns (for use in combined lowering passes)
 void populateDotOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter,
+    mlir::RewritePatternSet &patterns,
+    mlir::PatternBenefit benefit = 1);
+
+// Populate load/store/addptr patterns
+void populateLoadStoreToLLVMPatterns(
     mlir::LLVMTypeConverter &typeConverter,
     mlir::RewritePatternSet &patterns,
     mlir::PatternBenefit benefit = 1);

@@ -103,10 +103,22 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp> {
         auto sTy = dyn_cast<LLVMStructType>(resultTy);
         if (!sTy || sTy.getBody().size() != ptrs.size())
             return failure();
+        Value maskOperand  = adaptor.getMask();
+        Value otherOperand = adaptor.getOther();
+        auto masks  = maskOperand  ? unpackElems(maskOperand,  rewriter, loc) : SmallVector<Value>{};
+        auto others = otherOperand ? unpackElems(otherOperand, rewriter, loc) : SmallVector<Value>{};
+
         SmallVector<Value> loaded;
-        for (size_t i = 0; i < ptrs.size(); ++i)
-            loaded.push_back(LLVM::LoadOp::create(rewriter, loc,
-                sTy.getBody()[i], ptrs[i]));
+        for (size_t i = 0; i < ptrs.size(); ++i) {
+            Value val = LLVM::LoadOp::create(rewriter, loc, sTy.getBody()[i], ptrs[i]);
+            if (!masks.empty()) {
+                Value other = others.empty()
+                    ? LLVM::UndefOp::create(rewriter, loc, sTy.getBody()[i])
+                    : others[i];
+                val = LLVM::SelectOp::create(rewriter, loc, masks[i], val, other);
+            }
+            loaded.push_back(val);
+        }
         rewriter.replaceOp(op, packElems(loaded, rewriter, loc));
         return success();
     }
@@ -129,9 +141,19 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp> {
         if (ptrs.size() != vals.size())
             return failure();
 
-        for (size_t i = 0; i < ptrs.size(); ++i)
-            LLVM::StoreOp::create(rewriter, loc, vals[i], ptrs[i]);
+        Value maskOperand = adaptor.getMask();
+        auto masks = maskOperand ? unpackElems(maskOperand, rewriter, loc) : SmallVector<Value>{};
 
+        for (size_t i = 0; i < ptrs.size(); ++i) {
+            Value toStore = vals[i];
+            if (!masks.empty() && masks[i]) {
+                // Masked store: load existing value, select(mask, new_val, existing)
+                // so unmasked lanes write back what was already there (no-op).
+                Value existing = LLVM::LoadOp::create(rewriter, loc, vals[i].getType(), ptrs[i]);
+                toStore = LLVM::SelectOp::create(rewriter, loc, masks[i], vals[i], existing);
+            }
+            LLVM::StoreOp::create(rewriter, loc, toStore, ptrs[i]);
+        }
         rewriter.eraseOp(op);
         return success();
     }

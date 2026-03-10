@@ -126,6 +126,9 @@ class MPSLauncher:
         )
         import os as _os
         if _os.environ.get('TRITON_MPS_DEBUG'):
+            _threads = [gridX * self.lx, gridY * self.ly, gridZ * self.lz]
+            _gs = [self.lx, self.ly, self.lz]
+            print(f'[MPS] threads={_threads} group_size={_gs} grid=({gridX},{gridY},{gridZ})')
             print(f'[MPS] filtered_args={filtered_args} arg_casts={self.arg_casts}')
         function(
             *filtered_args,

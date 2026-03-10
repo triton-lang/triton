@@ -5,6 +5,7 @@
 #include "TritonAppleGPUTransforms/Passes.h"
 #include "TritonAppleGPUToLLVM/Passes.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Conversion/Passes.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -25,6 +26,18 @@ void init_triton_apple_passes_ttgpuir(py::module &&m) {
             pm.addPass(applegpu::createConvertTritonAppleGPUToLLVMPass());
         },
         "Lower TritonGPU IR with AppleMmaEncoding to LLVM IR with simdgroup intrinsics");
+
+    m.def("add_lower_gpu_to_air",
+        [](mlir::PassManager &pm) {
+            pm.addPass(applegpu::createLowerGPUToAirPass());
+        },
+        "Lower gpu.thread_id/block_dim to air intrinsics/constants");
+
+    m.def("add_reconcile_unrealized_casts",
+        [](mlir::PassManager &pm) {
+            pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+        },
+        "Reconcile/eliminate leftover unrealized_conversion_cast ops");
 }
 
 // Dialect registration
@@ -57,7 +70,7 @@ void init_triton_apple_metal(py::module &&m) {
         });
 }
 
-PYBIND11_MODULE(triton_apple, m) {
+void init_triton_apple(py::module &&m) {
     m.doc() = "Apple MPS backend for Triton";
 
     init_triton_apple_passes_ttgpuir(m.def_submodule("passes")

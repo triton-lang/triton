@@ -2,6 +2,8 @@ add_triton_library(TritonAppleGPUToLLVM
   Dialect.cpp
   AppleMmaLayoutConversions.cpp
   DotOpToLLVM.cpp
+  LoadStoreToLLVM.cpp
+  TargetInfo.cpp
   ConvertTritonAppleGPUToLLVM.cpp
 
   DEPENDS
@@ -9,6 +11,12 @@ add_triton_library(TritonAppleGPUToLLVM
   TritonAppleGPUAttrDefsIncGen
   TritonGPUIR
   MLIRLLVMDialect
+  MLIRGPUDialect
+  MLIRArithToLLVM
+  MLIRMathToLLVM
+  MLIRControlFlowToLLVM
+  MLIRIndexToLLVM
+  MLIRReconcileUnrealizedCasts
 )
 
 target_include_directories(TritonAppleGPUToLLVM PUBLIC

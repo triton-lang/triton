@@ -69,9 +69,14 @@ struct BlockedToAppleMma : public OpRewritePattern<tt::DotOp> {
         auto cType = cast<RankedTensorType>(dot.getC().getType());
         auto aType = cast<RankedTensorType>(dot.getA().getType());
 
-        // Only rewrite if output has BlockedEncoding
-        if (!isa<ttg::BlockedEncodingAttr>(cType.getEncoding()))
-            return failure();
+        // Skip — keep BlockedEncoding on dot ops.
+        // AppleMmaEncoding rewrite causes verifier failures (Triton's
+        // DotOp verifier only accepts known parent layouts for DotOperandEncoding,
+        // and DialectInferLayoutInterface is not yet registered for Apple dialect).
+        // The DotOpToLLVM conversion handles BlockedEncoding dot ops directly.
+        (void)cType;
+        (void)aType;
+        return failure();
 
         // Check supported element types
         if (!isSupportedDotType(aType.getElementType()))
@@ -88,17 +93,15 @@ struct BlockedToAppleMma : public OpRewritePattern<tt::DotOp> {
 
         auto newCType = RankedTensorType::get(shape, cType.getElementType(), mmaEnc);
 
-        // Operands A, B need DotOperandEncoding wrapping the mma parent
-        auto aEnc = ttg::DotOperandEncodingAttr::get(ctx, /*opIdx=*/0, mmaEnc,
-                                                      /*kWidth=*/1);
-        auto bEnc = ttg::DotOperandEncodingAttr::get(ctx, /*opIdx=*/1, mmaEnc,
-                                                      /*kWidth=*/1);
-
+        // Keep A, B with AppleMmaEncoding (same as C) — DotOperandEncoding
+        // not used because Triton's verifier doesn't know AppleMmaEncoding
+        // as a valid DotOperandEncoding parent. The DotOpToLLVM conversion
+        // handles unblocking via the TG scatter/gather path.
         auto newAType = RankedTensorType::get(aType.getShape(),
-                                              aType.getElementType(), aEnc);
+                                              aType.getElementType(), mmaEnc);
         auto newBType = RankedTensorType::get(
             cast<RankedTensorType>(dot.getB().getType()).getShape(),
-            cast<RankedTensorType>(dot.getB().getType()).getElementType(), bEnc);
+            cast<RankedTensorType>(dot.getB().getType()).getElementType(), mmaEnc);
 
         // Insert layout conversions for operands
         auto loc = dot.getLoc();
