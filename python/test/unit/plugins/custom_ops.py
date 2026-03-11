@@ -45,7 +45,7 @@ def get_hash():
 @builtin
 def custom_op(x, sanitize_overflow: tl.constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
-    builder = _semantic.getBuilder()
+    builder = _semantic.builder
     arg_handles = []
     arg_handles.extend(flatten_values_to_ir([x]))
     return tl.tensor(builder.create_custom_op(arg_handles), x.type)
