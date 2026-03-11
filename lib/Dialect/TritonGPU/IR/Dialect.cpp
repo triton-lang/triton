@@ -2974,18 +2974,18 @@ struct TritonGPUInferLayoutInterface
     }
 
     // For AMDWmmaEncodingAttr verify multi-cta CGA layout compatibility
-    auto wmmaAEncoding = dyn_cast<AMDWmmaEncodingAttr>(aEncoding.getParent());
-    auto wmmaBEncoding = dyn_cast<AMDWmmaEncodingAttr>(bEncoding.getParent());
+    auto wmmaAParentEnc = dyn_cast<AMDWmmaEncodingAttr>(aEncoding.getParent());
+    auto wmmaBParentEnc = dyn_cast<AMDWmmaEncodingAttr>(bEncoding.getParent());
     auto wmmaResEncoding = dyn_cast<AMDWmmaEncodingAttr>(resEnc);
-    if (wmmaAEncoding && wmmaBEncoding && wmmaResEncoding) {
+    if (wmmaAParentEnc && wmmaBParentEnc && wmmaResEncoding) {
       auto resLL = wmmaResEncoding.getCGALayout().getLinearLayout();
 
       if (!resLL.isInvertible())
         return op->emitError("Accumulator CGA layout should not broadcast or "
                              "have repeated rows");
 
-      auto aLL = wmmaAEncoding.getCGALayout().getLinearLayout();
-      auto bLL = wmmaBEncoding.getCGALayout().getLinearLayout();
+      auto aLL = aEncoding.getCGALayout().getLinearLayout();
+      auto bLL = bEncoding.getCGALayout().getLinearLayout();
       // In multi-CTA, the CGA layout of operand 0 broadcasts across dim1 and
       // operand 1 broadcasts across dim0.
       auto ctx = op->getContext();
