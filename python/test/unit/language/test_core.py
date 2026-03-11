@@ -6256,6 +6256,22 @@ def test_constexpr_reassign_in_loop(device):
     assert torch.equal(out, expected)
 
 
+def test_user_constexpr_reassign_in_loop_errors(device):
+    # User-annotated tl.constexpr locals must NOT be relaxed to runtime
+    # values inside loops — that's a genuine type error.
+
+    @triton.jit
+    def kernel(out, BLOCK: tl.constexpr):
+        x: tl.constexpr = 1
+        for i in range(BLOCK):
+            tl.store(out + i, x)
+            x = tl.load(out + i)  # constexpr -> tensor: should fail
+
+    out = torch.zeros(4, dtype=torch.int32, device=device)
+    with pytest.raises(Exception):
+        kernel[(1, )](out, 4)
+
+
 @pytest.mark.interpreter
 def test_num_programs(device):
     # Assuming that the kernel is launched with a grid of (11, 21, 31)
