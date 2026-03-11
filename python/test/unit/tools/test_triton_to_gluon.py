@@ -8,7 +8,7 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton.tools.triton_to_gluon_translator.translator import convert_triton_to_gluon
 from triton.tools.triton_to_gluon_translator.translator_helpers import convert_host_descriptor
-from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda, is_hip_gfx1250
+from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda, is_hip_gfx1250, is_hip_cdna3, is_hip_cdna4
 
 
 def convert_kernel(kernel, kernel_name, tmp_path, target="nvidia"):
@@ -382,6 +382,136 @@ def test_split_gfx1250(tmp_path):
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
 def test_reduce_to_scalar_gfx1250(tmp_path):
     kernel = convert_kernel(reduce_to_scalar_kernel, "reduce_to_scalar_kernel", tmp_path, target="amd_gfx1250")
+    grid = (1, )
+
+    out = torch.empty((1, ), device="cuda", dtype=torch.int32)
+    kernel[grid](out)
+    ref = torch.empty_like(out)
+    reduce_to_scalar_kernel[grid](ref)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+# --- CDNA3 (gfx942) translator tests ---
+
+
+@pytest.mark.skipif(not is_hip_cdna3(), reason="Requires gfx942")
+def test_simple_kernel_cdna3(tmp_path):
+    kernel = convert_kernel(add_kernel, "add_kernel", tmp_path, target="gfx942")
+
+    n = 1024
+    BLOCK = 128
+    x = torch.randn(n, device="cuda", dtype=torch.float32)
+    y = torch.randn(n, device="cuda", dtype=torch.float32)
+    out = torch.empty_like(x)
+    grid = (n // BLOCK, )
+    kernel[grid](x, y, out, n, BLOCK)
+
+    ref = torch.empty_like(x)
+    add_kernel[grid](x, y, ref, n, BLOCK)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_cdna3(), reason="Requires gfx942")
+def test_triton_to_gluon_dot_minimal_cdna3(tmp_path):
+    kernel = convert_kernel(matmul_tile_kernel, "matmul_tile_kernel", tmp_path, target="gfx942")
+    M, N, K = 128, 128, 128
+    a = torch.randn((M, K), device="cuda", dtype=torch.float16)
+    b = torch.randn((K, N), device="cuda", dtype=torch.float16)
+    grid = (1, )
+
+    c = torch.empty((M, N), device="cuda", dtype=torch.float32)
+    kernel[grid](a, b, c, M, N, K, num_warps=4)
+
+    ref = torch.empty_like(c)
+    matmul_tile_kernel[grid](a, b, ref, M, N, K, num_warps=4)
+    torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("TRANS_KIND", ["trans_method", "tl_trans_separate", "tl_trans_tuple", "tl_trans"])
+@pytest.mark.skipif(not is_hip_cdna3(), reason="Requires gfx942")
+def test_triton_reshape_trans_cdna3(tmp_path, TRANS_KIND):
+    kernel = convert_kernel(reshape_trans_kernel, "reshape_trans_kernel", tmp_path, target="gfx942")
+
+    n = 1024
+    BLOCK = 256
+    x = torch.randn(n, device="cuda", dtype=torch.float32)
+    y = torch.randn(n, device="cuda", dtype=torch.float32)
+    out = torch.empty_like(x)
+    grid = (n // BLOCK, )
+    kernel[grid](x, y, out, n, BLOCK, TRANS_KIND)
+    ref = torch.empty_like(x)
+    reshape_trans_kernel[grid](x, y, ref, n, BLOCK, TRANS_KIND)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_cdna3(), reason="Requires gfx942")
+def test_reduce_to_scalar_cdna3(tmp_path):
+    kernel = convert_kernel(reduce_to_scalar_kernel, "reduce_to_scalar_kernel", tmp_path, target="gfx942")
+    grid = (1, )
+
+    out = torch.empty((1, ), device="cuda", dtype=torch.int32)
+    kernel[grid](out)
+    ref = torch.empty_like(out)
+    reduce_to_scalar_kernel[grid](ref)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+# --- CDNA4 (gfx950) translator tests ---
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires gfx950")
+def test_simple_kernel_cdna4(tmp_path):
+    kernel = convert_kernel(add_kernel, "add_kernel", tmp_path, target="gfx950")
+
+    n = 1024
+    BLOCK = 128
+    x = torch.randn(n, device="cuda", dtype=torch.float32)
+    y = torch.randn(n, device="cuda", dtype=torch.float32)
+    out = torch.empty_like(x)
+    grid = (n // BLOCK, )
+    kernel[grid](x, y, out, n, BLOCK)
+
+    ref = torch.empty_like(x)
+    add_kernel[grid](x, y, ref, n, BLOCK)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires gfx950")
+def test_triton_to_gluon_dot_minimal_cdna4(tmp_path):
+    kernel = convert_kernel(matmul_tile_kernel, "matmul_tile_kernel", tmp_path, target="gfx950")
+    M, N, K = 128, 128, 128
+    a = torch.randn((M, K), device="cuda", dtype=torch.float16)
+    b = torch.randn((K, N), device="cuda", dtype=torch.float16)
+    grid = (1, )
+
+    c = torch.empty((M, N), device="cuda", dtype=torch.float32)
+    kernel[grid](a, b, c, M, N, K, num_warps=4)
+
+    ref = torch.empty_like(c)
+    matmul_tile_kernel[grid](a, b, ref, M, N, K, num_warps=4)
+    torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("TRANS_KIND", ["trans_method", "tl_trans_separate", "tl_trans_tuple", "tl_trans"])
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires gfx950")
+def test_triton_reshape_trans_cdna4(tmp_path, TRANS_KIND):
+    kernel = convert_kernel(reshape_trans_kernel, "reshape_trans_kernel", tmp_path, target="gfx950")
+
+    n = 1024
+    BLOCK = 256
+    x = torch.randn(n, device="cuda", dtype=torch.float32)
+    y = torch.randn(n, device="cuda", dtype=torch.float32)
+    out = torch.empty_like(x)
+    grid = (n // BLOCK, )
+    kernel[grid](x, y, out, n, BLOCK, TRANS_KIND)
+    ref = torch.empty_like(x)
+    reshape_trans_kernel[grid](x, y, ref, n, BLOCK, TRANS_KIND)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires gfx950")
+def test_reduce_to_scalar_cdna4(tmp_path):
+    kernel = convert_kernel(reduce_to_scalar_kernel, "reduce_to_scalar_kernel", tmp_path, target="gfx950")
     grid = (1, )
 
     out = torch.empty((1, ), device="cuda", dtype=torch.int32)

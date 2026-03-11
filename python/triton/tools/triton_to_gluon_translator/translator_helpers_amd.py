@@ -1,7 +1,8 @@
 # type: ignore
 #
-# AMD gfx1250 translator helpers. Mirrors translator_helpers.py (NVIDIA) but
-# targets WMMA and TDM instead of tcgen05/TMA.
+# AMD translator helpers. Supports gfx1250 (WMMA), cdna3/gfx942 (MFMA v3),
+# and cdna4/gfx950 (MFMA v4). Dispatches at compile time via current_target(),
+# same pattern as the NVIDIA helpers dispatch between Blackwell and Hopper.
 
 import math
 from typing import Any
@@ -11,24 +12,15 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.amd.gfx1250 import wmma, wmma_scaled
 from triton.experimental.gluon.language.amd.gfx1250 import tdm as amd_tdm
 from triton.experimental.gluon.language.amd.gfx1250 import mbarrier as amd_mbarrier
+from triton.experimental.gluon.language.amd.cdna3 import mfma
 from triton.language.core import _unwrap_if_constexpr
 
-# Target-agnostic helpers reused from the existing module.
+# Warp-size-independent helpers reused from the existing module.
 from triton.tools.triton_to_gluon_translator.translator_helpers import (
-    default_blocked_layout,
-    get_num_threads_per_warp,
-    get_num_threads_per_program,
-    tl_arange,
-    tl_full,
     tl_trans,
-    tl_cat,
     cat,
     cat_with_permute,
     _wrap_axis,
-    reset_to_default_layout,
-    set_split_src_layout,
-    get_split_src_layout,
-    convert_to_expand_dims_layout,
     tl_atomic_add,
     current_target,
     get_int_type,
@@ -43,7 +35,152 @@ from triton.tools.triton_to_gluon_translator.translator_helpers import (
     tl_dot_decomposed_scale_arg,
 )
 
-# ---- WMMA layout helpers ----
+# ---- warp size and blocked layout (target-aware) ----
+
+
+@gluon.constexpr_function
+def get_num_threads_per_warp() -> ttgl.constexpr:
+    target = current_target()
+    if target is not None and target.backend == "hip":
+        gfx_major = int(target.arch[3:-2])
+        return ttgl.constexpr(32 if gfx_major >= 10 else 64)
+    return ttgl.constexpr(32)
+
+
+@ttgl._core.builtin
+def get_num_threads_per_program(_semantic=None, _generator=None):
+    return ttgl.num_warps(_semantic=_semantic, _generator=_generator) * get_num_threads_per_warp(_semantic=_semantic)
+
+
+@gluon.constexpr_function
+def default_blocked_layout(shape: ttgl.constexpr, num_warps: ttgl.constexpr) -> ttgl.constexpr:
+    rank = len(shape)
+    size_per_thread = [1] * rank
+    threads_per_warp = [1] * rank
+    threads_per_warp[rank - 1] = get_num_threads_per_warp()
+    warps_per_cta = [1] * rank
+    warps_per_cta[0] = num_warps
+    order = list(range(rank - 1, -1, -1))
+    return ttgl.BlockedLayout(
+        size_per_thread=size_per_thread,
+        threads_per_warp=threads_per_warp,
+        warps_per_cta=warps_per_cta,
+        order=order,
+    )
+
+
+# ---- layout-dependent helpers (use local default_blocked_layout) ----
+
+
+@gluon.jit
+def tl_arange(start: ttgl.constexpr, stop: ttgl.constexpr = None):
+    layout: ttgl.constexpr = default_blocked_layout([stop - start], ttgl.num_warps())
+    return ttgl.arange(start, stop, layout=layout)
+
+
+@gluon.jit
+def tl_full(shape, value, dtype=None):
+    layout: ttgl.constexpr = default_blocked_layout(shape, ttgl.num_warps())
+    return ttgl.full(shape, value, dtype, layout=layout)
+
+
+@gluon.jit
+def tl_cat(lhs, rhs, can_reorder=False):
+    if can_reorder:
+        return cat(
+            lhs,
+            rhs,
+            can_reorder,
+            layout=default_blocked_layout([lhs.shape[0] + rhs.shape[0]], ttgl.num_warps()),
+        )
+    else:
+        return cat_with_permute(lhs, rhs)
+
+
+@gluon.jit
+def reset_to_default_layout(value):
+    ty: ttgl.constexpr = value.type
+    if isinstance(ty, ttgl.tuple_type):
+        out = ()
+        for i in ttgl.static_range(len(value)):
+            r = ttgl.convert_layout(value[i], layout=default_blocked_layout(value[i].type.shape, ttgl.num_warps()))
+            out = out + (r, )
+        return out
+    elif isinstance(value, ttgl.tensor) and isinstance(value.type, ttgl.distributed_type):
+        layout: ttgl.constexpr = default_blocked_layout(ty.shape, ttgl.num_warps())
+        return ttgl.convert_layout(value, layout=layout)
+    else:
+        return value
+
+
+@gluon.constexpr_function
+def get_split_src_layout(shape: ttgl.constexpr, num_warps: ttgl.constexpr) -> ttgl.constexpr:
+    rank = len(shape)
+    size_per_thread = [1 if i != rank - 1 else 2 for i in range(rank)]
+    threads_per_warp = [1 for _ in range(rank)]
+    remaining_threads = get_num_threads_per_warp()
+    for dim in range(rank - 2, -1, -1):
+        threads_per_warp[dim] = min(shape[dim], remaining_threads)
+        remaining_threads = remaining_threads // threads_per_warp[dim]
+    warps_per_cta = [1 for _ in range(rank)]
+    warps_per_cta[0] = num_warps
+    order = list(range(rank - 1, -1, -1))
+    return ttgl.BlockedLayout(
+        size_per_thread=size_per_thread,
+        threads_per_warp=threads_per_warp,
+        warps_per_cta=warps_per_cta,
+        order=order,
+    )
+
+
+@gluon.jit
+def set_split_src_layout(value):
+    layout: ttgl.constexpr = get_split_src_layout(value.type.shape, ttgl.num_warps())
+    return ttgl.convert_layout(value, layout=layout)
+
+
+@ttgl._core.builtin
+def convert_to_expand_dims_layout(value, expand_dims: list[int], _semantic=None, _generator=None) -> Any:
+    parent_shape = _unwrap_if_constexpr(value.type.shape)
+    if isinstance(parent_shape, ttgl.tuple):
+        parent_shape = parent_shape.values
+    assert isinstance(parent_shape, list)
+    for dim in expand_dims:
+        parent_shape.insert(dim, 1)
+    num_warps = ttgl.num_warps(_semantic=_semantic, _generator=_generator)
+    layout = default_blocked_layout(parent_shape, num_warps)
+    for dim in reversed(expand_dims):
+        layout = ttgl.SliceLayout(dim=dim, parent=layout)
+    return ttgl.convert_layout(value, layout, _semantic=_semantic)
+
+
+# ---- architecture detection ----
+
+
+@gluon.constexpr_function
+def _is_gfx1250():
+    target = current_target()
+    return target is not None and target.arch == "gfx1250"
+
+
+@gluon.constexpr_function
+def _is_cdna():
+    target = current_target()
+    if target is None:
+        return False
+    return target.arch in ("gfx942", "gfx950")
+
+
+@gluon.constexpr_function
+def _cdna_version():
+    """Returns 3 for gfx942, 4 for gfx950."""
+    target = current_target()
+    if target is not None and target.arch == "gfx950":
+        return 4
+    return 3
+
+
+# ---- WMMA layout helpers (gfx1250) ----
 
 
 @gluon.constexpr_function
@@ -66,10 +203,39 @@ def get_wmma_layout(shape, num_warps):
 
 @gluon.constexpr_function
 def get_wmma_k_width(a_ty, b_ty):
-    a_bitwidth = a_ty.element_ty.primitive_bitwidth
-    b_bitwidth = b_ty.element_ty.primitive_bitwidth
-    min_bitwidth = min(a_bitwidth, b_bitwidth)
+    min_bitwidth = min(a_ty.element_ty.primitive_bitwidth, b_ty.element_ty.primitive_bitwidth)
     return max(128 // min_bitwidth, 1)
+
+
+# ---- MFMA layout helpers (cdna3/cdna4) ----
+
+
+@gluon.constexpr_function
+def get_mfma_instr_k(element_bitwidth):
+    """K dimension of the MFMA instruction for [32, 32, K]."""
+    k_bits = 128 if _cdna_version() == 3 else 256
+    return k_bits // element_bitwidth
+
+
+@gluon.constexpr_function
+def get_mfma_layout(num_warps, element_bitwidth):
+    instr_k = get_mfma_instr_k(element_bitwidth)
+    return ttgl.amd.AMDMFMALayout(
+        version=_cdna_version(),
+        instr_shape=[32, 32, instr_k],
+        transposed=True,
+        warps_per_cta=[num_warps, 1],
+    )
+
+
+@gluon.constexpr_function
+def get_mfma_k_width(a_ty, b_ty):
+    min_bitwidth = min(a_ty.element_ty.primitive_bitwidth, b_ty.element_ty.primitive_bitwidth)
+    instr_k = get_mfma_instr_k(min_bitwidth)
+    return instr_k // 2
+
+
+# ---- shared memory layout ----
 
 
 @gluon.constexpr_function
@@ -83,19 +249,12 @@ def get_shared_memory_mma_layout(shape, element_bitwidth):
     )
 
 
-# ---- dot (WMMA) ----
+# ---- dot (dispatches WMMA vs MFMA) ----
 
 
 @gluon.jit
-def tl_dot(
-    a,
-    b,
-    acc=None,
-    input_precision=None,
-    allow_tf32=None,
-    max_num_imprecise_acc=None,
-    out_dtype=ttgl.float32,
-):
+def tl_dot_wmma(a, b, acc, out_dtype):
+    """gfx1250 WMMA path."""
     M: ttgl.constexpr = a.type.shape[0]
     N: ttgl.constexpr = b.type.shape[1]
     num_warps: ttgl.constexpr = ttgl.num_warps()
@@ -119,8 +278,53 @@ def tl_dot(
         ret_layout: ttgl.constexpr = acc.type.layout
     else:
         ret_layout: ttgl.constexpr = default_blocked_layout(result.type.shape, num_warps)
-    result = ttgl.convert_layout(result, ret_layout)
-    return result
+    return ttgl.convert_layout(result, ret_layout)
+
+
+@gluon.jit
+def tl_dot_mfma(a, b, acc, out_dtype):
+    """CDNA3/CDNA4 MFMA path."""
+    M: ttgl.constexpr = a.type.shape[0]
+    N: ttgl.constexpr = b.type.shape[1]
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    min_bitwidth: ttgl.constexpr = min(a.type.element_ty.primitive_bitwidth, b.type.element_ty.primitive_bitwidth)
+
+    mfma_layout: ttgl.constexpr = get_mfma_layout(num_warps, min_bitwidth)
+    k_width: ttgl.constexpr = get_mfma_k_width(a.type, b.type)
+    a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=k_width)
+    b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=k_width)
+
+    a = ttgl.convert_layout(a, a_layout)
+    b = ttgl.convert_layout(b, b_layout)
+
+    if acc is not None:
+        accumulator = ttgl.convert_layout(acc, mfma_layout)
+    else:
+        accumulator = ttgl.zeros([M, N], out_dtype, layout=mfma_layout)
+
+    result = mfma(a, b, accumulator)
+
+    if acc is not None:
+        ret_layout: ttgl.constexpr = acc.type.layout
+    else:
+        ret_layout: ttgl.constexpr = default_blocked_layout(result.type.shape, num_warps)
+    return ttgl.convert_layout(result, ret_layout)
+
+
+@gluon.jit
+def tl_dot(
+    a,
+    b,
+    acc=None,
+    input_precision=None,
+    allow_tf32=None,
+    max_num_imprecise_acc=None,
+    out_dtype=ttgl.float32,
+):
+    if _is_gfx1250():
+        return tl_dot_wmma(a, b, acc, out_dtype)
+    else:
+        return tl_dot_mfma(a, b, acc, out_dtype)
 
 
 # ---- dot_scaled (decomposed; uses tl_dot above) ----
@@ -205,7 +409,7 @@ def tl_dot_decomposed_block_scales(
         return tl_dot(scale_a, scale_b, acc, out_dtype=out_dtype)
 
 
-# ---- TDM tensor descriptors ----
+# ---- TDM tensor descriptors (gfx1250 only) ----
 
 
 @gluon.constexpr_function
