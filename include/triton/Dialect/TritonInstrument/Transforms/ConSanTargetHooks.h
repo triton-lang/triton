@@ -57,6 +57,12 @@ struct WaitOpInfo {
   CommitKind::Kind commitKind;
   int pendingCount;
   bool transferWrites;
+  bool transferReads;
+};
+
+struct CommitKindDesc {
+  CommitKind::Kind kind;
+  std::string operationDesc;
 };
 
 class ConSanTargetHooks {
@@ -106,6 +112,18 @@ public:
       }
     }
     return info;
+  }
+
+  // Returns commit kinds that represent async writes to shared memory.
+  // Used by addWriteChecks to detect outstanding write conflicts.
+  virtual SmallVector<CommitKindDesc> getAsyncWriteCommitKinds() const {
+    return {{CommitKind::AsyncCp, "async_copy_global_to_shared"}};
+  }
+
+  // Returns commit kinds that represent async reads from shared memory.
+  // Used by addReadChecks to detect outstanding read conflicts.
+  virtual SmallVector<CommitKindDesc> getAsyncReadCommitKinds() const {
+    return {};
   }
 
   virtual SmallVector<CommitKind::Kind>

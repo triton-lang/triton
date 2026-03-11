@@ -9,6 +9,7 @@ namespace tti = mlir::triton::instrument;
 
 using tti::BarrierInitInfo;
 using tti::BarrierWaitInfo;
+using tti::CommitKindDesc;
 using tti::MemEffectsOpInfo;
 using tti::WaitOpInfo;
 
@@ -47,7 +48,7 @@ public:
     if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op))
       return WaitOpInfo{tti::CommitKind::TmaStore,
                         static_cast<int>(tmaStoreWaitOp.getPendings()),
-                        /*transferWrites=*/false};
+                        /*transferWrites=*/false, /*transferReads=*/true};
     return std::nullopt;
   }
 
@@ -168,6 +169,11 @@ public:
           {arriveOp.getAlloc(), nullptr, (int)arriveOp.getCount()});
     }
     return info;
+  }
+
+  SmallVector<CommitKindDesc> getAsyncReadCommitKinds() const override {
+    return {{tti::CommitKind::Wgmma, "warpgroup_mma operand read"},
+            {tti::CommitKind::TmaStore, "async_copy_shared_to_global"}};
   }
 
   SmallVector<tti::CommitKind::Kind>

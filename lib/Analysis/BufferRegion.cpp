@@ -85,6 +85,12 @@ llvm::DenseSet<Value> getBarrierOperands(Operation *op) {
     return llvm::DenseSet<Value>(mmaV5Op.getCompletionBarriers().begin(),
                                  mmaV5Op.getCompletionBarriers().end());
   }
+  if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op)) {
+    if (Value desc = barrierOp.getBarrierMemDesc())
+      return {desc};
+    return {};
+  }
+
   return llvm::DenseSet<Value>{};
 }
 
@@ -335,6 +341,9 @@ bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
           ttng::AsyncTMAGatherOp, ttng::AsyncTMAScatterOp, ttng::InitBarrierOp,
           ttng::BarrierExpectOp, ttng::InvalBarrierOp, ttng::WaitBarrierOp,
           ttng::ArriveBarrierOp>(op)) {
+    return true;
+  }
+  if (isa<ttg::MBarrierOpInterface>(op)) {
     return true;
   }
   // Allocations with operands write to the memory.
