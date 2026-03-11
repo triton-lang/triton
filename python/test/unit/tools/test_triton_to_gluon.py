@@ -8,11 +8,11 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton.tools.triton_to_gluon_translator.translator import convert_triton_to_gluon
 from triton.tools.triton_to_gluon_translator.translator_helpers import convert_host_descriptor
-from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda
+from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda, is_hip_gfx1250
 
 
-def convert_kernel(kernel, kernel_name, tmp_path):
-    converted = convert_triton_to_gluon([kernel])
+def convert_kernel(kernel, kernel_name, tmp_path, target="nvidia"):
+    converted = convert_triton_to_gluon([kernel], target=target)
 
     # Write converted kernel to a file so @gluon.jit can retrieve source
     mod_path = tmp_path / "converted_kernel.py"
@@ -307,4 +307,85 @@ def test_num_threads(tmp_path):
     kernel[(1, )](out, num_warps=num_threads // 32)
     ref = torch.empty_like(out)
     num_threads_kernel[(1, )](ref, num_warps=num_threads // 32)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+# --- gfx1250 (AMD) translator tests ---
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+def test_simple_kernel_gfx1250(tmp_path):
+    kernel = convert_kernel(add_kernel, "add_kernel", tmp_path, target="amd_gfx1250")
+
+    n = 1024
+    BLOCK = 128
+    x = torch.randn(n, device="cuda", dtype=torch.float32)
+    y = torch.randn(n, device="cuda", dtype=torch.float32)
+    out = torch.empty_like(x)
+    grid = (n // BLOCK, )
+    kernel[grid](x, y, out, n, BLOCK)
+
+    ref = torch.empty_like(x)
+    add_kernel[grid](x, y, ref, n, BLOCK)
+
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+def test_triton_to_gluon_dot_minimal_gfx1250(tmp_path):
+    kernel = convert_kernel(matmul_tile_kernel, "matmul_tile_kernel", tmp_path, target="amd_gfx1250")
+    M, N, K = 128, 128, 128
+    a = torch.randn((M, K), device="cuda", dtype=torch.float16)
+    b = torch.randn((K, N), device="cuda", dtype=torch.float16)
+    grid = (1, )
+
+    c = torch.empty((M, N), device="cuda", dtype=torch.float32)
+    kernel[grid](a, b, c, M, N, K, num_warps=4)
+
+    ref = torch.empty_like(c)
+    matmul_tile_kernel[grid](a, b, ref, M, N, K, num_warps=4)
+    torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("TRANS_KIND", ["trans_method", "tl_trans_separate", "tl_trans_tuple", "tl_trans"])
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+def test_triton_reshape_trans_gfx1250(tmp_path, TRANS_KIND):
+    kernel = convert_kernel(reshape_trans_kernel, "reshape_trans_kernel", tmp_path, target="amd_gfx1250")
+
+    n = 1024
+    BLOCK = 256
+    x = torch.randn(n, device="cuda", dtype=torch.float32)
+    y = torch.randn(n, device="cuda", dtype=torch.float32)
+    out = torch.empty_like(x)
+    grid = (n // BLOCK, )
+    kernel[grid](x, y, out, n, BLOCK, TRANS_KIND)
+    ref = torch.empty_like(x)
+    reshape_trans_kernel[grid](x, y, ref, n, BLOCK, TRANS_KIND)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+def test_split_gfx1250(tmp_path):
+    kernel = convert_kernel(split_kernel, "split_kernel", tmp_path, target="amd_gfx1250")
+
+    n = 1024
+    x = torch.randn(2 * n, device="cuda", dtype=torch.float32)
+    grid = (n // BLOCK_SPLIT, )
+
+    out = torch.empty_like(x[:n])
+    kernel[grid](x, out)
+    ref = torch.empty_like(x[:n])
+    split_kernel[grid](x, ref)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+def test_reduce_to_scalar_gfx1250(tmp_path):
+    kernel = convert_kernel(reduce_to_scalar_kernel, "reduce_to_scalar_kernel", tmp_path, target="amd_gfx1250")
+    grid = (1, )
+
+    out = torch.empty((1, ), device="cuda", dtype=torch.int32)
+    kernel[grid](out)
+    ref = torch.empty_like(out)
+    reduce_to_scalar_kernel[grid](ref)
     torch.testing.assert_close(out, ref, atol=0, rtol=0)
