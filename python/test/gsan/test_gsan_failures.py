@@ -58,6 +58,36 @@ def _waw_kernel(ptr, scratch_ptr):
 
 
 @triton.jit
+def _cross_sm_relaxed_flag_kernel(payload_ptr, flag_ptr, scratch_ptr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_xchg(flag_ptr, 1, sem="relaxed", scope="gpu")
+    elif pid == 1:
+        ready = 0
+        while ready != 1:
+            nanosleep(500_000)
+            ready = tl.atomic_add(flag_ptr, 0, sem="acquire", scope="gpu")
+        result = tl.load(payload_ptr)
+        tl.store(scratch_ptr, result)
+
+
+@triton.jit
+def _cross_sm_cta_scope_kernel(payload_ptr, flag_ptr, scratch_ptr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_xchg(flag_ptr, 1, sem="release", scope="cta")
+    elif pid == 1:
+        ready = 0
+        while ready != 1:
+            nanosleep(500_000)
+            ready = tl.atomic_add(flag_ptr, 0, sem="acquire", scope="cta")
+        result = tl.load(payload_ptr)
+        tl.store(scratch_ptr, result)
+
+
+@triton.jit
 def _tma_raw_kernel(ptr, scratch_ptr, m_size, n_size, row_idx, col_idx, stride_0, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     if pid == 0:
@@ -152,6 +182,7 @@ def _run_case(case: str) -> None:
     gather_row_idx = 5
     gather_y_offset = 8
     gather_x_offsets = [5, 7, 9, 10, 1, 3, 11, 13]
+
     pool = create_mem_pool()
     with torch.cuda.use_mem_pool(pool):
         if case == "tma_raw":
@@ -183,6 +214,10 @@ def _run_case(case: str) -> None:
                 src = torch.arange(1, gather_block_x * gather_block_y + 1, dtype=torch.int32,
                                    device="cuda").reshape(gather_block_x, gather_block_y)
                 scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
+        elif case in {"cross_sm_relaxed_flag", "cross_sm_cta_scope"}:
+            payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+            flags = torch.zeros(1, dtype=torch.int32, device="cuda")
+            scratch = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
         else:
             target = torch.zeros(1, dtype=torch.int32, device="cuda")
             scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
@@ -199,6 +234,13 @@ def _run_case(case: str) -> None:
     elif case == "host_tma_scatter_war":
         kernel[(2, )](target, target_desc, x_offsets, src, src.stride(0), src.stride(1), scratch, gather_row_idx,
                       gather_y_offset, target.stride(0), BLOCK_X=gather_block_x, num_warps=4)
+    elif case in {"cross_sm_relaxed_flag", "cross_sm_cta_scope"}:
+        kernel[(2, )](
+            payload,
+            flags,
+            scratch,
+            num_warps=1,
+        )
     else:
         kernel[(2, )](target, scratch, num_warps=1)
 
@@ -238,6 +280,16 @@ CASE_INFO = {
         "error": "Write after read race detected",
         "function": _host_tma_scatter_war_kernel.fn,
         "marker": "tma.async_scatter(target_desc, x_offsets, y_offset, smem_src)",
+    },
+    "cross_sm_relaxed_flag": {
+        "error": "Read after write race detected",
+        "function": _cross_sm_relaxed_flag_kernel.fn,
+        "marker": "result = tl.load(payload_ptr)",
+    },
+    "cross_sm_cta_scope": {
+        "error": "Read after write race detected",
+        "function": _cross_sm_cta_scope_kernel.fn,
+        "marker": 'ready = tl.atomic_add(flag_ptr, 0, sem="acquire", scope="cta"',
     },
 }
 
@@ -294,3 +346,11 @@ def test_host_tma_gather_write_after_read():
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_host_tma_scatter_write_after_read():
     _run_failure_case("host_tma_scatter_war")
+
+
+def test_cross_sm_relaxed_flag_read_after_write():
+    _run_failure_case("cross_sm_relaxed_flag")
+
+
+def test_cross_sm_cta_scope_read_after_write():
+    _run_failure_case("cross_sm_cta_scope")

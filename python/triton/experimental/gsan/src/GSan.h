@@ -22,7 +22,10 @@ enum class AtomicScope : uint8_t {
   CTA,
   GPU,
   System,
-  MAX_VALUE = System,
+  CTAToken,
+  GPUToken,
+  SystemToken,
+  MAX_VALUE = SystemToken,
 };
 
 using epoch_t = uint16_t;
@@ -30,11 +33,11 @@ using epoch_t = uint16_t;
 struct alignas(4) ScalarClock {
   epoch_t epoch;
   thread_id_t threadId : 12; // Supports 4096 threads
-  AtomicScope scope : 2;
+  AtomicScope scope : 4;
 };
 static constexpr int kMaxThreads = 1 << 12;
 static_assert(sizeof(ScalarClock) == 4);
-static_assert(static_cast<int>(AtomicScope::MAX_VALUE) == 3);
+static_assert(static_cast<int>(AtomicScope::MAX_VALUE) == 6);
 
 // TODO: Change to struct-of-array for better coalescing?
 struct alignas(4) ShadowCell {
@@ -84,10 +87,18 @@ struct ThreadState {
   epoch_t vectorClock[];
 };
 
+static constexpr int kMaxAtomicShadowCells = 3;
+
+struct AtomicEventState {
+  ThreadState *threadState;
+  ShadowCell *cells[kMaxAtomicShadowCells];
+  uint8_t numCells;
+};
+
 // Place the thread state for each device at a fixed stride for ease of
 // address calculation.
 static constexpr uintptr_t kPerDeviceStateStride = 1ull << 30;
-static constexpr uintptr_t kMaxGPUs = 16;
+static constexpr uintptr_t kMaxGPUs = 32;
 static constexpr uintptr_t kGlobalsReserveSize =
     kPerDeviceStateStride * kMaxGPUs;
 
@@ -116,6 +127,49 @@ inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress) {
 inline GSAN_HOST_DEVICE bool isGsanManaged(uintptr_t addr,
                                            uintptr_t reserveBase) {
   return getReserveBaseFromAddress(addr) == reserveBase;
+}
+
+inline GSAN_HOST_DEVICE bool isAtomicScope(AtomicScope scope) {
+  return scope != AtomicScope::NonAtomic;
+}
+
+inline GSAN_HOST_DEVICE bool isTokenScope(AtomicScope scope) {
+  switch (scope) {
+  case AtomicScope::CTAToken:
+  case AtomicScope::GPUToken:
+  case AtomicScope::SystemToken:
+    return true;
+  default:
+    return false;
+  }
+}
+
+inline GSAN_HOST_DEVICE AtomicScope getBaseAtomicScope(AtomicScope scope) {
+  switch (scope) {
+  case AtomicScope::CTAToken:
+    return AtomicScope::CTA;
+  case AtomicScope::GPUToken:
+    return AtomicScope::GPU;
+  case AtomicScope::SystemToken:
+    return AtomicScope::System;
+  default:
+    return scope;
+  }
+}
+
+inline GSAN_HOST_DEVICE AtomicScope makeTokenScope(AtomicScope scope) {
+  switch (getBaseAtomicScope(scope)) {
+  case AtomicScope::CTA:
+    return AtomicScope::CTAToken;
+  case AtomicScope::GPU:
+    return AtomicScope::GPUToken;
+  case AtomicScope::System:
+    return AtomicScope::SystemToken;
+  case AtomicScope::NonAtomic:
+    return AtomicScope::NonAtomic;
+  default:
+    return AtomicScope::NonAtomic;
+  }
 }
 
 } // namespace gsan

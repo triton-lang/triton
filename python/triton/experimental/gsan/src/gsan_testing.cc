@@ -59,6 +59,12 @@ const char *atomicScopeName(gsan::AtomicScope scope) {
     return "gpu";
   case gsan::AtomicScope::System:
     return "system";
+  case gsan::AtomicScope::CTAToken:
+    return "cta_token";
+  case gsan::AtomicScope::GPUToken:
+    return "gpu_token";
+  case gsan::AtomicScope::SystemToken:
+    return "system_token";
   }
   return "unknown";
 }
@@ -73,6 +79,12 @@ const char *atomicScopeEnumName(gsan::AtomicScope scope) {
     return "GPU";
   case gsan::AtomicScope::System:
     return "SYSTEM";
+  case gsan::AtomicScope::CTAToken:
+    return "CTA_TOKEN";
+  case gsan::AtomicScope::GPUToken:
+    return "GPU_TOKEN";
+  case gsan::AtomicScope::SystemToken:
+    return "SYSTEM_TOKEN";
   }
   return "UNKNOWN";
 }
@@ -236,6 +248,9 @@ void init_gsan_testing(py::module &&m) {
       .value("CTA", gsan::AtomicScope::CTA)
       .value("GPU", gsan::AtomicScope::GPU)
       .value("SYSTEM", gsan::AtomicScope::System)
+      .value("CTA_TOKEN", gsan::AtomicScope::CTAToken)
+      .value("GPU_TOKEN", gsan::AtomicScope::GPUToken)
+      .value("SYSTEM_TOKEN", gsan::AtomicScope::SystemToken)
       .def("__str__",
            [](gsan::AtomicScope scope) { return atomicScopeStr(scope); })
       .def("__repr__",
