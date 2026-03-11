@@ -24,6 +24,11 @@ def with_gsan(fresh_knobs):
         yield
 
 
+CROSS_SM_MAGIC = 1000
+CROSS_SM_SPIN_ITERS = 128
+CROSS_SM_SLEEP_NS = 100_000
+
+
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 def test_load_store_updates_shadow(with_gsan):
     target = torch.zeros(1, dtype=torch.int32, device="cuda")
@@ -81,6 +86,175 @@ def test_gluon_warp_specialize_completes(with_gsan):
     _gluon_ws_completion_kernel[(1, )](out, num_warps=4)
     torch.cuda.synchronize()
     torch.testing.assert_close(out, expected)
+
+
+@triton.jit
+def _atomic_add_relaxed_i32(ptr):
+    tl.atomic_add(ptr, 1, sem="relaxed", scope="gpu")
+
+
+@triton.jit
+def _atomic_add_release_i32(ptr):
+    tl.atomic_add(ptr, 1, sem="release", scope="gpu")
+
+
+@triton.jit
+def _atomic_cas_fail_i32(ptr, out_ptr):
+    old = tl.atomic_cas(ptr, 1, 2, sem="acquire", scope="gpu")
+    tl.store(out_ptr, old)
+
+
+@triton.jit
+def _atomic_cas_release_i32(ptr, out_ptr):
+    old = tl.atomic_cas(ptr, 0, 2, sem="release", scope="gpu")
+    tl.store(out_ptr, old)
+
+
+@triton.jit
+def _nanosleep(duration):
+    duration = tl.to_tensor(duration)
+    tl.inline_asm_elementwise("nanosleep.u32 $1; mov.b32 $0, 0;", "=r, r", [duration], tl.int32, is_pure=False, pack=1)
+
+
+@triton.jit
+def _cross_sm_release_acquire_kernel(payload_ptr, flag_ptr, out_ptr, smid_ptr, sleep_ns, spin_iters):
+    pid = tl.program_id(0)
+    smid = tl.extra.cuda.smid()
+    tl.store(smid_ptr + pid, smid)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_xchg(flag_ptr, 1, sem="release", scope="gpu")
+    elif pid == 1:
+        i = 0
+        while i < spin_iters:
+            ready = tl.atomic_add(flag_ptr, 0, sem="acquire", scope="gpu")
+            if ready != 0:
+                result = tl.load(payload_ptr)
+                tl.store(out_ptr, result)
+            else:
+                _nanosleep(sleep_ns)
+            i += 1
+
+
+def _launch_cross_sm_case(kernel, grid_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flags = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    smids = torch.full((grid_size, ), -1, dtype=torch.int32, device="cuda")
+    kernel[(grid_size, )](
+        payload,
+        flags,
+        out,
+        smids,
+        CROSS_SM_SLEEP_NS,
+        CROSS_SM_SPIN_ITERS,
+        num_warps=1,
+    )
+    torch.cuda.synchronize()
+    return out, smids
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_atomic_add_relaxed_updates_atomic_shadow(with_gsan):
+    target = torch.zeros(1, dtype=torch.int32, device="cuda")
+
+    _atomic_add_relaxed_i32[(1, )](target, num_warps=1)
+    assert target.item() == 1
+
+    cell = shadow_cell_from_address(target.data_ptr())
+    tid = cell.write_clock.thread_id
+    epoch = thread_state_from_smid(tid).vector_clock[tid]
+
+    assert cell.write_clock == ScalarClock(epoch, tid, AtomicScope.GPU)
+    assert cell.read_clocks[0] == ScalarClock(epoch, tid, AtomicScope.GPU)
+    assert cell.num_reads == 1
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_atomic_add_release_publishes_token_then_increments(with_gsan):
+    target = torch.zeros(1, dtype=torch.int32, device="cuda")
+
+    _atomic_add_release_i32[(1, )](target, num_warps=1)
+    assert target.item() == 1
+
+    cell = shadow_cell_from_address(target.data_ptr())
+    tid = cell.write_clock.thread_id
+    state = thread_state_from_smid(tid)
+    token = cell.write_clock.epoch
+    snapshot_idx = (token - 1) * state.num_threads + tid
+    published_epoch = state.clock_buffer[snapshot_idx]
+
+    assert cell.write_clock.scope == AtomicScope.GPU_TOKEN
+    assert token == state.clock_buffer_head
+    assert state.clock_buffer_dirty
+    assert cell.read_clocks[0] == ScalarClock(published_epoch, tid, AtomicScope.GPU)
+    assert state.vector_clock[tid] == published_epoch + 1
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_atomic_cas_failed_only_records_read(with_gsan):
+    target = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.zeros(1, dtype=torch.int32, device="cuda")
+
+    _atomic_cas_fail_i32[(1, )](target, out, num_warps=1)
+
+    assert target.item() == 0
+    assert out.item() == 0
+
+    cell = shadow_cell_from_address(target.data_ptr())
+    tid = cell.read_clocks[0].thread_id
+    epoch = thread_state_from_smid(tid).vector_clock[tid]
+
+    assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
+    assert cell.read_clocks[0] == ScalarClock(epoch, tid, AtomicScope.GPU)
+    assert cell.num_reads == 1
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_atomic_cas_release_success_publishes_token(with_gsan):
+    target = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.zeros(1, dtype=torch.int32, device="cuda")
+
+    _atomic_cas_release_i32[(1, )](target, out, num_warps=1)
+
+    assert target.item() == 2
+    assert out.item() == 0
+
+    cell = shadow_cell_from_address(target.data_ptr())
+    tid = cell.write_clock.thread_id
+    state = thread_state_from_smid(tid)
+    token = cell.write_clock.epoch
+    snapshot_idx = (token - 1) * state.num_threads + tid
+    published_epoch = state.clock_buffer[snapshot_idx]
+
+    assert cell.write_clock.scope == AtomicScope.GPU_TOKEN
+    assert token == state.clock_buffer_head
+    assert cell.read_clocks[0] == ScalarClock(published_epoch, tid, AtomicScope.GPU)
+    assert state.vector_clock[tid] == published_epoch + 1
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_atomic_release_acquire_synchronizes_cross_sm(with_gsan, capfd):
+    num_sms = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
+    if num_sms < 2:
+        pytest.skip("requires at least 2 SMs")
+
+    grid_size = max(num_sms, 2)
+    success = False
+    out = None
+    smids = None
+    for _ in range(6):
+        out, smids = _launch_cross_sm_case(_cross_sm_release_acquire_kernel, grid_size)
+        if smids[0].item() != smids[1].item() and out.item() == CROSS_SM_MAGIC:
+            success = True
+            break
+
+    assert success, ("Failed to observe a release/acquire handoff between different SMs; "
+                     f"writer_smid={smids[0].item() if smids is not None else -1}, "
+                     f"reader_smid={smids[1].item() if smids is not None else -1}, "
+                     f"observed_value={out.item() if out is not None else -1}.")
+    captured = capfd.readouterr()
+    assert "GSanLibrary.cu" not in captured.out + captured.err
 
 
 @triton.jit
