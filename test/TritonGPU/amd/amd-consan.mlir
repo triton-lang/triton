@@ -569,8 +569,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     %pred = arith.constant 1 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK-NOT: tt.call @__triton_consan_check_outstanding_commits
     // CHECK: tt.call @__triton_consan_verify_read_visibility
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits
+    // CHECK-NOT: tt.call @__triton_consan_check_outstanding_commits
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: tt.call @__triton_consan_commit_accesses
     // CHECK-NOT: tt.call @__triton_consan_verify_barrier_arrive

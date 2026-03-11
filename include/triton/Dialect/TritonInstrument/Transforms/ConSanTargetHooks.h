@@ -126,6 +126,13 @@ public:
     return {};
   }
 
+  // Returns true if operations tracked under `kind` complete in issue order
+  // within a warp. When true, ConSan skips the
+  // outstanding-commit conflict check between two ops that share this kind.
+  virtual bool isOrderedCommitKind(CommitKind::Kind kind) const {
+    return false;
+  }
+
   virtual SmallVector<CommitKind::Kind>
   getRequiredCommitKinds(ModuleOp module) const = 0;
 };

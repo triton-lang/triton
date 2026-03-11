@@ -22,6 +22,11 @@ public:
                ttag::AsyncTDMCopyLocalToGlobalOp>(op);
   }
 
+  // TDM ops from the same warp complete in issue order.
+  bool isOrderedCommitKind(tti::CommitKind::Kind kind) const override {
+    return kind == tti::CommitKind::TmaStore;
+  }
+
   bool isPostInstrumentedOp(Operation *op) const override {
     return isa<ttag::WaitBarrierOp>(op);
   }

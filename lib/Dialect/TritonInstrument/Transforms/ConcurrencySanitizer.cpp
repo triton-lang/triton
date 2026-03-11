@@ -318,7 +318,7 @@ private:
         // For op that is reading, we only need to check if anything else
         // is writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
-                       thread, effect.operandName);
+                       thread, effect.operandName, opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createSetReadVisibilityCall(b, buf, effect.length,
                                                   getThreadPeersMask(thread),
@@ -336,9 +336,9 @@ private:
         // Op is writing to the buffer, we need to check if anything else
         // is reading or writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
-                       thread, effect.operandName);
+                       thread, effect.operandName, opInfo->commitKind);
         addReadChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
-                      thread, effect.operandName);
+                      thread, effect.operandName, opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createSetWriteVisibilityCall(b, buf, effect.length,
                                                    getThreadPeersMask(thread),
@@ -390,30 +390,40 @@ private:
   void addWriteChecks(ImplicitLocOpBuilder &b,
                       tti::FunctionBuilder &funcBuilder, Operation *op,
                       Value buf, uint32_t length, Value pred, MemType memType,
-                      int thread, const std::string &operandName) {
+                      int thread, const std::string &operandName,
+                      CommitKind::Kind opCommitKind = CommitKind::None) {
     funcBuilder.createVerifyWriteVisibilityCall(b, buf, length, thread,
                                                 operandName, pred, memType, op);
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
-      for (const auto &commitKindDesc : hooks->getAsyncWriteCommitKinds())
+      for (const auto &commitKindDesc : hooks->getAsyncWriteCommitKinds()) {
+        if (opCommitKind == commitKindDesc.kind &&
+            hooks->isOrderedCommitKind(opCommitKind))
+          continue;
         funcBuilder.createCheckOutstandingCommitsCall(
             b, buf, length, getBaseThread(thread), commitKindDesc.operationDesc,
             pred, memType, commitKindDesc.kind, op);
+      }
     }
   }
 
   void addReadChecks(ImplicitLocOpBuilder &b, tti::FunctionBuilder &funcBuilder,
                      Operation *op, Value buf, uint32_t length, Value pred,
                      MemType memType, int thread,
-                     const std::string &operandName) {
+                     const std::string &operandName,
+                     CommitKind::Kind opCommitKind = CommitKind::None) {
     funcBuilder.createVerifyReadVisibilityCall(b, buf, length, thread,
                                                operandName, pred, memType, op);
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
-      for (const auto &commitKindDesc : hooks->getAsyncReadCommitKinds())
+      for (const auto &commitKindDesc : hooks->getAsyncReadCommitKinds()) {
+        if (opCommitKind == commitKindDesc.kind &&
+            hooks->isOrderedCommitKind(opCommitKind))
+          continue;
         funcBuilder.createCheckOutstandingCommitsCall(
             b, buf, length, getBaseThread(thread), commitKindDesc.operationDesc,
             pred, memType, commitKindDesc.kind, op);
+      }
     }
   }
 
