@@ -696,9 +696,8 @@ def tl_dot_mfma(a, b, acc, out_dtype):
 
 @gluon.constexpr_function
 def get_default_tdm_layout(block_shape, element_bitwidth):
-    pad_elems = max(128 // element_bitwidth, 8)
     return ttgl.PaddedSharedLayout.with_identity_for(
-        [[block_shape[-1], pad_elems]],
+        [[block_shape[-1], 4]],
         list(block_shape),
         [1, 0],
     )

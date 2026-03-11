@@ -39,10 +39,8 @@ def convert_host_descriptor(desc):
     assert isinstance(desc, TensorDescriptor)
     block_shape = desc.block_shape
     dtype = desc.base.dtype
-    element_bitwidth = torch_dtype_to_triton(dtype).primitive_bitwidth
-    pad_elems = max(128 // element_bitwidth, 8)
     layout = gl.PaddedSharedLayout.with_identity_for(
-        [[block_shape[-1], pad_elems]], list(block_shape), [1, 0]
+        [[block_shape[-1], 4]], list(block_shape), [1, 0]
     )
     return gluon.amd.gfx1250.TensorDescriptor(
         desc.base, list(desc.shape), list(desc.strides), block_shape, layout
