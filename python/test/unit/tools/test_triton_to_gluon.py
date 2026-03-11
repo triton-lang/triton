@@ -336,7 +336,7 @@ def test_num_threads(tmp_path):
     torch.testing.assert_close(out, ref, atol=0, rtol=0)
 
 
-# ---- gfx1250-only tests for ops not covered above ----
+# ---- additional op coverage ----
 
 
 @triton.jit
@@ -388,5 +388,7 @@ def test_make_tensor_descriptor_gfx1250(tmp_path):
     y_ref = torch.zeros_like(y)
     make_desc_copy_kernel[grid](x, y_ref, M, N, x.stride(0), x.stride(1), M, N)
     torch.testing.assert_close(y, y_ref, atol=0, rtol=0)
+
+
 
 
