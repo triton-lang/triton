@@ -9,7 +9,8 @@ Dispatch pipeline:
 """
 
 import torch
-from triton.backends.driver import DriverBase
+from triton.backends.driver import DriverBase, decompose_descriptor, expand_signature
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 
 def ty_to_cpp(ty):
@@ -23,13 +24,13 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-# Metal setBytes only handles these casts; fp32 + tensors pass through naturally
+# Metal setBytes only handles these casts; fp32 + tensors pass through naturally.
+# i64/u64: no cast — PyTorch MPS setArg handles int64_t natively (8 bytes via setBytes).
 _SCALAR_CAST = {
     "i1": "int32", "i8": "int8", "i16": "int16",
-    "i32": "int32", "i64": "int32",
-    "u32": "uint32", "u64": "uint32",
+    "i32": "int32", "u32": "uint32",
     "fp16": "fp16", "bf16": "bf16",
-    # fp32, fp64: pass as Python float — no cast needed
+    # i64, u64, fp32, fp64: pass as Python int/float — no cast needed
 }
 
 
@@ -95,15 +96,17 @@ class MPSLauncher:
             if ty == 'constexpr'
         )
 
-        # Build arg_casts: after stripping constexprs, the remaining args are
-        # passed sequentially to Metal. arg_casts key = index in the *filtered*
-        # args list (= IR slot index) → cast type for scalar args.
-        slot = 0  # IR slot after constexpr removal
+        # Expand tensor descriptor types into flat scalar types.
+        # MPS has no hardware TMA, so tensordesc_meta is always None —
+        # descriptors are decomposed to (ptr, *shape, *strides, padding, tf32, *shape, *strides).
+        non_constexpr_sig = [ty for ty in self.signature.values() if ty != 'constexpr']
+        expanded = expand_signature(non_constexpr_sig, None, None)
+
+        # Build arg_casts from the expanded (flat) signature.
+        slot = 0
         self.arg_casts = {}
-        for py_idx, (k, ty) in enumerate(self.signature.items()):
-            if ty == 'constexpr':
-                continue
-            if ty[0] != '*' and ty in _SCALAR_CAST:
+        for ty in expanded:
+            if isinstance(ty, str) and ty[0] != '*' and ty in _SCALAR_CAST:
                 self.arg_casts[slot] = _SCALAR_CAST[ty]
             slot += 1
 
@@ -124,11 +127,19 @@ class MPSLauncher:
         #   (*args, threads=[gx,gy,gz], group_size=[lx,ly,lz], arg_casts=dict|None)
         # Strip constexpr args — they're not in the compiled IR, so Metal slots
         # must be contiguous over non-constexpr args only.
+        # Then decompose TensorDescriptor args into flat (ptr, shape, strides, ...).
         from triton.runtime.jit import TensorWrapper
-        filtered_args = tuple(
-            (a.base if isinstance(a, TensorWrapper) else a)
-            for i, a in enumerate(args) if i not in self.constexpr_py_slots
-        )
+        flat_args = []
+        for i, a in enumerate(args):
+            if i in self.constexpr_py_slots:
+                continue
+            if isinstance(a, TensorWrapper):
+                flat_args.append(a.base)
+            elif isinstance(a, TensorDescriptor):
+                flat_args.extend(decompose_descriptor(a))
+            else:
+                flat_args.append(a)
+        filtered_args = tuple(flat_args)
         import os as _os
         if _os.environ.get('TRITON_MPS_DEBUG'):
             _threads = [gridX * self.lx, gridY * self.ly, gridZ * self.lz]

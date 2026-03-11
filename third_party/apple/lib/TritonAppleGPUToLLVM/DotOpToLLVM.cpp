@@ -370,6 +370,9 @@ struct DotOpAppleMmaConversion : public ConvertOpToLLVMPattern<tt::DotOp> {
         // ── GEP helpers ───────────────────────────────────────────────────
 
         auto scatter1 = [&](Value ptr, Value val, Value flatIdx64) {
+            // MMA operates in f32 — convert non-f32 elements before storing
+            if (val.getType() != f32Ty)
+                val = arith::ExtFOp::create(rewriter, loc, f32Ty, val);
             Value gep = LLVM::GEPOp::create(rewriter, loc,
                 tgPtrTy, f32Ty, ptr, ArrayRef<LLVM::GEPArg>{flatIdx64});
             LLVM::StoreOp::create(rewriter, loc, val, gep);

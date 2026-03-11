@@ -103,7 +103,11 @@ static LLVMFuncOp getOrInsertShuffleIntrinsic(RewriterBase &rewriter,
                                                ModuleOp mod, StringRef kind,
                                                Type valTy) {
     // Build intrinsic name based on type
-    std::string name = "air.simd_shuffle_" + kind.str() + ".";
+    // Build base: "air.simd_shuffle" or "air.simd_shuffle_xor" etc.
+    std::string base = "air.simd_shuffle";
+    if (!kind.empty())
+        base += "_" + kind.str();
+    std::string name = base + ".";
     if (valTy.isF32())
         name += "f32";
     else if (valTy.isF16())
@@ -113,11 +117,11 @@ static LLVMFuncOp getOrInsertShuffleIntrinsic(RewriterBase &rewriter,
     else if (valTy.isF64())
         name += "f64";
     else if (valTy.isInteger(32))
-        name = "air.simd_shuffle_" + kind.str() + ".s.i32";
+        name = base + ".s.i32";
     else if (valTy.isInteger(16))
-        name = "air.simd_shuffle_" + kind.str() + ".s.i16";
+        name = base + ".s.i16";
     else if (valTy.isInteger(64))
-        name = "air.simd_shuffle_" + kind.str() + ".s.i64";
+        name = base + ".s.i64";
     else
         llvm_unreachable("unsupported shuffle type");
 

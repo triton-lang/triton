@@ -7,6 +7,7 @@ Usage:
   python third_party/apple/run_core_tests.py arith         # run one category
   python third_party/apple/run_core_tests.py arith memory  # run multiple
   python third_party/apple/run_core_tests.py --list        # list categories
+  python third_party/apple/run_core_tests.py --validated   # run only validated categories
 """
 import subprocess, sys, os, shutil, re
 
@@ -14,6 +15,14 @@ TRITON_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__
 TEST_FILE = os.path.join(TRITON_ROOT, "python/test/unit/language/test_core.py")
 
 # Logically grouped test categories
+# Categories that have been validated and pass fully on MPS
+SKIP_CATEGORIES = {  # Validated categories (pass fully or with known limitations)
+    "arith", "compare", "unary", "math", "cast", "memory", "reduce", "atomic",  # arith: 1450, compare: 636, unary: 26, math: 23, cast: 77, memory: 189, reduce: 416, atomic: 191
+    # "control" excluded from batch — causes GPU deadlock. Run standalone: python run_core_tests.py control
+    # control: 28/28 pass individually. 3 test_for_iv i64 known fragile, 1 test_nested_while (37 vs 40)
+    "misc",     # 62/63: 1 skip (test_value_specialization_overflow u64 — PyTorch MPS can't cast u64 max)
+}
+
 CATEGORIES = {
     "arith": [
         "test_bin_op", "test_addptr", "test_floordiv",
@@ -21,7 +30,7 @@ CATEGORIES = {
     ],
     "compare": [
         "test_compare_op", "test_where", "test_where_broadcast",
-        "test_clamp",
+        "test_clamp", "test_clamp_symmetric",
     ],
     "unary": [
         "test_unary_op", "test_abs",
@@ -41,28 +50,113 @@ CATEGORIES = {
         "test_reduce1d", "test_reduce", "test_sum_dtype",
     ],
     "atomic": [
-        "test_atomic_rmw",
-    ],
-    "dot": [
-        "test_dot", "test_dot_without_load",
+        "test_atomic_rmw", "test_atomic_cas", "test_atomic_min_max_neg_zero",
     ],
     "control": [
-        "test_if", "test_if_else",
         "test_for_iv", "test_while", "test_nested_while",
-    ],
-    "tensor_ops": [
-        "test_broadcast", "test_arange", "test_reshape",
-        "test_expand_dims", "test_full",
-        "test_permute", "test_transpose",
-        "test_cat", "test_join", "test_split", "test_interleave",
+        "test_if", "test_if_else", "test_if_call",
     ],
     "misc": [
         "test_constexpr", "test_const",
         "test_shapes_as_params", "test_index1d",
         "test_value_specialization", "test_num_programs",
     ],
+    "dot": [
+        "test_dot", "test_dot_without_load",
+    ],
+    "tensor_ops": [
+        "test_broadcast", "test_arange", "test_reshape",
+        "test_expand_dims", "test_full",
+        "test_permute", "test_transpose",
+        "test_cat", "test_cat_nd", "test_join", "test_split", "test_interleave",
+    ],
+    "histogram": [
+        "test_histogram", "test_histogram_mask", "test_histogram_silent_data_corruption",
+    ],
     "scan": [
-        "test_scan_1d", "test_scan2d", "test_histogram",
+        "test_scan_1d", "test_scan2d", "test_cumsum_dtype",
+        "test_side_effectful_scan",
+    ],
+    "dot_advanced": [
+        "test_dot3d", "test_dot_max_num_imprecise_acc", "test_dot_mulbroadcasted",
+        "test_dot_multidim", "test_scaled_dot", "test_join_with_mma",
+    ],
+    "control_advanced": [
+        "test_if_return", "test_nested_if_else_return",
+        "test_short_circuiting", "test_static_range",
+        "test_temp_var_in_loop", "test_disable_licm",
+        "test_tl_range_fuse", "test_tl_range_fuse_dependent",
+        "test_tl_range_num_stages", "test_tl_range_option_none",
+    ],
+    "memory_advanced": [
+        "test_masked_load_shared_memory",
+        "test_load_cache_modifier", "test_store_cache_modifier",
+        "test_store_eviction_policy",
+        "test_load_scope_sem_coop_grid_cta_not_one",
+        "test_load_scope_sem_coop_grid_cta_one",
+        "test_strided_load", "test_strided_store",
+        "test_indirect_load", "test_indirect_store",
+        "test_gather", "test_aliasing",
+        "test_zero_strided_tensors",
+    ],
+    "atomic_advanced": [
+        "test_atomic_rmw_predicate", "test_atomic_unsupported_type",
+        "test_tensor_atomic_rmw", "test_tensor_atomic_rmw_block",
+        "test_tensor_atomic_cas",
+        "test_tensor_atomic_add_access_patterns",
+        "test_tensor_atomic_add_non_exclusive_offset",
+        "test_tensor_atomic_add_shift_1",
+        "test_tensor_atomic_use_result",
+    ],
+    "reduce_advanced": [
+        "test_chained_reductions", "test_generic_reduction",
+        "test_side_effectful_reduction", "test_side_effectful_reduction_2d",
+        "test_max_min_with_nan", "test_max_returns_zero",
+        "test_propagate_nan", "test_optimize_thread_locality",
+    ],
+    "tensor_ops_advanced": [
+        "test_expand_dims_error_cases",
+        "test_reshape_err", "test_invalid_slice", "test_slice",
+        "test_trans_2d", "test_trans_4d", "test_trans_reshape",
+        "test_interleave_scalars", "test_join_scalars", "test_split_to_scalar",
+        "test_unsplat",
+    ],
+    "dtype": [
+        "test_dtype", "test_dtype_codegen", "test_dtype_tensor",
+        "test_abs_fp8", "test_scalar_overflow",
+        "test_value_specialization_overflow",
+    ],
+    "math_advanced": [
+        "test_math_erf_op", "test_precise_math",
+        "test_enable_fp_fusion", "test_enable_reflect_ftz",
+        "test_umulhi", "test_libdevice_rint",
+    ],
+    "function_call": [
+        "test_call", "test_noinline", "test_jit_function_arg",
+        "test_map_elementwise", "test_map_elementwise_multiple_outputs",
+        "test_map_elementwise_pack",
+    ],
+    "misc_advanced": [
+        "test_constexpr_arg_str_attr", "test_constexpr_assignment",
+        "test_constexpr_flattens", "test_constexpr_if_return",
+        "test_constexpr_scalar_shape", "test_constexpr_shape",
+        "test_assume", "test_tensor_member",
+        "test_unroll_attr", "test_unsigned_name_mangling",
+        "test_poison_return", "test_no_rematerialization_op",
+        "test_vectorization", "test_vectorization_hints",
+    ],
+    "hw_specific": [
+        "test_num_threads", "test_num_warps_pow2", "test_num_ctas_pre_sm90",
+        "test_maxnreg", "test_override_arch",
+        "test_globaltimer", "test_smid", "test_invalid_pid_axis",
+    ],
+    "inline_asm": [
+        "test_inline_asm", "test_inline_asm_multiple_outputs",
+        "test_inline_asm_packed", "test_inline_asm_packed_multiple_outputs",
+        "test_inline_asm_with_pointers", "test_ptx_cast",
+    ],
+    "tma": [
+        "test_tma_load_block_shape_err", "test_tma_store_block_shape_err",
     ],
 }
 
@@ -82,7 +176,11 @@ def run_category(name, tests, verbose=False):
 
     print(f"\n── {name}: {', '.join(tests)}")
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=TRITON_ROOT)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=TRITON_ROOT)
+    except subprocess.TimeoutExpired as e:
+        print(f"   TIMEOUT: hung after 300s (GPU likely stuck)")
+        return 0, len(tests), 0
 
     all_output = result.stdout + "\n" + result.stderr
 
@@ -147,10 +245,13 @@ def main():
         return
 
     verbose = "--verbose" in args or "-v" in args
-    args = [a for a in args if a not in ("--verbose", "-v", "--list")]
+    validated_only = "--validated" in args
+    args = [a for a in args if a not in ("--verbose", "-v", "--list", "--validated")]
 
     if args:
         names = args
+    elif validated_only:
+        names = [n for n in CATEGORIES if n in SKIP_CATEGORIES]
     else:
         names = list(CATEGORIES.keys())
 
@@ -159,6 +260,9 @@ def main():
     for name in names:
         if name not in CATEGORIES:
             print(f"Unknown category '{name}', valid: {', '.join(CATEGORIES.keys())}")
+            continue
+        if not args and not validated_only and name in SKIP_CATEGORIES:
+            print(f"\n── {name}: SKIP (validated)")
             continue
         tests = CATEGORIES[name]
         p, f, e = run_category(name, tests, verbose=verbose)

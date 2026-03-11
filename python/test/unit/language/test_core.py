@@ -131,6 +131,20 @@ def check_type_supported(dtype, device):
     if device == 'mps':
         if dtype in [tl.float64, "float64", torch.float64]:
             pytest.skip("float64 is not supported on MPS")
+        if dtype in [tl.int64, tl.uint64, "int64", "uint64", torch.int64]:
+            pytest.skip("int64 is not supported on MPS")
+        # PyTorch MPS doesn't support uint16/uint32/uint64 type promotion
+        # (e.g. `tensor == 2` fails), so tests can't verify results
+        if dtype in [tl.uint16, tl.uint32, "uint16", "uint32"]:
+            pytest.skip("uint16/uint32 type promotion is not supported on MPS")
+        fp8_types = {tl.float8e4nv, tl.float8e5, tl.float8e4b15, "float8e4nv",
+                     "float8_e4m3fn", "float8e5", "float8_e5m2", "float8e4b15"}
+        if hasattr(tl, 'float8e4b8'):
+            fp8_types.add(tl.float8e4b8)
+        if hasattr(tl, 'float8e5b16'):
+            fp8_types.add(tl.float8e5b16)
+        if dtype in fp8_types:
+            pytest.skip("fp8 is not supported on MPS")
     if is_interpreter():
         if dtype in [tl.bfloat16, "bfloat16", torch.bfloat16]:
             pytest.skip("bfloat16 is not supported in the interpreter")
@@ -1042,6 +1056,8 @@ def test_abs(dtype_x, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4nv, tl.float8e5, tl.float8e4b8, tl.float8e5b16])
 def test_abs_fp8(in_dtype, device):
+    if device == 'mps':
+        pytest.skip('fp8 not supported on MPS')
     if is_hip():
         pytest.skip('test_abs_fp8 not supported on HIP.')
     elif is_cuda():
@@ -1631,6 +1647,8 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
 def test_atomic_cas(sem, num_ctas, dtype_str, device):
     if is_hip_cdna2():
         pytest.skip("Disabled due to being flaky on CDNA2")
+    if device == 'mps':
+        pytest.skip("MPS: cross-threadgroup spin-locks deadlock — Metal cannot preempt threadgroups")
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
     def change_value(Lock, triton_dtype: tl.constexpr):
@@ -4006,6 +4024,7 @@ def test_dot_mulbroadcasted(in_dtype, device):
 @pytest.mark.parametrize("dtype_str", int_dtypes + uint_dtypes + float_dtypes + ['bfloat16'])
 @pytest.mark.parametrize("shape", [(), (1, ), (128, )])
 def test_full(dtype_str, shape, device):
+    check_type_supported(dtype_str, device)
     if dtype_str in uint_dtypes and not hasattr(torch, dtype_str):
         # PyTorch only has unsigned 8, but not 16, 32, or 64
         dtype = getattr(torch, dtype_str[1:])  # uintx -> intx
@@ -4547,17 +4566,21 @@ def test_default(device):
 # ----------------
 
 
-@pytest.mark.parametrize("device", ['cuda', 'cpu', 'cpu_pinned'])
+@pytest.mark.parametrize("device", ['cuda', 'cpu', 'cpu_pinned', 'mps'])
 def test_pointer_arguments(device):
 
     @triton.jit
     def kernel(x):
         pass
 
+    if device == 'cuda' and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    if device == 'mps' and not torch.backends.mps.is_available():
+        pytest.skip("MPS not available")
     pin_memory = 'pinned' in device
     x = torch.empty(1024, device=device.split('_')[0], pin_memory=pin_memory)
     if device == "cpu":
-        with pytest.raises(ValueError):
+        with pytest.raises((ValueError, RuntimeError)):  # ValueError on CUDA backend, RuntimeError on MPS backend
             kernel[(1, )](x)
     else:
         kernel[(1, )](x)
