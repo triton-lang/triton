@@ -36,6 +36,10 @@ def is_fpsan_supported(arch):
     return arch in ["gfx942", "gfx950", "gfx1250"]
 
 
+def is_consan_supported(arch):
+    return arch in ["gfx1250"]
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -334,7 +338,7 @@ class HIPBackend(BaseBackend):
 
         amd.passes.ttgpuir.add_allocate_shared_memory(pm)
         # # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after shared
-        if "consan" in options.instrumentation_mode:
+        if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)
             passes.common.add_cse(pm)
