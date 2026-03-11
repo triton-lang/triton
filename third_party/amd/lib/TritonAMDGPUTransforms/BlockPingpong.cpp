@@ -41,6 +41,7 @@ class Pingponger {
   SmallVector<ttg::LocalLoadOp> lLoadOps;
   SmallVector<ttg::LocalStoreOp> lStoreOps;
   SmallVector<ttg::AsyncCopyGlobalToLocalOp> asyncCopyOps;
+  SmallVector<tt::amdgpu::BufferLoadToLocalOp> bufferLoadToLocalOps;
   SmallVector<ttg::AsyncWaitOp> asyncWaitOps;
   SmallVector<ttg::AsyncCommitGroupOp> asyncCommitOps;
   SmallVector<tt::DotOp> dotOps;
@@ -746,9 +747,12 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
                                                       Location loc) {
   assert(dotOps.size() == 2);
 
-  // Memory clusters start with either ttg.async_wait or ttg.local_store
+  // Memory clusters start with ttg.async_wait, ttg.local_store,
+  // ttg.async_commit_group, or amdgpu.buffer_load_to_local.
   auto findNextMemoryCluster = [](Operation *op) {
-    while (op && !llvm::isa<ttg::AsyncWaitOp, ttg::LocalStoreOp>(op)) {
+    while (op && !llvm::isa<ttg::AsyncWaitOp, ttg::LocalStoreOp,
+                             ttg::AsyncCommitGroupOp,
+                             tt::amdgpu::BufferLoadToLocalOp>(op)) {
       op = op->getNextNode();
     }
     return op;
@@ -961,6 +965,9 @@ void Pingponger::getDotPingponged() {
         .Case<tt::LoadOp>([&](auto gLoadOp) { gLoadOps.push_back(gLoadOp); })
         .Case<ttg::AsyncCopyGlobalToLocalOp>(
             [&](auto asyncCopyOp) { asyncCopyOps.push_back(asyncCopyOp); })
+        .Case<tt::amdgpu::BufferLoadToLocalOp>([&](auto bufferLoadOp) {
+          bufferLoadToLocalOps.push_back(bufferLoadOp);
+        })
         .Case<ttg::LocalLoadOp>([&](auto lLoad) {
           // This scheduling doesn't help hiding intra-warp latency. So, we only
           // collect local_load ops that are software pipelined, which means
@@ -1011,8 +1018,13 @@ void Pingponger::getDotPingponged() {
     addAsymmetricSyncToLoop(builder, loc);
   }
 
-  useAsyncCopy = (asyncCopyOps.size() > 0);
-  int64_t gloadSize = useAsyncCopy ? asyncCopyOps.size() : gLoadOps.size();
+  useAsyncCopy =
+      (asyncCopyOps.size() > 0 || bufferLoadToLocalOps.size() > 0);
+  int64_t gloadSize = asyncCopyOps.size() > 0
+                          ? asyncCopyOps.size()
+                          : bufferLoadToLocalOps.size() > 0
+                                ? bufferLoadToLocalOps.size()
+                                : gLoadOps.size();
   int64_t dotSize =
       scaledDotOps.size() > 0 ? scaledDotOps.size() : dotOps.size();
   if ((gloadSize < 2 || lLoadOps.size() < 2 || dotSize != 1)) {

@@ -200,3 +200,69 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %5#0 : tensor<128x16xf32, #mma>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 8, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+
+  // CHECK-LABEL: chained_dots_buffer_load_to_local
+
+  // CHECK: scf.for
+  // CHECK-NEXT: rocdl.s.barrier
+  // CHECK-NEXT: rocdl.sched.barrier 0
+  // Compute Cluster1
+  // CHECK: tt.dot
+  // CHECK: rocdl.sched.barrier 0
+  // Memory Cluster1
+  // CHECK: ttg.local_load
+  // CHECK: amdg.buffer_load_to_local
+  // CHECK: ttg.async_commit_group
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.s.setprio 0
+  // CHECK-NEXT: amdg.memory_counter_wait ds(0)
+  // CHECK-NEXT: rocdl.s.barrier
+  // CHECK-NEXT: rocdl.sched.barrier 0
+  // Compute Cluster2
+  // CHECK: tt.dot
+  // CHECK: rocdl.sched.barrier 0
+  // Memory Cluster2
+  // CHECK: ttg.local_load
+  // CHECK: amdg.buffer_load_to_local
+  // CHECK: ttg.async_commit_group
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.s.setprio 0
+  // CHECK-NEXT: amdg.memory_counter_wait ds(0)
+  // CHECK-NEXT: scf.yield
+
+  tt.func @chained_dots_buffer_load_to_local(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: !ttg.async.token, %arg4: tensor<128x16xf32, #mma>, %arg5: tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, %arg6: i32, %arg7: tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, %arg8: tensor<128x16xf32, #mma>, %arg9: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg10: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, %arg11: i32, %arg12: i32, %arg13: tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, %offsets: tensor<64x16xi32, #blocked>) -> tensor<128x16xf32, #mma> {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable>
+    %2 = ttg.memdesc_index %1[%c0_i32] : !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x16xf16, #shared, #smem, mutable>
+    %3 = ttg.memdesc_index %0[%c0_i32] : !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x16xf16, #shared, #smem, mutable>
+    %4 = ttg.memdesc_index %1[%c1_i32] : !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x16xf16, #shared, #smem, mutable>
+    %5:9 = scf.for %arg14 = %c0_i32 to %arg1 step %arg2 iter_args(%arg15 = %arg4, %arg16 = %arg4, %arg17 = %arg7, %arg18 = %arg3, %arg19 = %arg3, %arg20 = %2, %arg21 = %4, %arg22 = %arg3, %arg23 = %3) -> (tensor<128x16xf32, #mma>, tensor<128x16xf32, #mma>, tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, !ttg.async.token, !ttg.async.token, !ttg.memdesc<64x16xf16, #shared, #smem, mutable>, !ttg.memdesc<64x16xf16, #shared, #smem, mutable>, !ttg.async.token, !ttg.memdesc<64x16xf16, #shared, #smem, mutable>)  : i32 {
+      %6 = tt.dot %arg10, %arg17, %arg15 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
+      %7 = ttg.async_wait %arg18 {num = 0 : i32}
+      %8 = ttg.local_load %arg20 token %7 : !ttg.memdesc<64x16xf16, #shared, #smem, mutable> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %9 = ttg.memdesc_index %0[%arg6] : !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x16xf16, #shared, #smem, mutable>
+      %10 = amdg.buffer_load_to_local %arg0[%offsets] into %9 : !tt.ptr<f16> [tensor<64x16xi32, #blocked>] -> !ttg.memdesc<64x16xf16, #shared, #smem, mutable>
+      %11 = ttg.async_commit_group tokens %10
+      %12 = tt.dot %arg10, %8, %arg16 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
+      %13 = ttg.async_wait %arg22 {num = 0 : i32}
+      %14 = ttg.local_load %arg23 token %13 : !ttg.memdesc<64x16xf16, #shared, #smem, mutable> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %15 = ttg.memdesc_index %1[%arg6] : !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x16xf16, #shared, #smem, mutable>
+      %16 = amdg.buffer_load_to_local %arg0[%offsets] into %15 : !tt.ptr<f16> [tensor<64x16xi32, #blocked>] -> !ttg.memdesc<64x16xf16, #shared, #smem, mutable>
+      %17 = ttg.async_commit_group tokens %16
+      scf.yield %12, %6, %14, %arg19, %17, %arg21, %15, %11, %9 : tensor<128x16xf32, #mma>, tensor<128x16xf32, #mma>, tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, !ttg.async.token, !ttg.async.token, !ttg.memdesc<64x16xf16, #shared, #smem, mutable>, !ttg.memdesc<64x16xf16, #shared, #smem, mutable>, !ttg.async.token, !ttg.memdesc<64x16xf16, #shared, #smem, mutable>
+    }
+    ttg.local_dealloc %1 : !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable>
+    ttg.local_dealloc %0 : !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable>
+    tt.return %5#0 : tensor<128x16xf32, #mma>
+  }
+}
