@@ -107,7 +107,7 @@ def add_expr_rewrites(rewrites: list[RewriteFn]) -> None:
 
 
 def _is_amd_target(target: str) -> bool:
-    return target.startswith("amd") or target.startswith("gfx")
+    return target.startswith("gfx")
 
 
 @dataclass

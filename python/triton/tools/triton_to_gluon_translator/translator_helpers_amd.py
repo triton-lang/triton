@@ -5,7 +5,6 @@
 # same pattern as the NVIDIA helpers dispatch between Blackwell and Hopper.
 
 import math
-from typing import Any
 
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -13,14 +12,24 @@ from triton.experimental.gluon.language.amd.gfx1250 import wmma, wmma_scaled
 from triton.experimental.gluon.language.amd.gfx1250 import tdm as amd_tdm
 from triton.experimental.gluon.language.amd.gfx1250 import mbarrier as amd_mbarrier
 from triton.experimental.gluon.language.amd.cdna3 import mfma
-from triton.language.core import _unwrap_if_constexpr
 
-# Warp-size-independent helpers reused from the existing module.
+# Target-agnostic helpers reused from the existing module.
+# get_num_threads_per_warp is target-aware (returns 64 for CDNA, 32 otherwise).
 from triton.tools.triton_to_gluon_translator.translator_helpers import (
+    default_blocked_layout,
+    get_num_threads_per_warp,
+    get_num_threads_per_program,
+    tl_arange,
+    tl_full,
     tl_trans,
+    tl_cat,
     cat,
     cat_with_permute,
     _wrap_axis,
+    reset_to_default_layout,
+    set_split_src_layout,
+    get_split_src_layout,
+    convert_to_expand_dims_layout,
     tl_atomic_add,
     current_target,
     get_int_type,
@@ -34,124 +43,6 @@ from triton.tools.triton_to_gluon_translator.translator_helpers import (
     tl_dot_decomposed_mask_nan,
     tl_dot_decomposed_scale_arg,
 )
-
-# ---- warp size and blocked layout (target-aware) ----
-
-
-@gluon.constexpr_function
-def get_num_threads_per_warp() -> ttgl.constexpr:
-    target = current_target()
-    if target is not None and target.backend == "hip":
-        gfx_major = int(target.arch[3:-2])
-        return ttgl.constexpr(32 if gfx_major >= 10 else 64)
-    return ttgl.constexpr(32)
-
-
-@ttgl._core.builtin
-def get_num_threads_per_program(_semantic=None, _generator=None):
-    return ttgl.num_warps(_semantic=_semantic, _generator=_generator) * get_num_threads_per_warp(_semantic=_semantic)
-
-
-@gluon.constexpr_function
-def default_blocked_layout(shape: ttgl.constexpr, num_warps: ttgl.constexpr) -> ttgl.constexpr:
-    rank = len(shape)
-    size_per_thread = [1] * rank
-    threads_per_warp = [1] * rank
-    threads_per_warp[rank - 1] = get_num_threads_per_warp()
-    warps_per_cta = [1] * rank
-    warps_per_cta[0] = num_warps
-    order = list(range(rank - 1, -1, -1))
-    return ttgl.BlockedLayout(
-        size_per_thread=size_per_thread,
-        threads_per_warp=threads_per_warp,
-        warps_per_cta=warps_per_cta,
-        order=order,
-    )
-
-
-# ---- layout-dependent helpers (use local default_blocked_layout) ----
-
-
-@gluon.jit
-def tl_arange(start: ttgl.constexpr, stop: ttgl.constexpr = None):
-    layout: ttgl.constexpr = default_blocked_layout([stop - start], ttgl.num_warps())
-    return ttgl.arange(start, stop, layout=layout)
-
-
-@gluon.jit
-def tl_full(shape, value, dtype=None):
-    layout: ttgl.constexpr = default_blocked_layout(shape, ttgl.num_warps())
-    return ttgl.full(shape, value, dtype, layout=layout)
-
-
-@gluon.jit
-def tl_cat(lhs, rhs, can_reorder=False):
-    if can_reorder:
-        return cat(
-            lhs,
-            rhs,
-            can_reorder,
-            layout=default_blocked_layout([lhs.shape[0] + rhs.shape[0]], ttgl.num_warps()),
-        )
-    else:
-        return cat_with_permute(lhs, rhs)
-
-
-@gluon.jit
-def reset_to_default_layout(value):
-    ty: ttgl.constexpr = value.type
-    if isinstance(ty, ttgl.tuple_type):
-        out = ()
-        for i in ttgl.static_range(len(value)):
-            r = ttgl.convert_layout(value[i], layout=default_blocked_layout(value[i].type.shape, ttgl.num_warps()))
-            out = out + (r, )
-        return out
-    elif isinstance(value, ttgl.tensor) and isinstance(value.type, ttgl.distributed_type):
-        layout: ttgl.constexpr = default_blocked_layout(ty.shape, ttgl.num_warps())
-        return ttgl.convert_layout(value, layout=layout)
-    else:
-        return value
-
-
-@gluon.constexpr_function
-def get_split_src_layout(shape: ttgl.constexpr, num_warps: ttgl.constexpr) -> ttgl.constexpr:
-    rank = len(shape)
-    size_per_thread = [1 if i != rank - 1 else 2 for i in range(rank)]
-    threads_per_warp = [1 for _ in range(rank)]
-    remaining_threads = get_num_threads_per_warp()
-    for dim in range(rank - 2, -1, -1):
-        threads_per_warp[dim] = min(shape[dim], remaining_threads)
-        remaining_threads = remaining_threads // threads_per_warp[dim]
-    warps_per_cta = [1 for _ in range(rank)]
-    warps_per_cta[0] = num_warps
-    order = list(range(rank - 1, -1, -1))
-    return ttgl.BlockedLayout(
-        size_per_thread=size_per_thread,
-        threads_per_warp=threads_per_warp,
-        warps_per_cta=warps_per_cta,
-        order=order,
-    )
-
-
-@gluon.jit
-def set_split_src_layout(value):
-    layout: ttgl.constexpr = get_split_src_layout(value.type.shape, ttgl.num_warps())
-    return ttgl.convert_layout(value, layout=layout)
-
-
-@ttgl._core.builtin
-def convert_to_expand_dims_layout(value, expand_dims: list[int], _semantic=None, _generator=None) -> Any:
-    parent_shape = _unwrap_if_constexpr(value.type.shape)
-    if isinstance(parent_shape, ttgl.tuple):
-        parent_shape = parent_shape.values
-    assert isinstance(parent_shape, list)
-    for dim in expand_dims:
-        parent_shape.insert(dim, 1)
-    num_warps = ttgl.num_warps(_semantic=_semantic, _generator=_generator)
-    layout = default_blocked_layout(parent_shape, num_warps)
-    for dim in reversed(expand_dims):
-        layout = ttgl.SliceLayout(dim=dim, parent=layout)
-    return ttgl.convert_layout(value, layout, _semantic=_semantic)
 
 
 # ---- architecture detection ----

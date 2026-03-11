@@ -495,6 +495,10 @@ def tl_dot_scaled_blackwell(
 
 @gluon.constexpr_function
 def get_num_threads_per_warp() -> ttgl.constexpr:
+    target = current_target()
+    if target is not None and target.backend == "hip":
+        gfx_major = int(target.arch[3:-2])
+        return ttgl.constexpr(32 if gfx_major >= 10 else 64)
     return ttgl.constexpr(32)
 
 

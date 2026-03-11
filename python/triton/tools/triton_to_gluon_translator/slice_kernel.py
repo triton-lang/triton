@@ -459,7 +459,7 @@ class SliceRewriter(ReferenceRewriter):
             raise e
 
     def _is_amd_target(self) -> bool:
-        return self.target.startswith("amd") or self.target.startswith("gfx")
+        return self.target.startswith("gfx")
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         if not self.translate_to_gluon:
