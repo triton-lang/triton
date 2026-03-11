@@ -188,7 +188,8 @@ TritonPlugin::getDialectPluginInfo(const char *dialectName) {
 }
 
 llvm::Expected<TritonPluginResult>
-TritonPlugin::addCustomOp(TRITON_PLUGIN_CUSTOM_OP_ARGS) {
+TritonPlugin::addCustomOp(const char *handle, TritonOpBuilder &self,
+                          std::vector<mlir::Value> &operands) {
   if (auto Err = loadPlugin())
     return Err;
   addCustomOpAPI(handle, self, operands);

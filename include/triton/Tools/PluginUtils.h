@@ -19,10 +19,6 @@ enum TritonPluginResult {
 #define TRITON_PLUGIN_API_TYPE(_TYPE)                                          \
   extern "C" __attribute__((visibility("default"))) _TYPE
 
-#define TRITON_PLUGIN_ENUMERATOR_ARGS uint32_t *count, const char **handles
-#define TRITON_PLUGIN_CUSTOM_OP_ARGS                                           \
-  const char *handle, TritonOpBuilder &self, std::vector<mlir::Value> &operands
-
 struct TritonPlugin {
   TritonPlugin() = delete;
   TritonPlugin(std::string filename) : filename(filename) {}
@@ -57,9 +53,12 @@ private:
   using DialectPluginInfoCType =
       ::mlir::DialectPluginLibraryInfo (*)(const char *);
 
-  using AddCustomOpType =
-      std::function<TritonPluginResult(TRITON_PLUGIN_CUSTOM_OP_ARGS)>;
-  using AddCustomOpCType = TritonPluginResult (*)(TRITON_PLUGIN_CUSTOM_OP_ARGS);
+  using AddCustomOpType = std::function<TritonPluginResult(
+      const char *handle, TritonOpBuilder &self,
+      std::vector<mlir::Value> &operands)>;
+  using AddCustomOpCType =
+      TritonPluginResult (*)(const char *handle, TritonOpBuilder &self,
+                             std::vector<mlir::Value> &operands);
 
   llvm::Expected<intptr_t> getAddressOfSymbol(const std::string &symbol) const;
 
@@ -96,7 +95,9 @@ public:
   llvm::Expected<TritonPluginResult> addPass(mlir::PassManager *pm,
                                              const char *passHandle);
 
-  llvm::Expected<TritonPluginResult> addCustomOp(TRITON_PLUGIN_CUSTOM_OP_ARGS);
+  llvm::Expected<TritonPluginResult>
+  addCustomOp(const char *handle, TritonOpBuilder &self,
+              std::vector<mlir::Value> &operands);
 
   llvm::Expected<TritonPluginResult> registerPass(const char *passHandle);
 

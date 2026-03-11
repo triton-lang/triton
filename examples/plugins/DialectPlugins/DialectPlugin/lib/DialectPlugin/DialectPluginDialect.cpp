@@ -106,7 +106,7 @@ tritonGetDialectPluginInfo(const char *name) {
 }
 
 TRITON_PLUGIN_API
-tritonEnumeratePluginCustomOps(TRITON_PLUGIN_ENUMERATOR_ARGS) {
+tritonEnumeratePluginCustomOps(uint32_t *count, const char **handles) {
   if (!count)
     return TP_GENERIC_FAILURE;
   *count = 1;
@@ -117,7 +117,8 @@ tritonEnumeratePluginCustomOps(TRITON_PLUGIN_ENUMERATOR_ARGS) {
 }
 
 TRITON_PLUGIN_API
-tritonAddPluginCustomOp(TRITON_PLUGIN_CUSTOM_OP_ARGS) {
+tritonAddPluginCustomOp(const char *handle, TritonOpBuilder &self,
+                        std::vector<mlir::Value> &operands) {
   ::mlir::Value &dst = operands[0];
   ::mlir::Value &src = operands[1];
 
