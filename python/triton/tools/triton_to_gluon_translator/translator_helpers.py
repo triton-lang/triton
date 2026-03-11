@@ -974,9 +974,7 @@ def convert_host_descriptor(desc):
     if target is not None and target.backend == "hip" and target.arch == "gfx1250":
         element_bitwidth = torch_dtype_to_triton(dtype).primitive_bitwidth
         layout = get_default_tdm_layout(block_shape, element_bitwidth)
-        return gluon.amd.gfx1250.TensorDescriptor(
-            desc.base, list(desc.shape), list(desc.strides), block_shape, layout
-        )
+        return gluon.amd.gfx1250.TensorDescriptor(desc.base, list(desc.shape), list(desc.strides), block_shape, layout)
 
     tensor = desc.base
     layout = ttgl.NVMMASharedLayout.get_default_for(block_shape, torch_dtype_to_triton(dtype))
