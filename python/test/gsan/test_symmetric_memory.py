@@ -7,11 +7,13 @@ import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import triton
+import triton.language as tl
 
-from triton._internal_testing import is_cuda
+from triton._internal_testing import is_cuda, run_in_process
 from triton.experimental.gsan import symmetric_memory
 from triton.experimental.gsan._allocator import get_runtime_state_layout
-from triton.experimental.gsan._testing_utils import shadow_tensor_for
+from triton.experimental.gsan._testing_utils import atomic_poll, shadow_tensor_for
 from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
 
 
@@ -31,6 +33,27 @@ def _local_vector_clocks(device_index: int) -> tuple[torch.Tensor, dict[str, int
         stride=(layout["thread_state_stride_bytes"] // 2, 1),
     )
     return clocks, layout
+
+
+@triton.jit
+def _single_cta_atomic_sync_kernel(counter_ptr, payload_ptr, peer_payload_ptr, num_ready_ptr, seen_peer_ptr,
+                                   payload_value, num_gpus):
+    tl.store(payload_ptr, payload_value)
+
+    num_ready = tl.atomic_add(counter_ptr, 1, sem="acq_rel", scope="sys")
+    if num_ready != num_gpus - 1:
+        atomic_poll(counter_ptr, num_gpus, sem="acquire", scope="sys")
+
+    seen_peer = tl.load(peer_payload_ptr)
+    tl.store(num_ready_ptr, num_ready)
+    tl.store(seen_peer_ptr, seen_peer)
+
+
+@triton.jit
+def _single_cta_no_atomic_sync_kernel(payload_ptr, peer_payload_ptr, seen_peer_ptr, payload_value):
+    tl.store(payload_ptr, payload_value)
+    seen_peer = tl.load(peer_payload_ptr)
+    tl.store(seen_peer_ptr, seen_peer)
 
 
 def _run_symmetric_memory_checks(rank: int, world_size: int) -> None:
@@ -166,6 +189,74 @@ def _run_subgroup_symmetric_memory_checks(rank: int) -> None:
             dist.destroy_process_group(subgroup)
 
 
+def _run_single_cta_atomic_sync_check(rank: int, world_size: int) -> None:
+    dev = torch.device(f"cuda:{rank}")
+    torch.cuda.set_device(dev)
+
+    peer = (rank + 1) % world_size
+    state = symmetric_memory.empty((2, ), dtype=torch.int32, device=dev)
+    state.zero_()
+
+    hdl = symmetric_memory.rendezvous(state, group=dist.group.WORLD)
+    counter = hdl.get_buffer(0, (1, ), state.dtype, storage_offset=0)
+    peer_payload = hdl.get_buffer(peer, (1, ), state.dtype, storage_offset=1)
+    local_payload = state[1:]
+    num_ready = torch.full((1, ), -1, dtype=torch.int32, device=dev)
+    seen_peer = torch.full((1, ), -1, dtype=torch.int32, device=dev)
+
+    hdl.barrier(channel=0)
+    _single_cta_atomic_sync_kernel[(1, )](
+        counter,
+        local_payload,
+        peer_payload,
+        num_ready,
+        seen_peer,
+        rank + 1,
+        world_size,
+        num_warps=1,
+    )
+    torch.cuda.synchronize()
+
+    assert 0 <= int(num_ready.item()) < world_size
+    assert int(seen_peer.item()) == peer + 1
+
+    all_num_ready = [None] * world_size
+    dist.all_gather_object(all_num_ready, int(num_ready.item()))
+    if rank == 0:
+        assert sorted(all_num_ready) == list(range(world_size))
+        assert int(state[0].item()) == world_size
+
+    dist.barrier()
+    torch.cuda.synchronize()
+    hdl.close()
+    hdl.close()
+
+
+def _run_single_cta_no_atomic_sync_check(rank: int, world_size: int) -> None:
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+
+    dev = torch.device(f"cuda:{rank}")
+    torch.cuda.set_device(dev)
+
+    peer = (rank + 1) % world_size
+    payload = symmetric_memory.empty((1, ), dtype=torch.int32, device=dev)
+    payload.zero_()
+
+    hdl = symmetric_memory.rendezvous(payload, group=dist.group.WORLD)
+    peer_payload = hdl.get_buffer(peer, payload.shape, payload.dtype)
+    seen_peer = torch.full((1, ), -1, dtype=torch.int32, device=dev)
+
+    hdl.barrier(channel=0)
+    _single_cta_no_atomic_sync_kernel[(1, )](
+        payload,
+        peer_payload,
+        seen_peer,
+        rank + 1,
+        num_warps=1,
+    )
+    torch.cuda.synchronize()
+
+
 def _distributed_worker(rank: int, world_size: int, master_port: int, run_subgroup_check: bool) -> None:
     dev = f"cuda:{rank}"
     os.environ["WORLD_SIZE"] = str(world_size)
@@ -180,6 +271,44 @@ def _distributed_worker(rank: int, world_size: int, master_port: int, run_subgro
         dist.barrier()
     finally:
         dist.destroy_process_group()
+
+
+def _distributed_worker_single_cta_atomic_sync(rank: int, world_size: int, master_port: int) -> None:
+    dev = f"cuda:{rank}"
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(master_port)
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, device_id=torch.device(dev))
+    try:
+        _run_single_cta_atomic_sync_check(rank, world_size)
+        dist.barrier()
+    finally:
+        dist.destroy_process_group()
+
+
+def _distributed_worker_single_cta_no_atomic_sync(rank: int, world_size: int, master_port: int) -> None:
+    dev = f"cuda:{rank}"
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(master_port)
+    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size)
+    torch.cuda.set_device(dev)
+    try:
+        _run_single_cta_no_atomic_sync_check(rank, world_size)
+        dist.barrier()
+    finally:
+        dist.destroy_process_group()
+
+
+def _run_single_cta_no_atomic_sync_failure_case() -> None:
+    world_size = 2
+    master_port = _get_free_tcp_port()
+    mp.spawn(
+        _distributed_worker_single_cta_no_atomic_sync,
+        args=(world_size, master_port),
+        nprocs=world_size,
+        join=True,
+    )
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
@@ -210,6 +339,31 @@ def test_gsan_symmetric_memory_rendezvous_subgroup_without_global_zero():
         nprocs=world_size,
         join=True,
     )
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_gsan_symmetric_memory_single_cta_atomic_sync():
+    if torch.cuda.device_count() < 2:
+        pytest.skip("requires 2 CUDA devices")
+
+    world_size = 2
+    master_port = _get_free_tcp_port()
+    mp.spawn(
+        _distributed_worker_single_cta_atomic_sync,
+        args=(world_size, master_port),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_gsan_symmetric_memory_single_cta_no_atomic_sync_fails():
+    if torch.cuda.device_count() < 2:
+        pytest.skip("requires 2 CUDA devices")
+
+    result = run_in_process(_run_single_cta_no_atomic_sync_failure_case, env={"CUDA_LAUNCH_BLOCKING": "1"})
+    assert result.exc is not None
+    assert "race detected" in result.driver_stderr_output
 
 
 def _run_triton_kernels_convert_dp_to_ep_with_gsan_pool(rank: int, world_size: int) -> None:

@@ -31,6 +31,9 @@ struct alignas(4) ScalarClock {
   epoch_t epoch;
   thread_id_t threadId : 12; // Supports 4096 threads
   AtomicScope scope : 2;
+  // For a release write, the epoch is actually an index into the thread's
+  // circular clock buffer where the full vector clock is stored.
+  bool isRelease : 1;
 };
 static constexpr int kMaxThreads = 1 << 12;
 static_assert(sizeof(ScalarClock) == 4);
@@ -84,10 +87,18 @@ struct ThreadState {
   epoch_t vectorClock[];
 };
 
+static constexpr int kMaxAtomicShadowCells = 3;
+
+struct AtomicEventState {
+  ThreadState *threadState;
+  ShadowCell *cells[kMaxAtomicShadowCells];
+  uint8_t numCells;
+};
+
 // Place the thread state for each device at a fixed stride for ease of
 // address calculation.
 static constexpr uintptr_t kPerDeviceStateStride = 1ull << 30;
-static constexpr uintptr_t kMaxGPUs = 16;
+static constexpr uintptr_t kMaxGPUs = 32;
 static constexpr uintptr_t kGlobalsReserveSize =
     kPerDeviceStateStride * kMaxGPUs;
 
@@ -116,6 +127,10 @@ inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress) {
 inline GSAN_HOST_DEVICE bool isGsanManaged(uintptr_t addr,
                                            uintptr_t reserveBase) {
   return getReserveBaseFromAddress(addr) == reserveBase;
+}
+
+inline GSAN_HOST_DEVICE bool isAtomicScope(AtomicScope scope) {
+  return scope != AtomicScope::NonAtomic;
 }
 
 } // namespace gsan
