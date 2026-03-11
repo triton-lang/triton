@@ -106,10 +106,6 @@ def add_expr_rewrites(rewrites: list[RewriteFn]) -> None:
     rewrites.append(expr_rewrite(tl.debug_barrier, "gl.barrier"))
 
 
-def _is_amd_target(target: str) -> bool:
-    return target.startswith("gfx")
-
-
 @dataclass
 class Translator(ReferenceRewriter):
     tensor_member_match_fns: list[str] = field(default_factory=list)
@@ -129,10 +125,7 @@ class Translator(ReferenceRewriter):
 
         self.imports.add("import triton.experimental.gluon as gluon")
         self.imports.add("import triton.experimental.gluon.language as gl")
-        if _is_amd_target(self.target):
-            self.imports.add("import triton.tools.triton_to_gluon_translator.translator_helpers_amd as helpers")
-        else:
-            self.imports.add("import triton.tools.triton_to_gluon_translator.translator_helpers as helpers")
+        self.imports.add("import triton.tools.triton_to_gluon_translator.translator_helpers as helpers")
 
         self.tensor_member_match_fns = ["reshape", "trans", "permute", "split", "reduce", "sum"]
 
