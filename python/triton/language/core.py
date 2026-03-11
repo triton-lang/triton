@@ -2365,6 +2365,8 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :type rhs_format: str
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
     :param lhs_k_pack: If false, the lhs tensor is packed into uint8 along M dimension.
+                       Note: FP4 formats (e2m1) require ``lhs_k_pack=True`` (the default) on sm120
+                       (e.g., GB202/GB203 Blackwell desktop GPUs).
     :type lhs_k_pack: bool, optional
     :param rhs_k_pack: If false, the rhs tensor is packed into uint8 along N dimension.
                        Note: FP4 formats (e2m1) require ``rhs_k_pack=True`` (the default) on sm120
