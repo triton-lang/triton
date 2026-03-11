@@ -2,6 +2,7 @@
 
 #include <fstream>
 
+#include "mlir/Analysis/DataFlow/LivenessAnalysis.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
@@ -84,10 +85,6 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
     assert(false && "version not supported");
     return {0, 0};
   }
-}
-
-bool isLoadFromTensorPtr(triton::LoadOp op) {
-  return mlir::triton::isTensorPointerType(op.getPtr().getType());
 }
 
 SmallVector<unsigned, 4>
@@ -590,15 +587,10 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
-  // Case 1: Pointer of tensor is always expensive
-  auto operandType = op->getOperand(0).getType();
-  if (triton::isTensorPointerType(operandType))
-    return true;
-  // Case 2a: A size 1 tensor is not expensive since all threads will load the
-  // same
+  // size 1 tensor is not expensive since all threads will load the same
   if (isSingleValue(op->getOperand(0)))
     return false;
-  // Case 2b: Tensor of pointers has more threads than elements
+  // Tensor of pointers has more threads than elements
   // we can presume a high hit-rate that makes it cheap to load
   auto ptrType = cast<RankedTensorType>(op->getOperand(0).getType());
   auto mod = op->getParentOfType<ModuleOp>();
@@ -1200,9 +1192,6 @@ static bool skipOperand(Operation *op, unsigned operandNumber) {
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
   OpBuilder builder(op);
   // Convert operands
-  // For load/store with tensor pointers, we don't have to change the
-  // operands' type, we do this by changing the outputs' type of
-  // `make_tensor_ptr`
   SmallVector<Value, 4> newArgs;
   for (auto &opOperand : op->getOpOperands()) {
     Value operand = opOperand.get();
@@ -1241,138 +1230,23 @@ Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
   return newOp;
 }
 
-namespace {
+void runDeadIterArgElimination(Operation *top) {
+  // The op we are running on must not have any results, because the liveness
+  // analysis will not consider their users.
+  assert(top->hasTrait<OpTrait::ZeroResults>() && "op cannot have results");
+  dataflow::RunLivenessAnalysis la{top};
 
-/// Detect dead arguments in scf.for op by assuming all the values are dead and
-/// propagate liveness property.
-struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
-  using OpRewritePattern<scf::ForOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(scf::ForOp forOp,
-                                PatternRewriter &rewriter) const final {
-    Block &block = *forOp.getBody();
-    auto yieldOp = cast<scf::YieldOp>(block.getTerminator());
-    // Assume that nothing is live at the beginning and mark values as live
-    // based on uses.
-    DenseSet<Value> aliveValues;
-    SmallVector<Value> queue;
-    // Helper to mark values as live and add them to the queue of value to
-    // propagate if it is the first time we detect the value as live.
-    auto markLive = [&](Value val) {
-      if (!forOp->isAncestor(val.getParentRegion()->getParentOp()))
-        return;
-      if (aliveValues.insert(val).second)
-        queue.push_back(val);
-    };
-    // Mark all yield operands as live if the associated forOp result has any
-    // use.
-    for (auto result : llvm::enumerate(forOp.getResults())) {
-      if (!result.value().use_empty())
-        markLive(yieldOp.getOperand(result.index()));
-    }
-    if (aliveValues.size() == forOp.getNumResults())
-      return failure();
-    // Operations with side-effects are always live. Mark all theirs operands as
-    // live.
-    block.walk([&](Operation *op) {
-      if (!isa<scf::YieldOp, scf::ForOp>(op) && !wouldOpBeTriviallyDead(op)) {
-        for (Value operand : op->getOperands())
-          markLive(operand);
-      }
-    });
-    // Propagate live property until reaching a fixed point.
-    while (!queue.empty()) {
-      Value value = queue.pop_back_val();
-      if (auto nestedFor = value.getDefiningOp<scf::ForOp>()) {
-        auto result = mlir::cast<OpResult>(value);
-        OpOperand &forOperand = *nestedFor.getTiedLoopInit(result);
-        markLive(forOperand.get());
-        auto nestedYieldOp =
-            cast<scf::YieldOp>(nestedFor.getBody()->getTerminator());
-        Value nestedYieldOperand =
-            nestedYieldOp.getOperand(result.getResultNumber());
-        markLive(nestedYieldOperand);
-        continue;
-      }
-      if (auto nestedIf = value.getDefiningOp<scf::IfOp>()) {
-        auto result = mlir::cast<OpResult>(value);
-        // mark condition as live.
-        markLive(nestedIf.getCondition());
-        for (scf::YieldOp nestedYieldOp :
-             {nestedIf.thenYield(), nestedIf.elseYield()}) {
-          Value nestedYieldOperand =
-              nestedYieldOp.getOperand(result.getResultNumber());
-          markLive(nestedYieldOperand);
-        }
-        continue;
-      }
-      if (Operation *def = value.getDefiningOp()) {
-        // TODO: support while ops.
-        if (isa<scf::WhileOp>(def))
-          return failure();
-        for (Value operand : def->getOperands())
-          markLive(operand);
-        continue;
-      }
-      // If an argument block is live then the associated yield operand and
-      // forOp operand are live.
-      auto arg = mlir::cast<BlockArgument>(value);
-      if (auto forOwner = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
-        if (arg.getArgNumber() < forOwner.getNumInductionVars())
-          continue;
-        unsigned iterIdx = arg.getArgNumber() - forOwner.getNumInductionVars();
-        Value yieldOperand =
-            forOwner.getBody()->getTerminator()->getOperand(iterIdx);
-        markLive(yieldOperand);
-        markLive(forOwner.getInitArgs()[iterIdx]);
+  // We just replace users of the block arg with their corresponding init value.
+  // Dead code elimination can then do the actual removal.
+  top->walk([&](Operation *op) {
+    if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op)) {
+      for (auto [idx, arg] : llvm::enumerate(loopLike.getRegionIterArgs())) {
+        const auto *liveness = la.getLiveness(arg);
+        if (liveness && !liveness->isLive)
+          arg.replaceAllUsesWith(loopLike.getInits()[idx]);
       }
     }
-    SmallVector<unsigned> deadArg;
-    for (auto yieldOperand : llvm::enumerate(yieldOp->getOperands())) {
-      if (aliveValues.contains(yieldOperand.value()))
-        continue;
-      if (yieldOperand.value() == block.getArgument(yieldOperand.index() + 1))
-        continue;
-
-      // The yield operand might live outside the loop, e.g.
-      //   %init = ...
-      //   %x = ...
-      //   %y = for iter_args(%unused = %init) {
-      //     yield %x
-      //   }
-      //
-      // In this case, the loop returns %x if it runs 1 or more times, and
-      // otherwise it returns %init.  We cowardly refuse to remove this operand
-      // from the yield.  (We could, but we'd need to prove that the loop runs 0
-      // or >=1 times.)
-      //
-      // As a special case, if it doesn't matter whether the loop runs 0 or >=1
-      // times (because the loop returns the same value in both cases) then we
-      // can still mark the operand as dead. This occurs in the above example
-      // when %init is the same as %x.
-      if (!forOp->isAncestor(
-              yieldOperand.value().getParentRegion()->getParentOp()) &&
-          yieldOperand.value() != forOp.getInitArgs()[yieldOperand.index()])
-        continue;
-
-      deadArg.push_back(yieldOperand.index());
-    }
-    bool changed = false;
-    // For simplicity we just replace users of the block arg with init value and
-    // leave the operations and argument removal to dead code elimination.
-    for (unsigned deadArgIdx : deadArg) {
-      BlockArgument arg = block.getArgument(deadArgIdx + 1);
-      changed |= !arg.use_empty();
-      rewriter.replaceAllUsesWith(arg, forOp.getTiedLoopInit(arg)->get());
-    }
-    return success(changed);
-  }
-};
-
-} // namespace
-
-void populateForOpDeadArgumentElimination(RewritePatternSet &patterns) {
-  patterns.add<ForOpDeadArgElimination>(patterns.getContext());
+  });
 }
 
 ttg::LocalAllocOp findShmemAlloc(Value operand) {

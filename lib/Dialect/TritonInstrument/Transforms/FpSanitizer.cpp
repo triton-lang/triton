@@ -66,6 +66,28 @@ constexpr uint64_t getUnaryOpId(UnaryOpId opId) {
 // Scratch memory management
 // ------------------------------------------------------------
 
+static ttg::BlockedEncodingAttr
+getOptimizedBlockedEncoding(PatternRewriter &rewriter, ArrayRef<int64_t> shape,
+                            Type elemType) {
+  int numWarps = ttg::lookupNumWarps(rewriter.getInsertionBlock()->getParent());
+  int threadsPerWarp = ttg::lookupThreadsPerWarp(rewriter);
+  int numCTAs = ttg::lookupNumCTAs(rewriter.getInsertionBlock()->getParentOp());
+  auto base = ttg::getDefaultBlockedEncoding(rewriter.getContext(), shape,
+                                             numWarps, threadsPerWarp, numCTAs);
+  SmallVector<unsigned> order = llvm::to_vector(base.getOrder());
+  SmallVector<unsigned> sizePerThread(shape.size(), 1);
+  unsigned elemBits = elemType.getIntOrFloatBitWidth();
+  unsigned maxElems = std::max(128u / elemBits, 1u);
+  if (!order.empty()) {
+    unsigned dim = order.front();
+    sizePerThread[dim] =
+        static_cast<unsigned>(std::min<int64_t>(shape[dim], maxElems));
+  }
+  return ttg::BlockedEncodingAttr::get(
+      rewriter.getContext(), sizePerThread, base.getThreadsPerWarp(),
+      base.getWarpsPerCTA(), order, base.getCGALayout());
+}
+
 struct ScratchInfo {
   Value ptr;
   RankedTensorType tensorType;
@@ -93,30 +115,6 @@ public:
       return arith::ExtSIOp::create(rewriter, loc, i32Ty, value);
     }
     return Value();
-  }
-
-  static ttg::BlockedEncodingAttr
-  getOptimizedBlockedEncoding(PatternRewriter &rewriter,
-                              ArrayRef<int64_t> shape, Type elemType) {
-    int numWarps =
-        ttg::lookupNumWarps(rewriter.getInsertionBlock()->getParent());
-    int threadsPerWarp = ttg::lookupThreadsPerWarp(rewriter);
-    int numCTAs =
-        ttg::lookupNumCTAs(rewriter.getInsertionBlock()->getParentOp());
-    auto base = ttg::getDefaultBlockedEncoding(
-        rewriter.getContext(), shape, numWarps, threadsPerWarp, numCTAs);
-    SmallVector<unsigned> order = llvm::to_vector(base.getOrder());
-    SmallVector<unsigned> sizePerThread(shape.size(), 1);
-    unsigned elemBits = elemType.getIntOrFloatBitWidth();
-    unsigned maxElems = std::max(128u / elemBits, 1u);
-    if (!order.empty()) {
-      unsigned dim = order.front();
-      sizePerThread[dim] =
-          static_cast<unsigned>(std::min<int64_t>(shape[dim], maxElems));
-    }
-    return ttg::BlockedEncodingAttr::get(
-        rewriter.getContext(), sizePerThread, base.getThreadsPerWarp(),
-        base.getWarpsPerCTA(), order, base.getCGALayout());
   }
 
   std::optional<ScratchInfo>
@@ -422,6 +420,15 @@ Value bitcastToFloat(PatternRewriter &rewriter, Location loc, Value v,
   return tt::BitcastOp::create(rewriter, loc, floatTy, v);
 }
 
+uint64_t stableStringHash(StringRef str) {
+  uint64_t h = 14695981039346656037ull;
+  for (uint8_t c : str.bytes()) {
+    h ^= c;
+    h *= 1099511628211ull;
+  }
+  return h;
+}
+
 uint64_t murmur64Mixer(uint64_t h) {
   h ^= h >> 33;
   h *= 0xff51afd7ed558ccd;
@@ -456,6 +463,78 @@ Value fpsanSRem(PatternRewriter &rewriter, Location loc, Value num, Value den) {
   auto denSafe = arith::OrIOp::create(rewriter, loc, denI, one);
   auto resI = arith::RemSIOp::create(rewriter, loc, numI, denSafe);
   return bitcastToFloat(rewriter, loc, resI, num.getType());
+}
+
+bool isIntLike(Type ty) { return isa<IntegerType>(getElementType(ty)); }
+
+bool isNumericLike(Type ty) {
+  Type elemTy = getElementType(ty);
+  return isa<FloatType>(elemTy) || isa<IntegerType>(elemTy);
+}
+
+bool externHasNumericOperands(tt::ExternElementwiseOp op) {
+  return llvm::all_of(op.getOperands(), [](Value operand) {
+    return isNumericLike(operand.getType());
+  });
+}
+
+bool externInvolvesFloatLike(tt::ExternElementwiseOp op) {
+  return isFloatLike(op.getType()) ||
+         llvm::any_of(op.getOperands(), [](Value operand) {
+           return isFloatLike(operand.getType());
+         });
+}
+
+Value castExternOperandToResultInt(PatternRewriter &rewriter, Location loc,
+                                   Value operand, Type resultIntTy) {
+  if (isFloatLike(operand.getType())) {
+    return castIntValueToType(
+        rewriter, loc, bitcastToInt(rewriter, loc, operand), resultIntTy);
+  }
+  if (isIntLike(operand.getType())) {
+    return castIntValueToType(rewriter, loc, operand, resultIntTy);
+  }
+  return Value();
+}
+
+Value rotateLeftIntByAmount(PatternRewriter &rewriter, Location loc,
+                            Value value, unsigned amount) {
+  unsigned bitWidth = getIntBitwidth(value.getType());
+  if (bitWidth == 0)
+    return value;
+  amount %= bitWidth;
+  if (amount == 0)
+    return value;
+
+  auto leftShift = getIntConstantLike(rewriter, loc, value.getType(),
+                                      static_cast<int64_t>(amount));
+  auto rightShift = getIntConstantLike(rewriter, loc, value.getType(),
+                                       static_cast<int64_t>(bitWidth - amount));
+  auto left = arith::ShLIOp::create(rewriter, loc, value, leftShift);
+  auto right = arith::ShRUIOp::create(rewriter, loc, value, rightShift);
+  return arith::OrIOp::create(rewriter, loc, left, right);
+}
+
+Value fpsanVariadicExternTagged(PatternRewriter &rewriter, Location loc,
+                                tt::ExternElementwiseOp op, uint64_t hash) {
+  Type resultTy = op.getType();
+  Type resultIntTy = getIntTypeLike(resultTy);
+
+  Value sumI = getIntConstantLike(rewriter, loc, resultIntTy, 0);
+  for (auto [argIdx, operand] : llvm::enumerate(op.getOperands())) {
+    Value operandI =
+        castExternOperandToResultInt(rewriter, loc, operand, resultIntTy);
+    if (!operandI)
+      return Value();
+    Value rotated = rotateLeftIntByAmount(rewriter, loc, operandI,
+                                          static_cast<unsigned>(argIdx));
+    sumI = arith::AddIOp::create(rewriter, loc, sumI, rotated);
+  }
+
+  auto hashVal = getIntConstantLike(rewriter, loc, resultIntTy,
+                                    static_cast<int64_t>(hash));
+  auto outI = arith::XOrIOp::create(rewriter, loc, sumI, hashVal);
+  return bitcastToFloat(rewriter, loc, outI, resultTy);
 }
 
 std::optional<ScratchInfo>
@@ -830,9 +909,16 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
     int64_t tileM = std::min<int64_t>(kTileM, m);
     int64_t tileN = std::min<int64_t>(kTileN, n);
 
-    auto accLayout = cast<ttg::DistributedEncodingTrait>(cTy.getEncoding());
-    auto aLayout = cast<ttg::DistributedEncodingTrait>(aTy.getEncoding());
-    auto bLayout = cast<ttg::DistributedEncodingTrait>(bTy.getEncoding());
+    // Use optimized blocked layouts for emulation tiles instead of the
+    // original dot encodings.  Encodings like AMDWmmaEncodingAttr impose
+    // minimum shape requirements (e.g. >= 16x16) that the small emulation
+    // tiles (kTileM x kTileN = 8x8) cannot satisfy.
+    auto accLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
+                                                 cTy.getElementType());
+    auto aLayout =
+        getOptimizedBlockedEncoding(rewriter, {tileM, k}, aTy.getElementType());
+    auto bLayout =
+        getOptimizedBlockedEncoding(rewriter, {k, tileN}, bTy.getElementType());
 
     auto accTileTy =
         RankedTensorType::get({tileM, tileN}, cTy.getElementType(), accLayout);
@@ -845,6 +931,12 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
     Value bPtr = createScratchAndStore(rewriter, loc, op.getB(), bTy);
     Value dPtr = createScratchAndStore(rewriter, loc, op.getC(), cTy);
 
+    // Each warp may only store a subset of each tile's rows, so a barrier is
+    // needed to make all scratch stores visible before the loops read them.
+    ttg::BarrierOp::create(rewriter, loc,
+                           ttg::AddrSpace::GlobalRead |
+                               ttg::AddrSpace::GlobalWrite);
+
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, aPtr, bPtr, dPtr, m, n, k, tileM, tileN, aTileTy,
         bTileTy, accTileTy, accLayout, accElem, useDInt, predInt,
@@ -852,6 +944,12 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
     if (!mLoop)
       return failure();
     rewriter.setInsertionPointAfter(*mLoop);
+
+    // Same reason: each warp may only write a subset of D's rows in the loop,
+    // so synchronize before the final load.
+    ttg::BarrierOp::create(rewriter, loc,
+                           ttg::AddrSpace::GlobalRead |
+                               ttg::AddrSpace::GlobalWrite);
 
     Value out = loadScratchStrided2D(rewriter, loc, dPtr, cTy, /*stride1=*/m);
     if (!out)
@@ -1035,16 +1133,16 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     int64_t tileM = std::min<int64_t>(kTileM, m);
     int64_t tileN = std::min<int64_t>(kTileN, n);
 
-    auto accTileLayout = TmemScratchManager::getOptimizedBlockedEncoding(
-        rewriter, {tileM, tileN}, dMemTy.getElementType());
+    auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
+                                                     dMemTy.getElementType());
     auto accTileTy = RankedTensorType::get(
         {tileM, tileN}, dMemTy.getElementType(), accTileLayout);
-    auto aTileLayout = TmemScratchManager::getOptimizedBlockedEncoding(
-        rewriter, {tileM, k}, aMemTy.getElementType());
+    auto aTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, k},
+                                                   aMemTy.getElementType());
     auto aTileTy =
         RankedTensorType::get({tileM, k}, aMemTy.getElementType(), aTileLayout);
-    auto bTileLayout = TmemScratchManager::getOptimizedBlockedEncoding(
-        rewriter, {k, tileN}, bMemTy.getElementType());
+    auto bTileLayout = getOptimizedBlockedEncoding(rewriter, {k, tileN},
+                                                   bMemTy.getElementType());
     auto bTileTy =
         RankedTensorType::get({k, tileN}, bMemTy.getElementType(), bTileLayout);
 
@@ -1101,6 +1199,25 @@ private:
   UnaryOpId unaryOpId;
 };
 
+struct ExternElementwisePattern
+    : public OpRewritePattern<tt::ExternElementwiseOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tt::ExternElementwiseOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!op.getPure() || !isFloatLike(op.getType()) ||
+        op.getNumOperands() == 0 || !externHasNumericOperands(op))
+      return failure();
+
+    uint64_t hash = stableStringHash(op.getSymbol());
+    Value result = fpsanVariadicExternTagged(rewriter, op.getLoc(), op, hash);
+    if (!result)
+      return failure();
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
 public:
@@ -1139,6 +1256,7 @@ public:
     patterns.add<UnaryPattern<math::CeilOp>>(&getContext(), UnaryOpId::Ceil);
     patterns.add<UnaryPattern<tt::PreciseSqrtOp>>(&getContext(),
                                                   UnaryOpId::PreciseSqrt);
+    patterns.add<ExternElementwisePattern>(&getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
                  TCGen5MMAPattern>(&getContext(), &scratch);
     patterns.add<TCGen5CommitPattern>(&getContext());
@@ -1147,6 +1265,25 @@ public:
       llvm::errs() << "FpSanitizer error: Failed to apply patterns\n";
       signalPassFailure();
     }
+
+    getOperation()->walk([&](tt::ExternElementwiseOp op) {
+      if (!externInvolvesFloatLike(op))
+        return WalkResult::advance();
+
+      hasUnsupportedOperations = true;
+      llvm::errs()
+          << "FpSanitizer error: Unsupported extern_elementwise: symbol="
+          << op.getSymbol() << ", pure=" << op.getPure()
+          << ", num_operands=" << op.getNumOperands() << ", result_ty=";
+      op.getType().print(llvm::errs());
+      llvm::errs() << ", operand_tys=(";
+      llvm::interleaveComma(op.getOperandTypes(), llvm::errs(),
+                            [&](Type ty) { ty.print(llvm::errs()); });
+      llvm::errs() << ")\n";
+      return WalkResult::interrupt();
+    });
+    if (hasUnsupportedOperations)
+      signalPassFailure();
 
     // TODO: Remove unused tmem usages. This requires unwiring them from the
     // warp specialize partitions.
