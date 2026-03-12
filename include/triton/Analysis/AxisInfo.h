@@ -191,8 +191,47 @@ private:
   std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
 };
 
+// a visitor for non-control flow arguments
+class AxisInfoNCFAVisitor {
+public:
+  AxisInfoNCFAVisitor() = default;
+  virtual ~AxisInfoNCFAVisitor() = default;
+
+  virtual void
+  visit(Operation *op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices,
+        function_ref<const dataflow::Lattice<AxisInfo> *(Value)> lookupLattice,
+        function_ref<void(dataflow::Lattice<AxisInfo> *, AxisInfo)>
+            propagate) = 0;
+
+  virtual bool match(Operation *op) = 0;
+};
+
+class AxisInfoNCFAVisitorList {
+public:
+  template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
+  void append() {
+    (visitors.emplace_back(std::make_unique<Ts>()), ...);
+  }
+
+  bool
+  apply(Operation *op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices,
+        function_ref<const dataflow::Lattice<AxisInfo> *(Value)> lookupLattice,
+        function_ref<void(dataflow::Lattice<AxisInfo> *, AxisInfo)> propagate) {
+    for (auto &visitor : visitors)
+      if (visitor->match(op)) {
+        visitor->visit(op, argLattices, lookupLattice, propagate);
+        return true;
+      }
+    return false;
+  }
+
+private:
+  std::vector<std::unique_ptr<AxisInfoNCFAVisitor>> visitors;
+};
+
 namespace axisinfo {
 using CallbackType = std::function<void(AxisInfoVisitorList &)>;
+using NCFACallbackType = std::function<void(AxisInfoNCFAVisitorList &)>;
 } // namespace axisinfo
 
 // Module level axis info analysis based on the call graph, assuming that we do
@@ -205,8 +244,9 @@ using CallbackType = std::function<void(AxisInfoVisitorList &)>;
 using AxisInfoMapT = DenseMap<Value, AxisInfo>;
 class ModuleAxisInfoAnalysis : public CallGraph<AxisInfoMapT> {
 public:
-  explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp,
-                                  axisinfo::CallbackType callback = nullptr)
+  explicit ModuleAxisInfoAnalysis(
+      ModuleOp moduleOp, axisinfo::CallbackType callback = nullptr,
+      axisinfo::NCFACallbackType ncfaCallback = nullptr)
       : CallGraph<AxisInfoMapT>(moduleOp) {
     SmallVector<FunctionOpInterface> funcs;
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
@@ -220,7 +260,7 @@ public:
     SetVector<FunctionOpInterface> sortedFuncs(funcs.begin(), funcs.end());
     SymbolTableCollection symbolTable;
     for (auto funcOp : llvm::reverse(sortedFuncs)) {
-      initialize(funcOp, callback);
+      initialize(funcOp, callback, ncfaCallback);
       funcOp.walk([&](CallOpInterface callOp) {
         auto callee = dyn_cast<FunctionOpInterface>(
             callOp.resolveCallableInTable(&symbolTable));
@@ -263,7 +303,8 @@ public:
 
 private:
   void initialize(FunctionOpInterface funcOp,
-                  axisinfo::CallbackType callback = nullptr);
+                  axisinfo::CallbackType callback = nullptr,
+                  axisinfo::NCFACallbackType ncfaCallback = nullptr);
   void update(CallOpInterface callOp, FunctionOpInterface funcOp);
 };
 } // namespace mlir::triton

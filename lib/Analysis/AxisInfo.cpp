@@ -138,6 +138,7 @@ class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
                              dataflow::Lattice<AxisInfo>> {
 private:
   AxisInfoVisitorList visitors;
+  AxisInfoNCFAVisitorList ncfaVisitors;
 
   void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override {
     propagateIfChanged(
@@ -151,14 +152,22 @@ private:
       ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) override {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       visitForOpInductionVar(forOp, argLattices);
-    } else {
+    } else if (!ncfaVisitors.apply(
+                   op, argLattices,
+                   [&](Value v) {
+                     return getLatticeElementFor(getProgramPointAfter(op), v);
+                   },
+                   [&](dataflow::Lattice<AxisInfo> *lattice, AxisInfo info) {
+                     propagateIfChanged(lattice, lattice->join(info));
+                   })) {
       setAllToEntryStates(argLattices);
     }
   }
 
 public:
   AxisInfoAnalysis(DataFlowSolver &solver,
-                   axisinfo::CallbackType callback = nullptr);
+                   axisinfo::CallbackType callback = nullptr,
+                   axisinfo::NCFACallbackType ncfaCallback = nullptr);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
 
@@ -1197,7 +1206,8 @@ public:
 //===----------------------------------------------------------------------===//
 
 AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
-                                   axisinfo::CallbackType callback)
+                                   axisinfo::CallbackType callback,
+                                   axisinfo::NCFACallbackType ncfaCallback)
     : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
           solver) {
   // UnrealizedConversionCast:
@@ -1242,6 +1252,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
 
   if (callback)
     callback(visitors);
+  if (ncfaCallback)
+    ncfaCallback(ncfaVisitors);
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
@@ -1478,10 +1490,12 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
-void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
-                                        axisinfo::CallbackType callback) {
+void ModuleAxisInfoAnalysis::initialize(
+    FunctionOpInterface funcOp, axisinfo::CallbackType callback,
+    axisinfo::NCFACallbackType ncfaCallback) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>(callback);
+  AxisInfoAnalysis *analysis =
+      solver->load<AxisInfoAnalysis>(callback, ncfaCallback);
   if (failed(solver->initializeAndRun(funcOp)))
     return;
 
