@@ -702,8 +702,7 @@ public:
 
     // sm120 native scaled dot does not support k_pack=False for FP4.
     // Fall back to dequantize -> fp16 MMA in that case.
-    if (isFP4(aElemType) &&
-        (!dotOp.getLhsKPack() || !dotOp.getRhsKPack())) {
+    if (isFP4(aElemType) && (!dotOp.getLhsKPack() || !dotOp.getRhsKPack())) {
       return rewriter.notifyMatchFailure(
           dotOp, "FP4 with k_pack=False is not supported on sm120 native MMA");
     }
