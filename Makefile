@@ -51,7 +51,7 @@ test-gluon: all
 
 .PHONY: test-gsan
 test-gsan: all
-	$(PYTEST) --tb=short python/test/gsan
+	$(PYTEST) -n $(NUM_PROCS) python/test/gsan
 
 .PHONY: test-regression
 test-regression: all

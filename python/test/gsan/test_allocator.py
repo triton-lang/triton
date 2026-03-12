@@ -101,8 +101,7 @@ def test_free_invalid_pointer_and_double_free(_direct_allocator):
     p0 = malloc(1)
     assert p0 != 0
 
-    # Invalid interior-pointer free should not free p0 and must not crash.
-    free(p0 + 1)
+    free(p0 + 1)  # freeing an invalid pointer should not crash.
 
     free(p0)
     free(p0)  # double free must be a no-op

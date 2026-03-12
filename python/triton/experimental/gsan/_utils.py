@@ -108,4 +108,4 @@ def shadow_tensor_for(real: torch.Tensor) -> torch.Tensor:
     reserve_ptr = get_reserve_pointer()
     reserve_size = get_reserve_size()
     shadow_ptr, shadow_size = shadow_region(real.data_ptr(), real.untyped_storage().nbytes(), reserve_ptr, reserve_size)
-    return uint8_cuda_tensor_from_ptr(shadow_ptr, shadow_size, torch.cuda.current_device())
+    return uint8_cuda_tensor_from_ptr(shadow_ptr, shadow_size, real.device.index)
