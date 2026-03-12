@@ -434,9 +434,22 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
     };
 
     // Note: AsyncWaits should ignore TDM ops; different HW counter
+    bool useAsyncMarks = llvm::is_contained(
+        {triton::AMD::ISAFamily::CDNA3, triton::AMD::ISAFamily::CDNA4},
+        targetInfo.getISAFamily());
+
     for (auto waitOp : waitOps) {
       IRRewriter builder(waitOp->getContext());
-      updateWaitCount(waitOp, countAsyncLoadInstructions, builder);
+      if (useAsyncMarks) {
+        // With asyncmark/wait_asyncmark, LLVM handles vmcnt computation.
+        // Pass through the commit group count directly.
+        auto tokens = waitOp.getAsyncToken();
+        builder.setInsertionPointAfter(waitOp);
+        builder.replaceOpWithNewOp<amdgpu::AsyncWaitOp>(waitOp, tokens,
+                                                        waitOp.getNum());
+      } else {
+        updateWaitCount(waitOp, countAsyncLoadInstructions, builder);
+      }
     }
 
     // amdgpu.AsyncTDMWait should only count async tdm ops

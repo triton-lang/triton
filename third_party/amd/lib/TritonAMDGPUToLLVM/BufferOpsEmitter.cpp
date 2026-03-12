@@ -122,14 +122,36 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   return data;
 }
 
-ROCDL::RawPtrBufferLoadLdsOp
-BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
-                             Value offset, Value dst, Value pred,
-                             triton::CacheModifier cm) {
+Operation *BufferEmitter::emitLoadToLds(Type type, Value byteWidth,
+                                        Value rsrcDesc, Value offset, Value dst,
+                                        Value pred,
+                                        triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
                  commonArgs);
+  Type bufferType = getBufferOpType(type, false);
+
+  bool useAsync = llvm::is_contained(
+      {ISAFamily::CDNA3, ISAFamily::CDNA4}, targetInfo.getISAFamily());
+
+  if (useAsync) {
+    // Use the async intrinsic so that LLVM's SIInsertWaitcnts tracks
+    // these operations via asyncmark/wait_asyncmark instead of generating
+    // conservative vmcnt(0) waits.
+    return ROCDL::RawPtrBufferLoadAsyncLdsOp::create(
+        rewriter, loc, TypeRange{},
+        ValueRange{
+            commonArgs[0], // Buffer descriptor
+            dst,           // LDS base ptr
+            byteWidth,     // Instr size
+            commonArgs[1], // Buffer offset
+            b.i32_val(0),  // LDS offset
+            commonArgs[2], // Instruction offset
+            commonArgs[3], // AUX
+        });
+  }
+
   return ROCDL::RawPtrBufferLoadLdsOp::create(
       rewriter, loc, TypeRange{},
       ValueRange{
