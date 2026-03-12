@@ -1181,10 +1181,10 @@ bool supportMMA(triton::DotOp op, int version) {
     auto rank = retShapePerCTA.size();
     int numWarps = lookupNumWarps(op);
     // Allow int8 * int8 -> int32 for MMAv5, reject other integer combinations
-    if (aElemTy.isInteger(8) || bElemTy.isInteger(8) ||
-        retType.getElementType().isInteger(32)) {
-      if (!(aElemTy.isInteger(8) && bElemTy.isInteger(8) &&
-            retType.getElementType().isInteger(32)))
+    if (aElemTy.isInteger() || bElemTy.isInteger() ||
+        retType.getElementType().isInteger()) {
+      if (!aElemTy.isInteger(8) || !bElemTy.isInteger(8) ||
+          !retType.getElementType().isInteger(32))
         return false;
     }
     if (op.getType().getRank() != 2)
