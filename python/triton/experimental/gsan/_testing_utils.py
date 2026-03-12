@@ -10,6 +10,12 @@ from ._testing import (decode_global_state_tensor, decode_shadow_cell_tensor, de
 from ._utils import uint8_cuda_tensor_from_ptr
 
 
+@triton.jit
+def nanosleep(duration):
+    duration = tl.to_tensor(duration)
+    tl.inline_asm_elementwise("nanosleep.u32 $1; mov.b32 $0, 0;", "=r, r", [duration], tl.int32, is_pure=False, pack=1)
+
+
 def shadow_cell_tensor_from_address(real_address: int, *, device_index: int | None = None) -> torch.Tensor:
     if device_index is None:
         device_index = torch.cuda.current_device()

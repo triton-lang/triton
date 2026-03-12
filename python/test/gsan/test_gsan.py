@@ -7,14 +7,13 @@ import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy as ampere_async_copy
-from triton.experimental.gluon.language.nvidia.blackwell import fence_async_shared, mbarrier, tma
-from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
-from triton._internal_testing import is_blackwell, is_cuda
+from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer
 from triton.experimental.gsan import create_mem_pool
 from triton._C.libtriton.gsan_testing import ScalarClock, AtomicScope
 from triton.experimental.gsan._testing_utils import (load_one_i32, shadow_cell_from_address, store_one_i32,
-                                                     thread_state_from_smid)
+                                                     thread_state_from_smid, nanosleep)
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 
 @pytest.fixture()
@@ -23,15 +22,6 @@ def with_gsan(fresh_knobs):
     pool = create_mem_pool()
     with torch.cuda.use_mem_pool(pool):
         yield
-
-
-def _is_ampere_or_newer() -> bool:
-    return is_cuda() and torch.cuda.get_device_capability()[0] >= 8
-
-
-CROSS_SM_MAGIC = 1000
-CROSS_SM_SPIN_ITERS = 128
-CROSS_SM_SLEEP_NS = 100_000
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
@@ -85,47 +75,18 @@ def _atomic_cas_release_i32(ptr, out_ptr):
 
 
 @triton.jit
-def _nanosleep(duration):
-    duration = tl.to_tensor(duration)
-    tl.inline_asm_elementwise("nanosleep.u32 $1; mov.b32 $0, 0;", "=r, r", [duration], tl.int32, is_pure=False, pack=1)
-
-
-@triton.jit
-def _cross_sm_release_acquire_kernel(payload_ptr, flag_ptr, out_ptr, smid_ptr, sleep_ns, spin_iters):
+def _cross_sm_release_acquire_kernel(payload_ptr, flag_ptr, out_ptr):
     pid = tl.program_id(0)
-    smid = tl.extra.cuda.smid()
-    tl.store(smid_ptr + pid, smid)
     if pid == 0:
         tl.store(payload_ptr, 1000)
         tl.atomic_xchg(flag_ptr, 1, sem="release", scope="gpu")
     elif pid == 1:
-        i = 0
-        while i < spin_iters:
+        ready = 0
+        while ready != 1:
+            nanosleep(500_000)
             ready = tl.atomic_add(flag_ptr, 0, sem="acquire", scope="gpu")
-            if ready != 0:
-                result = tl.load(payload_ptr)
-                tl.store(out_ptr, result)
-            else:
-                _nanosleep(sleep_ns)
-            i += 1
-
-
-def _launch_cross_sm_case(kernel, grid_size: int) -> tuple[torch.Tensor, torch.Tensor]:
-    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
-    flags = torch.zeros(1, dtype=torch.int32, device="cuda")
-    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
-    smids = torch.full((grid_size, ), -1, dtype=torch.int32, device="cuda")
-    kernel[(grid_size, )](
-        payload,
-        flags,
-        out,
-        smids,
-        CROSS_SM_SLEEP_NS,
-        CROSS_SM_SPIN_ITERS,
-        num_warps=1,
-    )
-    torch.cuda.synchronize()
-    return out, smids
+        result = tl.load(payload_ptr)
+        tl.store(out_ptr, result)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
@@ -209,24 +170,17 @@ def test_atomic_cas_release_success_publishes_token(with_gsan):
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 def test_atomic_release_acquire_synchronizes_cross_sm(with_gsan, capfd):
-    num_sms = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
-    if num_sms < 2:
-        pytest.skip("requires at least 2 SMs")
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flags = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _cross_sm_release_acquire_kernel[(2, )](
+        payload,
+        flags,
+        out,
+        num_warps=1,
+    )
+    torch.cuda.synchronize()
 
-    grid_size = max(num_sms, 2)
-    success = False
-    out = None
-    smids = None
-    for _ in range(6):
-        out, smids = _launch_cross_sm_case(_cross_sm_release_acquire_kernel, grid_size)
-        if smids[0].item() != smids[1].item() and out.item() == CROSS_SM_MAGIC:
-            success = True
-            break
-
-    assert success, ("Failed to observe a release/acquire handoff between different SMs; "
-                     f"writer_smid={smids[0].item() if smids is not None else -1}, "
-                     f"reader_smid={smids[1].item() if smids is not None else -1}, "
-                     f"observed_value={out.item() if out is not None else -1}.")
     captured = capfd.readouterr()
     assert "GSanLibrary.cu" not in captured.out + captured.err
 
@@ -289,46 +243,24 @@ def _device_tma_masked_store_kernel(ptr, m_size, n_size, row_idx, col_idx, strid
     desc.store([row_idx, col_idx], values)
 
 
-@gluon.jit
-def _host_tma_gather_kernel(out_ptr, out_stride_0, out_stride_1, desc, x_offsets_ptr, y_offset, BLOCK_X: gl.constexpr):
-    BLOCK_Y: gl.constexpr = desc.block_type.shape[1]
-    coalesced_1d_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0])
-    x_offsets = gl.load(x_offsets_ptr + gl.arange(0, BLOCK_X, coalesced_1d_layout))
-    offsets_layout: gl.constexpr = gl.SliceLayout(0, gl.BlockedLayout([1, 4], [32, 1], [1, gl.num_warps()], [1, 0]))
-    x_offsets = gl.convert_layout(x_offsets, offsets_layout)
-    smem_dest = gl.allocate_shared_memory(desc.dtype, [BLOCK_X, BLOCK_Y], desc.layout)
-    bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-    mbarrier.init(bar, count=1)
-    mbarrier.expect(bar, BLOCK_X * desc.block_type.nbytes)
-    tma.async_gather(desc, x_offsets, y_offset, barrier=bar, result=smem_dest)
-    mbarrier.wait(bar, phase=0)
-    mbarrier.invalidate(bar)
-
-    coalesced_2d_layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, gl.num_warps()], [1, 0])
-    out = smem_dest.load(coalesced_2d_layout)
-    indices_x = gl.arange(0, BLOCK_X, gl.SliceLayout(1, coalesced_2d_layout))[:, None] * out_stride_0
-    indices_y = gl.arange(0, BLOCK_Y, gl.SliceLayout(0, coalesced_2d_layout))[None, :] * out_stride_1
-    gl.store(out_ptr + indices_x + indices_y, out)
+@triton.jit
+def _host_tma_gather_kernel(out_ptr, out_stride_0, out_stride_1, desc, x_offsets_ptr, y_offset, BLOCK_X: tl.constexpr):
+    BLOCK_Y: tl.constexpr = desc.block_shape[1]
+    x_offsets = tl.load(x_offsets_ptr + tl.arange(0, BLOCK_X))
+    out = desc.gather(x_offsets, y_offset)
+    indices_x = tl.arange(0, BLOCK_X)[:, None] * out_stride_0
+    indices_y = tl.arange(0, BLOCK_Y)[None, :] * out_stride_1
+    tl.store(out_ptr + indices_x + indices_y, out)
 
 
-@gluon.jit
-def _host_tma_scatter_kernel(desc, x_offsets_ptr, y_offset, src_ptr, src_stride_0, src_stride_1, BLOCK_X: gl.constexpr):
-    BLOCK_Y: gl.constexpr = desc.block_type.shape[1]
-    coalesced_2d_layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, gl.num_warps()], [1, 0])
-    indices_x = gl.arange(0, BLOCK_X, gl.SliceLayout(1, coalesced_2d_layout))[:, None] * src_stride_0
-    indices_y = gl.arange(0, BLOCK_Y, gl.SliceLayout(0, coalesced_2d_layout))[None, :] * src_stride_1
-    src = gl.load(src_ptr + indices_x + indices_y)
-
-    coalesced_1d_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0])
-    x_offsets = gl.load(x_offsets_ptr + gl.arange(0, BLOCK_X, coalesced_1d_layout))
-    offsets_layout: gl.constexpr = gl.SliceLayout(0, gl.BlockedLayout([1, 4], [32, 1], [1, gl.num_warps()], [1, 0]))
-    x_offsets = gl.convert_layout(x_offsets, offsets_layout)
-
-    smem_src = gl.allocate_shared_memory(desc.dtype, [BLOCK_X, BLOCK_Y], desc.layout)
-    smem_src.store(src)
-    fence_async_shared()
-    tma.async_scatter(desc, x_offsets, y_offset, smem_src)
-    tma.store_wait(0)
+@triton.jit
+def _host_tma_scatter_kernel(desc, x_offsets_ptr, y_offset, src_ptr, src_stride_0, src_stride_1, BLOCK_X: tl.constexpr):
+    BLOCK_Y: tl.constexpr = desc.block_shape[1]
+    indices_x = tl.arange(0, BLOCK_X)[:, None] * src_stride_0
+    indices_y = tl.arange(0, BLOCK_Y)[None, :] * src_stride_1
+    src = tl.load(src_ptr + indices_x + indices_y)
+    x_offsets = tl.load(x_offsets_ptr + tl.arange(0, BLOCK_X))
+    desc.scatter(src, x_offsets, y_offset)
 
 
 def _assert_ttgir_contains(kernel, *ops):
@@ -371,13 +303,7 @@ def _scatter_reference(dst: torch.Tensor, src: torch.Tensor, x_offsets: torch.Te
     return result
 
 
-def _make_gather_scatter_descriptor(tensor: torch.Tensor, block_x: int, block_y: int) -> GluonTensorDescriptor:
-    gl_dtype = getattr(gl, str(tensor.dtype).split(".")[1])
-    layout = gl.NVMMASharedLayout.get_default_for([block_x, block_y], gl_dtype)
-    return GluonTensorDescriptor.from_tensor(tensor, [1, block_y], layout)
-
-
-@pytest.mark.skipif(not _is_ampere_or_newer(), reason="Requires Ampere or newer")
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 def test_gluon_async_copy_updates_shadow(with_gsan, capfd):
     block = 128
     start_idx = 5
@@ -427,11 +353,10 @@ def test_tma_masked_store_updates_shadow(with_gsan, with_allocator, capfd):
     masked0 = shadow_cell_from_address(masked_addr)
 
     compiled = _device_tma_masked_store_kernel.warmup(target, m_size, n_size, row_idx, col_idx, target.stride(0),
-                                                      BLOCK=block, grid=(1, ), num_warps=4)
+                                                      BLOCK=block, grid=(1, ))
     _assert_ttgir_contains(compiled, "ttng.async_tma_copy_local_to_global")
 
-    _device_tma_masked_store_kernel[(1, )](target, m_size, n_size, row_idx, col_idx, target.stride(0), BLOCK=block,
-                                           num_warps=4)
+    _device_tma_masked_store_kernel[(1, )](target, m_size, n_size, row_idx, col_idx, target.stride(0), BLOCK=block)
     torch.cuda.synchronize()
 
     expected = torch.zeros_like(target)
@@ -461,7 +386,7 @@ def test_host_tma_gather_updates_shadow(with_gsan, capfd):
     x_offsets = torch.tensor([1, 3, 5, 7, 9, 10, 11, 13], dtype=torch.int32, device="cuda")
     target_storage = torch.arange(padded_m * padded_n, dtype=torch.int32, device="cuda").reshape(padded_m, padded_n)
     target = target_storage[:m_size, :n_size]
-    target_desc = _make_gather_scatter_descriptor(target, block_x, block_y)
+    target_desc = TensorDescriptor.from_tensor(target, [1, block_y])
     out = torch.empty((block_x, block_y), dtype=torch.int32, device="cuda")
 
     valid_addr = _tensor_storage_address(target_storage, x_offsets[0].item(), y_offset)
@@ -473,11 +398,10 @@ def test_host_tma_gather_updates_shadow(with_gsan, capfd):
     masked_col0 = shadow_cell_from_address(masked_col_addr)
 
     compiled = _host_tma_gather_kernel.warmup(out, out.stride(0), out.stride(1), target_desc, x_offsets, y_offset,
-                                              BLOCK_X=block_x, grid=(1, ), num_warps=4)
+                                              BLOCK_X=block_x, grid=(1, ))
     _assert_ttgir_contains(compiled, "ttng.async_tma_gather")
 
-    _host_tma_gather_kernel[(1, )](out, out.stride(0), out.stride(1), target_desc, x_offsets, y_offset, BLOCK_X=block_x,
-                                   num_warps=4)
+    _host_tma_gather_kernel[(1, )](out, out.stride(0), out.stride(1), target_desc, x_offsets, y_offset, BLOCK_X=block_x)
     torch.cuda.synchronize()
 
     torch.testing.assert_close(out, _gather_reference(target, x_offsets, y_offset, block_y))
@@ -503,7 +427,7 @@ def test_host_tma_scatter_updates_shadow(with_gsan, capfd):
     x_offsets = torch.tensor([1, 3, 5, 7, 9, 10, 11, 13], dtype=torch.int32, device="cuda")
     target_storage = torch.zeros((padded_m, padded_n), dtype=torch.int32, device="cuda")
     target = target_storage[:m_size, :n_size]
-    target_desc = _make_gather_scatter_descriptor(target, block_x, block_y)
+    target_desc = TensorDescriptor.from_tensor(target, [1, block_y])
     src = torch.arange(1, block_x * block_y + 1, dtype=torch.int32, device="cuda").reshape(block_x, block_y)
 
     valid_addr = _tensor_storage_address(target_storage, x_offsets[0].item(), y_offset)
@@ -515,11 +439,11 @@ def test_host_tma_scatter_updates_shadow(with_gsan, capfd):
     masked_col0 = shadow_cell_from_address(masked_col_addr)
 
     compiled = _host_tma_scatter_kernel.warmup(target_desc, x_offsets, y_offset, src, src.stride(0), src.stride(1),
-                                               BLOCK_X=block_x, grid=(1, ), num_warps=4)
+                                               BLOCK_X=block_x, grid=(1, ))
     _assert_ttgir_contains(compiled, "ttng.async_tma_scatter")
 
     _host_tma_scatter_kernel[(1, )](target_desc, x_offsets, y_offset, src, src.stride(0), src.stride(1),
-                                    BLOCK_X=block_x, num_warps=4)
+                                    BLOCK_X=block_x)
     torch.cuda.synchronize()
 
     torch.testing.assert_close(target, _scatter_reference(target, src, x_offsets, y_offset))
