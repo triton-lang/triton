@@ -3988,9 +3988,9 @@ void TritonGPUDialect::initialize() {
 LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
                                                          NamedAttribute attr) {
   // Verify that dialect attributes are attached to the right ops.
-  if (llvm::is_contained(
-          {AttrNumCTAsName, AttrTargetName, AttrNumThreadsPerWarp},
-          attr.getName()) &&
+  if (llvm::is_contained({AttrNumCTAsName, AttrTargetName,
+                          AttrNumThreadsPerWarp, AttrNumBanksName},
+                         attr.getName()) &&
       !isa<ModuleOp>(op)) {
     return op->emitOpError("has unexpected attribute ")
            << attr.getName() << " which is expected only on `module` ops";
@@ -4146,11 +4146,8 @@ int TritonGPUDialect::getThreadsPerWarp(ModuleOp module) {
 }
 
 int TritonGPUDialect::getNumBanks(ModuleOp module) {
-  if (auto attr = module->getAttrOfType<StringAttr>(AttrTargetName)) {
-    StringRef targetAttr = attr.getValue();
-    if (targetAttr.contains("gfx950"))
-      return 64;
-  }
+  if (auto attr = module->getAttrOfType<IntegerAttr>(AttrNumBanksName))
+    return attr.getInt();
   return 32;
 }
 

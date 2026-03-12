@@ -107,13 +107,14 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
     return mlir::emitError(mod.getLoc(), "module missing target specification");
   int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
   int numCTAs = TritonGPUDialect::getNumCTAs(mod);
+  int numBanks = TritonGPUDialect::getNumBanks(mod);
 
   // Enable `convert-triton-to-tritongpu` to rematerialize source layouts for
   // TTG dialect operations. They will get cleared later.
   OpPassManager pm;
-  pm.addPass(
-      createConvertTritonToTritonGPU({target.str(), newNumWarps, threadsPerWarp,
-                                      numCTAs, /*enableSourceRemat=*/true}));
+  pm.addPass(createConvertTritonToTritonGPU({target.str(), newNumWarps,
+                                             threadsPerWarp, numCTAs, numBanks,
+                                             /*enableSourceRemat=*/true}));
   pm.addPass(createRelayoutTritonGPU());
   if (failed(runPipeline(pm, *container)))
     return failure();

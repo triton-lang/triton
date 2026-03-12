@@ -305,7 +305,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         self.builder.create_local_scatter(mem_desc.handle, values.handle, indices.handle, axis)
 
-    def bank_conflicts(self, distr_ty, shared_ty, num_banks):
+    def bank_conflicts(self, distr_ty, shared_ty):
         if not isinstance(distr_ty, ttgl.distributed_type):
             raise TypeError(
                 f"bank_conflicts expects the register layout to be a distributed_type, got {type(distr_ty)}")
@@ -329,7 +329,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         reg_attr = distr_ty.layout._to_ir(self.builder)
         shared_attr = shared_ty.layout._to_ir(self.builder)
         return self.builder.get_shared_bank_conflicts(reg_attr, shared_attr, list(distr_ty.shape),
-                                                      distr_ty.element_ty.primitive_bitwidth, num_banks)
+                                                      distr_ty.element_ty.primitive_bitwidth)
 
     def to_linear_layout(self, layout, shape):
         from triton.experimental.gluon.language.nvidia.blackwell import (

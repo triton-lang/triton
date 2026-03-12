@@ -709,9 +709,14 @@ void init_gluon_ir(py::module &&m) {
       .def("get_shared_bank_conflicts",
            [](GluonOpBuilder &self, Attribute regLayoutAttr,
               Attribute sharedLayoutAttr, std::vector<int64_t> &shape,
-              int bitwidth, int numBanks) -> int {
+              int bitwidth) -> int {
              auto regLayout = ttg::toLinearLayout(shape, regLayoutAttr);
              auto smemLayout = ttg::toLinearLayout(shape, sharedLayoutAttr);
+             int numBanks = ttg::TritonGPUDialect::getNumBanks(
+                 self.getBuilder()
+                     .getInsertionBlock()
+                     ->getParentOp()
+                     ->getParentOfType<ModuleOp>());
              return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
                                               numBanks);
            })

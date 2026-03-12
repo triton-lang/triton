@@ -50,6 +50,7 @@ constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
+constexpr static char AttrNumBanksName[] = "ttg.num-banks";
 // FIXME: rename to match above
 constexpr static char kPartitionAttrName[] = "ttg.partition";
 constexpr static char kPartitionOutputsAttrName[] = "ttg.partition.outputs";

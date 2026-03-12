@@ -102,6 +102,8 @@ class HIPOptions:
         for lib in ["ocml", "ockl"]:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
+        num_banks = 64 if self.arch == 'gfx950' else 32
+        object.__setattr__(self, 'num_banks', num_banks)
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -230,7 +232,7 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"hip:{options.arch}", options.num_warps, options.warp_size,
-                                           options.num_ctas)
+                                           options.num_ctas, options.num_banks)
         pm.run(mod, 'make_ttgir_early')
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()

@@ -40,15 +40,15 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 
 LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
                                   const LinearLayout &dst, int32_t bitwidth,
-                                  int32_t numBanks);
+                                  int32_t numBanks = 32);
 
 std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
                                       const LinearLayout &dst,
                                       const LinearLayout &smem,
-                                      int32_t bitwidth, int32_t numBanks);
+                                      int32_t bitwidth, int32_t numBanks = 32);
 
 int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
-                         int32_t bitwidth, int32_t numBanks);
+                         int32_t bitwidth, int32_t numBanks = 32);
 
 std::pair<int, int> bankConflicts(llvm::ArrayRef<int32_t> tileSrc,
                                   llvm::ArrayRef<int32_t> tileDst,
