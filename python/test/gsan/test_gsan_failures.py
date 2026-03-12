@@ -89,6 +89,27 @@ def _cross_sm_cta_scope_kernel(payload_ptr, flag_ptr, scratch_ptr):
 
 
 @triton.jit
+def _transitive_relaxed_relay_kernel(payload_ptr, flag0_ptr, flag1_ptr, scratch_ptr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_xchg(flag0_ptr, 1, sem="release", scope="gpu")
+    elif pid == 1:
+        ready = 0
+        while ready != 1:
+            nanosleep(500_000)
+            ready = tl.atomic_add(flag0_ptr, 0, sem="relaxed", scope="gpu")
+        tl.atomic_xchg(flag1_ptr, 1, sem="release", scope="gpu")
+    elif pid == 2:
+        ready = 0
+        while ready != 1:
+            nanosleep(500_000)
+            ready = tl.atomic_add(flag1_ptr, 0, sem="acquire", scope="gpu")
+        result = tl.load(payload_ptr)
+        tl.store(scratch_ptr, result)
+
+
+@triton.jit
 def _tma_raw_kernel(ptr, scratch_ptr, counter_ptr, m_size, n_size, row_idx, col_idx, stride_0, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     if pid == 0:
@@ -287,6 +308,15 @@ def _run_cross_sm_cta_scope_case() -> None:
     _cross_sm_cta_scope_kernel[(2, )](payload, flags, scratch, num_warps=1)
 
 
+@run_with_gsan
+def _run_transitive_relaxed_relay_case() -> None:
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flag0 = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flag1 = torch.zeros(1, dtype=torch.int32, device="cuda")
+    scratch = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _transitive_relaxed_relay_kernel[(3, )](payload, flag0, flag1, scratch, num_warps=1)
+
+
 def _expected_file_line(source_function, marker: str) -> str:
     source_lines, starting_line = inspect.getsourcelines(source_function)
     for line_offset, line in enumerate(source_lines):
@@ -362,4 +392,10 @@ def test_cross_sm_cta_scope_read_after_write():
     _run_failure_case("cross_sm_cta_scope", runner=_run_cross_sm_cta_scope_case,
                       source_function=_cross_sm_cta_scope_kernel.fn,
                       marker='ready = tl.atomic_add(flag_ptr, 0, sem="acquire", scope="cta"',
+                      error="Read after write race detected")
+
+
+def test_transitive_release_acquire_requires_middle_acquire():
+    _run_failure_case("transitive_relaxed_relay", runner=_run_transitive_relaxed_relay_case,
+                      source_function=_transitive_relaxed_relay_kernel.fn, marker="result = tl.load(payload_ptr)",
                       error="Read after write race detected")

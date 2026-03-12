@@ -121,6 +121,27 @@ def _cross_sm_release_acquire_kernel(payload_ptr, flag_ptr, out_ptr):
         tl.store(out_ptr, result)
 
 
+@triton.jit
+def _transitive_release_acquire_kernel(payload_ptr, flag0_ptr, flag1_ptr, out_ptr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_xchg(flag0_ptr, 1, sem="release", scope="gpu")
+    elif pid == 1:
+        ready = 0
+        while ready != 1:
+            nanosleep(500_000)
+            ready = tl.atomic_add(flag0_ptr, 0, sem="acquire", scope="gpu")
+        tl.atomic_xchg(flag1_ptr, 1, sem="release", scope="gpu")
+    elif pid == 2:
+        ready = 0
+        while ready != 1:
+            nanosleep(500_000)
+            ready = tl.atomic_add(flag1_ptr, 0, sem="acquire", scope="gpu")
+        result = tl.load(payload_ptr)
+        tl.store(out_ptr, result)
+
+
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 def test_atomic_add_relaxed_updates_atomic_shadow(with_gsan):
     target = torch.zeros(1, dtype=torch.int32, device="cuda")
@@ -212,6 +233,43 @@ def test_atomic_release_acquire_synchronizes_cross_sm(with_gsan, capfd):
         num_warps=1,
     )
     torch.cuda.synchronize()
+
+    captured = capfd.readouterr()
+    assert "GSanLibrary.cu" not in captured.out + captured.err
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_atomic_release_acquire_transitively_synchronizes_cross_sm(with_gsan, capfd):
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flag0 = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flag1 = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _transitive_release_acquire_kernel[(3, )](
+        payload,
+        flag0,
+        flag1,
+        out,
+        num_warps=1,
+    )
+    torch.cuda.synchronize()
+
+    assert out.item() == 1000
+
+    payload_cell = shadow_cell_from_address(payload.data_ptr())
+    flag1_cell = shadow_cell_from_address(flag1.data_ptr())
+    producer_tid = payload_cell.write_clock.thread_id
+    producer_epoch = payload_cell.write_clock.epoch
+
+    relay_state = thread_state_from_smid(flag1_cell.write_clock.thread_id)
+    snapshot_idx = (flag1_cell.write_clock.epoch - 1) * relay_state.num_threads + producer_tid
+
+    assert flag1_cell.write_clock.scope == AtomicScope.GPU_TOKEN
+    assert relay_state.clock_buffer[snapshot_idx] >= producer_epoch
+
+    consumer_tid = payload_cell.read_clocks[0].thread_id
+    consumer_state = thread_state_from_smid(consumer_tid)
+
+    assert consumer_state.vector_clock[producer_tid] >= producer_epoch
 
     captured = capfd.readouterr()
     assert "GSanLibrary.cu" not in captured.out + captured.err
