@@ -623,7 +623,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   }
 
   auto &dataToEntry = threadState.dataToEntry;
-  if (handleStreamCaptureCallbacks(cbId)) // stream captured kernels do not have correlations
+  if (handleStreamCaptureCallbacks(
+          cbId)) // stream captured kernels do not have correlations
     return;
   if (dataToEntry.empty()) // Profiler is deactivated
     return;
@@ -728,7 +729,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiCallbacks(
   // Do not track metric kernel launches for triton ops.
   // In this case, metric kernels are launched after a triton op is entered.
   // We should track metric kernel launches for scopes.
-  // In this case, the metric kernel's stack has the same name as the scope's stack.
+  // In this case, the metric kernel's stack has the same name as the scope's
+  // stack.
   if (threadState.isMetricKernelLaunching && profiler.isOpInProgress())
     return;
 
