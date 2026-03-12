@@ -10,7 +10,8 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
+class __attribute__((visibility("default"))) TritonGPUToLLVMTypeConverter
+    : public LLVMTypeConverter {
 public:
   using TypeConverter::convertType;
 

@@ -326,10 +326,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
   get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
-  set(TRITON_LIBRARIES
+  set(TRITON_COMPILER_LIBRARIES
     ${triton_libs}
-    ${triton_plugins}
-
     # mlir
     MLIRAMDGPUDialect
     MLIRNVVMDialect
@@ -360,7 +358,11 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # LLVMNVPTXAsmPrinter
     LLVMAMDGPUCodeGen
     LLVMAMDGPUAsmParser
+  )
 
+  set(TRITON_LIBRARIES
+    ${triton_plugins}
+    ${TRITON_COMPILER_LIBRARIES}
     Python3::Module
     pybind11::headers
 

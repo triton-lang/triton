@@ -6,7 +6,7 @@ add_executable(triton-opt triton-opt.cpp)
 
 target_compile_options(triton-opt PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-opt PRIVATE
-  ${triton_libs}
+  ${TRITON_COMPILER_LIBRARIES}
   # tests
   TritonTestAnalysis
   TritonTestDialect
@@ -18,6 +18,7 @@ target_link_libraries(triton-opt PRIVATE
   MLIRRegisterAllDialects
   MLIRRegisterAllPasses
   MLIRTransforms
+  TritonNVIDIAGPUToLLVM
 )
 
 mlir_check_all_link_libraries(triton-opt)
