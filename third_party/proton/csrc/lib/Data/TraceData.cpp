@@ -246,6 +246,9 @@ struct FlexibleMetricWithStartEndTime {
                                  std::vector<Context> ctx)
       : flexibleMetrics(metrics), contexts(std::move(ctx)),
         startNs(std::numeric_limits<uint64_t>::max()), endNs(0) {}
+
+  FlexibleMetricWithStartEndTime() 
+      : FlexibleMetricWithStartEndTime(nullptr, {}) {}
 };
 
 std::vector<KernelTrace>
