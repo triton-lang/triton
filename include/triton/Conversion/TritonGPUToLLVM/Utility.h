@@ -494,7 +494,8 @@ Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
 
 Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
                            const TargetInfoBase &targetInfo,
-                           FunctionOpInterface funcOp, Value allocOffset = {});
+                           FunctionOpInterface funcOp, Value allocOffset = {},
+                           bool currentCTA = true);
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &target, Operation *op);

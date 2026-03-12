@@ -181,7 +181,7 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
                                                         benefit);
     mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter,
-                                                        patterns);
+                                                        patterns, targetInfo);
 
     TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))

@@ -1261,7 +1261,8 @@ static Value getScratchPtrImpl(Location loc, RewriterBase &rewriter,
                                const TargetInfoBase &targetInfo,
                                FunctionOpInterface funcOp, Value allocOffset,
                                int32_t bufferArgOffset, StringRef allocSizeAttr,
-                               bool addOffsetIfNoAllocSizeAttr) {
+                               bool addOffsetIfNoAllocSizeAttr,
+                               bool currentCTA = true) {
   // See NOTE: [Additional Function Arguments]
   auto gmemBase =
       funcOp.getArgument(funcOp.getNumArguments() + bufferArgOffset);
@@ -1293,7 +1294,12 @@ static Value getScratchPtrImpl(Location loc, RewriterBase &rewriter,
   auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
   if (numCTAs > 1) {
     linearId = b.mul(linearId, b.i32_val(numCTAs));
-    linearId = b.add(linearId, targetInfo.getClusterCTAId(rewriter, loc));
+    // FIXME: We should always have currentCTA == false. This way we would just
+    // need to set the CTA layout to split the input along the kBlock and
+    // everything would work Even more, it allows us to gather the data from all
+    // CTAs in a given CTA which is sometimes needed.
+    if (currentCTA)
+      linearId = b.add(linearId, targetInfo.getClusterCTAId(rewriter, loc));
   }
 
   auto allocSize = allocSizeAttrVal.getValue().getZExtValue();
@@ -1317,11 +1323,12 @@ Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
 
 Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
                            const TargetInfoBase &targetInfo,
-                           FunctionOpInterface funcOp, Value allocOffset) {
+                           FunctionOpInterface funcOp, Value allocOffset,
+                           bool currentCTA) {
   return getScratchPtrImpl(loc, rewriter, targetInfo, funcOp, allocOffset,
                            kProfileScratchBufferOffset,
                            "ttg.profile_scratch_memory_size",
-                           /*addOffsetIfNoAllocSizeAttr=*/true);
+                           /*addOffsetIfNoAllocSizeAttr=*/true, currentCTA);
 }
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,

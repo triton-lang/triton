@@ -42,7 +42,7 @@ unsigned getMemDescSize(ttg::MemDescType ty) {
   assert(isa<ttg::SharedMemorySpaceAttr>(ty.getMemorySpace()) &&
          "Unsupported memory space");
   unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
-  return product(ty.getShape()) * elSize;
+  return product(ttg::getShapePerCTA(ty)) * elSize;
 }
 
 unsigned getAllocSize(ttg::LocalAllocOp op) {
@@ -133,7 +133,6 @@ uint32_t getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
   }
 
   StringAttr offsetDim = StringAttr::get(ctx, "offset");
-  layout = layout.sublayout({offsetDim}, dimNames);
   mlir::triton::LinearLayout inverse = layout.invert();
   auto mapped = inverse.apply(logicalOffsets);
   assert(mapped.size() == 1 && mapped[0].first == offsetDim &&
