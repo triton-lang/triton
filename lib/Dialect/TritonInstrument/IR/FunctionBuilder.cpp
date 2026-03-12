@@ -374,14 +374,6 @@ Value createColumnMask(ImplicitLocOpBuilder &b, Value column,
   return convertAndBroadcast(b, mask1D, {columnDim}, maskType);
 }
 
-Value createCurrentCTAId(ImplicitLocOpBuilder &b) {
-  if (ttg::lookupNumCTAs(b.getInsertionBlock()->getParentOp()) == 1)
-    return arith::ConstantIntOp::create(b, 0, 32);
-  OperationState state(b.getLoc(), ttn::ClusterCTAIdOp::getOperationName());
-  state.addTypes(b.getI32Type());
-  return b.create(state)->getResult(0);
-}
-
 Value createTrueTensorLike(ImplicitLocOpBuilder &b,
                            RankedTensorType tensorType) {
   return tti::createConstIntTensor(b, b.getLoc(), 1, tensorType);
@@ -389,7 +381,8 @@ Value createTrueTensorLike(ImplicitLocOpBuilder &b,
 
 Value createCurrentCTAMask(ImplicitLocOpBuilder &b) {
   Value one = arith::ConstantIntOp::create(b, 1, 32);
-  return arith::ShLIOp::create(b, one, createCurrentCTAId(b));
+  return arith::ShLIOp::create(b, one,
+                               ttn::ClusterCTAIdOp::create(b, b.getLoc()));
 }
 
 Value createCTAMaskMatch1D(ImplicitLocOpBuilder &b, RankedTensorType tensorType,

@@ -63,6 +63,30 @@ def run_in_process(client_fn, args=(), kwargs={}):
     return result
 
 
+def assert_subprocess_ok(result):
+    assert result.exc is None, result.driver_stderr_output
+    assert result.driver_stderr_output == ""
+
+
+def assert_subprocess_assert(result, message):
+    assert "device-side assert" in str(result.exc)
+    assert message in result.driver_stderr_output
+
+
+def enable_consan(monkeypatch=None):
+    if monkeypatch is not None:
+        monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+        monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+        monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
+    else:
+        os.environ["TRITON_INSTRUMENTATION_MODE"] = "consan"
+        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+        os.environ["TRITON_ALWAYS_COMPILE"] = "1"
+    knobs.refresh_knobs()
+    knobs.compilation.instrumentation_mode = "consan"
+    knobs.compilation.always_compile = True
+
+
 # Use the same block size for all tests
 XBLOCK = ttgl.constexpr(128)
 
@@ -1931,3 +1955,36 @@ def test_mma_read_local_alloc_write(run_wrapper, monkeypatch):
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 64
     A = torch.randn((BLOCK_M, BLOCK_K), device="cuda", dtype=torch.float16)
     load_local_alloc_mma_write_after_read_kernel[(1, )](A, K, BLOCK_M, BLOCK_N, BLOCK_K)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+def test_multicta_tma_multicast_wait(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_multicta_tma_multicast_wait, (device, False, monkeypatch))
+        assert_subprocess_ok(result)
+        return
+
+    enable_consan(monkeypatch)
+
+    @gluon.jit
+    def tma_multicast_wait_kernel(input_desc, output_desc):
+        ttgl.static_assert(ttgl.num_ctas() == 2)
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        mbarrier.expect(bar, input_desc.nbytes_per_cta)
+        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem, multicast=True)
+        mbarrier.wait(bar, phase=0, deps=[smem])
+        tma.async_copy_shared_to_global(output_desc, [0, 0], smem)
+        tma.store_wait(0)
+        mbarrier.invalidate(bar)
+
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    output = torch.empty_like(input)
+    shared_layout = ttgl.NVMMASharedLayout.get_default_for([XBLOCK.value, XBLOCK.value], ttgl.float16,
+                                                           cga_layout=((0, 0), ))
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK.value, XBLOCK.value], shared_layout)
+    output_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, [XBLOCK.value, XBLOCK.value], shared_layout)
+    tma_multicast_wait_kernel[(1, )](input_desc, output_desc, num_warps=4, num_ctas=2)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(output, input, atol=0, rtol=0)
