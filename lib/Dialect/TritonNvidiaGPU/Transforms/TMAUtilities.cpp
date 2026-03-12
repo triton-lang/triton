@@ -1,3 +1,4 @@
+#include <triton/Dialect/TritonGPU/Transforms/DescriptorUtils.h>
 #include <triton/Dialect/TritonNvidiaGPU/IR/Dialect.h>
 #include <triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h>
 #include <triton/Tools/LayoutUtils.h>
@@ -6,43 +7,6 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
 namespace mlir::triton::nvidia_gpu {
-
-ttg::CGAEncodingAttr updateCGALayoutForShape(ttg::CGAEncodingAttr cgaLayout,
-                                             ArrayRef<int64_t> shape) {
-  auto rank = shape.size();
-  if (cgaLayout.getRank() == rank)
-    return cgaLayout;
-
-  auto ctx = cgaLayout.getContext();
-  if (cgaLayout.getRank() > rank) {
-    auto ll = cgaLayout.getLinearLayout();
-    // Broadcast over the first rankDiff dims
-    unsigned rankDiff = cgaLayout.getRank() - rank;
-    for (int i = 0; i < rankDiff; ++i) {
-      ll = removeStandardDim(ll, 0);
-    }
-    return ttg::CGAEncodingAttr::get(ctx, std::move(ll));
-  }
-  // For rank-reducing loads, we need to rank-increase the CTA Layout
-  auto rankDiff = rank - cgaLayout.getRank();
-  for (unsigned i = 0; i < rankDiff; ++i) {
-    assert(shape[i] == 1 && "Should only happen for rank-reducing loads");
-  }
-  auto ll = cgaLayout.getLinearLayout();
-  auto kBlock = *ll.getInDimNames().begin();
-  auto standardOuts = standardOutDimNames(ctx, rank);
-  // Append to front
-  for (int i = cgaLayout.getRank(); i < rank; ++i) {
-    ll = LinearLayout::identity1D(1, kBlock, standardOuts[i]) * ll;
-  }
-  // Rename out dims to dim0..dimn-1
-  auto dimSizes = ll.getOutDims();
-  for (auto [i, dim] : llvm::enumerate(standardOuts)) {
-    dimSizes[i].first = dim;
-  }
-  ll = LinearLayout(ll.getBases(), dimSizes, false);
-  return ttg::CGAEncodingAttr::get(ctx, std::move(ll));
-}
 
 ttg::SharedEncodingTrait
 updateEncodingForShape(Operation *op, ttg::SharedEncodingTrait encoding,
@@ -54,7 +18,8 @@ updateEncodingForShape(Operation *op, ttg::SharedEncodingTrait encoding,
     if (!existingCga)
       return nvmmaEnc;
 
-    auto newCgaEnc = updateCGALayoutForShape(cgaLayout, tensorType.getShape());
+    auto newCgaEnc =
+        ttg::updateCGALayoutForShape(cgaLayout, tensorType.getShape());
     return ttg::NVMMASharedEncodingAttr::get(
         ctx, nvmmaEnc.getSwizzlingByteWidth(), nvmmaEnc.getTransposed(),
         nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCgaEnc);
@@ -75,7 +40,8 @@ updateEncodingForShape(Operation *op, ttg::SharedEncodingTrait encoding,
         continue;
       order.push_back(oldOrder[i]);
     }
-    auto newCgaEnc = updateCGALayoutForShape(cgaLayout, tensorType.getShape());
+    auto newCgaEnc =
+        ttg::updateCGALayoutForShape(cgaLayout, tensorType.getShape());
     return ttg::SwizzledSharedEncodingAttr::get(
         ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
         order, newCgaEnc);
