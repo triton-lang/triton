@@ -43,16 +43,48 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 # ---------------------------------------------------------------------------
 
 
-def GroupedPersistentTileScheduler(GROUP_SIZE_M):
-    # Bind this as a constexpr so it can be captured.
-    GROUP_SIZE_M = gl.constexpr(GROUP_SIZE_M)
+@gluon.jit
+def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width: gl.constexpr):
+    major_size = n_tiles if minor_dim == 0 else m_tiles
+    minor_size = m_tiles if minor_dim == 0 else n_tiles
 
-    # Like C++ templates!
+    full_minor_tiles = minor_size // tile_width
+    full_minor_size = full_minor_tiles * tile_width
+    full_elements = full_minor_tiles * tile_width * major_size
+
+    minor_tile_idx = lin_idx // (tile_width * major_size)
+
+    full_minor_within = lin_idx % tile_width
+    full_major_within = (lin_idx // tile_width) % major_size
+    full_minor = minor_tile_idx * tile_width + full_minor_within
+    full_major = gl.where((minor_tile_idx % 2) == 0, full_major_within, major_size - 1 - full_major_within)
+
+    partial_width = minor_size - full_minor_size
+    partial_width = gl.where(partial_width > 0, partial_width, 1)
+    partial_lin = lin_idx - full_elements
+    partial_minor_within = partial_lin % partial_width
+    partial_major_within = (partial_lin // partial_width) % major_size
+    partial_minor = minor_tile_idx * tile_width + partial_minor_within
+    partial_major = gl.where((minor_tile_idx % 2) == 0, partial_major_within, major_size - 1 - partial_major_within)
+
+    in_full_tile = lin_idx < full_elements
+    minor = gl.where(in_full_tile, full_minor, partial_minor)
+    major = gl.where(in_full_tile, full_major, partial_major)
+
+    if minor_dim == 0:
+        return minor, major
+    return major, minor
+
+
+def PlanarSnakePersistentTileScheduler(MINOR_DIM, TILE_WIDTH):
+    MINOR_DIM = gl.constexpr(MINOR_DIM)
+    TILE_WIDTH = gl.constexpr(TILE_WIDTH)
+
     @aggregate
-    class GroupedPersistentTileSchedulerImpl:
+    class Impl:
         start_pid: gl.tensor
         num_pid_m: gl.tensor
-        num_pid_in_group: gl.tensor
+        num_pid_n: gl.tensor
         num_pid: gl.tensor
 
         @gluon.jit
@@ -60,9 +92,8 @@ def GroupedPersistentTileScheduler(GROUP_SIZE_M):
             start_pid = gl.program_id(axis=0)
             num_pid_m = gl.cdiv(M, BLOCK_M)
             num_pid_n = gl.cdiv(N, BLOCK_N)
-            num_pid_in_group = GROUP_SIZE_M * num_pid_n
             num_pid = num_pid_m * num_pid_n
-            return GroupedPersistentTileSchedulerImpl(start_pid, num_pid_m, num_pid_in_group, num_pid)
+            return Impl(start_pid, num_pid_m, num_pid_n, num_pid)
 
         @gluon.jit
         def get_num_tiles(self):
@@ -71,15 +102,10 @@ def GroupedPersistentTileScheduler(GROUP_SIZE_M):
         @gluon.jit
         def get_tile(self, idx):
             tile_id = self.start_pid + idx * gl.num_programs(axis=0)
-            group_id = tile_id // self.num_pid_in_group
-            first_pid_m = group_id * GROUP_SIZE_M
-            group_size_m = min(self.num_pid_m - first_pid_m, GROUP_SIZE_M)
-            pid_m = first_pid_m + (tile_id % group_size_m)
-            pid_n = (tile_id % self.num_pid_in_group) // group_size_m
-            return pid_m, pid_n
+            return _planar_snake(tile_id, self.num_pid_m, self.num_pid_n, MINOR_DIM, TILE_WIDTH)
 
-    GroupedPersistentTileSchedulerImpl.__name__ = f"GroupedPersistentTileScheduler({GROUP_SIZE_M.value})"
-    return GroupedPersistentTileSchedulerImpl
+    Impl.__name__ = f"PlanarSnakePersistentTileScheduler({MINOR_DIM.value}, {TILE_WIDTH.value})"
+    return Impl
 
 
 def is_blackwell():
@@ -439,9 +465,9 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
 # ---------------------------------------------------------------------------
 
 
-def mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, GROUP_SIZE_M=8, out_dtype=torch.float16, BLOCK_M=128,
-                                BLOCK_N=256, BLOCK_K=None, EPILOGUE_BLOCK_N=None, num_buffers=3, acc_buffers=None,
-                                num_ctas=1):
+def mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, GRID_MINOR_DIM=0, GRID_TILE_WIDTH=4,
+                                out_dtype=torch.float16, BLOCK_M=128, BLOCK_N=256, BLOCK_K=None, EPILOGUE_BLOCK_N=None,
+                                num_buffers=3, acc_buffers=None, num_ctas=1):
     """Warp-specialized block-scale MMA (supports 1CTA and multi-CTA)."""
     if BLOCK_K is None:
         BLOCK_K = 128 if torch.float8_e4m3fn in [A.dtype, B.dtype] else 256
@@ -450,7 +476,7 @@ def mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, GROUP_SIZE_M=8
     if acc_buffers is None:
         acc_buffers = 2 if BLOCK_N < 256 else 1
 
-    SchedulerImpl = GroupedPersistentTileScheduler(GROUP_SIZE_M)
+    SchedulerImpl = PlanarSnakePersistentTileScheduler(GRID_MINOR_DIM, GRID_TILE_WIDTH)
     M, N = A.shape[0], B.shape[0]
     MIXED_PREC = A.dtype != B.dtype
 
