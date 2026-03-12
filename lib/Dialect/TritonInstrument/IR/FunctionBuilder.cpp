@@ -553,6 +553,7 @@ Value createIntConstantLike(ImplicitLocOpBuilder &b, Type type, int64_t value) {
                                       cast<IntegerType>(type).getWidth());
 }
 
+
 Value createEffectiveWaitingBits(ImplicitLocOpBuilder &b, Value waiting,
                                  Value barrierState) {
   Type waitingType = waiting.getType();
@@ -604,8 +605,6 @@ void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b,
   Value barrierLength =
       arith::ConstantIntOp::create(b, getMemDescLength(barrier), 32);
   Value barriersVal = auxData.barriers.at(insertPoint).value;
-  auto barriersType =
-      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value waitingVal = auxData.waiting.at(insertPoint).value;
   auto waitingType =
       cast<RankedTensorType>(auxData.waiting.at(insertPoint).type);
@@ -614,8 +613,8 @@ void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b,
                              waitingVal};
   createCallToCachedFunction(
       b, "set_waiting", args,
-      /*assertInfo=*/std::nullopt, {barriersType, waitingType},
-      [barriersType, waitingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, {waitingType},
+      [](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value baseThread = entryBlock->getArgument(0);
         Value phase = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -664,8 +663,6 @@ void FunctionBuilder::createClearWaitingCall(ImplicitLocOpBuilder &b,
   Value barrierLength =
       arith::ConstantIntOp::create(b, getMemDescLength(barrier), 32);
   Value barriersVal = auxData.barriers.at(insertPoint).value;
-  auto barriersType =
-      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value waitingVal = auxData.waiting.at(insertPoint).value;
   auto waitingType =
       cast<RankedTensorType>(auxData.waiting.at(insertPoint).type);
@@ -673,8 +670,8 @@ void FunctionBuilder::createClearWaitingCall(ImplicitLocOpBuilder &b,
                              barrierLength, barriersVal, waitingVal};
   createCallToCachedFunction(
       b, "clear_waiting", args,
-      /*assertInfo=*/std::nullopt, {barriersType, waitingType},
-      [barriersType, waitingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, {waitingType},
+      [](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value baseThread = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value barrierOffset = entryBlock->getArgument(2);
@@ -773,8 +770,6 @@ void FunctionBuilder::createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b,
   Value barrierLength =
       arith::ConstantIntOp::create(b, getMemDescLength(barrier), 32);
   Value barriersVal = auxData.barriers.at(insertPoint).value;
-  auto barriersType =
-      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
   auto barrierStatesType =
       cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
@@ -783,10 +778,8 @@ void FunctionBuilder::createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b,
   AssertInfo assertInfo{"Barrier re-initialized without prior invalidation",
                         b.getI1Type()};
   createCallToCachedFunction(
-      b, "verify_barrier_can_init", args, assertInfo,
-      {barriersType, barrierStatesType},
-      [barriersType, barrierStatesType](ImplicitLocOpBuilder &fb,
-                                        Block *entryBlock) {
+      b, "verify_barrier_can_init", args, assertInfo, {barrierStatesType},
+      [](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value barrierOffset = entryBlock->getArgument(0);
         Value barrierLength = entryBlock->getArgument(1);
         Value barriers = entryBlock->getArgument(2);
@@ -821,8 +814,6 @@ void FunctionBuilder::createVerifyBarrierInitializedCall(
   Value barrierLength =
       arith::ConstantIntOp::create(b, getMemDescLength(barrier), 32);
   Value barriersVal = auxData.barriers.at(insertPoint).value;
-  auto barriersType =
-      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
   auto barrierStatesType =
       cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
@@ -832,10 +823,8 @@ void FunctionBuilder::createVerifyBarrierInitializedCall(
                         "invalidation",
                         b.getI1Type()};
   createCallToCachedFunction(
-      b, "verify_barrier_initialized", args, assertInfo,
-      {barriersType, barrierStatesType},
-      [barriersType, barrierStatesType](ImplicitLocOpBuilder &fb,
-                                        Block *entryBlock) {
+      b, "verify_barrier_initialized", args, assertInfo, {barrierStatesType},
+      [](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value pred = entryBlock->getArgument(0);
         Value barrierOffset = entryBlock->getArgument(1);
         Value barrierLength = entryBlock->getArgument(2);
@@ -872,8 +861,6 @@ void FunctionBuilder::createInitBarrierStateCall(ImplicitLocOpBuilder &b,
   Value barrierLength =
       arith::ConstantIntOp::create(b, getMemDescLength(barrier), 32);
   Value barriersVal = auxData.barriers.at(insertPoint).value;
-  auto barriersType =
-      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
   auto barrierStatesType =
       cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
@@ -881,9 +868,8 @@ void FunctionBuilder::createInitBarrierStateCall(ImplicitLocOpBuilder &b,
                              barriersVal, barrierStatesVal, ctaMask};
   createCallToCachedFunction(
       b, "init_barrier_state", args,
-      /*assertInfo=*/std::nullopt, {barriersType, barrierStatesType},
-      [barriersType, barrierStatesType](ImplicitLocOpBuilder &fb,
-                                        Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, {barrierStatesType},
+      [](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value count = entryBlock->getArgument(0);
         Value barrierOffset = entryBlock->getArgument(1);
         Value barrierLength = entryBlock->getArgument(2);
@@ -935,8 +921,6 @@ void FunctionBuilder::createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b,
   Value barrierLength =
       arith::ConstantIntOp::create(b, getMemDescLength(barrier), 32);
   Value barriersVal = auxData.barriers.at(insertPoint).value;
-  auto barriersType =
-      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
   auto barrierStatesType =
       cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
@@ -947,10 +931,8 @@ void FunctionBuilder::createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b,
                              barrierStatesVal, waitingVal,    ctaMask};
   createCallToCachedFunction(
       b, "invalidate_barrier_state", args,
-      /*assertInfo=*/std::nullopt,
-      {barriersType, barrierStatesType, waitingType},
-      [barriersType, barrierStatesType, waitingType](ImplicitLocOpBuilder &fb,
-                                                     Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, {barrierStatesType, waitingType},
+      [](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value barrierOffset = entryBlock->getArgument(0);
         Value barrierLength = entryBlock->getArgument(1);
         Value barriers = entryBlock->getArgument(2);
@@ -1003,8 +985,6 @@ void FunctionBuilder::createVerifyBarrierArriveCall(ImplicitLocOpBuilder &b,
   Value barrierLength =
       arith::ConstantIntOp::create(b, getMemDescLength(barrier), 32);
   Value barriersVal = auxData.barriers.at(insertPoint).value;
-  auto barriersType =
-      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
   auto barrierStatesType =
       cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
@@ -1015,10 +995,8 @@ void FunctionBuilder::createVerifyBarrierArriveCall(ImplicitLocOpBuilder &b,
                         "negative",
                         b.getI1Type()};
   createCallToCachedFunction(
-      b, "verify_barrier_arrive", args, assertInfo,
-      {barriersType, barrierStatesType},
-      [barriersType, barrierStatesType](ImplicitLocOpBuilder &fb,
-                                        Block *entryBlock) {
+      b, "verify_barrier_arrive", args, assertInfo, {barrierStatesType},
+      [](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value count = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value barrierOffset = entryBlock->getArgument(2);
@@ -1072,8 +1050,6 @@ void FunctionBuilder::createUpdateBarrierStateCall(ImplicitLocOpBuilder &b,
   Value barrierLength =
       arith::ConstantIntOp::create(b, getMemDescLength(barrier), 32);
   Value barriersVal = auxData.barriers.at(insertPoint).value;
-  auto barriersType =
-      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
   auto barrierStatesType =
       cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
@@ -1082,9 +1058,8 @@ void FunctionBuilder::createUpdateBarrierStateCall(ImplicitLocOpBuilder &b,
                              ctaMask};
   createCallToCachedFunction(
       b, "update_barrier_state", args,
-      /*assertInfo=*/std::nullopt, {barriersType, barrierStatesType},
-      [barriersType, barrierStatesType](ImplicitLocOpBuilder &fb,
-                                        Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, {barrierStatesType},
+      [](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value count = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value barrierOffset = entryBlock->getArgument(2);
