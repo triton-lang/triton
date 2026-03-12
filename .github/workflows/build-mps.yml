@@ -12,7 +12,7 @@ on:
 
 jobs:
   build-mps:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     env:
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
@@ -44,7 +44,9 @@ jobs:
           python3 -m venv ~/.venv
           source ~/.venv/bin/activate
           pip install --upgrade pip
-          pip install ninja cmake wheel numpy pytest torch
+          pip install ninja cmake wheel numpy pytest
+          # Install PyTorch with PrecompiledMetalShaderLibrary API
+          pip install https://github.com/imperatormk/pytorch/releases/download/v0.1.0-mps-metallib/torch-2.12.0a0+git440ad94-cp314-cp314-macosx_26_0_arm64.whl
 
       - name: Install Triton (Apple MPS only)
         env:
