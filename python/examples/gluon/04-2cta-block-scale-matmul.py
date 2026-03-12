@@ -6,12 +6,9 @@ High-performance 2CTA warp-specialized block-scaled MMA.
 Two CTAs cooperate per output tile, sharing operands to
 increase arithmetic intensity and reduce the per-CTA SMEM
 footprint.
-
-Performance is benchmarked against a baseline 1CTA kernel
-(from Gluon tutorial 11) and cuBLAS.  Supports mxfp8,
-mxfp4, nvfp4, and mixed-precision (mxfp8 x mxfp4) formats.
 """
 
+import argparse
 import itertools
 import pytest
 import torch
@@ -19,7 +16,6 @@ import torch
 import triton
 import triton.experimental.gluon as gluon
 import triton.experimental.gluon.language as gl
-from dataclasses import replace
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.language.core import _aggregate as aggregate
 
@@ -78,8 +74,15 @@ def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width
 
 
 def is_blackwell():
+    if not torch.cuda.is_available():
+        return False
     target = triton.runtime.driver.active.get_current_target()
     return target.backend == "cuda" and torch.cuda.get_device_capability()[0] == 10
+
+
+@gluon.constexpr_function
+def get_split_dim(cga_layout, dim):
+    return 1 << sum(b[dim] != 0 for b in cga_layout)
 
 
 # ---------------------------------------------------------------------------
@@ -133,45 +136,96 @@ def swizzle_scales_packed_block(scales: torch.Tensor):
     return scales.contiguous()
 
 
-def make_operand_descriptor(value: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, MIXED_PREC: bool, cga_layout=None):
-    # If the operand dtype is fp4, they will be packed into uint8.
-    IS_FP4 = value.dtype == torch.uint8
-    ELEM_PER_BYTE = 2 if IS_FP4 else 1
-
-    # When performing a mixed-precision `tcgen05_mma_scaled`, where one operand
-    # is mxfp8 and the other is mxfp4, the fp4 operand is padded in shared memory.
-    IS_MIXED_PREC_FP4 = MIXED_PREC and IS_FP4
-    layout = gl.NVMMASharedLayout.get_default_for(
-        [BLOCK_MN, BLOCK_K // ELEM_PER_BYTE],
-        gl.uint8 if IS_FP4 else gl.float8e4nv,
-        fp4_padded=IS_MIXED_PREC_FP4,
-        cga_layout=cga_layout,
-    )
-    return TensorDescriptor.from_tensor(value, [BLOCK_MN, BLOCK_K // ELEM_PER_BYTE], layout)
+# ---------------------------------------------------------------------------
+# Autotuning configs and hook
+# ---------------------------------------------------------------------------
 
 
-def make_output_descriptor(M: int, N: int, dtype: torch.dtype, BLOCK_M: int, BLOCK_N: int, cga_layout=None):
-    C = torch.empty(M, N, device="cuda", dtype=dtype)
-    C_dtype = getattr(gl, str(dtype).split('.')[1])
-    C_desc_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], C_dtype, cga_layout=cga_layout)
-    return TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], C_desc_layout)
+def mma_scaled_get_configs(pre_hook=None, cga_layouts=None):
+    if cga_layouts is None:
+        cga_layouts = [(), ((1, 0), )]
+    return [
+        triton.Config(
+            {
+                "BLOCK_M": BM,
+                "BLOCK_N": BN,
+                "BLOCK_K": BK,
+                "EPILOGUE_BLOCK_N": epilogue_n,
+                "num_buffers": stages,
+                "num_acc_buffers": acc_buffers,
+                "GRID_MINOR_DIM": minor_dim,
+                "GRID_TILE_WIDTH": grid_tile_width,
+                "CGA_LAYOUT": cga_layout,
+            },
+            num_warps=4,
+            num_ctas=2**len(cga_layout),
+            pre_hook=pre_hook,
+        )
+        for BM in (128, 256)
+        for BN in (128, 256)
+        for BK in (128, 256)
+        for epilogue_n in (64, BN)
+        for minor_dim in (0, 1)
+        for grid_tile_width in (4, 8, 16)
+        for stages in (3, 4, 5)
+        for acc_buffers in (1, 2)
+        for cga_layout in cga_layouts
+        # tcgen05_mma_scaled requires BLOCK_M_PER_CTA == 128
+        if BM // (2**len(cga_layout)) == 128 if epilogue_n <= BN
+    ]
 
 
-def make_scales_descriptor(scales: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, VEC_SIZE: int, cga_layout=None):
-    # Note that this 5D swizzling scheme has minimum block size requirements
-    # of BLOCK_N >= 128 and BLOCK_K >= VEC_SIZE * 4 (64 for nvfp4 and 128 for MX).
-    REP_MN = BLOCK_MN // 128
-    REP_K = BLOCK_K // (VEC_SIZE * 4)
-    # Use a 5D TMA descriptor with block shape [1, rep_m, rep_k, 2, 256] of uint8
-    # elements. With 256 bytes along the inner dimension, we better utilize the
-    # L2 cache and don't require the TMA engine to emit many small messages (16B)
-    # as it would with 32x16xu8.
-    block_shape = [1, REP_MN, REP_K, 2, 256]
-    scales = scales.reshape(1, scales.shape[0], scales.shape[1], 2, 256)
-    IS_NVFP4 = scales.dtype == torch.float8_e4m3fn
-    layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.float8e4nv if IS_NVFP4 else gl.uint8,
-                                                  cga_layout=cga_layout)
-    return TensorDescriptor.from_tensor(scales, block_shape, layout)
+def mma_scaled_tma_set_block_size_hook(nargs):
+    block_m = nargs["BLOCK_M"]
+    block_n = nargs["BLOCK_N"]
+    block_k = nargs["BLOCK_K"]
+    epilogue_n = nargs["EPILOGUE_BLOCK_N"]
+    cga_layout = nargs["CGA_LAYOUT"]
+
+    a_base = nargs["a_desc"].base
+    b_base = nargs["b_desc"].base
+    a_is_fp4 = a_base.dtype == torch.uint8
+    b_is_fp4 = b_base.dtype == torch.uint8
+    mixed_prec = a_is_fp4 != b_is_fp4
+    a_elem_per_byte = 2 if a_is_fp4 else 1
+    b_elem_per_byte = 2 if b_is_fp4 else 1
+
+    a_block = [block_m, block_k // a_elem_per_byte]
+    b_block = [block_n, block_k // b_elem_per_byte]
+    c_block = [block_m, epilogue_n]
+
+    nargs["a_desc"].block_shape = a_block
+    nargs["b_desc"].block_shape = b_block
+    nargs["c_desc"].block_shape = c_block
+
+    cga = tuple(tuple(x) for x in cga_layout) if cga_layout else None
+    nargs["a_desc"].layout = gl.NVMMASharedLayout.get_default_for(a_block, gl.uint8 if a_is_fp4 else gl.float8e4nv,
+                                                                  fp4_padded=(mixed_prec and a_is_fp4), cga_layout=cga)
+    nargs["b_desc"].layout = gl.NVMMASharedLayout.get_default_for(b_block, gl.uint8 if b_is_fp4 else gl.float8e4nv,
+                                                                  fp4_padded=(mixed_prec and b_is_fp4), cga_layout=cga)
+    c_dtype = getattr(gl, str(nargs["c_desc"].base.dtype).split('.')[1])
+    nargs["c_desc"].layout = gl.NVMMASharedLayout.get_default_for(c_block, c_dtype, cga_layout=cga)
+
+    a_scale_base = nargs["a_scale_desc"].base
+    is_nvfp4 = a_scale_base.dtype == torch.float8_e4m3fn
+    vec_size = 16 if is_nvfp4 else 32
+    rep_m = block_m // 128
+    rep_n = block_n // 128
+    rep_k = block_k // (vec_size * 4)
+    nargs["a_scale_desc"].block_shape = [1, rep_m, rep_k, 2, 256]
+    nargs["b_scale_desc"].block_shape = [1, rep_n, rep_k, 2, 256]
+
+    if cga_layout:
+        cga_a_scale = [[0, 1, 0, 0, 0]]
+        cga_b_scale = [[0, 0, 0, 0, 0]]
+        nargs["a_scale_desc"].layout = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
+                                                            cga_layout=cga_a_scale)
+        nargs["b_scale_desc"].layout = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
+                                                            cga_layout=cga_b_scale)
+    else:
+        no_swizzle = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5)
+        nargs["a_scale_desc"].layout = no_swizzle
+        nargs["b_scale_desc"].layout = no_swizzle
 
 
 @gluon.jit
@@ -548,8 +602,9 @@ def mma_scaled_clc_partition(p):
 
 
 @gluon.jit
-def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, num_buffers: gl.constexpr,
-                                       BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr,
+def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, M, N, K, A_ELEM_PER_BYTE,
+                                       num_buffers: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr,
+                                       BLOCK_K: gl.constexpr, EPILOGUE_BLOCK_N: gl.constexpr,
                                        num_acc_buffers: gl.constexpr, GRID_MINOR_DIM: gl.constexpr,
                                        GRID_TILE_WIDTH: gl.constexpr, CGA_LAYOUT: gl.constexpr):
     NUM_CTAS: gl.constexpr = gl.num_ctas()
@@ -607,15 +662,52 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
     ], [1, 1, 1], [24, 24, 24])
 
 
+mma_scaled_kernel = triton.autotune(
+    configs=mma_scaled_get_configs(pre_hook=mma_scaled_tma_set_block_size_hook),
+    key=["M", "N", "K", "A_ELEM_PER_BYTE"],
+)(mma_scaled_warp_specialized_kernel)
+
+mma_scaled_1cta_kernel = triton.autotune(
+    configs=mma_scaled_get_configs(pre_hook=mma_scaled_tma_set_block_size_hook, cga_layouts=[()]),
+    key=["M", "N", "K", "A_ELEM_PER_BYTE"],
+)(mma_scaled_warp_specialized_kernel)
+
+mma_scaled_2cta_kernel = triton.autotune(
+    configs=mma_scaled_get_configs(pre_hook=mma_scaled_tma_set_block_size_hook, cga_layouts=[((1, 0), )]),
+    key=["M", "N", "K", "A_ELEM_PER_BYTE"],
+)(mma_scaled_warp_specialized_kernel)
+
 # ---------------------------------------------------------------------------
 # Wrapper
 # ---------------------------------------------------------------------------
 
 
+def make_dummy_descriptors(A, B, A_scale, B_scale, out_dtype, M, N):
+    """Create TMA descriptors with dummy block shapes; the hook sets the real ones."""
+    dummy_block_2d = [1, 1]
+    dummy_layout_2d = gl.NVMMASharedLayout.get_default_for(dummy_block_2d, gl.float8e4nv)
+    a_desc = TensorDescriptor.from_tensor(A, dummy_block_2d, dummy_layout_2d)
+    b_desc = TensorDescriptor.from_tensor(B, dummy_block_2d, dummy_layout_2d)
+
+    C = torch.empty(M, N, device="cuda", dtype=out_dtype)
+    C_dtype = getattr(gl, str(out_dtype).split('.')[1])
+    c_layout = gl.NVMMASharedLayout.get_default_for(dummy_block_2d, C_dtype)
+    c_desc = TensorDescriptor.from_tensor(C, dummy_block_2d, c_layout)
+
+    A_scale_5d = A_scale.reshape(1, A_scale.shape[0], A_scale.shape[1], 2, 256)
+    B_scale_5d = B_scale.reshape(1, B_scale.shape[0], B_scale.shape[1], 2, 256)
+    dummy_block_5d = [1, 1, 1, 2, 256]
+    dummy_layout_5d = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5)
+    a_scale_desc = TensorDescriptor.from_tensor(A_scale_5d, dummy_block_5d, dummy_layout_5d)
+    b_scale_desc = TensorDescriptor.from_tensor(B_scale_5d, dummy_block_5d, dummy_layout_5d)
+
+    return a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc
+
+
 def mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, GRID_MINOR_DIM=0, GRID_TILE_WIDTH=4,
                                 out_dtype=torch.float16, BLOCK_M=128, BLOCK_N=256, BLOCK_K=None, EPILOGUE_BLOCK_N=None,
                                 num_buffers=3, acc_buffers=None, num_ctas=1):
-    """Warp-specialized block-scale MMA (supports 1CTA and multi-CTA)."""
+    """Warp-specialized block-scale MMA (supports 1CTA and 2CTA)."""
     if BLOCK_K is None:
         BLOCK_K = 128 if torch.float8_e4m3fn in [A.dtype, B.dtype] else 256
     if EPILOGUE_BLOCK_N is None:
@@ -624,50 +716,74 @@ def mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, GRID_MINOR_DIM
         acc_buffers = 2 if BLOCK_N < 256 else 1
 
     M, N = A.shape[0], B.shape[0]
-    MIXED_PREC = A.dtype != B.dtype
+    IS_FP4_A = A.dtype == torch.uint8
+    K = A.shape[1] * (2 if IS_FP4_A else 1)
+    cga_layout = ((1, 0), ) if num_ctas > 1 else ()
 
-    if num_ctas > 1:
-        # split A/C along M; B along N across CTAs
-        cga_layout = [[1, 0]]
-        cga_layout_a_scale = [[0, 1, 0, 0, 0]]  # split A scales along M across CTAs
-        cga_layout_b_scale = [[0, 0, 0, 0, 0]]  # broadcast B scales to both CTAs
-        no_swizzle_a = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
-                                            cga_layout=cga_layout_a_scale)
-        no_swizzle_b = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
-                                            cga_layout=cga_layout_b_scale)
-    else:
-        cga_layout = None
-        cga_layout_a_scale = None
-        cga_layout_b_scale = None
-        no_swizzle_a = no_swizzle_b = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5)
+    A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc = make_dummy_descriptors(A, B, A_scale, B_scale, out_dtype, M, N)
 
-    A_desc = make_operand_descriptor(A, BLOCK_M, BLOCK_K, MIXED_PREC, cga_layout=cga_layout)
-    B_desc = make_operand_descriptor(B, BLOCK_N, BLOCK_K, MIXED_PREC, cga_layout=cga_layout)
-    C_desc = make_output_descriptor(M, N, out_dtype, BLOCK_M, EPILOGUE_BLOCK_N, cga_layout=cga_layout)
-    A_scale_desc = make_scales_descriptor(A_scale, BLOCK_M, BLOCK_K, VEC_SIZE, cga_layout=cga_layout_a_scale)
-    B_scale_desc = make_scales_descriptor(B_scale, BLOCK_N, BLOCK_K, VEC_SIZE, cga_layout=cga_layout_b_scale)
-    A_scale_desc = replace(A_scale_desc, layout=no_swizzle_a)
-    B_scale_desc = replace(B_scale_desc, layout=no_swizzle_b)
+    mma_scaled_tma_set_block_size_hook({
+        "a_desc": A_desc,
+        "b_desc": B_desc,
+        "c_desc": C_desc,
+        "a_scale_desc": A_scale_desc,
+        "b_scale_desc": B_scale_desc,
+        "BLOCK_M": BLOCK_M,
+        "BLOCK_N": BLOCK_N,
+        "BLOCK_K": BLOCK_K,
+        "EPILOGUE_BLOCK_N": EPILOGUE_BLOCK_N,
+        "CGA_LAYOUT": cga_layout,
+    })
 
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
     grid = (num_pid, )
+    A_ELEM_PER_BYTE = 2 if IS_FP4_A else 1
     mma_scaled_warp_specialized_kernel[grid](
         A_desc,
         B_desc,
         C_desc,
         A_scale_desc,
         B_scale_desc,
+        M,
+        N,
+        K,
+        A_ELEM_PER_BYTE,
         num_buffers,
         BLOCK_M,
         BLOCK_N,
         BLOCK_K,
+        EPILOGUE_BLOCK_N,
         acc_buffers,
         GRID_MINOR_DIM,
         GRID_TILE_WIDTH,
-        tuple(tuple(x) for x in cga_layout) if cga_layout else (),
+        cga_layout,
         num_ctas=num_ctas,
     )
     return C_desc.base
+
+
+def mma_scaled_matmul(A, B, A_scale, B_scale, VEC_SIZE, out_dtype=torch.float16, num_ctas=None):
+    """Autotuned block-scaled matmul.
+
+    Args:
+        num_ctas: None = autotune across all configs (1CTA and 2CTA),
+                  1 = autotune 1CTA configs only,
+                  2 = autotune 2CTA configs only.
+    """
+    M, N = A.shape[0], B.shape[0]
+    IS_FP4_A = A.dtype == torch.uint8
+    A_ELEM_PER_BYTE = 2 if IS_FP4_A else 1
+    K = A.shape[1] * A_ELEM_PER_BYTE
+
+    a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc = make_dummy_descriptors(A, B, A_scale, B_scale, out_dtype, M, N)
+
+    def grid(meta):
+        num_tiles = triton.cdiv(M, meta["BLOCK_M"]) * triton.cdiv(N, meta["BLOCK_N"])
+        return (num_tiles, )
+
+    kernel = {None: mma_scaled_kernel, 1: mma_scaled_1cta_kernel, 2: mma_scaled_2cta_kernel}[num_ctas]
+    kernel[grid](a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, M, N, K, A_ELEM_PER_BYTE)
+    return c_desc.base
 
 
 # ---------------------------------------------------------------------------
@@ -734,20 +850,22 @@ ALL_FORMATS = [("mxfp8", "mxfp8"), ("nvfp4", "nvfp4"), ("mxfp8", "mxfp4"), ("mxf
 
 MNK_VALS = [8192, 16384, 32768]
 
+BEST_1CTA_CONFIG = dict(BLOCK_M=128, BLOCK_N=256, EPILOGUE_BLOCK_N=64, num_buffers=3, num_ctas=1, GRID_MINOR_DIM=1,
+                        GRID_TILE_WIDTH=8)
+BEST_2CTA_CONFIG = dict(BLOCK_M=256, BLOCK_N=256, EPILOGUE_BLOCK_N=64, num_buffers=5, num_ctas=2, GRID_MINOR_DIM=0,
+                        GRID_TILE_WIDTH=8)
 
-def make_fn(variant, A, B, A_scale, B_scale, VEC_SIZE, a_format):
+
+def make_fn(variant, A, B, A_scale, B_scale, VEC_SIZE, a_format, use_autotuned=False):
     """Build the callable for a given variant (1cta, 2cta, or cublas)."""
-    # 2CTA: Shared B operand doubles arithmetic intensity and
-    # halves per-CTA SMEM. Subtiled epilogue reclaims additional
-    # SMEM from the C store path. Reduced SMEM footprint enables
-    # a deeper pipeline.
     if variant == "2cta":
-        return lambda: mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M=256, BLOCK_N=256,
-                                                   EPILOGUE_BLOCK_N=64, num_buffers=5, num_ctas=2)
-    # 1CTA: Defaults from Gluon tutorial 11.
+        if use_autotuned:
+            return lambda: mma_scaled_matmul(A, B, A_scale, B_scale, VEC_SIZE, num_ctas=2)
+        return lambda: mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, **BEST_2CTA_CONFIG)
     elif variant == "1cta":
-        return lambda: mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M=128, BLOCK_N=256,
-                                                   EPILOGUE_BLOCK_N=256, num_buffers=3, num_ctas=1)
+        if use_autotuned:
+            return lambda: mma_scaled_matmul(A, B, A_scale, B_scale, VEC_SIZE, num_ctas=1)
+        return lambda: mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, **BEST_1CTA_CONFIG)
     elif variant == "cublas":
         A_scale_flat = A_scale.contiguous().flatten()
         B_scale_flat = B_scale.contiguous().flatten()
@@ -779,10 +897,7 @@ def get_variants(a_format, b_format):
 
 
 def print_table(label, variants, mnk_vals, results):
-    """Print a formatted benchmark table with optional ratio columns.
-
-    Column order: MNK | 1cta | 2cta | 2cta/1cta | [cublas] | [2cta/cublas]
-    """
+    """Print a formatted benchmark table with optional ratio columns."""
     has_cublas = "cublas" in variants
     col_w = 16
     header = f"{'MNK':>8}"
@@ -811,18 +926,52 @@ def print_table(label, variants, mnk_vals, results):
     print()
 
 
-def run_benchmark():
+def format_config(cfg):
+    """Format an autotuner Config as a concise string."""
+    if cfg is None:
+        return "(none)"
+    kw = cfg.kwargs
+    parts = [
+        f"BM={kw['BLOCK_M']}", f"BN={kw['BLOCK_N']}", f"BK={kw['BLOCK_K']}", f"epilogue_N={kw['EPILOGUE_BLOCK_N']}",
+        f"bufs={kw['num_buffers']}", f"acc_bufs={kw['num_acc_buffers']}", f"minor={kw['GRID_MINOR_DIM']}",
+        f"tile_w={kw['GRID_TILE_WIDTH']}", f"cga={kw['CGA_LAYOUT']}"
+    ]
+    return ", ".join(parts)
+
+
+def run_benchmark(use_autotuned=False):
     results = {}
+    best_configs = {}
     for a_format, b_format in ALL_FORMATS:
         label = f"{a_format}-{b_format}"
         variants = get_variants(a_format, b_format)
         for MNK in MNK_VALS:
             A, B, A_scale, B_scale, VEC_SIZE = make_tensors(MNK, a_format, b_format)
             for variant in variants:
-                fn = make_fn(variant, A, B, A_scale, B_scale, VEC_SIZE, a_format)
+                if use_autotuned:
+                    print(f"  {label} {variant} MNK={MNK}: ...", end="", flush=True)
+                fn = make_fn(variant, A, B, A_scale, B_scale, VEC_SIZE, a_format, use_autotuned=use_autotuned)
                 ms = triton.testing.do_bench(fn)
                 tflops = 2.0 * MNK**3 * 1e-12 / (ms * 1e-3)
                 results[(label, variant, MNK)] = tflops
+                if use_autotuned:
+                    print(f"\r  {label} {variant} MNK={MNK}: {tflops:.1f} TFLOPS")
+                    if variant == "1cta":
+                        best_configs[(label, "1cta", MNK)] = mma_scaled_1cta_kernel.best_config
+                    elif variant == "2cta":
+                        best_configs[(label, "2cta", MNK)] = mma_scaled_2cta_kernel.best_config
+
+    if use_autotuned:
+        largest_mnk = MNK_VALS[-1]
+        print(f"\nBest autotuned configs (MNK={largest_mnk}):")
+        for a_format, b_format in ALL_FORMATS:
+            label = f"{a_format}-{b_format}"
+            c1 = best_configs.get((label, "1cta", largest_mnk))
+            c2 = best_configs.get((label, "2cta", largest_mnk))
+            print(f"  {label}:")
+            print(f"    1cta: {format_config(c1)}")
+            print(f"    2cta: {format_config(c2)}")
+        print()
 
     for a_format, b_format in ALL_FORMATS:
         label = f"{a_format}-{b_format}"
@@ -831,4 +980,11 @@ def run_benchmark():
 
 
 if __name__ == "__main__":
-    run_benchmark()
+    parser = argparse.ArgumentParser(description="Block-scaled matmul benchmark")
+    parser.add_argument(
+        "--use-autotuned",
+        action="store_true",
+        help="Use autotuned mma_scaled_matmul() instead of mma_scaled_warp_specialized().",
+    )
+    args = parser.parse_args()
+    run_benchmark(use_autotuned=args.use_autotuned)
