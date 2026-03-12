@@ -711,7 +711,7 @@ def tdm_two_bufs_one_wait_kernel():
         ttgl.amd.gfx1250.tdm.async_load(a_desc, [0, 0], a_smem)
         ttgl.amd.gfx1250.tdm.async_load(b_desc, [0, 0], b_smem)
         if not FAILURE:
-            ttgl.amd.gfx1250.tdm.async_wait(0)
+            ttgl.amd.gfx1250.tdm.async_wait(1)
         val = a_smem.load(blocked_layout)
         if FAILURE:
             ttgl.amd.gfx1250.tdm.async_wait(0)

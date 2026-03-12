@@ -126,9 +126,9 @@ public:
     return {};
   }
 
-  // Returns true if operations tracked under `kind` complete in issue order
-  // within a warp. When true, ConSan skips the
-  // outstanding-commit conflict check between two ops that share this kind.
+  // Returns true to skip the outstanding-commit conflict check between
+  // two consecutive ops of the same commit kind to avoid ConSan false
+  // positives.
   virtual bool isOrderedCommitKind(CommitKind::Kind kind) const {
     return false;
   }

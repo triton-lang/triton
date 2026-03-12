@@ -22,7 +22,9 @@ public:
                ttag::AsyncTDMCopyLocalToGlobalOp>(op);
   }
 
-  // TDM ops from the same warp complete in issue order.
+  // ConSan's thread model uses one logical TMA (here: TDM) thread per
+  // WS partition. TDM ops from the same warp complete in issue order,
+  // so skipping the conflict check avoids false positives.
   bool isOrderedCommitKind(tti::CommitKind::Kind kind) const override {
     return kind == tti::CommitKind::TmaStore;
   }
