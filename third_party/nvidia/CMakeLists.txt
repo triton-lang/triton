@@ -10,10 +10,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
   set(GSAN_RUNTIME_IR "${CMAKE_CURRENT_SOURCE_DIR}/backend/lib/gsan.ll")
 
   find_program(TRITON_GSAN_CLANGXX NAMES clang++
-               PATHS "${LLVM_SYSPATH}/bin" NO_DEFAULT_PATH)
-  if(NOT TRITON_GSAN_CLANGXX)
-    find_program(TRITON_GSAN_CLANGXX NAMES clang++)
-  endif()
+               PATHS "${LLVM_SYSPATH}/bin"
+               REQUIRED NO_DEFAULT_PATH)
   if(NOT TRITON_GSAN_CLANGXX)
     message(FATAL_ERROR "clang++ is required to build gsan.ll")
   endif()
@@ -45,6 +43,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
       COMMAND "${TRITON_GSAN_CLANGXX}" -x c++ -std=c++17 -O3 -S -emit-llvm
               -x cuda --cuda-device-only
               -nocudalib
+              -nocudainc
               --no-cuda-version-check
               -fno-exceptions
               -fcuda-flush-denormals-to-zero
@@ -53,6 +52,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
               ${GSAN_RUNTIME_COMPAT_DEFINES}
               ${GSAN_RUNTIME_STDLIB_INCLUDE_FLAGS}
               -isystem "${CMAKE_CURRENT_SOURCE_DIR}/backend/include"
+              -isystem "${LLVM_SYSPATH}/lib/clang/23/include"
               "${GSAN_RUNTIME_SRC}" -o "${GSAN_RUNTIME_IR}"
       COMMENT "Building GSan runtime"
       VERBATIM)
