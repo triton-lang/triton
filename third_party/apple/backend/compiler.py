@@ -35,11 +35,35 @@ from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm
 
 
+def _find_metalasm_dylib():
+    """Find libMetalASMBridge.dylib, building from submodule if needed."""
+    # 1. Environment variable override
+    if os.environ.get('METALASM_DYLIB_PATH'):
+        return os.environ['METALASM_DYLIB_PATH']
+
+    # 2. Submodule build (third_party/apple/MetalASM/)
+    submodule_dir = os.path.join(os.path.dirname(__file__), '..', 'MetalASM')
+    submodule_dylib = os.path.join(submodule_dir, '.build', 'release', 'libMetalASMBridge.dylib')
+    if os.path.isdir(submodule_dir) and not os.path.exists(submodule_dylib):
+        # Auto-build on first use
+        import subprocess
+        try:
+            subprocess.check_call(
+                ['swift', 'build', '-c', 'release', '--product', 'MetalASMBridge'],
+                cwd=os.path.abspath(submodule_dir),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+    if os.path.exists(submodule_dylib):
+        return submodule_dylib
+
+    return None
+
+
 def _load_metalasm():
     """Load MetalASMBridge dylib and return a compile function, or None."""
-    dylib = os.path.expanduser(
-        '~/projects/oss/llvm/.build/debug/libMetalASMBridge.dylib')
-    if not os.path.exists(dylib):
+    dylib = _find_metalasm_dylib()
+    if not dylib:
         return None
     try:
         lib = ctypes.CDLL(dylib)

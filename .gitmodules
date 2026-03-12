@@ -1,0 +1,3 @@
+[submodule "third_party/apple/MetalASM"]
+	path = third_party/apple/MetalASM
+	url = https://github.com/mpsops/MetalASM.git
