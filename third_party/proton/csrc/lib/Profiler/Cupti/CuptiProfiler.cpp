@@ -602,12 +602,14 @@ bool CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureCallbacks(
     threadState.isStreamCapturing = false;
     return true;
   }
-  return threadState.isStreamCapturing;
+  return false;
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
+  if (handleStreamCaptureCallbacks(cbId))
+    return;
   if (!isLaunch(cbId))
     return;
 
@@ -623,8 +625,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   }
 
   auto &dataToEntry = threadState.dataToEntry;
-  if (handleStreamCaptureCallbacks(
-          cbId)) // stream captured kernels do not have correlations
+  if (threadState.isStreamCapturing) // Do not correlate stream captured kernels
     return;
   if (dataToEntry.empty()) // Profiler is deactivated
     return;
@@ -705,6 +706,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
 void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
+  if (handleStreamCaptureCallbacks(cbId))
+    return;
   if (!isLaunch(cbId))
     return;
 
@@ -718,8 +721,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
 
   if (dataToEntry.empty()) // Profiler is deactivated
     return;
-  if (handleStreamCaptureCallbacks(
-          cbId)) // Do not correlate for stream captured kernels
+  if (threadState.isStreamCapturing) // Do not correlate for stream captured kernels
     return;
   profiler.correlation.submit(callbackData->correlationId);
 }
