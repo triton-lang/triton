@@ -141,7 +141,8 @@ uint32_t processActivityKernel(
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
             auto childEntry = data->addOp(Data::kVirtualPhase, baseEntry.id,
                                           {Context(kernel->name)});
-            baseEntry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
+            baseEntry.upsertLinkedMetric(std::move(kernelMetric),
+                                         childEntry.id);
             detail::updateDataPhases(dataPhases, data, baseEntry.phase);
           }
         }
@@ -195,10 +196,11 @@ uint32_t processActivity(
   return correlationId;
 }
 
-void queueGraphMetrics(
-    const DataToEntryMap &dataToEntry, PendingGraphPool *pendingGraphPool,
-    const CUpti_CallbackData *callbackData, const GraphState &graphState,
-    CuptiProfiler::ExternIdState &externIdState) {
+void queueGraphMetrics(const DataToEntryMap &dataToEntry,
+                       PendingGraphPool *pendingGraphPool,
+                       const CUpti_CallbackData *callbackData,
+                       const GraphState &graphState,
+                       CuptiProfiler::ExternIdState &externIdState) {
   if (graphState.metricNodeIdToNumWords.empty()) {
     return;
   }
@@ -209,7 +211,9 @@ void queueGraphMetrics(
     for (const auto &metricNode : graphState.metricNodeIdToNumWords) {
       auto nodeId = metricNode.first;
       auto nodeStateIt = graphState.nodeIdToState.find(nodeId);
-      if (nodeStateIt == graphState.nodeIdToState.end()) // The node has been skipped during graph capture
+      if (nodeStateIt ==
+          graphState.nodeIdToState
+              .end()) // The node has been skipped during graph capture
         continue;
       if (nodeStateIt->second.dataToEntryId.count(data)) {
         metricNodeEntries[data].emplace_back(
@@ -528,7 +532,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     graphState.metricNodeIdToNumWords.erase(nodeId);
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
     graphStates.erase(graphId);
-  } 
+  }
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleResourceCallbacks(
@@ -638,13 +642,14 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       auto &graphState = graphStates[graphExecId];
 
       // For each unique call path, we generate an entry per data object.
-      auto &externState =
-          profiler.correlation.externIdToState[scope.scopeId];
+      auto &externState = profiler.correlation.externIdToState[scope.scopeId];
       externState.graphState = &graphState;
       static const bool timingEnabled =
           getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
       using Clock = std::chrono::steady_clock;
       auto t0 = decltype(Clock::now()){};
+      if (timingEnabled)
+        t0 = Clock::now();
 
       queueGraphMetrics(dataToEntry, profiler.pendingGraphPool.get(),
                         callbackData, graphState, externState);
