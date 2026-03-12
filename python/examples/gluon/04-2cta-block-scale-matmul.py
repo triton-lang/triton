@@ -31,6 +31,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
     tensor_memory_descriptor,
+    clc,
     tcgen05_copy,
     tcgen05_commit,
     tcgen05_mma_scaled,
@@ -74,38 +75,6 @@ def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width
     if minor_dim == 0:
         return minor, major
     return major, minor
-
-
-def PlanarSnakePersistentTileScheduler(MINOR_DIM, TILE_WIDTH):
-    MINOR_DIM = gl.constexpr(MINOR_DIM)
-    TILE_WIDTH = gl.constexpr(TILE_WIDTH)
-
-    @aggregate
-    class Impl:
-        start_pid: gl.tensor
-        num_pid_m: gl.tensor
-        num_pid_n: gl.tensor
-        num_pid: gl.tensor
-
-        @gluon.jit
-        def initialize(M, N, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr):
-            start_pid = gl.program_id(axis=0)
-            num_pid_m = gl.cdiv(M, BLOCK_M)
-            num_pid_n = gl.cdiv(N, BLOCK_N)
-            num_pid = num_pid_m * num_pid_n
-            return Impl(start_pid, num_pid_m, num_pid_n, num_pid)
-
-        @gluon.jit
-        def get_num_tiles(self):
-            return gl.cdiv(self.num_pid - self.start_pid, gl.num_programs(axis=0))
-
-        @gluon.jit
-        def get_tile(self, idx):
-            tile_id = self.start_pid + idx * gl.num_programs(axis=0)
-            return _planar_snake(tile_id, self.num_pid_m, self.num_pid_n, MINOR_DIM, TILE_WIDTH)
-
-    Impl.__name__ = f"PlanarSnakePersistentTileScheduler({MINOR_DIM.value}, {TILE_WIDTH.value})"
-    return Impl
 
 
 def is_blackwell():
@@ -253,13 +222,13 @@ def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale
                 b_scale_bufs, bars, pred, multicast_b_scale: gl.constexpr = False):
     A_ELEM_PER_BYTE: gl.constexpr = 2 if a_desc.dtype == gl.uint8 else 1
     B_ELEM_PER_BYTE: gl.constexpr = 2 if b_desc.dtype == gl.uint8 else 1
-    BLOCK_M: gl.constexpr = a_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = b_desc.block_type.shape[0]
-    BLOCK_K: gl.constexpr = a_desc.block_type.shape[1] * A_ELEM_PER_BYTE
-    REP_M: gl.constexpr = a_scale_desc.block_type.shape[1]
-    REP_N: gl.constexpr = b_scale_desc.block_type.shape[1]
-    A_REP_K: gl.constexpr = a_scale_desc.block_type.shape[2]
-    B_REP_K: gl.constexpr = b_scale_desc.block_type.shape[2]
+    BLOCK_M: gl.constexpr = a_desc.block_shape[0]
+    BLOCK_N: gl.constexpr = b_desc.block_shape[0]
+    BLOCK_K: gl.constexpr = a_desc.block_shape[1] * A_ELEM_PER_BYTE
+    REP_M: gl.constexpr = a_scale_desc.block_shape[1]
+    REP_N: gl.constexpr = b_scale_desc.block_shape[1]
+    A_REP_K: gl.constexpr = a_scale_desc.block_shape[2]
+    B_REP_K: gl.constexpr = b_scale_desc.block_shape[2]
 
     off_m = pid_m * BLOCK_M
     off_n = pid_n * BLOCK_N
@@ -314,6 +283,108 @@ class Counter:
         return Counter(index, phase, self.num_barriers)
 
 
+@aggregate
+class ClcTileSchedulerConsumer:
+    has_work: gl.tensor
+    tile_id: gl.tensor
+    pid_m: gl.tensor
+    pid_n: gl.tensor
+    num_pid_m: gl.tensor
+    num_pid_n: gl.tensor
+    TILE_M: gl.constexpr
+    TILE_N: gl.constexpr
+    MINOR_DIM: gl.constexpr
+    GRID_TILE_WIDTH: gl.constexpr
+    clc_result_buffers: gl.shared_memory_descriptor
+    clc_barriers: gl.shared_memory_descriptor
+    clc_planar_pid_buffers: gl.shared_memory_descriptor
+    clc_planar_ready_bars: gl.shared_memory_descriptor
+    clc_consumed_bars: gl.shared_memory_descriptor
+    counter: Counter
+    consumed_counter: Counter
+
+    @gluon.jit
+    def initialize(M, N, TILE_M: gl.constexpr, TILE_N: gl.constexpr, MINOR_DIM: gl.constexpr,
+                   GRID_TILE_WIDTH: gl.constexpr, clc_result_buffers, clc_barriers, clc_planar_pid_buffers,
+                   clc_planar_ready_bars, clc_consumed_bars):
+        tile_id = gl.program_id(axis=0)
+        num_pid_m = gl.cdiv(M, TILE_M)
+        num_pid_n = gl.cdiv(N, TILE_N)
+        pid_m, pid_n = _planar_snake(tile_id, num_pid_m, num_pid_n, MINOR_DIM, GRID_TILE_WIDTH)
+        has_work = gl.to_tensor(True)
+        counter = Counter.create(0, clc_barriers.shape[0])
+        consumed_counter = Counter.create(0, clc_barriers.shape[0])
+        return ClcTileSchedulerConsumer(
+            has_work,
+            tile_id,
+            pid_m,
+            pid_n,
+            num_pid_m,
+            num_pid_n,
+            TILE_M,
+            TILE_N,
+            MINOR_DIM,
+            GRID_TILE_WIDTH,
+            clc_result_buffers,
+            clc_barriers,
+            clc_planar_pid_buffers,
+            clc_planar_ready_bars,
+            clc_consumed_bars,
+            counter,
+            consumed_counter,
+        )
+
+    @gluon.jit
+    def get_offsets(self):
+        return self.pid_m * self.TILE_M, self.pid_n * self.TILE_N
+
+    @gluon.jit
+    def step(self, iteration):
+        # The 0-th iteration uses the program_id as the tile_id.
+        # At the end of each iteration we prefetch the next tile.
+        # As such we must signal the consumed slot at the end of
+        # each iteration skipping the first one.
+        consumed_counter = self.consumed_counter
+        if iteration > 0:
+            mbarrier.arrive(self.clc_consumed_bars.index(consumed_counter.index))
+            consumed_counter = consumed_counter.next()
+        counter = self.counter
+        barrier = self.clc_barriers.index(counter.index)
+        result = self.clc_result_buffers.index(counter.index)
+        mbarrier.wait(barrier, counter.phase)
+        clc_res = clc.load_result(result)
+        mbarrier.wait(self.clc_planar_ready_bars.index(counter.index), counter.phase)
+        planar_slot = self.clc_planar_pid_buffers.index(counter.index)
+        planar_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0],
+                                                       [[0]] * (gl.num_ctas().bit_length() - 1))
+        packed_pid = planar_slot.load(planar_layout).reshape([])
+        pid_m = ((packed_pid >> 32) & 0xFFFFFFFF).to(gl.int32)
+        pid_n = (packed_pid & 0xFFFFFFFF).to(gl.int32)
+        has_work = clc_res.is_canceled()
+        tile_id = self.tile_id
+        if has_work:
+            tile_id = clc_res.program_id(0)
+        return ClcTileSchedulerConsumer(
+            has_work,
+            tile_id,
+            pid_m,
+            pid_n,
+            self.num_pid_m,
+            self.num_pid_n,
+            self.TILE_M,
+            self.TILE_N,
+            self.MINOR_DIM,
+            self.GRID_TILE_WIDTH,
+            self.clc_result_buffers,
+            self.clc_barriers,
+            self.clc_planar_pid_buffers,
+            self.clc_planar_ready_bars,
+            self.clc_consumed_bars,
+            counter.next(),
+            consumed_counter,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Partitions
 # ---------------------------------------------------------------------------
@@ -335,59 +406,86 @@ class PartitionArgs:
     acc_bufs: tensor_memory_descriptor
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
-    SchedulerImpl: gl.constexpr
-    multicast_b_scale: gl.constexpr
+    clc_result_buffers: gl.shared_memory_descriptor
+    clc_barriers: gl.shared_memory_descriptor
+    clc_planar_pid_buffers: gl.shared_memory_descriptor
+    clc_planar_ready_bars: gl.shared_memory_descriptor
+    clc_consumed_bars: gl.shared_memory_descriptor
+    MINOR_DIM: gl.constexpr
+    GRID_TILE_WIDTH: gl.constexpr
 
-    BLOCK_M: gl.constexpr
-    BLOCK_N: gl.constexpr
-    BLOCK_K: gl.constexpr
-    M: gl.tensor
-    N: gl.tensor
-    K: gl.tensor
+    @gluon.jit
+    def get_clc_consumer(self):
+        return ClcTileSchedulerConsumer.initialize(
+            self.c_desc.shape[0],
+            self.c_desc.shape[1],
+            self.a_desc.block_shape[0],
+            self.b_desc.block_shape[0],
+            self.MINOR_DIM,
+            self.GRID_TILE_WIDTH,
+            self.clc_result_buffers,
+            self.clc_barriers,
+            self.clc_planar_pid_buffers,
+            self.clc_planar_ready_bars,
+            self.clc_consumed_bars,
+        )
 
 
 @gluon.jit
 def mma_scaled_load_partition(p):
+    A_ELEM_PER_BYTE: gl.constexpr = 2 if p.a_desc.dtype == gl.uint8 else 1
+    BLOCK_K: gl.constexpr = p.a_desc.block_shape[1] * A_ELEM_PER_BYTE
+    K = p.a_desc.shape[1] * A_ELEM_PER_BYTE
     state = Counter.create(1, p.load_empty_bars.shape[0])
-    scheduler = p.SchedulerImpl.initialize(p.M, p.N, p.BLOCK_M, p.BLOCK_N)
-    for idx in range(scheduler.get_num_tiles()):
-        pid_m, pid_n = scheduler.get_tile(idx)
-        for k in range(0, p.K, p.BLOCK_K):
+    scheduler = p.get_clc_consumer()
+    i = 0
+    while scheduler.has_work:
+        for k in range(0, K, BLOCK_K):
             mbarrier.wait(p.load_empty_bars.index(state.index), state.phase)
-            state = issue_loads(state, pid_m, pid_n, k, p.a_desc, p.b_desc, p.a_scale_desc, p.b_scale_desc, p.a_bufs,
-                                p.b_bufs, p.a_scale_bufs, p.b_scale_bufs, p.load_ready_bars, pred=True,
-                                multicast_b_scale=p.multicast_b_scale)
+            state = issue_loads(state, scheduler.pid_m, scheduler.pid_n, k, p.a_desc, p.b_desc, p.a_scale_desc,
+                                p.b_scale_desc, p.a_bufs, p.b_bufs, p.a_scale_bufs, p.b_scale_bufs, p.load_ready_bars,
+                                pred=True, multicast_b_scale=gl.num_ctas() > 1)
+        scheduler = scheduler.step(i)
+        i += 1
 
 
 @gluon.jit
 def mma_scaled_mma_partition(p):
+    A_ELEM_PER_BYTE: gl.constexpr = 2 if p.a_desc.dtype == gl.uint8 else 1
+    BLOCK_K: gl.constexpr = p.a_desc.block_shape[1] * A_ELEM_PER_BYTE
+    K = p.a_desc.shape[1] * A_ELEM_PER_BYTE
     load_state = Counter.create(0, p.load_empty_bars.shape[0])
     acc_state = Counter.create(1, p.acc_empty_bars.shape[0])
-    scheduler = p.SchedulerImpl.initialize(p.M, p.N, p.BLOCK_M, p.BLOCK_N)
-    for idx in range(scheduler.get_num_tiles()):
+    scheduler = p.get_clc_consumer()
+    i = 0
+    while scheduler.has_work:
         mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase)
         acc_buf = p.acc_bufs.index(acc_state.index)
         use_acc = False
-        for k in range(0, p.K, p.BLOCK_K):
+        for k in range(0, K, BLOCK_K):
             _, load_state = issue_mma(load_state, p.load_ready_bars, p.a_bufs, p.b_bufs, p.a_scale_bufs, p.b_scale_bufs,
                                       load_state, p.load_empty_bars, acc_buf, use_acc, pred=True)
             use_acc = True
         tcgen05_commit(p.acc_ready_bars.index(acc_state.index))
         acc_state = acc_state.next()
+        scheduler = scheduler.step(i)
+        i += 1
 
 
 @gluon.jit
 def mma_scaled_epilogue_partition(p):
-    tile_m: gl.constexpr = p.c_desc.block_type.shape[0]
-    EPILOGUE_BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
-    subtile_factor: gl.constexpr = p.BLOCK_N // EPILOGUE_BLOCK_N
+    tile_m: gl.constexpr = p.c_desc.block_shape[0]
+    BLOCK_N: gl.constexpr = p.b_desc.block_shape[0]
+    EPILOGUE_BLOCK_N: gl.constexpr = p.c_desc.block_shape[1]
+    subtile_factor: gl.constexpr = BLOCK_N // EPILOGUE_BLOCK_N
     subtile_stages: gl.constexpr = 1 if subtile_factor == 1 else 2
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
     acc_smems = gl.allocate_shared_memory(p.c_desc.dtype, [subtile_stages, tile_m, EPILOGUE_BLOCK_N], p.c_desc.layout)
     sub_acc_state = Counter.create(0, subtile_stages)
-    scheduler = p.SchedulerImpl.initialize(p.M, p.N, p.BLOCK_M, p.BLOCK_N)
-    for idx in range(scheduler.get_num_tiles()):
-        pid_m, pid_n = scheduler.get_tile(idx)
+    scheduler = p.get_clc_consumer()
+    i = 0
+    while scheduler.has_work:
+        off_m, off_n = scheduler.get_offsets()
         mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
         acc_buf = p.acc_bufs.index(acc_state.index)
 
@@ -397,12 +495,51 @@ def mma_scaled_epilogue_partition(p):
             acc = acc_sub.load().to(p.c_desc.dtype)
             tma.store_wait(pendings=subtile_stages - 1)
             acc_smem.store(acc)
-            tma.async_copy_shared_to_global(p.c_desc, [pid_m * p.BLOCK_M, pid_n * p.BLOCK_N + EPILOGUE_BLOCK_N * s],
-                                            acc_smem)
+            tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + EPILOGUE_BLOCK_N * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
         acc_state = acc_state.next()
+        scheduler = scheduler.step(i)
+        i += 1
     tma.store_wait(0)
+
+
+@gluon.jit
+def mma_scaled_clc_partition(p):
+    TILE_M: gl.constexpr = p.a_desc.block_shape[0]
+    TILE_N: gl.constexpr = p.b_desc.block_shape[0]
+    has_work = gl.to_tensor(True)
+    num_pid_m = gl.cdiv(p.c_desc.shape[0], TILE_M)
+    num_pid_n = gl.cdiv(p.c_desc.shape[1], TILE_N)
+    state = Counter.create(0, p.clc_barriers.shape[0])
+    consumed_state = Counter.create(1, p.clc_barriers.shape[0])
+    ACC_STAGES: gl.constexpr = p.clc_barriers.shape[0]
+    i = 0
+    while has_work:
+        # Reuse the slot only after all consumer partitions signaled consumed.
+        mbarrier.wait(p.clc_consumed_bars.index(consumed_state.index), consumed_state.phase, pred=(i >= ACC_STAGES))
+        barrier = p.clc_barriers.index(state.index)
+        result = p.clc_result_buffers.index(state.index)
+        # 16: clc.try_cancel has a `.b128` modifier
+        mbarrier.expect(barrier, 16)
+        clc.try_cancel(result, barrier, multicast=True)
+        mbarrier.wait(barrier, state.phase)
+        clc_res = clc.load_result(result)
+        has_work = clc_res.is_canceled()
+        pid_m = gl.to_tensor(0)
+        pid_n = gl.to_tensor(0)
+        if has_work:
+            tile_id = clc_res.program_id(0)
+            pid_m, pid_n = _planar_snake(tile_id, num_pid_m, num_pid_n, p.MINOR_DIM, p.GRID_TILE_WIDTH)
+        packed_pid = (pid_m.to(gl.int64) << 32) | (pid_n.to(gl.int64) & 0xFFFFFFFF)
+        planar_slot = p.clc_planar_pid_buffers.index(state.index)
+        planar_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0],
+                                                       [[0]] * (gl.num_ctas().bit_length() - 1))
+        planar_slot.store(gl.full([1], packed_pid, gl.int64, layout=planar_layout))
+        mbarrier.arrive(p.clc_planar_ready_bars.index(state.index))
+        state = state.next()
+        consumed_state = consumed_state.next()
+        i += 1
 
 
 # ---------------------------------------------------------------------------
@@ -413,51 +550,61 @@ def mma_scaled_epilogue_partition(p):
 @gluon.jit
 def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, num_buffers: gl.constexpr,
                                        BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr,
-                                       num_acc_buffers: gl.constexpr, SchedulerImpl: gl.constexpr,
-                                       block_layout_c: gl.constexpr):
+                                       num_acc_buffers: gl.constexpr, GRID_MINOR_DIM: gl.constexpr,
+                                       GRID_TILE_WIDTH: gl.constexpr, CGA_LAYOUT: gl.constexpr):
     NUM_CTAS: gl.constexpr = gl.num_ctas()
-    MULTI_CTA: gl.constexpr = NUM_CTAS > 1
+    TWO_CTAS: gl.constexpr = NUM_CTAS > 1
     BLOCK_M_PER_CTA: gl.constexpr = BLOCK_M // NUM_CTAS
     gl.static_assert(BLOCK_M_PER_CTA == 64 or BLOCK_M_PER_CTA == 128)
+    N_PARTITIONS: gl.constexpr = 4
 
-    A_ELEM_PER_BYTE: gl.constexpr = 2 if a_desc.dtype == gl.uint8 else 1
-    M = c_desc.shape[0]
-    N = c_desc.shape[1]
-    K = a_desc.shape[1] * A_ELEM_PER_BYTE
-
-    a_bufs = gl.allocate_shared_memory(a_desc.dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
-    b_bufs = gl.allocate_shared_memory(b_desc.dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
-    a_scale_bufs = gl.allocate_shared_memory(a_scale_desc.dtype, [num_buffers] + a_scale_desc.block_type.shape,
+    a_bufs = gl.allocate_shared_memory(a_desc.dtype, [num_buffers] + a_desc.block_shape, a_desc.layout)
+    b_bufs = gl.allocate_shared_memory(b_desc.dtype, [num_buffers] + b_desc.block_shape, b_desc.layout)
+    a_scale_bufs = gl.allocate_shared_memory(a_scale_desc.dtype, [num_buffers] + a_scale_desc.block_shape,
                                              a_scale_desc.layout)
-    b_scale_bufs = gl.allocate_shared_memory(b_scale_desc.dtype, [num_buffers] + b_scale_desc.block_type.shape,
+    b_scale_bufs = gl.allocate_shared_memory(b_scale_desc.dtype, [num_buffers] + b_scale_desc.block_shape,
                                              b_scale_desc.layout)
 
-    cga_layout: gl.constexpr = block_layout_c.cga_layout if MULTI_CTA else []
-    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M // NUM_CTAS, BLOCK_N], col_stride=1, cga_layout=cga_layout,
-                                                   two_ctas=MULTI_CTA)
+    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M_PER_CTA, BLOCK_N], col_stride=1, cga_layout=CGA_LAYOUT,
+                                                   two_ctas=TWO_CTAS)
 
     load_empty_bars = mbarrier.allocate_mbarrier(batch=num_buffers)
-    load_ready_bars = mbarrier.allocate_mbarrier(batch=num_buffers, two_ctas=MULTI_CTA)
+    load_ready_bars = mbarrier.allocate_mbarrier(batch=num_buffers, two_ctas=TWO_CTAS)
     for i in gl.static_range(num_buffers):
         mbarrier.init(load_empty_bars.index(i), count=1)
         mbarrier.init(load_ready_bars.index(i), count=1)
 
-    acc_empty_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=MULTI_CTA)
+    acc_empty_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=TWO_CTAS)
     acc_ready_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
     for i in gl.static_range(num_acc_buffers):
         mbarrier.init(acc_empty_bars.index(i), count=1)
         mbarrier.init(acc_ready_bars.index(i), count=1)
 
+    clc_barriers = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
+    clc_planar_ready_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
+    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=TWO_CTAS)
+    for i in gl.static_range(num_acc_buffers):
+        mbarrier.init(clc_barriers.index(i), count=1)
+        mbarrier.init(clc_planar_ready_bars.index(i), count=1)
+        mbarrier.init(clc_consumed_bars.index(i), count=N_PARTITIONS - 1)
+
+    cga_layout_clc: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
+    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout_clc)
+    clc_result_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 2], clc_layout)
+    clc_planar_pid_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 1], clc_layout)
+
     acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
     p = PartitionArgs(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs,
-                      load_empty_bars, load_ready_bars, acc_bufs, acc_empty_bars, acc_ready_bars, SchedulerImpl,
-                      MULTI_CTA, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
+                      load_empty_bars, load_ready_bars, acc_bufs, acc_empty_bars, acc_ready_bars, clc_result_buffers,
+                      clc_barriers, clc_planar_pid_buffers, clc_planar_ready_bars, clc_consumed_bars, GRID_MINOR_DIM,
+                      GRID_TILE_WIDTH)
 
     gl.warp_specialize([
         (mma_scaled_epilogue_partition, (p, )),
         (mma_scaled_mma_partition, (p, )),
         (mma_scaled_load_partition, (p, )),
-    ], [1, 1], [24, 24])
+        (mma_scaled_clc_partition, (p, )),
+    ], [1, 1, 1], [24, 24, 24])
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +623,6 @@ def mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, GRID_MINOR_DIM
     if acc_buffers is None:
         acc_buffers = 2 if BLOCK_N < 256 else 1
 
-    SchedulerImpl = PlanarSnakePersistentTileScheduler(GRID_MINOR_DIM, GRID_TILE_WIDTH)
     M, N = A.shape[0], B.shape[0]
     MIXED_PREC = A.dtype != B.dtype
 
@@ -489,13 +635,11 @@ def mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, GRID_MINOR_DIM
                                             cga_layout=cga_layout_a_scale)
         no_swizzle_b = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
                                             cga_layout=cga_layout_b_scale)
-        block_layout_c = gl.BlockedLayout([1, 8], [1, 32], warps_per_cta=[4, 1], order=[1, 0], cga_layout=cga_layout)
     else:
         cga_layout = None
         cga_layout_a_scale = None
         cga_layout_b_scale = None
         no_swizzle_a = no_swizzle_b = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5)
-        block_layout_c = None
 
     A_desc = make_operand_descriptor(A, BLOCK_M, BLOCK_K, MIXED_PREC, cga_layout=cga_layout)
     B_desc = make_operand_descriptor(B, BLOCK_N, BLOCK_K, MIXED_PREC, cga_layout=cga_layout)
@@ -505,9 +649,8 @@ def mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, GRID_MINOR_DIM
     A_scale_desc = replace(A_scale_desc, layout=no_swizzle_a)
     B_scale_desc = replace(B_scale_desc, layout=no_swizzle_b)
 
-    num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
-    grid = (min(num_sms, num_pid), )
+    grid = (num_pid, )
     mma_scaled_warp_specialized_kernel[grid](
         A_desc,
         B_desc,
@@ -519,8 +662,9 @@ def mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, GRID_MINOR_DIM
         BLOCK_N,
         BLOCK_K,
         acc_buffers,
-        SchedulerImpl,
-        block_layout_c,
+        GRID_MINOR_DIM,
+        GRID_TILE_WIDTH,
+        tuple(tuple(x) for x in cga_layout) if cga_layout else (),
         num_ctas=num_ctas,
     )
     return C_desc.base
