@@ -118,28 +118,33 @@ uint32_t processActivityKernel(
     }
     auto &externState = *state;
     // We have a graph creation captured
-    auto &graphNodeIdToState = externState.graphNodeIdToState;
-    auto *nodeState = graphNodeIdToState.find(kernel->graphNodeId);
-    if (nodeState && !nodeState->isMetricNode()) {
-      const bool isMissingName = nodeState->isMissingName();
+    auto *graphState = externState.graphState;
+    GraphState::NodeState *nodeState = nullptr;
+    if (graphState) {
+      if (graphState->nodeIdToState.count(kernel->graphNodeId)) {
+        nodeState = &graphState->nodeIdToState.at(kernel->graphNodeId);
+      }
+    }
+    if (nodeState && !nodeState->status.isMetricNode()) {
+      const bool isMissingName = nodeState->status.isMissingName();
       if (!isMissingName) {
-        nodeState->forEachEntry(
-            [activity, &dataPhases](Data *data, DataEntry &entry) {
-              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                entry.upsertLinkedMetric(std::move(kernelMetric), entry.id);
-                detail::updateDataPhases(dataPhases, data, entry.phase);
-              }
-            });
-      } else {
-        nodeState->forEachEntry([kernel, activity,
-                                 &dataPhases](Data *data, DataEntry &entry) {
+        for (auto &[data, id] : nodeState->dataToEntryId) {
+          auto &baseEntry = externState.dataToEntry.at(data);
           if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-            auto childEntry = data->addOp(Data::kVirtualPhase, entry.id,
-                                          {Context(kernel->name)});
-            entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
-            detail::updateDataPhases(dataPhases, data, entry.phase);
+            baseEntry.upsertLinkedMetric(std::move(kernelMetric), id);
+            detail::updateDataPhases(dataPhases, data, baseEntry.phase);
           }
-        });
+        }
+      } else {
+        for (auto &[data, id] : nodeState->dataToEntryId) {
+          auto &baseEntry = externState.dataToEntry.at(data);
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            auto childEntry = data->addOp(Data::kVirtualPhase, baseEntry.id,
+                                          {Context(kernel->name)});
+            baseEntry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
+            detail::updateDataPhases(dataPhases, data, baseEntry.phase);
+          }
+        }
       }
     } else if (!nodeState) {
       // This can happen when graph creation is not captured, or the node is
@@ -190,31 +195,10 @@ uint32_t processActivity(
   return correlationId;
 }
 
-void buildGraphNodeEntries(
-    const DataToEntryMap &dataToEntry, const GraphState &graphState,
-    CuptiProfiler::ExternIdState::GraphNodeStateTable &graphNodeIdToState) {
-  for (const auto &[data, launchEntry] : dataToEntry) {
-    auto nodeStateIt = graphState.dataToEntryIdToNodeStates.find(data);
-    if (nodeStateIt == graphState.dataToEntryIdToNodeStates.end())
-      // This is a new data which was not enabled during graph capture
-      continue;
-    auto baseEntry = data->addOp(launchEntry.phase, launchEntry.id,
-                                 {Context{GraphState::captureTag}});
-    for (const auto &[targetEntryId, nodeStates] : nodeStateIt->second) {
-      for (const auto *nodeState : nodeStates) {
-        auto &graphNodeState = graphNodeIdToState.emplace(nodeState->nodeId);
-        graphNodeState.status = nodeState->status;
-        graphNodeState.setEntry(data, DataEntry(targetEntryId, baseEntry.phase,
-                                                baseEntry.metricSet.get()));
-      }
-    }
-  }
-}
-
 void queueGraphMetrics(
     const DataToEntryMap &dataToEntry, PendingGraphPool *pendingGraphPool,
     const CUpti_CallbackData *callbackData, const GraphState &graphState,
-    CuptiProfiler::ExternIdState::GraphNodeStateTable &graphNodeIdToState) {
+    CuptiProfiler::ExternIdState &externIdState) {
   if (graphState.metricNodeIdToNumWords.empty()) {
     return;
   }
@@ -224,11 +208,13 @@ void queueGraphMetrics(
     phase = launchEntry.phase;
     for (const auto &metricNode : graphState.metricNodeIdToNumWords) {
       auto nodeId = metricNode.first;
-      auto *nodeState = graphNodeIdToState.find(nodeId);
-      if (!nodeState) // The node has been skipped during graph capture
+      auto nodeStateIt = graphState.nodeIdToState.find(nodeId);
+      if (nodeStateIt == graphState.nodeIdToState.end()) // The node has been skipped during graph capture
         continue;
-      if (nodeState->dataToEntry.count(data)) {
-        metricNodeEntries[data].emplace_back(nodeState->dataToEntry.at(data));
+      if (nodeStateIt->second.dataToEntryId.count(data)) {
+        metricNodeEntries[data].emplace_back(
+            DataEntry(nodeStateIt->second.dataToEntryId.at(data), phase,
+                      launchEntry.metricSet.get()));
       } else {
         // Indicate that we'll call upsertFlexibleMetric instead of
         // upsertLinkedFlexibleMetric in queueGraphMetrics, so that the kernel
@@ -542,9 +528,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     graphState.metricNodeIdToNumWords.erase(nodeId);
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
     graphStates.erase(graphId);
-  } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
-    graphStates.erase(graphExecId);
-  }
+  } 
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleResourceCallbacks(
@@ -654,37 +638,16 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       auto &graphState = graphStates[graphExecId];
 
       // For each unique call path, we generate an entry per data object.
-      auto &graphNodeIdToState =
-          profiler.correlation.externIdToState[scope.scopeId]
-              .graphNodeIdToState;
-      if (!graphState.nodeIdToState.empty()) {
-        auto minNodeId = graphState.nodeIdToState.begin()->first;
-        auto maxNodeId = graphState.nodeIdToState.rbegin()->first;
-        graphNodeIdToState.resetRange(minNodeId, maxNodeId);
-      } else {
-        graphNodeIdToState.clear();
-      }
+      auto &externState =
+          profiler.correlation.externIdToState[scope.scopeId];
+      externState.graphState = &graphState;
       static const bool timingEnabled =
           getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
       using Clock = std::chrono::steady_clock;
       auto t0 = decltype(Clock::now()){};
-      if (timingEnabled)
-        t0 = Clock::now();
-
-      buildGraphNodeEntries(dataToEntry, graphState, graphNodeIdToState);
-
-      if (timingEnabled) {
-        auto t1 = Clock::now();
-        auto elapsed =
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        std::cerr << "[PROTON] Graph launch call path time: " << elapsed
-                  << " us for graphExecId: " << graphExecId << std::endl;
-        t0 = Clock::now();
-      }
 
       queueGraphMetrics(dataToEntry, profiler.pendingGraphPool.get(),
-                        callbackData, graphState, graphNodeIdToState);
+                        callbackData, graphState, externState);
 
       if (timingEnabled) {
         auto t1 = Clock::now();
