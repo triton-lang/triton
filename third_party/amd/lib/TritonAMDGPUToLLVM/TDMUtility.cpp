@@ -1,4 +1,5 @@
 #include "TDMUtility.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -975,10 +976,9 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
                                         {kWarp, warpId},
                                         {kBlock, ctaId}});
 
-  int cacheScope = 8; // (8) = L2 scope
-  int hintValue = cacheScope | static_cast<int>(isSpeculative);
-  Value hint = LLVM::ConstantOp::create(rewriter, loc, i32_ty,
-                                        rewriter.getI32IntegerAttr(hintValue));
+  constexpr int cacheScope = 8; // (8) = L2 scope
+  const int hintValue = cacheScope | static_cast<int>(isSpeculative);
+  IntegerAttr hint = rewriter.getI32IntegerAttr(hintValue);
 
   // Iterate over each register and emit a prefetch intrinsic
   SmallVector<Value> offsets(ll.getInDimSize(kRegister));
@@ -997,7 +997,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
     // Compute the local offset from tile ptr for this prefetch based on the
     // computed indices
     Value localOffset = dot64(indices, scaledStride);
-    auto prefetchPtr = b.gep(globalPtrTy, elementType, tilePtr, localOffset);
+    Value prefetchPtr = b.gep(globalPtrTy, elementType, tilePtr, localOffset);
 
     // Mask the prefetch if the offset is out of bounds
     Value inBounds = b.icmp_slt(localOffset, maxOffsetFromTile);
@@ -1015,8 +1015,8 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
 
     rewriter.setInsertionPointToStart(prefetchBlock);
 
-    LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, "llvm.amdgcn.global.prefetch", {}, {prefetchPtr, hint});
+    ROCDL::GlobalPrefetchOp::create(rewriter, loc, prefetchPtr, hint, {}, {},
+                                    {});
 
     rewriter.setInsertionPointToEnd(prefetchBlock);
     LLVM::BrOp::create(rewriter, loc, afterPrefetch);
