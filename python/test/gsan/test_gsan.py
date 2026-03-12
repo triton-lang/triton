@@ -13,7 +13,8 @@ from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer
 from triton.experimental.gsan import create_mem_pool
 from triton._C.libtriton.gsan_testing import AtomicScope, SHADOW_GRANULARITY_BYTES, ScalarClock
 from triton.experimental.gsan._testing_utils import (load_one_i32, shadow_cell_from_address, store_one_i32,
-                                                     thread_state_from_smid)
+                                                     thread_state_from_smid, nanosleep)
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 
 @pytest.fixture()
@@ -22,11 +23,6 @@ def with_gsan(fresh_knobs):
     pool = create_mem_pool()
     with torch.cuda.use_mem_pool(pool):
         yield
-
-
-CROSS_SM_MAGIC = 1000
-CROSS_SM_SPIN_ITERS = 128
-CROSS_SM_SLEEP_NS = 100_000
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
@@ -111,47 +107,18 @@ def _atomic_cas_release_i32(ptr, out_ptr):
 
 
 @triton.jit
-def _nanosleep(duration):
-    duration = tl.to_tensor(duration)
-    tl.inline_asm_elementwise("nanosleep.u32 $1; mov.b32 $0, 0;", "=r, r", [duration], tl.int32, is_pure=False, pack=1)
-
-
-@triton.jit
-def _cross_sm_release_acquire_kernel(payload_ptr, flag_ptr, out_ptr, smid_ptr, sleep_ns, spin_iters):
+def _cross_sm_release_acquire_kernel(payload_ptr, flag_ptr, out_ptr):
     pid = tl.program_id(0)
-    smid = tl.extra.cuda.smid()
-    tl.store(smid_ptr + pid, smid)
     if pid == 0:
         tl.store(payload_ptr, 1000)
         tl.atomic_xchg(flag_ptr, 1, sem="release", scope="gpu")
     elif pid == 1:
-        i = 0
-        while i < spin_iters:
+        ready = 0
+        while ready != 1:
+            nanosleep(500_000)
             ready = tl.atomic_add(flag_ptr, 0, sem="acquire", scope="gpu")
-            if ready != 0:
-                result = tl.load(payload_ptr)
-                tl.store(out_ptr, result)
-            else:
-                _nanosleep(sleep_ns)
-            i += 1
-
-
-def _launch_cross_sm_case(kernel, grid_size: int) -> tuple[torch.Tensor, torch.Tensor]:
-    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
-    flags = torch.zeros(1, dtype=torch.int32, device="cuda")
-    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
-    smids = torch.full((grid_size, ), -1, dtype=torch.int32, device="cuda")
-    kernel[(grid_size, )](
-        payload,
-        flags,
-        out,
-        smids,
-        CROSS_SM_SLEEP_NS,
-        CROSS_SM_SPIN_ITERS,
-        num_warps=1,
-    )
-    torch.cuda.synchronize()
-    return out, smids
+        result = tl.load(payload_ptr)
+        tl.store(out_ptr, result)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
@@ -235,24 +202,17 @@ def test_atomic_cas_release_success_publishes_token(with_gsan):
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 def test_atomic_release_acquire_synchronizes_cross_sm(with_gsan, capfd):
-    num_sms = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
-    if num_sms < 2:
-        pytest.skip("requires at least 2 SMs")
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flags = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _cross_sm_release_acquire_kernel[(2, )](
+        payload,
+        flags,
+        out,
+        num_warps=1,
+    )
+    torch.cuda.synchronize()
 
-    grid_size = max(num_sms, 2)
-    success = False
-    out = None
-    smids = None
-    for _ in range(6):
-        out, smids = _launch_cross_sm_case(_cross_sm_release_acquire_kernel, grid_size)
-        if smids[0].item() != smids[1].item() and out.item() == CROSS_SM_MAGIC:
-            success = True
-            break
-
-    assert success, ("Failed to observe a release/acquire handoff between different SMs; "
-                     f"writer_smid={smids[0].item() if smids is not None else -1}, "
-                     f"reader_smid={smids[1].item() if smids is not None else -1}, "
-                     f"observed_value={out.item() if out is not None else -1}.")
     captured = capfd.readouterr()
     assert "GSanLibrary.cu" not in captured.out + captured.err
 

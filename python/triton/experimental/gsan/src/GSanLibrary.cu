@@ -397,7 +397,7 @@ __device__ void recordRead(ThreadState *state, ShadowCell *cell,
     }
   }
 
-  auto threadNumReads = __scoped_fetch_add_n(
+  auto threadNumReads = __scoped_atomic_fetch_add(
       &state->numReads, 1, __ATOMIC_RELAXED, __MEMORY_SCOPE_WRKGRP);
   auto seed = getGlobalState(state)->rngSeed;
   uint32_t rand = hash2x32(threadNumReads, state->threadId, seed);

@@ -206,6 +206,8 @@ std::string getRegisterSizeCode(int size, bool isFloat) {
 
 Value materializeI32Bool(ConversionPatternRewriter &rewriter,
                          TritonLLVMOpBuilder &b, Value pred) {
+  if (!pred)
+    return b.i32_val(1);
   return b.zext(i32_ty, pred);
 }
 
