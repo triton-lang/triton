@@ -190,6 +190,7 @@ jobs:
       - name: Run Proton tests
         run: |
           unset HIP_VISIBLE_DEVICES
+          unset ROCR_VISIBLE_DEVICES
           make test-proton
       - name: Inspect cache directories
         run: |
