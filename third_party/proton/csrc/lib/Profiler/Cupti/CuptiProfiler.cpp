@@ -702,8 +702,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
   auto &dataToEntry = threadState.dataToEntry;
-  if (dataToEntry.empty()) // Profiler is deactivated
-    return;
+  bool deactivated = dataToEntry.empty();
 
   if (profiler.pcSamplingEnabled) {
     // XXX: Conservatively stop every GPU kernel for now.
@@ -714,6 +713,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
 
   if (threadState
           .isStreamCapturing) // Do not correlate for stream captured kernels
+    return;
+  if (deactivated) // Profiler is deactivated
     return;
   profiler.correlation.submit(callbackData->correlationId);
 }
