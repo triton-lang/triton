@@ -32,6 +32,7 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew install ccache llvm@19 coreutils ninja
+          echo "/opt/homebrew/opt/llvm@19/bin" >> $GITHUB_PATH
 
       - name: Build MetalASM
         run: |
