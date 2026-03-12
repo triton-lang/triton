@@ -282,7 +282,7 @@ constexpr std::array<CUpti_CallbackId, 5> kGraphResourceCallbacks = {
     CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED,
     CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED,
     CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING,
-    CUPTI_CBID_RESOURCE_GRAPHEXEC_CREATED,
+    CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING,
     CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING,
 };
 
@@ -458,7 +458,6 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
 void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     CUpti_GraphData *graphData) {
-
   uint32_t graphId = 0;
   uint32_t graphExecId = 0;
   if (graphData->graph)
@@ -504,6 +503,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
             &nodeState);
       }
     } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
+      // When a graph is cloned under the stream capture mode, graphId is the
+      // same as the graphExecId to be created
       uint32_t originalGraphId = 0;
       uint64_t originalNodeId = 0;
       cupti::getGraphId<true>(graphData->originalGraph, &originalGraphId);
@@ -601,14 +602,12 @@ bool CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureCallbacks(
     threadState.isStreamCapturing = false;
     return true;
   }
-  return false;
+  return threadState.isStreamCapturing;
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
-  if (handleStreamCaptureCallbacks(cbId))
-    return;
   if (!isLaunch(cbId))
     return;
 
@@ -623,8 +622,13 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     threadState.enterOp(Scope(symbolName));
   }
 
-  const auto &scope = threadState.scopeStack.back();
   auto &dataToEntry = threadState.dataToEntry;
+  if (handleStreamCaptureCallbacks(cbId)) // stream captured kernels do not have correlations
+    return;
+  if (dataToEntry.empty()) // Profiler is deactivated
+    return;
+
+  const auto &scope = threadState.scopeStack.back();
   if (isGraphLaunch(cbId)) {
     auto graphExec =
         static_cast<const cuGraphLaunch_params *>(callbackData->functionParams)
@@ -703,13 +707,19 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
   if (!isLaunch(cbId))
     return;
 
+  auto &dataToEntry = threadState.dataToEntry;
   if (profiler.pcSamplingEnabled) {
-    auto &dataToEntry = threadState.dataToEntry;
     // XXX: Conservatively stop every GPU kernel for now.
     pcSampling.stop(callbackData->context, dataToEntry);
   }
 
   threadState.exitOp();
+
+  if (dataToEntry.empty()) // Profiler is deactivated
+    return;
+  if (handleStreamCaptureCallbacks(
+          cbId)) // Do not correlate for stream captured kernels
+    return;
   profiler.correlation.submit(callbackData->correlationId);
 }
 
@@ -717,8 +727,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId, const void *cbData) {
   // Do not track metric kernel launches for triton ops.
   // In this case, metric kernels are launched after a triton op is entered.
-  // We should track metric kernel launches for scopes. In this case, the metric
-  // kernel's stack has the same name as the scope's stack.
+  // We should track metric kernel launches for scopes.
+  // In this case, the metric kernel's stack has the same name as the scope's stack.
   if (threadState.isMetricKernelLaunching && profiler.isOpInProgress())
     return;
 
