@@ -1,0 +1,69 @@
+name: Build MPS Backend
+
+on:
+  push:
+    branches: [apple-mps-backend]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'third_party/apple/**'
+      - 'CMakeLists.txt'
+      - 'setup.py'
+
+jobs:
+  build-mps:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+      TRITON_CODEGEN_BACKENDS: "apple"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Install brew dependencies
+        run: |
+          brew install ccache llvm@19 coreutils ninja
+
+      - name: Build MetalASM
+        run: |
+          cd third_party/apple/MetalASM
+          swift build -c release --product MetalASMBridge
+          ls -la .build/release/libMetalASMBridge.dylib
+
+      - name: Create venv and install deps
+        run: |
+          python3 -m venv ~/.venv
+          source ~/.venv/bin/activate
+          pip install --upgrade pip
+          pip install ninja cmake wheel numpy pytest torch
+
+      - name: Install Triton (Apple MPS only)
+        env:
+          TRITON_BUILD_WITH_O1: "true"
+          MAX_JOBS: 3
+          NINJA_STATUS: "[%f/%t, %es elapsed] "
+          LLVM_SYSPATH: /opt/homebrew/opt/llvm@19
+        run: |
+          source ~/.venv/bin/activate
+          export PATH="/opt/homebrew/opt/llvm@19/bin:$PATH"
+          export CC="/opt/homebrew/opt/llvm@19/bin/clang"
+          export CXX="/opt/homebrew/opt/llvm@19/bin/clang++"
+          export CXXFLAGS="-stdlib=libc++"
+          export LDFLAGS="-L/opt/homebrew/opt/llvm@19/lib"
+          pip install -e python/ --no-build-isolation -v
+
+      - name: Verify import
+        run: |
+          source ~/.venv/bin/activate
+          python -c "
+          import triton
+          from triton.backends.apple.compiler import MPSBackend
+          print('Triton MPS backend imported successfully')
+          print(f'Triton version: {triton.__version__}')
+          "
