@@ -16,7 +16,6 @@ jobs:
     timeout-minutes: 60
     env:
       TRITON_BUILD_WITH_CLANG_LLD: "FALSE"
-      TRITON_CODEGEN_BACKENDS: "apple"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
