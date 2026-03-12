@@ -25,7 +25,7 @@ from triton.language.core import _aggregate as aggregate
 
 from triton._C.libtriton import nvidia
 
-from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
+from triton.experimental.gluon.nvidia.blackwell import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
