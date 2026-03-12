@@ -9,6 +9,7 @@ add_triton_library(TritonInstrumentIR
 
   LINK_LIBS PUBLIC
     MLIRIR
+    NVGPUIR
     TritonIR
     TritonGPUIR
 )

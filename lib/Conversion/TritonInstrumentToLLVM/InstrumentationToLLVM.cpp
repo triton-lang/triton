@@ -221,11 +221,6 @@ struct LockReleaseOpConversion
     Location loc = op.getLoc();
     b.setInsertionPoint(op);
     Value lock = op.getLock();
-    if (op.getPred()) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(b, loc, op.getPred());
-      b.setInsertionPointToStart(ifBlock);
-    }
 
     Type elType = cast<PointerType>(lock.getType()).getPointeeType();
     assert(elType == b.getI32Type() && "Expected i32 lock element type");
@@ -233,11 +228,48 @@ struct LockReleaseOpConversion
     triton::gpu::BarrierOp::create(b, loc,
                                    triton::gpu::AddrSpace::GlobalRead |
                                        triton::gpu::AddrSpace::GlobalWrite);
+    Value elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
+    if (op.getPred()) {
+      elect = arith::AndIOp::create(b, loc, elect, op.getPred());
+    }
     Value zero =
         arith::ConstantOp::create(b, loc, elType, b.getIntegerAttr(elType, 0));
-    triton::AtomicRMWOp::create(b, loc, elType, RMWOp::XCHG, lock, zero,
-                                nullptr, MemSemantic::ACQUIRE_RELEASE,
-                                MemSyncScope::GPU);
+
+    PTXBuilder ptx;
+    auto *dstOpr = ptx.newOperand("=r", /*init=*/true);
+    auto *ptrOpr = ptx.newAddrOperand(adaptor.getLock(), "l");
+    auto *valOpr = ptx.newOperand(zero, "r");
+    auto &atom = *ptx.create("atom");
+    atom.global().o("acq_rel").o("gpu").o("exch").o("b32");
+    atom(dstOpr, ptrOpr, valOpr).predicate(elect);
+    ptx.launch(b, loc, elType);
+
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct StoreI32OpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalStoreI32Op> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult matchAndRewrite(tti::ExperimentalStoreI32Op op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+
+    Value elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
+    if (op.getPred())
+      elect = arith::AndIOp::create(b, loc, elect, adaptor.getPred());
+
+    PTXBuilder ptx;
+    auto *ptrOpr = ptx.newAddrOperand(adaptor.getPtr(), "l");
+    auto *valOpr = ptx.newOperand(adaptor.getValue(), "r");
+    auto &st = *ptx.create("st");
+    st.global().o("b32");
+    st(ptrOpr, valOpr).predicate(elect);
+    ptx.launch(b, loc, void_ty(b.getContext()));
+
     b.eraseOp(op);
     return success();
   }
@@ -261,13 +293,51 @@ public:
   }
 };
 
+struct ClusterScratchBaseOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalClusterScratchBaseOp> {
+  ClusterScratchBaseOpConversion(const LLVMTypeConverter &converter,
+                                 const TargetInfoBase &targetInfo,
+                                 PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<tti::ExperimentalClusterScratchBaseOp>(converter,
+                                                                      benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalClusterScratchBaseOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+    auto allocSizeAttr =
+        mod->getAttrOfType<IntegerAttr>("ttg.profile_scratch_memory_size");
+    assert(allocSizeAttr && "Expected profile scratch memory size attribute");
+    assert(!allocSizeAttr.getValue().isZero() &&
+           "Expected profile scratch memory size to be non-zero");
+
+    Location loc = op.getLoc();
+    auto ptrTy = cast<LLVM::LLVMPointerType>(adaptor.getPtr().getType());
+    auto i64Ty = rewriter.getI64Type();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value ptrInt = b.ptrtoint(i64Ty, adaptor.getPtr());
+    Value ctaId = b.zext(i64Ty, targetInfo.getClusterCTAId(rewriter, loc));
+    Value allocSize = b.i64_val(allocSizeAttr.getValue().getZExtValue());
+    Value byteOffset = b.mul(ctaId, allocSize);
+    Value baseInt = b.sub(ptrInt, byteOffset);
+    rewriter.replaceOp(op, b.inttoptr(ptrTy, baseInt));
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
 } // namespace
 
 void mlir::triton::populateInstrumentationToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    const TargetInfoBase &targetInfo) {
   patterns.add<AssertUniformOpConversion>(typeConverter);
   patterns.add<BufferDescriptorsOpConversion>(typeConverter);
   patterns.add<LockAcquireOpConversion>(typeConverter);
   patterns.add<LockReleaseOpConversion>(typeConverter);
+  patterns.add<StoreI32OpConversion>(typeConverter);
   patterns.add<MemDescToI32OpConversion>(typeConverter);
+  patterns.add<ClusterScratchBaseOpConversion>(typeConverter, targetInfo);
 }

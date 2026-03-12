@@ -84,43 +84,50 @@ public:
                                   RankedTensorType type, Value scalar);
   // setWaiting: mark the base thread as waiting on the given barrier phase and
   // record that phase for deadlock detection.
-  void createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar, int thread,
+  void createSetWaitingCall(ImplicitLocOpBuilder &b, Value barrier, int thread,
                             Value phase, Value pred, Operation *insertPoint);
   // clearWaiting: clear the waiting flag and stored phase for the base thread.
-  void createClearWaitingCall(ImplicitLocOpBuilder &b, Value mbar, int thread,
-                              Value pred, Operation *insertPoint);
+  void createClearWaitingCall(ImplicitLocOpBuilder &b, Value barrier,
+                              int thread, Value pred, Operation *insertPoint);
   // checkAllActiveWaiting: assert that not all active threads are waiting on
   // matching barrier phases.
   void createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b, int activeMask,
                                        Value pred, Operation *insertPoint);
   // verifyBarrierCanInit: ensure the barrier is currently invalidated before
   // initializing it again.
-  void createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b, Value mbar,
-                                      Operation *insertPoint);
+  void createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b, Value barrier,
+                                      Operation *insertPoint,
+                                      Value ctaMask = Value());
   // verifyBarrierInitialized: ensure the barrier has been initialized and not
   // invalidated before it is used.
-  void createVerifyBarrierInitializedCall(ImplicitLocOpBuilder &b, Value mbar,
-                                          Value pred, Operation *insertPoint);
+  void createVerifyBarrierInitializedCall(ImplicitLocOpBuilder &b,
+                                          Value barrier, Value pred,
+                                          Operation *insertPoint,
+                                          Value ctaMask = Value());
   // initBarrierState: Initialize the tracked barrier state to phase 0 and set
   // both the initial and current arrival counts. A zero state denotes an
   // invalidated/uninitialized barrier.
-  void createInitBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
-                                  int count, Operation *insertPoint);
+  void createInitBarrierStateCall(ImplicitLocOpBuilder &b, Value barrier,
+                                  int count, Operation *insertPoint,
+                                  Value ctaMask = Value());
   // invalidateBarrierState: clear the tracked barrier lifecycle state and any
   // waiting bits for the barrier.
-  void createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
-                                        Operation *insertPoint);
+  void createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b, Value barrier,
+                                        Operation *insertPoint,
+                                        Value ctaMask = Value());
   // verifyBarrierArrive: Check that applying the arrive count would not drive
   // the tracked current count negative. Triggers an assertion on failure.
-  void createVerifyBarrierArriveCall(ImplicitLocOpBuilder &b, Value mbar,
+  void createVerifyBarrierArriveCall(ImplicitLocOpBuilder &b, Value barrier,
                                      int count, Value pred,
-                                     Operation *insertPoint);
+                                     Operation *insertPoint,
+                                     Value ctaMask = Value());
   // updateBarrierState: Apply an arrive count to the tracked barrier state,
   // toggling the phase when the count reaches zero and reloading the current
   // count from the initial count.
-  void createUpdateBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
+  void createUpdateBarrierStateCall(ImplicitLocOpBuilder &b, Value barrier,
                                     int count, Value pred,
-                                    Operation *insertPoint);
+                                    Operation *insertPoint,
+                                    Value ctaMask = Value());
   // setWriteVisibility: Set the write visibility for a buffer. Marks the buffer
   // as visible to the threads set in threadMask. Clears out any other threads
   // from the visibility bitmask. We know this is safe because there cannot be
@@ -128,104 +135,121 @@ public:
   void createSetWriteVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
                                     uint32_t length, uint64_t threadMask,
                                     Value pred, MemType memType,
-                                    Operation *insertPoint);
+                                    Operation *insertPoint,
+                                    Value ctaMask = Value());
   // setReadVisibility: add the threads set in threadMask to the buffer's read
   // visibility bitmask.
   void createSetReadVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
                                    uint32_t length, uint64_t threadMask,
                                    Value pred, MemType memType,
-                                   Operation *insertPoint);
+                                   Operation *insertPoint,
+                                   Value ctaMask = Value());
   // clearWriteTracking: clear all the information about threads writing to a
   // buffer.
   void createClearWriteTrackingCall(ImplicitLocOpBuilder &b, Value buf,
                                     uint32_t length, Value pred,
-                                    MemType memType, Operation *insertPoint);
+                                    MemType memType, Operation *insertPoint,
+                                    Value ctaMask = Value());
   // clearReadVisibility: clear the read visibility for a buffer.
   void createClearReadVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
                                      uint32_t length, Value pred,
-                                     MemType memType, Operation *insertPoint);
+                                     MemType memType, Operation *insertPoint,
+                                     Value ctaMask = Value());
   // clearReadTracking: clear the read tracking for a buffer.
   void createClearReadTrackingCall(ImplicitLocOpBuilder &b, Value buf,
                                    uint32_t length, Value pred, MemType memType,
-                                   Operation *insertPoint);
+                                   Operation *insertPoint,
+                                   Value ctaMask = Value());
   // trackVisibleWrites: snapshot buffers currently visible to the thread into
   // the tracking table for a barrier.
   void createTrackVisibleWritesCall(ImplicitLocOpBuilder &b, Value mbar,
                                     int thread, Value pred, MemType memType,
-                                    Operation *insertPoint);
+                                    Operation *insertPoint,
+                                    Value ctaMask = Value());
   // trackVisibleReads: snapshot buffers currently visible to the thread into
   // the read tracking table for a barrier.
   void createTrackVisibleReadsCall(ImplicitLocOpBuilder &b, Value mbar,
                                    int thread, Value pred, MemType memType,
-                                   Operation *insertPoint);
+                                   Operation *insertPoint,
+                                   Value ctaMask = Value());
   // clearBarrierWriteTracking: clear all write tracking associated with the
   // given barrier row.
   void createClearBarrierWriteTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
                                            Value pred, MemType memType,
-                                           Operation *insertPoint);
+                                           Operation *insertPoint,
+                                           Value ctaMask = Value());
   // clearBarrierReadTracking: clear all read tracking associated with the
   // given barrier row.
   void createClearBarrierReadTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
                                           Value pred, MemType memType,
-                                          Operation *insertPoint);
+                                          Operation *insertPoint,
+                                          Value ctaMask = Value());
   // transferVisibleWrites: transfer write visibility tracked by a barrier to
   // all threads in threadMask.
   void createTransferVisibleWritesCall(ImplicitLocOpBuilder &b, Value mbar,
                                        uint64_t threadMask, Value pred,
-                                       MemType memType, Operation *insertPoint);
+                                       MemType memType, Operation *insertPoint,
+                                       Value ctaMask = Value());
   // transferVisibleReads: transfer read visibility tracked by a barrier to all
   // threads in threadMask.
   void createTransferVisibleReadsCall(ImplicitLocOpBuilder &b, Value mbar,
                                       uint64_t threadMask, Value pred,
-                                      MemType memType, Operation *insertPoint);
+                                      MemType memType, Operation *insertPoint,
+                                      Value ctaMask = Value());
   // verifyWriteVisibility: ensure the thread either sees the latest write or no
   // other thread is writing the buffer.
   void createVerifyWriteVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
                                        uint32_t length, int thread,
                                        StringRef operandName, Value pred,
-                                       MemType memType, Operation *insertPoint);
+                                       MemType memType, Operation *insertPoint,
+                                       Value ctaMask = Value());
   // verifyReadVisibility: ensure all reads from the buffer are visible to the
   // thread.
   void createVerifyReadVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
                                       uint32_t length, int thread,
                                       StringRef operandName, Value pred,
-                                      MemType memType, Operation *insertPoint);
+                                      MemType memType, Operation *insertPoint,
+                                      Value ctaMask = Value());
   // copyWriteVisibility: replicate the write visibility bit of sourceThread to
   // every destination thread in destMask.
   void createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,
                                      uint64_t destMask, Value pred,
-                                     MemType memType, Operation *insertPoint);
+                                     MemType memType, Operation *insertPoint,
+                                     Value ctaMask = Value());
   // copyReadVisibility: replicate the read visibility row of sourceThread to
   // every destination thread in destMask.
   void createCopyReadVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,
                                     uint64_t destMask, Value pred,
-                                    MemType memType, Operation *insertPoint);
+                                    MemType memType, Operation *insertPoint,
+                                    Value ctaMask = Value());
   // stageAccessForCommit: mark the buffer as staged (value -1) in the
   // outstanding commit table for this thread.
   void createStageAccessForCommitCall(ImplicitLocOpBuilder &b, Value buf,
                                       uint32_t length, int thread, Value pred,
                                       MemType memType,
                                       CommitKind::Kind commitKind,
-                                      Operation *insertPoint);
+                                      Operation *insertPoint,
+                                      Value ctaMask = Value());
   // commitAccesses: convert staged entries to 1 and increment outstanding
   // commits greater than zero for the committing thread.
   void createCommitAccessesCall(ImplicitLocOpBuilder &b, int thread, Value pred,
                                 CommitKind::Kind commitKind,
-                                Operation *insertPoint);
+                                Operation *insertPoint,
+                                Value ctaMask = Value());
   // clearOutstandingCommitsTransferWrites: clear entries farther than
   // outstandingNum from the thread and set write visibility for threads in
   // transferThreadMask.
   void createClearOutstandingCommitsTransferWritesCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
       int outstandingNum, Value pred, CommitKind::Kind commitKind,
-      MemType memType, Operation *insertPoint);
+      MemType memType, Operation *insertPoint, Value ctaMask = Value());
   // clearOutstandingCommitsTransferReads: clear entries farther than
   // outstandingNum from the thread and set read visibility for threads in
   // transferThreadMask.
   void createClearOutstandingCommitsTransferReadsCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
       int outstandingNum, Value pred, CommitKind::Kind commitKind,
-      MemType memType, Operation *insertPoint);
+      MemType memType, Operation *insertPoint, Value ctaMask = Value());
   // checkOutstandingCommits: assert that the outstanding commit row for the
   // buffer is zero before the access described by pendingAccessType.
   void createCheckOutstandingCommitsCall(ImplicitLocOpBuilder &b, Value buf,
@@ -233,7 +257,8 @@ public:
                                          StringRef pendingAccessType,
                                          Value pred, MemType memType,
                                          CommitKind::Kind commitKind,
-                                         Operation *insertPoint);
+                                         Operation *insertPoint,
+                                         Value ctaMask = Value());
 
 private:
   ModuleOp module;

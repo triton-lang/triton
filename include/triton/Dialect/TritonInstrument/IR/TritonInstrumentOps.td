@@ -64,6 +64,24 @@ def TTI_ExperimentalMemDescToI32Op : TTI_Op<"experimental_memdesc_to_i32", [Pure
   let assemblyFormat = "$memdesc attr-dict `:` type($memdesc)";
 }
 
+def TTI_ExperimentalClusterScratchBaseOp
+    : TTI_Op<"experimental_cluster_scratch_base", [Pure]> {
+  let summary = "Rebase a profile-scratch pointer to the CTA0 replica";
+  let description = [{
+    Return the pointer to the CTA0 replica of the same profile-scratch
+    allocation. In multi-CTA ConSan kernels this lets every CTA address one
+    shared logical scratch slab while still using the default per-CTA profile
+    scratch lowering.
+  }];
+  let arguments = (ins TT_PtrLike:$ptr);
+  let results = (outs TT_PtrLike:$result);
+  let builders = [
+    OpBuilder<(ins "Value":$ptr), [{
+      build($_builder, $_state, ptr.getType(), ptr);
+    }]>
+  ];
+  let assemblyFormat = "$ptr attr-dict `:` type($ptr) `->` type($result)";
+}
 
 // ===== Critical section lock ops =====
 
@@ -88,6 +106,22 @@ def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryE
   let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
   let assemblyFormat = [{
     $lock (`,` $pred^)? attr-dict `:` type($lock)
+  }];
+}
+
+def TTI_ExperimentalStoreI32Op
+    : TTI_Op<"experimental_store_i32",
+             [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Store an i32 through a pointer with one elected thread per CTA.";
+  let description = [{
+    Emit a predicated global i32 store using one elected thread per CTA. This is
+    used for ConSan cluster-scoped scratch updates where the generic scalar
+    StoreOp lowering would otherwise elect only one thread for the whole
+    cluster.
+  }];
+  let arguments = (ins TT_PtrLike:$ptr, I32:$value, Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $ptr `,` $value (`,` $pred^)? attr-dict `:` type($ptr)
   }];
 }
 
