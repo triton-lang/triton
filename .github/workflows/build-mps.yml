@@ -59,7 +59,7 @@ jobs:
           export CXX="/opt/homebrew/opt/llvm@19/bin/clang++"
           export CXXFLAGS="-stdlib=libc++"
           export LDFLAGS="-L/opt/homebrew/opt/llvm@19/lib"
-          pip install -e python/ --no-build-isolation -v
+          pip install -e . --no-build-isolation -v
 
       - name: Verify import
         run: |
