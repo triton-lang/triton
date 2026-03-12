@@ -701,19 +701,21 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
 void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
+  auto &dataToEntry = threadState.dataToEntry;
+  bool deactivated = dataToEntry.empty();
+
   if (profiler.pcSamplingEnabled) {
     // XXX: Conservatively stop every GPU kernel for now.
-    auto &dataToEntry = threadState.dataToEntry;
     pcSampling.stop(callbackData->context, dataToEntry);
   }
 
   threadState.exitOp();
 
-  // We still need to submit the kernel even when we are in
-  // 1. graph capturing
-  // 2. deactivated status
-  // Because in both cases we want to make sure the correlation ID is consumed
-  // from the cupti buffer
+  if (threadState
+          .isStreamCapturing) // Do not correlate for stream captured kernels
+    return;
+  if (deactivated) // Profiler is deactivated
+    return;
   profiler.correlation.submit(callbackData->correlationId);
 }
 
