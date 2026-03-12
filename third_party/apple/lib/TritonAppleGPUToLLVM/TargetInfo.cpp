@@ -68,7 +68,12 @@ void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
         fn = LLVMFuncOp::create(rewriter, mod.getLoc(),
             "air.wg.barrier", fnTy, Linkage::External);
     }
-    Value flags = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
+    // air.wg.barrier flags: 1 = device memory fence, 2 = threadgroup memory fence
+    // Use flag 2 when the barrier needs to order threadgroup (shared) memory
+    bool needsTGFence = static_cast<uint32_t>(targets) &
+                        static_cast<uint32_t>(triton::gpu::AddrSpace::Local);
+    int flag = needsTGFence ? 2 : 1;
+    Value flags = arith::ConstantIntOp::create(rewriter, loc, flag, 32);
     Value scope = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
     LLVM::CallOp::create(rewriter, loc, fn, ValueRange{flags, scope});
 }

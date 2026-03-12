@@ -174,6 +174,7 @@ class MPSBackend(BaseBackend):
         # Shared layout optimization passes
         passes.ttgpuir.add_coalesce(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_optimize_thread_locality(pm)
 
         # THE Apple-specific pass: BlockedEncoding → AppleMmaEncoding
         self._apple.passes.ttgpuir.add_accelerate_matmul(pm)

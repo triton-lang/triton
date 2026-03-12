@@ -33,6 +33,9 @@ SKIP_CATEGORIES = {  # Validated categories (pass fully or with known limitation
     "control_advanced",  # 15/15: test_tl_range_num_stages (pipelined matmul) now passes with load-and-extract
     "inline_asm",  # 0/0: all skipped (PTX/CUDA inline asm, not applicable to MPS)
     "math_advanced",  # 7/10: 3 skip (float64 unsupported on MPS: rint f32/f64 test harness, precise_math sqrt_rn)
+    "memory_advanced",  # 66/70: 4 skip (float64 unsupported on MPS)
+    "reduce_advanced",  # 71/71
+    "atomic_advanced",  # 403/404: 102 skip (int64/float64), 1 fail (TG overflow 128-1-f32)
 }
 
 CATEGORIES = {

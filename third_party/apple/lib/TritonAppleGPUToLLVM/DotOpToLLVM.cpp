@@ -495,10 +495,15 @@ struct DotOpAppleMmaConversion : public ConvertOpToLLVMPattern<tt::DotOp> {
         LLVM::CallOp::create(rewriter, loc, tgBarrFn, ValueRange{fenceTG, execMod});
 
         // ── Gather C elements back ────────────────────────────────────────
+        auto outElemTy = cType.getElementType();
         SmallVector<Value> resultElems(elemsC.size());
         for (size_t i = 0; i < elemsC.size(); ++i) {
             auto &c = cCoordsStatic[i];
-            resultElems[i] = gather1(ptrTG, flatIdx(cBaseRow, cBaseCol, c.row, c.col, N));
+            Value val = gather1(ptrTG, flatIdx(cBaseRow, cBaseCol, c.row, c.col, N));
+            // MMA operates in f32 — truncate back if output type is narrower
+            if (val.getType() != outElemTy)
+                val = arith::TruncFOp::create(rewriter, loc, outElemTy, val);
+            resultElems[i] = val;
         }
 
         // ── Pack result ───────────────────────────────────────────────────

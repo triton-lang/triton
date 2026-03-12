@@ -3317,6 +3317,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             if in_dtype == 'float64' and input_precision != 'ieee':
                 pytest.skip("Only IEEE precision is supported for float64 dot")
 
+        if device == 'mps':
+            if out_dtype == 'float64' or in_dtype == 'float64':
+                pytest.skip("MPS does not support float64")
+            if input_precision in ("tf32", "tf32x3", "bf16x3", "bf16x6"):
+                pytest.skip(f"MPS does not support {input_precision} input precision")
+
         if is_hip():
             if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_gfx1250() or is_hip_cdna4() or is_hip_rdna4()):
                 pytest.skip(f"{in_dtype} only supported on CDNA4, RDNA4 and above")
@@ -6562,8 +6568,7 @@ def test_zero_strided_tensors(device):
 
     a, b, c = x.shape
     grid = (a, b, c)
-    with torch.cuda.device(x.device.index):
-        _simple_add[grid](x, x.stride(0), x.stride(1))
+    _simple_add[grid](x, x.stride(0), x.stride(1))
 
     assert torch.allclose(x, torch.ones_like(x) * c_dim)
 

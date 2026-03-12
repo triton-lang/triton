@@ -77,10 +77,18 @@ struct ConvertLayoutOpAppleConversion
             return success();
         }
 
+
         auto loc = op.getLoc();
         auto *ctx = op.getContext();
         auto mod = op->getParentOfType<ModuleOp>();
         auto shape = srcTy.getShape();
+
+        // 1D blocked→blocked: simple TG scatter/gather with flat indices
+        if (shape.size() == 1) {
+            return convertLayout1D(op, adaptor, rewriter, srcEnc, dstEnc,
+                                   srcTy, dstTy, loc, ctx, mod);
+        }
+
         if (shape.size() != 2) return failure();
 
         int64_t rows = shape[0], cols = shape[1];
@@ -316,6 +324,169 @@ struct ConvertLayoutOpAppleConversion
         }
         return success();
     }
+
+    // 1D blocked→blocked conversion via TG scatter/gather
+    LogicalResult convertLayout1D(
+        ttg::ConvertLayoutOp op, OpAdaptor adaptor,
+        ConversionPatternRewriter &rewriter,
+        ttg::BlockedEncodingAttr srcEnc, ttg::BlockedEncodingAttr dstEnc,
+        RankedTensorType srcTy, RankedTensorType dstTy,
+        Location loc, MLIRContext *ctx, ModuleOp mod) const {
+
+        int64_t numElems = srcTy.getShape()[0];
+        auto elemTy  = getTypeConverter()->convertType(srcTy.getElementType());
+        auto i32Ty   = IntegerType::get(ctx, 32);
+        auto i64Ty   = IntegerType::get(ctx, 64);
+        auto tgPtrTy = LLVMPointerType::get(ctx, 3);
+
+        // For pointer elements, use i64 in TG (Metal can't store ptrs in TG)
+        bool isPointerElem = isa<LLVMPointerType>(elemTy);
+        Type tgElemTy = isPointerElem ? i64Ty : elemTy;
+
+        // Get thread/warp IDs
+        auto laneIdFnTy = LLVMFunctionType::get(i32Ty, {}, false);
+        LLVMFuncOp laneIdFn;
+        {
+            OpBuilder::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPointToStart(mod.getBody());
+            if (auto fn = mod.lookupSymbol<LLVMFuncOp>("air.thread_index_in_simdgroup"))
+                laneIdFn = fn;
+            else
+                laneIdFn = LLVMFuncOp::create(rewriter, mod.getLoc(),
+                    "air.thread_index_in_simdgroup", laneIdFnTy, Linkage::External);
+        }
+
+        auto arrI32x3Ty = LLVMArrayType::get(i32Ty, 3);
+        auto tidFnTy = LLVMFunctionType::get(arrI32x3Ty, {}, false);
+        LLVMFuncOp tidFn;
+        {
+            OpBuilder::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPointToStart(mod.getBody());
+            if (auto fn = mod.lookupSymbol<LLVMFuncOp>("air.thread_position_in_threadgroup"))
+                tidFn = fn;
+            else
+                tidFn = LLVMFuncOp::create(rewriter, mod.getLoc(),
+                    "air.thread_position_in_threadgroup", tidFnTy, Linkage::External);
+        }
+
+        auto barrFnTy = LLVMFunctionType::get(LLVMVoidType::get(ctx), {i32Ty, i32Ty}, false);
+        LLVMFuncOp tgBarrFn;
+        {
+            OpBuilder::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPointToStart(mod.getBody());
+            if (auto fn = mod.lookupSymbol<LLVMFuncOp>("air.threadgroup.barrier"))
+                tgBarrFn = fn;
+            else
+                tgBarrFn = LLVMFuncOp::create(rewriter, mod.getLoc(),
+                    "air.threadgroup.barrier", barrFnTy, Linkage::External);
+        }
+
+        Value laneId = LLVM::CallOp::create(rewriter, loc, laneIdFn,
+                                              ValueRange{}).getResult();
+        Value tidStruct = LLVM::CallOp::create(rewriter, loc, tidFn,
+                                                ValueRange{}).getResult();
+        Value tid32 = LLVM::ExtractValueOp::create(rewriter, loc, i32Ty,
+                          tidStruct, ArrayRef<int64_t>{0});
+        Value c32    = arith::ConstantIntOp::create(rewriter, loc, 32, 32);
+        Value warpId = arith::DivUIOp::create(rewriter, loc, tid32, c32);
+
+        // Create TG global
+        unsigned id = getCounter(ctx)++;
+        std::string tgName = ("__tg_cvt_" + llvm::Twine(id)).str();
+        {
+            OpBuilder::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPointToStart(mod.getBody());
+            auto arrTy = LLVMArrayType::get(tgElemTy, numElems);
+            LLVM::GlobalOp::create(rewriter, mod.getLoc(), arrTy, false,
+                                    Linkage::Internal, tgName, Attribute(),
+                                    isPointerElem ? 8 : 4, 3u);
+        }
+        auto tgGlobal = mod.lookupSymbol<LLVM::GlobalOp>(tgName);
+        Value tgPtr = LLVM::AddressOfOp::create(rewriter, loc, tgPtrTy, tgGlobal.getName());
+
+        // Compute per-thread base index for 1D blocked layout
+        auto computeBase1D = [&](ttg::BlockedEncodingAttr enc) -> Value {
+            auto spt = enc.getSizePerThread()[0];
+            auto tpw = enc.getThreadsPerWarp()[0];
+            auto wpc = enc.getWarpsPerCTA()[0];
+            // base = warpId * (tpw * spt) + laneId * spt
+            Value tpwSpt = arith::ConstantIntOp::create(rewriter, loc, tpw * spt, 32);
+            Value sptV   = arith::ConstantIntOp::create(rewriter, loc, spt, 32);
+            Value base = arith::AddIOp::create(rewriter, loc,
+                arith::MulIOp::create(rewriter, loc, warpId, tpwSpt),
+                arith::MulIOp::create(rewriter, loc, laneId, sptV));
+            return base;
+        };
+
+        // Use emitOffsetForLayout to get canonical element ordering
+        auto srcOffsets = emitOffsetForLayout(srcEnc, srcTy);
+        auto dstOffsets = emitOffsetForLayout(dstEnc, dstTy);
+
+        // Unpack source elements
+        Value src = adaptor.getSrc();
+        SmallVector<Value> srcElems;
+        if (auto sTy = dyn_cast<LLVMStructType>(src.getType())) {
+            for (unsigned i = 0; i < sTy.getBody().size(); ++i)
+                srcElems.push_back(ExtractValueOp::create(rewriter, loc,
+                    sTy.getBody()[i], src, ArrayRef<int64_t>{(int64_t)i}));
+        } else {
+            srcElems = {src};
+        }
+
+        Value srcBase = computeBase1D(srcEnc);
+        Value dstBase = computeBase1D(dstEnc);
+
+        // Scatter source elements to TG
+        for (size_t i = 0; i < srcElems.size(); ++i) {
+            int64_t elemOff = srcOffsets[i][0];
+            Value idx = arith::AddIOp::create(rewriter, loc, srcBase,
+                arith::ConstantIntOp::create(rewriter, loc, elemOff, 32));
+            Value idx64 = arith::ExtUIOp::create(rewriter, loc, i64Ty, idx);
+            Value gep = LLVM::GEPOp::create(rewriter, loc,
+                tgPtrTy, tgElemTy, tgPtr, ArrayRef<LLVM::GEPArg>{idx64});
+            Value toStore = srcElems[i];
+            if (isPointerElem)
+                toStore = LLVM::PtrToIntOp::create(rewriter, loc, i64Ty, toStore);
+            LLVM::StoreOp::create(rewriter, loc, toStore, gep);
+        }
+
+        // Barrier
+        Value fenceTG = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
+        Value execMod = arith::ConstantIntOp::create(rewriter, loc, 4, 32);
+        LLVM::CallOp::create(rewriter, loc, tgBarrFn, ValueRange{fenceTG, execMod});
+
+        // Gather destination elements from TG
+        SmallVector<Value> dstElems;
+        for (size_t i = 0; i < dstOffsets.size(); ++i) {
+            int64_t elemOff = dstOffsets[i][0];
+            Value idx = arith::AddIOp::create(rewriter, loc, dstBase,
+                arith::ConstantIntOp::create(rewriter, loc, elemOff, 32));
+            Value idx64 = arith::ExtUIOp::create(rewriter, loc, i64Ty, idx);
+            Value gep = LLVM::GEPOp::create(rewriter, loc,
+                tgPtrTy, tgElemTy, tgPtr, ArrayRef<LLVM::GEPArg>{idx64});
+            Value loaded = LLVM::LoadOp::create(rewriter, loc, tgElemTy, gep).getResult();
+            if (isPointerElem)
+                loaded = LLVM::IntToPtrOp::create(rewriter, loc, elemTy, loaded);
+            dstElems.push_back(loaded);
+        }
+
+        // Pack result
+        auto outTy = getTypeConverter()->convertType(dstTy);
+        if (!outTy) return failure();
+
+        if (auto outSt = dyn_cast<LLVMStructType>(outTy)) {
+            if (outSt.getBody().size() != dstElems.size())
+                return failure();
+            Value result = UndefOp::create(rewriter, loc, outSt);
+            for (size_t i = 0; i < dstElems.size(); ++i)
+                result = InsertValueOp::create(rewriter, loc, outSt,
+                             result, dstElems[i], ArrayRef<int64_t>{(int64_t)i});
+            rewriter.replaceOp(op, result);
+        } else {
+            rewriter.replaceOp(op, dstElems[0]);
+        }
+        return success();
+    }
 };
 
 // Lower triton::AtomicRMWOp → air.atomic.global.{op}.{type}
@@ -330,6 +501,71 @@ struct ConvertLayoutOpAppleConversion
 // For unsupported native atomics (f32 max/min, f16/bf16 add), we emit a CAS loop:
 //   air.atomic.global.cmpxchg.weak.i32(ptr, expected_ptr, desired, succ_order, fail_order, scope, vol)
 //   returns old i32. Expected is passed by pointer and updated on failure.
+
+// Emit a predicate that is true only for threads that own unique data.
+// This prevents redundant threads from executing atomics (e.g. 128 threads
+// for a 4-element tensor → only 4 should execute).
+// Returns null Value if no predication is needed.
+static Value emitAppleRedundantThreadPredicate(
+    const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, Location loc, ModuleOp mod) {
+    auto *ctx = rewriter.getContext();
+    auto i32Ty = IntegerType::get(ctx, 32);
+
+    auto kLane = StringAttr::get(ctx, "lane");
+    auto kWarp = StringAttr::get(ctx, "warp");
+
+    // Get thread_position_in_threadgroup (tid within threadgroup)
+    auto arrI32x3Ty = LLVM::LLVMArrayType::get(i32Ty, 3);
+    auto tidFnTy = LLVMFunctionType::get(arrI32x3Ty, {}, false);
+    {
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPointToStart(mod.getBody());
+        if (!mod.lookupSymbol<LLVMFuncOp>("air.thread_position_in_threadgroup"))
+            LLVMFuncOp::create(rewriter, mod.getLoc(),
+                "air.thread_position_in_threadgroup", tidFnTy, Linkage::External);
+    }
+    auto tidFn = mod.lookupSymbol<LLVMFuncOp>("air.thread_position_in_threadgroup");
+    Value tidStruct = LLVM::CallOp::create(rewriter, loc, tidFn, ValueRange{}).getResult();
+    Value tid = LLVM::ExtractValueOp::create(rewriter, loc, i32Ty, tidStruct, ArrayRef<int64_t>{0});
+
+    // laneId = tid % 32, warpId = tid / 32
+    int tpw = ttg::lookupThreadsPerWarp(rewriter);
+    Value warpSize = arith::ConstantIntOp::create(rewriter, loc, tpw, 32);
+    Value laneId = arith::RemUIOp::create(rewriter, loc, tid, warpSize);
+    Value warpId = arith::DivUIOp::create(rewriter, loc, tid, warpSize);
+
+    Value zero = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+    Value pred;
+
+    // Check each dimension: (dimId & mask) == 0 means this thread is canonical
+    auto dimNames = {kLane, kWarp};
+    auto dimIds = {laneId, warpId};
+    for (auto [dimName, dimId] : llvm::zip(dimNames, dimIds)) {
+        auto it = freeVarMasks.find(dimName);
+        int32_t mask = (it != freeVarMasks.end()) ? it->second : 0;
+        if (mask != 0) {
+            Value maskVal = arith::ConstantIntOp::create(rewriter, loc, mask, 32);
+            Value masked = LLVM::AndOp::create(rewriter, loc, dimId, maskVal);
+            Value dimPred = LLVM::ICmpOp::create(rewriter, loc,
+                LLVM::ICmpPredicate::eq, masked, zero);
+            if (pred)
+                pred = LLVM::AndOp::create(rewriter, loc, pred, dimPred);
+            else
+                pred = dimPred;
+        }
+    }
+    return pred;
+}
+
+// Combine two predicates with AND, handling null values.
+static Value maybeAnd(ConversionPatternRewriter &rewriter, Location loc,
+                      Value a, Value b) {
+    if (!a) return b;
+    if (!b) return a;
+    return LLVM::AndOp::create(rewriter, loc, a, b);
+}
+
 struct AtomicRMWOpAppleConversion
     : public ConvertOpToLLVMPattern<triton::AtomicRMWOp> {
     using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -634,6 +870,95 @@ struct AtomicRMWOpAppleConversion
         return afterBlock->getArgument(0);
     }
 
+    // Emit a single scalar atomic: either direct AIR intrinsic or CAS loop.
+    // Returns the old value.
+    Value emitOneAtomic(ConversionPatternRewriter &rewriter, Location loc,
+                        ModuleOp mod, Value ptr, Value val, Value mask,
+                        Type valueElemTy, RMWOp rmwOp,
+                        const std::string &airName, bool needsCAS) const {
+        auto *ctx = rewriter.getContext();
+
+        // CAS loop path
+        if (needsCAS) {
+            auto emitCAS = [&]() -> Value {
+                if (valueElemTy.isF32())
+                    return emitF32CASLoop(rewriter, loc, mod, ptr, val, rmwOp);
+                else
+                    return emitF16BF16CASLoop(rewriter, loc, mod, ptr, val,
+                                              valueElemTy, rmwOp);
+            };
+
+            if (mask) {
+                // Wrap CAS in conditional to skip non-canonical threads
+                auto *currentBlock = rewriter.getInsertionBlock();
+                auto *afterBlock = rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+                auto *casBlock = rewriter.createBlock(afterBlock);
+
+                afterBlock->addArgument(valueElemTy, loc);
+
+                rewriter.setInsertionPointToEnd(currentBlock);
+                Value zeroVal = LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
+                    rewriter.getZeroAttr(valueElemTy));
+                LLVM::CondBrOp::create(rewriter, loc, mask,
+                    casBlock, ValueRange{},
+                    afterBlock, ValueRange{zeroVal});
+
+                rewriter.setInsertionPointToStart(casBlock);
+                Value casResult = emitCAS();
+                LLVM::BrOp::create(rewriter, loc, ValueRange{casResult}, afterBlock);
+
+                rewriter.setInsertionPointToStart(afterBlock);
+                return afterBlock->getArgument(0);
+            }
+            return emitCAS();
+        }
+
+        // Direct AIR intrinsic path
+        auto ptrTy = LLVM::LLVMPointerType::get(ctx, 1);
+        auto i32Ty = IntegerType::get(ctx, 32);
+        auto i1Ty  = IntegerType::get(ctx, 1);
+        auto fnTy  = LLVMFunctionType::get(valueElemTy,
+                         {ptrTy, valueElemTy, i32Ty, i32Ty, i1Ty}, false);
+        {
+            OpBuilder::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPointToStart(mod.getBody());
+            if (!mod.lookupSymbol<LLVMFuncOp>(airName))
+                LLVMFuncOp::create(rewriter, mod.getLoc(),
+                    airName, fnTy, Linkage::External);
+        }
+        auto atomicFn = mod.lookupSymbol<LLVMFuncOp>(airName);
+
+        Value order = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+        Value scope = arith::ConstantIntOp::create(rewriter, loc, 2, 32);
+        Value vol   = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+
+        if (mask) {
+            auto *currentBlock = rewriter.getInsertionBlock();
+            auto *afterBlock = rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+            auto *atomicBlock = rewriter.createBlock(afterBlock);
+
+            afterBlock->addArgument(valueElemTy, loc);
+
+            rewriter.setInsertionPointToEnd(currentBlock);
+            Value zeroVal = LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
+                rewriter.getZeroAttr(valueElemTy));
+            LLVM::CondBrOp::create(rewriter, loc, mask,
+                atomicBlock, ValueRange{},
+                afterBlock, ValueRange{zeroVal});
+
+            rewriter.setInsertionPointToStart(atomicBlock);
+            Value atomicResult = LLVM::CallOp::create(rewriter, loc, atomicFn,
+                ValueRange{ptr, val, order, scope, vol}).getResult();
+            LLVM::BrOp::create(rewriter, loc, ValueRange{atomicResult}, afterBlock);
+
+            rewriter.setInsertionPointToStart(afterBlock);
+            return afterBlock->getArgument(0);
+        } else {
+            return LLVM::CallOp::create(rewriter, loc, atomicFn,
+                       ValueRange{ptr, val, order, scope, vol}).getResult();
+        }
+    }
+
     LogicalResult matchAndRewrite(
         triton::AtomicRMWOp op, OpAdaptor adaptor,
         ConversionPatternRewriter &rewriter) const override {
@@ -646,23 +971,21 @@ struct AtomicRMWOpAppleConversion
         Value llVal = adaptor.getVal();
         Value llMask = adaptor.getMask();
 
-        // Only handle scalar atomics for now
-        if (isa<RankedTensorType>(op.getType()))
-            return failure();
-
         auto rmwOp = op.getAtomicRmwOp();
+        auto tensorTy = dyn_cast<RankedTensorType>(op.getType());
+
+        // Determine element type
+        Type valueElemTy = tensorTy
+            ? getTypeConverter()->convertType(tensorTy.getElementType())
+            : getTypeConverter()->convertType(op.getType());
 
         // Determine AIR intrinsic name or CAS loop
-        Type valueElemTy = getTypeConverter()->convertType(op.getType());
         std::string airName;
         bool needsCAS = false;
         if (valueElemTy.isF32()) {
             switch (rmwOp) {
             case RMWOp::FADD: airName = "air.atomic.global.add.f32"; break;
             case RMWOp::XCHG: airName = "air.atomic.global.xchg.f32"; break;
-            // Note: float max/min is lowered by Triton frontend to
-            // bitcast(f32→i32) + masked atomic_max.s.i32/atomic_umin.u.i32,
-            // so RMWOp::MAX/MIN with f32 type should never reach here.
             default: return failure();
             }
         } else if (valueElemTy.isF16() || valueElemTy.isBF16()) {
@@ -687,69 +1010,48 @@ struct AtomicRMWOpAppleConversion
             return failure();
         }
 
-        // CAS loop path
-        if (needsCAS) {
-            Value result;
-            if (valueElemTy.isF32()) {
-                result = emitF32CASLoop(rewriter, loc, mod, llPtr, llVal, rmwOp);
-            } else {
-                result = emitF16BF16CASLoop(rewriter, loc, mod, llPtr, llVal,
-                                            valueElemTy, rmwOp);
-            }
+        if (!tensorTy) {
+            // Scalar atomic
+            Value result = emitOneAtomic(rewriter, loc, mod, llPtr, llVal,
+                                         llMask, valueElemTy, rmwOp, airName, needsCAS);
             rewriter.replaceOp(op, result);
             return success();
         }
 
-        // Direct AIR intrinsic path
-        auto ptrTy = LLVM::LLVMPointerType::get(ctx, 1);
-        auto i32Ty = IntegerType::get(ctx, 32);
-        auto i1Ty  = IntegerType::get(ctx, 1);
-        auto fnTy  = LLVMFunctionType::get(valueElemTy,
-                         {ptrTy, valueElemTy, i32Ty, i32Ty, i1Ty}, false);
-        {
-            OpBuilder::InsertionGuard guard(rewriter);
-            rewriter.setInsertionPointToStart(mod.getBody());
-            if (!mod.lookupSymbol<LLVMFuncOp>(airName))
-                LLVMFuncOp::create(rewriter, mod.getLoc(),
-                    airName, fnTy, Linkage::External);
+        // Tensor atomic: unpack → per-element atomic → pack
+        // Compute redundant thread predicate to mask out threads that
+        // don't own unique elements (e.g. 128 threads, 4 elements → 124 idle)
+        auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+        Value threadPred = emitAppleRedundantThreadPredicate(
+            freeVarMasks, rewriter, loc, mod);
+        uint32_t regMask = freeVarMasks[StringAttr::get(ctx, "reg")];
+
+        auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
+        auto valElements = unpackLLElements(loc, llVal, rewriter);
+        SmallVector<Value> maskElements;
+        if (llMask)
+            maskElements = unpackLLElements(loc, llMask, rewriter);
+
+        SmallVector<Value> resultVals(ptrElements.size());
+        for (size_t i = 0; i < ptrElements.size(); ++i) {
+            // Skip redundant register elements — reuse canonical result
+            if (!isCanonicalIndex(i, regMask)) {
+                resultVals[i] = resultVals[i & ~regMask];
+                continue;
+            }
+
+            // Combine thread predicate with per-element mask
+            Value mask = llMask ? maybeAnd(rewriter, loc, threadPred, maskElements[i])
+                                : threadPred;
+            Value res = emitOneAtomic(rewriter, loc, mod,
+                                       ptrElements[i], valElements[i], mask,
+                                       valueElemTy, rmwOp, airName, needsCAS);
+            resultVals[i] = res;
         }
-        auto atomicFn = mod.lookupSymbol<LLVMFuncOp>(airName);
 
-        // Args: ptr, value, memory_order=0 (relaxed), scope=2 (device), volatile=true
-        Value order   = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
-        Value scope   = arith::ConstantIntOp::create(rewriter, loc, 2, 32);
-        Value vol     = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
-
-        if (llMask) {
-            // Wrap atomic in conditional: if (mask) { atomic } else { undef }
-            auto *currentBlock = rewriter.getInsertionBlock();
-            auto *afterBlock = rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
-            auto *atomicBlock = rewriter.createBlock(afterBlock);
-
-            // Add block arg to afterBlock for the result
-            afterBlock->addArgument(valueElemTy, loc);
-
-            // Branch: if mask → atomicBlock, else → afterBlock with zero
-            rewriter.setInsertionPointToEnd(currentBlock);
-            Value zeroVal = LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
-                rewriter.getZeroAttr(valueElemTy));
-            LLVM::CondBrOp::create(rewriter, loc, llMask,
-                atomicBlock, ValueRange{},
-                afterBlock, ValueRange{zeroVal});
-
-            // Atomic block: call intrinsic, branch to afterBlock
-            rewriter.setInsertionPointToStart(atomicBlock);
-            Value atomicResult = LLVM::CallOp::create(rewriter, loc, atomicFn,
-                ValueRange{llPtr, llVal, order, scope, vol}).getResult();
-            LLVM::BrOp::create(rewriter, loc, ValueRange{atomicResult}, afterBlock);
-
-            rewriter.setInsertionPointToStart(afterBlock);
-            rewriter.replaceOp(op, afterBlock->getArgument(0));
-        } else {
-            Value result = LLVM::CallOp::create(rewriter, loc, atomicFn,
-                               ValueRange{llPtr, llVal, order, scope, vol}).getResult();
-            rewriter.replaceOp(op, result);
-        }
+        Value packed = packLLElements(loc, getTypeConverter(), resultVals,
+                                       rewriter, op.getType());
+        rewriter.replaceOp(op, packed);
         return success();
     }
 };
@@ -766,27 +1068,121 @@ struct AtomicCASOpAppleConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp> {
     using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-    LogicalResult matchAndRewrite(
-        triton::AtomicCASOp op, OpAdaptor adaptor,
-        ConversionPatternRewriter &rewriter) const override {
+    // Emit f16/bf16 CAS via i32 CAS on aligned word.
+    // Strategy: align ptr to i32 boundary, read i32 word, replace the target
+    // half with cmp/val, do i32 CAS. No loop needed — CAS semantics guarantee
+    // atomicity. If the CAS fails (other half changed), return the old f16 value.
+    Value emitF16BF16CAS(ConversionPatternRewriter &rewriter, Location loc,
+                         ModuleOp mod, Value ptr, Value cmp, Value val,
+                         Type elemTy) const {
+        auto *ctx = rewriter.getContext();
+        auto i16Ty = IntegerType::get(ctx, 16);
+        auto i32Ty = IntegerType::get(ctx, 32);
+        auto i64Ty = IntegerType::get(ctx, 64);
+        auto i1Ty  = IntegerType::get(ctx, 1);
+        auto ptrTy = LLVM::LLVMPointerType::get(ctx, 1);
+        auto ptrTy0 = LLVM::LLVMPointerType::get(ctx, 0);
 
-        auto loc = op.getLoc();
-        auto *ctx = op.getContext();
-        auto mod = op->getParentOfType<ModuleOp>();
+        // Declare i32 CAS
+        auto airName = StringRef("air.atomic.global.cmpxchg.weak.i32");
+        {
+            OpBuilder::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPointToStart(mod.getBody());
+            if (!mod.lookupSymbol<LLVMFuncOp>(airName)) {
+                auto fnTy = LLVMFunctionType::get(i32Ty,
+                    {ptrTy, ptrTy0, i32Ty, i32Ty, i32Ty, i32Ty, i1Ty}, false);
+                LLVMFuncOp::create(rewriter, mod.getLoc(), airName, fnTy, Linkage::External);
+            }
+        }
+        auto casFn = mod.lookupSymbol<LLVMFuncOp>(airName);
 
-        Value llPtr = adaptor.getPtr();
-        Value llCmp = adaptor.getCmp();
-        Value llVal = adaptor.getVal();
+        // Align pointer to i32 boundary
+        Value ptrInt = LLVM::PtrToIntOp::create(rewriter, loc, i64Ty, ptr);
+        Value one64 = arith::ConstantIntOp::create(rewriter, loc, 1, 64);
+        Value offset = LLVM::AndOp::create(rewriter, loc, ptrInt, one64); // 0 or 1 (byte offset within i16 pair → 0 or 2 bytes)
+        // Actually: ptr points to f16 (2 bytes). Aligned i32 = ptr & ~3.
+        Value three64 = arith::ConstantIntOp::create(rewriter, loc, 3, 64);
+        Value notThree64 = arith::ConstantIntOp::create(rewriter, loc, ~3LL, 64);
+        Value alignedInt = LLVM::AndOp::create(rewriter, loc, ptrInt, notThree64);
+        Value alignedPtr = LLVM::IntToPtrOp::create(rewriter, loc, ptrTy, alignedInt);
 
-        // Only handle scalar atomics
-        if (isa<RankedTensorType>(op.getType()))
-            return failure();
+        // Byte offset within i32 word (0 or 2)
+        Value byteOffset = LLVM::AndOp::create(rewriter, loc, ptrInt, three64);
+        Value byteOffset32 = LLVM::TruncOp::create(rewriter, loc, i32Ty, byteOffset);
+        // Shift in bits
+        Value shift = LLVM::ShlOp::create(rewriter, loc, byteOffset32,
+            arith::ConstantIntOp::create(rewriter, loc, 3, 32)); // bytes → bits
 
-        Type valueTy = getTypeConverter()->convertType(op.getType());
+        // Mask for the target half: 0xFFFF shifted to position
+        Value mask16 = arith::ConstantIntOp::create(rewriter, loc, 0xFFFF, 32);
+        Value mask = LLVM::ShlOp::create(rewriter, loc, mask16, shift);
+        Value notMask = LLVM::XOrOp::create(rewriter, loc, mask,
+            arith::ConstantIntOp::create(rewriter, loc, -1, 32));
 
-        // Determine intrinsic name based on type width
+        // Truncate f32 cmp/val to f16/bf16 if needed (Triton CAS passes f32 cmp/val for f16 ptrs)
+        Value cmpElem = cmp, valElem = val;
+        if (cmp.getType().isF32()) {
+            cmpElem = arith::TruncFOp::create(rewriter, loc, elemTy, cmp);
+            valElem = arith::TruncFOp::create(rewriter, loc, elemTy, val);
+        }
+        // Bitcast to i16 then zext to i32
+        Value cmpI16 = LLVM::BitcastOp::create(rewriter, loc, i16Ty, cmpElem);
+        Value valI16 = LLVM::BitcastOp::create(rewriter, loc, i16Ty, valElem);
+        Value cmpI32 = LLVM::ZExtOp::create(rewriter, loc, i32Ty, cmpI16);
+        Value valI32 = LLVM::ZExtOp::create(rewriter, loc, i32Ty, valI16);
+
+        // Shift cmp/val to position within i32 word
+        Value cmpShifted = LLVM::ShlOp::create(rewriter, loc, cmpI32, shift);
+        Value valShifted = LLVM::ShlOp::create(rewriter, loc, valI32, shift);
+
+        // Read current i32 word (non-atomic, as initial guess)
+        Value curI32 = LLVM::LoadOp::create(rewriter, loc, i32Ty, alignedPtr);
+
+        // Build expected i32 = (curI32 & ~mask) | cmpShifted
+        Value otherBits = LLVM::AndOp::create(rewriter, loc, curI32, notMask);
+        Value expectedI32 = LLVM::OrOp::create(rewriter, loc, otherBits, cmpShifted);
+        // Build desired i32 = (curI32 & ~mask) | valShifted
+        Value desiredI32 = LLVM::OrOp::create(rewriter, loc, otherBits, valShifted);
+
+        // Alloca for expected — must be in entry block
+        Value expectedAlloca;
+        {
+            OpBuilder::InsertionGuard guard(rewriter);
+            auto *funcOp = rewriter.getInsertionBlock()->getParent()->getParentOp();
+            auto &entryBlock = cast<LLVM::LLVMFuncOp>(funcOp).getBody().front();
+            rewriter.setInsertionPointToStart(&entryBlock);
+            Value oneI64 = arith::ConstantIntOp::create(rewriter, loc, 1, 64);
+            expectedAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy0, i32Ty, oneI64, /*alignment=*/4);
+        }
+
+        LLVM::StoreOp::create(rewriter, loc, expectedI32, expectedAlloca);
+
+        Value order = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+        Value scope = arith::ConstantIntOp::create(rewriter, loc, 2, 32);
+        Value vol   = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+
+        Value oldI32 = LLVM::CallOp::create(rewriter, loc, casFn,
+            ValueRange{alignedPtr, expectedAlloca, desiredI32, order, order, scope, vol})
+            .getResult();
+
+        // Extract old f16/bf16 from the returned i32 word
+        Value oldShifted = LLVM::LShrOp::create(rewriter, loc, oldI32, shift);
+        Value oldI16 = LLVM::TruncOp::create(rewriter, loc, i16Ty, oldShifted);
+        return LLVM::BitcastOp::create(rewriter, loc, elemTy, oldI16);
+    }
+
+    // Emit a single scalar CAS operation. Returns the old value.
+    Value emitOneCAS(ConversionPatternRewriter &rewriter, Location loc,
+                     ModuleOp mod, Value ptr, Value cmp, Value val,
+                     Type valueTy) const {
+        auto *ctx = rewriter.getContext();
+
+        // f16/bf16 CAS via i32 word CAS
+        if (valueTy.isF16() || valueTy.isBF16())
+            return emitF16BF16CAS(rewriter, loc, mod, ptr, cmp, val, valueTy);
+
         std::string airName;
-        Type casTy; // type for the CAS operation (may bitcast to this)
+        Type casTy;
         if (valueTy.isInteger(32) || valueTy.isF32()) {
             airName = "air.atomic.global.cmpxchg.weak.i32";
             casTy = IntegerType::get(ctx, 32);
@@ -794,15 +1190,14 @@ struct AtomicCASOpAppleConversion
             airName = "air.atomic.global.cmpxchg.weak.i64";
             casTy = IntegerType::get(ctx, 64);
         } else {
-            return failure();
+            llvm_unreachable("unsupported CAS type");
         }
 
-        auto ptrTy  = LLVM::LLVMPointerType::get(ctx, 1); // device
-        auto ptrTy0 = LLVM::LLVMPointerType::get(ctx, 0); // private
+        auto ptrTy  = LLVM::LLVMPointerType::get(ctx, 1);
+        auto ptrTy0 = LLVM::LLVMPointerType::get(ctx, 0);
         auto i32Ty  = IntegerType::get(ctx, 32);
         auto i1Ty   = IntegerType::get(ctx, 1);
 
-        // Declare intrinsic
         {
             OpBuilder::InsertionGuard guard(rewriter);
             rewriter.setInsertionPointToStart(mod.getBody());
@@ -814,42 +1209,117 @@ struct AtomicCASOpAppleConversion
         }
         auto casFn = mod.lookupSymbol<LLVMFuncOp>(airName);
 
-        // Bitcast cmp/val to integer type if needed (e.g. f32 → i32)
-        Value cmpI = llCmp, valI = llVal;
+        Value cmpI = cmp, valI = val;
         bool needBitcast = (valueTy != casTy);
         if (needBitcast) {
-            cmpI = LLVM::BitcastOp::create(rewriter, loc, casTy, llCmp);
-            valI = LLVM::BitcastOp::create(rewriter, loc, casTy, llVal);
+            cmpI = LLVM::BitcastOp::create(rewriter, loc, casTy, cmp);
+            valI = LLVM::BitcastOp::create(rewriter, loc, casTy, val);
         }
 
-        // Alloca for expected value — must be in entry block (not inside loops)
+        // Alloca for expected — entry block
         Value one, expectedAlloca;
         {
             OpBuilder::InsertionGuard guard(rewriter);
-            auto &entryBlock = op->getParentOfType<LLVM::LLVMFuncOp>().getBody().front();
+            auto *funcOp = rewriter.getInsertionBlock()->getParent()->getParentOp();
+            auto &entryBlock = cast<LLVM::LLVMFuncOp>(funcOp).getBody().front();
             rewriter.setInsertionPointToStart(&entryBlock);
             one = arith::ConstantIntOp::create(rewriter, loc, 1, 64);
             expectedAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy0, casTy, one, /*alignment=*/4);
         }
 
-        // Store cmp into expected alloca
         LLVM::StoreOp::create(rewriter, loc, cmpI, expectedAlloca);
 
-        // Call cmpxchg: order=0 (relaxed), scope=2 (device), volatile=true
         Value order = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
         Value scope = arith::ConstantIntOp::create(rewriter, loc, 2, 32);
         Value vol   = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
 
         Value oldI = LLVM::CallOp::create(rewriter, loc, casFn,
-            ValueRange{llPtr, expectedAlloca, valI, order, order, scope, vol})
+            ValueRange{ptr, expectedAlloca, valI, order, order, scope, vol})
             .getResult();
 
-        // Bitcast back if needed
-        Value result = oldI;
         if (needBitcast)
-            result = LLVM::BitcastOp::create(rewriter, loc, valueTy, oldI);
+            return LLVM::BitcastOp::create(rewriter, loc, valueTy, oldI);
+        return oldI;
+    }
 
-        rewriter.replaceOp(op, result);
+    LogicalResult matchAndRewrite(
+        triton::AtomicCASOp op, OpAdaptor adaptor,
+        ConversionPatternRewriter &rewriter) const override {
+
+        auto loc = op.getLoc();
+        auto mod = op->getParentOfType<ModuleOp>();
+
+        Value llPtr = adaptor.getPtr();
+        Value llCmp = adaptor.getCmp();
+        Value llVal = adaptor.getVal();
+
+        auto tensorTy = dyn_cast<RankedTensorType>(op.getType());
+        Type valueTy = tensorTy
+            ? getTypeConverter()->convertType(tensorTy.getElementType())
+            : getTypeConverter()->convertType(op.getType());
+
+        // Check supported types
+        if (!(valueTy.isInteger(32) || valueTy.isF32() ||
+              valueTy.isInteger(64) || valueTy.isF64() ||
+              valueTy.isF16() || valueTy.isBF16()))
+            return failure();
+
+        if (!tensorTy) {
+            // Scalar CAS
+            Value result = emitOneCAS(rewriter, loc, mod, llPtr, llCmp, llVal, valueTy);
+            rewriter.replaceOp(op, result);
+            return success();
+        }
+
+        // Tensor CAS: unpack → per-element CAS → pack
+        // Compute redundant thread predicate
+        auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+        Value threadPred = emitAppleRedundantThreadPredicate(
+            freeVarMasks, rewriter, loc, mod);
+        uint32_t regMask = freeVarMasks[StringAttr::get(rewriter.getContext(), "reg")];
+
+        auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
+        auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
+        auto valElements = unpackLLElements(loc, llVal, rewriter);
+
+        SmallVector<Value> resultVals(ptrElements.size());
+        for (size_t i = 0; i < ptrElements.size(); ++i) {
+            // Skip redundant register elements
+            if (!isCanonicalIndex(i, regMask)) {
+                resultVals[i] = resultVals[i & ~regMask];
+                continue;
+            }
+
+            // For CAS, wrap with thread predicate: skip non-canonical threads
+            if (threadPred) {
+                auto *currentBlock = rewriter.getInsertionBlock();
+                auto *afterBlock = rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+                auto *casBlock = rewriter.createBlock(afterBlock);
+                afterBlock->addArgument(valueTy, loc);
+
+                rewriter.setInsertionPointToEnd(currentBlock);
+                Value zeroVal = LLVM::ConstantOp::create(rewriter, loc, valueTy,
+                    rewriter.getZeroAttr(valueTy));
+                LLVM::CondBrOp::create(rewriter, loc, threadPred,
+                    casBlock, ValueRange{},
+                    afterBlock, ValueRange{zeroVal});
+
+                rewriter.setInsertionPointToStart(casBlock);
+                Value casResult = emitOneCAS(rewriter, loc, mod,
+                    ptrElements[i], cmpElements[i], valElements[i], valueTy);
+                LLVM::BrOp::create(rewriter, loc, ValueRange{casResult}, afterBlock);
+
+                rewriter.setInsertionPointToStart(afterBlock);
+                resultVals[i] = afterBlock->getArgument(0);
+            } else {
+                resultVals[i] = emitOneCAS(rewriter, loc, mod,
+                    ptrElements[i], cmpElements[i], valElements[i], valueTy);
+            }
+        }
+
+        Value packed = packLLElements(loc, getTypeConverter(), resultVals,
+                                       rewriter, op.getType());
+        rewriter.replaceOp(op, packed);
         return success();
     }
 };
@@ -1153,6 +1623,10 @@ struct ConvertTritonAppleGPUToLLVMPass
         mlir::triton::populateReduceOpToLLVMPatterns(
             typeConverter, patterns, targetInfo, patternBenefitDefault);
         mlir::triton::populateScanOpToLLVMPatterns(
+            typeConverter, patterns, targetInfo, patternBenefitDefault);
+
+        // Gather → shared memory scatter/gather
+        mlir::triton::populateGatherOpToLLVMPatterns(
             typeConverter, patterns, targetInfo, patternBenefitDefault);
 
         // Histogram → shared memory atomics + barrier

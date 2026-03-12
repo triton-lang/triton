@@ -955,6 +955,85 @@ except Exception as e:
     check('gemm_stride (64x64x48, runtime strides)', False, str(e)[:200])
 
 
+# ── Fused recurrent linear attention (fla-style delta rule) ──────────────────
+# Real-world kernel pattern from flash-linear-attention (fla).
+# Tests: pointer arithmetic in loops, 2D accumulator (BK×BV), phi nodes for
+# advancing pointers, mixed reductions — the pattern that broke opaque ptrs.
+@triton.jit
+def fused_recurrent_delta_rule_fwd_kernel(
+    q, k, v, beta, o,
+    s_k_h, s_v_h,
+    scale,
+    T: tl.constexpr, K: tl.constexpr, V: tl.constexpr,
+    BK: tl.constexpr, BV: tl.constexpr,
+):
+    i_v, i_k, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+
+    b_h = tl.zeros([BK, BV], dtype=tl.float32)
+
+    p_q = q + i_bh * s_k_h + i_k * BK + tl.arange(0, BK)
+    p_k = k + i_bh * s_k_h + i_k * BK + tl.arange(0, BK)
+    p_v = v + i_bh * s_v_h + i_v * BV + tl.arange(0, BV)
+    p_o = o + i_bh * s_v_h + i_v * BV + tl.arange(0, BV)
+    p_beta = beta + i_bh * T
+
+    for _ in range(0, T):
+        b_q = tl.load(p_q).to(tl.float32) * scale
+        b_k = tl.load(p_k).to(tl.float32)
+        b_v = tl.load(p_v).to(tl.float32)
+        b_beta = tl.load(p_beta).to(tl.float32)
+
+        b_kh = tl.sum(b_h * b_k[:, None], axis=0)
+        b_v = b_v - b_kh
+        b_h = b_h + b_beta * b_k[:, None] * b_v[None, :]
+
+        b_o = tl.sum(b_h * b_q[:, None], axis=0)
+        tl.store(p_o, b_o.to(p_o.dtype.element_ty))
+
+        p_q += K
+        p_k += K
+        p_v += V
+        p_o += V
+        p_beta += 1
+
+B, H, T, K, V = 1, 1, 8, 16, 16
+BK, BV = 16, 16
+torch.manual_seed(42)
+q_fla = torch.randn(B, H, T, K, device=DEVICE)
+k_fla = torch.randn(B, H, T, K, device=DEVICE)
+v_fla = torch.randn(B, H, T, V, device=DEVICE)
+beta_fla = torch.ones(B, H, T, device=DEVICE)
+o_fla = torch.zeros(B, H, T, V, device=DEVICE)
+scale_fla = 1.0 / (K ** 0.5)
+
+try:
+    grid = (V // BV, K // BK, B * H)
+    fused_recurrent_delta_rule_fwd_kernel[grid](
+        q_fla, k_fla, v_fla, beta_fla, o_fla,
+        T * K, T * V, scale_fla,
+        T, K, V, BK, BV,
+    )
+    torch.mps.synchronize()
+
+    # Reference: delta rule recurrence on CPU
+    h = torch.zeros(K, V)
+    o_ref = torch.zeros(B, H, T, V)
+    for t in range(T):
+        qt = q_fla[0,0,t].cpu() * scale_fla
+        kt = k_fla[0,0,t].cpu()
+        vt = v_fla[0,0,t].cpu()
+        bt = beta_fla[0,0,t].cpu().item()
+        kh = h.T @ kt
+        vt_delta = vt - kh
+        h = h + bt * kt[:, None] * vt_delta[None, :]
+        o_ref[0,0,t] = h.T @ qt
+
+    err = (o_fla.cpu() - o_ref).abs().max().item()
+    check('fla delta_rule (recurrent, 8 steps)', err < 1e-3, f'max_err={err}')
+except Exception as e:
+    check('fla delta_rule (recurrent, 8 steps)', False, str(e)[:200])
+
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 passed = sum(1 for _, ok in results if ok)
 total = len(results)

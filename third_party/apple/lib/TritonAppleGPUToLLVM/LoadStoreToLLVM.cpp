@@ -69,7 +69,8 @@ struct AddPtrOpConversion : public ConvertOpToLLVMPattern<triton::AddPtrOp> {
         if (!elemTy) return failure();
 
         // Scalar addptr: bare pointer + scalar offset → single GEP.
-        if (!isa<LLVMStructType>(base.getType())) {
+        if (!isa<LLVMStructType>(base.getType()) &&
+            !isa<LLVMStructType>(offset.getType())) {
             Value gep = LLVM::GEPOp::create(rewriter, loc,
                 base.getType(), elemTy, base,
                 ArrayRef<LLVM::GEPArg>{offset});
@@ -79,6 +80,19 @@ struct AddPtrOpConversion : public ConvertOpToLLVMPattern<triton::AddPtrOp> {
 
         auto basePtrs   = unpackElems(base,   rewriter, loc);
         auto offsets    = unpackElems(offset, rewriter, loc);
+
+        // Broadcast scalar base to match tensor offsets (e.g. addptr(scalar_ptr, tensor_offsets))
+        if (basePtrs.size() == 1 && offsets.size() > 1) {
+            Value scalarBase = basePtrs[0];
+            basePtrs.clear();
+            basePtrs.resize(offsets.size(), scalarBase);
+        }
+        // Broadcast scalar offset to match tensor base
+        if (offsets.size() == 1 && basePtrs.size() > 1) {
+            Value scalarOff = offsets[0];
+            offsets.clear();
+            offsets.resize(basePtrs.size(), scalarOff);
+        }
 
         if (basePtrs.size() != offsets.size())
             return failure();
