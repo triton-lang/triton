@@ -700,8 +700,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
         signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
         # check arguments
         assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
-        assert "device" not in kwargs, "device option is deprecated; current device will be used"
-        assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
         for k in kwargs:
             if k not in options.__dict__ and k not in sigkeys:
                 raise KeyError("Keyword argument %s was specified but unrecognised" % k)
@@ -719,9 +717,12 @@ class JITFunction(JITCallable, KernelInterface[T]):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
         kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
 
-        # parse options
-        device = driver.active.get_current_device()
-        stream = driver.active.get_current_stream(device)
+        device = kwargs.get("device", None)
+        stream = kwargs.get("stream", None)
+        if device is None:
+            device = driver.active.get_current_device()
+        if stream is None:
+            stream = driver.active.get_current_stream(device)
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
