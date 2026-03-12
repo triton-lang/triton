@@ -25,4 +25,8 @@ void populateLoadStoreToLLVMPatterns(
     mlir::RewritePatternSet &patterns,
     mlir::PatternBenefit benefit = 1);
 
+// Register all Apple GPU → LLVM passes with the MLIR pass registry
+// (for use with triton-opt / mlir-opt command line tools).
+void registerTritonAppleGPUToLLVMPasses();
+
 } // namespace mlir::triton::applegpu

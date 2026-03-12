@@ -8,6 +8,7 @@ Dispatch pipeline:
     → lib.kernel_name(*args, threads=grid, group_size=block, arg_casts=...)
 """
 
+import struct as _struct
 import torch
 from triton.backends.driver import DriverBase, decompose_descriptor, expand_signature
 from triton.tools.tensor_descriptor import TensorDescriptor
@@ -24,14 +25,65 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-# Metal setBytes only handles these casts; fp32 + tensors pass through naturally.
-# i64/u64: no cast — PyTorch MPS setArg handles int64_t natively (8 bytes via setBytes).
-_SCALAR_CAST = {
-    "i1": "int32", "i8": "int8", "i16": "int16",
-    "i32": "int32", "u32": "uint32",
-    "fp16": "fp16", "bf16": "bf16",
-    # i64, u64, fp32, fp64: pass as Python int/float — no cast needed
+# Scalar type → (struct.pack format char, byte size, alignment)
+_SCALAR_PACK_INFO = {
+    "i1":  ("b", 1, 1),   # i1 stored as 1 byte
+    "i8":  ("b", 1, 1),
+    "i16": ("h", 2, 2),
+    "i32": ("i", 4, 4),
+    "i64": ("q", 8, 8),
+    "u32": ("I", 4, 4),
+    "u64": ("Q", 8, 8),
+    "fp16": ("e", 2, 2),
+    "bf16": ("e", 2, 2),   # bf16 → pack as fp16 (Metal treats both as 2-byte)
+    "fp32": ("f", 4, 4),
+    "fp64": ("d", 8, 8),
 }
+
+
+def _is_pointer_type(ty):
+    """Check if a type string represents a pointer (tensor) argument."""
+    return isinstance(ty, str) and ty.startswith('*')
+
+
+def _compute_scalar_layout(scalar_types):
+    """Compute packed buffer layout matching MetalASM Pass 5b.
+
+    Returns (total_size, field_offsets) where field_offsets[i] is the byte
+    offset for scalar i in the packed buffer.
+    """
+    offsets = []
+    current = 0
+    for ty in scalar_types:
+        info = _SCALAR_PACK_INFO.get(ty)
+        if info is None:
+            raise ValueError(f"Unknown scalar type for packing: {ty}")
+        _, size, align = info
+        padding = (align - (current % align)) % align
+        current += padding
+        offsets.append(current)
+        current += size
+    return current, offsets
+
+
+def _pack_scalars(scalar_types, scalar_values, total_size, offsets):
+    """Pack scalar values into a bytes buffer matching MetalASM struct layout."""
+    buf = bytearray(total_size)
+    for ty, val, offset in zip(scalar_types, scalar_values, offsets):
+        fmt, size, _ = _SCALAR_PACK_INFO[ty]
+        if ty == "i1":
+            val = 1 if val else 0
+        elif ty == "bf16":
+            # bf16: convert float → bf16 bits, pack as uint16
+            import numpy as np
+            bf16_bits = int.from_bytes(
+                np.array([val], dtype=np.float32).view(np.uint32).item().to_bytes(4, 'little')[2:4],
+                'little'
+            )
+            _struct.pack_into("H", buf, offset, bf16_bits)
+            continue
+        _struct.pack_into(fmt, buf, offset, val)
+    return bytes(buf)
 
 
 class MPSUtils:
@@ -102,13 +154,26 @@ class MPSLauncher:
         non_constexpr_sig = [ty for ty in self.signature.values() if ty != 'constexpr']
         expanded = expand_signature(non_constexpr_sig, None, None)
 
-        # Build arg_casts from the expanded (flat) signature.
-        slot = 0
-        self.arg_casts = {}
-        for ty in expanded:
-            if isinstance(ty, str) and ty[0] != '*' and ty in _SCALAR_CAST:
-                self.arg_casts[slot] = _SCALAR_CAST[ty]
-            slot += 1
+        # Classify each expanded arg as pointer or scalar.
+        # MetalASM Pass 5b packs all scalars into ONE device buffer,
+        # so the IR param order is: [pointers..., packed_scalar_buf, system_values].
+        # We need to separate pointers from scalars at launch time.
+        self.ptr_indices = []    # indices into expanded that are pointers
+        self.scalar_indices = [] # indices into expanded that are scalars
+        self.scalar_types = []   # type strings for scalars (for packing)
+        for slot, ty in enumerate(expanded):
+            if _is_pointer_type(ty):
+                self.ptr_indices.append(slot)
+            else:
+                self.scalar_indices.append(slot)
+                self.scalar_types.append(ty)
+
+        # Pre-compute packed buffer layout
+        if self.scalar_types:
+            self.total_size, self.field_offsets = _compute_scalar_layout(self.scalar_types)
+        else:
+            self.total_size = 0
+            self.field_offsets = []
 
         # Threadgroup size: num_warps * 32 threads, capped at 1024
         warp_size = 32
@@ -123,11 +188,7 @@ class MPSLauncher:
         if launch_enter_hook:
             launch_enter_hook(launch_metadata)
 
-        # _mps_MetalKernel.__call__ signature:
-        #   (*args, threads=[gx,gy,gz], group_size=[lx,ly,lz], arg_casts=dict|None)
-        # Strip constexpr args — they're not in the compiled IR, so Metal slots
-        # must be contiguous over non-constexpr args only.
-        # Then decompose TensorDescriptor args into flat (ptr, shape, strides, ...).
+        # Strip constexpr args and decompose TensorDescriptors.
         from triton.runtime.jit import TensorWrapper
         flat_args = []
         for i, a in enumerate(args):
@@ -139,18 +200,36 @@ class MPSLauncher:
                 flat_args.extend(decompose_descriptor(a))
             else:
                 flat_args.append(a)
-        filtered_args = tuple(flat_args)
+
+        # Separate pointer args from scalar args.
+        # IR param order after Pass 5b: [ptr0, ptr1, ..., packed_scalar_buf]
+        ptr_args = [flat_args[i] for i in self.ptr_indices]
+        scalar_values = [flat_args[i] for i in self.scalar_indices]
+
+        if scalar_values:
+            # Pack all scalars into a small MPS tensor (acts as device buffer)
+            packed_bytes = _pack_scalars(
+                self.scalar_types, scalar_values,
+                self.total_size, self.field_offsets
+            )
+            scalar_buf = torch.frombuffer(bytearray(packed_bytes), dtype=torch.uint8).to('mps')
+            reordered_args = tuple(ptr_args) + (scalar_buf,)
+        else:
+            reordered_args = tuple(ptr_args)
+
         import os as _os
         if _os.environ.get('TRITON_MPS_DEBUG'):
             _threads = [gridX * self.lx, gridY * self.ly, gridZ * self.lz]
             _gs = [self.lx, self.ly, self.lz]
             print(f'[MPS] threads={_threads} group_size={_gs} grid=({gridX},{gridY},{gridZ})')
-            print(f'[MPS] filtered_args={filtered_args} arg_casts={self.arg_casts}')
+            print(f'[MPS] reordered_args={reordered_args}')
+            if scalar_values:
+                print(f'[MPS] scalar_types={self.scalar_types} scalar_values={scalar_values}')
+                print(f'[MPS] packed_bytes={packed_bytes.hex()} total_size={self.total_size}')
         function(
-            *filtered_args,
+            *reordered_args,
             threads    =[gridX * self.lx, gridY * self.ly, gridZ * self.lz],
             group_size =[self.lx, self.ly, self.lz],
-            arg_casts  = self.arg_casts if self.arg_casts else None,
         )
 
         if launch_exit_hook:

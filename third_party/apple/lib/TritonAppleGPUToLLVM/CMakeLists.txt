@@ -14,8 +14,10 @@ add_triton_library(TritonAppleGPUToLLVM
   MLIRGPUDialect
   MLIRArithToLLVM
   MLIRMathToLLVM
+  MLIRMathTransforms
   MLIRControlFlowToLLVM
   MLIRIndexToLLVM
+  MLIRUBToLLVM
   MLIRReconcileUnrealizedCasts
 )
 

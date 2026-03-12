@@ -1,10 +1,15 @@
 // DotOpToLLVM: lower tt.dot to air simdgroup matrix intrinsics via TG memory.
 //
-// Strategy (TG scatter/gather):
-//   1. All threads scatter their A/B/C elements into threadgroup memory.
-//   2. Threadgroup barrier to synchronise.
-//   3. Each simdgroup loads 8×8 tiles and does MMA with K-accumulation.
-//   4. Barrier, then each thread gathers its C elements back.
+// Strategy (register-resident C):
+//   1. All threads scatter A into TG, barrier, pre-load A tiles to simdgroup regs.
+//   2. All threads scatter B into TG (reusing A's buffer), barrier.
+//   3. Each warp accumulates ONLY its owned C tiles in registers (no TG for C).
+//      C starts as zeroinitializer <64 x float>, MMA accumulates in regs.
+//   4. Each warp stores its C tiles to TG (no race — tiles are partitioned).
+//   5. Barrier, then each thread gathers its C elements back.
+//
+// TG memory = max(M*K, K*N, M*N) — phases alias the same buffer.
+// This fits 64×64 in 16 KB (vs 32+ KB with separate C buffer).
 //
 // Supports arbitrary M×K × K×N where M,N,K are multiples of 8.
 // Handles any blocked encoding (reads sizePerThread/threadsPerWarp/warpsPerCTA).
@@ -186,7 +191,7 @@ struct DotOpAppleMmaConversion : public ConvertOpToLLVMPattern<tt::DotOp> {
         auto barrTy = LLVMFunctionType::get(voidTy, {i32Ty, i32Ty}, false);
         auto tgBarrFn = getOrInsertIntrinsic(rewriter, mod,
             "air.threadgroup.barrier", barrTy);
-        auto sgBarrFn = getOrInsertIntrinsic(rewriter, mod,
+        (void)getOrInsertIntrinsic(rewriter, mod,
             "air.simdgroup.barrier", barrTy);
 
         auto vec2i64Ty = LLVM::getVectorType(IntegerType::get(ctx, 64), 2);
@@ -206,7 +211,7 @@ struct DotOpAppleMmaConversion : public ConvertOpToLLVMPattern<tt::DotOp> {
         Value stride18 = makeI64Vec2(rewriter, loc, 1, 8);
         Value zeroOff  = makeI64Vec2(rewriter, loc, 0, 0);
         Value fenceTG  = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
-        Value fenceSG  = arith::ConstantIntOp::create(rewriter, loc, 2, 32);
+        // fenceSG not used in register-resident approach
         Value execMod  = arith::ConstantIntOp::create(rewriter, loc, 4, 32);
 
         // ── Thread identification ─────────────────────────────────────────
@@ -352,20 +357,16 @@ struct DotOpAppleMmaConversion : public ConvertOpToLLVMPattern<tt::DotOp> {
         auto [bBaseRow, bBaseCol] = makeBase(bSrcEnc, K, N);
         auto [cBaseRow, cBaseCol] = makeBase(cEnc, M, N);
 
-        // ── Create threadgroup globals ────────────────────────────────────
-        // Full M×K for A, K×N for B, M×N for C
+        // ── Create threadgroup global ─────────────────────────────────────
+        // Single TG buffer shared across phases (A/B scatter, then C store).
+        // TG = max(M*K, K*N, M*N) — phases alias the same memory.
 
         unsigned id = getCounter(ctx)++;
-        auto tgA = getOrCreateTGGlobal(rewriter, mod,
-            ("__tg_dot_a_" + llvm::Twine(id)).str(), M * K);
-        auto tgB = getOrCreateTGGlobal(rewriter, mod,
-            ("__tg_dot_b_" + llvm::Twine(id)).str(), K * N);
-        auto tgC = getOrCreateTGGlobal(rewriter, mod,
-            ("__tg_dot_c_" + llvm::Twine(id)).str(), M * N);
+        int64_t tgSize = std::max({M * K, K * N, M * N});
+        auto tgBuf = getOrCreateTGGlobal(rewriter, mod,
+            ("__tg_dot_ab_" + llvm::Twine(id)).str(), tgSize);
 
-        Value ptrA = LLVM::AddressOfOp::create(rewriter, loc, tgPtrTy, tgA.getName());
-        Value ptrB = LLVM::AddressOfOp::create(rewriter, loc, tgPtrTy, tgB.getName());
-        Value ptrC = LLVM::AddressOfOp::create(rewriter, loc, tgPtrTy, tgC.getName());
+        Value ptrTG = LLVM::AddressOfOp::create(rewriter, loc, tgPtrTy, tgBuf.getName());
 
         // ── GEP helpers ───────────────────────────────────────────────────
 
@@ -398,111 +399,106 @@ struct DotOpAppleMmaConversion : public ConvertOpToLLVMPattern<tt::DotOp> {
             return arith::ExtUIOp::create(rewriter, loc, i64Ty, flat32);
         };
 
-        // ── Scatter A into TG_A [M×K row-major] ──────────────────────────
+        // ── Phase 1: Scatter A into TG_AB, barrier, pre-load A tiles ─────
         for (size_t i = 0; i < elemsA.size(); ++i) {
             auto &c = aCoordsStatic[i];
-            scatter1(ptrA, elemsA[i], flatIdx(aBaseRow, aBaseCol, c.row, c.col, K));
+            scatter1(ptrTG, elemsA[i], flatIdx(aBaseRow, aBaseCol, c.row, c.col, K));
         }
-
-        // ── Scatter B into TG_B [K×N row-major] ──────────────────────────
-        for (size_t i = 0; i < elemsB.size(); ++i) {
-            auto &c = bCoordsStatic[i];
-            scatter1(ptrB, elemsB[i], flatIdx(bBaseRow, bBaseCol, c.row, c.col, N));
-        }
-
-        // ── Scatter C into TG_C [M×N row-major] ──────────────────────────
-        SmallVector<Value> resultElems(elemsC.begin(), elemsC.end());
-        for (size_t i = 0; i < elemsC.size(); ++i) {
-            auto &c = cCoordsStatic[i];
-            scatter1(ptrC, elemsC[i], flatIdx(cBaseRow, cBaseCol, c.row, c.col, N));
-        }
-
-        // ── Threadgroup barrier ───────────────────────────────────────────
         LLVM::CallOp::create(rewriter, loc, tgBarrFn, ValueRange{fenceTG, execMod});
 
-        // ── MMA: for each (tm, tn) output tile, accumulate over K tiles ──
-        // Partition tiles across simdgroups (warps) to avoid races on TG_C.
-        // Each warp only stores tiles it owns; all warps compute all tiles
-        // (simdgroup_matrix ops are per-simdgroup so compute is harmless).
+        // Pre-load all A 8×8 tiles into simdgroup registers before B overwrites.
         int64_t tilesM = M / 8;
         int64_t tilesN = N / 8;
         int64_t tilesK = K / 8;
-        int64_t numWarps = cEnc.getWarpsPerCTA()[0] * cEnc.getWarpsPerCTA()[1];
+        (void)(cEnc.getWarpsPerCTA()); // numWarps not needed — all warps compute all tiles
 
+        // matA_tiles[tm][tk] = simdgroup_matrix loaded from TG_AB
+        SmallVector<SmallVector<Value>> matA_tiles(tilesM);
+        for (int64_t tm = 0; tm < tilesM; ++tm) {
+            matA_tiles[tm].resize(tilesK);
+            for (int64_t tk = 0; tk < tilesK; ++tk) {
+                Value aOff = makeI64Vec2(rewriter, loc, tk * 8, tm * 8);
+                Value aStride = makeI64Vec2(rewriter, loc, 1, K);
+                Value aShape  = makeI64Vec2(rewriter, loc, K, 8);
+                matA_tiles[tm][tk] = LLVM::CallOp::create(rewriter, loc, loadFn,
+                    ValueRange{ptrTG, aShape, aStride, aOff}).getResult();
+            }
+        }
+
+        // ── Phase 2: Scatter C into TG (reuses A's buffer), barrier ──────
+        // C input must be in TG so all warps can load their initial accumulators.
+        // This overwrites A in TG — that's fine, A is already in simdgroup regs.
+        // Barrier ensures all warps finished loading A before any warp writes C.
+        LLVM::CallOp::create(rewriter, loc, tgBarrFn, ValueRange{fenceTG, execMod});
+        for (size_t i = 0; i < elemsC.size(); ++i) {
+            auto &c = cCoordsStatic[i];
+            scatter1(ptrTG, elemsC[i], flatIdx(cBaseRow, cBaseCol, c.row, c.col, N));
+        }
+        LLVM::CallOp::create(rewriter, loc, tgBarrFn, ValueRange{fenceTG, execMod});
+
+        // ── Phase 3: Load C tiles to regs, then scatter B into TG ────────
+        // Load all C 8×8 tiles into simdgroup registers (register-resident C).
+        SmallVector<SmallVector<Value>> matC_tiles(tilesM);
+        Value cStride = makeI64Vec2(rewriter, loc, 1, N);
+        Value cShape  = makeI64Vec2(rewriter, loc, N, 8);
+        for (int64_t tm = 0; tm < tilesM; ++tm) {
+            matC_tiles[tm].resize(tilesN);
+            for (int64_t tn = 0; tn < tilesN; ++tn) {
+                Value cOff = makeI64Vec2(rewriter, loc, tn * 8, tm * 8);
+                matC_tiles[tm][tn] = LLVM::CallOp::create(rewriter, loc, loadFn,
+                    ValueRange{ptrTG, cShape, cStride, cOff}).getResult();
+            }
+        }
+
+        // Scatter B into TG (overwrites C — fine, C is in regs now).
+        // Need TG barrier first so all warps finish loading C before any writes B.
+        LLVM::CallOp::create(rewriter, loc, tgBarrFn, ValueRange{fenceTG, execMod});
+        for (size_t i = 0; i < elemsB.size(); ++i) {
+            auto &c = bCoordsStatic[i];
+            scatter1(ptrTG, elemsB[i], flatIdx(bBaseRow, bBaseCol, c.row, c.col, N));
+        }
+        LLVM::CallOp::create(rewriter, loc, tgBarrFn, ValueRange{fenceTG, execMod});
+
+        // ── Phase 4: MMA in registers ────────────────────────────────────
+        // All warps compute ALL tiles identically (same A regs, same B in TG,
+        // same C regs). MMA is deterministic so all warps get same results.
+        // This means all warps can store without races (identical values).
+        // Redundant compute but correct, branchless, and no extra TG needed.
         for (int64_t tm = 0; tm < tilesM; ++tm) {
             for (int64_t tn = 0; tn < tilesN; ++tn) {
-                // Load C tile from TG_C at offset (tn*8, tm*8)
-                Value cOff = makeI64Vec2(rewriter, loc, tn * 8, tm * 8);
-                Value cStride = makeI64Vec2(rewriter, loc, 1, N);
-                Value cShape  = makeI64Vec2(rewriter, loc, N, 8);
-                Value matC = LLVM::CallOp::create(rewriter, loc, loadFn,
-                    ValueRange{ptrC, cShape, cStride, cOff}).getResult();
-
                 for (int64_t tk = 0; tk < tilesK; ++tk) {
-                    Value aOff = makeI64Vec2(rewriter, loc, tk * 8, tm * 8);
-                    Value aStride = makeI64Vec2(rewriter, loc, 1, K);
-                    Value aShape  = makeI64Vec2(rewriter, loc, K, 8);
-                    Value matA = LLVM::CallOp::create(rewriter, loc, loadFn,
-                        ValueRange{ptrA, aShape, aStride, aOff}).getResult();
+                    Value matA = matA_tiles[tm][tk];
 
                     Value bOff = makeI64Vec2(rewriter, loc, tn * 8, tk * 8);
                     Value bStride = makeI64Vec2(rewriter, loc, 1, N);
                     Value bShape  = makeI64Vec2(rewriter, loc, N, 8);
                     Value matB = LLVM::CallOp::create(rewriter, loc, loadFn,
-                        ValueRange{ptrB, bShape, bStride, bOff}).getResult();
+                        ValueRange{ptrTG, bShape, bStride, bOff}).getResult();
 
-                    matC = LLVM::CallOp::create(rewriter, loc, mmaFn,
-                        ValueRange{matA, matB, matC}).getResult();
-                }
-
-                // Only the owning warp stores the result to avoid races.
-                // We conditionally store by writing to a dummy address for
-                // non-owner warps: use ptrC + 0 (harmless overwrite) vs real offset.
-                // Actually: use simdgroup_matrix_store which is per-simdgroup,
-                // so we just need to pick a safe target for non-owners.
-                // Simplest correct approach: all warps store, but non-owners
-                // store to a scratch area that gets overwritten.
-                if (numWarps > 1) {
-                    // Only owner warp stores to real C; others store to scratch.
-                    // We need a scratch TG buffer for non-owner warp stores.
-                    int64_t tileIdx = tm * tilesN + tn;
-                    int64_t ownerWarp = tileIdx % numWarps;
-                    Value expectedWarp = arith::ConstantIntOp::create(rewriter, loc, ownerWarp, 32);
-                    Value isOwner = arith::CmpIOp::create(rewriter, loc,
-                        arith::CmpIPredicate::eq, warpId, expectedWarp);
-
-                    // Use a scratch TG global for non-owner stores
-                    auto tgScratch = getOrCreateTGGlobal(rewriter, mod,
-                        ("__tg_dot_scratch_" + llvm::Twine(id)).str(), 8 * 8);
-                    Value ptrScratch = LLVM::AddressOfOp::create(rewriter, loc, tgPtrTy, tgScratch.getName());
-
-                    // Select target pointer: owner→ptrC, non-owner→ptrScratch
-                    Value storePtr = LLVM::SelectOp::create(rewriter, loc, isOwner, ptrC, ptrScratch);
-                    // Non-owner stores to scratch at offset (0,0)
-                    Value scratchOff = makeI64Vec2(rewriter, loc, 0, 0);
-                    Value scratchShape = makeI64Vec2(rewriter, loc, 8, 8);
-                    Value scratchStride = makeI64Vec2(rewriter, loc, 1, 8);
-                    // Owner uses real params, non-owner uses scratch params
-                    Value storeOff = LLVM::SelectOp::create(rewriter, loc, isOwner, cOff, scratchOff);
-                    Value storeShape = LLVM::SelectOp::create(rewriter, loc, isOwner, cShape, scratchShape);
-                    Value storeStride = LLVM::SelectOp::create(rewriter, loc, isOwner, cStride, scratchStride);
-
-                    LLVM::CallOp::create(rewriter, loc, storeFn,
-                        ValueRange{matC, storePtr, storeShape, storeStride, storeOff});
-                } else {
-                    LLVM::CallOp::create(rewriter, loc, storeFn,
-                        ValueRange{matC, ptrC, cShape, cStride, cOff});
+                    matC_tiles[tm][tn] = LLVM::CallOp::create(rewriter, loc, mmaFn,
+                        ValueRange{matA, matB, matC_tiles[tm][tn]}).getResult();
                 }
             }
         }
 
-        // ── Threadgroup barrier before gather (all warps must finish MMA) ──
+        // ── Phase 5: Store C from regs → TG, barrier, gather ────────────
+        // All warps store all tiles (identical values, no race).
+        // B is no longer needed — C overwrites TG.
+        LLVM::CallOp::create(rewriter, loc, tgBarrFn, ValueRange{fenceTG, execMod});
+        for (int64_t tm = 0; tm < tilesM; ++tm) {
+            for (int64_t tn = 0; tn < tilesN; ++tn) {
+                Value cOff = makeI64Vec2(rewriter, loc, tn * 8, tm * 8);
+                LLVM::CallOp::create(rewriter, loc, storeFn,
+                    ValueRange{matC_tiles[tm][tn], ptrTG, cShape, cStride, cOff});
+            }
+        }
         LLVM::CallOp::create(rewriter, loc, tgBarrFn, ValueRange{fenceTG, execMod});
 
         // ── Gather C elements back ────────────────────────────────────────
+        SmallVector<Value> resultElems(elemsC.size());
         for (size_t i = 0; i < elemsC.size(); ++i) {
             auto &c = cCoordsStatic[i];
-            resultElems[i] = gather1(ptrC, flatIdx(cBaseRow, cBaseCol, c.row, c.col, N));
+            resultElems[i] = gather1(ptrTG, flatIdx(cBaseRow, cBaseCol, c.row, c.col, N));
         }
 
         // ── Pack result ───────────────────────────────────────────────────

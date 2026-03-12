@@ -2929,7 +2929,7 @@ def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
     np.testing.assert_allclose(y_tri, y_ref, rtol=0.01, atol=1e-3)
 
 
-def test_no_rematerialization_op():
+def test_no_rematerialization_op(device):
 
     if torch.version.hip:
         pytest.skip("test not supported on AMD")
@@ -2953,7 +2953,6 @@ def test_no_rematerialization_op():
             sum_plus_0 = tl.full((1, 2), 0, tl.float32) + accum[:, None]
             tl.store(out_1 + my_idxs[:, None] * 2 + tl.arange(0, 2)[None, :], sum_plus_0)
 
-    device = "cuda"
     data_len = 32
     data_dim = 64
     torch.manual_seed(0)
@@ -5682,6 +5681,8 @@ def test_load_scalar_with_mask(device):
 # maybe delete it later after ptxas has been fixed
 @pytest.mark.parametrize("dtype_str", ['float16', 'int16'])
 def test_ptx_cast(dtype_str, device):
+    if not is_cuda():
+        pytest.skip("test_ptx_cast is PTX-specific")
 
     @triton.jit
     def kernel(in_ptr0, out_ptr2, xnumel, rnumel, dtype: tl.constexpr, XBLOCK: tl.constexpr, RBLOCK: tl.constexpr):
@@ -6096,6 +6097,8 @@ def test_tl_range_num_stages(device):
 
 
 def test_tl_range_fuse(device):
+    if not is_cuda():
+        pytest.skip("loop fusion not supported on MPS")
 
     @triton.jit
     def kernel(ub, out_ptr):
@@ -6121,6 +6124,8 @@ def test_tl_range_fuse(device):
 
 
 def test_tl_range_fuse_dependent(device):
+    if not is_cuda():
+        pytest.skip("loop fusion not supported on MPS")
 
     @triton.jit
     def kernel(ub, out_i_ptr, out_j_ptr):
@@ -6172,7 +6177,9 @@ def test_tl_range_option_none():
     assert "loop_unroll_factor" not in compiled_kernel.asm["ttir"]
 
 
-def test_disable_licm():
+def test_disable_licm(device='cuda'):
+    if not is_cuda():
+        pytest.skip("LICM metadata not supported on MPS")
 
     @triton.jit
     def while_no_licm(n):

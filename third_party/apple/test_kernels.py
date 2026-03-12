@@ -504,19 +504,19 @@ def atomic_add_kernel(ptr, val, N: tl.constexpr):
     pid = tl.program_id(0)
     tl.atomic_add(ptr, val)
 
-# Single block: 128 threads all atomically add 1.0
+# Single block: scalar atomic → 1 program adds 1.0
 out = torch.zeros(1, device=DEVICE)
 atomic_add_kernel[(1,)](out, 1.0, N=128, num_warps=4)
 torch.mps.synchronize()
-check('atomic_add (f32, single block)', abs(out.item() - 128.0) < 1e-3,
-      f'got {out.item()}, expected 128.0')
+check('atomic_add (f32, single block)', abs(out.item() - 1.0) < 1e-3,
+      f'got {out.item()}, expected 1.0')
 
-# Multi-block: 4 blocks × 128 threads
+# Multi-block: 4 programs each add 1.0
 out = torch.zeros(1, device=DEVICE)
 atomic_add_kernel[(4,)](out, 1.0, N=128, num_warps=4)
 torch.mps.synchronize()
-check('atomic_add (f32, multi-block)', abs(out.item() - 512.0) < 1e-3,
-      f'got {out.item()}, expected 512.0')
+check('atomic_add (f32, multi-block)', abs(out.item() - 4.0) < 1e-3,
+      f'got {out.item()}, expected 4.0')
 
 # Integer atomic add
 @triton.jit
@@ -526,8 +526,8 @@ def atomic_add_i32_kernel(ptr, val, N: tl.constexpr):
 out_i = torch.zeros(1, dtype=torch.int32, device=DEVICE)
 atomic_add_i32_kernel[(4,)](out_i, 1, N=128, num_warps=4)
 torch.mps.synchronize()
-check('atomic_add (i32, multi-block)', out_i.item() == 512,
-      f'got {out_i.item()}, expected 512')
+check('atomic_add (i32, multi-block)', out_i.item() == 4,
+      f'got {out_i.item()}, expected 4')
 
 
 # Integer atomic max
@@ -599,13 +599,12 @@ check('atomic_or (i32)', out_i.item() == 0xFF,
 def atomic_xor_kernel(ptr, val, N: tl.constexpr):
     tl.atomic_xor(ptr, val)
 
-# 128 threads XOR with same value: even count → cancels out
+# 1 program XORs 0xAA with 0xFF → 0x55
 out_i = torch.full((1,), 0xAA, dtype=torch.int32, device=DEVICE)
 atomic_xor_kernel[(1,)](out_i, 0xFF, N=128, num_warps=4)
 torch.mps.synchronize()
-# 128 threads XOR 0xFF: even number of XORs cancels, result = 0xAA
-check('atomic_xor (i32)', out_i.item() == 0xAA,
-      f'got {out_i.item()}, expected {0xAA}')
+check('atomic_xor (i32)', out_i.item() == 0x55,
+      f'got {out_i.item()}, expected {0x55}')
 
 
 # ── tl.where (select) ────────────────────────────────────────────────────────
@@ -876,6 +875,84 @@ torch.mps.synchronize()
 ref = A @ B
 check('gemm_tiled (128x128x64)', (C - ref).abs().max().item() < 1e-1,
       f'max err {(C - ref).abs().max().item()}')
+
+
+# ── Larger tile GEMM (32×32 tiles — stress TG memory) ────────────────────────
+# 32×32 tiles: each dot needs 4×[1024×float] TG = 16 KB + global_smem
+# This is close to the 32 KB TG limit on Apple Silicon.
+M, N, K = 128, 128, 128
+BM, BN, BK = 32, 32, 32
+A = torch.randn(M, K, device=DEVICE)
+B = torch.randn(K, N, device=DEVICE)
+C = torch.zeros(M, N, device=DEVICE)
+grid = (M // BM * (N // BN),)
+try:
+    gemm_tiled_kernel[grid](A, B, C, M=M, N=N, K=K, BM=BM, BN=BN, BK=BK)
+    torch.mps.synchronize()
+    ref = A @ B
+    check('gemm_tiled (128x128, 32x32 tiles)', (C - ref).abs().max().item() < 1e-1,
+          f'max err {(C - ref).abs().max().item()}')
+except Exception as e:
+    check('gemm_tiled (128x128, 32x32 tiles)', False, str(e)[:200])
+
+
+# ── 64×64 single-tile dot (exceeds 32 KB TG — currently fails on M1) ────────
+# 64×64 dot: 4×[4096×float] + cvt + scratch = ~72 KB TG → GPU JIT rejects.
+# This is the blocker for larger tile sizes on MPS.
+try:
+    A64 = torch.randn(64, 64, device=DEVICE)
+    B64 = torch.randn(64, 64, device=DEVICE)
+    C64 = torch.zeros(64, 64, device=DEVICE)
+    dot_kernel[(1,)](A64, B64, C64, 64, 64, 64)
+    torch.mps.synchronize()
+    ref64 = A64 @ B64
+    check('dot (64x64) [TG limit]', (C64 - ref64).abs().max().item() < 1e-1,
+          f'max err {(C64 - ref64).abs().max().item()}')
+except Exception as e:
+    err_msg = str(e)
+    if 'materializeAll' in err_msg or 'pipeline state' in err_msg.lower():
+        check('dot (64x64) [TG limit]', False, 'TG memory exceeds 32 KB limit (~72 KB needed)')
+    else:
+        check('dot (64x64) [TG limit]', False, err_msg[:200])
+
+
+# ── GEMM with runtime strides (regression test for scalar buffer packing) ────
+@triton.jit
+def gemm_stride_kernel(
+    A, B, C, M, N, K,
+    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+    BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    num_n = N // BN
+    pid_m = pid // num_n
+    pid_n = pid % num_n
+    offs_m = pid_m * BM + tl.arange(0, BM)
+    offs_n = pid_n * BN + tl.arange(0, BN)
+    acc = tl.zeros((BM, BN), dtype=tl.float32)
+    for k in range(0, K, BK):
+        offs_k = k + tl.arange(0, BK)
+        a = tl.load(A + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak)
+        b = tl.load(B + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn)
+        acc += tl.dot(a, b)
+    tl.store(C + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn, acc)
+
+torch.manual_seed(42)
+M, N, K = 64, 64, 48
+A = torch.randn(M, K, device=DEVICE)
+B = torch.randn(K, N, device=DEVICE)
+C = torch.zeros(M, N, device=DEVICE)
+ref = A @ B
+grid = (M // 16 * (N // 16),)
+try:
+    gemm_stride_kernel[grid](A, B, C, M, N, K,
+        A.stride(0), A.stride(1), B.stride(0), B.stride(1), C.stride(0), C.stride(1),
+        16, 16, 16)
+    torch.mps.synchronize()
+    err = (C - ref).abs().max().item()
+    check('gemm_stride (64x64x48, runtime strides)', err < 1e-2, f'max err {err}')
+except Exception as e:
+    check('gemm_stride (64x64x48, runtime strides)', False, str(e)[:200])
 
 
 # ── Summary ───────────────────────────────────────────────────────────────────

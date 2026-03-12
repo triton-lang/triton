@@ -38,7 +38,7 @@ from triton._C.libtriton import ir, passes, llvm
 def _load_metalasm():
     """Load MetalASMBridge dylib and return a compile function, or None."""
     dylib = os.path.expanduser(
-        '~/projects/oss/llvm/.build/release/libMetalASMBridge.dylib')
+        '~/projects/oss/llvm/.build/debug/libMetalASMBridge.dylib')
     if not os.path.exists(dylib):
         return None
     try:
@@ -117,6 +117,8 @@ class MPSBackend(BaseBackend):
 
     def parse_options(self, opts) -> MPSOptions:
         args = {k: opts[k] for k in MPSOptions.__dataclass_fields__ if k in opts}
+        nw = args.get("num_warps", MPSOptions.num_warps)
+        assert nw > 0 and (nw & (nw - 1)) == 0, "num_warps must be a power of 2"
         return MPSOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -151,6 +153,7 @@ class MPSBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
         passes.common.add_symbol_dce(pm)
+        passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
         return mod
 

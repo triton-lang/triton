@@ -21,6 +21,18 @@ SKIP_CATEGORIES = {  # Validated categories (pass fully or with known limitation
     # "control" excluded from batch — causes GPU deadlock. Run standalone: python run_core_tests.py control
     # control: 28/28 pass individually. 3 test_for_iv i64 known fragile, 1 test_nested_while (37 vs 40)
     "misc",     # 62/63: 1 skip (test_value_specialization_overflow u64 — PyTorch MPS can't cast u64 max)
+    "tensor_ops",  # 80/80: 8 skipped (int64/float64 in test_cat), 1 TG overflow in test_permute (known)
+    "histogram",  # 15/15
+    "scan",  # 885/885: 12 skip (cummax TG overflow on large shapes), 112 skip (int64/float64)
+    "dtype",  # 20/20
+    "tma",  # 2/2
+    "hw_specific",  # 2/2
+    "misc_advanced",  # 20/20
+    "tensor_ops_advanced",  # 113/113: test_trans_4d flaky (passes on rerun)
+    "function_call",  # 11/11: noinline (simple/call_graph/shared/dynamic/multi_values) all pass
+    "control_advanced",  # 15/15: test_tl_range_num_stages (pipelined matmul) now passes with load-and-extract
+    "inline_asm",  # 0/0: all skipped (PTX/CUDA inline asm, not applicable to MPS)
+    "math_advanced",  # 7/10: 3 skip (float64 unsupported on MPS: rint f32/f64 test harness, precise_math sqrt_rn)
 }
 
 CATEGORIES = {

@@ -83,7 +83,20 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                                std::optional<Value> ctaId, Value val,
                                Value pred) const {
     assert(!ctaId && "Apple does not support cross-CTA transfers");
-    LLVM::StoreOp::create(rewriter, loc, val, ptr);
+    if (pred) {
+        auto *curBlock = rewriter.getInsertionBlock();
+        auto curPoint = rewriter.getInsertionPoint();
+        auto *endBlock = curBlock->splitBlock(curPoint);
+        auto *thenBlock = rewriter.createBlock(endBlock);
+        rewriter.setInsertionPointToEnd(curBlock);
+        LLVM::CondBrOp::create(rewriter, loc, pred, thenBlock, endBlock);
+        rewriter.setInsertionPointToEnd(thenBlock);
+        LLVM::StoreOp::create(rewriter, loc, val, ptr);
+        LLVM::BrOp::create(rewriter, loc, endBlock);
+        rewriter.setInsertionPointToStart(endBlock);
+    } else {
+        LLVM::StoreOp::create(rewriter, loc, val, ptr);
+    }
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -138,12 +151,7 @@ static LLVMFuncOp getOrInsertShuffleIntrinsic(RewriterBase &rewriter,
 // Emit a shuffle call, handling bitcast for types that need i32 shuffle
 static Value emitShuffle(RewriterBase &rewriter, Location loc, Value val,
                           Value offset, StringRef kind) {
-    auto mod = val.getDefiningOp()
-                   ? val.getDefiningOp()->getParentOfType<ModuleOp>()
-                   : cast<BlockArgument>(val)
-                         .getOwner()
-                         ->getParentOp()
-                         ->getParentOfType<ModuleOp>();
+    auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     Type valTy = val.getType();
 
     // For types narrower than 32 bits, bitcast to i32, shuffle, bitcast back

@@ -18,6 +18,8 @@
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
+#include "mlir/Dialect/Math/Transforms/Passes.h"
+#include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
@@ -970,8 +972,16 @@ struct AppleFuncOpConversion
             if (results.size() == 1) {
                 retTy = getTypeConverter()->convertType(results[0]);
                 if (!retTy) return failure();
+            } else if (results.size() > 1) {
+                // Pack multiple return values into a struct
+                SmallVector<Type> memberTypes;
+                for (auto resTy : results) {
+                    Type converted = getTypeConverter()->convertType(resTy);
+                    if (!converted) return failure();
+                    memberTypes.push_back(converted);
+                }
+                retTy = LLVM::LLVMStructType::getLiteral(ctx, memberTypes);
             }
-            // 0 results → void, >1 results not handled (would need struct packing)
         }
 
         auto llvmFuncTy = LLVM::LLVMFunctionType::get(retTy, newArgTypes);
@@ -1006,6 +1016,19 @@ struct AppleFuncOpConversion
     }
 };
 
+// Lower triton::PrintOp → no-op (Metal has no printf).
+// Erase the op so it doesn't block legalization.
+struct ApplePrintOpConversion
+    : public ConvertOpToLLVMPattern<triton::PrintOp> {
+    using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+    LogicalResult matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter) const override {
+        rewriter.eraseOp(op);
+        return success();
+    }
+};
+
 // Lower triton::CallOp → LLVM::CallOp for Apple device function calls.
 // Unlike CUDA, we don't append shared memory stack pointers.
 struct AppleCallOpConversion
@@ -1026,15 +1049,37 @@ struct AppleCallOpConversion
             resultTypes.push_back(converted);
         }
 
-        auto newCallOp = LLVM::CallOp::create(
-            rewriter, loc, resultTypes.empty() ? TypeRange() : TypeRange(resultTypes),
-            promotedOperands, callOp->getAttrs());
-        newCallOp.getProperties().setOpBundleSizes(
-            rewriter.getDenseI32ArrayAttr({}));
-        newCallOp.getProperties().setOperandSegmentSizes(
-            {static_cast<int>(promotedOperands.size()), 0});
+        if (resultTypes.size() <= 1) {
+            // Single or void return — direct lowering
+            auto newCallOp = LLVM::CallOp::create(
+                rewriter, loc, resultTypes.empty() ? TypeRange() : TypeRange(resultTypes),
+                promotedOperands, callOp->getAttrs());
+            newCallOp.getProperties().setOpBundleSizes(
+                rewriter.getDenseI32ArrayAttr({}));
+            newCallOp.getProperties().setOperandSegmentSizes(
+                {static_cast<int>(promotedOperands.size()), 0});
+            rewriter.replaceOp(callOp, newCallOp.getResults());
+        } else {
+            // Multi-return: call returns a struct, extract each field
+            auto *ctx = rewriter.getContext();
+            auto structTy = LLVM::LLVMStructType::getLiteral(ctx, resultTypes);
+            auto newCallOp = LLVM::CallOp::create(
+                rewriter, loc, TypeRange(structTy),
+                promotedOperands, callOp->getAttrs());
+            newCallOp.getProperties().setOpBundleSizes(
+                rewriter.getDenseI32ArrayAttr({}));
+            newCallOp.getProperties().setOperandSegmentSizes(
+                {static_cast<int>(promotedOperands.size()), 0});
 
-        rewriter.replaceOp(callOp, newCallOp.getResults());
+            SmallVector<Value> extracted;
+            Value structResult = newCallOp.getResult();
+            for (unsigned i = 0; i < resultTypes.size(); ++i) {
+                extracted.push_back(LLVM::ExtractValueOp::create(
+                    rewriter, loc, resultTypes[i], structResult,
+                    ArrayRef<int64_t>{static_cast<int64_t>(i)}));
+            }
+            rewriter.replaceOp(callOp, extracted);
+        }
         return success();
     }
 };
@@ -1107,6 +1152,8 @@ struct ConvertTritonAppleGPUToLLVMPass
             typeConverter, targetInfo, patterns, patternBenefitDefault);
         mlir::triton::populateReduceOpToLLVMPatterns(
             typeConverter, patterns, targetInfo, patternBenefitDefault);
+        mlir::triton::populateScanOpToLLVMPatterns(
+            typeConverter, patterns, targetInfo, patternBenefitDefault);
 
         // Histogram → shared memory atomics + barrier
         mlir::triton::populateHistogramOpToLLVMPatterns(
@@ -1121,6 +1168,9 @@ struct ConvertTritonAppleGPUToLLVMPass
 
         // WarpIdOp → tid / 32 (needed by shared range/layout helpers)
         patterns.add<WarpIdOpConversion>(typeConverter, patternBenefitDefault);
+
+        // PrintOp → no-op (Metal has no printf)
+        patterns.add<ApplePrintOpConversion>(typeConverter, patternBenefitDefault + 10);
 
         // GetNumProgramsOp → air.threadgroups_per_grid
         patterns.add<GetNumProgramsOpAppleConversion>(typeConverter,
@@ -1164,11 +1214,15 @@ struct ConvertTritonAppleGPUToLLVMPass
 #undef POPULATE_FLOAT_OP
         mlir::triton::populateViewOpToLLVMPatterns(
             typeConverter, patterns, patternBenefitDefault + 1);
+        // Expand math::ErfOp to polynomial approximation before MathToLLVM
+        // (there is no llvm.erf intrinsic — NVIDIA uses libdevice, we expand inline)
+        mlir::populatePolynomialApproximateErfPattern(patterns);
         mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
         mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                                patterns);
         mlir::index::populateIndexToLLVMConversionPatterns(typeConverter,
                                                             patterns);
+        mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
 
         // Conversion target: everything must lower to LLVM dialect
         ConversionTarget target(*ctx);
@@ -1324,6 +1378,15 @@ std::unique_ptr<mlir::Pass> createConvertTritonAppleGPUToLLVMPass() {
 
 std::unique_ptr<mlir::Pass> createLowerGPUToAirPass() {
     return std::make_unique<LowerGPUToAirPass>();
+}
+
+void registerTritonAppleGPUToLLVMPasses() {
+    mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+        return std::make_unique<ConvertTritonAppleGPUToLLVMPass>();
+    });
+    mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+        return std::make_unique<LowerGPUToAirPass>();
+    });
 }
 
 } // namespace mlir::triton::applegpu
