@@ -753,7 +753,6 @@ def make_fn(variant, A, B, A_scale, B_scale, VEC_SIZE, a_format):
         B_scale_flat = B_scale.contiguous().flatten()
 
         def cublas_fn():
-            cublas.set_stream(torch.cuda.current_stream().cuda_stream)
             return cublas_block_scaled_matmul(A, B, A_scale_flat, B_scale_flat, a_format)
 
         return cublas_fn

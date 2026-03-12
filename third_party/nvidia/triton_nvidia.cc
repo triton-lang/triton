@@ -317,9 +317,6 @@ void init_triton_nvidia(py::module &&m) {
                         workspace.attr("element_size")().cast<size_t>();
         return new CublasLtInstance(wrk_ptr, wrk_size);
       }))
-      // Required for benchmarking cuBLAS with do_bench_cudagraph.
-      .def("set_stream", [](CublasLtInstance &self,
-                            uint64_t stream) { self.set_stream(stream); })
       .def("matmul",
            [](CublasLtInstance &self, py::object &A, py::object &B,
               py::object &C) {
