@@ -14,7 +14,6 @@ from triton.experimental.gsan import create_mem_pool
 from triton._C.libtriton.gsan_testing import AtomicScope, SHADOW_GRANULARITY_BYTES, ScalarClock
 from triton.experimental.gsan._testing_utils import (load_one_i32, shadow_cell_from_address, store_one_i32,
                                                      thread_state_from_smid, nanosleep)
-from triton.tools.tensor_descriptor import TensorDescriptor
 
 
 @pytest.fixture()
