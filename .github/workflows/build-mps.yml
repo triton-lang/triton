@@ -24,7 +24,10 @@ jobs:
           submodules: recursive
 
       - name: Install Metal Toolchain
-        run: xcodebuild -downloadComponent MetalToolchain
+        run: |
+          # -downloadComponent is Xcode 26+ only; on older Xcode, Metal tools are bundled
+          xcodebuild -downloadComponent MetalToolchain || echo "Metal toolchain already bundled"
+          xcrun --find metal-as || echo "WARNING: metal-as not found"
 
       - name: Install brew dependencies
         run: |
