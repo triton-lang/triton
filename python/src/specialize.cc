@@ -611,6 +611,138 @@ PyObject *specialize_impl(PyObject *self, PyObject *const *args,
   return PyTuple_Pack(2, type.ptr(), key.ptr());
 }
 
+PyObject *specialize_impl_batched(PyObject *self, PyObject *const *args,
+                                  Py_ssize_t nargs) {
+  if (!init_called) {
+    if (!init_globals()) {
+      return nullptr;
+    }
+  }
+
+  if (nargs != 8) {
+    PyErr_SetString(PyExc_TypeError,
+                    "native_specialize_impl_batched expected 8 arguments");
+    return nullptr;
+  }
+
+  PyObject *backend = args[0];
+  PyObject *kernel_args = args[1];
+  PyObject *constexpr_flags = args[2];
+  PyObject *is_consts = args[3];
+  PyObject *specialize_values = args[4];
+  PyObject *aligns = args[5];
+  PyObject *override_types = args[6];
+  PyObject *return_keys = args[7];
+
+  auto check_tuple = [](PyObject *obj, const char *name) {
+    if (!PyTuple_Check(obj)) {
+      PyErr_Format(PyExc_TypeError,
+                   "native_specialize_impl_batched expected %s to be a tuple",
+                   name);
+      return false;
+    }
+    return true;
+  };
+
+  if (!check_tuple(kernel_args, "args") ||
+      !check_tuple(constexpr_flags, "constexpr_flags") ||
+      !check_tuple(is_consts, "is_consts") ||
+      !check_tuple(specialize_values, "specialize_values") ||
+      !check_tuple(aligns, "aligns") ||
+      !check_tuple(override_types, "override_types") ||
+      !check_tuple(return_keys, "return_keys")) {
+    return nullptr;
+  }
+
+  Py_ssize_t num_args = PyTuple_GET_SIZE(kernel_args);
+  auto check_len = [num_args](PyObject *obj, const char *name) {
+    if (PyTuple_GET_SIZE(obj) != num_args) {
+      PyErr_Format(PyExc_ValueError,
+                   "native_specialize_impl_batched expected %s to have %zd "
+                   "entries but got %zd",
+                   name, num_args, PyTuple_GET_SIZE(obj));
+      return false;
+    }
+    return true;
+  };
+
+  if (!check_len(constexpr_flags, "constexpr_flags") ||
+      !check_len(is_consts, "is_consts") ||
+      !check_len(specialize_values, "specialize_values") ||
+      !check_len(aligns, "aligns") ||
+      !check_len(override_types, "override_types") ||
+      !check_len(return_keys, "return_keys")) {
+    return nullptr;
+  }
+
+  auto result = from_new_ref(PyList_New(num_args));
+  if (!result)
+    return nullptr;
+
+  for (Py_ssize_t i = 0; i < num_args; ++i) {
+    PyObject *arg = PyTuple_GET_ITEM(kernel_args, i);
+    int is_constexpr = PyObject_IsTrue(PyTuple_GET_ITEM(constexpr_flags, i));
+    if (is_constexpr == -1) {
+      PyErr_Format(PyExc_TypeError,
+                   "native_specialize_impl_batched expected boolean "
+                   "constexpr_flags at index %zd",
+                   i);
+      return nullptr;
+    }
+
+    py::object type;
+    py::object key;
+    if (is_constexpr) {
+      type = from_borrowed_ref(constexpr_str);
+      key = from_borrowed_ref(arg);
+    } else {
+      int is_const = PyObject_IsTrue(PyTuple_GET_ITEM(is_consts, i));
+      int specialize_value =
+          PyObject_IsTrue(PyTuple_GET_ITEM(specialize_values, i));
+      int align = PyObject_IsTrue(PyTuple_GET_ITEM(aligns, i));
+      int return_key = PyObject_IsTrue(PyTuple_GET_ITEM(return_keys, i));
+      if (is_const == -1 || specialize_value == -1 || align == -1 ||
+          return_key == -1) {
+        PyErr_Format(PyExc_TypeError,
+                     "native_specialize_impl_batched expected boolean "
+                     "metadata at index %zd",
+                     i);
+        return nullptr;
+      }
+
+      auto spec =
+          specialize_arg(backend, arg, is_const, specialize_value, align);
+      type = std::move(spec.first);
+      key = std::move(spec.second);
+      if (!type || !key) {
+        if (!PyErr_Occurred()) {
+          PyErr_Format(PyExc_TypeError,
+                       "failed to specialize argument of type: %s",
+                       Py_TYPE(arg)->tp_name);
+        }
+        return nullptr;
+      }
+
+      PyObject *override_type = PyTuple_GET_ITEM(override_types, i);
+      if (!Py_IsNone(override_type)) {
+        type = from_borrowed_ref(override_type);
+      }
+      if (!return_key) {
+        key = py::none();
+      }
+    }
+
+    auto item = from_new_ref(PyTuple_New(2));
+    if (!item)
+      return nullptr;
+    PyTuple_SET_ITEM(item.ptr(), 0, type.release().ptr());
+    PyTuple_SET_ITEM(item.ptr(), 1, key.release().ptr());
+    PyList_SET_ITEM(result.ptr(), i, item.release().ptr());
+  }
+
+  return result.release().ptr();
+}
+
 bool visit_make_tensordesc_args(PyObject *arg, PyObject *sig,
                                 PyObject *relevant_paths,
                                 PyObject *tensordesc_meta,
@@ -754,6 +886,8 @@ PyObject *make_tensordesc_args(PyObject *self, PyObject *const *args,
 static PyMethodDef module_methods[] = {
     {"native_specialize_impl", (PyCFunction)specialize_impl, METH_FASTCALL,
      nullptr},
+    {"native_specialize_impl_batched", (PyCFunction)specialize_impl_batched,
+     METH_FASTCALL, nullptr},
     {"make_tensordesc_args", (PyCFunction)make_tensordesc_args, METH_FASTCALL,
      "Helper to translate tensordesc args"},
     {nullptr, nullptr, 0, nullptr} // sentinel

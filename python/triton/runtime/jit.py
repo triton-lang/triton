@@ -7,7 +7,6 @@ import itertools
 import threading
 import re
 import textwrap
-from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, overload, Dict, Any, Tuple
@@ -19,7 +18,7 @@ from .driver import driver
 from . import _async_compile
 from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
 from .cache import get_cache_key
-from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, ir
+from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, native_specialize_impl_batched, ir
 
 TRITON_MODULE = "triton.language"
 GLUON_MODULE = "triton.experimental.gluon.language"
@@ -400,36 +399,36 @@ def create_function_from_signature(sig, kparams, backend):
     much of the kernel launch overhead -- every time we run the kernel.
     """
     assert len(sig.parameters) == len(kparams)
-    # Create the function argument list and the dict entries for the return statement
-    specialization = []
-    # signature
-    for name, kp in zip(sig.parameters.keys(), kparams):
-        if kp.is_constexpr:
-            specialization.append(f'("constexpr", {name})')
-        else:
-            is_const = 'True' if kp.is_const else 'False'
-            specialize = 'False' if kp.do_not_specialize else 'True'
-            align = 'False' if kp.do_not_specialize_on_alignment else 'True'
-            ret = f"specialize_impl(backend, {name}, {is_const}, {specialize}, {align})"
-            if kp.annotation_type:
-                if isinstance(kp.annotation_type, str):
-                    if kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]:
-                        # we do not specialize non-constexpr floats and bools:
-                        specialize = False
-                if specialize:
-                    specialization.append(f'("{kp.annotation_type}",) + {ret}[1:]')
-                else:
-                    # skip runtime specialization:
-                    specialization.append(f'("{kp.annotation_type}", None)')
-            else:
-                specialization.append(f"{ret}")
+    param_names = tuple(sig.parameters.keys())
+    constexpr_flags = tuple(kp.is_constexpr for kp in kparams)
+    is_consts = tuple(kp.is_const for kp in kparams)
+    specialize_values = tuple(not kp.do_not_specialize for kp in kparams)
+    aligns = tuple(not kp.do_not_specialize_on_alignment for kp in kparams)
+    override_types = tuple(kp.annotation_type or None for kp in kparams)
+    return_keys = tuple(
+        not (kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]) if kp.annotation_type else True
+        for kp in kparams)
+
+    if param_names:
+        args_tuple_expr = f'({", ".join(param_names)}{"," if len(param_names) == 1 else ""})'
+    else:
+        args_tuple_expr = "()"
 
     # compute argument string for a given parameter
     arg = lambda x: x[0] if x[1].default is inspect.Parameter.empty else f"{x[0]}=default_{x[0]}"
     func_body = f"""
 def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
-    params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
-    specialization = [{','.join(specialization)}]
+    params = {{{', '.join([f"'{name}': {name}" for name in param_names])}}}
+    specialization = specialize_impl_batched(
+        backend,
+        {args_tuple_expr},
+        constexpr_flags,
+        is_consts,
+        specialize_values,
+        aligns,
+        override_types,
+        return_keys,
+    )
     return params, specialization, options
 """
 
@@ -440,10 +439,14 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
         if param.default is not inspect.Parameter.empty
     }
 
-    specialize_impl = native_specialize_impl
-    func_namespace["specialize_impl"] = specialize_impl
+    func_namespace["specialize_impl_batched"] = native_specialize_impl_batched
     func_namespace["backend"] = backend
-    func_namespace["JITCallable"] = JITCallable
+    func_namespace["constexpr_flags"] = constexpr_flags
+    func_namespace["is_consts"] = is_consts
+    func_namespace["specialize_values"] = specialize_values
+    func_namespace["aligns"] = aligns
+    func_namespace["override_types"] = override_types
+    func_namespace["return_keys"] = return_keys
 
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
@@ -678,18 +681,23 @@ class JITFunction(JITCallable, KernelInterface[T]):
         assert callable(hook)
         self.pre_run_hooks.append(hook)
 
-    def create_binder(self):
+    def create_binder(self, device=None):
         """
         Precompute as much as possible.
         """
         from ..compiler import CompiledKernel, compile, ASTSource, make_backend
-        target = driver.active.get_current_target()
+        target = driver.active.get_current_target(device)
         backend = make_backend(target)
         self.CompiledKernel = CompiledKernel
         self.compile = compile
         self.ASTSource = ASTSource
         binder = create_function_from_signature(self.signature, self.params, backend)
         return {}, {}, target, backend, binder
+
+    def _get_device_cache(self, device):
+        if device not in self.device_caches:
+            self.device_caches[device] = self.create_binder(device)
+        return self.device_caches[device]
 
     def _pack_args(self, backend, kwargs, bound_args, specialization, options):
         # options
@@ -700,8 +708,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
         signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
         # check arguments
         assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
-        assert "device" not in kwargs, "device option is deprecated; current device will be used"
-        assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
         for k in kwargs:
             if k not in options.__dict__ and k not in sigkeys:
                 raise KeyError("Keyword argument %s was specified but unrecognised" % k)
@@ -719,15 +725,18 @@ class JITFunction(JITCallable, KernelInterface[T]):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
         kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
 
-        # parse options
-        device = driver.active.get_current_device()
-        stream = driver.active.get_current_stream(device)
+        device = kwargs.pop("device", None)
+        stream = kwargs.pop("stream", None)
+        if device is None:
+            device = driver.active.get_current_device()
+        if stream is None:
+            stream = driver.active.get_current_stream(device)
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        kernel_cache, kernel_key_cache, target, backend, binder = self.device_caches[device]
+        kernel_cache, kernel_key_cache, target, backend, binder = self._get_device_cache(device)
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
@@ -767,8 +776,9 @@ class JITFunction(JITCallable, KernelInterface[T]):
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
             # launch kernel
-            launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
-            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+            kernel._init_handles(device=device)
+            launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values(), device=device)
+            kernel.run(grid_0, grid_1, grid_2, stream, device, kernel.function, kernel.packed_metadata, launch_metadata,
                        knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *bound_args.values())
         return kernel
 
@@ -797,7 +807,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
             self.params.append(KernelParam(i, param, dns, dns_oa))
 
         # cache of just-in-time compiled kernels
-        self.device_caches = defaultdict(self.create_binder)
+        self.device_caches = {}
 
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
@@ -823,7 +833,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
                 f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self._fn_name}")
         constant_keys = map(tuple, deserialized_obj['constant_keys'])
         constant_vals = deserialized_obj['constant_vals']
-        _, _, target, backend, _ = self.device_caches[device]
+        _, _, target, backend, _ = self._get_device_cache(device)
         deserialized_target = deserialized_obj['target']
         # TODO: we could support loading a kernel signature serialized on a different target however
         # currently options are target specific so we would need to change that.
@@ -867,7 +877,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         )
 
     def _do_compile(self, key, signature, device, constexprs, options, attrs, warmup):
-        kernel_cache, _, target, backend, _ = self.device_caches[device]
+        kernel_cache, _, target, backend, _ = self._get_device_cache(device)
 
         if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, target, device, constexprs, options, [attrs],
                            warmup):
