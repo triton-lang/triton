@@ -77,8 +77,8 @@ struct RoctxApiData {
   } args;
 };
 
-using RoctxTracerCallbackFn =
-    int (*)(uint32_t domain, uint32_t operationId, void *data);
+using RoctxTracerCallbackFn = int (*)(uint32_t domain, uint32_t operationId,
+                                      void *data);
 using RoctxRegisterTracerCallbackFn = void (*)(RoctxTracerCallbackFn);
 
 // registerRoctxCallback is defined after the Pimpl class (needs access to
@@ -177,9 +177,9 @@ void processKernelRecord(
     const std::string &kernelName,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record) {
   auto externId = Scope::DummyScopeId;
-  bool hasCorrelation = corrIdToExternId.withRead(
-      record->correlation_id.internal,
-      [&](const size_t &value) { externId = value; });
+  bool hasCorrelation =
+      corrIdToExternId.withRead(record->correlation_id.internal,
+                                [&](const size_t &value) { externId = value; });
 
   if (!hasCorrelation) {
     corrIdToExternId.erase(record->correlation_id.internal);
@@ -190,8 +190,7 @@ void processKernelRecord(
   if (externId == Scope::DummyScopeId)
     return;
 
-  bool isGraph =
-      corrIdToIsHipGraph.contain(record->correlation_id.internal);
+  bool isGraph = corrIdToIsHipGraph.contain(record->correlation_id.internal);
   auto &state = externIdToState[externId];
 
   if (!isGraph) {
@@ -435,10 +434,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::roctxCallback(
 }
 
 namespace {
-int roctxTracerCallback(uint32_t /*domain*/, uint32_t operationId,
-                        void *data) {
-  RocprofSDKProfiler::RocprofSDKProfilerPimpl::roctxCallback(operationId,
-                                                              data);
+int roctxTracerCallback(uint32_t /*domain*/, uint32_t operationId, void *data) {
+  RocprofSDKProfiler::RocprofSDKProfilerPimpl::roctxCallback(operationId, data);
   return 0;
 }
 

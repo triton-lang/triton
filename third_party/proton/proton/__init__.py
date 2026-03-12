@@ -11,6 +11,7 @@ from .profile import (
 )
 from . import context, specs, mode, data
 
+
 # Eagerly configure rocprofiler-sdk on AMD systems so that the interception
 # hooks are installed before any HIP/HSA operations create GPU queues.
 # force_configure must run before the first HSA queue is created, otherwise
@@ -24,6 +25,7 @@ def _eager_rocprofiler_init():
         _libproton.ensure_rocprofiler_configured()
     except Exception:
         pass
+
 
 _eager_rocprofiler_init()
 del _eager_rocprofiler_init
