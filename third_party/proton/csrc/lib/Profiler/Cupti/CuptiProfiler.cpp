@@ -608,11 +608,6 @@ bool CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureCallbacks(
 void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
-  if (handleStreamCaptureCallbacks(cbId))
-    return;
-  if (!isLaunch(cbId))
-    return;
-
   size_t numNodes = 1;
   if (isGraphLaunch(cbId)) {
     threadState.enterOp(Scope(""));
@@ -706,11 +701,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
 void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
-  if (handleStreamCaptureCallbacks(cbId))
-    return;
-  if (!isLaunch(cbId))
-    return;
-
   auto &dataToEntry = threadState.dataToEntry;
   if (dataToEntry.empty()) // Profiler is deactivated
     return;
@@ -740,10 +730,13 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiCallbacks(
 
   const CUpti_CallbackData *callbackData =
       static_cast<const CUpti_CallbackData *>(cbData);
-  if (callbackData->callbackSite == CUPTI_API_ENTER) {
-    handleApiEnterLaunchCallbacks(profiler, cbId, callbackData);
-  } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
-    handleApiExitLaunchCallbacks(profiler, cbId, callbackData);
+  handleStreamCaptureCallbacks(cbId);
+  if (isLaunch(cbId)) {
+    if (callbackData->callbackSite == CUPTI_API_ENTER) {
+      handleApiEnterLaunchCallbacks(profiler, cbId, callbackData);
+    } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
+      handleApiExitLaunchCallbacks(profiler, cbId, callbackData);
+    }
   }
 }
 
