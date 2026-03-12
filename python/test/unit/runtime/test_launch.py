@@ -11,6 +11,35 @@ import triton.language as tl
 from triton._internal_testing import is_cuda, is_hip
 
 
+def _install_driver_lookup_counters(monkeypatch):
+    active_driver = triton.runtime.driver.active
+    calls = {
+        "get_current_device": 0,
+        "get_current_stream": [],
+        "get_current_target": [],
+    }
+    orig_get_current_device = active_driver.get_current_device
+    orig_get_current_stream = active_driver.get_current_stream
+    orig_get_current_target = active_driver.get_current_target
+
+    def get_current_device():
+        calls["get_current_device"] += 1
+        return orig_get_current_device()
+
+    def get_current_stream(device):
+        calls["get_current_stream"].append(device)
+        return orig_get_current_stream(device)
+
+    def get_current_target(device=None):
+        calls["get_current_target"].append(device)
+        return orig_get_current_target(device)
+
+    monkeypatch.setattr(active_driver, "get_current_device", get_current_device)
+    monkeypatch.setattr(active_driver, "get_current_stream", get_current_stream)
+    monkeypatch.setattr(active_driver, "get_current_target", get_current_target)
+    return calls
+
+
 def test_metadata() -> None:
 
     used_hook = False
@@ -205,6 +234,41 @@ def test_launch_with_options(options) -> None:
 
     triton.knobs.runtime.jit_post_compile_hook = None
     triton.knobs.runtime.jit_cache_hook = None
+
+
+def test_launch_with_device_and_stream(monkeypatch) -> None:
+    device = triton.runtime.driver.active.get_current_device()
+    launch_stream = torch.cuda.Stream(device=device)
+    calls = _install_driver_lookup_counters(monkeypatch)
+
+    @triton.jit
+    def kernel(x):
+        pass
+
+    kernel[(1, )](1, device=device, stream=launch_stream.cuda_stream)
+
+    assert calls["get_current_device"] == 0
+    assert calls["get_current_stream"] == []
+    assert calls["get_current_target"]
+    assert set(calls["get_current_target"]) == {device}
+
+
+def test_compiled_launch_with_device_and_stream(monkeypatch) -> None:
+
+    @triton.jit
+    def kernel(x):
+        pass
+
+    compiled = kernel.warmup(1, grid=(1, ))
+    device = triton.runtime.driver.active.get_current_device()
+    launch_stream = torch.cuda.Stream(device=device)
+    calls = _install_driver_lookup_counters(monkeypatch)
+
+    compiled[(1, 1, 1)](1, device=device, stream=launch_stream.cuda_stream)
+
+    assert calls["get_current_device"] == 0
+    assert calls["get_current_stream"] == []
+    assert calls["get_current_target"] == [device]
 
 
 @pytest.mark.interpreter

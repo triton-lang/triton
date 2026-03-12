@@ -7,7 +7,6 @@ import itertools
 import threading
 import re
 import textwrap
-from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, overload, Dict, Any, Tuple
@@ -678,18 +677,23 @@ class JITFunction(JITCallable, KernelInterface[T]):
         assert callable(hook)
         self.pre_run_hooks.append(hook)
 
-    def create_binder(self):
+    def create_binder(self, device=None):
         """
         Precompute as much as possible.
         """
         from ..compiler import CompiledKernel, compile, ASTSource, make_backend
-        target = driver.active.get_current_target()
+        target = driver.active.get_current_target(device)
         backend = make_backend(target)
         self.CompiledKernel = CompiledKernel
         self.compile = compile
         self.ASTSource = ASTSource
         binder = create_function_from_signature(self.signature, self.params, backend)
         return {}, {}, target, backend, binder
+
+    def _get_device_cache(self, device):
+        if device not in self.device_caches:
+            self.device_caches[device] = self.create_binder(device)
+        return self.device_caches[device]
 
     def _pack_args(self, backend, kwargs, bound_args, specialization, options):
         # options
@@ -728,7 +732,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        kernel_cache, kernel_key_cache, target, backend, binder = self.device_caches[device]
+        kernel_cache, kernel_key_cache, target, backend, binder = self._get_device_cache(device)
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
@@ -768,8 +772,9 @@ class JITFunction(JITCallable, KernelInterface[T]):
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
             # launch kernel
-            launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
-            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+            kernel._init_handles(device=device)
+            launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values(), device=device)
+            kernel.run(grid_0, grid_1, grid_2, stream, device, kernel.function, kernel.packed_metadata, launch_metadata,
                        knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *bound_args.values())
         return kernel
 
@@ -798,7 +803,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
             self.params.append(KernelParam(i, param, dns, dns_oa))
 
         # cache of just-in-time compiled kernels
-        self.device_caches = defaultdict(self.create_binder)
+        self.device_caches = {}
 
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
@@ -824,7 +829,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
                 f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self._fn_name}")
         constant_keys = map(tuple, deserialized_obj['constant_keys'])
         constant_vals = deserialized_obj['constant_vals']
-        _, _, target, backend, _ = self.device_caches[device]
+        _, _, target, backend, _ = self._get_device_cache(device)
         deserialized_target = deserialized_obj['target']
         # TODO: we could support loading a kernel signature serialized on a different target however
         # currently options are target specific so we would need to change that.
@@ -868,7 +873,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         )
 
     def _do_compile(self, key, signature, device, constexprs, options, attrs, warmup):
-        kernel_cache, _, target, backend, _ = self.device_caches[device]
+        kernel_cache, _, target, backend, _ = self._get_device_cache(device)
 
         if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, target, device, constexprs, options, [attrs],
                            warmup):

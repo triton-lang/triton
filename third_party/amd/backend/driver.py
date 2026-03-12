@@ -340,8 +340,8 @@ class HIPLauncher(object):
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
 
-    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
-                 launch_exit_hook, *args):
+    def __call__(self, gridX, gridY, gridZ, stream, device, function, kernel_metadata, launch_metadata,
+                 launch_enter_hook, launch_exit_hook, *args):
         active_driver = triton.runtime.driver.active
 
         def allocate_scratch(size, align, allocator):
@@ -356,7 +356,7 @@ class HIPLauncher(object):
             if size > 0:
                 grid_size = gridX * gridY * gridZ
                 alloc_size = grid_size * size
-                return active_driver.allocate_default_profile_scratch(alloc_size, align, stream)
+                return active_driver.allocate_default_profile_scratch(alloc_size, align, stream, device)
             return None
 
         global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
@@ -393,17 +393,18 @@ class HIPDriver(GPUDriver):
     def map_python_to_cpp_type(self, ty: str) -> str:
         return ty_to_cpp(ty)
 
-    def get_current_target(self):
-        device = self.get_current_device()
+    def get_current_target(self, device=None):
+        device = self.get_current_device() if device is None else device
         device_properties = self.utils.get_device_properties(device)
         arch = knobs.runtime.override_arch or device_properties['arch']
         warp_size = device_properties['warpSize']
         return GPUTarget("hip", arch.split(':')[0], warp_size)
 
-    def get_active_torch_device(self):
+    def get_active_torch_device(self, device=None):
         import torch
         # when using hip devices, the device string in pytorch is "cuda"
-        return torch.device("cuda", self.get_current_device())
+        device = self.get_current_device() if device is None else device
+        return torch.device("cuda", device)
 
     def get_benchmarker(self):
         from triton.testing import do_bench
