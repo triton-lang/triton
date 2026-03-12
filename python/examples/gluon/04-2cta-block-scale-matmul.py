@@ -812,11 +812,6 @@ def print_table(label, variants, mnk_vals, results):
     print()
 
 
-# Uses do_bench_cudagraph to amortise persistent-kernel launch
-# overhead.  These kernels launch a full SM grid and partition work
-# cooperatively, so standalone launch cost dominates at small problem
-# sizes.  CUDA graph replay isolates steady-state compute throughput,
-# which is the production-relevant metric.
 def run_benchmark():
     results = {}
     for a_format, b_format in ALL_FORMATS:
@@ -826,7 +821,7 @@ def run_benchmark():
             A, B, A_scale, B_scale, VEC_SIZE = make_tensors(MNK, a_format, b_format)
             for variant in variants:
                 fn = make_fn(variant, A, B, A_scale, B_scale, VEC_SIZE, a_format)
-                ms = triton.testing.do_bench_cudagraph(fn)
+                ms = triton.testing.do_bench(fn)
                 tflops = 2.0 * MNK**3 * 1e-12 / (ms * 1e-3)
                 results[(label, variant, MNK)] = tflops
 
