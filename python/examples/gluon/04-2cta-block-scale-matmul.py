@@ -388,7 +388,12 @@ def mma_scaled_epilogue_partition(p):
 def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, num_buffers: gl.constexpr,
                                        BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr,
                                        num_acc_buffers: gl.constexpr, SchedulerImpl: gl.constexpr,
-                                       NUM_CTAS: gl.constexpr, block_layout_c: gl.constexpr):
+                                       block_layout_c: gl.constexpr):
+    NUM_CTAS: gl.constexpr = gl.num_ctas()
+    MULTI_CTA: gl.constexpr = NUM_CTAS > 1
+    BLOCK_M_PER_CTA: gl.constexpr = BLOCK_M // NUM_CTAS
+    gl.static_assert(BLOCK_M_PER_CTA == 64 or BLOCK_M_PER_CTA == 128)
+
     A_ELEM_PER_BYTE: gl.constexpr = 2 if a_desc.dtype == gl.uint8 else 1
     M = c_desc.shape[0]
     N = c_desc.shape[1]
@@ -401,24 +406,18 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
     b_scale_bufs = gl.allocate_shared_memory(b_scale_desc.dtype, [num_buffers] + b_scale_desc.block_type.shape,
                                              b_scale_desc.layout)
 
-    if NUM_CTAS > 1:
-        bar_layout: gl.constexpr = mbarrier.MBarrierLayout.multicta(num_ctas=NUM_CTAS, two_cta=True)
-        lead_bar_layout: gl.constexpr = mbarrier.MBarrierLayout.multicta(num_ctas=NUM_CTAS, two_cta=False)
-        tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M // NUM_CTAS, BLOCK_N], col_stride=1,
-                                                       cga_layout=block_layout_c.cga_layout, two_ctas=True)
-    else:
-        bar_layout: gl.constexpr = mbarrier.MBarrierLayout()
-        lead_bar_layout: gl.constexpr = mbarrier.MBarrierLayout()
-        tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
+    cga_layout: gl.constexpr = block_layout_c.cga_layout if MULTI_CTA else []
+    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M // NUM_CTAS, BLOCK_N], col_stride=1, cga_layout=cga_layout,
+                                                   two_ctas=MULTI_CTA)
 
-    load_empty_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, NUM_CTAS], lead_bar_layout)
-    load_ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], bar_layout)
+    load_empty_bars = mbarrier.allocate_mbarrier(batch=num_buffers)
+    load_ready_bars = mbarrier.allocate_mbarrier(batch=num_buffers, two_ctas=MULTI_CTA)
     for i in gl.static_range(num_buffers):
         mbarrier.init(load_empty_bars.index(i), count=1)
         mbarrier.init(load_ready_bars.index(i), count=1)
 
-    acc_empty_bars = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], bar_layout)
-    acc_ready_bars = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, NUM_CTAS], lead_bar_layout)
+    acc_empty_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=MULTI_CTA)
+    acc_ready_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
     for i in gl.static_range(num_acc_buffers):
         mbarrier.init(acc_empty_bars.index(i), count=1)
         mbarrier.init(acc_ready_bars.index(i), count=1)
@@ -426,7 +425,7 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
     acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
     p = PartitionArgs(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs,
                       load_empty_bars, load_ready_bars, acc_bufs, acc_empty_bars, acc_ready_bars, SchedulerImpl,
-                      NUM_CTAS > 1, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
+                      MULTI_CTA, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
 
     gl.warp_specialize([
         (mma_scaled_epilogue_partition, (p, )),
@@ -495,7 +494,6 @@ def mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, GROUP_SIZE_M=8
         BLOCK_K,
         acc_buffers,
         SchedulerImpl,
-        num_ctas,
         block_layout_c,
         num_ctas=num_ctas,
     )
