@@ -717,8 +717,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
         kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
 
-        device = kwargs.get("device", None)
-        stream = kwargs.get("stream", None)
+        device = kwargs.pop("device", None)
+        stream = kwargs.pop("stream", None)
         if device is None:
             device = driver.active.get_current_device()
         if stream is None:
