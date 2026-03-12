@@ -181,11 +181,8 @@ void processKernelRecord(
       corrIdToExternId.withRead(record->correlation_id.internal,
                                 [&](const size_t &value) { externId = value; });
 
-  if (!hasCorrelation) {
-    corrIdToExternId.erase(record->correlation_id.internal);
-    corrIdToIsHipGraph.erase(record->correlation_id.internal);
+  if (!hasCorrelation)
     return;
-  }
 
   if (externId == Scope::DummyScopeId)
     return;
@@ -259,17 +256,15 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
                     std::unordered_map<uint64_t, std::string>>;
 
   std::string getKernelName(uint64_t kernelId) {
-    if (kernelNames.contain(kernelId)) {
-      std::string name = kernelNames[kernelId];
-      const std::string suffix = ".kd";
-      if (name.size() > suffix.size() &&
-          name.compare(name.size() - suffix.size(), suffix.size(), suffix) ==
-              0) {
-        name = name.substr(0, name.size() - suffix.size());
-      }
-      return name;
-    }
-    return UnknownKernelName;
+    std::string name;
+    if (!kernelNames.withRead(kernelId,
+                              [&](const std::string &v) { name = v; }))
+      return UnknownKernelName;
+    const std::string suffix = ".kd";
+    if (name.size() > suffix.size() &&
+        name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
+      name.resize(name.size() - suffix.size());
+    return name;
   }
 
   void setKernelName(uint64_t kernelId, const char *name) {
@@ -294,6 +289,10 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
 
   ThreadSafeMap<hipStream_t, bool, std::unordered_map<hipStream_t, bool>>
       streamToCapture;
+
+  // Fast check: non-zero when any stream is being captured. Avoids acquiring
+  // a shared_mutex on every kernel launch EXIT just to find an empty map.
+  std::atomic<int> activeCaptureCount{0};
 
   KernelNameMap kernelNames;
 };
@@ -357,6 +356,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
     auto stream = payload->args.hipStreamBeginCapture.stream;
     impl->streamToCaptureCount[stream] = 0;
     impl->streamToCapture[stream] = true;
+    impl->activeCaptureCount.fetch_add(1, std::memory_order_release);
     break;
   }
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture: {
@@ -367,36 +367,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
                             : 0;
     impl->graphToNumInstances[graph] = captured;
     impl->streamToCapture.erase(stream);
-    break;
-  }
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchKernel: {
-    auto stream = payload->args.hipLaunchKernel.stream;
-    if (impl->streamToCapture.contain(stream))
-      impl->streamToCaptureCount[stream]++;
-    break;
-  }
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchKernel: {
-    auto stream = payload->args.hipExtLaunchKernel.stream;
-    if (impl->streamToCapture.contain(stream))
-      impl->streamToCaptureCount[stream]++;
-    break;
-  }
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchCooperativeKernel: {
-    auto stream = payload->args.hipLaunchCooperativeKernel.stream;
-    if (impl->streamToCapture.contain(stream))
-      impl->streamToCaptureCount[stream]++;
-    break;
-  }
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchKernel: {
-    auto stream = payload->args.hipModuleLaunchKernel.stream;
-    if (impl->streamToCapture.contain(stream))
-      impl->streamToCaptureCount[stream]++;
-    break;
-  }
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernel: {
-    auto stream = payload->args.hipModuleLaunchCooperativeKernel.stream;
-    if (impl->streamToCapture.contain(stream))
-      impl->streamToCaptureCount[stream]++;
+    impl->streamToCaptureCount.erase(stream);
+    impl->activeCaptureCount.fetch_sub(1, std::memory_order_release);
     break;
   }
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithFlags: {
@@ -411,8 +383,53 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
     impl->graphExecToGraph[graphExec] = graph;
     break;
   }
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphExecDestroy: {
+    auto graphExec = payload->args.hipGraphExecDestroy.graphExec;
+    impl->graphExecToGraph.erase(graphExec);
+    break;
+  }
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphDestroy: {
+    auto graph = payload->args.hipGraphDestroy.graph;
+    impl->graphToNumInstances.erase(graph);
+    break;
+  }
   default:
     break;
+  }
+
+  // Count kernel launches during graph capture. The atomic fast-check avoids
+  // acquiring the shared_mutex on streamToCapture for every kernel launch
+  // when no capture is active (the overwhelmingly common case).
+  if (isKernelOp &&
+      impl->activeCaptureCount.load(std::memory_order_acquire) > 0) {
+    hipStream_t stream = nullptr;
+    switch (operation) {
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchKernel:
+      stream = payload->args.hipLaunchKernel.stream;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchKernel:
+      stream = payload->args.hipExtLaunchKernel.stream;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchCooperativeKernel:
+      stream = payload->args.hipLaunchCooperativeKernel.stream;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchKernel:
+      stream = payload->args.hipModuleLaunchKernel.stream;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernel:
+      stream = payload->args.hipModuleLaunchCooperativeKernel.stream;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtModuleLaunchKernel:
+      stream = payload->args.hipExtModuleLaunchKernel.stream;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipHccModuleLaunchKernel:
+      stream = payload->args.hipHccModuleLaunchKernel.stream;
+      break;
+    default:
+      break;
+    }
+    if (stream && impl->streamToCapture.contain(stream))
+      impl->streamToCaptureCount[stream]++;
   }
 
   if (isKernelOp) {
@@ -549,9 +566,37 @@ int proton_tool_init(rocprofiler_client_finalize_t finiFunc, void *toolData) {
   // time, even though the context is not yet active.
   rocprofiler::createContext<true>(&state->profilingContext);
 
+  // Subscribe only to the HIP operations Proton needs: kernel launches,
+  // graph capture/instantiate/destroy. Passing nullptr/0 would subscribe to
+  // all ~519 HIP runtime APIs, causing the SDK to construct correlation IDs
+  // and invoke our callback for every hipMalloc, hipMemcpy, etc.
+  constexpr rocprofiler_tracing_operation_t kTracedHipOps[] = {
+      // Kernel launches (ENTER: correlation tracking, EXIT: capture counting)
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchKernel,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchKernel,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchMultiKernelMultiDevice,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipExtModuleLaunchKernel,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipHccModuleLaunchKernel,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchCooperativeKernel,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchCooperativeKernelMultiDevice,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchKernel,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernel,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernelMultiDevice,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch,
+      // Graph capture (EXIT only)
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamBeginCapture,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture,
+      // Graph instantiate (EXIT only)
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiate,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithFlags,
+      // Graph cleanup (EXIT only)
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphExecDestroy,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphDestroy,
+  };
+
   rocprofiler::configureCallbackTracingService<true>(
       state->profilingContext, ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API,
-      nullptr, 0,
+      kTracedHipOps, std::size(kTracedHipOps),
       &RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback,
       nullptr);
 
