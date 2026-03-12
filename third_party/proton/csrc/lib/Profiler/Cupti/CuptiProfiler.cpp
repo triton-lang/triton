@@ -721,7 +721,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
 
   if (dataToEntry.empty()) // Profiler is deactivated
     return;
-  if (threadState.isStreamCapturing) // Do not correlate for stream captured kernels
+  if (threadState
+          .isStreamCapturing) // Do not correlate for stream captured kernels
     return;
   profiler.correlation.submit(callbackData->correlationId);
 }
