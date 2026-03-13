@@ -583,8 +583,9 @@ void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
 //   WARNING: Changing the order of schedule.clusters.newAtBack() calls
 //            can cause invalid schedules to be produced.
 LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
-                           int &numBuffers, bool useAsyncCopy, bool hasTDMLoad, bool waitAtTail,
-                           Clusters &clusters, tt::CoarseSchedule &schedule) {
+                           int &numBuffers, bool useAsyncCopy, bool hasTDMLoad,
+                           bool waitAtTail, Clusters &clusters,
+                           tt::CoarseSchedule &schedule) {
   LDBG("Init SingleDotSchedule");
   int lastStage = numStages - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
@@ -617,8 +618,8 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   // TODO: Use the precise number of buffers needed by the particular load.
   numBuffers =
       std::max(1, stages[SCHED_LOCAL_LOAD] - stages[SCHED_LOCAL_STORE]);
-  // If we use AsyncCopy or TDM loads, we need one more buffer since we are not using a
-  // register buffer
+  // If we use AsyncCopy or TDM loads, we need one more buffer since we are not
+  // using a register buffer
   if (useAsyncCopy || hasTDMLoad) {
     numBuffers += 1;
   }
@@ -792,7 +793,8 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
 
   int numBuffers = 1;
   if (failed(initSchedule(maxDist, stages, schedule.getNumStages(), numBuffers,
-                          useAsyncCopy, hasTDMLoad, waitAtTail, clusters, schedule)))
+                          useAsyncCopy, hasTDMLoad, waitAtTail, clusters,
+                          schedule)))
     return;
 
   // Convert the loads into shared memory allocations and loads from them.
@@ -970,7 +972,7 @@ void lowerLoop(scf::ForOp forOp,
     } else {
       auto useTDM = isa<tt::DescriptorLoadOp>(load);
       if (useTDM) {
-	hasTDMLoad = true;
+        hasTDMLoad = true;
         auto paddedEncoding =
             getSharedEncIfAllUsersAreDotEncPadded(load->getResult(0))
                 .value_or(nullptr);
@@ -997,8 +999,8 @@ void lowerLoop(scf::ForOp forOp,
                                        axisInfoAnalysis, useAsyncCopy);
   } else {
     SingleDotSchedule::updateSchedule(forOp, loadToInfo, schedule,
-                                      axisInfoAnalysis, useAsyncCopy, hasTDMLoad,
-                                      waitAtTail);
+                                      axisInfoAnalysis, useAsyncCopy,
+                                      hasTDMLoad, waitAtTail);
   }
 
   dumpSchedule(schedule, "[lowerLoops]updated schedule:");
