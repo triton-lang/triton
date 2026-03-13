@@ -418,6 +418,29 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   return TDMDescriptor{group0, group1, group2, group3};
 }
 
+// Returns a copy of `layout` where the semantics of dimA and dimB are
+// exchanged: new.apply(x)[dimA] == old.apply(x)[dimB] and vice versa. The
+// output dimension order is preserved.
+static triton::LinearLayout
+swapOutDimSemantics(const triton::LinearLayout &layout, StringAttr dimA,
+                    StringAttr dimB) {
+  assert(layout.hasOutDim(dimA));
+  assert(layout.hasOutDim(dimB));
+  SmallVector<std::pair<StringAttr, int32_t>> renamedOutDims;
+  for (auto [name, size] : layout.getOutDims()) {
+    if (name == dimA)
+      renamedOutDims.push_back({dimB, size});
+    else if (name == dimB)
+      renamedOutDims.push_back({dimA, size});
+    else
+      renamedOutDims.push_back({name, size});
+  }
+  // Transpose to restore the original output dimension order.
+  return triton::LinearLayout(layout.getBases(), renamedOutDims,
+                              /*requireSurjective=*/false)
+      .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
+}
+
 // Fill TDM descriptor for regular load/store operations (1D-5D tensors)
 void fillTDMDescriptor(
     RewriterBase &rewriter, Location loc,
@@ -440,6 +463,22 @@ void fillTDMDescriptor(
   Type globalPtrTy = ptr_ty(ctx, 1);
   Type sharedPtrTy = ptr_ty(ctx, 3);
 
+  // For col-major tensors the TDM descriptor was created with the trailing two
+  // dimensions swapped. Swap shapePerCTA and offset to match that hardware
+  // view, and rename the same two dims in the shared layout to align out dims.
+  std::optional<triton::LinearLayout> adjustedSharedLayout;
+  if (!isRowMajor) {
+    swapTrailingDims(shapePerCTA);
+    swapTrailingDims(offset);
+    if (numDims >= 2) {
+      auto dimN_2 = StringAttr::get(ctx, "dim" + std::to_string(numDims - 2));
+      auto dimN_1 = StringAttr::get(ctx, "dim" + std::to_string(numDims - 1));
+      adjustedSharedLayout = swapOutDimSemantics(sharedLayout, dimN_2, dimN_1);
+    }
+  }
+  const auto &tdmViewSharedLayout =
+      adjustedSharedLayout ? *adjustedSharedLayout : sharedLayout;
+
   // Decode the full TDM descriptor to get all values
   auto [srcPtr, tensorShape, tensorStride, decodedBlockShape] =
       decodeTDMDescriptorFull(
@@ -452,11 +491,6 @@ void fillTDMDescriptor(
               : std::nullopt,
           numDims);
 
-  if (!isRowMajor) {
-    swapTrailingDims(decodedBlockShape);
-    swapTrailingDims(offset);
-  }
-
   auto kMessage = str_attr("message");
   auto kWarp = str_attr("warp");
   auto kBlock = str_attr("block");
@@ -464,7 +498,7 @@ void fillTDMDescriptor(
   auto kPartition = str_attr("partition");
 
   auto cgaLayout = triton::gpu::SharedLinearEncodingAttr::get(
-                       ctx, sharedLayout, /*layoutAlignment=*/16)
+                       ctx, tdmViewSharedLayout, /*layoutAlignment=*/16)
                        .getCGALayout()
                        .getLinearLayout();
 
@@ -492,7 +526,7 @@ void fillTDMDescriptor(
   }
   srcPtr = b.gep(globalPtrTy, elementType, srcPtr, baseOffset);
 
-  auto tdmToShared = tdmLayout.invertAndCompose(sharedLayout);
+  auto tdmToShared = tdmLayout.invertAndCompose(tdmViewSharedLayout);
   auto sharedOffsets = applyLinearLayout(
       loc, rewriter, tdmToShared,
       {{kMessage, b.i32_val(0)}, {kWarp, warpId}, {kBlock, ctaId}});
