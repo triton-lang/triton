@@ -83,7 +83,6 @@ class FnSpecs:
 
 def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple()):
     assert isinstance(fn, triton.runtime.jit.JITFunction)
-    is_gluon = fn.is_gluon()
     if name is None:
         name = f"{fn.__name__}"
     # Get original source code
@@ -122,7 +121,7 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
     globals = spec_fns | fn.get_capture_scope()
     # build new source code and define kernel dynamically
     new_signature = f"def {name}({', '.join(non_specialized_args)}):"
-    lang_module = "gl" if is_gluon else "tl"
+    lang_module = "gl" if fn.is_gluon() else "tl"
     constexpr_lines = [
         f"    {key}: {lang_module}.constexpr = {value.__name__ if callable(value) else value}"
         for key, value in constants.items()
@@ -130,8 +129,8 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
     tuple_lines = [
         f"    {key} = {'(' + ','.join(value) + (',' if len(value)>=1 else '') + ')'}" for key, value in tuples.items()
     ]
-    new_src = "\n".join(["@gluon.jit" if is_gluon else "@triton.jit", new_signature] + constexpr_lines + tuple_lines +
-                        body_lines)
+    new_src = "\n".join(["@gluon.jit" if fn.is_gluon() else "@triton.jit", new_signature] + constexpr_lines +
+                        tuple_lines + body_lines)
     # Track how many logical lines precede the function body so we can adjust
     # the bookkeeping metadata to match the template definition.
     new_preamble_len = 1 + len(constexpr_lines) + len(tuple_lines)  # def + injected init lines
@@ -160,7 +159,7 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
 
     if do_not_specialize:
         attrs["do_not_specialize"] = do_not_specialize
-    ret = define_kernel(new_src, module, attrs, is_gluon=is_gluon, **globals)
+    ret = define_kernel(new_src, module, attrs, is_gluon=fn.is_gluon(), **globals)
 
     # Reuse the original kernel's metadata so that stack traces and other
     # source-based tooling report the correct file and line numbers.

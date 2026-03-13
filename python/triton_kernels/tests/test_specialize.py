@@ -1,9 +1,11 @@
 import importlib
 
+import pytest
 import torch
 from triton_kernels.specialize import cacheable, specialize
 import triton
 import triton.language as tl
+from triton.experimental import gluon
 
 
 @triton.jit
@@ -18,35 +20,51 @@ def template_kernel(o, fn: tl.constexpr):
     tl.store(o, cst)
 
 
+gluon_identity = gluon.jit(identity.fn)
+gluon_template_kernel = gluon.jit(template_kernel.fn)
+
+
 def retrieve_fn(module, name):
     module = importlib.import_module(module)
     fn = getattr(module, name)
     return fn
 
 
-_specialized_kernel = None
+_specialized_kernels = {}
 
 
-def get_specialized_kernel():
-    global _specialized_kernel
-    if _specialized_kernel is not None:
-        return _specialized_kernel
+def get_specialized_kernel(is_gluon):
+    if is_gluon in _specialized_kernels:
+        return _specialized_kernels[is_gluon]
     import types
-    spec_constants = {"fn": identity}
+    if is_gluon:
+        _identity = gluon_identity
+        _template = gluon_template_kernel
+    else:
+        _identity = identity
+        _template = template_kernel
+    spec_constants = {"fn": _identity}
     spec_tuples = {}
     module = types.ModuleType("specialized_kernel")
-    module.specialized = specialize(template_kernel, module, spec_constants, spec_tuples)
-    _specialized_kernel = module.specialized
-    return _specialized_kernel
+    module.specialized = specialize(_template, module, spec_constants, spec_tuples)
+    _specialized_kernels[is_gluon] = module.specialized
+    return _specialized_kernels[is_gluon]
 
 
 @cacheable
 def cacheable_kernel():
-    return get_specialized_kernel()
+    return get_specialized_kernel(False)
 
 
-def test_cacheable(device, fresh_triton_cache, monkeypatch):
-    specialized_kernel = get_specialized_kernel()
+@cacheable
+def cacheable_kernel_gluon():
+    return get_specialized_kernel(True)
+
+
+@pytest.mark.parametrize("is_gluon", [True, False])
+def test_cacheable(device, fresh_triton_cache, monkeypatch, is_gluon):
+    specialized_kernel = get_specialized_kernel(is_gluon)
+    expected_fn_name = "cacheable_kernel_gluon" if is_gluon else "cacheable_kernel"
     monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "0")
 
     specialization_data = None
@@ -67,18 +85,18 @@ def test_cacheable(device, fresh_triton_cache, monkeypatch):
     hash = k.hash
     assert o.item() == 1.0
     assert module_name == "tests.test_specialize"
-    assert fn_name == "cacheable_kernel"
+    assert fn_name == expected_fn_name
 
-    # check line info in ttir
-    ttir = k.asm["ttir"]
+    ir_key = "source" if is_gluon else "ttir"
+    ir_src = k.asm[ir_key]
     loc = None
-    for line in ttir.split("\n"):
+    for line in ir_src.split("\n"):
         if loc and loc in line:
             assert "test_specialize.py" in line
-            assert ":18:5" in line
+            assert ":21:5" in line
         if "store" in line:
             loc = line.split("(", 1)[1].split(")", 1)[0]
-    assert loc is not None, f"Expected to find a store instruction with location info, got: {ttir}"
+    assert loc is not None, f"Expected to find a store instruction with location info, got: {ir_src}"
 
     compile_count = 0
 
