@@ -95,8 +95,8 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
   // because this eliminates
   // 1) inter-warp reduction in the softmax step.
   // 2) layout conversion from #mma to #dot_op of the second dot.
-  if (isHeadDot)
-    return {static_cast<unsigned>(numWarps), 1};
+  // if (isHeadDot)
+  //   return {static_cast<unsigned>(numWarps), 1};
   // For the 2nd dot in chain-dot, we always distribute warp along dim0 first,
   // then dim1. Because
   // 1) This is how we distribute the warps for the 1st dot. Now the
@@ -107,7 +107,7 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
   //    needs to hold more elements in the final output, which increases
   //    register pressure, especially for large head dim (e.g. 512) attention
   //    kernels.
-  if (isTailDot) {
+  if (isHeadDot || isTailDot) {
     SmallVector<unsigned, 3> ret = {1, 1};
     ret[0] = static_cast<unsigned>(std::min(
         static_cast<int64_t>(numWarps),
