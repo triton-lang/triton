@@ -176,7 +176,8 @@ public:
       llvm::StringRef samplingOptions, gpu::Granularity granularity,
       gpu::BufferStrategy bufferStrategy, gpu::BufferType bufferType,
       int32_t bufferSize, int32_t maxSharedMemSize, int64_t profileScratchSize,
-      int32_t profileScratchAlignment, bool clockExtension)
+      int32_t profileScratchAlignment, bool kernelTraceMode,
+      bool clockExtension)
       : ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass>() {
     this->metricType = metricType;
     this->samplingStrategy = samplingStrategy;
@@ -188,6 +189,7 @@ public:
     this->maxSharedMemSize = maxSharedMemSize;
     this->profileScratchSize = profileScratchSize;
     this->profileScratchAlignment = profileScratchAlignment;
+    this->kernelTraceMode = kernelTraceMode;
     this->clockExtension = clockExtension;
   }
 
@@ -371,7 +373,8 @@ public:
     FuncOp func = *m.getOps<triton::FuncOp>().begin();
 
     // Check if there are any proton records to process
-    if (!hasOperator<Operation, proton::RecordOp>(func.getOperation())) {
+    if (!hasOperator<Operation, proton::RecordOp>(func.getOperation()) &&
+        !kernelTraceMode) {
       return; // No proton records to process, silently return
     }
 
@@ -405,11 +408,11 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
     llvm::StringRef samplingOptions, gpu::Granularity granularity,
     gpu::BufferStrategy bufferStrategy, gpu::BufferType bufferType,
     int32_t bufferSize, int32_t maxSharedMemSize, int64_t profileScratchSize,
-    int32_t profileScratchAlignment, bool clkExt) {
+    int32_t profileScratchAlignment, bool kernelTraceMode, bool clkExt) {
   return std::make_unique<ConvertProtonToProtonGPUPass>(
       metricType, samplingStrategy, samplingOptions, granularity,
       bufferStrategy, bufferType, bufferSize, maxSharedMemSize,
-      profileScratchSize, profileScratchAlignment, clkExt);
+      profileScratchSize, profileScratchAlignment, kernelTraceMode, clkExt);
 }
 
 } // namespace proton

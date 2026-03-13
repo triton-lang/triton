@@ -419,6 +419,9 @@ void dumpKernelMetricTrace(
       element["tid"] = streamId; // thread id = stream
       json callStack = json::array();
       for (const auto &ctx : contexts) {
+        if (ctx.name == "ROOT") {
+          continue;
+        }
         callStack.push_back(ctx.name);
       }
       element["args"]["call_stack"] = std::move(callStack);

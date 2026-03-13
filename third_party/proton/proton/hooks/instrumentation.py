@@ -169,6 +169,7 @@ class InstrumentationHook(Hook):
                                                           self.mode.buffer_strategy, self.mode.buffer_type,
                                                           self.mode.buffer_size, max_shared_mem,
                                                           self.profile_buffer_size, self.profile_buffer_alignment,
+                                                          self.mode.trace_mode == "kernel",
                                                           is_long_clk)
             triton_passes.common.add_cse(pm)
 
