@@ -7,7 +7,7 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_mx_scale_cdna4
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
-from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
 from ._common import (
     compute_offsets,
@@ -71,6 +71,7 @@ def _matmul(
              SWIZZLE_MX_VALUE: tl.constexpr,
              # One of ["HOPPER", "BLACKWELL", None]
              SWIZZLE_MX_SCALE: tl.constexpr,
+             MX_BLOCK_SIZE: tl.constexpr,
              EPILOGUE_SUBTILE: tl.constexpr,
              EVEN_K: tl.constexpr, SPLIT_K: tl.constexpr,
              W_CACHE_MODIFIER: tl.constexpr,
@@ -115,12 +116,19 @@ def _matmul(
     is_x_microscaled: tl.constexpr = XMxScale is not None
     is_w_microscaled: tl.constexpr = WMxScale is not None
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
+    MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
 
-    MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_w_microscaled:
+        tl.static_assert(MX_BLOCK_SIZE == NVFP_BLOCK_SIZE or MX_BLOCK_SIZE == MXFP_BLOCK_SIZE,
+                         "Unsupported microscale factor")
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
                          "mx_weight_ptr must be uint8 or fp8")
-        tl.static_assert(WMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
+        # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8e4nv.
+        tl.static_assert(
+            WMxScale.dtype.element_ty == tl.uint8
+            or WMxScale.dtype.element_ty == tl.float8e4nv,
+            "mx_scale_ptr must be uint8 or float8e4nv",
+        )
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, f"{BLOCK_K=} must be a multiple of {MX_PACK_DIVISOR=}")
         tl.static_assert(SWIZZLE_MX_VALUE == "HOPPER_VALUE" or SWIZZLE_MX_VALUE == "STRIDED", "Only Hopper swizzling is supported for values")
 
@@ -159,10 +167,18 @@ def _matmul(
         tl.static_assert(SWIZZLE_MX_SCALE == "STRIDED")
     if is_x_microscaled:
         x_type: tl.constexpr = X.dtype.element_ty
+        is_x_fp4: tl.constexpr = x_type == tl.uint8
         tl.static_assert(is_w_microscaled)
-        tl.static_assert(x_type == tl.float8e4nv, "mx_act_ptr must be float8e4nv")
-        tl.static_assert(XMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
+        tl.static_assert(x_type == tl.float8e4nv or x_type == tl.uint8, "mx_act_ptr must be float8e4nv or uint8")
+        # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8e4nv.
+        tl.static_assert(
+            XMxScale.dtype.element_ty == tl.uint8
+            or XMxScale.dtype.element_ty == tl.float8e4nv,
+            "mx_scale_ptr must be uint8 or float8e4nv",
+        )
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
+    else:
+        is_x_fp4: tl.constexpr = False
     is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
 
     if _W_SLICE_SIZES_DIVISIBILITY is None:
@@ -251,8 +267,11 @@ def _matmul(
         GatherIndx += start_m
         # no needs to bounds-check here because `offs_x_m` wraps around M dim
         offs_x_m = tl.load(GatherIndx + offs_x_m)
-    offs_k = off_k_x + tl.arange(0, BLOCK_K)
-    XPtrs = X + offs_x_m.to(index_type)[:, None] * stride_x_m + offs_k.to(index_type)[None, :] * stride_x_k
+    if is_x_fp4:
+        offs_k_x = off_k_x // 2 + tl.arange(0, BLOCK_K // 2)
+    else:
+        offs_k_x = off_k_x + tl.arange(0, BLOCK_K)
+    XPtrs = X + offs_x_m.to(index_type)[:, None] * stride_x_m + offs_k_x.to(index_type)[None, :] * stride_x_k
 
 
     # TODO: refactor if/else when triton front end improves
@@ -308,7 +327,7 @@ def _matmul(
         XMxScale += start_z.to(index_type) * stride_x_mx_z
         if GatherIndx is None:
             XMxScale += start_m * stride_x_mx_m
-        offs_x_k_scale = off_k_x // MXFP_BLOCK_SIZE + tl.arange(0, MX_SCALE_BLOCK_K)
+        offs_x_k_scale = off_k_x // MX_BLOCK_SIZE + tl.arange(0, MX_SCALE_BLOCK_K)
         XMxScalePtrs = XMxScale + offs_x_m.to(index_type)[:, None] * stride_x_mx_m + offs_x_k_scale.to(index_type)[None, :] * stride_x_mx_k
     else:
         XMxScalePtrs = None
@@ -325,14 +344,20 @@ def _matmul(
         x_k_limit -= BLOCK_K * SPLIT_K
         w_k_limit -= PACKED_BLOCK_K_W * SPLIT_K
         if EVEN_K:
-            mask_k_x = tl.full([BLOCK_K], True, dtype=tl.int1)
+            if is_x_fp4:
+                mask_k_x = tl.full([BLOCK_K // 2], True, dtype=tl.int1)
+            else:
+                mask_k_x = tl.full([BLOCK_K], True, dtype=tl.int1)
             mask_k_w = tl.full([PACKED_BLOCK_K_W], True, dtype=tl.int1)
             if is_w_microscaled and SWIZZLE_MX_SCALE == "STRIDED":
                 mask_k_scale = tl.full([PACKED_MX_BLOCK], True, dtype=tl.int1)
             if is_x_microscaled:
                 mask_x_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
         else:
-            mask_k_x = offs_k < x_k_limit
+            if is_x_fp4:
+                mask_k_x = offs_k_x * 2 < x_k_limit
+            else:
+                mask_k_x = offs_k_x < x_k_limit
             mask_k_w = offs_w_k < w_k_limit
             if is_w_microscaled and SWIZZLE_MX_SCALE == "STRIDED":
                 # dividing by W_K_DIVISOR because w_k_limit is also already
@@ -340,8 +365,6 @@ def _matmul(
                 # packed per Byte along K)
                 mask_k_scale = offs_k_scale * (MX_PACK_DIVISOR // W_K_DIVISOR) < w_k_limit
             if is_x_microscaled:
-                # No need to divide because we only support mxfp8 for x (we
-                # don't have divisor for x)
                 mask_x_k_scale = offs_x_k_scale * MX_PACK_DIVISOR < x_k_limit
 
         x = tl.load(XPtrs, mask=mask_k_x[None, :], other=0.0)
@@ -360,8 +383,10 @@ def _matmul(
             elif x_format == "fp16" or x_format == "bf16":
                 x_scales: tl.constexpr = None
             else:
-                # Scale of 1 in E8M0 format
-                x_scales = tl.full((BLOCK_M, MX_SCALE_BLOCK_K), 127, dtype=tl.uint8)
+                if WMxScale.dtype.element_ty == tl.uint8:
+                    x_scales = tl.full((BLOCK_M, MX_SCALE_BLOCK_K), 127, dtype=tl.uint8)
+                else:
+                    x_scales = tl.full((BLOCK_M, MX_SCALE_BLOCK_K), 1.0, dtype=tl.float8e4nv)
 
             if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
                 w_scales = unswizzle_mx_scale_bw(tl.load(WMxScalePtrs))
@@ -396,7 +421,10 @@ def _matmul(
             # if w.dtype.is_fp8() and not x.dtype.is_fp8():
             #     w = w.to(x.dtype)
             acc = tl.dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
-        XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
+        if is_x_fp4:
+            XPtrs += ((BLOCK_K // 2) * SPLIT_K) * stride_x_k
+        else:
+            XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
         WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
     # bias + scale
     offs_m = off_m + tl.arange(0, BLOCK_M)

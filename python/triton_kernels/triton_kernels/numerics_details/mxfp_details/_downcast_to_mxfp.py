@@ -5,7 +5,9 @@ from triton_kernels.target_info import cuda_capability_geq
 # fmt: off
 
 
+# NOTE: MXFP_BLOCK_SIZE = OCP MXFP block size.
 MXFP_BLOCK_SIZE = tl.constexpr(32)
+NVFP_BLOCK_SIZE = tl.constexpr(16)
 
 
 @triton.jit

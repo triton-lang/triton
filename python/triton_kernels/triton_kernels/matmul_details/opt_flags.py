@@ -190,6 +190,7 @@ def make_default_opt_flags_nvidia(
     x_transpose,
     has_y_acc_in,
     constraints,
+    mx_block_size=None,
 ):
     constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps"}
     unsupported = set(constraints.keys()) - constraints_supported
@@ -297,6 +298,7 @@ def make_default_opt_flags_nvidia(
         x_transpose,
         epilogue_effective_itemsize,
         has_y_acc_in,
+        mx_block_size,
     )
 
     num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
@@ -399,6 +401,7 @@ def make_opt_flags(
     x_transpose,
     has_y_acc_in,
     block_k,
+    mx_block_size=None,
 ):
     if _opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
@@ -424,5 +427,5 @@ def make_opt_flags(
     if backend == "hip":
         return make_default_opt_flags_amd(*args)
     if backend == "cuda":
-        return make_default_opt_flags_nvidia(*args)
+        return make_default_opt_flags_nvidia(*args, mx_block_size=mx_block_size)
     assert False

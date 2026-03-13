@@ -17,6 +17,7 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXSc
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
+from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .matmul_details.opt_flags import make_opt_flags, update_opt_flags_constraints
@@ -278,8 +279,6 @@ def matmul(a, b, bias,
         assert b.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
     if b_scale is not None and not isinstance(b_scale, Tensor):
         b_scale = wrap_torch_tensor(b_scale)
-    if b_scale is not None:
-        b_scale.storage.data = b_scale.data.view(torch.uint8)
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
     if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     # unpack a scale
@@ -289,7 +288,34 @@ def matmul(a, b, bias,
     if a_scale is not None and not isinstance(a_scale, Tensor):
         a_scale = wrap_torch_tensor(a_scale)
     if not isinstance(a, Tensor):
-        a = wrap_torch_tensor(a)
+        dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
+        a = wrap_torch_tensor(a, dtype=dtype)
+    a_scale_dtype = None if a_scale is None else a_scale.storage.data.dtype
+    b_scale_dtype = None if b_scale is None else b_scale.storage.data.dtype
+    # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8_e4m3fn.
+    if a_scale_dtype is not None:
+        assert (
+            a_scale_dtype == torch.uint8
+            or a_scale_dtype == torch.float8_e4m3fn
+        ), f"Unsupported microscale dtype {a_scale_dtype}"
+    if b_scale_dtype is not None:
+        assert (
+            b_scale_dtype == torch.uint8
+            or b_scale_dtype == torch.float8_e4m3fn
+        ), f"Unsupported microscale dtype {b_scale_dtype}"
+    a_microblock_size = None if a_scale is None else a.shape[-1] // a_scale.shape[-1]
+    b_microblock_size = None if b_scale is None else b.shape[-2] // b_scale.shape[-2]
+    if a_microblock_size is not None:
+        assert a_microblock_size == int(MXFP_BLOCK_SIZE if a_scale_dtype == torch.uint8 else NVFP_BLOCK_SIZE), \
+            f"Unsupported microscale block size {a_microblock_size}"
+    if b_microblock_size is not None:
+        assert b_microblock_size == int(MXFP_BLOCK_SIZE if b_scale_dtype == torch.uint8 else NVFP_BLOCK_SIZE), \
+            f"Unsupported microscale block size {b_microblock_size}"
+    if a_microblock_size is not None and b_microblock_size is not None:
+        assert a_microblock_size == b_microblock_size, (
+            f"Microscaled operands must share a block size. Got {a_microblock_size} and {b_microblock_size}"
+        )
+    mx_block_size = b_microblock_size or a_microblock_size or int(MXFP_BLOCK_SIZE)
     a_transpose = a.stride(-1) != 1
     # determine shapes
     has_gather = gather_indx is not None
@@ -343,6 +369,7 @@ def matmul(a, b, bias,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
         a_transpose, c_acc_in is not None,
         block_k = block_k,
+        mx_block_size = mx_block_size,
     )
     # there seems to be a bug on A100
     # pytest -vs test_matmul.py::test_op[False-False-False-False-pad_b-16-768-512-1024-ragged-float16-float16-10-1-False-None-False-False-False-True-None]
@@ -452,13 +479,24 @@ def matmul(a, b, bias,
     b_scale_has_tma = opt_flags.is_persistent and b_scale is not None
     b_transpose = b.storage.data.stride()[-2] == 1
     if b_scale_has_tma:
-        scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
+        scale_block_k = opt_flags.block_k // mx_block_size
         b_scale_storage = b_scale.storage
         b_scale_tma_block_size = [scale_block_k, opt_flags.block_n]
         if isinstance(b_scale_storage.layout, (StridedLayout, HopperMXScaleLayout)):
-            b_scale = Tensor(_canonicalize_storage(b_scale.storage, 3, None), dtype=b_scale.dtype, shape=b_scale.shape, shape_max=b_scale.shape_max)
             b_scale_tma_block_size = [1] + b_scale_tma_block_size
-        b_scale_tensor_or_tma = make_tma(b_scale, b_scale_tma_block_size, "dense", is_scale=True)
+            b_scale_tensor_or_tma = make_tma(
+                Tensor(
+                    _canonicalize_storage(b_scale.storage, 3, None),
+                    dtype=b_scale.dtype,
+                    shape=b_scale.shape,
+                    shape_max=b_scale.shape_max,
+                ),
+                b_scale_tma_block_size,
+                "dense",
+                is_scale=True,
+            )
+        else:
+            b_scale_tensor_or_tma = make_tma(b_scale, b_scale_tma_block_size, "dense", is_scale=True)
     else:
         b_scale_tensor_or_tma = None if b_scale is None else b_scale.storage.data
     # create tma descriptor for x_scale
@@ -469,12 +507,11 @@ def matmul(a, b, bias,
         assert opt_flags.block_m == 128 and opt_flags.block_k >= 128, "block_m and block_k must be at least 128 if x scale is swizzled"
         a_scale_has_tma = True
     if a_scale_has_tma:
-        a_scale.storage.data = a_scale.storage.data.view(torch.uint8)
-        scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
+        scale_block_k = opt_flags.block_k // mx_block_size
         a_scale_tma_block_size = [opt_flags.block_m, scale_block_k]
         a_scale_tensor_or_tma = make_tma(a_scale, a_scale_tma_block_size, "dense", is_scale=True)
     else:
-        a_scale_tensor_or_tma = None if a_scale is None else a_scale.data.view(torch.uint8)
+        a_scale_tensor_or_tma = None if a_scale is None else a_scale.storage.data
     # canonicalize strides
     a_strides = [0]*(3 - a.storage.data.ndim) + list(a.storage.data.stride())
     a_scale_strides = a_scale.stride() if a_has_mx and not a_scale_has_tma else (None, None, None)
@@ -538,6 +575,7 @@ def matmul(a, b, bias,
                    XCD_SWIZZLE=opt_flags.xcd_swizzle,
                    SWIZZLE_MX_VALUE=b.storage.layout.name,
                    SWIZZLE_MX_SCALE="STRIDED" if b_scale is None else b_scale.storage.layout.name,
+                   MX_BLOCK_SIZE=mx_block_size,
                    EPILOGUE_SUBTILE=opt_flags.epilogue_subtile,
                    SPLIT_K=opt_flags.split_k,
                    EVEN_K=even_K,
