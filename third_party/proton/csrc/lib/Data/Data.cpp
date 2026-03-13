@@ -154,10 +154,11 @@ void Data::dump(const std::string &outputFormat) {
                         : ".part_" + std::to_string(phase);
       const auto filePath =
           path + suffix + "." + outputFormatToString(outputFormatEnum);
-      const auto fileMode =
-          (outputFormatEnum == OutputFormat::HatchetMsgPack)
-              ? (std::ios::out | std::ios::binary | std::ios::trunc)
-              : (std::ios::out | std::ios::trunc);
+      const auto fileMode = (outputFormatEnum == OutputFormat::HatchetMsgPack ||
+                             outputFormatEnum == OutputFormat::ChromeTraceMsgPack)
+                                ? (std::ios::out | std::ios::binary |
+                                   std::ios::trunc)
+                                : (std::ios::out | std::ios::trunc);
       out.reset(
           new std::ofstream(filePath, fileMode)); // Opening a file for output
     }
@@ -172,6 +173,8 @@ OutputFormat parseOutputFormat(const std::string &outputFormat) {
     return OutputFormat::HatchetMsgPack;
   } else if (toLower(outputFormat) == "chrome_trace") {
     return OutputFormat::ChromeTrace;
+  } else if (toLower(outputFormat) == "chrome_trace_msgpack") {
+    return OutputFormat::ChromeTraceMsgPack;
   } else {
     throw std::runtime_error("Unknown output format: " + outputFormat);
   }
@@ -184,6 +187,8 @@ const std::string outputFormatToString(OutputFormat outputFormat) {
     return "hatchet_msgpack";
   } else if (outputFormat == OutputFormat::ChromeTrace) {
     return "chrome_trace";
+  } else if (outputFormat == OutputFormat::ChromeTraceMsgPack) {
+    return "chrome_trace_msgpack";
   }
   throw std::runtime_error("Unknown output format: " +
                            std::to_string(static_cast<int>(outputFormat)));

@@ -116,7 +116,8 @@ void periodicFlushDataPhases(Data &data,
         std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
         ofs << jsonStr;
       }
-    } else if (periodicFlushingFormat == "hatchet_msgpack") {
+    } else if (periodicFlushingFormat == "hatchet_msgpack" ||
+               periodicFlushingFormat == "chrome_trace_msgpack") {
       std::vector<uint8_t> msgPack;
       if (timingEnabled) {
         const auto t0 = Clock::now();
@@ -186,8 +187,8 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
       throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
                                   ": unsupported option key: " + key);
     }
-    if (value != "hatchet_msgpack" && value != "chrome_trace" &&
-        value != "hatchet") {
+    if (value != "hatchet_msgpack" && value != "chrome_trace_msgpack" &&
+        value != "chrome_trace" && value != "hatchet") {
       throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
                                   ": unsupported format: " + value);
     }

@@ -95,8 +95,8 @@ def start(
                                                For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.
                                                For example, "periodic_flushing" mode has a knob:
-                                               - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace"]. Default is "hatchet".
-                                               The can be set via `mode="periodic_flushing:format=chrome_trace"`.
+                                               - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace", "chrome_trace_msgpack"]. Default is "hatchet".
+                                               The can be set via `mode="periodic_flushing:format=chrome_trace_msgpack"`.
         hook (Union[str, Hook], optional): The hook to use for profiling.
                                            You may pass either:
                                            - a string hook name, e.g. "triton" (kernel launch metadata), or
@@ -185,7 +185,7 @@ def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -
     Args:
         session (int, optional): The session ID to finalize. If None, all sessions are finalized. Defaults to None.
         output_format (str, optional): The output format for the profiling results.
-                                       Available options are ["hatchet", "hatchet_msgpack", "chrome_trace"].
+                                       Available options are ["hatchet", "hatchet_msgpack", "chrome_trace", "chrome_trace_msgpack"].
 
     Returns:
         None
