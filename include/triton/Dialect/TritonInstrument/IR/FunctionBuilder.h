@@ -259,6 +259,10 @@ public:
                                          CommitKind::Kind commitKind,
                                          Operation *insertPoint,
                                          Value ctaMask = Value());
+  void createClusterSyncWritesCall(ImplicitLocOpBuilder &b, MemType memType,
+                                   Operation *insertPoint);
+  void createClusterSyncReadsCall(ImplicitLocOpBuilder &b, MemType memType,
+                                  Operation *insertPoint);
 
 private:
   ModuleOp module;

@@ -262,6 +262,12 @@ private:
         funcBuilder.createClearWaitingCall(b, barrier, baseThread, pred,
                                            waitOp);
       }
+      if (isa<ttng::ClusterWaitOp, ttng::ClusterBarrierOp>(op)) {
+        for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
+          funcBuilder.createClusterSyncWritesCall(b, memType, op);
+          funcBuilder.createClusterSyncReadsCall(b, memType, op);
+        }
+      }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
         if (!auxData.commits[CommitKind::AsyncCp].empty())
           funcBuilder.createCommitAccessesCall(b, thread, nullptr,

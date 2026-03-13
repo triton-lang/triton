@@ -2653,4 +2653,74 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
   }
 }
 
+void FunctionBuilder::createClusterSyncWritesCall(ImplicitLocOpBuilder &b,
+                                                  MemType memType,
+                                                  Operation *insertPoint) {
+  if (auxData.writeVisibility[(int)memType].empty())
+    return;
+
+  ValueType writeVisibility =
+      auxData.writeVisibility[(int)memType].at(insertPoint);
+  auto writeVisibilityType = cast<RankedTensorType>(writeVisibility.type);
+  createCallToCachedFunction(
+      b, "cluster_sync_writes", {writeVisibility.value},
+      /*assertInfo=*/std::nullopt, {writeVisibilityType, (uint64_t)memType},
+      [writeVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value writeVisibilityPtr = entryBlock->getArgument(0);
+        Value writeVisibilityTensor = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), writeVisibilityPtr, writeVisibilityType);
+        auto elemType = cast<IntegerType>(writeVisibilityType.getElementType());
+        constexpr uint64_t fullMask = getFullThreadBitmask();
+        Value fullMaskVal = arith::ConstantIntOp::create(fb, fullMask, 64);
+        Value fullMaskElem = adjustIntegerWidth(fb, fullMaskVal, elemType);
+        Value fullMaskTensor =
+            triton::SplatOp::create(fb, writeVisibilityType, fullMaskElem);
+        Value zeroTensor =
+            tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
+        Value hasWrites = arith::CmpIOp::create(
+            fb, arith::CmpIPredicate::ne, writeVisibilityTensor, zeroTensor);
+        Value updated = arith::SelectOp::create(fb, hasWrites, fullMaskTensor,
+                                                writeVisibilityTensor);
+        tti::createStoreScratchMemory(fb, fb.getLoc(), writeVisibilityPtr,
+                                      updated, writeVisibilityType);
+        triton::ReturnOp::create(fb);
+      });
+}
+
+void FunctionBuilder::createClusterSyncReadsCall(ImplicitLocOpBuilder &b,
+                                                 MemType memType,
+                                                 Operation *insertPoint) {
+  if (auxData.readVisibility[(int)memType].empty())
+    return;
+
+  ValueType readVisibility =
+      auxData.readVisibility[(int)memType].at(insertPoint);
+  auto readVisibilityType = cast<RankedTensorType>(readVisibility.type);
+  createCallToCachedFunction(
+      b, "cluster_sync_reads", {readVisibility.value},
+      /*assertInfo=*/std::nullopt, {readVisibilityType, (uint64_t)memType},
+      [readVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value readVisibilityPtr = entryBlock->getArgument(0);
+        Value readVisibilityTensor = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
+        auto elemType = cast<IntegerType>(readVisibilityType.getElementType());
+        constexpr uint64_t fullMask = getFullThreadBitmask();
+        Value fullMaskVal = arith::ConstantIntOp::create(fb, fullMask, 64);
+        Value fullMaskElem = adjustIntegerWidth(fb, fullMaskVal, elemType);
+        Value fullMaskTensor =
+            triton::SplatOp::create(fb, readVisibilityType, fullMaskElem);
+        Value zeroTensor =
+            tti::createConstIntTensor(fb, fb.getLoc(), 0, readVisibilityType);
+        Value hasReads = arith::CmpIOp::create(
+            fb, arith::CmpIPredicate::ne, readVisibilityTensor, zeroTensor);
+        Value rowMask = reduceLastDim<arith::OrIOp>(fb, hasReads);
+        rowMask = convertAndBroadcast(fb, rowMask, {0, 1}, readVisibilityType);
+        Value updated = arith::SelectOp::create(fb, rowMask, fullMaskTensor,
+                                                readVisibilityTensor);
+        tti::createStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
+                                      updated, readVisibilityType);
+        triton::ReturnOp::create(fb);
+      });
+}
+
 } // namespace mlir::triton::instrument
