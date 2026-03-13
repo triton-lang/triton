@@ -220,8 +220,8 @@ protected:
     }
 
     void clear() {
-      corrIdToExternId = CorrIdToExternIdMap();
-      externIdToState = ExternIdToStateMap();
+      corrIdToExternId.clear();
+      externIdToState.clear();
       maxCompletedCorrelationId.store(0);
       maxSubmittedCorrelationId.store(0);
     }
