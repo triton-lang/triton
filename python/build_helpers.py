@@ -2,6 +2,7 @@ import argparse
 import contextlib
 import json
 import os
+import io
 import platform
 import re
 import shutil
@@ -9,7 +10,6 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
-import tempfile
 import time
 import urllib.request
 import zipfile
@@ -167,7 +167,7 @@ class DownloadProgressReader:
 
 
 def _download_file(url: str, label: str):
-    file_bytes = tempfile.SpooledTemporaryFile(mode="w+b")
+    file_bytes = io.BytesIO()
     with open_url(url) as response:
         progress_reader = DownloadProgressReader(response, label)
         shutil.copyfileobj(progress_reader, file_bytes)
