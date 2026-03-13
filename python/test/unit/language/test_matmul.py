@@ -760,13 +760,14 @@ def _gemm_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scales_ptr, b_s
 """
 use_tdm_load = True, preshuffle = True:
    The test uses preshuffle_factor=128 on both gfx1250 and cdna4, targeting optimization for WMMA memory access patterns.
-use_tdm_load = False, preshuffle = True: 
+use_tdm_load = False, preshuffle = True:
    The test uses preshuffle_factor=32 on both gfx1250 and cdna4 and applies mfma_nonkdim-specific shuffle patterns, targeting MFMA memory access patterns.
 use_tdm_load = True, preshuffle = False:
    Load with tensor desriptor, not preshuffling scales.
 use_tdm_load = False, preshuffle = False:
    Load with pointers, not preshuffling scales.
 """
+
 
 @pytest.mark.parametrize("M, N, K", [(1024, 1024, 1024)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 256), (64, 64, 512), [32, 32, 64]])
