@@ -8,11 +8,23 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton.tools.triton_to_gluon_translator.translator import convert_triton_to_gluon
 from triton.tools.triton_to_gluon_translator.translator_helpers import convert_host_descriptor
-from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda
+from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda, is_hip_gfx1250, is_hip_cdna3, is_hip_cdna4
+
+_all_targets = {
+    "nvidia": is_cuda,
+    "gfx1250": is_hip_gfx1250,
+    "gfx942": is_hip_cdna3,
+    "gfx950": is_hip_cdna4,
+}
 
 
-def convert_kernel(kernel, kernel_name, tmp_path):
-    converted = convert_triton_to_gluon([kernel])
+def _skip_unless_target(target):
+    if not _all_targets[target]():
+        pytest.skip(f"Requires {target}")
+
+
+def convert_kernel(kernel, kernel_name, tmp_path, target="nvidia"):
+    converted = convert_triton_to_gluon([kernel], target=target)
 
     # Write converted kernel to a file so @gluon.jit can retrieve source
     mod_path = tmp_path / "converted_kernel.py"
@@ -36,9 +48,10 @@ def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK: tl.constexpr):
     tl.store(out_ptr + offsets, x + y)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
-def test_simple_kernel(tmp_path):
-    kernel = convert_kernel(add_kernel, "add_kernel", tmp_path)
+@pytest.mark.parametrize("target", _all_targets.keys())
+def test_simple_kernel(tmp_path, target):
+    _skip_unless_target(target)
+    kernel = convert_kernel(add_kernel, "add_kernel", tmp_path, target=target)
 
     n = 1024
     BLOCK = 128
@@ -70,10 +83,10 @@ def matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.c
     impl_matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M, BLOCK_N, BLOCK_K)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_triton_to_gluon_dot_minimal(tmp_path):
-    # Convert directly from the Triton kernel object
-    kernel = convert_kernel(matmul_tile_kernel, "matmul_tile_kernel", tmp_path)
+@pytest.mark.parametrize("target", _all_targets.keys())
+def test_triton_to_gluon_dot_minimal(tmp_path, target):
+    _skip_unless_target(target)
+    kernel = convert_kernel(matmul_tile_kernel, "matmul_tile_kernel", tmp_path, target=target)
     M, N, K = 128, 128, 128
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
@@ -161,9 +174,17 @@ def descriptor_store_kernel(desc, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, 
     desc.store([0, 0], tile)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
-def test_triton_to_gluon_descriptor_roundtrip(tmp_path):
-    kernel = convert_kernel(descriptor_store_kernel, "descriptor_store_kernel", tmp_path)
+_descriptor_targets = {
+    "nvidia": is_hopper_or_newer,
+    "gfx1250": is_hip_gfx1250,
+}
+
+
+@pytest.mark.parametrize("target", _descriptor_targets.keys())
+def test_triton_to_gluon_descriptor_roundtrip(tmp_path, target):
+    if not _descriptor_targets[target]():
+        pytest.skip(f"Requires {target} with descriptor support")
+    kernel = convert_kernel(descriptor_store_kernel, "descriptor_store_kernel", tmp_path, target=target)
 
     M = N = 64
     y = torch.zeros((M, N), device="cuda", dtype=torch.float16)
@@ -185,9 +206,11 @@ def descriptor_copy_kernel(in_desc, out_desc, BLOCK_M: tl.constexpr, BLOCK_N: tl
     out_desc.store([0, 0], tile)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
-def test_triton_to_gluon_descriptor_load_roundtrip(tmp_path):
-    kernel = convert_kernel(descriptor_copy_kernel, "descriptor_copy_kernel", tmp_path)
+@pytest.mark.parametrize("target", _descriptor_targets.keys())
+def test_triton_to_gluon_descriptor_load_roundtrip(tmp_path, target):
+    if not _descriptor_targets[target]():
+        pytest.skip(f"Requires {target} with descriptor support")
+    kernel = convert_kernel(descriptor_copy_kernel, "descriptor_copy_kernel", tmp_path, target=target)
 
     M = N = 64
     x = torch.ones((M, N), device="cuda", dtype=torch.float16) * 3.0
@@ -226,9 +249,10 @@ def reshape_trans_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK: tl.constexpr,
 
 
 @pytest.mark.parametrize("TRANS_KIND", ["trans_method", "tl_trans_separate", "tl_trans_tuple", "tl_trans"])
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
-def test_triton_reshape_trans(tmp_path, TRANS_KIND):
-    kernel = convert_kernel(reshape_trans_kernel, "reshape_trans_kernel", tmp_path)
+@pytest.mark.parametrize("target", _all_targets.keys())
+def test_triton_reshape_trans(tmp_path, TRANS_KIND, target):
+    _skip_unless_target(target)
+    kernel = convert_kernel(reshape_trans_kernel, "reshape_trans_kernel", tmp_path, target=target)
 
     n = 1024
     BLOCK = 256
@@ -257,9 +281,10 @@ def split_kernel(x_ptr, out_ptr):
     tl.store(p, a)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
-def test_split(tmp_path):
-    kernel = convert_kernel(split_kernel, "split_kernel", tmp_path)
+@pytest.mark.parametrize("target", _all_targets.keys())
+def test_split(tmp_path, target):
+    _skip_unless_target(target)
+    kernel = convert_kernel(split_kernel, "split_kernel", tmp_path, target=target)
 
     n = 1024
     x = torch.randn(2 * n, device="cuda", dtype=torch.float32)
@@ -279,9 +304,10 @@ def reduce_to_scalar_kernel(out_ptr):
     tl.store(out_ptr, x)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
-def test_reduce_to_scalar(tmp_path):
-    kernel = convert_kernel(reduce_to_scalar_kernel, "reduce_to_scalar_kernel", tmp_path)
+@pytest.mark.parametrize("target", _all_targets.keys())
+def test_reduce_to_scalar(tmp_path, target):
+    _skip_unless_target(target)
+    kernel = convert_kernel(reduce_to_scalar_kernel, "reduce_to_scalar_kernel", tmp_path, target=target)
     grid = (1, )
 
     out = torch.empty((1, ), device="cuda", dtype=torch.int32)
@@ -308,3 +334,83 @@ def test_num_threads(tmp_path):
     ref = torch.empty_like(out)
     num_threads_kernel[(1, )](ref, num_warps=num_threads // 32)
     torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+# ---- additional op coverage ----
+
+
+@triton.jit
+def cat_kernel(x_ptr, y_ptr, out_ptr, BLOCK: tl.constexpr):
+    offs = tl.arange(0, BLOCK)
+    x = tl.load(x_ptr + offs)
+    y = tl.load(y_ptr + offs)
+    z = tl.cat(x, y, can_reorder=True)
+    tl.store(out_ptr + tl.arange(0, 2 * BLOCK), z)
+
+
+@pytest.mark.parametrize("target", _all_targets.keys())
+def test_cat(tmp_path, target):
+    _skip_unless_target(target)
+    kernel = convert_kernel(cat_kernel, "cat_kernel", tmp_path, target=target)
+
+    BLOCK = 256
+    x = torch.randn(BLOCK, device="cuda", dtype=torch.float32)
+    y = torch.randn(BLOCK, device="cuda", dtype=torch.float32)
+    out = torch.empty(2 * BLOCK, device="cuda", dtype=torch.float32)
+    kernel[(1, )](x, y, out, BLOCK)
+
+    ref = torch.empty_like(out)
+    cat_kernel[(1, )](x, y, ref, BLOCK)
+    torch.testing.assert_close(sorted(out.cpu()), sorted(ref.cpu()), atol=0, rtol=0)
+
+
+@triton.jit
+def make_desc_copy_kernel(in_ptr, out_ptr, M, N, stride_m, stride_n, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    in_desc = tl.make_tensor_descriptor(in_ptr, shape=[M, N], strides=[stride_m, stride_n],
+                                        block_shape=[BLOCK_M, BLOCK_N])
+    out_desc = tl.make_tensor_descriptor(out_ptr, shape=[M, N], strides=[stride_m, stride_n],
+                                         block_shape=[BLOCK_M, BLOCK_N])
+    tile = in_desc.load([0, 0])
+    out_desc.store([0, 0], tile)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+def test_make_tensor_descriptor_gfx1250(tmp_path):
+    kernel = convert_kernel(make_desc_copy_kernel, "make_desc_copy_kernel", tmp_path, target="gfx1250")
+
+    M, N = 64, 64
+    x = torch.randn((M, N), device="cuda", dtype=torch.float16)
+    y = torch.zeros((M, N), device="cuda", dtype=torch.float16)
+    grid = (1, )
+    kernel[grid](x, y, M, N, x.stride(0), x.stride(1), M, N)
+
+    y_ref = torch.zeros_like(y)
+    make_desc_copy_kernel[grid](x, y_ref, M, N, x.stride(0), x.stride(1), M, N)
+    torch.testing.assert_close(y, y_ref, atol=0, rtol=0)
+
+
+@triton.jit
+def gather_scatter_roundtrip_kernel(out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y: tl.constexpr, BLOCK_X: tl.constexpr,
+                                    BLOCK_Y: tl.constexpr):
+    idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
+    in_desc = tl.make_tensor_descriptor(in_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
+    out_desc = tl.make_tensor_descriptor(out_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
+    data = in_desc.gather(idx, 0)
+    out_desc.scatter(data, idx, 0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+def test_gather_scatter_roundtrip(tmp_path):
+    kernel = convert_kernel(gather_scatter_roundtrip_kernel, "gather_scatter_roundtrip_kernel", tmp_path,
+                            target="gfx1250")
+
+    X, Y, BLOCK_X, BLOCK_Y = 64, 64, 8, 64
+    inp = torch.arange(X * Y, device="cuda", dtype=torch.float16).reshape(X, Y)
+    idx = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7], device="cuda", dtype=torch.int32)
+    out = torch.zeros((X, Y), device="cuda", dtype=torch.float16)
+    kernel[(1, )](out, inp, idx, X, Y, BLOCK_X, BLOCK_Y)
+
+    expected = torch.zeros_like(out)
+    for i, row in enumerate(idx.tolist()):
+        expected[row] = inp[row]
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
