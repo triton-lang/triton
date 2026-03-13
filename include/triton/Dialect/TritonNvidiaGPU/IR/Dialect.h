@@ -69,7 +69,7 @@ inline bool getModuleTwoCTAs(Operation *op) {
 }
 
 struct TensorMemory : public SideEffects::Resource::Base<TensorMemory> {
-  StringRef getName() final { return "<TensorMemory>"; }
+  StringRef getName() const final { return "<TensorMemory>"; }
 };
 
 struct TMemAllocation {
