@@ -641,7 +641,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     if (!findGraph && !graphStates[graphExecId].captureStatusChecked) {
       graphStates[graphExecId].captureStatusChecked = true;
       std::cerr << "[PROTON] Cannot find graph for graphExecId: " << graphExecId
-                << ", and t may cause memory leak. To avoid this problem, "
+                << ", and may cause memory leak. To avoid this problem, "
                    "please start profiling before the graph is created."
                 << std::endl;
     } else if (findGraph && !graphStates[graphExecId].captureStatusChecked) {
