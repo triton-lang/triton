@@ -770,11 +770,6 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   int m = mixedTranspositions.size();
   int nPackPrelim = llvm::Log2_32(std::clamp(32 / bitwidth, 1, 4));
   int nPack = std::min(nPackPrelim, nRegBases - m);
-  // TODO: getTranspositionSelectors incorrectly lowers some conversions with
-  // multiple mixed transpositions. This path has not be extensively tested, so
-  // disable packing for multiple mixed transpositions until we are confident.
-  if (m > 1)
-    nPack = 0;
   auto processedTranspos =
       getTranspositionSelectors(mixedTranspositions, regBases, nPack);
 
@@ -802,43 +797,54 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
       ret.push_back(DecomposedWarpConversion::TranspositionInfo{t});
     return ret;
   }
-  // Consider for example the cycle
+  // This algorithm performs further algebraic processing.
   //
-  //        (r2 r1 l0 r0 r3) = (r0 l0) * (r2 r1 r0 r3)
-  //                         = (r3 r0) * (r3 l0) * (r3 r1) * (r3 r2)
+  // Suppose nPack > 0 and for simplicity that P is a cycle. We are given an
+  // initial decomposition P = pMixed * pLane * pReg. A (mixed) transposition
+  // involving an intra-register bit, say (r0 l0), can equivalently be
+  // expressed as (rN r0)(rN l0)(rN r0) for N >= nPack. The lowering of (rN l0)
+  // involves decomposing the permutation into three linear transformations,
+  // with the first and third transformations expressible as tiles of prmt
+  // instructions. The effect of (rN r0) is to permute the values of the
+  // default selectors, 0x7654 and 0x3210, viewing N as bit 3 of the values.
   //
-  // with `nPack` = 2 so that r0 and r1 are considered low bits. We want to
-  // factor out any low bits from `pReg` and to incorporate them into the data
-  // of the mixed transposition. After processing, the contribution to `pReg`
-  // is reduced to (r3 r2) and the mixed transposition recorded is (r3 l0), with
-  // the effects of (r3 r0) and (r3 r1) encoded in the returned selectors.
-  // In general, low bits occurring immediately before l_j modify the selectors
-  // of the `prmt` before the shuffle, while low bits occurring immediately
-  // after l_k modify the selectors of the `prmt` after the shuffle. Unmodified
-  // selectors correspond to `select` instructions.
-  // Cases like (l0 r0 r1) must be handled by selecting a 'partner' bit that is
-  // not used in another mixed transposition and conjugating out a low bit:
+  // This rewrite does not address the presence of intra-register bits in pReg,
+  // which often causes extra instructions to be generated. The goal of this
+  // algorithm is to peel off intra-register bits occuring in pReg whenever
+  // possible and to attach them to some mixed transposition while being mindful
+  // of the ordering of these extracted and conjugating factors for correctness.
   //
-  //           (l0 r0 r1) = (r2 r1) * (l0 r0 r2) * (r2 r1)
-  //                      = (r2 r1) * (r2 r0) * (r2 l0) * (r2 r1).
+  // For a concrete example, consider P := (l0 r0 r1 l1 r2) with nPack = 2.
+  // Initially, we have P = (r2 l1)(r0 l0) * (r0 r1 r2) (= pMixed * pReg).
+  // We can reorder the two transpositions and decompose pReg to get
   //
-  // Conjugation does not affect `pReg`. However, the set of fused mixed and
-  // low-bit transpositions is noncommutative in cases where there are no
-  // intervening high bits in between distinct sequences of lane bits as the
-  // paired low bit is used in modifying the selectors of both factors:
+  //                P = (r0 l0)(r2 l1) * (r2 r1)(r2 r0).
   //
-  //    (l0 r0 r1 l1 r2) = (r3 r0)(r3 l0)(r3 r0) * (r2 l1)(r2 r1)(r2 r0).
+  // We see (r2 r1)(r2 r0) can act as prmt selector modifiers for (r2 l1), and
+  // for (r0 l0), we can pick an unused register bit, such as r3, and write
+  // (r0 l0) = (r3 r0)(r3 l0)(r3 r0). This gives us our two TranspositionInfo
+  // objects:
   //
-  // The `*` is standard composition of permutations. The groupings correspond
-  // to different `TranspositionInfo` objects. For example, the permutation
-  // `(r3 r0)(r3 l0)(r3 r0) = (r0 l0)` has mixed transposition `(r3 l0)` with
-  // pre- and post-shuffle selectors determined by the `r0` bit.
-  // Processing of mixed transpositions is performed by determining the `head`
-  // and `tail` of an excision of bits in cycles of `pReg` and building lists
-  // of low bits acting as selector modifiers. In the noncommutative cases, we
-  // opt to restrict the number of post-shuffle modifiers to one.
+  //            P = (r3 r0)(r3 l0)(r3 r0) * (r2 l1)(r2 r1)(r2 r0).
+  //
+  // Since r0 is used in both TranspositionInfo objects, we must maintain this
+  // relative order (right term applied first) for equality to hold. However,
+  // since the conjugating term of the left term, (r3 r0), is disjoint from
+  // (r2 l1), the lowering algorithm is still valid. Roughly, it performs:
+  //
+  //           prmt      selp         shfl         prmt          prmt
+  //   P  =  (r3 r0) * (r2 r2) * (r3 l0)(r2 l1) * (r3 r0) * (r2 r1)(r2 r0).
+  //
+  // The selector algorithm processes transpositions sequentially, excising
+  // intra-register bits from pReg or conjugating mixed transpositions by higher
+  // "partner" register bits as in the example. Conjugation corresponds applying
+  // selector modifiers to both the pre- and post-shuffle prmts, while excision
+  // only applies modifiers to pre-shuffle prmt selector masks. The algorithm
+  // reorders the input list of transpositions to ensure this (partial) order is
+  // respected.
 
   auto permuteSelector = [nPack](uint16_t sel, int bitIdx) {
+    // Swap bit 2 and bit `lo` of the nibbles in `sel`.
     int lo = bitIdx + (2 - nPack);
     uint16_t maskHi = 0x4444;
     uint16_t maskLo = 0x1111 << lo;
@@ -852,6 +858,7 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     for (auto lowBit : lowBits) {
       topSel = permuteSelector(topSel, lowBit);
       botSel = permuteSelector(botSel, lowBit);
+      // Fix the low bits between `tail` and `head` in pReg.
       if (lowBit != head && lowBit != tail)
         regBases[lowBit][0] = 1 << lowBit;
     }
@@ -866,12 +873,15 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
   // choice of high bit can affect instruction count. If the first high bit
   // found when walking along `pReg` is unpaired, then that bit is the best
   // choice. We reorder the transpositions to guarantee this during processing.
+  // This also guarantees the correct ordering for the lowering algorithm.
   auto next = [&](int b) { return llvm::Log2_32(regBases[b][0]); };
   auto nextHighFree = [&](auto p) {
     int curr = p.first;
     do {
       if (curr >= nPack)
         return curr == p.first || !pairedRegBits.contains(curr);
+      else if (pairedRegBits.contains(next(curr)))
+        return false;
       curr = next(curr);
     } while (curr != p.first);
     return false;
@@ -880,6 +890,7 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
                         nextHighFree);
   // If `P` has an isolated low-bit mixed transposition, and `pReg` maps a low
   // bit to an open high bit, then the high bit should be used as the partner.
+  // This folds cases like P = (r0 l0)(r2 r1).
   auto prev = [&](int b) {
     int tail = b;
     int curr = next(b);
@@ -931,39 +942,26 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     int tail;
     int partnerBit = -1;
 
-    // Case work to determine what to conjugate out.
-    if (forwardEnd != cycle.end()) {
-      if (*forwardEnd == rBit || !pairedRegBits.contains(*forwardEnd)) {
-        // End at original or unpaired high bit. E.g. (l0 r0 r2) or (l0 r2)
-        // No conjugation needed.
-        head = partnerBit = *forwardEnd;
-      } else {
-        // End at different paired bit. E.g. (l0 r0 r1 l1 r2)
-        // Non-leading factor in a noncommutative case.
-        // Conjugate by first low bit in forward walk.
-        head = postShufLoBits.front();
-        preShufLoBits.push_back(head);
-        postShufLoBits.resize(1);
-        pairedRegBits.erase(head);
-      }
-      tail = *backwardEnd;
-      if (tail < nPack && pairedRegBits.contains(tail)) {
-        // Non-terminal factor in a noncommutative case.
-        preShufLoBits.insert(preShufLoBits.begin(), tail);
-      }
-    } else {
-      if (next(rBit) != rBit && pairedRegBits.contains(next(rBit))) {
-        // Symmetric noncommutative case. E.g. (l0 r0 l1 r1)
-        preShufLoBits.erase(preShufLoBits.begin());
+    // Determine selector modifiers and low bit excision from pReg.
+    if (forwardEnd == cycle.end()) {
+      // Isolated low bits with single mixed transposition. E.g. (l0 r0 r1)
+      if (postShufLoBits.size() == 2)
         postShufLoBits.pop_back();
-        pairedRegBits.erase(postShufLoBits.front());
-        head = rBit;
-        tail = next(rBit);
-      } else {
-        // Isolated low bits with single mixed transposition. E.g. (l0 r0 r1)
-        if (postShufLoBits.size() == 2)
-          postShufLoBits.pop_back();
-        head = tail = preShufLoBits.front();
+      head = tail = preShufLoBits.front();
+    } else if (*forwardEnd < nPack) {
+      // End at a different paired low bit. E.g. (l0 r0 l1 r1)
+      head = rBit;
+      tail = next(head);
+      preShufLoBits.push_back(head);
+    } else {
+      // End at original or unpaired high bit. E.g. (l0 r0 r2) or (l0 r2)
+      head = partnerBit = *forwardEnd;
+      pairedRegBits.insert(partnerBit);
+      tail = *backwardEnd;
+      while (tail < nPack && pairedRegBits.contains(tail)) {
+        // Leading factor in a noncommutative case.
+        preShufLoBits.push_back(tail);
+        tail = prev(tail);
       }
     }
 
@@ -981,23 +979,17 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     info.topPostSel = topPostSel;
     info.botPostSel = botPostSel;
 
-    // In noncommutative cases, post-shuffle selectors of non-leading terms come
-    // from a single low bit by design, so we can determine where to insert a
-    // non-terminal factor by examining processed selectors.
-    if (!preShufLoBits.empty()) {
-      uint16_t sel = (nPack - preShufLoBits.back()) == 2 ? 0x6240 : 0x5410;
-      auto it =
-          llvm::find_if(ret, [&](auto &t) { return t.topPostSel == sel; });
-      ret.insert(it, info);
-    } else {
-      ret.push_back(info);
-    }
+    ret.push_back(info);
   }
   if (nPack == 2 && regBases[0][0] == 2 && regBases[1][0] == 1 && ret.size()) {
-    // If (r0 r1) was originally in `P`, fold it into a mixed transposition.
-    auto &t = ret.back();
-    t.topPostSel = 0x3120;
-    t.botPostSel = 0x7564;
+    // If (r0 r1) remains in pReg, fold it into a mixed transposition.
+    auto &t = ret.front();
+    for (int lowBit : {0, 1, 0}) {
+      t.topPreSel = permuteSelector(t.topPreSel, lowBit);
+      t.botPreSel = permuteSelector(t.botPreSel, lowBit);
+    }
+    regBases[0][0] = 1;
+    regBases[1][0] = 2;
   }
   return ret;
 }
