@@ -187,9 +187,10 @@ def tl_dot(
     max_num_imprecise_acc=None,
     out_dtype=ttgl.float32,
 ):
-    if _is_gfx1250():
+    target: ttgl.constexpr = current_target()
+    if _is_gfx1250(target):
         return tl_dot_wmma(a, b, acc, out_dtype)
-    elif _is_cdna():
+    elif _is_cdna(target):
         return tl_dot_mfma(a, b, acc, out_dtype)
     else:
         num_warps: ttgl.constexpr = ttgl.num_warps()
@@ -344,7 +345,7 @@ def tl_dot_scaled(
     rhs_k_pack=True,
     out_dtype=ttgl.float32,
 ):
-    if (_is_nvidia() and tl_dot_scaled_mmav5_supported(lhs.type, rhs.type, ttgl.num_warps()) and lhs_scale is not None
+    if (_is_nvidia(current_target()) and tl_dot_scaled_mmav5_supported(lhs.type, rhs.type, ttgl.num_warps()) and lhs_scale is not None
             and rhs_scale is not None):
         return tl_dot_scaled_blackwell(
             lhs,
@@ -503,8 +504,7 @@ def tl_dot_scaled_blackwell(
 
 
 @gluon.constexpr_function
-def get_num_threads_per_warp() -> ttgl.constexpr:
-    target = current_target()
+def get_num_threads_per_warp(target=None) -> ttgl.constexpr:
     if target is not None and target.backend == "hip":
         gfx_major = int(target.arch[3:-2])
         return ttgl.constexpr(32 if gfx_major >= 10 else 64)
@@ -513,26 +513,18 @@ def get_num_threads_per_warp() -> ttgl.constexpr:
 
 @ttgl._core.builtin
 def get_num_threads_per_program(_semantic=None, _generator=None):
-    return ttgl.num_warps(_semantic=_semantic, _generator=_generator) * get_num_threads_per_warp(_semantic=_semantic)
+    return ttgl.num_warps(_semantic=_semantic, _generator=_generator) * get_num_threads_per_warp(current_target())
 
 
 @gluon.constexpr_function
-def default_blocked_layout(shape: ttgl.constexpr, num_warps: ttgl.constexpr) -> ttgl.constexpr:
+def default_blocked_layout(shape: ttgl.constexpr, num_warps: ttgl.constexpr, target=None) -> ttgl.constexpr:
     rank = len(shape)
-    # 1 element per thread for all dimensions
     size_per_thread = [1] * rank
-    # Distribute 32 threads per warp across dimensions (simple heuristic: last-fastest)
     threads_per_warp = [1] * rank
     # TODO: pick a better layout based on shape. Using this allows to not have to convert layout when broadcasting but may blow up register pressure.
-    threads_per_warp[rank - 1] = get_num_threads_per_warp()
-    # remaining_threads = get_num_threads_per_warp()
-    # for dim in range(rank - 1, -1, -1):
-    #     threads_per_warp[dim] = min(remaining_threads, shape[dim])
-    #     remaining_threads = remaining_threads // threads_per_warp[dim]
-    # Use provided num_warps to distribute warps per CTA (put all on first dim)
+    threads_per_warp[rank - 1] = get_num_threads_per_warp(target)
     warps_per_cta = [1] * rank
     warps_per_cta[0] = num_warps
-    # Natural order [rank-1, rank-2, ..., 0]
     order = list(range(rank - 1, -1, -1))
     return ttgl.BlockedLayout(
         size_per_thread=size_per_thread,
@@ -546,32 +538,24 @@ def default_blocked_layout(shape: ttgl.constexpr, num_warps: ttgl.constexpr) -> 
 
 
 @gluon.constexpr_function
-def _is_nvidia():
-    target = current_target()
+def _is_nvidia(target=None):
     return target is None or target.backend == "cuda"
 
 
 @gluon.constexpr_function
-def _is_gfx1250():
-    target = current_target()
+def _is_gfx1250(target=None):
     return target is not None and target.arch == "gfx1250"
 
 
 @gluon.constexpr_function
-def _is_cdna():
-    target = current_target()
-    if target is None:
-        return False
-    return target.arch in ("gfx942", "gfx950")
+def _is_cdna(target=None):
+    return target is not None and target.arch in ("gfx942", "gfx950")
 
 
 @gluon.constexpr_function
-def _cdna_version():
+def _cdna_version(target=None):
     """Returns 3 for gfx942, 4 for gfx950."""
-    target = current_target()
-    if target is not None and target.arch == "gfx950":
-        return 4
-    return 3
+    return 4 if target is not None and target.arch == "gfx950" else 3
 
 
 # ---- AMD WMMA layout helpers (gfx1250) ----
@@ -605,17 +589,17 @@ def get_wmma_k_width(a_ty, b_ty):
 
 
 @gluon.constexpr_function
-def get_mfma_instr_k(element_bitwidth):
+def get_mfma_instr_k(element_bitwidth, target=None):
     """K dimension of the MFMA instruction for [32, 32, K]."""
-    k_bits = 128 if _cdna_version() == 3 else 256
+    k_bits = 128 if _cdna_version(target) == 3 else 256
     return k_bits // element_bitwidth
 
 
 @gluon.constexpr_function
-def get_mfma_layout(num_warps, element_bitwidth):
-    instr_k = get_mfma_instr_k(element_bitwidth)
+def get_mfma_layout(num_warps, element_bitwidth, target=None):
+    instr_k = get_mfma_instr_k(element_bitwidth, target)
     return ttgl.amd.AMDMFMALayout(
-        version=_cdna_version(),
+        version=_cdna_version(target),
         instr_shape=[32, 32, instr_k],
         transposed=True,
         warps_per_cta=[num_warps, 1],
@@ -623,9 +607,9 @@ def get_mfma_layout(num_warps, element_bitwidth):
 
 
 @gluon.constexpr_function
-def get_mfma_k_width(a_ty, b_ty):
+def get_mfma_k_width(a_ty, b_ty, target=None):
     min_bitwidth = min(a_ty.element_ty.primitive_bitwidth, b_ty.element_ty.primitive_bitwidth)
-    instr_k = get_mfma_instr_k(min_bitwidth)
+    instr_k = get_mfma_instr_k(min_bitwidth, target)
     return instr_k // 2
 
 
@@ -668,9 +652,10 @@ def tl_dot_mfma(a, b, acc, out_dtype):
     N: ttgl.constexpr = b.type.shape[1]
     num_warps: ttgl.constexpr = ttgl.num_warps()
     min_bitwidth: ttgl.constexpr = min(a.type.element_ty.primitive_bitwidth, b.type.element_ty.primitive_bitwidth)
+    target: ttgl.constexpr = current_target()
 
-    mfma_layout: ttgl.constexpr = get_mfma_layout(num_warps, min_bitwidth)
-    k_width: ttgl.constexpr = get_mfma_k_width(a.type, b.type)
+    mfma_layout: ttgl.constexpr = get_mfma_layout(num_warps, min_bitwidth, target)
+    k_width: ttgl.constexpr = get_mfma_k_width(a.type, b.type, target)
     a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=k_width)
     b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=k_width)
 
@@ -798,14 +783,14 @@ def tl_obj_gather_amd(desc, x_offsets, y_offset, _semantic=None, _generator=None
         gather_shape, smem_layout, _semantic=_semantic)
     num_warps = ttgl.num_warps(_semantic=_semantic, _generator=_generator)
     idx_base = ttgl.BlockedLayout(
-        [num_idx, 1], [1, get_num_threads_per_warp()], [1, num_warps], [1, 0])
+        [num_idx, 1], [1, get_num_threads_per_warp(current_target())], [1, num_warps], [1, 0])
     idx_layout = ttgl.SliceLayout(1, idx_base)
     x_offsets = ttgl.convert_layout(x_offsets, idx_layout, _semantic=_semantic)
     alloc = ttgl.allocate_shared_memory(desc.dtype, gather_shape, smem_layout, _semantic=_semantic)
     y_off = ttgl.to_tensor(y_offset, _semantic=_semantic)
     amd_tdm.async_gather(gather_desc, x_offsets, y_off, alloc, _semantic=_semantic)
     amd_tdm.async_wait(0, _semantic=_semantic)
-    ret_layout = default_blocked_layout(gather_shape, num_warps)
+    ret_layout = default_blocked_layout(gather_shape, num_warps, current_target())
     out = alloc.load(ret_layout, _semantic=_semantic)
     return out
 
@@ -824,7 +809,7 @@ def tl_obj_scatter_amd(desc, value, x_offsets, y_offset, _semantic=None, _genera
         scatter_shape, smem_layout, _semantic=_semantic)
     num_warps = ttgl.num_warps(_semantic=_semantic, _generator=_generator)
     idx_base = ttgl.BlockedLayout(
-        [num_idx, 1], [1, get_num_threads_per_warp()], [1, num_warps], [1, 0])
+        [num_idx, 1], [1, get_num_threads_per_warp(current_target())], [1, num_warps], [1, 0])
     idx_layout = ttgl.SliceLayout(1, idx_base)
     x_offsets = ttgl.convert_layout(x_offsets, idx_layout, _semantic=_semantic)
     alloc = ttgl.allocate_shared_memory(desc.dtype, scatter_shape, smem_layout, value, _semantic=_semantic)
@@ -835,7 +820,7 @@ def tl_obj_scatter_amd(desc, value, x_offsets, y_offset, _semantic=None, _genera
 
 @ttgl._core.builtin
 def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option="zero", _semantic=None):
-    if _is_gfx1250():
+    if _is_gfx1250(current_target()):
         element_bitwidth = base.dtype.element_ty.primitive_bitwidth
         layout = get_default_tdm_layout(block_shape, element_bitwidth)
         desc = amd_tdm.make_tensor_descriptor(base, shape, strides, block_shape, layout, _semantic=_semantic)
@@ -965,12 +950,11 @@ def reset_to_default_layout(value):
 
 
 @gluon.constexpr_function
-def get_split_src_layout(shape: ttgl.constexpr, num_warps: ttgl.constexpr) -> ttgl.constexpr:
+def get_split_src_layout(shape: ttgl.constexpr, num_warps: ttgl.constexpr, target=None) -> ttgl.constexpr:
     rank = len(shape)
     size_per_thread = [1 if i != rank - 1 else 2 for i in range(rank)]
-    # Distribute 32 threads per warp across dimensions (simple heuristic: last-fastest)
     threads_per_warp = [1 for _ in range(rank)]
-    remaining_threads = get_num_threads_per_warp()
+    remaining_threads = get_num_threads_per_warp(target)
     for dim in range(rank - 2, -1, -1):
         threads_per_warp[dim] = min(shape[dim], remaining_threads)
         remaining_threads = remaining_threads // threads_per_warp[dim]
@@ -1049,17 +1033,33 @@ def tl_atomic_add(ptr, val, mask=None, sem=None, scope=None, _semantic=None):
     return ttgl.atomic_add(ptr, val=val, mask=mask, sem=sem, scope=scope, _semantic=_semantic)
 
 
-# hacks to workaround limited dependencies tracking.
-# TODO: fix this by pulling imports into the generated file.
+# Module-level target, set by the translator via _make_target().
+# Falls back to the active driver's target if not set.
+_current_target = None
+
+
 def current_target():
+    if _current_target is not None:
+        return _current_target
     from triton.runtime import driver
 
     try:
         active_driver = driver.active
     except RuntimeError:
-        # If there is no active driver, return None
         return None
     return active_driver.get_current_target()
 
 
 current_target.__triton_builtin__ = True
+
+
+def _make_target(arch):
+    """Construct a GPUTarget from an architecture string (e.g. 'gfx1250', 'nvidia')."""
+    if arch.startswith("gfx"):
+        from triton.backends.amd.compiler import GPUTarget
+        warp_size = 32 if int(arch[3:-2]) >= 10 else 64
+        return GPUTarget("hip", arch, warp_size)
+    return None
+
+
+_make_target.__triton_builtin__ = True

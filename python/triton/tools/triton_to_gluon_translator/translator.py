@@ -255,8 +255,11 @@ def translate_kernels(kernels: list[GlobalValue], target: str = "nvidia") -> str
         assert reference.mangled_name is not None
         source = reference.value.mangle_source(source, reference.mangled_name)
         output += source + "\n\n\n"
-    output = "\n".join(imports) + "\n\n" + output
-    return output
+    header = "\n".join(imports) + "\n"
+    if target != "nvidia":
+        header += f'\nhelpers._current_target = helpers._make_target("{target}")\n'
+    header += "\n"
+    return header + output
 
 
 def translate_paths(kernel_paths: list[str], target: str = "nvidia") -> str:
