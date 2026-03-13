@@ -45,7 +45,8 @@ protected:
                            uint8_t *buffer, size_t size) override;
   void exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
                           uint8_t *buffer, size_t size) override;
-  void markStep(uint64_t streamId) override;
+  void markStep(uint64_t streamId, uint64_t stepBufferToken) override;
+  void waitStepBuffer(uint64_t streamId, uint64_t stepBufferToken) override;
 
   // OpInterface
   void startOp(const Scope &scope) override {
@@ -68,13 +69,17 @@ private:
 
   struct PendingStepFence {
     size_t stepId;
+    uint64_t stepBufferToken;
     void *copyStream;
     void *completionEvent;
   };
 
-  struct InFlightInstrumentedOp {
-    PendingInstrumentedOp pendingOp;
-    uint8_t *hostBuffer;
+  struct InFlightInstrumentedStep {
+    size_t stepId;
+    uint64_t stepBufferToken;
+    std::vector<PendingInstrumentedOp> pendingOps;
+    std::vector<uint8_t *> hostBuffers;
+    void *copyStream;
     void *completionEvent;
   };
 
@@ -104,7 +109,7 @@ private:
   size_t currentStepId{0};
   std::vector<PendingInstrumentedOp> pendingInstrumentedOps;
   std::vector<PendingStepFence> pendingStepFences;
-  std::vector<InFlightInstrumentedOp> inflightInstrumentedOps;
+  std::vector<InFlightInstrumentedStep> inflightInstrumentedSteps;
   std::vector<uint64_t> completedBufferPtrs;
 };
 

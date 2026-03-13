@@ -232,7 +232,7 @@ def mark_step(stream: Optional[int] = None) -> None:
     if stream is None:
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
-    libproton.mark_step(stream)
+    HookManager.mark_step(stream)
 
 
 def _profiling(

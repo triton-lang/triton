@@ -20,6 +20,95 @@ from .. import mode
 VERSION = 1
 
 
+def _round_up(value: int, alignment: int) -> int:
+    return ((value + alignment - 1) // alignment) * alignment
+
+
+class ProfileScratchAllocation:
+
+    def __init__(self, slot: "StepBufferSlot", offset: int, size: int):
+        self.slot = slot
+        self.offset = offset
+        self.size = size
+
+    def data_ptr(self) -> int:
+        return self.slot.buffer.data_ptr() + self.offset
+
+    def element_size(self) -> int:
+        return 1
+
+    def numel(self) -> int:
+        return self.size
+
+
+class StepBufferSlot:
+
+    def __init__(self, buffer: Any):
+        self.buffer = buffer
+        self.capacity = int(buffer.element_size() * buffer.numel())
+        self.token = buffer.data_ptr()
+        self.reset()
+
+    def reset(self) -> None:
+        self.offset = 0
+        self.sealed = False
+        self.used = False
+
+
+class StepBufferRing:
+
+    def __init__(self, instrumentation_hook: "InstrumentationHook", slot_size: int, slot_count: int):
+        self.instrumentation_hook = instrumentation_hook
+        self.slots = [self._allocate_slot(slot_size) for _ in range(slot_count)]
+        self.current_slot_idx: Optional[int] = None
+        self.next_slot_idx = 0
+
+    def _allocate_slot(self, slot_size: int) -> StepBufferSlot:
+        import torch
+        device = triton.runtime.driver.active.get_active_torch_device()
+        enter_state(COMPUTE_METADATA_SCOPE_NAME)
+        buffer = torch.zeros((slot_size, ), dtype=torch.uint8, device=device)
+        exit_state()
+        return StepBufferSlot(buffer)
+
+    def allocate(self, size: int, alignment: int, stream: int) -> ProfileScratchAllocation:
+        slot = self._ensure_current_slot(stream)
+        offset = _round_up(slot.offset, alignment)
+        if offset + size > slot.capacity:
+            raise RuntimeError(
+                "Profiling step buffer is full; call proton.mark_step() sooner or increase TRITON_PROFILE_BUFFER_SIZE")
+        slot.offset = offset + size
+        slot.used = True
+        return ProfileScratchAllocation(slot, offset, size)
+
+    def mark_step(self, stream: int) -> None:
+        if self.current_slot_idx is None:
+            return
+        slot = self.slots[self.current_slot_idx]
+        if not slot.used:
+            return
+        libproton.mark_step(stream, slot.token)
+        slot.sealed = True
+        self.current_slot_idx = None
+        self.next_slot_idx = (self.next_slot_idx + 1) % len(self.slots)
+
+    def _ensure_current_slot(self, stream: int) -> StepBufferSlot:
+        if self.current_slot_idx is None:
+            self.current_slot_idx = self._acquire_slot(stream)
+        return self.slots[self.current_slot_idx]
+
+    def _acquire_slot(self, stream: int) -> int:
+        slot_idx = self.next_slot_idx
+        slot = self.slots[slot_idx]
+        if slot.sealed:
+            # Steady-state flush stays async. We only gate the compute stream
+            # when the ring wraps and this exact slot must be reused.
+            libproton.flush_all()
+            libproton.wait_step_buffer(stream, slot.token)
+        slot.reset()
+        return slot_idx
+
+
 class CudaAllocator:
 
     def __init__(self, instrumentation_hook):
@@ -29,22 +118,24 @@ class CudaAllocator:
         if alignment != self.instrumentation_hook.profile_buffer_alignment:
             raise RuntimeError(
                 f"Alignment mismatch: {alignment} != {self.instrumentation_hook.profile_buffer_alignment}")
-        aligned_size = (size + alignment - 1) // alignment * alignment
-        # Note: profile_buffer_size may be smaller than the aligned size if the kernel launches many blocks
-        # and the host CPU cannot store all profiling data in memory. This streaming mode is not yet implemented.
-        # In the future, we should support copying data incrementally from device to host to enable
-        # more efficient profiling data processing, rather than relying solely on post-processing.
-        aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
+        aligned_size = _round_up(size, alignment)
 
-        # Each launch gets its own scratch buffer. Kernel timing is drained on
-        # flush, so the hook keeps the tensor alive until the pending launch has
-        # been processed by libproton.
         import torch
-        enter_state(COMPUTE_METADATA_SCOPE_NAME)
-        buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device="cuda")
-        exit_state()
+        if stream is None:
+            device = triton.runtime.driver.active.get_current_device()
+            stream = triton.runtime.driver.active.get_current_stream(device)
+        if InstrumentationHook.enable_host_buffer:
+            enter_state(COMPUTE_METADATA_SCOPE_NAME)
+            buffer = torch.zeros((max(aligned_size, self.instrumentation_hook.profile_buffer_size), ),
+                                 dtype=torch.uint8, device=triton.runtime.driver.active.get_active_torch_device())
+            exit_state()
+        else:
+            if aligned_size > self.instrumentation_hook.profile_buffer_size:
+                raise RuntimeError(
+                    f"Kernel requested {aligned_size} bytes of profile scratch, which exceeds the preallocated step "
+                    f"slot size {self.instrumentation_hook.profile_buffer_size}. Increase TRITON_PROFILE_BUFFER_SIZE.")
+            buffer = self.instrumentation_hook.get_step_buffer_ring().allocate(aligned_size, alignment, stream)
         self.instrumentation_hook.current_buffer = buffer
-        self.instrumentation_hook.pending_buffers[buffer.data_ptr()] = buffer
         return buffer
 
 
@@ -143,6 +234,7 @@ class InstrumentationHook(Hook):
     host_buffer: Optional[Any] = None
     # FIXME(fywkevin): change to a more reasonable value after we have support for periodic buffer dumping.
     profile_buffer_size: int = 1
+    profile_buffer_slots: int = 2
     profile_buffer_alignment: int = 128
 
     def __init__(self, mode_obj: Union[None, str, mode.InstrumentationMode]):
@@ -151,7 +243,7 @@ class InstrumentationHook(Hook):
 
         self.allocator = CudaAllocator(self)
         self.current_buffer: Optional[Any] = None
-        self.pending_buffers: Dict[int, Any] = {}
+        self.step_buffer_rings: Dict[int, StepBufferRing] = {}
         self.metadata_path: Dict[Any, Optional[str]] = {}
 
     def activate(self):
@@ -161,6 +253,8 @@ class InstrumentationHook(Hook):
         InstrumentationHook.active_count += 1
 
         flags.instrumentation_on = True
+        self.profile_buffer_size = triton.knobs.proton.profile_buffer_size
+        self.profile_buffer_slots = triton.knobs.proton.profile_buffer_slots
 
         device = triton.runtime.driver.active.get_current_device()
         max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
@@ -229,11 +323,22 @@ class InstrumentationHook(Hook):
         InstrumentationHook.host_buffer = None
 
         self.current_buffer = None
+        self.step_buffer_rings = {}
 
     def flush(self) -> None:
         self.current_buffer = None
-        for buffer_ptr in libproton.take_completed_instrumented_buffers():
-            self.pending_buffers.pop(buffer_ptr, None)
+
+    def mark_step(self, stream: int) -> None:
+        device = triton.runtime.driver.active.get_current_device()
+        ring = self.step_buffer_rings.get(device)
+        if ring is not None:
+            ring.mark_step(stream)
+
+    def get_step_buffer_ring(self) -> StepBufferRing:
+        device = triton.runtime.driver.active.get_current_device()
+        if device not in self.step_buffer_rings:
+            self.step_buffer_rings[device] = StepBufferRing(self, self.profile_buffer_size, self.profile_buffer_slots)
+        return self.step_buffer_rings[device]
 
     def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
         if not function:

@@ -160,8 +160,16 @@ static void initProton(pybind11::module &&m) {
   });
 
   m.def("mark_step",
-        [](uint64_t streamId) { SessionManager::instance().markStep(streamId); },
-        pybind11::arg("streamId"));
+        [](uint64_t streamId, uint64_t stepBufferToken) {
+          SessionManager::instance().markStep(streamId, stepBufferToken);
+        },
+        pybind11::arg("streamId"), pybind11::arg("stepBufferToken"));
+
+  m.def("wait_step_buffer",
+        [](uint64_t streamId, uint64_t stepBufferToken) {
+          SessionManager::instance().waitStepBuffer(streamId, stepBufferToken);
+        },
+        pybind11::arg("streamId"), pybind11::arg("stepBufferToken"));
 
   m.def("take_completed_instrumented_buffers", []() {
     return InstrumentationProfiler::instance().drainCompletedBufferPtrs();

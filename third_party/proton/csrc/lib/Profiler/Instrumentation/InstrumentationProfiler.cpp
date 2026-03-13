@@ -239,9 +239,6 @@ void InstrumentationProfiler::scheduleReadySteps() {
     opsByStep[pendingOp.stepId].push_back(std::move(pendingOp));
   }
 
-  std::vector<PendingStepFence> remainingStepFences;
-  remainingStepFences.reserve(pendingStepFences.size());
-
   for (auto &stepFence : pendingStepFences) {
     auto readyOpsIt = opsByStep.find(stepFence.stepId);
     if (readyOpsIt == opsByStep.end()) {
@@ -250,6 +247,10 @@ void InstrumentationProfiler::scheduleReadySteps() {
     }
 
     runtime->waitEvent(stepFence.copyStream, stepFence.completionEvent);
+    std::vector<PendingInstrumentedOp> stepOps;
+    std::vector<uint8_t *> hostBuffers;
+    stepOps.reserve(readyOpsIt->second.size());
+    hostBuffers.reserve(readyOpsIt->second.size());
     for (auto &pendingOp : readyOpsIt->second) {
       if (pendingOp.size > MAX_HOST_BUFFER_SIZE) {
         throw std::runtime_error(
@@ -261,17 +262,20 @@ void InstrumentationProfiler::scheduleReadySteps() {
       runtime->allocateHostBuffer(&hostBuffer, pendingOp.size);
       runtime->copyDeviceToHostAsync(hostBuffer, pendingOp.buffer, pendingOp.size,
                                      stepFence.copyStream);
-      auto *copyDoneEvent = runtime->createEvent();
-      runtime->recordEvent(copyDoneEvent, stepFence.copyStream);
-      inflightInstrumentedOps.push_back(
-          InFlightInstrumentedOp{std::move(pendingOp), hostBuffer,
-                                 copyDoneEvent});
+      hostBuffers.push_back(hostBuffer);
+      stepOps.push_back(std::move(pendingOp));
     }
+    auto *copyDoneEvent = runtime->createEvent();
+    runtime->recordEvent(copyDoneEvent, stepFence.copyStream);
+    inflightInstrumentedSteps.push_back(
+        InFlightInstrumentedStep{stepFence.stepId, stepFence.stepBufferToken,
+                                 std::move(stepOps), std::move(hostBuffers),
+                                 stepFence.copyStream, copyDoneEvent});
     opsByStep.erase(readyOpsIt);
     runtime->destroyEvent(stepFence.completionEvent);
   }
 
-  pendingStepFences = std::move(remainingStepFences);
+  pendingStepFences.clear();
   for (auto &[_, remainingOps] : opsByStep) {
     for (auto &pendingOp : remainingOps) {
       pendingInstrumentedOps.push_back(std::move(pendingOp));
@@ -280,27 +284,27 @@ void InstrumentationProfiler::scheduleReadySteps() {
 }
 
 void InstrumentationProfiler::processCompletedCopies(bool blockUntilComplete) {
-  std::vector<InFlightInstrumentedOp> pendingInflightOps;
-  pendingInflightOps.reserve(inflightInstrumentedOps.size());
-  for (auto &inflightOp : inflightInstrumentedOps) {
-    if (blockUntilComplete ||
-        runtime->queryEvent(inflightOp.completionEvent)) {
+  std::vector<InFlightInstrumentedStep> pendingInflightSteps;
+  pendingInflightSteps.reserve(inflightInstrumentedSteps.size());
+  for (auto &inflightStep : inflightInstrumentedSteps) {
+    if (blockUntilComplete || runtime->queryEvent(inflightStep.completionEvent)) {
       if (blockUntilComplete) {
-        auto *device = reinterpret_cast<void *>(
-            static_cast<uintptr_t>(inflightOp.pendingOp.deviceId));
-        runtime->synchronizeStream(deviceStreams.at(device));
+        runtime->synchronizeStream(inflightStep.copyStream);
       }
-      parseCopiedInstrumentedOp(inflightOp.pendingOp, inflightOp.hostBuffer,
-                                inflightOp.pendingOp.size);
-      completedBufferPtrs.push_back(
-          reinterpret_cast<uint64_t>(inflightOp.pendingOp.buffer));
-      runtime->destroyEvent(inflightOp.completionEvent);
-      runtime->freeHostBuffer(inflightOp.hostBuffer);
+      for (size_t i = 0; i < inflightStep.pendingOps.size(); ++i) {
+        const auto &pendingOp = inflightStep.pendingOps[i];
+        auto *hostBuffer = inflightStep.hostBuffers[i];
+        parseCopiedInstrumentedOp(pendingOp, hostBuffer, pendingOp.size);
+        completedBufferPtrs.push_back(
+            reinterpret_cast<uint64_t>(pendingOp.buffer));
+        runtime->freeHostBuffer(hostBuffer);
+      }
+      runtime->destroyEvent(inflightStep.completionEvent);
     } else {
-      pendingInflightOps.push_back(std::move(inflightOp));
+      pendingInflightSteps.push_back(std::move(inflightStep));
     }
   }
-  inflightInstrumentedOps = std::move(pendingInflightOps);
+  inflightInstrumentedSteps = std::move(pendingInflightSteps);
 }
 
 void InstrumentationProfiler::parseCopiedInstrumentedOp(
@@ -413,7 +417,8 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                             std::move(launchDataEntries)});
 }
 
-void InstrumentationProfiler::markStep(uint64_t streamId) {
+void InstrumentationProfiler::markStep(uint64_t streamId,
+                                       uint64_t stepBufferToken) {
   void *device = runtime->getDevice();
   void *&copyStream = deviceStreams[device];
   if (!copyStream) {
@@ -422,8 +427,27 @@ void InstrumentationProfiler::markStep(uint64_t streamId) {
   auto *completionEvent = runtime->createEvent();
   runtime->recordEvent(completionEvent, reinterpret_cast<void *>(streamId));
   pendingStepFences.push_back(
-      PendingStepFence{currentStepId, copyStream, completionEvent});
+      PendingStepFence{currentStepId, stepBufferToken, copyStream,
+                       completionEvent});
   ++currentStepId;
+}
+
+void InstrumentationProfiler::waitStepBuffer(uint64_t streamId,
+                                             uint64_t stepBufferToken) {
+  for (const auto &stepFence : pendingStepFences) {
+    if (stepFence.stepBufferToken == stepBufferToken) {
+      throw std::runtime_error(
+          "Profiling step buffer is still pending flush; call proton.flush() "
+          "before reusing the slot");
+    }
+  }
+  for (const auto &inflightStep : inflightInstrumentedSteps) {
+    if (inflightStep.stepBufferToken == stepBufferToken) {
+      runtime->waitEvent(reinterpret_cast<void *>(streamId),
+                         inflightStep.completionEvent);
+      return;
+    }
+  }
 }
 
 void InstrumentationProfiler::doAddMetrics(

@@ -448,7 +448,8 @@ def test_trace_kernel_timing(tmp_path: pathlib.Path):
         assert events[1]["args"]["call_stack"] == ["sub_kernel"]
 
 
-def test_trace_kernel_timing_mark_step_flush(tmp_path: pathlib.Path):
+def test_trace_kernel_timing_mark_step_flush(tmp_path: pathlib.Path, fresh_knobs):
+    fresh_knobs.proton.profile_buffer_slots = 1
 
     @triton.jit
     def add_kernel(

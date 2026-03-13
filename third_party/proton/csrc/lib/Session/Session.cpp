@@ -312,11 +312,22 @@ void SessionManager::exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
       /*isReversed=*/true);
 }
 
-void SessionManager::markStep(uint64_t streamId) {
+void SessionManager::markStep(uint64_t streamId, uint64_t stepBufferToken) {
   std::lock_guard<std::mutex> lock(mutex);
   executeInterface(instrumentationInterfaceCounts,
                    [&](auto *instrumentationInterface) {
-                     instrumentationInterface->markStep(streamId);
+                     instrumentationInterface->markStep(streamId,
+                                                        stepBufferToken);
+                   });
+}
+
+void SessionManager::waitStepBuffer(uint64_t streamId,
+                                    uint64_t stepBufferToken) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](auto *instrumentationInterface) {
+                     instrumentationInterface->waitStepBuffer(
+                         streamId, stepBufferToken);
                    });
 }
 
