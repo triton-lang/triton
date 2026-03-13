@@ -92,6 +92,8 @@ jobs:
         run: make NUM_PROCS=24 test-unit
       - name: Run gluon tests
         run: make NUM_PROCS=24 test-gluon
+      - name: Run gsan tests
+        run: make NUM_PROCS=24 test-gsan
       - name: Run interpreter tests
         if: ${{ matrix.config.runner_type == 'nvidia-h100' }}
         run: make test-interpret
