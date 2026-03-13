@@ -740,7 +740,9 @@ public:
       return failure();
 
     // TODO: v_perm could be useful for fp16 tensors.
-    if (srcTy.getElementType().getIntOrFloatBitWidth() != 8)
+    auto elemTy = srcTy.getElementType();
+    int bitwidth = elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
+    if (bitwidth != 8)
       return failure();
     // TODO: broadcasting is not supported at the moment.
     if (!conversion.isInvertible())
