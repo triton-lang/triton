@@ -53,17 +53,9 @@ struct AssertUniformOpConversion
   LogicalResult
   matchAndRewrite(tti::ExperimentalAssertUniformOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    TritonLLVMIRRewriter b(op.getLoc(), rewriter);
-    Value tid = getThreadId(b, op.getLoc());
-    Value threadIdIsZero = b.icmp_eq(tid, b.i32_val(0));
-
-    auto [prevBlock, ifBlock, thenBlock] =
-        createIfBlock(rewriter, op.getLoc(), threadIdIsZero);
-    rewriter.setInsertionPointToStart(ifBlock);
     AssertOp::create(rewriter, op.getLoc(), adaptor.getCondition(),
                      adaptor.getMessage());
     rewriter.eraseOp(op);
-    rewriter.setInsertionPointToStart(thenBlock);
     return success();
   }
 };

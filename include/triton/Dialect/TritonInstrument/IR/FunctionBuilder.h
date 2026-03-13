@@ -92,7 +92,8 @@ public:
   // checkAllActiveWaiting: assert that not all active threads are waiting on
   // matching barrier phases.
   void createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b, int activeMask,
-                                       Value pred, Operation *insertPoint);
+                                       Value pred, Operation *insertPoint,
+                                       Value ctaMask = Value());
   // verifyBarrierCanInit: ensure the barrier is currently invalidated before
   // initializing it again.
   void createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b, Value barrier,
@@ -189,12 +190,14 @@ public:
   void createTransferVisibleWritesCall(ImplicitLocOpBuilder &b, Value mbar,
                                        uint64_t threadMask, Value pred,
                                        MemType memType, Operation *insertPoint,
+                                       Value barrierMask = Value(),
                                        Value ctaMask = Value());
   // transferVisibleReads: transfer read visibility tracked by a barrier to all
   // threads in threadMask.
   void createTransferVisibleReadsCall(ImplicitLocOpBuilder &b, Value mbar,
                                       uint64_t threadMask, Value pred,
                                       MemType memType, Operation *insertPoint,
+                                      Value barrierMask = Value(),
                                       Value ctaMask = Value());
   // verifyWriteVisibility: ensure the thread either sees the latest write or no
   // other thread is writing the buffer.

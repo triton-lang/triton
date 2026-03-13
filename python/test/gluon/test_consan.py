@@ -9,6 +9,7 @@ from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, mbarrier, tma
 from triton._internal_testing import is_cuda
+from triton._C.libtriton.gluon_ir import make_cga_layout
 import multiprocessing
 import tempfile
 
@@ -1988,3 +1989,176 @@ def test_multicta_tma_multicast_wait(device, run_wrapper, monkeypatch):
     tma_multicast_wait_kernel[(1, )](input_desc, output_desc, num_warps=4, num_ctas=2)
     torch.cuda.synchronize()
     torch.testing.assert_close(output, input, atol=0, rtol=0)
+
+
+def make_multicta_tcgen05_args(device):
+    ctas_per_cga = [2, 1]
+    BLOCK_M = 128 * ctas_per_cga[0]
+    BLOCK_N = 64
+    BLOCK_K = 32
+    cta_order = [1, 0]
+    cga_layout_a = make_cga_layout(ctas_per_cga, [ctas_per_cga[0], 1], cta_order)
+    cga_layout_b = make_cga_layout(ctas_per_cga, [1, 1], cta_order)
+    cga_layout_c = make_cga_layout(ctas_per_cga, ctas_per_cga, cta_order)
+
+    shared_layout_a = ttgl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], ttgl.float16, cga_layout=cga_layout_a)
+    shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], ttgl.float16, cga_layout=cga_layout_b)
+    acc_tmem_layout = blackwell.TensorMemoryLayout(
+        block=(128, BLOCK_N),
+        col_stride=1,
+        two_ctas=False,
+        cga_layout=cga_layout_c,
+    )
+    blocked_c = ttgl.BlockedLayout([1, 2], [1, 32], [4, 1], [1, 0], cga_layout=cga_layout_c)
+
+    a = torch.randn((BLOCK_M, BLOCK_K), dtype=torch.float16, device=device)
+    b = torch.randn((BLOCK_K, BLOCK_N), dtype=torch.float16, device=device)
+    out = torch.empty((BLOCK_M, BLOCK_N), dtype=torch.float32, device=device)
+    a_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(a, [BLOCK_M, BLOCK_K], shared_layout_a)
+    b_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(b, [BLOCK_K, BLOCK_N], shared_layout_b)
+    return a, b, out, a_desc, b_desc, BLOCK_M, BLOCK_N, acc_tmem_layout, blocked_c, ctas_per_cga
+
+
+def make_multicta_tcgen05_input_descs(device, block_m, block_n, block_k):
+    a = torch.randn((block_m.value, block_k.value), device=device, dtype=torch.float16)
+    b = torch.randn((block_k.value, block_n.value), device=device, dtype=torch.float16)
+    a_layout = ttgl.NVMMASharedLayout.get_default_for([block_m.value, block_k.value], ttgl.float16,
+                                                      cga_layout=((1, 0), ))
+    b_layout = ttgl.NVMMASharedLayout.get_default_for([block_k.value, block_n.value], ttgl.float16,
+                                                      cga_layout=((0, 1), ))
+    a_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(a, [block_m.value, block_k.value], a_layout)
+    b_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(b, [block_k.value, block_n.value], b_layout)
+    return a_desc, b_desc
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+def test_multicta_tcgen05_commit_wait(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_multicta_tcgen05_commit_wait, (device, False, monkeypatch))
+        assert_subprocess_ok(result)
+        return
+
+    enable_consan(monkeypatch)
+
+    BLOCK_M = ttgl.constexpr(256)
+    BLOCK_N = ttgl.constexpr(128)
+    BLOCK_K = ttgl.constexpr(64)
+
+    @gluon.jit
+    def tcgen05_commit_wait_kernel(a_desc, b_desc):
+        ttgl.static_assert(ttgl.num_ctas() == 2)
+
+        smem_a = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+        smem_b = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
+        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([BLOCK_M // 2, BLOCK_N], col_stride=1,
+                                                                  cga_layout=((1, 0), ), two_ctas=True)
+        acc = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_layout)
+        commit_count: ttgl.constexpr = blackwell.tcgen05_mma_barrier_count([smem_a, smem_b], multicast=True)
+        commit_bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(commit_bar, count=commit_count)
+
+        tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
+        mbarrier.init(tma_bar, count=1)
+        mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
+        tma.async_copy_global_to_shared(a_desc, [0, 0], tma_bar, smem_a, multicast=True)
+        tma.async_copy_global_to_shared(b_desc, [0, 0], tma_bar, smem_b, multicast=True)
+        mbarrier.wait(tma_bar, phase=0, deps=[smem_a, smem_b])
+        blackwell.tcgen05_mma(smem_a, smem_b, acc, use_acc=False, multicast=True)
+        blackwell.tcgen05_commit(commit_bar, descs=[smem_a, smem_b])
+        mbarrier.wait(commit_bar, phase=0)
+        acc.load()
+
+    a_desc, b_desc = make_multicta_tcgen05_input_descs(device, BLOCK_M, BLOCK_N, BLOCK_K)
+    tcgen05_commit_wait_kernel[(1, )](a_desc, b_desc, num_warps=4, num_ctas=2)
+    torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+def test_multicta_tcgen05_commit_barrier_overcounted(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_multicta_tcgen05_commit_barrier_overcounted, (device, False, monkeypatch))
+        assert_subprocess_assert(result, "Deadlock detected: all active threads are waiting on mbarriers")
+        return
+
+    enable_consan(monkeypatch)
+
+    BLOCK_M = ttgl.constexpr(256)
+    BLOCK_N = ttgl.constexpr(128)
+    BLOCK_K = ttgl.constexpr(64)
+
+    @gluon.jit
+    def tcgen05_commit_barrier_overcounted_kernel(a_desc, b_desc):
+        ttgl.static_assert(ttgl.num_ctas() == 2)
+
+        smem_a = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+        smem_b = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
+        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([BLOCK_M // 2, BLOCK_N], col_stride=1,
+                                                                  cga_layout=((1, 0), ), two_ctas=True)
+        acc = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_layout)
+        mma_count: ttgl.constexpr = blackwell.tcgen05_mma_barrier_count([smem_a, smem_b], multicast=True)
+        commit_bar = mbarrier.allocate_mbarrier()
+        commit_count: ttgl.constexpr = mma_count + 1
+        mbarrier.init(commit_bar, count=commit_count)
+
+        tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
+        mbarrier.init(tma_bar, count=1)
+        mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
+        tma.async_copy_global_to_shared(a_desc, [0, 0], tma_bar, smem_a, multicast=True)
+        tma.async_copy_global_to_shared(b_desc, [0, 0], tma_bar, smem_b, multicast=True)
+        mbarrier.wait(tma_bar, phase=0, deps=[smem_a, smem_b])
+        blackwell.tcgen05_mma(smem_a, smem_b, acc, use_acc=False, multicast=True)
+        blackwell.tcgen05_commit(commit_bar, descs=[smem_a, smem_b])
+        mbarrier.wait(commit_bar, phase=0)
+
+    a_desc, b_desc = make_multicta_tcgen05_input_descs(device, BLOCK_M, BLOCK_N, BLOCK_K)
+    tcgen05_commit_barrier_overcounted_kernel[(1, )](a_desc, b_desc, num_warps=4, num_ctas=2)
+    torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+def test_multicta_tcgen05_load_without_wait(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_multicta_tcgen05_load_without_wait, (device, False, monkeypatch))
+        assert_subprocess_assert(result, "Buffer being accessed has outstanding writes")
+        return
+
+    enable_consan(monkeypatch)
+
+    @gluon.jit
+    def tcgen05_load_without_wait_kernel(a_desc, b_desc, out_ptr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                         acc_tmem_layout: ttgl.constexpr, blocked_c: ttgl.constexpr):
+        smem_a = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+        smem_b = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
+
+        tma_bar = mbarrier.allocate_mbarrier(two_ctas=acc_tmem_layout.two_ctas)
+        mbarrier.init(tma_bar, count=1)
+        mma_bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(mma_bar, count=blackwell.tcgen05_mma_barrier_count([smem_a, smem_b], True))
+
+        mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
+        tma.async_copy_global_to_shared(a_desc, [0, 0], tma_bar, smem_a, multicast=True)
+        tma.async_copy_global_to_shared(b_desc, [0, 0], tma_bar, smem_b, multicast=True)
+        mbarrier.wait(tma_bar, phase=0, deps=[smem_a, smem_b])
+        mbarrier.invalidate(tma_bar)
+
+        acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_tmem_layout)
+        blackwell.tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=False, multicast=True, mbarriers=[mma_bar])
+        out = acc_tmem.load()
+        out = ttgl.convert_layout(out, blocked_c)
+        offs_m = ttgl.arange(0, BLOCK_M)[:, None]
+        offs_n = ttgl.arange(0, BLOCK_N)[None, :]
+        ttgl.store(out_ptr + offs_m * BLOCK_N + offs_n, out)
+
+    _, _, out, a_desc, b_desc, BLOCK_M, BLOCK_N, acc_tmem_layout, blocked_c, ctas_per_cga = make_multicta_tcgen05_args(
+        device)
+    tcgen05_load_without_wait_kernel[(1, )](
+        a_desc,
+        b_desc,
+        out,
+        BLOCK_M,
+        BLOCK_N,
+        acc_tmem_layout,
+        blocked_c,
+        num_warps=4,
+        num_ctas=ctas_per_cga[0] * ctas_per_cga[1],
+    )
