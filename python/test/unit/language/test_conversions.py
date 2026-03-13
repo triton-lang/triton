@@ -423,3 +423,153 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
         assert(torch.all(torch.isnan(dst)))
     else:
         torch.testing.assert_close(dst, torch.full_like(dst, expected_result))
+
+
+@triton.jit
+def sr_convert_kernel(src, dst, seed, BLOCK_SIZE: tl.constexpr):
+    idxs = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    x = tl.load(src + idxs)
+    y = tl.stochastic_round(x, dst.dtype.element_ty, seed, idxs)
+    tl.store(dst + idxs, y)
+
+
+def _run_sr_conversion(src_tensor, dst_torch_dtype, device, seed=None, BLOCK_SIZE=1024):
+    dst = torch.empty(src_tensor.shape, dtype=dst_torch_dtype, device=device)
+    grid = (src_tensor.shape[0] // BLOCK_SIZE,)
+    if seed is None:
+        seed = torch.randint(0, 2**31, (1,), device=device).item()
+    sr_convert_kernel[grid](src_tensor, dst, seed, BLOCK_SIZE)
+    return dst
+
+
+@pytest.mark.parametrize("src_dtype,dst_dtype,torch_dst", [
+    ("float32", "float16", torch.float16),
+    ("float32", "bfloat16", torch.bfloat16),
+])
+def test_stochastic_rounding_unbiased(src_dtype, dst_dtype, torch_dst, device):
+    if is_cuda() and torch.cuda.get_device_capability(0) < (8, 0):
+        pytest.skip("Test requires compute capability >= 8.0")
+
+    torch.manual_seed(42)
+    N = 1024
+    num_trials = 100
+    test_val = 1.001
+    src = torch.full((N,), test_val, dtype=torch.float32, device=device)
+
+    results_sum = torch.zeros(N, dtype=torch.float64, device='cpu')
+    for _ in range(num_trials):
+        dst = _run_sr_conversion(src, torch_dst, device)
+        results_sum += dst.to(torch.float64).cpu()
+
+    mean_result = results_sum / num_trials
+    torch.testing.assert_close(
+        mean_result.mean().item(), test_val,
+        atol=0.01, rtol=0.01,
+    )
+
+
+@pytest.mark.parametrize("src_dtype,dst_dtype,torch_dst", [
+    ("float32", "float16", torch.float16),
+    ("float32", "bfloat16", torch.bfloat16),
+])
+def test_stochastic_rounding_distribution(src_dtype, dst_dtype, torch_dst, device):
+    if is_cuda() and torch.cuda.get_device_capability(0) < (8, 0):
+        pytest.skip("Test requires compute capability >= 8.0")
+
+    N = 1024
+    num_trials = 200
+
+    base_val = torch.tensor(1.0, dtype=torch_dst)
+    next_val = torch.nextafter(base_val, torch.tensor(2.0, dtype=torch_dst))
+    floor_f32 = base_val.to(torch.float32).item()
+    ceil_f32 = next_val.to(torch.float32).item()
+    gap = ceil_f32 - floor_f32
+
+    test_val = floor_f32 + 0.25 * gap
+    expected_ceil_ratio = 0.25
+
+    src = torch.full((N,), test_val, dtype=torch.float32, device=device)
+
+    ceil_count = 0
+    total_count = 0
+    for _ in range(num_trials):
+        dst = _run_sr_conversion(src, torch_dst, device)
+        dst_f32 = dst.to(torch.float32).cpu()
+        ceil_count += (dst_f32 > floor_f32 + 1e-10).sum().item()
+        total_count += N
+
+    observed_ratio = ceil_count / total_count
+    assert abs(observed_ratio - expected_ceil_ratio) < 0.1, \
+        f"Expected ceil ratio ~{expected_ceil_ratio}, got {observed_ratio}"
+
+
+@pytest.mark.parametrize("src_dtype,dst_dtype,torch_dst", [
+    ("float32", "float16", torch.float16),
+    ("float32", "bfloat16", torch.bfloat16),
+])
+def test_stochastic_rounding_exact(src_dtype, dst_dtype, torch_dst, device):
+    if is_cuda() and torch.cuda.get_device_capability(0) < (8, 0):
+        pytest.skip("Test requires compute capability >= 8.0")
+
+    N = 1024
+    exact_vals = [0.0, 1.0, -1.0, 0.5, -0.5, 2.0, 128.0]
+
+    for val in exact_vals:
+        roundtrip = torch.tensor(val, dtype=torch_dst).to(torch.float32).item()
+        if roundtrip != val:
+            continue
+
+        src = torch.full((N,), val, dtype=torch.float32, device=device)
+        for _ in range(10):
+            dst = _run_sr_conversion(src, torch_dst, device)
+            dst_f32 = dst.to(torch.float32)
+            assert torch.all(dst_f32 == val), \
+                f"Exact value {val} was changed by SR to {dst_f32[dst_f32 != val][0].item()}"
+
+
+@pytest.mark.parametrize("src_dtype,dst_dtype,torch_dst", [
+    ("float32", "float16", torch.float16),
+    ("float32", "bfloat16", torch.bfloat16),
+])
+def test_stochastic_rounding_seeded(src_dtype, dst_dtype, torch_dst, device):
+    if is_cuda() and torch.cuda.get_device_capability(0) < (8, 0):
+        pytest.skip("Test requires compute capability >= 8.0")
+
+    N = 1024
+    test_val = 1.001
+    src = torch.full((N,), test_val, dtype=torch.float32, device=device)
+
+    result1 = _run_sr_conversion(src, torch_dst, device, seed=42)
+    result2 = _run_sr_conversion(src, torch_dst, device, seed=42)
+    assert torch.equal(result1, result2)
+
+    result3 = _run_sr_conversion(src, torch_dst, device, seed=123)
+    assert not torch.equal(result1, result3)
+
+
+@pytest.mark.parametrize("src_dtype,dst_dtype,torch_dst", [
+    ("float32", "float16", torch.float16),
+    ("float32", "bfloat16", torch.bfloat16),
+])
+def test_stochastic_rounding_edge_cases(src_dtype, dst_dtype, torch_dst, device):
+    if is_cuda() and torch.cuda.get_device_capability(0) < (8, 0):
+        pytest.skip("Test requires compute capability >= 8.0")
+
+    N = 1024
+
+    src = torch.zeros(N, dtype=torch.float32, device=device)
+    dst = _run_sr_conversion(src, torch_dst, device)
+    assert torch.all(dst == 0)
+
+    src = torch.full((N,), -0.0, dtype=torch.float32, device=device)
+    dst = _run_sr_conversion(src, torch_dst, device)
+    dst_f32 = dst.to(torch.float32)
+    assert torch.all(dst_f32 == 0)
+
+    src = torch.full((N,), float('nan'), dtype=torch.float32, device=device)
+    dst = _run_sr_conversion(src, torch_dst, device)
+    assert torch.all(torch.isnan(dst))
+
+    src = torch.full((N,), float('inf'), dtype=torch.float32, device=device)
+    dst = _run_sr_conversion(src, torch_dst, device)
+    assert torch.all(torch.isinf(dst) | (dst == torch.finfo(torch_dst).max))
