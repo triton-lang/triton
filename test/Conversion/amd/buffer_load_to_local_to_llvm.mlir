@@ -150,9 +150,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // COMMON: llvm.cond_br
     // COMMON: llvm.store
 
-    // Make sure branch condition is set properly when there is other value.
+    // Check for select condition when there is other value.
     // COMMON: [[AND:%.*]] = llvm.and
-    // COMMON: llvm.cond_br [[AND]]
+    // COMMON: llvm.select [[AND]]
 
     // COMMON: rocdl.raw.ptr.buffer.load.lds
     // COMMON: llvm.cond_br
@@ -186,7 +186,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   tt.func public @buffer_load_to_local_cache_mods(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg2: !ttg.memdesc<64xf32, #shared, #smem, mutable>) {
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
-    // The first constant 0 skips the LDS offset which is also 0
+    // Skip first select which is used for masking
+    // COMMON: llvm.select
     // COMMON: %[[VOFFSET:.*]] = llvm.select
     // COMMON-NEXT: %[[IMM0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COMMON-NEXT: %[[aux_ca:.*]] = llvm.mlir.constant(0 : i32) : i32

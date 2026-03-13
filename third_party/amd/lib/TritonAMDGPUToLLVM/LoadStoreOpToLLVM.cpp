@@ -832,16 +832,19 @@ struct BufferLoadToLocalOpConversion
         applySwizzling(rewriter, loc, offsetElem, maybeSwizzledMaskElem, laneId,
                        swizzleLaneOffset);
 
-      // If other=0.0 we remove other in canonicalizePointers and we can use out
-      // of bounds to store 0 to LDS. So if we have other values we need to
-      // predicate to not overwrite the other stores
+      // If `other=0.0`, canonicalizePointers drops `other`, so we can use an
+      // out-of-bounds *buffer* address to write 0 to LDS. For non-zero `other`,
+      // we must predicate to avoid overwriting redundant buffer loads to local.
       Value cond =
           hasOther ? b.and_(threadPred, maybeSwizzledMaskElem) : threadPred;
-
-      auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, cond);
+      // Use out-of-range *shmemAddr* instead of a branch to not influence the
+      // waitcnt. GFX9 and GFX1250 will drop the load if LDS is out of range.
+      Value int32MaxVal = b.i32_val(std::numeric_limits<int32_t>::max());
+      Value outOfRangeAddr = b.inttoptr(shmemAddr.getType(), int32MaxVal);
+      Value maskedShmemAddr = b.select(cond, shmemAddr, outOfRangeAddr);
 
       auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
-          vecTy, vecBytesVal, rsrcDesc, offsetElem, shmemAddr,
+          vecTy, vecBytesVal, rsrcDesc, offsetElem, maskedShmemAddr,
           hasOther ? b.true_val() : maybeSwizzledMaskElem, op.getCache());
       if (targetInfo.requiresAliasInfoForAsyncOps())
         AMD::addAsyncCopyAliasScope(bufferLoadToLds);
@@ -851,8 +854,6 @@ struct BufferLoadToLocalOpConversion
                        otherElems, shmemAddr, laneId, requiresSrcPtrSwizzling,
                        swizzleLaneOffset);
       }
-
-      rewriter.setInsertionPointToStart(afterLoadBlock);
 
       return {};
     };
@@ -973,12 +974,15 @@ struct AsyncCopyGlobalToLocalOpConversion
 
       // Predicate load based on threadPred && swizzledMask
       auto cond = b.and_(threadPred, maybeSwizzledMaskElem);
-      auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, cond);
 
-      emitAsyncLoad(rewriter, loc, targetInfo, vecBits, srcElem, shmemAddr,
-                    op.getCache(), multicastMask);
+      // Use out-of-range *shmemAddr* instead of a branch to not influence the
+      // waitcnt. GFX9 and GFX1250 will drop the load if LDS is out of range.
+      Value int32MaxVal = b.i32_val(std::numeric_limits<int32_t>::max());
+      Value outOfRangeAddr = b.inttoptr(shmemAddr.getType(), int32MaxVal);
+      Value maskedShmemAddr = b.select(cond, shmemAddr, outOfRangeAddr);
 
-      rewriter.setInsertionPointToStart(afterLoadBlock);
+      emitAsyncLoad(rewriter, loc, targetInfo, vecBits, srcElem,
+                    maskedShmemAddr, op.getCache(), multicastMask);
 
       if (hasOther) {
         emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy, maskElem,

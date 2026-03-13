@@ -178,27 +178,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // Each thread needs to load 4 elements and we load 1 (sizePerThread) per global.load.lds
     // Note that mask/other alignment is 1 so we need 4 conditionals
 
-    // CHECK: llvm.cond_br
+    // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK-NEXT: llvm.br
     // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
-    // CHECK: llvm.cond_br
+    // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK-NEXT: llvm.br
     // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
-    // CHECK: llvm.cond_br
+    // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK-NEXT: llvm.br
     // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
-    // CHECK: llvm.cond_br
+    // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK-NEXT: llvm.br
     // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
@@ -242,33 +238,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
     // CHECK: rocdl.ds_bpermute
     // CHECK: rocdl.ballot
-    // CHECK: llvm.cond_br
+    // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK-NEXT: llvm.br
     // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
     // CHECK: rocdl.ds_bpermute
     // CHECK: rocdl.ballot
-    // CHECK: llvm.cond_br
+    // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK-NEXT: llvm.br
     // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
     // CHECK: rocdl.ds_bpermute
     // CHECK: rocdl.ballot
-    // CHECK: llvm.cond_br
+    // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK-NEXT: llvm.br
     // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
     // CHECK: rocdl.ds_bpermute
     // CHECK: rocdl.ballot
-    // CHECK: llvm.cond_br
+    // CHECK: llvm.select
     // CHECK: rocdl.global.load.lds
-    // CHECK-NEXT: llvm.br
     // CHECK: llvm.cond_br
     // CHECK: llvm.store
 
