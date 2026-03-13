@@ -353,7 +353,7 @@ def test_cat(tmp_path, target):
     _skip_unless_target(target)
     kernel = convert_kernel(cat_kernel, "cat_kernel", tmp_path, target=target)
 
-    BLOCK = 128
+    BLOCK = 256
     x = torch.randn(BLOCK, device="cuda", dtype=torch.float32)
     y = torch.randn(BLOCK, device="cuda", dtype=torch.float32)
     out = torch.empty(2 * BLOCK, device="cuda", dtype=torch.float32)
@@ -390,5 +390,29 @@ def test_make_tensor_descriptor_gfx1250(tmp_path):
     torch.testing.assert_close(y, y_ref, atol=0, rtol=0)
 
 
+@triton.jit
+def gather_scatter_roundtrip_kernel(out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y: tl.constexpr,
+                                    BLOCK_X: tl.constexpr, BLOCK_Y: tl.constexpr):
+    idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
+    in_desc = tl.make_tensor_descriptor(in_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
+    out_desc = tl.make_tensor_descriptor(out_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
+    data = in_desc.gather(idx, 0)
+    out_desc.scatter(data, idx, 0)
 
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+def test_gather_scatter_roundtrip(tmp_path):
+    kernel = convert_kernel(gather_scatter_roundtrip_kernel, "gather_scatter_roundtrip_kernel", tmp_path,
+                            target="gfx1250")
+
+    X, Y, BLOCK_X, BLOCK_Y = 64, 64, 8, 64
+    inp = torch.arange(X * Y, device="cuda", dtype=torch.float16).reshape(X, Y)
+    idx = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7], device="cuda", dtype=torch.int32)
+    out = torch.zeros((X, Y), device="cuda", dtype=torch.float16)
+    kernel[(1,)](out, inp, idx, X, Y, BLOCK_X, BLOCK_Y)
+
+    expected = torch.zeros_like(out)
+    for i, row in enumerate(idx.tolist()):
+        expected[row] = inp[row]
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
 

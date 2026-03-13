@@ -162,7 +162,13 @@ class Translator(ReferenceRewriter):
                     "gather",
                     "scatter",
             ]:
-                new_callee = parse_expr(f"helpers.tl_obj_{node.func.attr}")
+                attr = node.func.attr
+                # Use AMD-specific helpers for gather/scatter on AMD targets
+                if attr in ["gather", "scatter"] and self.target.startswith("gfx"):
+                    helper_name = f"tl_obj_{attr}_amd"
+                else:
+                    helper_name = f"tl_obj_{attr}"
+                new_callee = parse_expr(f"helpers.{helper_name}")
                 node = ast.Call(func=new_callee, args=[node.func.value] + node.args, keywords=node.keywords)
             return self.generic_visit(node)
         value, _, _ = ref
