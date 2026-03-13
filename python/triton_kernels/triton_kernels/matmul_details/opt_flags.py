@@ -1,5 +1,6 @@
 # isort: off
 # fmt: off
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import triton
@@ -41,7 +42,7 @@ def max_allowable_mn(
 
 
 def all_constraints_satisfied(opt_flags: OptFlags, constraints: dict) -> bool:
-    _split_k_constraints = ['split_k', 'max_allowable_mn']
+    _split_k_constraints = ['split_k', 'max_allowable_mn', 'disable_mx4_block_swap']
     assert all(getattr(opt_flags, ck) == cv for ck, cv in constraints.items() if cv is not None and ck not in _split_k_constraints)
     if constraints.get('split_k') and not constraints.get('max_allowable_mn'):
         assert opt_flags.split_k == constraints['split_k']
@@ -65,7 +66,7 @@ def make_default_opt_flags_amd(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "max_allowable_mn", "num_warps"}
+    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "max_allowable_mn", "num_warps", "disable_mx4_block_swap"}
     unsupported = set(constraints.keys()) - constraints_supported
     assert not unsupported, f"Given unsupported constraint: {unsupported}"
     # tokens per slice
@@ -191,7 +192,7 @@ def make_default_opt_flags_nvidia(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps"}
+    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap"}
     unsupported = set(constraints.keys()) - constraints_supported
     assert not unsupported, f"Given unsupported constraint: {unsupported}"
     # tokens per expert
@@ -269,13 +270,14 @@ def make_default_opt_flags_nvidia(
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
         block_m = 128
     # block k
-    block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
-    if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and slice_size > 1 and lhs_dtype != torch.bfloat16:
+    if constraints.get("block_k", None) is not None:
+        block_k = constraints["block_k"]
+    else:
+        block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
+    if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and slice_size > 1 and lhs_dtype != torch.bfloat16 and not constraints.get("disable_mx4_block_swap", False):
         # Swap block_n and block_k for mxfp4 weights so that block_k is a full cacheline, so long as K is sufficiently large.
         # TODO: swizzle the HBM layout of the weights instead
         block_n, block_k = block_k, block_n
-    if constraints.get("block_k", None) is not None:
-        block_k = constraints["block_k"]
     # split_k
     split_k = 1
     if constraints.get("max_allowable_mn", 0) > 0 and constraints.get("split_k") is not None:
@@ -369,6 +371,16 @@ def update_opt_flags_constraints(constraints: dict[str, int]):
 def reset_opt_flags_constraints():
     global _opt_flags_constraints
     _opt_flags_constraints = dict()
+
+@contextmanager
+def scoped_opt_flags_constraints(constraints):
+    saved = dict(_opt_flags_constraints)
+    _opt_flags_constraints.update(constraints)
+    try:
+        yield
+    finally:
+        _opt_flags_constraints.clear()
+        _opt_flags_constraints.update(saved)
 
 def reset_opt_flags():
     global _opt_flags
