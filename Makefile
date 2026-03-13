@@ -51,7 +51,7 @@ test-gluon: all
 
 .PHONY: test-gsan
 test-gsan: all
-	$(PYTEST) -n $(NUM_PROCS) python/test/gsan
+	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -n $(NUM_PROCS) python/test/gsan
 
 .PHONY: test-regression
 test-regression: all

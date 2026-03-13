@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from triton.experimental.gsan._allocator import get_reserve_pointer, get_reserve_size
-
 import ctypes
 import torch
 
@@ -90,22 +88,3 @@ def uint8_cuda_tensor_from_ptr(data_ptr: int, numel: int, device_index: int) -> 
     except Exception:
         _DLPACK_STATE.pop(dl_managed_tensor_ptr, None)
         raise
-
-
-SHADOW_SIZE_BYTES = 24
-SHADOW_GRANULARITY_BYTES = 4
-
-
-def shadow_region(real_ptr: int, real_size_bytes: int, reserve_ptr: int, reserve_size: int) -> tuple[int, int]:
-    real_base = reserve_ptr + reserve_size // 2
-    word_offset = (real_ptr - real_base) // SHADOW_GRANULARITY_BYTES
-    shadow_ptr = reserve_ptr + word_offset * SHADOW_SIZE_BYTES
-    shadow_size = ((real_size_bytes + SHADOW_GRANULARITY_BYTES - 1) // SHADOW_GRANULARITY_BYTES) * SHADOW_SIZE_BYTES
-    return shadow_ptr, shadow_size
-
-
-def shadow_tensor_for(real: torch.Tensor) -> torch.Tensor:
-    reserve_ptr = get_reserve_pointer()
-    reserve_size = get_reserve_size()
-    shadow_ptr, shadow_size = shadow_region(real.data_ptr(), real.untyped_storage().nbytes(), reserve_ptr, reserve_size)
-    return uint8_cuda_tensor_from_ptr(shadow_ptr, shadow_size, real.device.index)

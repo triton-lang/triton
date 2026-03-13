@@ -6,7 +6,7 @@ import torch
 from triton._internal_testing import is_cuda
 from triton.experimental.gsan import create_mem_pool
 from triton.experimental.gsan._allocator import get_reserve_pointer, get_reserve_size, gsan_free, gsan_malloc
-from triton.experimental.gsan._utils import shadow_tensor_for
+from triton.experimental.gsan._testing_utils import shadow_tensor_for
 
 
 @pytest.fixture
