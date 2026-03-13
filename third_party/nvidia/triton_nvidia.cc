@@ -157,12 +157,21 @@ createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
   return ttng::createTritonGPUProxyFenceInsertion(options);
 }
 
+static std::unique_ptr<mlir::Pass>
+createTritonGPUClusterBarrierPreparationWrapper(int32_t capability) {
+  ttng::TritonGPUClusterBarrierPreparationOptions options;
+  options.computeCapability = capability;
+  return ttng::createTritonGPUClusterBarrierPreparation(options);
+}
+
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass);
   ADD_PASS_WRAPPER_1("add_fence_insertion",
                      createTritonGPUFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_1("add_proxy_fence_insertion",
                      createTritonGPUProxyFenceInsertionWrapper, int32_t);
+  ADD_PASS_WRAPPER_1("add_cluster_barrier_preparation",
+                     createTritonGPUClusterBarrierPreparationWrapper, int32_t);
   ADD_PASS_WRAPPER_0("add_tma_lowering",
                      ttng::createTritonNvidiaGPUTMALoweringPass);
   ADD_PASS_WRAPPER_0("add_promote_lhs_to_tmem",

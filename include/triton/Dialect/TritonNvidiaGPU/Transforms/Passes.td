@@ -82,6 +82,27 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
   ];
 }
 
+def TritonGPUClusterBarrierPreparation : Pass<"triton-nvidia-gpu-cluster-barrier-preparation", "mlir::ModuleOp"> {
+  let summary = "Insert cluster barriers and cross-CTA init syncs";
+
+  let description = [{
+    Insert the cluster-level synchronization ops required by multi-CTA NVIDIA
+    kernels so later passes, including ConSan, see the same synchronization
+    structure as the backend lowering.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"90",
+           "device compute capability">
+  ];
+}
+
 def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::ModuleOp"> {
   let summary = "lower to TMA load/store operations";
 

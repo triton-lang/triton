@@ -361,6 +361,7 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
         if "consan" in options.instrumentation_mode:
+            nvidia.passes.ttnvgpuir.add_cluster_barrier_preparation(pm, capability)
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
             passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)

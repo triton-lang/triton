@@ -39,6 +39,9 @@ using namespace mlir::triton::NVIDIA;
 
 namespace {
 
+constexpr StringLiteral kClusterBarrierPreparationDoneAttr =
+    "ttng.cluster_barrier_preparation_done";
+
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
   explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
@@ -93,11 +96,14 @@ struct ConvertTritonGPUToLLVM
     ModuleAllocation allocation(
         mod, mlir::triton::nvidia_gpu::getNvidiaAllocationAnalysisScratchSizeFn(
                  targetInfo));
-    mlir::triton::nvidia_gpu::runClusterBarrierInsertion(allocation,
-                                                         computeCapability);
-    if (failed(mlir::triton::nvidia_gpu::runCrossCTAMBarrierInitSyncInsertion(
-            allocation, computeCapability)))
-      return signalPassFailure();
+    if (!mod->hasAttr(kClusterBarrierPreparationDoneAttr)) {
+      mlir::triton::nvidia_gpu::runClusterBarrierInsertion(allocation,
+                                                           computeCapability);
+      if (failed(mlir::triton::nvidia_gpu::runCrossCTAMBarrierInitSyncInsertion(
+              allocation, computeCapability)))
+        return signalPassFailure();
+      mod->setAttr(kClusterBarrierPreparationDoneAttr, UnitAttr::get(context));
+    }
     ModuleMembarAnalysis membarPass(&allocation, canSkipBarSync);
     membarPass.run();
 
