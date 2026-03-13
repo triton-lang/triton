@@ -1,3 +1,6 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -418,6 +421,104 @@ public:
   }
 };
 
+// Helper: return true if the value is a constant false boolean.
+static bool isConstFalse(Value v) {
+  if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto attr = dyn_cast<BoolAttr>(cst.getValueAttr()))
+      return !attr.getValue();
+  }
+  return false;
+}
+
+// Helper to detect if the use of an alloc fully overwrites it.
+struct AllocUse {
+  Operation *useOp;
+  MutableOperandRange dep;
+};
+
+static FailureOr<AllocUse> useOverwritesAlloc(ttng::TMEMAllocOp alloc,
+                                              BlockArgument tokArg) {
+  if (!tokArg.hasOneUse())
+    return failure();
+  OpOperand &onlyUse = *tokArg.use_begin();
+  Operation *useOp = onlyUse.getOwner();
+  if (auto store = dyn_cast<ttng::TMEMStoreOp>(useOp)) {
+    if (store.getDst() != alloc.getResult())
+      return failure();
+    return AllocUse{useOp, store.getDepMutable()};
+  }
+  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(useOp)) {
+    if (onlyUse.get() == mma.getAccDep() &&
+        mma.getAccumulator() == alloc.getResult() &&
+        isConstFalse(mma.useAccumulator()))
+      return AllocUse{useOp, mma.getAccDepMutable()};
+  }
+  return failure();
+}
+
+class SinkTMemAlloc : public OpRewritePattern<ttng::TMEMAllocOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::TMEMAllocOp alloc,
+                                PatternRewriter &rewriter) const override {
+    // Only handle allocs that produce a token.
+    if (!alloc.getToken())
+      return failure();
+
+    // Find a forOp that takes the alloc token as an init arg.
+    // Limit to the simple case where the token has exactly one use.
+    if (!alloc.getToken().hasOneUse())
+      return failure();
+    OpOperand &tokUse = *alloc.getToken().use_begin();
+    auto userFor = dyn_cast<scf::ForOp>(tokUse.getOwner());
+    if (!userFor)
+      return failure();
+    scf::ForOp forOp = userFor;
+    if (forOp.getInitArgs().empty())
+      return failure();
+    auto firstInitIt = forOp.getInitArgsMutable().begin();
+    int baseOpNo = firstInitIt->getOperandNumber();
+    int tokIdx = tokUse.getOperandNumber() - baseOpNo;
+    assert(tokIdx >= 0 && tokIdx < (int)forOp.getInitArgs().size());
+
+    // Ensure the memory descriptor result of the alloc is only used inside the
+    // loop. Otherwise sinking would break users after the loop.
+    for (Operation *user : alloc.getResult().getUsers()) {
+      if (!forOp->isProperAncestor(user))
+        return failure();
+    }
+
+    BlockArgument tokArg = forOp.getRegionIterArg(tokIdx);
+
+    // Check if the op consuming the tocken fully overwrites the alloc. This
+    // means there is no loop carried values.
+    auto sinkable = useOverwritesAlloc(alloc, tokArg);
+    if (failed(sinkable))
+      return failure();
+    Operation *useOp = sinkable->useOp;
+
+    // Since the alloc is not used outside the loop its token should not be
+    // used.
+    assert(forOp.getResult(tokIdx).use_empty());
+
+    // Move the alloc just before the store to minimize live range inside the
+    // loop.
+    rewriter.moveOpBefore(alloc, useOp);
+    sinkable->dep.assign(alloc.getToken());
+
+    // Leave the token loop arguments to dead code.
+    auto yield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    yield.setOperand(tokIdx, forOp.getRegionIterArg(tokIdx));
+    rewriter.setInsertionPoint(forOp);
+    auto poisonTok = ub::PoisonOp::create(
+        rewriter, forOp.getLoc(), forOp.getInitArgs()[tokIdx].getType());
+    forOp.getInitArgsMutable()[tokIdx].assign(poisonTok);
+
+    return success();
+  }
+};
+
 // Given an operation that uses a token, return its forwarded token. This
 // assumes the memory variable is not loop carried.
 static Value getTokenFromOp(Operation *op) {
@@ -529,7 +630,7 @@ struct HoistTMEMAlloc
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
-    if (!hoistOutOfIf) {
+    if (!postPipeline) {
       SmallVector<ttng::MMAv5OpInterface> mmaOps;
       m.walk([&](ttng::MMAv5OpInterface mmaOp) { mmaOps.push_back(mmaOp); });
       for (auto mmaOp : mmaOps) {
@@ -553,13 +654,23 @@ struct HoistTMEMAlloc
     patterns.add<RotateTMEMStoreInLoop, RotateTMEMLoadInLoop,
                  CombineTMEMLoadAndStore, CombineTMEMStoreAndSelect,
                  SinkTMEMLoad, RemoveUnusedTMEMLoad>(&getContext());
-    if (hoistOutOfIf) {
+    if (postPipeline) {
       patterns.add<CombineTMEMStoreAndAlloc, HoistTMEMAllocOutOfIf,
                    TMEMLoadForwarding>(&getContext());
     }
     scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       llvm_unreachable("Failed to hoist tmem_store");
+    }
+
+    // Finally try to sink the alloc that can be to reduce tmem liveranges.
+    if (postPipeline) {
+      mlir::RewritePatternSet postPatterns(&getContext());
+      postPatterns.add<SinkTMemAlloc>(&getContext());
+      if (failed(
+              applyPatternsGreedily(getOperation(), std::move(postPatterns)))) {
+        signalPassFailure();
+      }
     }
 
     // TODO: currently some code assumes that a mutable tmem alloc doesn't have
