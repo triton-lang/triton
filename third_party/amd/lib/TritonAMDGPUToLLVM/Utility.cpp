@@ -735,39 +735,6 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   return false;
 }
 
-Value convertF8ToF16_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
-                        bool isE4M3FN) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (isE4M3FN) {
-    // E4M3FN -> f16: shift mantissa, adjust exponent bias (15 vs 7), handle
-    // denorms and NaN (0x7F -> 0x7E00)
-    Value a = b.undef(vec_ty(i8_ty, 2));
-    a = b.insert_element(a, b.i8_val(0), b.i32_val(0));
-    a = b.insert_element(a, fp8Val, b.i32_val(1));
-    a = b.bitcast(a, i16_ty);
-
-    Value sign = b.and_(a, b.i16_val(0x8000));
-    a = b.and_(a, b.i16_val(0x7FFF));
-    a = b.lshr(a, b.i16_val(1));
-    a = b.add(a, b.i16_val(0x2000));
-
-    Value vAbs = b.and_(fp8Val, b.i8_val(0x7F));
-    a = b.select(b.icmp_eq(vAbs, b.i8_val(0x7F)), b.i16_val(0x7E00), a);
-
-    static constexpr int16_t denormsAndZeroLut[8] = {
-        0x0000, 0x1800, 0x1C00, 0x1E00, 0x2000, 0x2100, 0x2200, 0x2300};
-    for (int i = 0; i < 8; i++)
-      a = b.select(b.icmp_eq(vAbs, b.i8_val(i)),
-                   b.i16_val(denormsAndZeroLut[i]), a);
-
-    a = b.or_(a, sign);
-    return b.bitcast(a, f16_ty);
-  }
-  // E5M2 has the same exponent format as f16 (5-bit, bias 15).
-  Value i16Val = b.shl(b.zext(i16_ty, fp8Val), b.i16_val(8));
-  return b.bitcast(i16Val, f16_ty);
-}
-
 Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
                         bool isE4M3FN) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);

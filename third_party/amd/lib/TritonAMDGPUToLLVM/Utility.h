@@ -116,11 +116,6 @@ bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);
 // in the same region
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
 
-// Software conversion of a single f8 value (i8) to f16.
-// Handles both E4M3FN (isE4M3FN=true) and E5M2 (isE4M3FN=false) formats.
-Value convertF8ToF16_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
-                        bool isE4M3FN);
-
 // Branchless fp8 -> f32 via multiply trick.
 // Handles both E4M3FN (isE4M3FN=true) and E5M2 (isE4M3FN=false) formats.
 Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
