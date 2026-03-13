@@ -372,7 +372,10 @@ public:
 
     FuncOp func = *m.getOps<triton::FuncOp>().begin();
 
-    // Check if there are any proton records to process
+    // Kernel-trace mode still needs the profiling scaffolding even when there
+    // are no explicit proton.record ops. The runtime prototype derives a
+    // launch-level interval from per-CTA init/finalize timestamps written into
+    // profile scratch.
     if (!hasOperator<Operation, proton::RecordOp>(func.getOperation()) &&
         !kernelTraceMode) {
       return; // No proton records to process, silently return

@@ -37,6 +37,20 @@ template <bool CheckSuccess>
 hipError_t streamCreateWithPriority(hipStream_t *pStream, unsigned int flags,
                                     int priority);
 
+template <bool CheckSuccess>
+hipError_t eventCreate(hipEvent_t *event);
+
+template <bool CheckSuccess> hipError_t eventDestroy(hipEvent_t event);
+
+template <bool CheckSuccess>
+hipError_t eventRecord(hipEvent_t event, hipStream_t stream);
+
+template <bool CheckSuccess>
+hipError_t streamWaitEvent(hipStream_t stream, hipEvent_t event,
+                           unsigned int flags);
+
+template <bool CheckSuccess> hipError_t eventQuery(hipEvent_t event);
+
 template <bool CheckSuccess> hipError_t streamSynchronize(hipStream_t stream);
 
 template <bool CheckSuccess> hipError_t streamDestroy(hipStream_t stream);

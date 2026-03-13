@@ -80,6 +80,37 @@ void *HipRuntime::getPriorityStream() {
   return reinterpret_cast<void *>(stream);
 }
 
+void *HipRuntime::createEvent() {
+  hipEvent_t event;
+  (void)hip::eventCreate<true>(&event);
+  return reinterpret_cast<void *>(event);
+}
+
+void HipRuntime::destroyEvent(void *event) {
+  (void)hip::eventDestroy<true>(reinterpret_cast<hipEvent_t>(event));
+}
+
+void HipRuntime::recordEvent(void *event, void *stream) {
+  (void)hip::eventRecord<true>(reinterpret_cast<hipEvent_t>(event),
+                               reinterpret_cast<hipStream_t>(stream));
+}
+
+void HipRuntime::waitEvent(void *stream, void *event) {
+  (void)hip::streamWaitEvent<true>(reinterpret_cast<hipStream_t>(stream),
+                                   reinterpret_cast<hipEvent_t>(event), 0);
+}
+
+bool HipRuntime::queryEvent(void *event) {
+  auto status = hip::eventQuery<false>(reinterpret_cast<hipEvent_t>(event));
+  if (status == hipSuccess) {
+    return true;
+  }
+  if (status == hipErrorNotReady) {
+    return false;
+  }
+  throw std::runtime_error("Failed to query HIP event");
+}
+
 void HipRuntime::synchronizeStream(void *stream) {
   (void)hip::streamSynchronize<true>(reinterpret_cast<hipStream_t>(stream));
 }

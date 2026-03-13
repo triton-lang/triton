@@ -448,6 +448,73 @@ def test_trace_kernel_timing(tmp_path: pathlib.Path):
         assert events[1]["args"]["call_stack"] == ["sub_kernel"]
 
 
+def test_trace_kernel_timing_mark_step_flush(tmp_path: pathlib.Path):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    @triton.jit
+    def sub_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x - y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    temp_file = tmp_path / "test_trace_kernel_timing_mark_step_flush.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    mode = proton.mode.Default(trace_mode="kernel")
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace", mode=mode)
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.mark_step()
+    proton.flush()
+    sub_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.mark_step()
+    proton.flush()
+    proton.finalize()
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+        assert len(events) == 2
+        assert events[0]["name"] == "add_kernel"
+        assert events[0]["cat"] == "kernel"
+        assert events[0]["dur"] > 0
+        assert events[0]["args"]["call_stack"] == ["add_kernel"]
+        assert events[1]["name"] == "sub_kernel"
+        assert events[1]["cat"] == "kernel"
+        assert events[1]["dur"] > 0
+        assert events[1]["args"]["call_stack"] == ["sub_kernel"]
+
+
 def test_multi_session(tmp_path: pathlib.Path):
 
     @triton.jit

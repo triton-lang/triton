@@ -91,6 +91,10 @@ public:
 
   void deactivateAllSessions(bool flushing);
 
+  void flushSession(size_t sessionId);
+
+  void flushAllSessions();
+
   size_t getContextDepth(size_t sessionId);
 
   std::vector<uint8_t> getDataMsgPack(size_t sessionId, size_t phase);
@@ -123,6 +127,8 @@ public:
 
   void exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
                           uint8_t *buffer, size_t size);
+
+  void markStep(uint64_t streamId);
 
   void addMetrics(size_t scopeId,
                   const std::map<std::string, MetricValueType> &scalarMetrics,

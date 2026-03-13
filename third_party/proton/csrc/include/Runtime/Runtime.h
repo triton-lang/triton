@@ -45,6 +45,16 @@ public:
 
   virtual void destroyStream(void *stream) = 0;
 
+  virtual void *createEvent() = 0;
+
+  virtual void destroyEvent(void *event) = 0;
+
+  virtual void recordEvent(void *event, void *stream) = 0;
+
+  virtual void waitEvent(void *stream, void *event) = 0;
+
+  virtual bool queryEvent(void *event) = 0;
+
   virtual void synchronizeStream(void *stream) = 0;
 
   virtual void synchronizeDevice() = 0;

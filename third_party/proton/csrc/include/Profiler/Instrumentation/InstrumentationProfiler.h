@@ -8,6 +8,7 @@
 #include "Runtime/Runtime.h"
 #include "TraceDataIO/Parser.h"
 #include "Utility/Singleton.h"
+#include <vector>
 
 namespace proton {
 
@@ -18,6 +19,8 @@ class InstrumentationProfiler : public Profiler,
 public:
   InstrumentationProfiler() = default;
   virtual ~InstrumentationProfiler();
+
+  std::vector<uint64_t> drainCompletedBufferPtrs();
 
 protected:
   // Profiler
@@ -42,6 +45,7 @@ protected:
                            uint8_t *buffer, size_t size) override;
   void exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
                           uint8_t *buffer, size_t size) override;
+  void markStep(uint64_t streamId) override;
 
   // OpInterface
   void startOp(const Scope &scope) override {
@@ -52,14 +56,39 @@ protected:
   void stopOp(const Scope &scope) override { dataToEntryMap.clear(); }
 
 private:
+  struct PendingInstrumentedOp {
+    uint64_t streamId;
+    uint64_t functionId;
+    uint8_t *buffer;
+    size_t size;
+    size_t stepId;
+    uint64_t deviceId;
+    DataToEntryMap dataToEntryMap;
+  };
+
+  struct PendingStepFence {
+    size_t stepId;
+    void *copyStream;
+    void *completionEvent;
+  };
+
+  struct InFlightInstrumentedOp {
+    PendingInstrumentedOp pendingOp;
+    uint8_t *hostBuffer;
+    void *completionEvent;
+  };
+
   std::shared_ptr<ParserConfig> getParserConfig(uint64_t functionId,
                                                 size_t bufferSize) const;
+  void scheduleReadySteps();
+  void processCompletedCopies(bool blockUntilComplete);
+  void parseCopiedInstrumentedOp(const PendingInstrumentedOp &pendingOp,
+                                 uint8_t *hostBuffer, size_t size);
 
   Runtime *runtime;
-  // device -> deviceStream
+  // device -> flush/copy stream
   std::map<void *, void *> deviceStreams;
   std::map<std::string, std::string> modeOptions;
-  uint8_t *hostBuffer{nullptr};
   // functionId -> scopeId -> scopeName
   std::map<uint64_t, std::map<size_t, std::string>> functionScopeIdNames;
   // functionId -> scopeId -> contexts
@@ -72,6 +101,11 @@ private:
   std::map<uint64_t, InstrumentationMetadata> functionMetadata;
   // Active per-data entries for the current op.
   DataToEntryMap dataToEntryMap;
+  size_t currentStepId{0};
+  std::vector<PendingInstrumentedOp> pendingInstrumentedOps;
+  std::vector<PendingStepFence> pendingStepFences;
+  std::vector<InFlightInstrumentedOp> inflightInstrumentedOps;
+  std::vector<uint64_t> completedBufferPtrs;
 };
 
 } // namespace proton

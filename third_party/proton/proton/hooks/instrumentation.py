@@ -36,12 +36,15 @@ class CudaAllocator:
         # more efficient profiling data processing, rather than relying solely on post-processing.
         aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
-        # Create the buffer
+        # Each launch gets its own scratch buffer. Kernel timing is drained on
+        # flush, so the hook keeps the tensor alive until the pending launch has
+        # been processed by libproton.
         import torch
         enter_state(COMPUTE_METADATA_SCOPE_NAME)
         buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device="cuda")
         exit_state()
-        self.instrumentation_hook.buffer = buffer
+        self.instrumentation_hook.current_buffer = buffer
+        self.instrumentation_hook.pending_buffers[buffer.data_ptr()] = buffer
         return buffer
 
 
@@ -147,7 +150,8 @@ class InstrumentationHook(Hook):
         self.mode: mode.InstrumentationMode = _interpret_mode(mode_obj)
 
         self.allocator = CudaAllocator(self)
-        self.buffer = None
+        self.current_buffer: Optional[Any] = None
+        self.pending_buffers: Dict[int, Any] = {}
         self.metadata_path: Dict[Any, Optional[str]] = {}
 
     def activate(self):
@@ -224,8 +228,12 @@ class InstrumentationHook(Hook):
         # Reset host memory for external processing
         InstrumentationHook.host_buffer = None
 
-        # Reset the buffer reference
-        self.buffer = None
+        self.current_buffer = None
+
+    def flush(self) -> None:
+        self.current_buffer = None
+        for buffer_ptr in libproton.take_completed_instrumented_buffers():
+            self.pending_buffers.pop(buffer_ptr, None)
 
     def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
         if not function:
@@ -260,28 +268,33 @@ class InstrumentationHook(Hook):
         self.metadata_path.pop(function, None)
         libproton.destroy_function_metadata(function)
 
-    def _data_ptr(self) -> int:
-        return 0 if self.buffer is None else self.buffer.data_ptr()
-
     def enter(self, metadata: LazyDict) -> None:
         func = metadata.data.get("function")
         stream = metadata.data.get("stream")
-        alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
-        libproton.enter_instrumented_op(stream, func, self._data_ptr(), alloc_size)
+        buffer = self.current_buffer
+        alloc_size = 0 if buffer is None else buffer.element_size() * buffer.numel()
+        data_ptr = 0 if buffer is None else buffer.data_ptr()
+        libproton.enter_instrumented_op(stream, func, data_ptr, alloc_size)
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
 
     def exit(self, metadata: LazyDict) -> None:
         func = metadata.data.get("function")
         stream = metadata.data.get("stream")
-        alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
-        libproton.exit_instrumented_op(stream, func, self._data_ptr(), alloc_size)
+        buffer = self.current_buffer
+        alloc_size = 0 if buffer is None else buffer.element_size() * buffer.numel()
+        data_ptr = 0 if buffer is None else buffer.data_ptr()
+        libproton.exit_instrumented_op(stream, func, data_ptr, alloc_size)
 
         if InstrumentationHook.enable_host_buffer:
-            self._populate_host_buffer(func)
+            self._populate_host_buffer(func, buffer)
 
-    def _populate_host_buffer(self, function: Any) -> None:
+        self.current_buffer = None
+
+    def _populate_host_buffer(self, function: Any, buffer: Optional[Any]) -> None:
         if function and self.metadata_path[function]:
+            if buffer is None:
+                return
             import torch
             import struct
             import json
@@ -294,7 +307,7 @@ class InstrumentationHook(Hook):
                     return 2
                 return 0
 
-            alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
+            alloc_size = 0 if buffer is None else buffer.element_size() * buffer.numel()
             sampled_warps = self.mode.sampling_options.strip().split(",")
             data = {}
             with open(self.metadata_path[function], 'r') as file:
@@ -357,5 +370,5 @@ class InstrumentationHook(Hook):
             InstrumentationHook.host_buffer = torch.empty(header_size + alloc_size, dtype=torch.uint8, device="cpu")
             config_portion = InstrumentationHook.host_buffer[:header_size]
             config_portion.copy_(torch.tensor(list(header_bytes), dtype=torch.uint8))
-            data_portion = InstrumentationHook.host_buffer[header_size:].view_as(self.buffer)
-            data_portion.copy_(self.buffer.cpu())
+            data_portion = InstrumentationHook.host_buffer[header_size:].view_as(buffer)
+            data_portion.copy_(buffer.cpu())

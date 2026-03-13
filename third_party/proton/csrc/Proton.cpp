@@ -102,6 +102,12 @@ static void initProton(pybind11::module &&m) {
     SessionManager::instance().deactivateAllSessions(flushing);
   });
 
+  m.def("flush", [](size_t sessionId) {
+    SessionManager::instance().flushSession(sessionId);
+  });
+
+  m.def("flush_all", []() { SessionManager::instance().flushAllSessions(); });
+
   m.def("finalize", [](size_t sessionId, const std::string &outputFormat) {
     SessionManager::instance().finalizeSession(sessionId, outputFormat);
   });
@@ -151,6 +157,14 @@ static void initProton(pybind11::module &&m) {
                                    uint64_t buffer, size_t size) {
     SessionManager::instance().exitInstrumentedOp(
         streamId, functionId, reinterpret_cast<uint8_t *>(buffer), size);
+  });
+
+  m.def("mark_step",
+        [](uint64_t streamId) { SessionManager::instance().markStep(streamId); },
+        pybind11::arg("streamId"));
+
+  m.def("take_completed_instrumented_buffers", []() {
+    return InstrumentationProfiler::instance().drainCompletedBufferPtrs();
   });
 
   m.def("enter_state", [](const std::string &state) {

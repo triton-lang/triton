@@ -149,6 +149,7 @@ public:
                                    uint8_t *buffer, size_t size) = 0;
   virtual void exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
                                   uint8_t *buffer, size_t size) = 0;
+  virtual void markStep(uint64_t streamId) = 0;
 };
 
 } // namespace proton

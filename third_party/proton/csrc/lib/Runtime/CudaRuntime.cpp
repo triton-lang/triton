@@ -80,6 +80,37 @@ void *CudaRuntime::getPriorityStream() {
   return reinterpret_cast<void *>(stream);
 }
 
+void *CudaRuntime::createEvent() {
+  CUevent event;
+  cuda::eventCreate<true>(&event, CU_EVENT_DEFAULT);
+  return reinterpret_cast<void *>(event);
+}
+
+void CudaRuntime::destroyEvent(void *event) {
+  cuda::eventDestroy<true>(reinterpret_cast<CUevent>(event));
+}
+
+void CudaRuntime::recordEvent(void *event, void *stream) {
+  cuda::eventRecord<true>(reinterpret_cast<CUevent>(event),
+                          reinterpret_cast<CUstream>(stream));
+}
+
+void CudaRuntime::waitEvent(void *stream, void *event) {
+  cuda::streamWaitEvent<true>(reinterpret_cast<CUstream>(stream),
+                              reinterpret_cast<CUevent>(event), 0);
+}
+
+bool CudaRuntime::queryEvent(void *event) {
+  auto status = cuda::eventQuery<false>(reinterpret_cast<CUevent>(event));
+  if (status == CUDA_SUCCESS) {
+    return true;
+  }
+  if (status == CUDA_ERROR_NOT_READY) {
+    return false;
+  }
+  throw std::runtime_error("Failed to query CUDA event");
+}
+
 void CudaRuntime::synchronizeStream(void *stream) {
   cuda::streamSynchronize<true>(reinterpret_cast<CUstream>(stream));
 }

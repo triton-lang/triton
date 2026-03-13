@@ -27,6 +27,11 @@ public:
                              void *stream) override;
   void *getDevice() override;
   void *getPriorityStream() override;
+  void *createEvent() override;
+  void destroyEvent(void *event) override;
+  void recordEvent(void *event, void *stream) override;
+  void waitEvent(void *stream, void *event) override;
+  bool queryEvent(void *event) override;
   void synchronizeStream(void *stream) override;
   void synchronizeDevice() override;
   void destroyStream(void *stream) override;

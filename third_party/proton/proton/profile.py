@@ -1,5 +1,6 @@
 import functools
 import triton
+import triton.runtime.driver as driver
 
 from triton._C.libproton import proton as libproton  # type: ignore
 from triton._C.libtriton import getenv  # type: ignore
@@ -175,6 +176,25 @@ def deactivate(session: Optional[int] = None, flushing: bool = False) -> None:
         libproton.deactivate_all(flushing)
     else:
         libproton.deactivate(session, flushing)
+    if flushing:
+        HookManager.flush(session)
+
+
+def flush(session: Optional[int] = None) -> None:
+    """
+    Flush profiling data without finalizing the session.
+
+    For instrumentation kernel tracing this schedules async draining work and
+    releases any profile scratch buffers whose copies have already completed.
+    """
+    if flags.command_line and session != 0:
+        raise ValueError("Only one session can be flushed when running from the command line.")
+
+    if session is None:
+        libproton.flush_all()
+    else:
+        libproton.flush(session)
+    HookManager.flush(session)
 
 
 def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -> None:
@@ -190,8 +210,6 @@ def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -
     Returns:
         None
     """
-    HookManager.unregister(session)
-
     if session is None:
         flags.profiling_on = False
         libproton.finalize_all(output_format)
@@ -199,6 +217,22 @@ def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -
         if flags.command_line and session != 0:
             raise ValueError("Only one session can be finalized when running from the command line.")
         libproton.finalize(session, output_format)
+
+    HookManager.flush(session)
+    HookManager.unregister(session)
+
+
+def mark_step(stream: Optional[int] = None) -> None:
+    """
+    Seal the current instrumentation step with an event recorded on `stream`.
+
+    Pending Triton instrumentation buffers for this step become eligible for
+    async draining on a copy stream at the next flush/finalize.
+    """
+    if stream is None:
+        device = driver.active.get_current_device()
+        stream = driver.active.get_current_stream(device)
+    libproton.mark_step(stream)
 
 
 def _profiling(

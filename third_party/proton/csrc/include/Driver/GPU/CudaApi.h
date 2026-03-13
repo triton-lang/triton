@@ -28,6 +28,19 @@ template <bool CheckSuccess>
 CUresult streamCreateWithPriority(CUstream *pStream, unsigned int flags,
                                   int priority);
 
+template <bool CheckSuccess>
+CUresult eventCreate(CUevent *phEvent, unsigned int flags);
+
+template <bool CheckSuccess> CUresult eventDestroy(CUevent hEvent);
+
+template <bool CheckSuccess>
+CUresult eventRecord(CUevent hEvent, CUstream hStream);
+
+template <bool CheckSuccess>
+CUresult streamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int flags);
+
+template <bool CheckSuccess> CUresult eventQuery(CUevent hEvent);
+
 template <bool CheckSuccess> CUresult streamSynchronize(CUstream stream);
 
 template <bool CheckSuccess> CUresult streamDestroy(CUstream stream);

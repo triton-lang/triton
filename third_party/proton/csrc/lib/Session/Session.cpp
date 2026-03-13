@@ -129,6 +129,24 @@ void SessionManager::deactivateAllSessions(bool flushing) {
   }
 }
 
+void SessionManager::flushSession(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  throwIfSessionNotInitialized(sessions, sessionId);
+  sessions[sessionId]->profiler->flush();
+}
+
+void SessionManager::flushAllSessions() {
+  std::lock_guard<std::mutex> lock(mutex);
+  std::set<Profiler *> flushedProfilers;
+  for (const auto &[sessionId, session] : sessions) {
+    (void)sessionId;
+    auto *profiler = session->profiler;
+    if (flushedProfilers.insert(profiler).second) {
+      profiler->flush();
+    }
+  }
+}
+
 void SessionManager::activateSessionImpl(size_t sessionId) {
   throwIfSessionNotInitialized(sessions, sessionId);
   if (sessionActive[sessionId])
@@ -292,6 +310,14 @@ void SessionManager::exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
                                                      buffer, size);
       },
       /*isReversed=*/true);
+}
+
+void SessionManager::markStep(uint64_t streamId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](auto *instrumentationInterface) {
+                     instrumentationInterface->markStep(streamId);
+                   });
 }
 
 void SessionManager::addMetrics(
