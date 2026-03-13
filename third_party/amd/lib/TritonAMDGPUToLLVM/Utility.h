@@ -72,9 +72,6 @@ getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
 int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
                                                  bool setNT);
 
-Value cvtFp32ToFp16RTNE_oneValue(Location loc, RewriterBase &rewriter,
-                                 const Value &v);
-
 // Return a tensor of pointers with the same type of `basePtr` and the same
 // shape of `offset`
 Type getPointerTypeWithShape(Value basePtr, Value offset);
@@ -118,6 +115,11 @@ bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);
 // Check if the opA of this tl.dot is the result of another tl.dot
 // in the same region
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
+
+// Branchless fp8 -> f32 via multiply trick.
+// Handles both E4M3FN (isE4M3FN=true) and E5M2 (isE4M3FN=false) formats.
+Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
+                        bool isE4M3FN);
 
 // Software implementation of converting an 8-element vector of MXFP4 elements
 // to a wider type: BF16 or FP16 for target before CDNA4.
