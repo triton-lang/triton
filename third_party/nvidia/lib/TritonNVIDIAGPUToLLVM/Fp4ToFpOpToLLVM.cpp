@@ -67,21 +67,74 @@ static constexpr const char *FP4ToFP16Ptx =
     "cvt.rn.f16x2.e4m3x2 $3, t3;\n"
     "}";
 
+static constexpr const char *FP4ToFP32Ptx =
+    "{\n"
+    ".reg .b32 a<18>;\n"
+    "and.b32  a0, $8, 0x88888888;\n\t"
+    "shr.u32 a1, a0, 3;\n\t"
+    "and.b32  a2, $8, 0x77777777;\n\t"
+    "shr.u32 a3, a2, 16;\n\t"
+    "shr.u32 a4, a0, 19;\n\t"
+    "prmt.b32 a5, 0xc0800000, 0xc0804000, a2;\n\t"
+    "prmt.b32 a6, 0xc0800000, 0xc0804000, a3;\n\t"
+    "prmt.b32 a7, 0x3f3f3f00, 0x40404040, a2;\n\t"
+    "prmt.b32 a8, 0x3f3f3f00, 0x40404040, a3;\n\t"
+    "prmt.b32 a9, 32768, 0, a1;\n\t"
+    "prmt.b32 a10, 32768, 0, a4;\n\t"
+    "or.b32   a11, a7, a9;\n\t"
+    "or.b32   a12, a8, a10;\n\t"
+    "prmt.b32 a13, a5, a11, 20800;\n\t"
+    "prmt.b32 a14, a5, a11, 29538;\n\t"
+    "prmt.b32 a15, a6, a12, 20800;\n\t"
+    "prmt.b32 a16, a6, a12, 29538;\n\t"
+    "shl.b32 $0, a13, 16;\n\t"
+    "and.b32  $1, a13, 0xFFFF0000;\n\t"
+    "shl.b32 $2, a14, 16;\n\t"
+    "and.b32  $3, a14, 0xFFFF0000;\n\t"
+    "shl.b32 $4, a15, 16;\n\t"
+    "and.b32  $5, a15, 0xFFFF0000;\n\t"
+    "shl.b32 $6, a16, 16;\n\t"
+    "and.b32  $7, a16, 0xFFFF0000;\n\t"
+    "}";
+
 static Value createInlineAsmUpcast(Location loc, RewriterBase &rewriter,
-                                   bool toFp16, Type retType, Value packedVec) {
+                                   Type targetElemType, Type retType,
+                                   Value packedVec) {
   PTXBuilder builder;
   SmallVector<PTXBuilder::Operand *> operands;
-  for (int i = 0; i < 4; i++) {
+
+  // According to the target element type, add the appropriate number of
+  int numOutputs = 0;
+  const char *ptxCode = nullptr;
+  if (targetElemType.isBF16()) {
+    numOutputs = 4;
+    ptxCode = FP4ToBP16Ptx;
+  } else if (targetElemType.isF16()) {
+    numOutputs = 4;
+    ptxCode = FP4ToFP16Ptx;
+  } else if (targetElemType.isF32()) {
+    numOutputs = 8;
+    ptxCode = FP4ToFP32Ptx;
+  } else {
+    llvm_unreachable(
+        "unsupported target element type for FP4 upcast (only f16/bf16/f32)");
+  }
+
+  // add output operands (=r mean register output)
+  for (int i = 0; i < numOutputs; i++) {
     operands.push_back(builder.newOperand("=r"));
   }
+  // add input operands (r mean register input)
   operands.push_back(builder.newOperand(packedVec, "r"));
-  auto &ptxOp = *builder.create(toFp16 ? FP4ToFP16Ptx : FP4ToBP16Ptx);
+
+  auto &ptxOp = *builder.create(ptxCode);
   ptxOp(operands, /*onlyAttachMLIRArgs=*/true);
   Value result = builder.launch(rewriter, loc, retType, false);
   return result;
 }
 
 namespace {
+
 class Fp4ToFpOpPattern : public ConvertOpToLLVMPattern<Fp4ToFpOp> {
 public:
   Fp4ToFpOpPattern(LLVMTypeConverter &typeConverter, PatternBenefit benefit)
@@ -93,16 +146,18 @@ public:
 
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
-    auto elemType = op.getType().getElementType();
-    assert(elemType == f16_ty || elemType == bf16_ty);
-    bool toFp16 = elemType == f16_ty;
+    auto targetType = op.getType();
+    auto elemType = targetType.getElementType();
+    assert(elemType == f16_ty || elemType == bf16_ty || elemType == f32_ty);
 
+    bool isF32Target = elemType.isF32();
     auto xVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
 
     SmallVector<Value> results;
     results.reserve(xVals.size() * 2);
-    assert(xVals.size() % 4 == 0);
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    assert(xVals.size() % 4 == 0 && "FP4 input must be multiple of 4 elements");
+
+    TritonLLVMOpBuilder b(loc, rewriter);
     for (int i = 0; i < xVals.size(); i += 4) {
       Value v0 = xVals[i];
       Value v1 = xVals[i + 1];
@@ -113,20 +168,33 @@ public:
       packedVec = b.insert_element(packedVec, v1, b.i32_val(1));
       packedVec = b.insert_element(packedVec, v2, b.i32_val(2));
       packedVec = b.insert_element(packedVec, v3, b.i32_val(3));
-      SmallVector<Type> rets(4, i32_ty);
+      SmallVector<Type> rets;
+      if (isF32Target) {
+        rets.resize(8, i32_ty);
+      } else {
+        rets.resize(4, i32_ty);
+      }
       Type retType = struct_ty(rets);
       Value ret =
-          createInlineAsmUpcast(loc, rewriter, toFp16, retType, packedVec);
-      for (int i = 0; i < 4; i++) {
-        Value extractI32 = b.extract_val(ret, i);
-        Value elements = b.bitcast(extractI32, vec_ty(elemType, 2));
-        results.push_back(b.extract_element(elements, b.i32_val(0)));
-        results.push_back(b.extract_element(elements, b.i32_val(1)));
+          createInlineAsmUpcast(loc, rewriter, elemType, retType, packedVec);
+      if (isF32Target) {
+        for (int j = 0; j < 8; j++) {
+          Value extractI32 = b.extract_val(ret, j);
+          Value elements = b.bitcast(extractI32, f32_ty);
+          results.push_back(elements);
+        }
+      } else {
+        for (int j = 0; j < 4; j++) {
+          Value extractI32 = b.extract_val(ret, j);
+          Value elements = b.bitcast(extractI32, vec_ty(elemType, 2));
+          results.push_back(b.extract_element(elements, b.i32_val(0)));
+          results.push_back(b.extract_element(elements, b.i32_val(1)));
+        }
       }
     }
 
-    Value result = packLLElements(loc, getTypeConverter(), results, rewriter,
-                                  op.getType());
+    Value result =
+        packLLElements(loc, getTypeConverter(), results, rewriter, targetType);
     rewriter.replaceOp(op, result);
     return success();
   }
