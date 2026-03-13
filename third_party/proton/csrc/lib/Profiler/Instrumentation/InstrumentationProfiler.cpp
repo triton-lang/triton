@@ -1,4 +1,5 @@
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
+#include "Data/TraceData.h"
 #include "TraceDataIO/CircularLayoutParser.h"
 
 #include "Runtime/CudaRuntime.h"
@@ -7,6 +8,7 @@
 #include "Utility/String.h"
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -91,6 +93,11 @@ getUnitIdVector(const std::map<std::string, std::string> &modeOptions,
     std::iota(unitIdVector.begin(), unitIdVector.end(), 0);
   }
   return unitIdVector;
+}
+
+bool isKernelTraceMode(const std::map<std::string, std::string> &modeOptions) {
+  auto traceMode = modeOptions.find("trace_mode");
+  return traceMode != modeOptions.end() && traceMode->second == "kernel";
 }
 
 } // namespace
@@ -234,7 +241,33 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
         ByteSpan byteSpan(bufferPtr, size);
         CircularLayoutParser parser(byteSpan, *circularLayoutConfig);
         parser.parse();
-        for (auto &blockTrace : parser.getResult()->blockTraces) {
+        const auto &blockTraces = parser.getResult()->blockTraces;
+        const auto kernelTraceMode = isKernelTraceMode(modeOptions);
+        const auto deviceId =
+            static_cast<uint64_t>(reinterpret_cast<uintptr_t>(device));
+
+        if (kernelTraceMode) {
+          uint64_t startTime = std::numeric_limits<uint64_t>::max();
+          uint64_t endTime = 0;
+          bool sawBlockTrace = false;
+          for (const auto &blockTrace : blockTraces) {
+            startTime = std::min(startTime, blockTrace.initTime);
+            endTime = std::max(endTime, blockTrace.postFinalTime);
+            sawBlockTrace = true;
+          }
+          if (sawBlockTrace && endTime >= startTime) {
+            for (const auto &[data, baseEntry] : dataToEntryMap) {
+              if (dynamic_cast<TraceData *>(data) == nullptr) {
+                continue;
+              }
+              auto entry = data->addOp(baseEntry.phase, baseEntry.id, {});
+              entry.upsertMetric(std::make_unique<KernelMetric>(
+                  startTime, endTime, 1, deviceId,
+                  static_cast<uint64_t>(runtime->getDeviceType()), streamId));
+            }
+          }
+        }
+        for (auto &blockTrace : blockTraces) {
           for (auto &trace : blockTrace.traces) {
             for (auto &event : trace.profileEvents) {
               auto &contexts = scopeIdContexts[event.first->scopeId];
@@ -243,13 +276,15 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                                         (circularLayoutConfig->totalUnits *
                                          circularLayoutConfig->numBlocks);
               for (const auto &[data, baseEntry] : dataToEntryMap) {
+                if (kernelTraceMode && dynamic_cast<TraceData *>(data) != nullptr) {
+                  continue;
+                }
                 auto kernelId = baseEntry.id;
                 auto entry = data->addOp(baseEntry.phase, kernelId, contexts);
                 entry.upsertMetric(std::make_unique<CycleMetric>(
                     event.first->cycle, event.second->cycle, duration,
-                    normalizedDuration, kernelId, functionName,
-                    blockTrace.blockId, blockTrace.procId, trace.uid,
-                    static_cast<uint64_t>(reinterpret_cast<uintptr_t>(device)),
+                    normalizedDuration, kernelId, functionName, blockTrace.blockId,
+                    blockTrace.procId, trace.uid, deviceId,
                     static_cast<uint64_t>(runtime->getDeviceType()),
                     timeShiftCost, blockTrace.initTime, blockTrace.preFinalTime,
                     blockTrace.postFinalTime));

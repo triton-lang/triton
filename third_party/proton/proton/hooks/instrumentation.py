@@ -82,11 +82,15 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
 
     # Get option values or empty strings
     options = {
-        "metric_type": opts.get("metric_type", "cycle"), "buffer_type": opts.get("buffer_type", "shared"),
+        "metric_type": opts.get("metric_type", "cycle"), "trace_mode": opts.get("trace_mode", "scope"),
+        "buffer_type": opts.get("buffer_type", "shared"),
         "buffer_strategy": opts.get("buffer_strategy", "circular"), "buffer_size": int(opts.get("buffer_size", "0")),
         "granularity": opts.get("granularity", "warp"), "sampling_strategy": opts.get("sampling_strategy", "none"),
         "sampling_options": opts.get("sampling_options", ""), "optimizations": opts.get("optimizations", "")
     }
+
+    if options["trace_mode"] not in {"scope", "kernel"}:
+        raise ValueError(f"Unknown trace_mode: {options['trace_mode']}")
 
     # Helper function to validate and map options to their enum values
     def get_option_value(opt_name, mapping):
