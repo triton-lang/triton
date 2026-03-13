@@ -618,6 +618,17 @@ public:
       SmallVector<unsigned, 2> tilesA{1, 1}, tilesB{1, 1};
       Value scaleA = findScaleAsDecompositionSource(a);
       Value scaleB = findScaleAsDecompositionSource(b);
+      // For decomposed scaled dots, pack warps along the free (non-scaled)
+      // dimension to keep scale values warp-local. Cap at tile extent to
+      // avoid overflow (e.g. 8 warps, 128-wide tile -> [2,4] not [1,8]).
+      if ((scaleA || scaleB) && !(scaleA && scaleB)) {
+        unsigned freeDim = scaleA ? 0 : 1;
+        unsigned scaledDim = 1 - freeDim;
+        unsigned maxFree = retShape[freeDim] / mDim;
+        warpsPerTile[freeDim] =
+            std::min(static_cast<unsigned>(numWarps), maxFree);
+        warpsPerTile[scaledDim] = numWarps / warpsPerTile[freeDim];
+      }
       tilesPerWarp = deduceTilesPerWarpForScale(
           dyn_cast_if_present<TensorValue>(scaleA),
           dyn_cast_if_present<TensorValue>(scaleB), mDim, retShape[0],

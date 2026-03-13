@@ -8,7 +8,7 @@
 
 using namespace mlir;
 using namespace mlir::triton;
-using mlir::LLVM::AMD::convertF8ToF16_SW;
+using mlir::LLVM::AMD::convertF8ToF32_SW;
 using mlir::LLVM::AMD::upcast4xMxfp8_HW;
 using mlir::LLVM::AMD::upcast8xMxfp4_HW;
 using mlir::LLVM::AMD::upcast8xMxfp4_SW;
@@ -185,7 +185,7 @@ struct ScaledUpcastFp8OpPattern
         }
       }
     } else {
-      // Software emulation: convert fp8 to f16, then scale via f32.
+      // Software emulation: convert fp8 to f32, then multiply by scale.
       bool isE4M3FN = isa<Float8E4M3FNType>(fp8ElemType);
       bool toFp16 = elemType.isF16();
       for (size_t i = 0; i < inputVals.size(); i += 4) {
@@ -197,9 +197,8 @@ struct ScaledUpcastFp8OpPattern
             f32_ty);
 
         for (int j : llvm::seq(4)) {
-          Value f16Val =
-              convertF8ToF16_SW(rewriter, loc, inputVals[i + j], isE4M3FN);
-          Value f32Val = b.fpext(f32_ty, f16Val);
+          Value f32Val =
+              convertF8ToF32_SW(rewriter, loc, inputVals[i + j], isE4M3FN);
           Value mulF32 = b.fmul(f32Val, scaleF32);
           if (toFp16) {
             results.push_back(b.fptrunc(f16_ty, mulF32));

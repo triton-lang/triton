@@ -121,6 +121,11 @@ bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
 Value convertF8ToF16_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
                         bool isE4M3FN);
 
+// Branchless fp8 -> f32 via multiply trick.
+// Handles both E4M3FN (isE4M3FN=true) and E5M2 (isE4M3FN=false) formats.
+Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
+                        bool isE4M3FN);
+
 // Software implementation of converting an 8-element vector of MXFP4 elements
 // to a wider type: BF16 or FP16 for target before CDNA4.
 // for CDNA3, we have optimized sequence that can combine scale during the
