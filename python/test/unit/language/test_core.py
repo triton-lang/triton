@@ -6245,6 +6245,47 @@ def test_temp_var_in_loop(device):
     assert (acc == out).all()
 
 
+def test_constexpr_reassign_in_loop(device):
+    # Regression test for #9547: when a stride argument gets JIT-specialized
+    # to constexpr and is then reassigned inside a loop, the compiler should
+    # relax it to a runtime value instead of raising a type mismatch error.
+
+    @triton.jit
+    def kernel(a_ptr, a0, b_ptr, b0, out, o0):
+        for i in range(0, 8, 2):
+            tl.store(out + i * o0, tl.load(a_ptr + i * a0))
+            a_ptr = b_ptr
+            a0 = b0
+
+    a = torch.arange(8, dtype=torch.int32, device=device)
+    b = torch.arange(8, dtype=torch.int32, device=device) + 10
+    out = torch.zeros(8, dtype=torch.int32, device=device)
+    kernel[(1, )](a, a.stride(0), b, b.stride(0), out, out.stride(0))
+
+    expected = torch.zeros(8, dtype=torch.int32, device=device)
+    expected[0] = a[0]  # i=0: reads from a
+    expected[2] = b[2]  # i=2: reads from b (a_ptr was reassigned)
+    expected[4] = b[4]  # i=4: reads from b
+    expected[6] = b[6]  # i=6: reads from b
+    assert torch.equal(out, expected)
+
+
+def test_user_constexpr_reassign_in_loop_errors(device):
+    # User-annotated tl.constexpr locals must NOT be relaxed to runtime
+    # values inside loops — that's a genuine type error.
+
+    @triton.jit
+    def kernel(out, BLOCK: tl.constexpr):
+        x: tl.constexpr = 1
+        for i in range(BLOCK):
+            tl.store(out + i, x)
+            x = tl.load(out + i)  # constexpr -> tensor: should fail
+
+    out = torch.zeros(4, dtype=torch.int32, device=device)
+    with pytest.raises(Exception):
+        kernel[(1, )](out, 4)
+
+
 @pytest.mark.interpreter
 def test_num_programs(device):
     # Assuming that the kernel is launched with a grid of (11, 21, 31)
