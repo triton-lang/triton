@@ -820,6 +820,8 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   }
   profiler.periodicFlushingEnabled = false;
   profiler.periodicFlushingFormat.clear();
+  // We have to clear the correlation maps before unsubscribing because CUPTI
+  // will reset correlation ID after unsubscribing
   profiler.correlation.clear();
   setGraphCallbacks(subscriber, /*enable=*/false);
   setLaunchCallbacks(subscriber, /*enable=*/false);
