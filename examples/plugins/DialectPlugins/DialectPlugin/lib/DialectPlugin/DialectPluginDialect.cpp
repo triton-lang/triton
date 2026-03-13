@@ -51,7 +51,8 @@ static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME};
 // Key APIs:
 
 TRITON_PLUGIN_API
-tritonAddPluginPass(mlir::PassManager *pm, const char *passName) {
+tritonAddPluginPass(mlir::PassManager *pm, const char *passName,
+                    const std::vector<std::string> &args) {
   std::string passNameStr(passName);
   if (passMap.find(passNameStr) == passMap.end())
     return TP_GENERIC_FAILURE;
