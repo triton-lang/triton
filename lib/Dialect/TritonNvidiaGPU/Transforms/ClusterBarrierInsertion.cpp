@@ -111,6 +111,9 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
   if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
     return tma.getMulticast() && aliasesTracked(tma.getBarrier());
   }
+  if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op)) {
+    return clc.getMulticast() && aliasesTracked(clc.getMbarrier());
+  }
   return false;
 }
 

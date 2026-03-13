@@ -473,6 +473,29 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
+#sharedClc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Multicast CLC uses the barrier across CTAs, so the init window still needs
+  // cluster synchronization even when the barrier allocation itself looks
+  // per-CTA.
+  // CHECK-LABEL: @cluster_clc_multicast_with_per_cta_barrier
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.clc_try_cancel
+  tt.func @cluster_clc_multicast_with_per_cta_barrier() {
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #sharedClc, #smem, mutable>
+    %result = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #sharedClc, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #sharedClc, #smem, mutable>
+    ttng.clc_try_cancel %result, %barrier {multicast = true} : !ttg.memdesc<2xi64, #sharedClc, #smem, mutable>, !ttg.memdesc<1xi64, #sharedClc, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
 #barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>

@@ -334,7 +334,8 @@ bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
           ttng::AsyncTMACopyGlobalToLocalOp, ttng::AsyncTMACopyLocalToGlobalOp,
           ttng::AsyncTMAGatherOp, ttng::AsyncTMAScatterOp, ttng::InitBarrierOp,
           ttng::BarrierExpectOp, ttng::InvalBarrierOp, ttng::WaitBarrierOp,
-          ttng::ArriveBarrierOp>(op)) {
+          ttng::ArriveBarrierOp, ttng::CLCTryCancelOp, ttng::CLCLoadResultOp>(
+          op)) {
     return true;
   }
   // Allocations with operands write to the memory.

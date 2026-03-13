@@ -162,6 +162,10 @@ uint16_t getCTABroadcastMask(Type type) {
       ttg::toLinearLayout(memDescType).getFreeVariableMasks().lookup(kBlock));
 }
 
+uint16_t getFullClusterBroadcastBits(Operation *op) {
+  return static_cast<uint16_t>(ttg::lookupNumCTAs(op) - 1);
+}
+
 int getCTAGroupSize(uint16_t ctaMaskBits) {
   return 1 << llvm::popcount(ctaMaskBits);
 }
@@ -823,6 +827,28 @@ private:
       info->barriers.push_back({arriveOp.getAlloc(), nullptr,
                                 (int)arriveOp.getCount(), barrierMask,
                                 barrierMask});
+    }
+    if (auto clcOp = dyn_cast<ttng::CLCTryCancelOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      Value ctaMask = localMask();
+      if (clcOp.getMulticast()) {
+        uint16_t broadcastBits = getFullClusterBroadcastBits(op);
+        ctaMask = broadcastingGroupCTAMask(b, broadcastBits);
+        info->representativePred = leadCTAPredicate(b, broadcastBits);
+      }
+      Value verifyMask = broadcastingGroupCTAMask(
+          b, getCTABroadcastMask(clcOp.getMbarrier().getType()));
+      info->barriers.push_back(
+          {clcOp.getMbarrier(), nullptr, /*count=*/0, ctaMask, verifyMask});
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                        clcOp.getResult(), "", ctaMask);
+    }
+    if (auto clcLoadOp = dyn_cast<ttng::CLCLoadResultOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
+                                        clcLoadOp.getSrc(), "", localMask());
     }
     if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
       if (wgmmaOp.getIsAsync() == true) {

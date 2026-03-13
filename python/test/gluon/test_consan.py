@@ -2162,3 +2162,93 @@ def test_multicta_tcgen05_load_without_wait(device, run_wrapper, monkeypatch):
         num_warps=4,
         num_ctas=ctas_per_cga[0] * ctas_per_cga[1],
     )
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+def test_multicta_clc_wait(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_multicta_clc_wait, (device, False, monkeypatch))
+        assert_subprocess_ok(result)
+        return
+
+    enable_consan(monkeypatch)
+
+    @gluon.jit
+    def clc_wait_kernel(is_cancelled, program_ids, smem_size: ttgl.constexpr):
+        ttgl.static_assert(ttgl.num_ctas() == 2)
+        clc_mbar = mbarrier.allocate_mbarrier()
+        result_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=((0, ), ))
+        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], result_layout)
+        mbarrier.init(clc_mbar, count=1)
+
+        dummy = ttgl.allocate_shared_memory(ttgl.int64, [smem_size // 8 - 32], clc_mbar.layout)
+        mbarrier.expect(clc_mbar, 16)
+        blackwell.clc.try_cancel(clc_result, clc_mbar, multicast=True)
+        mbarrier.wait(clc_mbar, phase=0)
+        response = blackwell.clc.load_result(clc_result)
+
+        pid = ttgl.program_id(0)
+        ttgl.store(is_cancelled + pid, response.is_canceled())
+        ttgl.store(program_ids + pid, response.program_id(0))
+        dummy._keep_alive()
+
+    dev_props = torch.cuda.get_device_properties(device)
+    grid = max(2, 2 * (dev_props.multi_processor_count // 2))
+    smem_size = dev_props.shared_memory_per_block_optin
+    is_cancelled = torch.zeros([grid], dtype=torch.bool, device=device)
+    program_ids = torch.zeros([grid], dtype=torch.int32, device=device)
+    clc_wait_kernel[(grid, )](is_cancelled, program_ids, smem_size, num_warps=4, num_ctas=2)
+    torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+def test_multicta_clc_barrier_uninitialized(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_multicta_clc_barrier_uninitialized, (device, False, monkeypatch))
+        assert_subprocess_assert(result, "Barrier used before initialization or after invalidation")
+        return
+
+    enable_consan(monkeypatch)
+
+    @gluon.jit
+    def clc_barrier_uninitialized_kernel(smem_size: ttgl.constexpr):
+        ttgl.static_assert(ttgl.num_ctas() == 2)
+        clc_mbar = mbarrier.allocate_mbarrier()
+        result_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=((0, ), ))
+        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], result_layout)
+        dummy = ttgl.allocate_shared_memory(ttgl.int64, [smem_size // 8 - 32], clc_mbar.layout)
+        mbarrier.expect(clc_mbar, 16)
+        blackwell.clc.try_cancel(clc_result, clc_mbar, multicast=True)
+        mbarrier.wait(clc_mbar, phase=0)
+        dummy._keep_alive()
+
+    smem_size = torch.cuda.get_device_properties(device).shared_memory_per_block_optin
+    clc_barrier_uninitialized_kernel[(1, )](smem_size, num_warps=4, num_ctas=2)
+    torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+def test_multicta_clc_barrier_overcounted(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_multicta_clc_barrier_overcounted, (device, False, monkeypatch))
+        assert_subprocess_assert(result, "Deadlock detected: all active threads are waiting on mbarriers")
+        return
+
+    enable_consan(monkeypatch)
+
+    @gluon.jit
+    def clc_barrier_overcounted_kernel(smem_size: ttgl.constexpr):
+        ttgl.static_assert(ttgl.num_ctas() == 2)
+        clc_mbar = mbarrier.allocate_mbarrier()
+        result_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=((0, ), ))
+        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], result_layout)
+        mbarrier.init(clc_mbar, count=3)
+        dummy = ttgl.allocate_shared_memory(ttgl.int64, [smem_size // 8 - 32], clc_mbar.layout)
+        mbarrier.expect(clc_mbar, 16)
+        blackwell.clc.try_cancel(clc_result, clc_mbar, multicast=True)
+        mbarrier.wait(clc_mbar, phase=0)
+        dummy._keep_alive()
+
+    smem_size = torch.cuda.get_device_properties(device).shared_memory_per_block_optin
+    clc_barrier_overcounted_kernel[(1, )](smem_size, num_warps=4, num_ctas=2)
+    torch.cuda.synchronize()
