@@ -179,9 +179,27 @@ tt.func @optimize_broadcast(%arg0: i32) {
 tt.func @no_partitions(%arg0: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
+  // CHECK: scf.for %{{.*}} = %c0_i32 to %arg0 step %c1_i32 : i32
+  // CHECK-NOT: ttg.partition
+  // CHECK-NOT: ttg.warp_specialize.tag
   scf.for %i = %c0_i32 to %arg0 step %c1_i32 : i32 {
     "use"(%c0_i32) : (i32) -> ()
-  } {tt.warp_specialize, ttg.partition.stages = [0 : i32], ttg.warp_specialize.tag = 0 : i32}
+  } {tt.warp_specialize}
+  tt.return
+}
+
+// CHECK-LABEL: @mma_no_memory_ops
+tt.func @mma_no_memory_ops(%arg0: i32, %arg1: !ttg.memdesc<256x64xf16, #shared, #smem>, %arg2: !ttg.memdesc<64x64xf16, #shared_T, #smem>, %arg3: !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %false = arith.constant false
+  %true = arith.constant true
+  // CHECK: scf.for %{{.*}} = %c0_i32 to %arg0 step %c1_i32 : i32
+  // CHECK-NOT: ttg.partition
+  // CHECK-NOT: ttg.warp_specialize.tag
+  scf.for %i = %c0_i32 to %arg0 step %c1_i32 : i32 {
+    %0 = ttng.tc_gen5_mma %arg1, %arg2, %arg3[], %false, %true : !ttg.memdesc<256x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared_T, #smem>, !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable>
+  } {tt.warp_specialize}
   tt.return
 }
 
