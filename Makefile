@@ -2,7 +2,7 @@
 # Make sure to first initialize the build system with:
 #     make dev-install
 
-PYTHON ?= python
+PYTHON ?= python3
 BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 INSTALL_DIR ?= $(dir $(BUILD_DIR))install
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
@@ -51,7 +51,7 @@ test-gluon: all
 
 .PHONY: test-gsan
 test-gsan: all
-	$(PYTEST) -n $(NUM_PROCS) python/test/gsan
+	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -n $(NUM_PROCS) python/test/gsan
 
 .PHONY: test-regression
 test-regression: all
