@@ -1,5 +1,7 @@
 #include "Proton.h"
 
+#include "Profiler/Instrumentation/InstrumentationProfiler.h"
+
 #include <cstdint>
 #include <map>
 #include <stdexcept>

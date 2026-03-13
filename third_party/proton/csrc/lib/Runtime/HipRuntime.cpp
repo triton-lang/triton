@@ -3,6 +3,7 @@
 #include "Driver/GPU/HipApi.h"
 #include <algorithm>
 #include <cstdint>
+#include <stdexcept>
 
 namespace proton {
 

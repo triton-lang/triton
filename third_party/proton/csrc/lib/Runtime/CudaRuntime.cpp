@@ -3,6 +3,7 @@
 #include "Driver/GPU/CudaApi.h"
 #include <algorithm>
 #include <cstdint>
+#include <stdexcept>
 
 namespace proton {
 
