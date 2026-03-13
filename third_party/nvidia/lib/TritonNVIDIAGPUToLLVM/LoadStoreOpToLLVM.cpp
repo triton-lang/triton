@@ -154,8 +154,13 @@ struct LoadStoreConversionBase {
     auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
     LDBG("getVectorSize contiguity = " << contiguity << " pointeeBitWidth = "
                                        << pointeeBitWidth);
-    // The maximum vector size is 128 bits on NVIDIA GPUs.
-    return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
+    // Blackwell (sm_100+) with PTX 8.8+ supports 256-bit global load/store.
+    unsigned maxVecBits = 128;
+    if (targetInfo.getComputeCapability() >= 100 &&
+        targetInfo.getPtxVersion() >= 88) {
+      maxVecBits = 256;
+    }
+    return std::min<unsigned>(maxVecBits / pointeeBitWidth, contiguity);
   }
 
   unsigned getMaskAlignment(Value mask) const {
