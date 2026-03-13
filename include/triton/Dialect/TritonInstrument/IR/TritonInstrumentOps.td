@@ -70,6 +70,22 @@ def TTI_ExperimentalGSanInitOp
   let arguments = (ins);
 }
 
+def TTI_ExperimentalGSanTensorDescInfoOp
+    : TTI_Op<"experimental_gsan_tensordesc_info", [Pure]> {
+  let summary = "Decode GSan descriptor metadata from a native tensor descriptor";
+  let description = [{
+    Decodes the native tensor descriptor used by async TMA operations into a
+    base pointer followed by shape and stride values. This lets the GSan pass
+    reason about the accessed address set without depending on companion block
+    arguments or high-level tensor descriptor producers.
+  }];
+  let arguments = (ins TT_AnyTensorDescType:$desc);
+  let results = (outs Variadic<AnyType>:$result);
+  let assemblyFormat = [{
+    $desc attr-dict `:` qualified(type($desc)) `->` type($result)
+  }];
+}
+
 def TTI_ExperimentalGSanTensorAccessOp
     : TTI_Op<"experimental_gsan_tensor_access",
              [MemoryEffects<[MemWrite<GlobalMemory>, MemWrite<GlobalMemory>]>,
