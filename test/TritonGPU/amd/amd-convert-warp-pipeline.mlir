@@ -445,3 +445,48 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: rocdl.sched.barrier
 // CHECK: amdg.cond_barrier
 // CHECK: tt.return
+
+// -----
+
+// ---- Scalar ops between stages (e.g. from loop unrolling) are tolerated ----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @scalar_ops_between_stages(%n: index, %ptr: !tt.ptr<f32>) {
+    %c0  = arith.constant 0 : index
+    %c1  = arith.constant 1 : index
+    %v0  = arith.constant 0.0 : f32
+    %v1  = arith.constant 1.0 : f32
+
+    // iter_args keeps the scalar ops alive across iterations.
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %c0) -> index {
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage0"}
+
+      // Scalar index arithmetic injected by loop unrolling.
+      %next = arith.addi %acc, %c1 : index
+
+      scf.execute_region {
+        tt.store %ptr, %v1 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage1"}
+
+      scf.yield %next : index
+    } {triton.warp_pipeline.pipelined_for}
+
+    tt.return
+  }
+}
+
+// The pass should succeed despite the scalar ops between stages.
+// CHECK-LABEL: tt.func @scalar_ops_between_stages
+// CHECK: ttg.barrier local
+// CHECK: amdg.cond_barrier
+// CHECK: scf.for
+// CHECK-NOT: scf.execute_region
+// CHECK: rocdl.sched.barrier
+// CHECK: rocdl.s.barrier
+// CHECK: rocdl.sched.barrier
+// CHECK: amdg.cond_barrier
+// CHECK: tt.return

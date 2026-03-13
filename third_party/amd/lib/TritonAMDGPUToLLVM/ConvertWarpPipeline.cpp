@@ -23,6 +23,7 @@
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -192,6 +193,10 @@ private:
         existingBarrierMap[currCluster] = &op;
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
         terminatorOp = &op;
+      } else if (triton::isPureScalarOp(&op)) {
+        // Tolerate pure scalar index arithmetic between stages.
+        // Loop unrolling introduces these for inter-iteration bookkeeping.
+        continue;
       } else { // Fail conversion if any other op found outside of the cluster.
         return failure();
       }
