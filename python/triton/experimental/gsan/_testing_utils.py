@@ -60,9 +60,9 @@ def thread_state_from_smid(smid: int, *, device_index: int | None = None):
 def shadow_tensor_for(real: torch.Tensor) -> torch.Tensor:
     shadow_ptr = shadow_cell_address(real.data_ptr())
     nbytes = real.untyped_storage().nbytes()
-    num_cells = (nbytes + SHADOW_GRANULARITY_BYTES - 1) // SHADOW_GRANULARITY_BYTES
+    num_cells = triton.cdiv(nbytes, SHADOW_GRANULARITY_BYTES)
     shadow_size = num_cells * SHADOW_CELL_SIZE_BYTES
-    return uint8_cuda_tensor_from_ptr(shadow_ptr, shadow_size, torch.cuda.current_device())
+    return uint8_cuda_tensor_from_ptr(shadow_ptr, shadow_size, real.device.index)
 
 
 @triton.jit

@@ -1990,8 +1990,8 @@ struct AtomicCASOpConversion
     auto scopeStr = StringRef(scope.value());
 
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
-    Value threadPred =
-        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred = emitRedundantThreadPredicateNonNull(
+        freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
 
     // atomic ops
