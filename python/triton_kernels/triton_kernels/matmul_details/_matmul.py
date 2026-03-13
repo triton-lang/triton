@@ -431,6 +431,7 @@ def _matmul(
     acc = acc + bias[None, :] * betas[:, None]
     if out_alpha is not None:
         acc *= out_alpha
+    acc *= gammas[:, None]
     if ACTIVATION_FN is not None:
         out = ACTIVATION_FN(acc, *activation_fn_args)
         tl.static_assert(out.shape[1] == OUT_BLOCK_N, f"Activation fn out.shape[1] ({out.shape[1]}) doesn't match computed OUT_BLOCK_N ({OUT_BLOCK_N})")
@@ -439,7 +440,6 @@ def _matmul(
     else:
         tl.static_assert(ACTIVATION_REDUCTION_N == 1, "Activation reduction must be 1 if no activation fn is provided")
         out = acc
-    out *= gammas[:, None]
     # write-back
     Y += start_z_out.to(index_type) * stride_y_z
     if WriteBackIndx is not None:
