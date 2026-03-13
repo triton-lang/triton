@@ -564,10 +564,7 @@ public:
                                 PatternRewriter &rewriter) const override {
     using TensorValue = TypedValue<RankedTensorType>;
     RankedTensorType oldRetType = dotOp.getType();
-    if (!oldRetType.getEncoding() ||
-        !isa<ttg::BlockedEncodingAttr>(oldRetType.getEncoding()))
-      return failure();
-    if (!isa_and_nonnull<BlockedEncodingAttr>(dotOp.getType().getEncoding()))
+    if (!isa_and_nonnull<BlockedEncodingAttr>(oldRetType.getEncoding()))
       return rewriter.notifyMatchFailure(
           dotOp, "expected blocked encoding result tensor");
 
@@ -729,9 +726,14 @@ public:
       // If a scaled mfma instruction is chosen, we will rewrite the DotOp to a
       // DotScaledOp.
       auto aScaledElemTy = mlirTypeToScaledElemType(aElemType);
+      if (failed(aScaledElemTy))
+        return rewriter.notifyMatchFailure(
+            dotOp, "failed to deduce scaled element type fo A");
+
       auto bScaledElemTy = mlirTypeToScaledElemType(bElemType);
-      if (failed(aScaledElemTy) || failed(bScaledElemTy))
-        return failure();
+      if (failed(bScaledElemTy))
+        return rewriter.notifyMatchFailure(
+            dotOp, "failed to deduce scaled element type fo A");
 
       assert(kWidth == 32);
       auto newAEncoding =
@@ -786,7 +788,8 @@ public:
                                 PatternRewriter &rewriter) const override {
     // TODO: add support for m/n packed formats.
     if (!dotOp.getLhsKPack() || !dotOp.getRhsKPack())
-      return failure();
+      return rewriter.notifyMatchFailure(
+          dotOp, "missing KPack attribute on LHS or RHS operand");
     using TensorValue = TypedValue<RankedTensorType>;
 
     RankedTensorType oldRetType = dotOp.getType();
@@ -1560,7 +1563,8 @@ public:
     auto oldRetType = cast<RankedTensorType>(dotOp.getResult().getType());
     auto oldRetEncoding = oldRetType.getEncoding();
     if (!oldRetEncoding || !isa<ttg::BlockedEncodingAttr>(oldRetEncoding))
-      return failure();
+      return rewriter.notifyMatchFailure(
+          dotOp, "expected `BlockedEncodingAttr` for the result type");
 
     auto oldAType = cast<RankedTensorType>(a.getType());
     auto oldBType = cast<RankedTensorType>(b.getType());
@@ -1571,7 +1575,8 @@ public:
     // get operand types
     auto operandTypes = getOperandTypesForWmmaOp(rewriter, dotOp, wmmaVersion);
     if (operandTypes.empty())
-      return failure();
+      return rewriter.notifyMatchFailure(
+          dotOp, "failed to get operands types for wmma op");
 
     auto kDimTensor = aShape.back();
     if (kDimTensor == 1) {
