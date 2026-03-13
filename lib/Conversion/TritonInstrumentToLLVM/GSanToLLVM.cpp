@@ -27,6 +27,10 @@ static constexpr StringLiteral kGSanLoadTensorRuntimeFn =
     "__triton_gsan_load_tensor";
 static constexpr StringLiteral kGSanStoreTensorRuntimeFn =
     "__triton_gsan_store_tensor";
+static constexpr StringLiteral kGSanAtomicBeginRuntimeFn =
+    "__triton_gsan_atomic_begin_scalar";
+static constexpr StringLiteral kGSanAtomicEndRuntimeFn =
+    "__triton_gsan_atomic_end_scalar";
 static constexpr StringLiteral kGSanInitRuntimeFn = "__triton_gsan_init";
 static constexpr StringLiteral kGSanGlobalStateArgAttr =
     "tti.gsan_global_state";
@@ -42,14 +46,29 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
   SmallVector<Type> argTys;
   if (funcName == kGSanInitRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty};
-  } else {
+  } else if (funcName == kGSanLoadTensorRuntimeFn ||
+             funcName == kGSanStoreTensorRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanAtomicBeginRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i64_ty, i32_ty,
+              i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanAtomicEndRuntimeFn) {
+    argTys = {ptr_ty(ctx), i32_ty, i32_ty, i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
+  } else {
+    llvm_unreachable("unexpected GSan runtime symbol");
   }
   auto funcTy = LLVM::LLVMFunctionType::get(void_ty(ctx), argTys);
   RewriterBase::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(moduleOp.getBody());
   return LLVM::LLVMFuncOp::create(rewriter, UnknownLoc::get(ctx), funcName,
                                   funcTy);
+}
+
+LLVM::LLVMStructType
+getGSanAtomicEventStateType(ConversionPatternRewriter &rewriter) {
+  auto *ctx = rewriter.getContext();
+  return LLVM::LLVMStructType::getLiteral(
+      ctx, {ptr_ty(ctx), array_ty(ptr_ty(ctx), 3), i8_ty});
 }
 
 FileLineColLoc extractSourceLocation(Location loc) {
@@ -136,6 +155,103 @@ void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
   b.call(runtimeFunc,
          ValueRange{gsanGlobalStatePtr, argsPtr, b.i32_val(ptrElems.size()),
                     b.i32_val(bytesPerElem), sourceLoc.file, sourceLoc.line});
+}
+
+void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
+                   int numCTAs, const TargetInfoBase &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (numCTAs == 1) {
+    b.barrier(ttg::AddrSpace::Local);
+  } else {
+    targetInfo.clusterBarrier(loc, rewriter);
+  }
+}
+
+unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
+  return index & ~freeVarMask;
+}
+
+Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
+                                  Value resultVal,
+                                  ConversionPatternRewriter &rewriter,
+                                  TritonLLVMOpBuilder &b, Value threadPred,
+                                  const TargetInfoBase &targetInfo) {
+  if (!op->hasAttr("allocation.offset"))
+    return resultVal;
+
+  auto loc = op->getLoc();
+  Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+  targetInfo.storeShared(rewriter, loc, smemBase, resultVal, threadPred);
+  b.barrier(ttg::AddrSpace::Local);
+  return targetInfo.loadShared(rewriter, loc, smemBase, valueElemTy,
+                               b.true_val());
+}
+
+std::string getRegisterSizeCode(int size, bool isFloat) {
+  switch (size) {
+  case 1:
+    return isFloat ? "h" : "c";
+  case 8:
+    return isFloat ? "h" : "h";
+  case 16:
+    return isFloat ? "h" : "h";
+  case 32:
+    return isFloat ? "f" : "r";
+  case 64:
+    return isFloat ? "d" : "l";
+  default:
+    llvm::report_fatal_error("Unsupported register size");
+  }
+}
+
+Value materializeI32Bool(ConversionPatternRewriter &rewriter,
+                         TritonLLVMOpBuilder &b, Value pred) {
+  return b.zext(i32_ty, pred);
+}
+
+void emitGSanAtomicBeginCall(ConversionPatternRewriter &rewriter, Location loc,
+                             Value gsanGlobalStatePtr, Value eventStatePtr,
+                             Value pred, Value ptr, int32_t bytesPerElem,
+                             int32_t sem, int32_t scope,
+                             GSanSourceLocation sourceLoc) {
+  auto *ctx = rewriter.getContext();
+  TritonLLVMOpBuilder b(loc, rewriter);
+  if (gsanGlobalStatePtr.getType() != ptr_ty(ctx))
+    gsanGlobalStatePtr = b.addrspacecast(ptr_ty(ctx), gsanGlobalStatePtr);
+  Value statePtr = b.bitcast(eventStatePtr, ptr_ty(ctx));
+  auto runtimeFunc =
+      getOrCreateGSanRuntimeFunction(rewriter, kGSanAtomicBeginRuntimeFn);
+  b.call(runtimeFunc,
+         ValueRange{gsanGlobalStatePtr, statePtr,
+                    materializeI32Bool(rewriter, b, pred),
+                    b.ptrtoint(i64_ty, ptr), b.i32_val(bytesPerElem),
+                    b.i32_val(sem), b.i32_val(scope), sourceLoc.file,
+                    sourceLoc.line});
+}
+
+void emitGSanAtomicEndCall(ConversionPatternRewriter &rewriter, Location loc,
+                           Value eventStatePtr, Value pred, Value didWrite,
+                           int32_t sem, int32_t scope,
+                           GSanSourceLocation sourceLoc) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  auto runtimeFunc =
+      getOrCreateGSanRuntimeFunction(rewriter, kGSanAtomicEndRuntimeFn);
+  Value statePtr = b.bitcast(eventStatePtr, ptr_ty(rewriter.getContext()));
+  b.call(runtimeFunc,
+         ValueRange{statePtr, materializeI32Bool(rewriter, b, pred),
+                    materializeI32Bool(rewriter, b, didWrite), b.i32_val(sem),
+                    b.i32_val(scope), sourceLoc.file, sourceLoc.line});
+}
+
+Value bitcastToScalarInt(ConversionPatternRewriter &rewriter, Location loc,
+                         Value value) {
+  Type ty = value.getType();
+  if (ty.isInteger())
+    return value;
+  auto intTy =
+      IntegerType::get(rewriter.getContext(), ty.getIntOrFloatBitWidth());
+  TritonLLVMOpBuilder b(loc, rewriter);
+  return b.bitcast(value, intTy);
 }
 
 Value getGSanGlobalStateArg(FunctionOpInterface funcOp) {
@@ -256,6 +372,280 @@ public:
   }
 };
 
+struct GSanAtomicRMWOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanAtomicRMWOp> {
+public:
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalGSanAtomicRMWOp>::ConvertOpToLLVMPattern;
+  const TargetInfoBase *targetInfo;
+
+  GSanAtomicRMWOpConversion(LLVMTypeConverter &typeConverter,
+                            const TargetInfoBase &targetInfo,
+                            PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanAtomicRMWOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto *ctx = rewriter.getContext();
+    Location loc = op.getLoc();
+    auto func = op->getParentOfType<FunctionOpInterface>();
+    Value gsanGlobalStatePtr = getGSanGlobalStateArg(func);
+    if (!gsanGlobalStatePtr)
+      return emitError(op.getLoc(), "Failed to find pointer to gsan state");
+
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    assert(moduleOp && "Parent ModuleOp not found for atomic op");
+    auto rmwOp = static_cast<tt::RMWOp>(
+        cast<IntegerAttr>(op->getAttr("atomic_rmw_op")).getInt());
+    auto sem = static_cast<tt::MemSemantic>(
+        cast<IntegerAttr>(op->getAttr("sem")).getInt());
+    auto scope = static_cast<tt::MemSyncScope>(
+        cast<IntegerAttr>(op->getAttr("scope")).getInt());
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value llPtr = adaptor.getPtr();
+    Value llVal = adaptor.getVal();
+    Value llMask = adaptor.getMask();
+
+    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
+    auto valElements = unpackLLElements(loc, llVal, rewriter);
+    SmallVector<Value> maskElements;
+    if (llMask)
+      maskElements = unpackLLElements(loc, llMask, rewriter);
+
+    auto valueTy = op.getType();
+    auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
+    Type valueElemTy =
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
+                 : getTypeConverter()->convertType(valueTy);
+    unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
+    int32_t bytesPerElem = std::max<int32_t>(1, valueElemNBits / 8);
+    auto elemsPerThread = ttg::getTotalElemsPerThread(op.getVal().getType());
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, *targetInfo);
+    uint32_t regMask = freeVarMasks.lookup(str_attr("reg"));
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto eventStateTy = getGSanAtomicEventStateType(rewriter);
+    Value eventState = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
+                                              eventStateTy, b.i32_val(1),
+                                              /*alignment=*/0);
+
+    SmallVector<Value> resultVals(elemsPerThread);
+
+    for (size_t i = 0; i < elemsPerThread; ++i) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
+        resultVals[i] = resultVals[canonicalStart];
+        continue;
+      }
+
+      Value pred =
+          llMask ? ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i])
+                 : threadPred;
+      Value rmwPtr = ptrElements[i];
+      Value rmwVal = valElements[i];
+
+      emitGSanAtomicBeginCall(rewriter, loc, gsanGlobalStatePtr, eventState,
+                              pred, rmwPtr, bytesPerElem,
+                              static_cast<int32_t>(sem),
+                              static_cast<int32_t>(scope), sourceLoc);
+
+      PTXBuilder ptxBuilderAtomicRMW;
+      std::string tyId = getRegisterSizeCode(valueElemNBits, false);
+      auto *dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true);
+      auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(rmwPtr, "l");
+      auto *valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
+      auto scopeStr = stringifyMemSyncScope(scope).str();
+      auto &atom = ptxBuilderAtomicRMW.create("atom")->global().o(scopeStr);
+      auto rmwOpName = stringifyRMWOp(rmwOp).str();
+      auto sBits = std::to_string(valueElemNBits);
+      std::string sTy;
+      switch (rmwOp) {
+      case tt::RMWOp::AND:
+      case tt::RMWOp::OR:
+      case tt::RMWOp::XOR:
+      case tt::RMWOp::XCHG:
+        sTy = "b" + sBits;
+        break;
+      case tt::RMWOp::ADD:
+        sTy = "u" + sBits;
+        break;
+      case tt::RMWOp::FADD:
+        rmwOpName = "add";
+        rmwOpName += (valueElemNBits == 16 ? ".noftz" : "");
+        sTy = (valueElemTy.isBF16() ? "bf" : "f") + sBits;
+        break;
+      case tt::RMWOp::MAX:
+      case tt::RMWOp::MIN:
+        sTy = "s" + sBits;
+        break;
+      case tt::RMWOp::UMAX:
+        rmwOpName = "max";
+        sTy = "u" + sBits;
+        break;
+      case tt::RMWOp::UMIN:
+        rmwOpName = "min";
+        sTy = "u" + sBits;
+        break;
+      default:
+        return failure();
+      }
+      std::string semStr;
+      llvm::raw_string_ostream os(semStr);
+      os << sem;
+      atom.o(semStr).o(rmwOpName).o(sTy);
+      atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
+      Value old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
+
+      emitGSanAtomicEndCall(rewriter, loc, eventState, pred, pred,
+                            static_cast<int32_t>(sem),
+                            static_cast<int32_t>(scope), sourceLoc);
+      resultVals[i] = old;
+    }
+
+    if (op.getResult().use_empty()) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    if (!tensorTy) {
+      Value scalarResult = broadcastScalarAtomicResult(
+          op, valueElemTy, resultVals[0], rewriter, b, threadPred, *targetInfo);
+      rewriter.replaceOp(op, {scalarResult});
+      return success();
+    }
+
+    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
+                                b, threadPred, *targetInfo, getTypeConverter());
+    return success();
+  }
+};
+
+struct GSanAtomicCASOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanAtomicCASOp> {
+public:
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalGSanAtomicCASOp>::ConvertOpToLLVMPattern;
+  const TargetInfoBase *targetInfo;
+
+  GSanAtomicCASOpConversion(LLVMTypeConverter &typeConverter,
+                            const TargetInfoBase &targetInfo,
+                            PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanAtomicCASOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto *ctx = rewriter.getContext();
+    Location loc = op.getLoc();
+    auto func = op->getParentOfType<FunctionOpInterface>();
+    Value gsanGlobalStatePtr = getGSanGlobalStateArg(func);
+    if (!gsanGlobalStatePtr)
+      return emitError(op.getLoc(), "Failed to find pointer to gsan state");
+
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    assert(moduleOp && "Parent ModuleOp not found for atomic op");
+    auto sem = static_cast<tt::MemSemantic>(
+        cast<IntegerAttr>(op->getAttr("sem")).getInt());
+    auto scope = static_cast<tt::MemSyncScope>(
+        cast<IntegerAttr>(op->getAttr("scope")).getInt());
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value llPtr = adaptor.getPtr();
+    Value llCmp = adaptor.getCmp();
+    Value llVal = adaptor.getVal();
+
+    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
+    auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
+    auto valElements = unpackLLElements(loc, llVal, rewriter);
+
+    auto valueTy = op.getType();
+    auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
+    Type valueElemTy =
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
+                 : getTypeConverter()->convertType(valueTy);
+    unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
+    int32_t bytesPerElem = std::max<int32_t>(1, valueElemNBits / 8);
+    auto elemsPerThread = ttg::getTotalElemsPerThread(op.getVal().getType());
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, *targetInfo);
+    uint32_t regMask = freeVarMasks.lookup(str_attr("reg"));
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto eventStateTy = getGSanAtomicEventStateType(rewriter);
+    Value eventState = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
+                                              eventStateTy, b.i32_val(1),
+                                              /*alignment=*/0);
+
+    SmallVector<Value> resultVals(elemsPerThread);
+
+    for (size_t i = 0; i < elemsPerThread; ++i) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
+        resultVals[i] = resultVals[canonicalStart];
+        continue;
+      }
+
+      Value pred = threadPred;
+      Value casPtr = ptrElements[i];
+      Value casCmp = cmpElements[i];
+      Value casVal = valElements[i];
+
+      emitGSanAtomicBeginCall(rewriter, loc, gsanGlobalStatePtr, eventState,
+                              pred, casPtr, bytesPerElem,
+                              static_cast<int32_t>(sem),
+                              static_cast<int32_t>(scope), sourceLoc);
+
+      PTXBuilder ptxBuilderAtomicCAS;
+      std::string tyId =
+          valueElemNBits == 64 ? "l" : (valueElemNBits == 32 ? "r" : "h");
+      auto *dstOpr = ptxBuilderAtomicCAS.newOperand("=" + tyId, /*init=*/true);
+      auto *ptrOpr = ptxBuilderAtomicCAS.newAddrOperand(casPtr, "l");
+      auto *cmpOpr = ptxBuilderAtomicCAS.newOperand(casCmp, tyId);
+      auto *valOpr = ptxBuilderAtomicCAS.newOperand(casVal, tyId);
+      auto &atom = *ptxBuilderAtomicCAS.create("atom");
+      auto sTy = "b" + std::to_string(valueElemNBits);
+      std::string semStr;
+      llvm::raw_string_ostream os(semStr);
+      os << sem;
+      auto scopeStr = stringifyMemSyncScope(scope).str();
+      atom.global().o(semStr).o(scopeStr).o("cas").o(sTy);
+      atom(dstOpr, ptrOpr, cmpOpr, valOpr).maybePredicate(pred);
+      Value old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
+
+      auto oldInt = bitcastToScalarInt(rewriter, loc, old);
+      auto cmpInt = bitcastToScalarInt(rewriter, loc, casCmp);
+      Value didWrite = LLVM::ICmpOp::create(
+          rewriter, loc, i1_ty, LLVM::ICmpPredicate::eq, oldInt, cmpInt);
+      didWrite = ttg::maybeAnd(rewriter, loc, pred, didWrite);
+      emitGSanAtomicEndCall(rewriter, loc, eventState, pred, didWrite,
+                            static_cast<int32_t>(sem),
+                            static_cast<int32_t>(scope), sourceLoc);
+      resultVals[i] = old;
+    }
+
+    if (op.getResult().use_empty()) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    if (!tensorTy) {
+      Value scalarResult = broadcastScalarAtomicResult(
+          op, valueElemTy, resultVals[0], rewriter, b, threadPred, *targetInfo);
+      rewriter.replaceOp(op, {scalarResult});
+      return success();
+    }
+
+    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
+                                b, threadPred, *targetInfo, getTypeConverter());
+    return success();
+  }
+};
+
 struct GSanTensorDescInfoOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalGSanTensorDescInfoOp> {
 public:
@@ -339,5 +729,7 @@ void mlir::triton::populateGSanToLLVMPatterns(
     const TargetInfoBase &targetInfo) {
   patterns.add<GSanInitOpConversion>(typeConverter);
   patterns.add<GSanTensorDescInfoOpConversion>(typeConverter);
+  patterns.add<GSanAtomicCASOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanAtomicRMWOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanTensorAccessOpConversion>(typeConverter, targetInfo);
 }
