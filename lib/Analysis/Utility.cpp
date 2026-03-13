@@ -806,7 +806,7 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
   // involves decomposing the permutation into three linear transformations,
   // with the first and third transformations expressible as tiles of prmt
   // instructions. The effect of (rN r0) is to permute the values of the
-  // default selectors, 0x7654 and 0x3210, viewing N as bit 3 of the values.
+  // default selectors, 0x7654 and 0x3210, viewing N as bit 2 of the values.
   //
   // This rewrite does not address the presence of intra-register bits in pReg,
   // which often causes extra instructions to be generated. The goal of this
@@ -837,11 +837,10 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
   //
   // The selector algorithm processes transpositions sequentially, excising
   // intra-register bits from pReg or conjugating mixed transpositions by higher
-  // "partner" register bits as in the example. Conjugation corresponds applying
-  // selector modifiers to both the pre- and post-shuffle prmts, while excision
-  // only applies modifiers to pre-shuffle prmt selector masks. The algorithm
-  // reorders the input list of transpositions to ensure this (partial) order is
-  // respected.
+  // "partner" register bits as in the example. In noncommutative cases, we
+  // reorder the transposition list to produce the factorization which places
+  // low-bit modifiers responsible for the ordering constraint on the
+  // pre-shuffle side.
 
   auto permuteSelector = [nPack](uint16_t sel, int bitIdx) {
     // Swap bit 2 and bit `lo` of the nibbles in `sel`.
@@ -879,11 +878,9 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     int curr = p.first;
     do {
       if (curr >= nPack)
-        return curr == p.first || !pairedRegBits.contains(curr);
-      else if (pairedRegBits.contains(next(curr)))
-        return false;
+        return true;
       curr = next(curr);
-    } while (curr != p.first);
+    } while (!pairedRegBits.contains(curr));
     return false;
   };
   std::stable_partition(mixedTranspositions.begin(), mixedTranspositions.end(),
@@ -929,8 +926,10 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
       currBit = next(currBit);
     } while (currBit != rBit);
 
-    // Find any low register bits adjacent to the excised lane bits which aren't
-    // used in other mixed transpositions.
+    // Walk forward and backward along the current `cycle` from `rBit` until we
+    // reach a boundary (either a high bit or a different paired low bit). The
+    // low-bit segment on the forward side becomes the post-shuffle selector
+    // modifiers, while those on the backward side become pre-shuffle modifiers.
     auto isBoundary = [&](int bit) {
       return bit >= nPack || (pairedRegBits.contains(bit) && bit != rBit);
     };
@@ -938,6 +937,8 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     auto backwardEnd = std::find_if(cycle.rbegin(), cycle.rend(), isBoundary);
     SmallVector<int> postShufLoBits(cycle.begin(), forwardEnd);
     SmallVector<int> preShufLoBits(cycle.rbegin(), backwardEnd);
+    // We slice out a segment of low bits (.. `tail` .. `head` ..) from pReg by
+    // setting `tail` -> `head` and fixing the low bits in between.
     int head;
     int tail;
     int partnerBit = -1;
@@ -945,9 +946,9 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     // Determine selector modifiers and low bit excision from pReg.
     if (forwardEnd == cycle.end()) {
       // Isolated low bits with single mixed transposition. E.g. (l0 r0 r1)
-      if (postShufLoBits.size() == 2)
+      if (cycle.size() == 2)
         postShufLoBits.pop_back();
-      head = tail = preShufLoBits.front();
+      head = tail = cycle.back();
     } else if (*forwardEnd < nPack) {
       // End at a different paired low bit. E.g. (l0 r0 l1 r1)
       head = rBit;
