@@ -1067,6 +1067,8 @@ and syncronize both CTAs if the op is synchronous.</p>
 <p>This operation takes and produces an optional token to indicate TMEM read
 and write on its accumulator operand. When the tokens are present, they can
 be used to check aliasing and modref on the accumulator memory.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">isUnsigned</span></code> attribute is only relevant when performing an integer MMA operation.
+If true, the integer values are treated as unsigned, otherwise they are treated as signed.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MMAv5OpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id30">
@@ -1076,6 +1078,7 @@ be used to check aliasing and modref on the accumulator memory.</p>
 <tr><td><code>is_async</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 <tr><td><code>two_ctas</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 <tr><td><code>multicast</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+<tr><td><code>is_unsigned</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 </section>
 <section id="id31">
