@@ -385,7 +385,6 @@ def test_trace(tmp_path: pathlib.Path):
         assert events[3]["cat"] == "sub_kernel"
 
 
-@pytest.mark.skip(reason="WIP: instrumentation trace_mode='kernel' currently emits empty trace output")
 def test_trace_kernel_timing(tmp_path: pathlib.Path):
 
     @triton.jit
