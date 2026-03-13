@@ -820,6 +820,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   }
   profiler.periodicFlushingEnabled = false;
   profiler.periodicFlushingFormat.clear();
+  profiler.correlation.clear();
   setGraphCallbacks(subscriber, /*enable=*/false);
   setLaunchCallbacks(subscriber, /*enable=*/false);
   nvtx::disable();

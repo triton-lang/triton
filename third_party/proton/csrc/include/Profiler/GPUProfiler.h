@@ -218,6 +218,13 @@ protected:
         --retries;
       }
     }
+
+    void clear() {
+      corrIdToExternId = CorrIdToExternIdMap();
+      externIdToState = ExternIdToStateMap();
+      maxCompletedCorrelationId.store(0);
+      maxSubmittedCorrelationId.store(0);
+    }
   };
 
   static thread_local ThreadState threadState;
