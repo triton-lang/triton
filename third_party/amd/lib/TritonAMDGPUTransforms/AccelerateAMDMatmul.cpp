@@ -247,8 +247,6 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
                                                int mfmaVersion, int nonKDim) {
-  using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
-
   auto ctx = dot.getContext();
   int64_t inputKDim = dot.getA().getType().getShape().back();
   if (dot.getAElemType() == ScaleDotElemType::E2M1 && dot.getLhsKPack()) {
@@ -256,8 +254,8 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
     // need to multiply it by 2.
     inputKDim *= 2;
   }
-  Type aElemType = scaleDotElemTypeToMLIRType(ctx, dot.getAElemType());
-  Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getBElemType());
+  Type aElemType = dot.getAElemMLIRType();
+  Type bElemType = dot.getBElemMLIRType();
   return chooseMfmaInstruction(dot.getLoc(), mfmaVersion, dot.getC().getType(),
                                aElemType, bElemType, inputKDim, nonKDim,
                                /*withScale=*/true, /*allowXF32=*/false);
@@ -806,8 +804,15 @@ public:
 
     ScaleDotElemType aElemType = dotOp.getAElemType();
     ScaleDotElemType bElemType = dotOp.getBElemType();
-    if (!isF16F8F4(aElemType) || !isF16F8F4(bElemType))
-      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6 operand");
+    auto supportsTypes = [](ScaleDotElemType elemType) {
+      return elemType == ScaleDotElemType::E2M1 ||
+             elemType == ScaleDotElemType::E4M3 ||
+             elemType == ScaleDotElemType::E5M2 ||
+             elemType == ScaleDotElemType::BF16 ||
+             elemType == ScaleDotElemType::FP16;
+    };
+    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
+      return rewriter.notifyMatchFailure(dotOp, "unknown operand type");
 
     MLIRContext *ctx = dotOp.getContext();
     auto moduleOp = dotOp->getParentOfType<ModuleOp>();
@@ -1084,12 +1089,14 @@ public:
     ScaleDotElemType bElemType = dotOp.getBElemType();
     auto supportsTypes = [](ScaleDotElemType elemType) {
       return elemType == ScaleDotElemType::E2M1 ||
+             elemType == ScaleDotElemType::E3M2 ||
+             elemType == ScaleDotElemType::E2M3 ||
              elemType == ScaleDotElemType::E4M3 ||
              elemType == ScaleDotElemType::E5M2;
     };
 
     if (!supportsTypes(aElemType) || !supportsTypes(bElemType)) {
-      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6");
+      return rewriter.notifyMatchFailure(dotOp, "unknown operand type");
     }
 
     bool bothScalesAbsent = !aScale && !bScale;
@@ -1142,11 +1149,24 @@ public:
     auto order = ttg::getMatrixOrder(rank, /*rowMajor=*/true);
     auto standardOutDims = standardOutDimNames(ctx, rank);
 
-    // For the mfma_scale_f32_*_f8f6f4 instructions, each thread consumes 32
-    // elements. But since two fp4 elements are packed into one int8, the
-    // kWidth is 16 for fp4.
     const unsigned kWidth = kBase;
     assert(kWidth == 32);
+
+    auto selectKWidthForDotOperand = [kWidth](ScaleDotElemType elemType) {
+      // For the mfma_scale_f32_*_f8f6f4 instructions
+      if (elemType == ScaleDotElemType::E3M2 ||
+          elemType == ScaleDotElemType::E2M3)
+        // Regarding fp6, there is a single 32-element consecutive group along
+        // K-dim
+        return kWidth;
+      else
+        // Regarding fp8, there are two 16-element consecutive groups
+        // distributed along K-dim. Regarding fp4, there is a single 32-element
+        // consecutive group along K-dim But since two fp4 elements are packed
+        // into one int8; thus the kWidth is halved for fp4.
+        return kWidth / 2;
+    };
+
     using basisT = std::vector<std::vector<int32_t>>;
 
     auto aShape = a.getType().getShape();
@@ -1158,8 +1178,9 @@ public:
                                   unsigned opIdx) -> TensorValue {
       auto vType = v.getType();
 
-      auto newEnc =
-          DotOperandEncodingAttr::get(ctx, opIdx, mfmaEnc, kWidth / 2);
+      const ScaleDotElemType elemType = opIdx == 0 ? aElemType : bElemType;
+      auto newEnc = DotOperandEncodingAttr::get(
+          ctx, opIdx, mfmaEnc, selectKWidthForDotOperand(elemType));
 
       bool kPacked = opIdx == 0 ? dotOp.getLhsKPack() : dotOp.getRhsKPack();
       if (kPacked == false) {

@@ -419,6 +419,36 @@ int32_t DotScaledOp::deduceScaleFactor() {
   return scaleFactor;
 }
 
+static Type getScaleDotElemMLIRType(ScaleDotElemType type, MLIRContext *ctx) {
+  switch (type) {
+  case ScaleDotElemType::E2M1:
+    return mlir::Float4E2M1FNType::get(ctx);
+  case ScaleDotElemType::E2M3:
+    return mlir::Float6E2M3FNType::get(ctx);
+  case ScaleDotElemType::E3M2:
+    return mlir::Float6E3M2FNType::get(ctx);
+  case ScaleDotElemType::E4M3:
+    return mlir::Float8E4M3FNType::get(ctx);
+  case ScaleDotElemType::E5M2:
+    return mlir::Float8E5M2Type::get(ctx);
+  case ScaleDotElemType::BF16:
+    return mlir::BFloat16Type::get(ctx);
+  case ScaleDotElemType::FP16:
+    return mlir::Float16Type::get(ctx);
+  default:
+    llvm_unreachable("unsupported ScaleDotElemType!");
+  };
+  return nullptr;
+}
+
+Type DotScaledOp::getAElemMLIRType() {
+  return getScaleDotElemMLIRType(getAElemType(), getContext());
+}
+
+Type DotScaledOp::getBElemMLIRType() {
+  return getScaleDotElemMLIRType(getBElemType(), getContext());
+}
+
 //-- MakeRangeOp --
 OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   // make_range(start, start + 1) -> constant(start)

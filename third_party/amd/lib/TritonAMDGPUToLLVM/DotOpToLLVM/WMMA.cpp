@@ -584,10 +584,8 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
-  Type scaledAElemType =
-      LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getAElemType());
-  Type scaledBElemType =
-      LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getBElemType());
+  Type scaledAElemType = op.getAElemMLIRType();
+  Type scaledBElemType = op.getBElemMLIRType();
 
   unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
   // compute number of output elements that each thread holds for one WMMA
