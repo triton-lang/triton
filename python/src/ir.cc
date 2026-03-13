@@ -825,1051 +825,1026 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<TritonOpBuilder> TritonOpBuilderBinding =
       py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
-                                  py::dynamic_attr())
-          .def(py::init<MLIRContext *>())
-          .def("get_op_builder", &TritonOpBuilder::getBuilder, ret::reference)
-          // getters
-          .def("create_module",
-               [](TritonOpBuilder &self) -> ModuleOp {
-                 return self.create<ModuleOp>();
-               })
-          // insertion block/point
-          .def("set_insertion_point_to_start",
-               [](TritonOpBuilder &self, Block &block) -> void {
-                 self.setInsertionPointToStart(block);
-               })
-          .def("set_insertion_point_to_end",
-               [](TritonOpBuilder &self, Block &block) {
-                 self.setInsertionPointToEnd(block);
-               })
-          .def("set_insertion_point_after",
-               [](TritonOpBuilder &self, Operation &op) {
-                 self.setInsertionPointAfter(op);
-               })
-          .def(
-              "get_insertion_block",
-              [](TritonOpBuilder &self) -> Block * {
-                return self.getBuilder().getInsertionBlock();
-              },
-              ret::reference)
-          .def("get_insertion_point",
-               [](TritonOpBuilder &self) {
-                 return self.getBuilder().saveInsertionPoint();
-               })
-          .def("restore_insertion_point",
-               [](TritonOpBuilder &self, OpBuilder::InsertPoint pt) {
-                 self.restoreInsertionPoint(pt);
-               })
-          // Attr
-          .def("get_unit_attr",
-               [](TritonOpBuilder &self) {
-                 return self.getBuilder().getUnitAttr();
-               })
-          .def("get_bool_attr",
-               [](TritonOpBuilder &self, bool value) {
-                 return self.getBuilder().getBoolAttr(value);
-               })
-          .def("get_int32_attr",
-               [](TritonOpBuilder &self, int32_t value) {
-                 return self.getBuilder().getI32IntegerAttr(value);
-               })
-          .def("get_string_attr",
-               [](TritonOpBuilder &self, std::string value) -> Attribute {
-                 return self.getBuilder().getStringAttr(value);
-               })
-          .def("get_disable_loop_licm_attr",
-               [](TritonOpBuilder &self) -> Attribute {
-                 auto licmAttr = LLVM::LoopLICMAttr::get(
-                     self.getBuilder().getContext(),
-                     self.getBuilder().getBoolAttr(true),
-                     self.getBuilder().getBoolAttr(true));
-                 mlir::LLVM::LoopAnnotationAttr la =
-                     mlir::LLVM::LoopAnnotationAttr::get(
-                         self.getBuilder().getContext(), {}, {}, {}, {}, {},
-                         licmAttr, {}, {}, {}, {}, {}, {}, {}, {}, {});
-                 return la;
-               })
-          // Use arith.ConstantOp to create constants
-          // Constants
-          .def("get_int1",
-               [](TritonOpBuilder &self, bool v) -> Value {
-                 return Value(self.create<arith::ConstantIntOp>(
-                     self.getBuilder().getI1Type(), v));
-               })
-          .def("get_int8",
-               [](TritonOpBuilder &self, int64_t v) -> Value {
-                 return Value(self.create<arith::ConstantIntOp>(
-                     self.getBuilder().getI8Type(), v));
-               })
-          .def("get_int16",
-               [](TritonOpBuilder &self, int64_t v) -> Value {
-                 return Value(self.create<arith::ConstantIntOp>(
-                     self.getBuilder().getI16Type(), v));
-               })
-          .def("get_int32",
-               [](TritonOpBuilder &self, int64_t v) -> Value {
-                 return Value(self.create<arith::ConstantIntOp>(
-                     self.getBuilder().getI32Type(), v));
-               })
-          .def("get_int64",
-               [](TritonOpBuilder &self, int64_t v) -> Value {
-                 return Value(self.create<arith::ConstantIntOp>(
-                     self.getBuilder().getI64Type(), v));
-               })
-          .def("get_uint8",
-               [](TritonOpBuilder &self, uint64_t v) -> Value {
-                 return Value(self.create<arith::ConstantIntOp>(
-                     self.getBuilder().getI8Type(), v));
-               })
-          .def("get_uint16",
-               [](TritonOpBuilder &self, uint64_t v) -> Value {
-                 return Value(self.create<arith::ConstantIntOp>(
-                     self.getBuilder().getI16Type(), v));
-               })
-          .def("get_uint32",
-               [](TritonOpBuilder &self, uint64_t v) -> Value {
-                 return Value(self.create<arith::ConstantIntOp>(
-                     self.getBuilder().getI32Type(), v));
-               })
-          .def("get_uint64",
-               [](TritonOpBuilder &self, uint64_t v) -> Value {
-                 return Value(self.create<arith::ConstantIntOp>(
-                     self.getBuilder().getI64Type(), v));
-               })
-          .def("get_bf16",
-               [](TritonOpBuilder &self, float v) -> Value {
-                 auto type = self.getBuilder().getBF16Type();
-                 return self.create<arith::ConstantFloatOp>(
-                     type,
-                     APFloat(type.getFloatSemantics(), std::to_string(v)));
-               })
-          .def("get_fp16",
-               [](TritonOpBuilder &self, float v) -> Value {
-                 return self.create<arith::ConstantOp>(
-                     self.getBuilder().getF16FloatAttr(v));
-               })
-          .def("get_fp32",
-               [](TritonOpBuilder &self, float v) -> Value {
-                 return self.create<arith::ConstantOp>(
-                     self.getBuilder().getF32FloatAttr(v));
-               })
-          .def("get_fp64",
-               [](TritonOpBuilder &self, double v) -> Value {
-                 return self.create<arith::ConstantOp>(
-                     self.getBuilder().getF64FloatAttr(v));
-               })
-          .def("get_null_value",
-               [](TritonOpBuilder &self, Type type) -> Value {
-                 if (auto floatTy = dyn_cast<FloatType>(type))
-                   return self.create<arith::ConstantFloatOp>(
-                       floatTy, APFloat(floatTy.getFloatSemantics(), 0));
-                 else if (auto intTy = dyn_cast<IntegerType>(type))
-                   return self.create<arith::ConstantIntOp>(intTy, 0);
-                 else
-                   throw std::runtime_error("Not implemented");
-               })
-          .def("get_all_ones_value",
-               [](TritonOpBuilder &self, Type type) -> Value {
-                 uint64_t val = 0xFFFFFFFFFFFFFFFF;
-                 if (auto intTy = dyn_cast<IntegerType>(type))
-                   return self.create<arith::ConstantIntOp>(intTy, val);
-                 else
-                   throw std::runtime_error("Not implemented");
-               })
+                                  py::dynamic_attr());
+  TritonOpBuilderBinding.def(py::init<MLIRContext *>())
+      .def("get_op_builder", &TritonOpBuilder::getBuilder, ret::reference)
+      // getters
+      .def("create_module",
+           [](TritonOpBuilder &self) -> ModuleOp {
+             return self.create<ModuleOp>();
+           })
+      // insertion block/point
+      .def("set_insertion_point_to_start",
+           [](TritonOpBuilder &self, Block &block) -> void {
+             self.setInsertionPointToStart(block);
+           })
+      .def("set_insertion_point_to_end",
+           [](TritonOpBuilder &self, Block &block) {
+             self.setInsertionPointToEnd(block);
+           })
+      .def("set_insertion_point_after",
+           [](TritonOpBuilder &self, Operation &op) {
+             self.setInsertionPointAfter(op);
+           })
+      .def(
+          "get_insertion_block",
+          [](TritonOpBuilder &self) -> Block * {
+            return self.getBuilder().getInsertionBlock();
+          },
+          ret::reference)
+      .def("get_insertion_point",
+           [](TritonOpBuilder &self) {
+             return self.getBuilder().saveInsertionPoint();
+           })
+      .def("restore_insertion_point",
+           [](TritonOpBuilder &self, OpBuilder::InsertPoint pt) {
+             self.restoreInsertionPoint(pt);
+           })
+      // Attr
+      .def(
+          "get_unit_attr",
+          [](TritonOpBuilder &self) { return self.getBuilder().getUnitAttr(); })
+      .def("get_bool_attr",
+           [](TritonOpBuilder &self, bool value) {
+             return self.getBuilder().getBoolAttr(value);
+           })
+      .def("get_int32_attr",
+           [](TritonOpBuilder &self, int32_t value) {
+             return self.getBuilder().getI32IntegerAttr(value);
+           })
+      .def("get_string_attr",
+           [](TritonOpBuilder &self, std::string value) -> Attribute {
+             return self.getBuilder().getStringAttr(value);
+           })
+      .def("get_disable_loop_licm_attr",
+           [](TritonOpBuilder &self) -> Attribute {
+             auto licmAttr =
+                 LLVM::LoopLICMAttr::get(self.getBuilder().getContext(),
+                                         self.getBuilder().getBoolAttr(true),
+                                         self.getBuilder().getBoolAttr(true));
+             mlir::LLVM::LoopAnnotationAttr la =
+                 mlir::LLVM::LoopAnnotationAttr::get(
+                     self.getBuilder().getContext(), {}, {}, {}, {}, {},
+                     licmAttr, {}, {}, {}, {}, {}, {}, {}, {}, {});
+             return la;
+           })
+      // Use arith.ConstantOp to create constants
+      // Constants
+      .def("get_int1",
+           [](TritonOpBuilder &self, bool v) -> Value {
+             return Value(self.create<arith::ConstantIntOp>(
+                 self.getBuilder().getI1Type(), v));
+           })
+      .def("get_int8",
+           [](TritonOpBuilder &self, int64_t v) -> Value {
+             return Value(self.create<arith::ConstantIntOp>(
+                 self.getBuilder().getI8Type(), v));
+           })
+      .def("get_int16",
+           [](TritonOpBuilder &self, int64_t v) -> Value {
+             return Value(self.create<arith::ConstantIntOp>(
+                 self.getBuilder().getI16Type(), v));
+           })
+      .def("get_int32",
+           [](TritonOpBuilder &self, int64_t v) -> Value {
+             return Value(self.create<arith::ConstantIntOp>(
+                 self.getBuilder().getI32Type(), v));
+           })
+      .def("get_int64",
+           [](TritonOpBuilder &self, int64_t v) -> Value {
+             return Value(self.create<arith::ConstantIntOp>(
+                 self.getBuilder().getI64Type(), v));
+           })
+      .def("get_uint8",
+           [](TritonOpBuilder &self, uint64_t v) -> Value {
+             return Value(self.create<arith::ConstantIntOp>(
+                 self.getBuilder().getI8Type(), v));
+           })
+      .def("get_uint16",
+           [](TritonOpBuilder &self, uint64_t v) -> Value {
+             return Value(self.create<arith::ConstantIntOp>(
+                 self.getBuilder().getI16Type(), v));
+           })
+      .def("get_uint32",
+           [](TritonOpBuilder &self, uint64_t v) -> Value {
+             return Value(self.create<arith::ConstantIntOp>(
+                 self.getBuilder().getI32Type(), v));
+           })
+      .def("get_uint64",
+           [](TritonOpBuilder &self, uint64_t v) -> Value {
+             return Value(self.create<arith::ConstantIntOp>(
+                 self.getBuilder().getI64Type(), v));
+           })
+      .def("get_bf16",
+           [](TritonOpBuilder &self, float v) -> Value {
+             auto type = self.getBuilder().getBF16Type();
+             return self.create<arith::ConstantFloatOp>(
+                 type, APFloat(type.getFloatSemantics(), std::to_string(v)));
+           })
+      .def("get_fp16",
+           [](TritonOpBuilder &self, float v) -> Value {
+             return self.create<arith::ConstantOp>(
+                 self.getBuilder().getF16FloatAttr(v));
+           })
+      .def("get_fp32",
+           [](TritonOpBuilder &self, float v) -> Value {
+             return self.create<arith::ConstantOp>(
+                 self.getBuilder().getF32FloatAttr(v));
+           })
+      .def("get_fp64",
+           [](TritonOpBuilder &self, double v) -> Value {
+             return self.create<arith::ConstantOp>(
+                 self.getBuilder().getF64FloatAttr(v));
+           })
+      .def("get_null_value",
+           [](TritonOpBuilder &self, Type type) -> Value {
+             if (auto floatTy = dyn_cast<FloatType>(type))
+               return self.create<arith::ConstantFloatOp>(
+                   floatTy, APFloat(floatTy.getFloatSemantics(), 0));
+             else if (auto intTy = dyn_cast<IntegerType>(type))
+               return self.create<arith::ConstantIntOp>(intTy, 0);
+             else
+               throw std::runtime_error("Not implemented");
+           })
+      .def("get_all_ones_value",
+           [](TritonOpBuilder &self, Type type) -> Value {
+             uint64_t val = 0xFFFFFFFFFFFFFFFF;
+             if (auto intTy = dyn_cast<IntegerType>(type))
+               return self.create<arith::ConstantIntOp>(intTy, val);
+             else
+               throw std::runtime_error("Not implemented");
+           })
 
-          // Types
-          .def("get_void_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getNoneType();
-               })
-          .def("get_int1_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getI1Type();
-               }) // or ret::copy?
-          .def("get_int8_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getI8Type();
-               })
-          .def("get_int16_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getType<IntegerType>(16);
-               })
-          .def("get_int32_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getI32Type();
-               })
-          .def("get_int64_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getI64Type();
-               })
-          .def("get_int128_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getIntegerType(128);
-               })
-          .def("get_fp8e4nv_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getType<Float8E4M3FNType>();
-               })
-          .def("get_fp8e4b8_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getType<Float8E4M3FNUZType>();
-               })
-          .def("get_fp8e4b15_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getI8Type();
-               })
-          .def("get_fp8e5_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getType<Float8E5M2Type>();
-               })
-          .def("get_fp8e5b16_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getType<Float8E5M2FNUZType>();
-               })
-          .def("get_half_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getF16Type();
-               })
-          .def("get_bf16_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getBF16Type();
-               })
-          .def("get_float_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getF32Type();
-               })
-          .def("get_double_ty",
-               [](TritonOpBuilder &self) -> Type {
-                 return self.getBuilder().getF64Type();
-               })
-          .def("get_ptr_ty",
-               [](TritonOpBuilder &self, Type &type, int addrSpace) -> Type {
-                 return PointerType::get(type, addrSpace);
-               })
-          .def("get_block_ty",
-               [](TritonOpBuilder &self, Type &elementType,
-                  std::vector<int64_t> &shape) -> Type {
-                 return RankedTensorType::get(shape, elementType);
-               })
-          .def("get_function_ty",
-               [](TritonOpBuilder &self, std::vector<Type> inTypes,
-                  std::vector<Type> outTypes) -> Type {
-                 return self.getBuilder().getFunctionType(inTypes, outTypes);
-               })
-          // locs
-          .def("set_loc", [](TritonOpBuilder &self,
-                             Location loc) { self.setLastLoc(loc); })
-          .def("set_loc",
-               [](TritonOpBuilder &self, std::string name) {
-                 auto nameAttr = StringAttr::get(self.getContext(), name);
-                 auto loc = NameLoc::get(nameAttr);
-                 self.setLastLoc(loc);
-               })
-          .def("create_loc",
-               [](TritonOpBuilder &self, const std::string &fileName, int line,
-                  int column) -> Location {
-                 return mlir::FileLineColLoc::get(self.getContext(), fileName,
-                                                  line, column);
-               })
-          .def(
-              "create_name_loc",
-              [](TritonOpBuilder &self, std::string name,
-                 std::optional<Location> childLoc) -> Location {
-                auto nameAttr = StringAttr::get(self.getContext(), name);
-                if (childLoc)
-                  return NameLoc::get(nameAttr, *childLoc);
-                return NameLoc::get(nameAttr);
-              },
-              py::arg("name"), py::arg("child_loc") = py::none())
-          .def("set_loc",
-               [](TritonOpBuilder &self, const std::string &fileName, int line,
-                  int column) { self.setLastLoc(fileName, line, column); })
-          .def("get_loc",
-               [](TritonOpBuilder &self) -> Location {
-                 return self.getLastLoc();
-               })
+      // Types
+      .def("get_void_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getNoneType();
+           })
+      .def("get_int1_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getI1Type();
+           }) // or ret::copy?
+      .def("get_int8_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getI8Type();
+           })
+      .def("get_int16_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getType<IntegerType>(16);
+           })
+      .def("get_int32_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getI32Type();
+           })
+      .def("get_int64_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getI64Type();
+           })
+      .def("get_int128_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getIntegerType(128);
+           })
+      .def("get_fp8e4nv_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getType<Float8E4M3FNType>();
+           })
+      .def("get_fp8e4b8_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getType<Float8E4M3FNUZType>();
+           })
+      .def("get_fp8e4b15_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getI8Type();
+           })
+      .def("get_fp8e5_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getType<Float8E5M2Type>();
+           })
+      .def("get_fp8e5b16_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getType<Float8E5M2FNUZType>();
+           })
+      .def("get_half_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getF16Type();
+           })
+      .def("get_bf16_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getBF16Type();
+           })
+      .def("get_float_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getF32Type();
+           })
+      .def("get_double_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getF64Type();
+           })
+      .def("get_ptr_ty",
+           [](TritonOpBuilder &self, Type &type, int addrSpace) -> Type {
+             return PointerType::get(type, addrSpace);
+           })
+      .def("get_block_ty",
+           [](TritonOpBuilder &self, Type &elementType,
+              std::vector<int64_t> &shape) -> Type {
+             return RankedTensorType::get(shape, elementType);
+           })
+      .def("get_function_ty",
+           [](TritonOpBuilder &self, std::vector<Type> inTypes,
+              std::vector<Type> outTypes) -> Type {
+             return self.getBuilder().getFunctionType(inTypes, outTypes);
+           })
+      // locs
+      .def("set_loc",
+           [](TritonOpBuilder &self, Location loc) { self.setLastLoc(loc); })
+      .def("set_loc",
+           [](TritonOpBuilder &self, std::string name) {
+             auto nameAttr = StringAttr::get(self.getContext(), name);
+             auto loc = NameLoc::get(nameAttr);
+             self.setLastLoc(loc);
+           })
+      .def("create_loc",
+           [](TritonOpBuilder &self, const std::string &fileName, int line,
+              int column) -> Location {
+             return mlir::FileLineColLoc::get(self.getContext(), fileName, line,
+                                              column);
+           })
+      .def(
+          "create_name_loc",
+          [](TritonOpBuilder &self, std::string name,
+             std::optional<Location> childLoc) -> Location {
+            auto nameAttr = StringAttr::get(self.getContext(), name);
+            if (childLoc)
+              return NameLoc::get(nameAttr, *childLoc);
+            return NameLoc::get(nameAttr);
+          },
+          py::arg("name"), py::arg("child_loc") = py::none())
+      .def("set_loc",
+           [](TritonOpBuilder &self, const std::string &fileName, int line,
+              int column) { self.setLastLoc(fileName, line, column); })
+      .def("get_loc",
+           [](TritonOpBuilder &self) -> Location { return self.getLastLoc(); })
 
-          // Ops
-          .def("get_or_insert_function",
-               [](TritonOpBuilder &self, ModuleOp &module,
-                  std::string &funcName, Type &funcType,
-                  std::string &visibility, bool noinline) -> FuncOp {
-                 if (Operation *funcOperation = module.lookupSymbol(funcName))
-                   return llvm::dyn_cast<FuncOp>(funcOperation);
-                 if (auto funcTy = dyn_cast<FunctionType>(funcType)) {
-                   llvm::SmallVector<NamedAttribute> attrs = {
-                       NamedAttribute(
-                           self.getBuilder().getStringAttr("sym_visibility"),
-                           self.getBuilder().getStringAttr(visibility)),
-                       NamedAttribute(
-                           self.getBuilder().getStringAttr("noinline"),
-                           self.getBuilder().getBoolAttr(noinline))};
-                   return self.create<FuncOp>(funcName, funcTy, attrs);
-                 }
-                 throw std::invalid_argument("invalid function type");
-               })
-          .def(
-              "create_block",
-              [](TritonOpBuilder &self)
-                  -> Block
-                      * {
-                        Region *parent =
-                            self.getBuilder().getBlock()->getParent();
-                        return self.getBuilder().createBlock(parent);
-                      },
-              ret::reference)
-          .def(
-              "create_block_with_parent",
-              [](TritonOpBuilder &self, Region &parent,
-                 std::vector<Type> &argTypes) -> Block * {
-                // TODO: update arg loc
-                auto loc = self.getBuilder().getUnknownLoc();
-                llvm::SmallVector<Location, 8> argLocs(argTypes.size(), loc);
-                return self.getBuilder().createBlock(&parent, {}, argTypes,
-                                                     argLocs);
-              },
-              ret::reference)
-          .def(
-              "new_block",
-              [](TritonOpBuilder &self) -> Block * { return new Block(); },
-              ret::reference)
-          // Function
-          .def("ret",
-               [](TritonOpBuilder &self, std::vector<Value> &vals) -> OpState {
-                 return self.create<ReturnOp>(vals);
-               })
-          .def("call",
-               [](TritonOpBuilder &self, FuncOp &func, std::vector<Value> &args)
-                   -> OpState { return self.create<CallOp>(func, args); })
-          // Unstructured control flow
-          .def("create_cond_branch",
-               [](TritonOpBuilder &self, Value condition, Block *trueDest,
-                  Block *falseDest) -> OpState {
-                 return self.create<cf::CondBranchOp>(condition, trueDest,
-                                                      falseDest);
-               })
-          .def("create_branch",
-               [](TritonOpBuilder &self, Block *dest, std::vector<Value> &args)
-                   -> OpState { return self.create<cf::BranchOp>(dest, args); })
-          // Structured control flow
-          .def("create_for_op",
-               [](TritonOpBuilder &self, Value &lb, Value &ub, Value &step,
-                  std::vector<Value> &initArgs) -> scf::ForOp {
-                 return self.create<scf::ForOp>(lb, ub, step, initArgs);
-               })
-          .def("create_if_op",
-               [](TritonOpBuilder &self, std::vector<Type> &retTypes,
-                  Value &condition, bool withElse) -> scf::IfOp {
-                 return self.create<scf::IfOp>(retTypes, condition, withElse);
-               })
-          .def("create_yield_op",
-               [](TritonOpBuilder &self,
-                  std::vector<Value> &yields) -> scf::YieldOp {
-                 return self.create<scf::YieldOp>(yields);
-               })
-          .def("create_while_op",
-               [](TritonOpBuilder &self, std::vector<Type> &retTypes,
-                  std::vector<Value> &initArgs) -> scf::WhileOp {
-                 return self.create<scf::WhileOp>(retTypes, initArgs);
-               })
-          .def("create_condition_op",
-               [](TritonOpBuilder &self, Value &cond,
-                  std::vector<Value> &args) -> scf::ConditionOp {
-                 return self.create<scf::ConditionOp>(cond, args);
-               })
+      // Ops
+      .def("get_or_insert_function",
+           [](TritonOpBuilder &self, ModuleOp &module, std::string &funcName,
+              Type &funcType, std::string &visibility,
+              bool noinline) -> FuncOp {
+             if (Operation *funcOperation = module.lookupSymbol(funcName))
+               return llvm::dyn_cast<FuncOp>(funcOperation);
+             if (auto funcTy = dyn_cast<FunctionType>(funcType)) {
+               llvm::SmallVector<NamedAttribute> attrs = {
+                   NamedAttribute(
+                       self.getBuilder().getStringAttr("sym_visibility"),
+                       self.getBuilder().getStringAttr(visibility)),
+                   NamedAttribute(self.getBuilder().getStringAttr("noinline"),
+                                  self.getBuilder().getBoolAttr(noinline))};
+               return self.create<FuncOp>(funcName, funcTy, attrs);
+             }
+             throw std::invalid_argument("invalid function type");
+           })
+      .def(
+          "create_block",
+          [](TritonOpBuilder &self) -> Block * {
+            Region *parent = self.getBuilder().getBlock()->getParent();
+            return self.getBuilder().createBlock(parent);
+          },
+          ret::reference)
+      .def(
+          "create_block_with_parent",
+          [](TritonOpBuilder &self, Region &parent,
+             std::vector<Type> &argTypes) -> Block * {
+            // TODO: update arg loc
+            auto loc = self.getBuilder().getUnknownLoc();
+            llvm::SmallVector<Location, 8> argLocs(argTypes.size(), loc);
+            return self.getBuilder().createBlock(&parent, {}, argTypes,
+                                                 argLocs);
+          },
+          ret::reference)
+      .def(
+          "new_block",
+          [](TritonOpBuilder &self) -> Block * { return new Block(); },
+          ret::reference)
+      // Function
+      .def("ret",
+           [](TritonOpBuilder &self, std::vector<Value> &vals) -> OpState {
+             return self.create<ReturnOp>(vals);
+           })
+      .def("call",
+           [](TritonOpBuilder &self, FuncOp &func, std::vector<Value> &args)
+               -> OpState { return self.create<CallOp>(func, args); })
+      // Unstructured control flow
+      .def("create_cond_branch",
+           [](TritonOpBuilder &self, Value condition, Block *trueDest,
+              Block *falseDest) -> OpState {
+             return self.create<cf::CondBranchOp>(condition, trueDest,
+                                                  falseDest);
+           })
+      .def("create_branch",
+           [](TritonOpBuilder &self, Block *dest, std::vector<Value> &args)
+               -> OpState { return self.create<cf::BranchOp>(dest, args); })
+      // Structured control flow
+      .def("create_for_op",
+           [](TritonOpBuilder &self, Value &lb, Value &ub, Value &step,
+              std::vector<Value> &initArgs) -> scf::ForOp {
+             return self.create<scf::ForOp>(lb, ub, step, initArgs);
+           })
+      .def("create_if_op",
+           [](TritonOpBuilder &self, std::vector<Type> &retTypes,
+              Value &condition, bool withElse) -> scf::IfOp {
+             return self.create<scf::IfOp>(retTypes, condition, withElse);
+           })
+      .def("create_yield_op",
+           [](TritonOpBuilder &self, std::vector<Value> &yields)
+               -> scf::YieldOp { return self.create<scf::YieldOp>(yields); })
+      .def("create_while_op",
+           [](TritonOpBuilder &self, std::vector<Type> &retTypes,
+              std::vector<Value> &initArgs) -> scf::WhileOp {
+             return self.create<scf::WhileOp>(retTypes, initArgs);
+           })
+      .def("create_condition_op",
+           [](TritonOpBuilder &self, Value &cond,
+              std::vector<Value> &args) -> scf::ConditionOp {
+             return self.create<scf::ConditionOp>(cond, args);
+           })
 
-          // miscellaneous
-          .def("create_make_range",
-               [](TritonOpBuilder &self, Type retTy, int start,
-                  int end) -> Value {
-                 return self.create<MakeRangeOp>(retTy, start, end);
-               })
+      // miscellaneous
+      .def("create_make_range",
+           [](TritonOpBuilder &self, Type retTy, int start, int end) -> Value {
+             return self.create<MakeRangeOp>(retTy, start, end);
+           })
 
-          // Cast instructions
-          // Conversions for custom FP types (FP8 and non-standard rounding
-          // modes)
-          .def("create_fp_to_fp",
-               [](TritonOpBuilder &self, Value &src, Type &dstType,
-                  std::optional<RoundingMode> roundingMode) -> Value {
-                 if (roundingMode.has_value())
-                   return self.create<FpToFpOp>(
-                       dstType, src,
-                       RoundingModeAttr::get(self.getBuilder().getContext(),
-                                             roundingMode.value()));
-                 else
-                   return self.create<FpToFpOp>(dstType, src);
-               })
-          // Conversions for standard LLVM builtin types
-          .def("create_bitcast",
-               [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
-                 return self.create<BitcastOp>(dstType, src);
-               })
-          .def("create_si_to_fp",
-               [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
-                 return self.create<arith::SIToFPOp>(dstType, src);
-               })
-          .def("create_ui_to_fp",
-               [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
-                 return self.create<arith::UIToFPOp>(dstType, src);
-               })
-          .def("create_fp_to_si",
-               [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
-                 return self.create<arith::FPToSIOp>(dstType, src);
-               })
-          .def("create_fp_to_ui",
-               [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
-                 return self.create<arith::FPToUIOp>(dstType, src);
-               })
-          .def("create_fp_ext",
-               [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
-                 return self.create<arith::ExtFOp>(dstType, src);
-               })
-          .def("create_fp_trunc",
-               [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
-                 return self.create<arith::TruncFOp>(dstType, src);
-               })
-          .def("create_int_cast",
-               [](TritonOpBuilder &self, Value &src, Type &dstType,
-                  bool isSigned) -> Value {
-                 // get element type if necessary
-                 Type srcType = src.getType();
-                 auto srcTensorType = dyn_cast<RankedTensorType>(srcType);
-                 auto dstTensorType = dyn_cast<RankedTensorType>(dstType);
-                 Type srcEltType = srcType;
-                 Type dstEltType = dstType;
-                 if (dstTensorType && srcTensorType) {
-                   dstEltType = dstTensorType.getElementType();
-                   srcEltType = srcTensorType.getElementType();
-                 }
-                 unsigned srcWidth = srcEltType.getIntOrFloatBitWidth();
-                 unsigned dstWidth = dstEltType.getIntOrFloatBitWidth();
-                 if (srcWidth == dstWidth)
-                   return self.create<arith::BitcastOp>(dstType, src);
-                 else if (srcWidth > dstWidth)
-                   return self.create<arith::TruncIOp>(dstType, src);
-                 else if (isSigned)
-                   return self.create<arith::ExtSIOp>(dstType, src);
-                 else
-                   return self.create<arith::ExtUIOp>(dstType, src);
-               })
-          .def("create_fmul",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::MulFOp>(lhs, rhs);
-               })
-          .def("create_fdiv",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::DivFOp>(lhs, rhs);
-               })
-          .def("create_frem",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::RemFOp>(lhs, rhs);
-               })
-          .def("create_fadd",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::AddFOp>(lhs, rhs);
-               })
-          .def("create_fsub",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::SubFOp>(lhs, rhs);
-               })
-          .def("create_mul",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::MulIOp>(lhs, rhs);
-               })
-          .def("create_umulhi",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<triton::MulhiUIOp>(lhs, rhs);
-               })
-          .def("create_sdiv",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::DivSIOp>(lhs, rhs);
-               })
-          .def("create_udiv",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::DivUIOp>(lhs, rhs);
-               })
-          .def("create_srem",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::RemSIOp>(lhs, rhs);
-               })
-          .def("create_urem",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::RemUIOp>(lhs, rhs);
-               })
-          .def("create_add",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::AddIOp>(lhs, rhs);
-               })
-          .def("create_sub",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<arith::SubIOp>(lhs, rhs));
-               })
-          .def(
-              "create_fma",
-              [](TritonOpBuilder &self, Value &a, Value &b, Value &c) -> Value {
-                return Value(self.create<math::FmaOp>(a, b, c));
-              })
-          .def("create_shl",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<arith::ShLIOp>(lhs, rhs));
-               })
-          .def("create_lshr",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<arith::ShRUIOp>(lhs, rhs));
-               })
-          .def("create_ashr",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<arith::ShRSIOp>(lhs, rhs));
-               })
-          .def("create_minsi",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<arith::MinSIOp>(lhs, rhs));
-               })
-          .def("create_minui",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<arith::MinUIOp>(lhs, rhs));
-               })
-          // minimumf follows the torch.minimum convention and returns NaN if
-          // either operand is NaN
-          .def("create_minimumf",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<arith::MinimumFOp>(lhs, rhs));
-               })
-          // minnumf follows the torch.fmin convention and returns the non-NaN
-          // operand
-          .def("create_minnumf",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<arith::MinNumFOp>(lhs, rhs));
-               })
-          .def("create_maxsi",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<arith::MaxSIOp>(lhs, rhs));
-               })
-          .def("create_maxui",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<arith::MaxUIOp>(lhs, rhs));
-               })
-          // maximumf follows the torch.maximum convention and returns NaN if
-          // either operand is NaN
-          .def("create_maximumf",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<arith::MaximumFOp>(lhs, rhs));
-               })
-          // maxnumf follows the torch.fmax convention and returns the non-NaN
-          // operand
-          .def("create_maxnumf",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<arith::MaxNumFOp>(lhs, rhs));
-               })
-          .def("create_clampf",
-               [](TritonOpBuilder &self, Value &input, Value &min, Value &max,
-                  PropagateNan propagateNan) -> Value {
-                 return Value(
-                     self.create<ClampFOp>(input, min, max, propagateNan));
-               })
-          .def("create_precise_sqrt",
-               [](TritonOpBuilder &self, Value &input) -> Value {
-                 return Value(self.create<PreciseSqrtOp>(input));
-               })
-          .def("create_precise_divf",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return Value(self.create<PreciseDivFOp>(lhs, rhs));
-               })
-          // AddPtr (similar to GEP)
-          .def("create_addptr",
-               [](TritonOpBuilder &self, Value &ptr, Value &offset) -> Value {
-                 return self.create<AddPtrOp>(ptr.getType(), ptr, offset);
-               })
-          // Comparison (int)
-          .def("create_icmpSLE",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpIOp>(arith::CmpIPredicate::sle,
-                                                   lhs, rhs);
-               })
-          .def("create_icmpSLT",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpIOp>(arith::CmpIPredicate::slt,
-                                                   lhs, rhs);
-               })
-          .def("create_icmpSGE",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpIOp>(arith::CmpIPredicate::sge,
-                                                   lhs, rhs);
-               })
-          .def("create_icmpSGT",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpIOp>(arith::CmpIPredicate::sgt,
-                                                   lhs, rhs);
-               })
-          .def("create_icmpULE",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpIOp>(arith::CmpIPredicate::ule,
-                                                   lhs, rhs);
-               })
-          .def("create_icmpULT",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpIOp>(arith::CmpIPredicate::ult,
-                                                   lhs, rhs);
-               })
-          .def("create_icmpUGE",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpIOp>(arith::CmpIPredicate::uge,
-                                                   lhs, rhs);
-               })
-          .def("create_icmpUGT",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpIOp>(arith::CmpIPredicate::ugt,
-                                                   lhs, rhs);
-               })
-          .def("create_icmpEQ",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpIOp>(arith::CmpIPredicate::eq,
-                                                   lhs, rhs);
-               })
-          .def("create_icmpNE",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpIOp>(arith::CmpIPredicate::ne,
-                                                   lhs, rhs);
-               })
-          // Comparison (float)
-          .def("create_fcmpOLT",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpFOp>(arith::CmpFPredicate::OLT,
-                                                   lhs, rhs);
-               })
-          .def("create_fcmpOGT",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpFOp>(arith::CmpFPredicate::OGT,
-                                                   lhs, rhs);
-               })
-          .def("create_fcmpOLE",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpFOp>(arith::CmpFPredicate::OLE,
-                                                   lhs, rhs);
-               })
-          .def("create_fcmpOGE",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpFOp>(arith::CmpFPredicate::OGE,
-                                                   lhs, rhs);
-               })
-          .def("create_fcmpOEQ",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpFOp>(arith::CmpFPredicate::OEQ,
-                                                   lhs, rhs);
-               })
-          .def("create_fcmpONE",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpFOp>(arith::CmpFPredicate::ONE,
-                                                   lhs, rhs);
-               })
-          .def("create_fcmpULT",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpFOp>(arith::CmpFPredicate::ULT,
-                                                   lhs, rhs);
-               })
-          .def("create_fcmpUGT",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpFOp>(arith::CmpFPredicate::UGT,
-                                                   lhs, rhs);
-               })
-          .def("create_fcmpULE",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpFOp>(arith::CmpFPredicate::ULE,
-                                                   lhs, rhs);
-               })
-          .def("create_fcmpUGE",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpFOp>(arith::CmpFPredicate::UGE,
-                                                   lhs, rhs);
-               })
-          .def("create_fcmpUEQ",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpFOp>(arith::CmpFPredicate::UEQ,
-                                                   lhs, rhs);
-               })
-          .def("create_fcmpUNE",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::CmpFOp>(arith::CmpFPredicate::UNE,
-                                                   lhs, rhs);
-               })
-          // // Logical
-          .def("create_and",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::AndIOp>(lhs, rhs);
-               })
-          .def("create_xor",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::XOrIOp>(lhs, rhs);
-               })
-          .def("create_or",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 return self.create<arith::OrIOp>(lhs, rhs);
-               })
-          // Input/Output
-          .def("create_load",
-               [](TritonOpBuilder &self, Value &ptrs,
-                  CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
-                  bool isVolatile) -> Value {
-                 return self.create<LoadOp>(ptrs, cacheModifier, evictionPolicy,
-                                            isVolatile);
-               })
-          .def("create_store",
-               [](TritonOpBuilder &self, Value &ptrs, Value &value,
-                  CacheModifier cacheModifier,
-                  EvictionPolicy evictionPolicy) -> void {
-                 self.create<StoreOp>(ptrs, value, cacheModifier,
-                                      evictionPolicy);
-               })
-          .def("create_masked_load",
-               [](TritonOpBuilder &self, Value &ptrs, Value &mask,
-                  std::optional<Value> &other, CacheModifier cacheModifier,
-                  EvictionPolicy evictionPolicy, bool isVolatile) -> Value {
-                 return self.create<LoadOp>(ptrs, mask, other.value_or(Value()),
-                                            cacheModifier, evictionPolicy,
-                                            isVolatile);
-               })
-          .def("create_masked_store",
-               [](TritonOpBuilder &self, Value &ptrs, Value &val, Value &mask,
-                  CacheModifier cacheModifier,
-                  EvictionPolicy evictionPolicy) -> void {
-                 self.create<StoreOp>(ptrs, val, mask, cacheModifier,
-                                      evictionPolicy);
-               })
-          .def("create_tensor_descriptor_type",
-               [](TritonOpBuilder &self, Type blockTy, bool isSigned) -> Type {
-                 auto ctx = self.getContext();
-                 return triton::TensorDescType::get(
-                     ctx, cast<RankedTensorType>(blockTy), isSigned);
-               })
-          .def("create_descriptor_load",
-               [](TritonOpBuilder &self, Value desc,
-                  std::vector<Value> &indices, CacheModifier cacheModifier,
-                  EvictionPolicy evictionPolicy) -> Value {
-                 auto descTy = cast<triton::TensorDescType>(desc.getType());
-                 auto resTy = descTy.getSignlessBlockType();
-                 return self.create<DescriptorLoadOp>(
-                     resTy, desc, indices, cacheModifier, evictionPolicy);
-               })
-          .def("create_descriptor_gather",
-               [](TritonOpBuilder &self, Value desc, Value x_indices,
-                  Value y_index, Type type) -> Value {
-                 return self.create<DescriptorGatherOp>(type, desc, x_indices,
-                                                        y_index);
-               })
-          .def("create_descriptor_store",
-               [](TritonOpBuilder &self, Value desc, Value value,
-                  std::vector<Value> &indices) -> void {
-                 self.create<DescriptorStoreOp>(desc, value, indices);
-               })
-          .def("create_descriptor_reduce",
-               [](TritonOpBuilder &self, DescriptorReduceKind kind, Value desc,
-                  Value value, std::vector<Value> &indices) -> void {
-                 self.create<DescriptorReduceOp>(kind, desc, value, indices);
-               })
-          .def("create_descriptor_scatter",
-               [](TritonOpBuilder &self, Value desc, Value value,
-                  Value x_indices, Value y_index) -> void {
-                 self.create<DescriptorScatterOp>(desc, x_indices, y_index,
-                                                  value);
-               })
-          .def("create_reshape",
-               [](TritonOpBuilder &self, Value &arg,
-                  std::vector<int64_t> &shape, bool allowReorder) -> Value {
-                 return self.create<ReshapeOp>(shape, arg, allowReorder);
-               })
-          .def("create_expand_dims",
-               [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
-                 return self.create<ExpandDimsOp>(arg, axis);
-               })
-          .def("create_cat",
-               [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-                 auto lhsType = dyn_cast<RankedTensorType>(lhs.getType());
-                 auto rhsType = dyn_cast<RankedTensorType>(rhs.getType());
-                 if (!(lhsType.getShape().size() == 1 &&
-                       rhsType.getShape().size() == 1))
-                   throw std::invalid_argument(
-                       "shape not supported by cat. Expecting rank-1 inputs");
-                 std::vector<int64_t> shape{lhsType.getShape()[0] +
-                                            rhsType.getShape()[0]};
-                 return self.create<CatOp>(lhsType.clone(shape), lhs, rhs);
-               })
-          .def("create_join",
-               [](TritonOpBuilder &self, Value &a, Value &b) -> Value {
-                 return self.create<JoinOp>(a, b);
-               })
-          .def("create_split",
-               [](TritonOpBuilder &self, Value &a) -> std::vector<Value> {
-                 auto op = self.create<SplitOp>(a);
-                 return std::vector<Value>(op->result_begin(),
-                                           op->result_end());
-               })
-          // Implements tl.trans and tl.permute.
-          .def("create_trans",
-               [](TritonOpBuilder &self, Value &arg, std::vector<int> &order)
-                   -> Value { return self.create<TransOp>(arg, order); })
-          .def("create_broadcast",
-               [](TritonOpBuilder &self, Value &arg,
-                  std::vector<int64_t> &shape) -> Value {
-                 if (auto argType = dyn_cast<RankedTensorType>(arg.getType()))
-                   return self.createOrFold<BroadcastOp>(argType.clone(shape),
-                                                         arg);
-                 throw std::invalid_argument(
-                     "arg is not of RankedTensorType, use create_splat");
-               })
-          .def("create_splat",
-               [](TritonOpBuilder &self, Type &retTy, Value &arg) -> Value {
-                 return self.createOrFold<SplatOp>(retTy, arg);
-               })
-          .def("create_unsplat",
-               [](TritonOpBuilder &self, Value &arg) -> Value {
-                 return self.createOrFold<UnsplatOp>(arg);
-               })
-          // // atomic
-          .def("create_atomic_cas",
-               [](TritonOpBuilder &self, Value &ptr, Value &cmp, Value &val,
-                  MemSemantic sem, MemSyncScope scope) -> Value {
-                 Type dstType;
-                 if (auto srcTensorType =
-                         dyn_cast<RankedTensorType>(ptr.getType())) {
-                   Type dstElemType =
-                       cast<PointerType>(srcTensorType.getElementType())
-                           .getPointeeType();
-                   dstType = srcTensorType.clone(dstElemType);
-                 } else {
-                   auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
-                   dstType = ptrType.getPointeeType();
-                 }
-                 return self.create<AtomicCASOp>(dstType, ptr, cmp, val, sem,
-                                                 scope);
-               })
-          .def("create_atomic_rmw",
-               [](TritonOpBuilder &self, RMWOp rmwOp, Value &ptr, Value &val,
-                  Value &mask, MemSemantic sem, MemSyncScope scope) -> Value {
-                 Type dstType;
-                 if (auto srcTensorType =
-                         dyn_cast<RankedTensorType>(ptr.getType())) {
-                   Type dstElemType =
-                       cast<PointerType>(srcTensorType.getElementType())
-                           .getPointeeType();
-                   dstType = srcTensorType.clone(dstElemType);
-                 } else {
-                   auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
-                   dstType = ptrType.getPointeeType();
-                 }
-                 return self.create<AtomicRMWOp>(dstType, rmwOp, ptr, val, mask,
-                                                 sem, scope);
-               })
-          // External
-          .def("create_extern_elementwise",
-               [](TritonOpBuilder &self, const std::string &libName,
-                  const std::string &libPath, const std::string &symbol,
-                  std::vector<Value> &argList, Type retType,
-                  bool isPure) -> Value {
-                 return self.create<ExternElementwiseOp>(
-                     retType, argList, libName, libPath, symbol, isPure);
-               })
-          // Built-in instruction
-          .def("create_get_program_id",
-               [](TritonOpBuilder &self, int axis) -> Value {
-                 if (axis < 0 || axis > 3)
-                   throw pybind11::index_error("program_id must be in [0,3]");
-                 return self.create<GetProgramIdOp>(axis);
-               })
-          .def("create_get_num_programs",
-               [](TritonOpBuilder &self, int axis) -> Value {
-                 if (axis < 0 || axis > 3)
-                   throw pybind11::index_error("program_id must be in [0,3]");
-                 return self.create<GetNumProgramsOp>(axis);
-               })
-          .def("create_dot",
-               [](TritonOpBuilder &self, mlir::Value &a, mlir::Value &b,
-                  mlir::Value &c, InputPrecision inputPrecision,
-                  int maxNumImpreciseAcc) -> mlir::Value {
-                 return self.create<DotOp>(c.getType(), a, b, c, inputPrecision,
-                                           maxNumImpreciseAcc);
-               })
-          .def("create_dot_scaled",
-               [](TritonOpBuilder &self, mlir::Value &lhs,
-                  std::optional<mlir::Value> &lhs_scale,
-                  ScaleDotElemType lhs_format, mlir::Value &rhs,
-                  std::optional<mlir::Value> &rhs_scale,
-                  ScaleDotElemType rhs_format, bool fast_math, bool lhs_k_pack,
-                  bool rhs_k_pack, mlir::Value &c) -> mlir::Value {
-                 return self.create<DotScaledOp>(
-                     c.getType(), lhs, rhs, c, lhs_scale.value_or(Value()),
-                     rhs_scale.value_or(Value()), lhs_format, rhs_format,
-                     fast_math, lhs_k_pack, rhs_k_pack);
-               })
-          .def("create_floor",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::FloorOp>(val);
-               })
-          .def("create_ceil",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::CeilOp>(val);
-               })
-          .def("create_exp",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::ExpOp>(val);
-               })
-          .def("create_exp2",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::Exp2Op>(val);
-               })
-          .def("create_cos",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::CosOp>(val);
-               })
-          .def("create_sin",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::SinOp>(val);
-               })
-          .def("create_log",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::LogOp>(val);
-               })
-          .def("create_log2",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::Log2Op>(val);
-               })
-          .def("create_erf",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::ErfOp>(val);
-               })
-          .def("create_sqrt",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::SqrtOp>(val);
-               })
-          .def("create_rsqrt",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::RsqrtOp>(val);
-               })
-          .def("create_fabs",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::AbsFOp>(val);
-               })
-          .def("create_iabs",
-               [](TritonOpBuilder &self, Value &val) -> Value {
-                 return self.create<math::AbsIOp>(val);
-               })
-          .def("create_reduce",
-               [](TritonOpBuilder &self, std::vector<Value> operands, int axis)
-                   -> OpState { return self.create<ReduceOp>(operands, axis); })
-          .def("create_reduce_ret",
-               [](TritonOpBuilder &self, py::args args) -> OpState {
-                 llvm::SmallVector<Value> return_values;
-                 for (const auto &arg : args) {
-                   return_values.push_back(py::cast<Value>(arg));
-                 }
-                 return self.create<ReduceReturnOp>(return_values);
-               })
-          .def("create_scan",
-               [](TritonOpBuilder &self, std::vector<Value> operands, int axis,
-                  bool reverse) -> OpState {
-                 return self.create<ScanOp>(operands, axis, reverse);
-               })
-          .def("create_scan_ret",
-               [](TritonOpBuilder &self, py::args args) -> OpState {
-                 llvm::SmallVector<Value> return_values;
-                 for (const auto &arg : args) {
-                   return_values.push_back(py::cast<Value>(arg));
-                 }
-                 return self.create<ScanReturnOp>(return_values);
-               })
-          .def("create_map_elementwise",
-               [](TritonOpBuilder &self, std::vector<Value> inputs,
-                  std::vector<Type> returnTys, int pack) -> OpState {
-                 return self.create<MapElementwiseOp>(returnTys, inputs, pack);
-               })
-          .def("create_map_elementwise_ret",
-               [](TritonOpBuilder &self,
-                  std::vector<Value> returnVals) -> OpState {
-                 return self.create<MapElementwiseReturnOp>(returnVals);
-               })
-          .def("create_ptr_to_int",
-               [](TritonOpBuilder &self, Value &val, Type &type) -> Value {
-                 return self.create<PtrToIntOp>(type, val);
-               })
-          .def("create_int_to_ptr",
-               [](TritonOpBuilder &self, Value &val, Type &type) -> Value {
-                 return self.create<IntToPtrOp>(type, val);
-               })
-          .def("create_select",
-               [](TritonOpBuilder &self, Value &condition, Value &trueValue,
-                  Value &falseValue) -> Value {
-                 return self.create<arith::SelectOp>(condition, trueValue,
-                                                     falseValue);
-               })
-          .def("create_inline_asm",
-               [](TritonOpBuilder &self, const std::string &inlineAsm,
-                  const std::string &constraints,
-                  const std::vector<Value> &values,
-                  const std::vector<Type> &types, bool isPure,
-                  int pack) -> OpState {
-                 return self.create<ElementwiseInlineAsmOp>(
-                     types, inlineAsm, constraints, isPure, pack, values);
-               })
-          .def("create_print",
-               [](TritonOpBuilder &self, const std::string &prefix, bool hex,
-                  const std::vector<Value> &values,
-                  const std::vector<int32_t> &isSigned) -> void {
-                 auto prefixAttr = StringAttr::get(
-                     self.getBuilder().getContext(), llvm::StringRef(prefix));
-                 self.create<PrintOp>(prefixAttr, hex, values, isSigned);
-               })
-          .def("create_assert",
-               [](TritonOpBuilder &self, Value &condition,
-                  const std::string &message) -> void {
-                 auto messageAttr = StringAttr::get(
-                     self.getBuilder().getContext(), llvm::StringRef(message));
-                 self.create<AssertOp>(condition, messageAttr);
-               })
-          .def("create_assume",
-               [](TritonOpBuilder &self, Value &condition) {
-                 self.create<LLVM::AssumeOp>(condition);
-               })
-          .def("create_poison",
-               [](TritonOpBuilder &self, Type &type) -> Value {
-                 return self.create<ub::PoisonOp>(type);
-               })
-          .def("create_histogram",
-               [](TritonOpBuilder &self, Value operand, int numBins,
-                  std::optional<Value> mask) -> Value {
-                 if (!mask) {
-                   return self.create<HistogramOp>(
-                       RankedTensorType::get(
-                           {static_cast<int64_t>(numBins)},
-                           IntegerType::get(operand.getContext(), 32)),
-                       operand);
-                 } else {
-                   return self.create<HistogramOp>(
-                       RankedTensorType::get(
-                           {static_cast<int64_t>(numBins)},
-                           IntegerType::get(operand.getContext(), 32)),
-                       operand, *mask);
-                 }
-               })
-          .def("create_gather",
-               [](TritonOpBuilder &self, Value src, Value indices,
-                  int axis) -> Value {
-                 return self.create<GatherOp>(src, indices, axis);
-               })
-          // Force GPU barrier
-          .def("create_barrier",
-               [](TritonOpBuilder &self) {
-                 self.create<triton::gpu::BarrierOp>(
-                     triton::gpu::AddrSpace::All);
-               })
-          // Make a tensor descriptor
-          .def("create_make_tensor_descriptor",
-               [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
-                  std::vector<Value> &strides,
-                  std::vector<int32_t> &tensorShape, bool isSignedInteger,
-                  PaddingOption paddingOption) -> Value {
-                 return self.create<MakeTensorDescOp>(
-                     base, shape, strides, tensorShape, isSignedInteger,
-                     paddingOption);
-               });
+      // Cast instructions
+      // Conversions for custom FP types (FP8 and non-standard rounding
+      // modes)
+      .def("create_fp_to_fp",
+           [](TritonOpBuilder &self, Value &src, Type &dstType,
+              std::optional<RoundingMode> roundingMode) -> Value {
+             if (roundingMode.has_value())
+               return self.create<FpToFpOp>(
+                   dstType, src,
+                   RoundingModeAttr::get(self.getBuilder().getContext(),
+                                         roundingMode.value()));
+             else
+               return self.create<FpToFpOp>(dstType, src);
+           })
+      // Conversions for standard LLVM builtin types
+      .def("create_bitcast",
+           [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<BitcastOp>(dstType, src);
+           })
+      .def("create_si_to_fp",
+           [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<arith::SIToFPOp>(dstType, src);
+           })
+      .def("create_ui_to_fp",
+           [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<arith::UIToFPOp>(dstType, src);
+           })
+      .def("create_fp_to_si",
+           [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<arith::FPToSIOp>(dstType, src);
+           })
+      .def("create_fp_to_ui",
+           [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<arith::FPToUIOp>(dstType, src);
+           })
+      .def("create_fp_ext",
+           [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<arith::ExtFOp>(dstType, src);
+           })
+      .def("create_fp_trunc",
+           [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<arith::TruncFOp>(dstType, src);
+           })
+      .def("create_int_cast",
+           [](TritonOpBuilder &self, Value &src, Type &dstType,
+              bool isSigned) -> Value {
+             // get element type if necessary
+             Type srcType = src.getType();
+             auto srcTensorType = dyn_cast<RankedTensorType>(srcType);
+             auto dstTensorType = dyn_cast<RankedTensorType>(dstType);
+             Type srcEltType = srcType;
+             Type dstEltType = dstType;
+             if (dstTensorType && srcTensorType) {
+               dstEltType = dstTensorType.getElementType();
+               srcEltType = srcTensorType.getElementType();
+             }
+             unsigned srcWidth = srcEltType.getIntOrFloatBitWidth();
+             unsigned dstWidth = dstEltType.getIntOrFloatBitWidth();
+             if (srcWidth == dstWidth)
+               return self.create<arith::BitcastOp>(dstType, src);
+             else if (srcWidth > dstWidth)
+               return self.create<arith::TruncIOp>(dstType, src);
+             else if (isSigned)
+               return self.create<arith::ExtSIOp>(dstType, src);
+             else
+               return self.create<arith::ExtUIOp>(dstType, src);
+           })
+      .def("create_fmul",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::MulFOp>(lhs, rhs);
+           })
+      .def("create_fdiv",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::DivFOp>(lhs, rhs);
+           })
+      .def("create_frem",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::RemFOp>(lhs, rhs);
+           })
+      .def("create_fadd",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::AddFOp>(lhs, rhs);
+           })
+      .def("create_fsub",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::SubFOp>(lhs, rhs);
+           })
+      .def("create_mul",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::MulIOp>(lhs, rhs);
+           })
+      .def("create_umulhi",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<triton::MulhiUIOp>(lhs, rhs);
+           })
+      .def("create_sdiv",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::DivSIOp>(lhs, rhs);
+           })
+      .def("create_udiv",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::DivUIOp>(lhs, rhs);
+           })
+      .def("create_srem",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::RemSIOp>(lhs, rhs);
+           })
+      .def("create_urem",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::RemUIOp>(lhs, rhs);
+           })
+      .def("create_add",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::AddIOp>(lhs, rhs);
+           })
+      .def("create_sub",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<arith::SubIOp>(lhs, rhs));
+           })
+      .def("create_fma",
+           [](TritonOpBuilder &self, Value &a, Value &b, Value &c) -> Value {
+             return Value(self.create<math::FmaOp>(a, b, c));
+           })
+      .def("create_shl",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<arith::ShLIOp>(lhs, rhs));
+           })
+      .def("create_lshr",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<arith::ShRUIOp>(lhs, rhs));
+           })
+      .def("create_ashr",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<arith::ShRSIOp>(lhs, rhs));
+           })
+      .def("create_minsi",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<arith::MinSIOp>(lhs, rhs));
+           })
+      .def("create_minui",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<arith::MinUIOp>(lhs, rhs));
+           })
+      // minimumf follows the torch.minimum convention and returns NaN if
+      // either operand is NaN
+      .def("create_minimumf",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<arith::MinimumFOp>(lhs, rhs));
+           })
+      // minnumf follows the torch.fmin convention and returns the non-NaN
+      // operand
+      .def("create_minnumf",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<arith::MinNumFOp>(lhs, rhs));
+           })
+      .def("create_maxsi",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<arith::MaxSIOp>(lhs, rhs));
+           })
+      .def("create_maxui",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<arith::MaxUIOp>(lhs, rhs));
+           })
+      // maximumf follows the torch.maximum convention and returns NaN if
+      // either operand is NaN
+      .def("create_maximumf",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<arith::MaximumFOp>(lhs, rhs));
+           })
+      // maxnumf follows the torch.fmax convention and returns the non-NaN
+      // operand
+      .def("create_maxnumf",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<arith::MaxNumFOp>(lhs, rhs));
+           })
+      .def("create_clampf",
+           [](TritonOpBuilder &self, Value &input, Value &min, Value &max,
+              PropagateNan propagateNan) -> Value {
+             return Value(self.create<ClampFOp>(input, min, max, propagateNan));
+           })
+      .def("create_precise_sqrt",
+           [](TritonOpBuilder &self, Value &input) -> Value {
+             return Value(self.create<PreciseSqrtOp>(input));
+           })
+      .def("create_precise_divf",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<PreciseDivFOp>(lhs, rhs));
+           })
+      // AddPtr (similar to GEP)
+      .def("create_addptr",
+           [](TritonOpBuilder &self, Value &ptr, Value &offset) -> Value {
+             return self.create<AddPtrOp>(ptr.getType(), ptr, offset);
+           })
+      // Comparison (int)
+      .def("create_icmpSLE",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpIOp>(arith::CmpIPredicate::sle, lhs,
+                                               rhs);
+           })
+      .def("create_icmpSLT",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpIOp>(arith::CmpIPredicate::slt, lhs,
+                                               rhs);
+           })
+      .def("create_icmpSGE",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpIOp>(arith::CmpIPredicate::sge, lhs,
+                                               rhs);
+           })
+      .def("create_icmpSGT",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpIOp>(arith::CmpIPredicate::sgt, lhs,
+                                               rhs);
+           })
+      .def("create_icmpULE",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpIOp>(arith::CmpIPredicate::ule, lhs,
+                                               rhs);
+           })
+      .def("create_icmpULT",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpIOp>(arith::CmpIPredicate::ult, lhs,
+                                               rhs);
+           })
+      .def("create_icmpUGE",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpIOp>(arith::CmpIPredicate::uge, lhs,
+                                               rhs);
+           })
+      .def("create_icmpUGT",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpIOp>(arith::CmpIPredicate::ugt, lhs,
+                                               rhs);
+           })
+      .def("create_icmpEQ",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpIOp>(arith::CmpIPredicate::eq, lhs,
+                                               rhs);
+           })
+      .def("create_icmpNE",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpIOp>(arith::CmpIPredicate::ne, lhs,
+                                               rhs);
+           })
+      // Comparison (float)
+      .def("create_fcmpOLT",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpFOp>(arith::CmpFPredicate::OLT, lhs,
+                                               rhs);
+           })
+      .def("create_fcmpOGT",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpFOp>(arith::CmpFPredicate::OGT, lhs,
+                                               rhs);
+           })
+      .def("create_fcmpOLE",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpFOp>(arith::CmpFPredicate::OLE, lhs,
+                                               rhs);
+           })
+      .def("create_fcmpOGE",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpFOp>(arith::CmpFPredicate::OGE, lhs,
+                                               rhs);
+           })
+      .def("create_fcmpOEQ",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpFOp>(arith::CmpFPredicate::OEQ, lhs,
+                                               rhs);
+           })
+      .def("create_fcmpONE",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpFOp>(arith::CmpFPredicate::ONE, lhs,
+                                               rhs);
+           })
+      .def("create_fcmpULT",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpFOp>(arith::CmpFPredicate::ULT, lhs,
+                                               rhs);
+           })
+      .def("create_fcmpUGT",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpFOp>(arith::CmpFPredicate::UGT, lhs,
+                                               rhs);
+           })
+      .def("create_fcmpULE",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpFOp>(arith::CmpFPredicate::ULE, lhs,
+                                               rhs);
+           })
+      .def("create_fcmpUGE",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpFOp>(arith::CmpFPredicate::UGE, lhs,
+                                               rhs);
+           })
+      .def("create_fcmpUEQ",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpFOp>(arith::CmpFPredicate::UEQ, lhs,
+                                               rhs);
+           })
+      .def("create_fcmpUNE",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::CmpFOp>(arith::CmpFPredicate::UNE, lhs,
+                                               rhs);
+           })
+      // // Logical
+      .def("create_and",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::AndIOp>(lhs, rhs);
+           })
+      .def("create_xor",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::XOrIOp>(lhs, rhs);
+           })
+      .def("create_or",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<arith::OrIOp>(lhs, rhs);
+           })
+      // Input/Output
+      .def("create_load",
+           [](TritonOpBuilder &self, Value &ptrs, CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy, bool isVolatile) -> Value {
+             return self.create<LoadOp>(ptrs, cacheModifier, evictionPolicy,
+                                        isVolatile);
+           })
+      .def("create_store",
+           [](TritonOpBuilder &self, Value &ptrs, Value &value,
+              CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy) -> void {
+             self.create<StoreOp>(ptrs, value, cacheModifier, evictionPolicy);
+           })
+      .def("create_masked_load",
+           [](TritonOpBuilder &self, Value &ptrs, Value &mask,
+              std::optional<Value> &other, CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy, bool isVolatile) -> Value {
+             return self.create<LoadOp>(ptrs, mask, other.value_or(Value()),
+                                        cacheModifier, evictionPolicy,
+                                        isVolatile);
+           })
+      .def("create_masked_store",
+           [](TritonOpBuilder &self, Value &ptrs, Value &val, Value &mask,
+              CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy) -> void {
+             self.create<StoreOp>(ptrs, val, mask, cacheModifier,
+                                  evictionPolicy);
+           })
+      .def("create_tensor_descriptor_type",
+           [](TritonOpBuilder &self, Type blockTy, bool isSigned) -> Type {
+             auto ctx = self.getContext();
+             return triton::TensorDescType::get(
+                 ctx, cast<RankedTensorType>(blockTy), isSigned);
+           })
+      .def("create_descriptor_load",
+           [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
+              CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy) -> Value {
+             auto descTy = cast<triton::TensorDescType>(desc.getType());
+             auto resTy = descTy.getSignlessBlockType();
+             return self.create<DescriptorLoadOp>(
+                 resTy, desc, indices, cacheModifier, evictionPolicy);
+           })
+      .def("create_descriptor_gather",
+           [](TritonOpBuilder &self, Value desc, Value x_indices, Value y_index,
+              Type type) -> Value {
+             return self.create<DescriptorGatherOp>(type, desc, x_indices,
+                                                    y_index);
+           })
+      .def("create_descriptor_store",
+           [](TritonOpBuilder &self, Value desc, Value value,
+              std::vector<Value> &indices) -> void {
+             self.create<DescriptorStoreOp>(desc, value, indices);
+           })
+      .def("create_descriptor_reduce",
+           [](TritonOpBuilder &self, DescriptorReduceKind kind, Value desc,
+              Value value, std::vector<Value> &indices) -> void {
+             self.create<DescriptorReduceOp>(kind, desc, value, indices);
+           })
+      .def("create_descriptor_scatter",
+           [](TritonOpBuilder &self, Value desc, Value value, Value x_indices,
+              Value y_index) -> void {
+             self.create<DescriptorScatterOp>(desc, x_indices, y_index, value);
+           })
+      .def("create_reshape",
+           [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
+              bool allowReorder) -> Value {
+             return self.create<ReshapeOp>(shape, arg, allowReorder);
+           })
+      .def("create_expand_dims",
+           [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
+             return self.create<ExpandDimsOp>(arg, axis);
+           })
+      .def("create_cat",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             auto lhsType = dyn_cast<RankedTensorType>(lhs.getType());
+             auto rhsType = dyn_cast<RankedTensorType>(rhs.getType());
+             if (!(lhsType.getShape().size() == 1 &&
+                   rhsType.getShape().size() == 1))
+               throw std::invalid_argument(
+                   "shape not supported by cat. Expecting rank-1 inputs");
+             std::vector<int64_t> shape{lhsType.getShape()[0] +
+                                        rhsType.getShape()[0]};
+             return self.create<CatOp>(lhsType.clone(shape), lhs, rhs);
+           })
+      .def("create_join",
+           [](TritonOpBuilder &self, Value &a, Value &b) -> Value {
+             return self.create<JoinOp>(a, b);
+           })
+      .def("create_split",
+           [](TritonOpBuilder &self, Value &a) -> std::vector<Value> {
+             auto op = self.create<SplitOp>(a);
+             return std::vector<Value>(op->result_begin(), op->result_end());
+           })
+      // Implements tl.trans and tl.permute.
+      .def("create_trans",
+           [](TritonOpBuilder &self, Value &arg, std::vector<int> &order)
+               -> Value { return self.create<TransOp>(arg, order); })
+      .def("create_broadcast",
+           [](TritonOpBuilder &self, Value &arg,
+              std::vector<int64_t> &shape) -> Value {
+             if (auto argType = dyn_cast<RankedTensorType>(arg.getType()))
+               return self.createOrFold<BroadcastOp>(argType.clone(shape), arg);
+             throw std::invalid_argument(
+                 "arg is not of RankedTensorType, use create_splat");
+           })
+      .def("create_splat",
+           [](TritonOpBuilder &self, Type &retTy, Value &arg) -> Value {
+             return self.createOrFold<SplatOp>(retTy, arg);
+           })
+      .def("create_unsplat",
+           [](TritonOpBuilder &self, Value &arg) -> Value {
+             return self.createOrFold<UnsplatOp>(arg);
+           })
+      // // atomic
+      .def("create_atomic_cas",
+           [](TritonOpBuilder &self, Value &ptr, Value &cmp, Value &val,
+              MemSemantic sem, MemSyncScope scope) -> Value {
+             Type dstType;
+             if (auto srcTensorType =
+                     dyn_cast<RankedTensorType>(ptr.getType())) {
+               Type dstElemType =
+                   cast<PointerType>(srcTensorType.getElementType())
+                       .getPointeeType();
+               dstType = srcTensorType.clone(dstElemType);
+             } else {
+               auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
+               dstType = ptrType.getPointeeType();
+             }
+             return self.create<AtomicCASOp>(dstType, ptr, cmp, val, sem,
+                                             scope);
+           })
+      .def("create_atomic_rmw",
+           [](TritonOpBuilder &self, RMWOp rmwOp, Value &ptr, Value &val,
+              Value &mask, MemSemantic sem, MemSyncScope scope) -> Value {
+             Type dstType;
+             if (auto srcTensorType =
+                     dyn_cast<RankedTensorType>(ptr.getType())) {
+               Type dstElemType =
+                   cast<PointerType>(srcTensorType.getElementType())
+                       .getPointeeType();
+               dstType = srcTensorType.clone(dstElemType);
+             } else {
+               auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
+               dstType = ptrType.getPointeeType();
+             }
+             return self.create<AtomicRMWOp>(dstType, rmwOp, ptr, val, mask,
+                                             sem, scope);
+           })
+      // External
+      .def("create_extern_elementwise",
+           [](TritonOpBuilder &self, const std::string &libName,
+              const std::string &libPath, const std::string &symbol,
+              std::vector<Value> &argList, Type retType, bool isPure) -> Value {
+             return self.create<ExternElementwiseOp>(retType, argList, libName,
+                                                     libPath, symbol, isPure);
+           })
+      // Built-in instruction
+      .def("create_get_program_id",
+           [](TritonOpBuilder &self, int axis) -> Value {
+             if (axis < 0 || axis > 3)
+               throw pybind11::index_error("program_id must be in [0,3]");
+             return self.create<GetProgramIdOp>(axis);
+           })
+      .def("create_get_num_programs",
+           [](TritonOpBuilder &self, int axis) -> Value {
+             if (axis < 0 || axis > 3)
+               throw pybind11::index_error("program_id must be in [0,3]");
+             return self.create<GetNumProgramsOp>(axis);
+           })
+      .def("create_dot",
+           [](TritonOpBuilder &self, mlir::Value &a, mlir::Value &b,
+              mlir::Value &c, InputPrecision inputPrecision,
+              int maxNumImpreciseAcc) -> mlir::Value {
+             return self.create<DotOp>(c.getType(), a, b, c, inputPrecision,
+                                       maxNumImpreciseAcc);
+           })
+      .def("create_dot_scaled",
+           [](TritonOpBuilder &self, mlir::Value &lhs,
+              std::optional<mlir::Value> &lhs_scale,
+              ScaleDotElemType lhs_format, mlir::Value &rhs,
+              std::optional<mlir::Value> &rhs_scale,
+              ScaleDotElemType rhs_format, bool fast_math, bool lhs_k_pack,
+              bool rhs_k_pack, mlir::Value &c) -> mlir::Value {
+             return self.create<DotScaledOp>(
+                 c.getType(), lhs, rhs, c, lhs_scale.value_or(Value()),
+                 rhs_scale.value_or(Value()), lhs_format, rhs_format, fast_math,
+                 lhs_k_pack, rhs_k_pack);
+           })
+      .def("create_floor",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::FloorOp>(val);
+           })
+      .def("create_ceil",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::CeilOp>(val);
+           })
+      .def("create_exp",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::ExpOp>(val);
+           })
+      .def("create_exp2",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::Exp2Op>(val);
+           })
+      .def("create_cos",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::CosOp>(val);
+           })
+      .def("create_sin",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::SinOp>(val);
+           })
+      .def("create_log",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::LogOp>(val);
+           })
+      .def("create_log2",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::Log2Op>(val);
+           })
+      .def("create_erf",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::ErfOp>(val);
+           })
+      .def("create_sqrt",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::SqrtOp>(val);
+           })
+      .def("create_rsqrt",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::RsqrtOp>(val);
+           })
+      .def("create_fabs",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::AbsFOp>(val);
+           })
+      .def("create_iabs",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::AbsIOp>(val);
+           })
+      .def("create_reduce",
+           [](TritonOpBuilder &self, std::vector<Value> operands, int axis)
+               -> OpState { return self.create<ReduceOp>(operands, axis); })
+      .def("create_reduce_ret",
+           [](TritonOpBuilder &self, py::args args) -> OpState {
+             llvm::SmallVector<Value> return_values;
+             for (const auto &arg : args) {
+               return_values.push_back(py::cast<Value>(arg));
+             }
+             return self.create<ReduceReturnOp>(return_values);
+           })
+      .def("create_scan",
+           [](TritonOpBuilder &self, std::vector<Value> operands, int axis,
+              bool reverse) -> OpState {
+             return self.create<ScanOp>(operands, axis, reverse);
+           })
+      .def("create_scan_ret",
+           [](TritonOpBuilder &self, py::args args) -> OpState {
+             llvm::SmallVector<Value> return_values;
+             for (const auto &arg : args) {
+               return_values.push_back(py::cast<Value>(arg));
+             }
+             return self.create<ScanReturnOp>(return_values);
+           })
+      .def("create_map_elementwise",
+           [](TritonOpBuilder &self, std::vector<Value> inputs,
+              std::vector<Type> returnTys, int pack) -> OpState {
+             return self.create<MapElementwiseOp>(returnTys, inputs, pack);
+           })
+      .def("create_map_elementwise_ret",
+           [](TritonOpBuilder &self, std::vector<Value> returnVals) -> OpState {
+             return self.create<MapElementwiseReturnOp>(returnVals);
+           })
+      .def("create_ptr_to_int",
+           [](TritonOpBuilder &self, Value &val, Type &type) -> Value {
+             return self.create<PtrToIntOp>(type, val);
+           })
+      .def("create_int_to_ptr",
+           [](TritonOpBuilder &self, Value &val, Type &type) -> Value {
+             return self.create<IntToPtrOp>(type, val);
+           })
+      .def("create_select",
+           [](TritonOpBuilder &self, Value &condition, Value &trueValue,
+              Value &falseValue) -> Value {
+             return self.create<arith::SelectOp>(condition, trueValue,
+                                                 falseValue);
+           })
+      .def("create_inline_asm",
+           [](TritonOpBuilder &self, const std::string &inlineAsm,
+              const std::string &constraints, const std::vector<Value> &values,
+              const std::vector<Type> &types, bool isPure,
+              int pack) -> OpState {
+             return self.create<ElementwiseInlineAsmOp>(
+                 types, inlineAsm, constraints, isPure, pack, values);
+           })
+      .def("create_print",
+           [](TritonOpBuilder &self, const std::string &prefix, bool hex,
+              const std::vector<Value> &values,
+              const std::vector<int32_t> &isSigned) -> void {
+             auto prefixAttr = StringAttr::get(self.getBuilder().getContext(),
+                                               llvm::StringRef(prefix));
+             self.create<PrintOp>(prefixAttr, hex, values, isSigned);
+           })
+      .def("create_assert",
+           [](TritonOpBuilder &self, Value &condition,
+              const std::string &message) -> void {
+             auto messageAttr = StringAttr::get(self.getBuilder().getContext(),
+                                                llvm::StringRef(message));
+             self.create<AssertOp>(condition, messageAttr);
+           })
+      .def("create_assume",
+           [](TritonOpBuilder &self, Value &condition) {
+             self.create<LLVM::AssumeOp>(condition);
+           })
+      .def("create_poison",
+           [](TritonOpBuilder &self, Type &type) -> Value {
+             return self.create<ub::PoisonOp>(type);
+           })
+      .def("create_histogram",
+           [](TritonOpBuilder &self, Value operand, int numBins,
+              std::optional<Value> mask) -> Value {
+             if (!mask) {
+               return self.create<HistogramOp>(
+                   RankedTensorType::get(
+                       {static_cast<int64_t>(numBins)},
+                       IntegerType::get(operand.getContext(), 32)),
+                   operand);
+             } else {
+               return self.create<HistogramOp>(
+                   RankedTensorType::get(
+                       {static_cast<int64_t>(numBins)},
+                       IntegerType::get(operand.getContext(), 32)),
+                   operand, *mask);
+             }
+           })
+      .def("create_gather",
+           [](TritonOpBuilder &self, Value src, Value indices, int axis)
+               -> Value { return self.create<GatherOp>(src, indices, axis); })
+      // Force GPU barrier
+      .def("create_barrier",
+           [](TritonOpBuilder &self) {
+             self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
+           })
+      // Make a tensor descriptor
+      .def("create_make_tensor_descriptor",
+           [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
+              std::vector<Value> &strides, std::vector<int32_t> &tensorShape,
+              bool isSignedInteger, PaddingOption paddingOption) -> Value {
+             return self.create<MakeTensorDescOp>(base, shape, strides,
+                                                  tensorShape, isSignedInteger,
+                                                  paddingOption);
+           });
 
   if (std::string filename =
           mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
