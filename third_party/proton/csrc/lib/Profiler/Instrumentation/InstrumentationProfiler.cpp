@@ -71,6 +71,11 @@ void InstrumentationProfiler::doStop() {
     runtime->destroyStream(deviceStream);
   }
   deviceStreams.clear();
+  for (auto &[size, hostBuffer] : availableHostStagingBuffers) {
+    (void)size;
+    runtime->freeHostBuffer(hostBuffer);
+  }
+  availableHostStagingBuffers.clear();
   currentStepId = 0;
   completedBufferPtrs.clear();
   // Reset mode options
@@ -248,9 +253,7 @@ void InstrumentationProfiler::scheduleReadySteps() {
 
     runtime->waitEvent(stepFence.copyStream, stepFence.completionEvent);
     std::vector<PendingInstrumentedOp> stepOps;
-    std::vector<uint8_t *> hostBuffers;
     stepOps.reserve(readyOpsIt->second.size());
-    hostBuffers.reserve(readyOpsIt->second.size());
     for (auto &pendingOp : readyOpsIt->second) {
       if (pendingOp.size > MAX_HOST_BUFFER_SIZE) {
         throw std::runtime_error(
@@ -258,18 +261,18 @@ void InstrumentationProfiler::scheduleReadySteps() {
             " exceeds the limit " + std::to_string(MAX_HOST_BUFFER_SIZE) +
             ", not supported yet in proton");
       }
-      uint8_t *hostBuffer = nullptr;
-      runtime->allocateHostBuffer(&hostBuffer, pendingOp.size);
-      runtime->copyDeviceToHostAsync(hostBuffer, pendingOp.buffer, pendingOp.size,
-                                     stepFence.copyStream);
-      hostBuffers.push_back(hostBuffer);
       stepOps.push_back(std::move(pendingOp));
     }
+    auto stepCopySize = getStepCopySize(stepOps, stepFence.stepBufferToken);
+    auto *hostBuffer = acquireHostStagingBuffer(stepCopySize);
+    runtime->copyDeviceToHostAsync(
+        hostBuffer, reinterpret_cast<uint8_t *>(stepFence.stepBufferToken),
+        stepCopySize, stepFence.copyStream);
     auto *copyDoneEvent = runtime->createEvent();
     runtime->recordEvent(copyDoneEvent, stepFence.copyStream);
     inflightInstrumentedSteps.push_back(
         InFlightInstrumentedStep{stepFence.stepId, stepFence.stepBufferToken,
-                                 std::move(stepOps), std::move(hostBuffers),
+                                 std::move(stepOps), hostBuffer, stepCopySize,
                                  stepFence.copyStream, copyDoneEvent});
     opsByStep.erase(readyOpsIt);
     runtime->destroyEvent(stepFence.completionEvent);
@@ -283,6 +286,40 @@ void InstrumentationProfiler::scheduleReadySteps() {
   }
 }
 
+size_t InstrumentationProfiler::getStepCopySize(
+    const std::vector<PendingInstrumentedOp> &pendingOps,
+    uint64_t stepBufferToken) const {
+  size_t stepCopySize = 0;
+  for (const auto &pendingOp : pendingOps) {
+    auto bufferPtr = reinterpret_cast<uint64_t>(pendingOp.buffer);
+    if (bufferPtr < stepBufferToken) {
+      throw std::runtime_error(
+          "Instrumented launch buffer does not belong to the step buffer");
+    }
+    auto opEnd = static_cast<size_t>(bufferPtr - stepBufferToken) + pendingOp.size;
+    stepCopySize = std::max(stepCopySize, opEnd);
+  }
+  return stepCopySize;
+}
+
+uint8_t *InstrumentationProfiler::acquireHostStagingBuffer(size_t size) {
+  auto it = availableHostStagingBuffers.lower_bound(size);
+  if (it != availableHostStagingBuffers.end()) {
+    auto *hostBuffer = it->second;
+    availableHostStagingBuffers.erase(it);
+    return hostBuffer;
+  }
+
+  uint8_t *hostBuffer = nullptr;
+  runtime->allocateHostBuffer(&hostBuffer, size);
+  return hostBuffer;
+}
+
+void InstrumentationProfiler::releaseHostStagingBuffer(uint8_t *buffer,
+                                                       size_t size) {
+  availableHostStagingBuffers.emplace(size, buffer);
+}
+
 void InstrumentationProfiler::processCompletedCopies(bool blockUntilComplete) {
   std::vector<InFlightInstrumentedStep> pendingInflightSteps;
   pendingInflightSteps.reserve(inflightInstrumentedSteps.size());
@@ -291,14 +328,17 @@ void InstrumentationProfiler::processCompletedCopies(bool blockUntilComplete) {
       if (blockUntilComplete) {
         runtime->synchronizeStream(inflightStep.copyStream);
       }
-      for (size_t i = 0; i < inflightStep.pendingOps.size(); ++i) {
-        const auto &pendingOp = inflightStep.pendingOps[i];
-        auto *hostBuffer = inflightStep.hostBuffers[i];
-        parseCopiedInstrumentedOp(pendingOp, hostBuffer, pendingOp.size);
+      for (const auto &pendingOp : inflightStep.pendingOps) {
+        auto hostOffset = static_cast<size_t>(
+            reinterpret_cast<uint64_t>(pendingOp.buffer) -
+            inflightStep.stepBufferToken);
+        parseCopiedInstrumentedOp(pendingOp, inflightStep.hostBuffer + hostOffset,
+                                  pendingOp.size);
         completedBufferPtrs.push_back(
             reinterpret_cast<uint64_t>(pendingOp.buffer));
-        runtime->freeHostBuffer(hostBuffer);
       }
+      releaseHostStagingBuffer(inflightStep.hostBuffer,
+                               inflightStep.hostBufferSize);
       runtime->destroyEvent(inflightStep.completionEvent);
     } else {
       pendingInflightSteps.push_back(std::move(inflightStep));

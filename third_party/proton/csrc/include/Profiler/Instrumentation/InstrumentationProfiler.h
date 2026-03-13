@@ -78,13 +78,18 @@ private:
     size_t stepId;
     uint64_t stepBufferToken;
     std::vector<PendingInstrumentedOp> pendingOps;
-    std::vector<uint8_t *> hostBuffers;
+    uint8_t *hostBuffer;
+    size_t hostBufferSize;
     void *copyStream;
     void *completionEvent;
   };
 
   std::shared_ptr<ParserConfig> getParserConfig(uint64_t functionId,
                                                 size_t bufferSize) const;
+  size_t getStepCopySize(const std::vector<PendingInstrumentedOp> &pendingOps,
+                         uint64_t stepBufferToken) const;
+  uint8_t *acquireHostStagingBuffer(size_t size);
+  void releaseHostStagingBuffer(uint8_t *buffer, size_t size);
   void scheduleReadySteps();
   void processCompletedCopies(bool blockUntilComplete);
   void parseCopiedInstrumentedOp(const PendingInstrumentedOp &pendingOp,
@@ -110,6 +115,7 @@ private:
   std::vector<PendingInstrumentedOp> pendingInstrumentedOps;
   std::vector<PendingStepFence> pendingStepFences;
   std::vector<InFlightInstrumentedStep> inflightInstrumentedSteps;
+  std::multimap<size_t, uint8_t *> availableHostStagingBuffers;
   std::vector<uint64_t> completedBufferPtrs;
 };
 
