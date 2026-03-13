@@ -466,6 +466,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     cupti::getGraphExecId<true>(graphData->graphExec, &graphExecId);
   if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED ||
       cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED) {
+    if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL) {
+      // We only care about kernel nodes
+      return;
+    }
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
     if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED) {
@@ -529,6 +533,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       }
     }
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
+    if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL) {
+      // We only care about kernel nodes
+      return;
+    }
     auto &graphState = graphStates[graphId];
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
@@ -571,8 +579,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleResourceCallbacks(
   } else {
     auto *graphData =
         static_cast<CUpti_GraphData *>(resourceData->resourceDescriptor);
-    if (graphData->nodeType == CU_GRAPH_NODE_TYPE_KERNEL)
-      handleGraphResourceCallbacks(profiler, cbId, graphData);
+    handleGraphResourceCallbacks(profiler, cbId, graphData);
   }
 }
 
