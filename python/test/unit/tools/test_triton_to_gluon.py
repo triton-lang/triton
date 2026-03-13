@@ -364,7 +364,6 @@ def test_cat(tmp_path, target):
     torch.testing.assert_close(sorted(out.cpu()), sorted(ref.cpu()), atol=0, rtol=0)
 
 
-
 @triton.jit
 def make_desc_copy_kernel(in_ptr, out_ptr, M, N, stride_m, stride_n, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     in_desc = tl.make_tensor_descriptor(in_ptr, shape=[M, N], strides=[stride_m, stride_n],
@@ -391,8 +390,8 @@ def test_make_tensor_descriptor_gfx1250(tmp_path):
 
 
 @triton.jit
-def gather_scatter_roundtrip_kernel(out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y: tl.constexpr,
-                                    BLOCK_X: tl.constexpr, BLOCK_Y: tl.constexpr):
+def gather_scatter_roundtrip_kernel(out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y: tl.constexpr, BLOCK_X: tl.constexpr,
+                                    BLOCK_Y: tl.constexpr):
     idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
     in_desc = tl.make_tensor_descriptor(in_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
     out_desc = tl.make_tensor_descriptor(out_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
@@ -409,10 +408,9 @@ def test_gather_scatter_roundtrip(tmp_path):
     inp = torch.arange(X * Y, device="cuda", dtype=torch.float16).reshape(X, Y)
     idx = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7], device="cuda", dtype=torch.int32)
     out = torch.zeros((X, Y), device="cuda", dtype=torch.float16)
-    kernel[(1,)](out, inp, idx, X, Y, BLOCK_X, BLOCK_Y)
+    kernel[(1, )](out, inp, idx, X, Y, BLOCK_X, BLOCK_Y)
 
     expected = torch.zeros_like(out)
     for i, row in enumerate(idx.tolist()):
         expected[row] = inp[row]
     torch.testing.assert_close(out, expected, atol=0, rtol=0)
-

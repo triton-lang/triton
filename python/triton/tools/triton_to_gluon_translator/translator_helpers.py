@@ -345,8 +345,8 @@ def tl_dot_scaled(
     rhs_k_pack=True,
     out_dtype=ttgl.float32,
 ):
-    if (_is_nvidia(current_target()) and tl_dot_scaled_mmav5_supported(lhs.type, rhs.type, ttgl.num_warps()) and lhs_scale is not None
-            and rhs_scale is not None):
+    if (_is_nvidia(current_target()) and tl_dot_scaled_mmav5_supported(lhs.type, rhs.type, ttgl.num_warps())
+            and lhs_scale is not None and rhs_scale is not None):
         return tl_dot_scaled_blackwell(
             lhs,
             lhs_scale,
@@ -778,12 +778,10 @@ def tl_obj_gather_amd(desc, x_offsets, y_offset, _semantic=None, _generator=None
     block_n = desc.block_shape[1]
     gather_shape = [num_idx, block_n]
     smem_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
-    gather_desc = amd_tdm.make_tensor_descriptor(
-        desc._tdm_base, list(desc._tdm_shape), list(desc._tdm_strides),
-        gather_shape, smem_layout, _semantic=_semantic)
+    gather_desc = amd_tdm.make_tensor_descriptor(desc._tdm_base, list(desc._tdm_shape), list(desc._tdm_strides),
+                                                 gather_shape, smem_layout, _semantic=_semantic)
     num_warps = ttgl.num_warps(_semantic=_semantic, _generator=_generator)
-    idx_base = ttgl.BlockedLayout(
-        [num_idx, 1], [1, get_num_threads_per_warp(current_target())], [1, num_warps], [1, 0])
+    idx_base = ttgl.BlockedLayout([num_idx, 1], [1, get_num_threads_per_warp(current_target())], [1, num_warps], [1, 0])
     idx_layout = ttgl.SliceLayout(1, idx_base)
     x_offsets = ttgl.convert_layout(x_offsets, idx_layout, _semantic=_semantic)
     alloc = ttgl.allocate_shared_memory(desc.dtype, gather_shape, smem_layout, _semantic=_semantic)
@@ -804,12 +802,10 @@ def tl_obj_scatter_amd(desc, value, x_offsets, y_offset, _semantic=None, _genera
     block_n = desc.block_shape[1]
     scatter_shape = [num_idx, block_n]
     smem_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
-    scatter_desc = amd_tdm.make_tensor_descriptor(
-        desc._tdm_base, list(desc._tdm_shape), list(desc._tdm_strides),
-        scatter_shape, smem_layout, _semantic=_semantic)
+    scatter_desc = amd_tdm.make_tensor_descriptor(desc._tdm_base, list(desc._tdm_shape), list(desc._tdm_strides),
+                                                  scatter_shape, smem_layout, _semantic=_semantic)
     num_warps = ttgl.num_warps(_semantic=_semantic, _generator=_generator)
-    idx_base = ttgl.BlockedLayout(
-        [num_idx, 1], [1, get_num_threads_per_warp(current_target())], [1, num_warps], [1, 0])
+    idx_base = ttgl.BlockedLayout([num_idx, 1], [1, get_num_threads_per_warp(current_target())], [1, num_warps], [1, 0])
     idx_layout = ttgl.SliceLayout(1, idx_base)
     x_offsets = ttgl.convert_layout(x_offsets, idx_layout, _semantic=_semantic)
     alloc = ttgl.allocate_shared_memory(desc.dtype, scatter_shape, smem_layout, value, _semantic=_semantic)
