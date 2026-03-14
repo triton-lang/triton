@@ -678,6 +678,33 @@ def test_invalid_slice(device):
     with pytest.raises(triton.TritonError, match='unsupported tensor index'):
         _kernel[(1, )](dst=dst)
 
+    @triton.jit
+    def scalar_none_slice_none():
+        scalar = tl.full([], 1, tl.int32)
+        t = scalar[None, :, None]
+
+    @triton.jit
+    def scalar_slice_none():
+        scalar = tl.full([], 1, tl.int32)
+        t = scalar[:, None]
+
+    @triton.jit
+    def scalar_slice_slice_none():
+        scalar = tl.full([], 1, tl.int32)
+        t = scalar[:, :, None]
+
+    with pytest.raises(triton.TritonError) as exc_info:
+        scalar_none_slice_none[(1, )]()
+    assert "too many indices for tensor: tensor is 0-dimensional, but 1 were indexed" in str(exc_info.value.__cause__)
+
+    with pytest.raises(triton.TritonError) as exc_info:
+        scalar_slice_none[(1, )]()
+    assert "too many indices for tensor: tensor is 0-dimensional, but 1 were indexed" in str(exc_info.value.__cause__)
+
+    with pytest.raises(triton.TritonError) as exc_info:
+        scalar_slice_slice_none[(1, )]()
+    assert "too many indices for tensor: tensor is 0-dimensional, but 2 were indexed" in str(exc_info.value.__cause__)
+
 
 # ----------------
 # test expand_dims
