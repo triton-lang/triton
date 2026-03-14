@@ -330,9 +330,6 @@ class InstrumentationHook(Hook):
         self.current_buffer = None
         self.step_buffer_rings = {}
 
-    def flush(self) -> None:
-        self.current_buffer = None
-
     def mark_step(self, stream: int) -> None:
         device = triton.runtime.driver.active.get_current_device()
         ring = self.step_buffer_rings.get(device)

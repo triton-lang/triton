@@ -257,6 +257,42 @@ For simplicity, the public API now couples step marking and async drain
 scheduling. We can split those again later if we want a separate batching
 control.
 
+## Current Implementation Map
+
+The current PR branch maps the design above to these main code paths:
+
+- GPU profile buffer allocation:
+  - `third_party/proton/proton/hooks/instrumentation.py`
+  - `StepBufferRing._allocate_slot(...)` allocates each preallocated GPU step-buffer slot as a device `torch.uint8` tensor.
+  - `StepBufferRing.allocate(...)` carves one launch allocation out of the current step slot.
+  - `CudaAllocator.__call__(...)` is the Triton profile allocator entrypoint that routes kernel profile-scratch requests into the current step-buffer slot.
+- Host staging buffer allocation:
+  - `third_party/proton/csrc/lib/Profiler/Instrumentation/InstrumentationProfiler.cpp`
+  - `InstrumentationProfiler::acquireHostStagingBuffer(...)` reuses or allocates pinned host staging buffers from the size-keyed pool.
+  - `third_party/proton/csrc/lib/Runtime/CudaRuntime.cpp`
+  - `CudaRuntime::allocateHostBuffer(...)` is the CUDA runtime implementation of the pinned host allocation.
+  - `third_party/proton/csrc/lib/Runtime/HipRuntime.cpp`
+  - `HipRuntime::allocateHostBuffer(...)` is the HIP counterpart.
+- Collection of start/end timing on GPU:
+  - `third_party/proton/Dialect/lib/ProtonGPUToLLVM/PatternProtonGPUOpToLLVM.cpp`
+  - `InitializeOpConversion` lowers kernel-trace mode entry instrumentation to an atomic min into slot 0 of the launch record.
+  - `FinalizeOpConversion` lowers kernel-trace mode exit instrumentation to an atomic max into slot 1 of the launch record.
+  - `third_party/proton/proton/hooks/instrumentation.py`
+  - `InstrumentationHook.initialize_kernel_trace_record(...)` initializes the launch record to `start=UINT64_MAX`, `end=0` before the kernel runs.
+- D2H copy scheduling:
+  - `third_party/proton/csrc/lib/Session/Session.cpp`
+  - `SessionManager::markStep(...)` treats public `mark_step()` as both "seal the step" and "schedule async draining now".
+  - `third_party/proton/csrc/lib/Profiler/Instrumentation/InstrumentationProfiler.cpp`
+  - `InstrumentationProfiler::scheduleReadySteps(...)` waits on the step-complete event, acquires a host staging buffer, and enqueues the async D2H copy on the copy stream.
+  - `third_party/proton/csrc/lib/Runtime/CudaRuntime.cpp`
+  - `CudaRuntime::copyDeviceToHostAsync(...)` is the CUDA runtime implementation used by the copy stream.
+  - `third_party/proton/csrc/lib/Runtime/HipRuntime.cpp`
+  - `HipRuntime::copyDeviceToHostAsync(...)` is the HIP counterpart.
+- Host parsing logic:
+  - `third_party/proton/csrc/lib/Profiler/Instrumentation/InstrumentationProfiler.cpp`
+  - `InstrumentationProfiler::processCompletedCopies(...)` detects completed async copies and hands each copied launch slice to the parser.
+  - `InstrumentationProfiler::parseCopiedInstrumentedOp(...)` decodes the copied launch record and emits `KernelMetric` trace events for `trace_mode="kernel"`.
+
 ## Why Not Per-Launch Host Parsing
 
 The current prototype proved correctness by:

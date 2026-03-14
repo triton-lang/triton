@@ -176,8 +176,6 @@ def deactivate(session: Optional[int] = None, flushing: bool = False) -> None:
         libproton.deactivate_all(flushing)
     else:
         libproton.deactivate(session, flushing)
-    if flushing:
-        HookManager.flush(session)
 
 
 def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -> None:
@@ -200,8 +198,6 @@ def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -
         if flags.command_line and session != 0:
             raise ValueError("Only one session can be finalized when running from the command line.")
         libproton.finalize(session, output_format)
-
-    HookManager.flush(session)
     HookManager.unregister(session)
 
 

@@ -32,9 +32,6 @@ class Hook:
     def deactivate(self) -> None:
         raise NotImplementedError
 
-    def flush(self) -> None:
-        pass
-
     def mark_step(self, stream: int) -> None:
         pass
 
@@ -101,23 +98,6 @@ class HookManager:
             if not any(session_hooks[hook] for session_hooks in HookManager.session_hooks.values()):
                 hook.deactivate()
                 HookManager.active_hooks.remove(hook)
-
-    @staticmethod
-    def flush(session: Optional[int] = None) -> None:
-        if session is None:
-            sessions = HookManager.session_hooks.keys()
-        else:
-            sessions = [session]
-
-        flushed_hooks = set()
-        for session_id in sessions:
-            if session_id not in HookManager.session_hooks:
-                continue
-            for hook in HookManager.session_hooks[session_id]:
-                if hook in flushed_hooks:
-                    continue
-                hook.flush()
-                flushed_hooks.add(hook)
 
     @staticmethod
     def mark_step(stream: int, session: Optional[int] = None) -> None:
