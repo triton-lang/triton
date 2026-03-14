@@ -73,6 +73,11 @@ class PCSampling(BaseMode):
 class InstrumentationMode(BaseMode):
     """Common base class for instrumentation modes with shared configuration."""
     metric_type: triton_proton.METRIC_TYPE = triton_proton.METRIC_TYPE.CYCLE
+    # Supported trace modes:
+    # - "scope": emit the existing intra-kernel scope trace from proton.record
+    #   intervals inside each Triton launch.
+    # - "kernel": emit one launch-level trace event per Triton kernel using the
+    #   profiling scratch record's start/end timestamps.
     trace_mode: str = "scope"
     sampling_strategy: triton_proton.SAMPLING_STRATEGY = triton_proton.SAMPLING_STRATEGY.NONE
     sampling_options: str = ""
