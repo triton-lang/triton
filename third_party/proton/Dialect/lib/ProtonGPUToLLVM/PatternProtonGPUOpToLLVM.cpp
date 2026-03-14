@@ -18,7 +18,7 @@ namespace {
 
 bool usesPerKernelTraceRecord(Operation *op) {
   auto mod = op->getParentOfType<ModuleOp>();
-  auto attr = mod.getAttrOfType<IntegerAttr>("ttg.profile_scratch_is_total");
+  auto attr = mod->getAttrOfType<IntegerAttr>("ttg.profile_scratch_is_total");
   return attr && attr.getInt() != 0;
 }
 
