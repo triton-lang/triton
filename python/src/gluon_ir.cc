@@ -713,7 +713,13 @@ void init_gluon_ir(py::module &&m) {
               int bitwidth) -> int {
              auto regLayout = ttg::toLinearLayout(shape, regLayoutAttr);
              auto smemLayout = ttg::toLinearLayout(shape, sharedLayoutAttr);
-             return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth);
+             int numBanks = ttg::TritonGPUDialect::getNumBanks(
+                 self.getBuilder()
+                     .getInsertionBlock()
+                     ->getParentOp()
+                     ->getParentOfType<ModuleOp>());
+             return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
+                                              numBanks);
            })
       .def("create_local_dealloc",
            [](GluonOpBuilder &self, Value memDesc) -> Operation * {
