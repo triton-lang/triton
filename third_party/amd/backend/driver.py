@@ -312,6 +312,8 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
     return wrap_handle_tensordesc_impl(launcher, signature, tensordesc_meta, make_tensordesc_arg)
 
 
+# Keep these integer values in sync with the C++ ProfileScratchBufferUnit enums
+# in ProtonToProtonGPU and ProtonGPUToLLVM.
 PROFILE_SCRATCH_BUFFER_UNIT_CTA = 0
 PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH = 1
 

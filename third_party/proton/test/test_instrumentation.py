@@ -64,6 +64,35 @@ def test_mode_obj(mode, tmp_path: pathlib.Path):
     proton.finalize()
 
 
+def test_kernel_trace_profile_scratch_buffer_unit(tmp_path: pathlib.Path):
+
+    @triton.jit
+    def copy_kernel(x_ptr, y_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        tl.store(y_ptr + offsets, tl.load(x_ptr + offsets, mask=mask), mask=mask)
+
+    backend = triton.runtime.driver.active.get_current_target().backend
+    if backend == "cuda":
+        from triton.backends.nvidia.driver import PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH
+    elif backend == "hip":
+        from triton.backends.amd.driver import PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH
+    else:
+        raise AssertionError(f"Unsupported backend: {backend}")
+
+    x = torch.rand(256, device="cuda")
+    y = torch.empty_like(x)
+    temp_file = tmp_path / "test_kernel_trace_profile_scratch_buffer_unit.hatchet"
+    mode = proton.mode.Default(trace_mode="kernel")
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
+    pgm = copy_kernel[(1, 1, 1)](x, y, y.numel(), BLOCK_SIZE=1024, num_warps=1)
+    proton.finalize()
+
+    assert pgm.metadata.profile_scratch_buffer_unit == PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH
+
+
 def test_jit(tmp_path):
 
     @triton.jit

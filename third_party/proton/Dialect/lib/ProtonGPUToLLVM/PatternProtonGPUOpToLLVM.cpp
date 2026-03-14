@@ -16,6 +16,8 @@ namespace proton::gpu {
 
 namespace {
 
+// Keep these integer values in sync with the Python launcher constants in
+// third_party/{nvidia,amd}/backend/driver.py.
 enum class ProfileScratchBufferUnit : int32_t {
   CTA = 0,
   KERNEL_LAUNCH = 1,
