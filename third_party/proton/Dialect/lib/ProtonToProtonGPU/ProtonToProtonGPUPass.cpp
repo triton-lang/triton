@@ -246,6 +246,9 @@ public:
       mod->setAttr("ttg.profile_scratch_buffer_unit",
                    builder.getI32IntegerAttr(static_cast<int32_t>(
                        ProfileScratchBufferUnit::KERNEL_LAUNCH)));
+      // Kernel-trace mode writes a single launch-wide {start, end} record into
+      // profile scratch. Lowering expands initialize/finalize into CTA-leader
+      // atomicMin/atomicMax updates on that shared record.
       Value profileMem = triton::gpu::GlobalScratchAllocOp::create(
           builder, loc, triton::getPointerType(builder.getI64Type()),
           allocProfileScratchSize, profileScratchAlignment,
@@ -269,11 +272,16 @@ public:
       auto segmentType = gpu::SegmentType::get(context, sizeof(uint32_t),
                                                memorySpace, granularity,
                                                selectIdVec);
+      // Reuse the existing finalize plumbing even though kernel-trace mode does
+      // not emit proton.record scopes. The synthetic segment preserves the
+      // initialize/finalize IR pattern that lowering already understands.
       Value segment = gpu::SegmentAllocOp::create(builder, loc, segmentType,
                                                   buffer);
 
       func.walk([&](triton::ReturnOp ret) {
         builder.setInsertionPoint(ret);
+        // Finalize every kernel exit path so the launch end timestamp is
+        // recorded even when the Triton function returns from multiple sites.
         mlir::triton::gpu::BarrierOp::create(
             builder, loc,
             triton::gpu::AddrSpace::Local |
