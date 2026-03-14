@@ -119,6 +119,7 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                             std::string);
   ADD_PASS_WRAPPER_0("add_convert_to_tensor_ops",
                      mlir::createTritonAMDGPUConvertToTensorOps);
+  mlir::registerConSanAMDHooks();
   m.def("add_in_thread_transpose", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUInThreadTranspose());

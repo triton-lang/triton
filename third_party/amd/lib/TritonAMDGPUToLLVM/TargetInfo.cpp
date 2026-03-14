@@ -26,6 +26,63 @@ LLVM::LLVMFuncOp getOrInsertFunction(T &moduleOp, const Location loc,
   return ret;
 }
 
+// Create (or look up) a noinline function that prints an assertion message
+// via ockl hostcall. Isolating the printf code in a separate noinline
+// function keeps VGPR pressure low when using instrumentation.
+LLVM::LLVMFuncOp getOrCreateAssertFailFunc(ModuleOp moduleOp, Location loc,
+                                           RewriterBase &rewriter) {
+  auto *ctx = rewriter.getContext();
+  StringRef funcName = "__triton_assert_fail";
+
+  if (auto existing = moduleOp.lookupSymbol<LLVM::LLVMFuncOp>(funcName))
+    return existing;
+
+  RewriterBase::InsertionGuard guard(rewriter);
+
+  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+  auto i64Ty = IntegerType::get(ctx, 64);
+  auto i32Ty = IntegerType::get(ctx, 32);
+  auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+  // Ensure ockl function declarations exist at module scope.
+  auto printBeginFn = getOrInsertFunction(
+      moduleOp, loc, rewriter, "__ockl_fprintf_stderr_begin",
+      LLVM::LLVMFunctionType::get(i64Ty, {}));
+  auto printStrFn = getOrInsertFunction(
+      moduleOp, loc, rewriter, "__ockl_printf_append_string_n",
+      LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, ptrTy, i64Ty, i32Ty}));
+
+  // Create the noinline function: void @__triton_assert_fail(ptr, i64)
+  rewriter.setInsertionPointToStart(moduleOp.getBody());
+  auto funcType = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i64Ty});
+  auto funcOp = LLVM::LLVMFuncOp::create(rewriter, loc, funcName, funcType,
+                                         LLVM::Linkage::Internal);
+  funcOp.setPassthroughAttr(
+      ArrayAttr::get(ctx, {
+                              StringAttr::get(ctx, "noinline"),
+                              StringAttr::get(ctx, "cold"),
+                              StringAttr::get(ctx, "convergent"),
+                              StringAttr::get(ctx, "nounwind"),
+                          }));
+  if (auto numWarps = moduleOp->getAttrOfType<IntegerAttr>("ttg.num-warps"))
+    funcOp->setAttr("ws_num_warps", numWarps);
+
+  // Build the function body.
+  Block *entry =
+      rewriter.createBlock(&funcOp.getBody(), {}, {ptrTy, i64Ty}, {loc, loc});
+  Value msg = entry->getArgument(0);
+  Value len = entry->getArgument(1);
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value beginResult = b.call(printBeginFn, ValueRange()).getResult();
+  Value oneI32 = b.i32_val(1);
+  SmallVector<Value> printArgs = {beginResult, msg, len, oneI32};
+  b.call(printStrFn, printArgs);
+  LLVM::ReturnOp::create(rewriter, loc, ValueRange());
+
+  return funcOp;
+}
+
 // Extend all values to 64-bit per printf call requirements.
 Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
   auto *context = rewriter.getContext();
@@ -639,6 +696,9 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto *ctx = rewriter.getContext();
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+
   // Compose and print an assert message.
   llvm::SmallString<256> msgBuffer;
   llvm::Twine("device assertion failed: '" + message + "', in " + func +
@@ -646,14 +706,30 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
       .toStringRef(msgBuffer);
   Value msgValue =
       LLVM::addStringToModule(loc, rewriter, "printfFormat_", msgBuffer);
-  printfImpl(msgValue, msgBuffer.size_in_bytes(), /*args=*/ValueRange(),
-             /*isSigned=*/{}, rewriter, /*useStdError=*/true);
+
+  // Call the noinline assert handler to print the message via hostcall.
+  auto assertFailFunc = getOrCreateAssertFailFunc(moduleOp, loc, rewriter);
+  Value msgLen = LLVM::ConstantOp::create(
+      rewriter, loc, IntegerType::get(ctx, 64), msgBuffer.size_in_bytes());
+  SmallVector<Value> callArgs = {msgValue, msgLen};
+  b.call(assertFailFunc, callArgs);
 
   // Set block barrier before aborting kernel, give a chance for all
   // the threads in a block to check/print the assert failure.
   b.barrier(triton::gpu::AddrSpace::All);
   // Perform the trap to abort the kernel.
-  LLVM::Trap::create(rewriter, loc);
+  // Use inline asm "s_trap 2" instead of LLVM::Trap because llvm.trap is
+  // noreturn, inserting 'unreachable' which causes StructurizeCFG to defer
+  // the block past convergence points, making ConSan lock releases
+  // unreachable and causing deadlocks. The noinline helper above prevents
+  // the printf code from being inlined and bloating the kernel.
+  LLVM::InlineAsmOp::create(
+      rewriter, loc, LLVM::LLVMVoidType::get(ctx), /*operands=*/ValueRange{},
+      "s_trap 2", /*constraints=*/"",
+      /*has_side_effects=*/true, /*is_align_stack=*/false,
+      LLVM::TailCallKind::None,
+      LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
+      /*operand_attrs=*/ArrayAttr::get(ctx, {}));
 }
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }

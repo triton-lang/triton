@@ -1,5 +1,7 @@
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
 
+#include <cassert>
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Builders.h"
@@ -46,8 +48,8 @@ namespace {
 namespace BarrierBits {
 constexpr unsigned phaseBit = 0;
 constexpr unsigned initCountLsb = 1;
-constexpr unsigned currentCountLsb = 9;
-constexpr unsigned countBitWidth = 8;
+constexpr unsigned currentCountLsb = 11;
+constexpr unsigned countBitWidth = 10;
 constexpr unsigned countMask = (1u << countBitWidth) - 1;
 } // namespace BarrierBits
 
@@ -699,6 +701,8 @@ void FunctionBuilder::createVerifyBarrierInitializedCall(
 void FunctionBuilder::createInitBarrierStateCall(ImplicitLocOpBuilder &b,
                                                  Value mbar, int count,
                                                  Operation *insertPoint) {
+  assert((unsigned)count <= BarrierBits::countMask &&
+         "barrier init count exceeds barrier state capacity");
 
   if (auxData.barriers.empty() || auxData.barrierStates.empty()) {
     return;
@@ -818,6 +822,8 @@ void FunctionBuilder::createVerifyBarrierArriveCall(ImplicitLocOpBuilder &b,
                                                     Value mbar, int count,
                                                     Value pred,
                                                     Operation *insertPoint) {
+  assert((unsigned)count <= BarrierBits::countMask &&
+         "barrier arrive count exceeds barrier state capacity");
 
   if (auxData.barriers.empty() || auxData.barrierStates.empty()) {
     return;
@@ -893,6 +899,8 @@ void FunctionBuilder::createUpdateBarrierStateCall(ImplicitLocOpBuilder &b,
                                                    Value mbar, int count,
                                                    Value pred,
                                                    Operation *insertPoint) {
+  assert((unsigned)count <= BarrierBits::countMask &&
+         "barrier update count exceeds barrier state capacity");
 
   if (auxData.barriers.empty() || auxData.barrierStates.empty()) {
     return;
@@ -2375,6 +2383,135 @@ void FunctionBuilder::createClearOutstandingCommitsTransferReadsCall(
                                       readVisibilityUpdated,
                                       readVisibilityType);
 
+        Value outstandingCommitsZero =
+            tti::createConstIntTensor(fb, fb.getLoc(), 0, commitsType);
+        outstandingCommits =
+            arith::SelectOp::create(fb, outstandingCommitsGtOutstandingNum,
+                                    outstandingCommitsZero, outstandingCommits);
+        tti::createStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
+                                      outstandingCommits, commitsType);
+
+        fb.setInsertionPointToEnd(thenBlock);
+        triton::ReturnOp::create(fb);
+      });
+}
+
+void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
+    ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
+    int outstandingNum, Value pred, CommitKind::Kind commitKind,
+    MemType memType, Operation *insertPoint) {
+  if (auxData.commits[commitKind].empty())
+    return;
+  bool hasWriteVis = !auxData.writeVisibility[(int)memType].empty();
+  bool hasReadVis = !auxData.readVisibility[(int)memType].empty();
+  if (!hasWriteVis && !hasReadVis)
+    return;
+  if (!hasWriteVis) {
+    createClearOutstandingCommitsTransferReadsCall(
+        b, thread, transferThreadMask, outstandingNum, pred, commitKind,
+        memType, insertPoint);
+    return;
+  }
+  if (!hasReadVis) {
+    createClearOutstandingCommitsTransferWritesCall(
+        b, thread, transferThreadMask, outstandingNum, pred, commitKind,
+        memType, insertPoint);
+    return;
+  }
+  if (!pred)
+    pred = arith::ConstantIntOp::create(b, 1, 1);
+  ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
+  ValueType writeVisibility =
+      auxData.writeVisibility[(int)memType].at(insertPoint);
+  ValueType readVisibility =
+      auxData.readVisibility[(int)memType].at(insertPoint);
+  auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
+  auto writeVisibilityType = cast<RankedTensorType>(writeVisibility.type);
+  auto readVisibilityType = cast<RankedTensorType>(readVisibility.type);
+  Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
+  Value transferMaskVal =
+      arith::ConstantIntOp::create(b, transferThreadMask, 64);
+  Value outstandingNumVal = arith::ConstantIntOp::create(b, outstandingNum, 32);
+  SmallVector<Value> args = {threadVal,
+                             transferMaskVal,
+                             outstandingNumVal,
+                             pred,
+                             outstandingCommits.value,
+                             writeVisibility.value,
+                             readVisibility.value};
+  createCallToCachedFunction(
+      b, "clear_outstanding_commits_transfer_both", args,
+      /*assertInfo=*/std::nullopt,
+      {commitsType, writeVisibilityType, readVisibilityType},
+      [commitsType, writeVisibilityType,
+       readVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value threadVal = entryBlock->getArgument(0);
+        Value transferMaskVal = entryBlock->getArgument(1);
+        Value outstandingNumVal = entryBlock->getArgument(2);
+        Value pred = entryBlock->getArgument(3);
+        Value outstandingCommitsPtr = entryBlock->getArgument(4);
+        Value writeVisibilityPtr = entryBlock->getArgument(5);
+        Value readVisibilityPtr = entryBlock->getArgument(6);
+
+        auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
+        fb.setInsertionPointToStart(ifBlock);
+
+        Value outstandingCommits = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), outstandingCommitsPtr, commitsType);
+        Value writeVisibility = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), writeVisibilityPtr, writeVisibilityType);
+        Value readVisibility = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
+
+        auto elemIntType = cast<IntegerType>(commitsType.getElementType());
+        Value outstandingNumElem =
+            adjustIntegerWidth(fb, outstandingNumVal, elemIntType);
+        Value threadColumnMask = createColumnMask(fb, threadVal, commitsType);
+        auto outstandingCommitsGtOutstandingNum =
+            createCmpIntTensorScalar(fb, outstandingCommits, outstandingNumElem,
+                                     arith::CmpIPredicate::sgt);
+        outstandingCommitsGtOutstandingNum = arith::AndIOp::create(
+            fb, outstandingCommitsGtOutstandingNum, threadColumnMask);
+
+        // Update write visibility
+        Value writeRowMask =
+            createBitwiseOrReduce(fb, outstandingCommitsGtOutstandingNum,
+                                  /*axis=*/1);
+        writeRowMask = createConvertLayout(fb, writeRowMask,
+                                           writeVisibilityType.getEncoding());
+        Value writeTransferMaskElem = adjustIntegerWidth(
+            fb, transferMaskVal,
+            cast<IntegerType>(writeVisibilityType.getElementType()));
+        Value writeTransferMaskTensor = triton::SplatOp::create(
+            fb, writeVisibilityType, writeTransferMaskElem);
+        Value writeVisibilityOrThreadBit =
+            arith::OrIOp::create(fb, writeVisibility, writeTransferMaskTensor);
+        Value writeVisibilityUpdated = arith::SelectOp::create(
+            fb, writeRowMask, writeVisibilityOrThreadBit, writeVisibility);
+        tti::createStoreScratchMemory(fb, fb.getLoc(), writeVisibilityPtr,
+                                      writeVisibilityUpdated,
+                                      writeVisibilityType);
+
+        // Update read visibility
+        Value readRowMask =
+            createBitwiseOrReduce(fb, outstandingCommitsGtOutstandingNum,
+                                  /*axis=*/1);
+        readRowMask =
+            convertAndBroadcast(fb, readRowMask, /*dim=*/1, readVisibilityType);
+        Value readTransferMaskElem = adjustIntegerWidth(
+            fb, transferMaskVal,
+            cast<IntegerType>(readVisibilityType.getElementType()));
+        Value readTransferMaskTensor = triton::SplatOp::create(
+            fb, readVisibilityType, readTransferMaskElem);
+        Value readVisibilityOrThreadBit =
+            arith::OrIOp::create(fb, readVisibility, readTransferMaskTensor);
+        Value readVisibilityUpdated = arith::SelectOp::create(
+            fb, readRowMask, readVisibilityOrThreadBit, readVisibility);
+        tti::createStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
+                                      readVisibilityUpdated,
+                                      readVisibilityType);
+
+        // Clear outstanding commits once
         Value outstandingCommitsZero =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, commitsType);
         outstandingCommits =

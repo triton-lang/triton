@@ -42,4 +42,22 @@ def InferMemDescTypeOpWithLayoutEquivalence : InferTypeOpAdaptorBase<[{
   }
 }]>;
 
+def MBarrierOpInterface : OpInterface<"MBarrierOpInterface"> {
+  let description = [{
+    Interface for operations that use mbarrier synchronization primitives.
+    Returns the barrier memdesc operand (or null if absent), allowing
+    backend-agnostic barrier identification without direct dialect dependencies.
+  }];
+
+  let cppNamespace = "::mlir::triton::gpu";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Return the barrier memdesc operand, or null if absent.",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getBarrierMemDesc"
+    >
+  ];
+}
+
 #endif // TRITONGPU_OP_INTERFACES
