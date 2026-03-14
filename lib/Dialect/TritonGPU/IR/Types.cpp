@@ -128,17 +128,20 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
              << "bitwidth * colStride must be less than or equal to 32. Got "
              << bitwidth << " and " << enc.getColStride();
     }
-    shape = shape.take_back(2);
+    // Takes subslices into account and figures out whether we can construct
+    // the linear layout at all
     allocShape = allocShape.take_back(2);
     auto ctaSplit = enc.getCGALayout().getCTASplitNum();
+    auto blockN = std::min<int32_t>(enc.getBlockN(), shape.back());
     if (allocShape[0] < enc.getBlockM() * ctaSplit[0] ||
-        allocShape[1] < enc.getBlockN() * ctaSplit[1]) {
+        allocShape[1] < blockN * ctaSplit[1]) {
       return emitError() << "the allocation shape must be at least "
                          << enc.getBlockM() * ctaSplit[0] << "x"
-                         << enc.getBlockN() * ctaSplit[1] << ". Got "
-                         << allocShape;
+                         << blockN * ctaSplit[1] << ". Got " << allocShape;
     }
+    // Checks the layout of the allocation
     auto ll = toLinearLayout(allocShape, enc);
+    // Sanity check that the layout is of the right shape
     auto dims = standardOutDimNames(ctx, 2);
     if (ll.getOutDimSize(dims[0]) != allocShape[0] ||
         ll.getOutDimSize(dims[1]) != allocShape[1]) {

@@ -269,8 +269,6 @@ public:
         tmemStoreOp.getDst().getType().getEncoding());
     if (!tmemEnc)
       return failure();
-    int M = tmemEnc.getBlockM();
-    int N = tmemEnc.getBlockN();
     int numWarps = ttg::lookupNumWarps(tmemStoreOp);
     // Compute the alternative layout.
     std::optional<LinearLayout> ll =
@@ -336,8 +334,6 @@ public:
         tmemLoadOp.getSrc().getType().getEncoding());
     if (!tmemEnc)
       return failure();
-    int M = tmemEnc.getBlockM();
-    int N = tmemEnc.getBlockN();
     int numWarps = ttg::lookupNumWarps(tmemLoadOp);
     auto oldType = tmemLoadOp.getType();
     auto memType = cast<gpu::MemDescType>(tmemLoadOp.getSrc().getType());

@@ -379,14 +379,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// NOTE: A/B/C/D's CGA-layout are not necessarilly equal when num-ctas > 1
+// NOTE: A/B/C/D's CGA-layout are not necessarily equal when num-ctas > 1
 //  - D and C's should have the same CGA-layout, in this case [[0, 1], [1, 0]]
 //  - A and B's CGA-layout is derived from D-CGA-layout by clearing the elements,
 //    corresponding to the K dim, in the bases to zero. Hence, one have layout
 //    [[0, 0] [1, ]], the other one has layout [[0, 1], [0, 0]]
+//  - However, A and B's CGAlayout is inferred on the fly. We only see parent's
+//    encoding in the IR.
 //
-// CHECK-DAG: #mma{{[0-9]}} = #ttg.amd_wmma<{version = 3, isTranspose = true, {{.*}} CGALayout = {{\[\[0, 0\], \[1, 0\]\]}}
-// CHECK-DAG: #mma{{[0-9]}} = #ttg.amd_wmma<{version = 3, isTranspose = true, {{.*}} CGALayout = {{\[\[0, 1\], \[0, 0\]\]}}
+// CHECK-NOT: #mma{{.*}} = #ttg.amd_wmma<{version = 3, isTranspose = true, {{.*}} CGALayout = {{\[\[0, 0\], \[1, 0\]\]}}
+// CHECK-NOT: #mma{{.*}} = #ttg.amd_wmma<{version = 3, isTranspose = true, {{.*}} CGALayout = {{\[\[0, 1\], \[0, 0\]\]}}
+// CHECK: #mma{{.*}} = #ttg.amd_wmma<{version = 3, isTranspose = true, {{.*}} CGALayout = {{\[\[0, 1\], \[1, 0\]\]}}
 // CHECK-LABEL: test_multi_ctas
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>

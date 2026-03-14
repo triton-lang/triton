@@ -186,18 +186,6 @@ Value createBufferDescriptor(ImplicitLocOpBuilder &b, Value offsetI32,
   return arith::OrIOp::create(b, lengthShifted, offsetI64);
 }
 
-uint32_t getMemDescLength(Value buf) {
-  auto memDescType = cast<ttg::MemDescType>(buf.getType());
-  if (isa<ttg::SharedEncodingTrait>(memDescType.getEncoding())) {
-    unsigned elSize = memDescType.getElementType().getIntOrFloatBitWidth() / 8;
-    return static_cast<uint32_t>(product(memDescType.getShape()) * elSize);
-  }
-  if (isa<ttng::TensorMemorySpaceAttr>(memDescType.getMemorySpace())) {
-    return ttng::getTmemAllocSizes(memDescType).numCols;
-  }
-  llvm_unreachable("Unsupported memory space for memdesc");
-}
-
 std::tuple<Block *, Block *, Block *> createIfBlock(ImplicitLocOpBuilder &b,
                                                     Value cnd) {
   // #prevBlock
@@ -1436,6 +1424,79 @@ void FunctionBuilder::createTrackVisibleReadsCall(ImplicitLocOpBuilder &b,
             fb, barriersEqBar, readTrackingOrVisible, readTracking);
         tti::createStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr,
                                       newTracking, readTrackingType);
+
+        fb.setInsertionPointToEnd(thenBlock);
+        triton::ReturnOp::create(fb);
+      });
+}
+
+void FunctionBuilder::createTrackBarrierWriteForBufferCall(
+    ImplicitLocOpBuilder &b, Value mbar, Value buf, uint32_t length, Value pred,
+    MemType memType, Operation *insertPoint) {
+  if (auxData.barriers.empty() || auxData.buffers[(int)memType].empty() ||
+      auxData.writeTracking[(int)memType].empty()) {
+    return;
+  }
+  if (!pred)
+    pred = arith::ConstantIntOp::create(b, 1, 1);
+  Value barriersVal = auxData.barriers.at(insertPoint).value;
+  auto barriersType =
+      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
+  Value buffersVal = auxData.buffers[(int)memType].at(insertPoint).value;
+  auto buffersType = cast<RankedTensorType>(
+      auxData.buffers[(int)memType].at(insertPoint).type);
+  Value writeTrackingVal =
+      auxData.writeTracking[(int)memType].at(insertPoint).value;
+  auto writeTrackingType = cast<RankedTensorType>(
+      auxData.writeTracking[(int)memType].at(insertPoint).type);
+  uint32_t mbarLength = getMemDescLength(mbar);
+  Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
+  Value mbarLengthVal = arith::ConstantIntOp::create(b, mbarLength, 32);
+  Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
+  Value bufLengthVal = arith::ConstantIntOp::create(b, length, 32);
+  SmallVector<Value> args = {mbarOffset, mbarLengthVal,   pred,
+                             bufOffset,  bufLengthVal,    barriersVal,
+                             buffersVal, writeTrackingVal};
+  createCallToCachedFunction(
+      b, "track_barrier_write_for_buffer", args,
+      /*assertInfo=*/std::nullopt,
+      {barriersType, buffersType, writeTrackingType, (uint64_t)memType},
+      [barriersType, buffersType, writeTrackingType](ImplicitLocOpBuilder &fb,
+                                                     Block *entryBlock) {
+        Value mbarOffset = entryBlock->getArgument(0);
+        Value mbarLengthVal = entryBlock->getArgument(1);
+        Value pred = entryBlock->getArgument(2);
+        Value bufOffset = entryBlock->getArgument(3);
+        Value bufLengthVal = entryBlock->getArgument(4);
+        Value barriers = entryBlock->getArgument(5);
+        Value buffers = entryBlock->getArgument(6);
+        Value writeTrackingPtr = entryBlock->getArgument(7);
+
+        auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
+        fb.setInsertionPointToStart(ifBlock);
+
+        Value writeTracking = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), writeTrackingPtr, writeTrackingType);
+        Value barrierDescriptor =
+            createBufferDescriptor(fb, mbarOffset, mbarLengthVal);
+        Value barriersEqBar =
+            createCmpIntTensorScalar(fb, barriers, barrierDescriptor);
+        barriersEqBar = convertAndBroadcast(fb, barriersEqBar, /*dim=*/0,
+                                            writeTrackingType);
+        Value bufferDescriptor =
+            createBufferDescriptor(fb, bufOffset, bufLengthVal);
+        Value buffersEqBuf =
+            createCmpIntTensorScalar(fb, buffers, bufferDescriptor);
+        buffersEqBuf =
+            convertAndBroadcast(fb, buffersEqBuf, /*dim=*/1, writeTrackingType);
+        Value trackMask =
+            arith::AndIOp::create(fb, barriersEqBar, buffersEqBuf);
+        Value writeTrackingOne =
+            tti::createConstIntTensor(fb, fb.getLoc(), 1, writeTrackingType);
+        Value newTracking = arith::SelectOp::create(
+            fb, trackMask, writeTrackingOne, writeTracking);
+        tti::createStoreScratchMemory(fb, fb.getLoc(), writeTrackingPtr,
+                                      newTracking, writeTrackingType);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);

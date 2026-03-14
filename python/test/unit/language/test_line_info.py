@@ -541,3 +541,8 @@ def test_line_and_column_numbers(fresh_triton_cache):
 
     check_template = inspect.getsource(kernel_basic.fn)
     run_filecheck("placeholder", h.asm["ttir"], check_template)
+
+
+@pytest.fixture(autouse=True)
+def with_line_info(fresh_knobs):
+    fresh_knobs.compilation.disable_line_info = False

@@ -106,6 +106,13 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
   return updateEncodingForShape(op, sharedEnc, tensorType);
 }
 
+bool hasCGABroadcast(ttg::MemDescType memDescType) {
+  auto kBlock = StringAttr::get(memDescType.getContext(), "block");
+  return ttg::toLinearLayout(memDescType)
+             .getFreeVariableMasks()
+             .lookup(kBlock) != 0;
+}
+
 FailureOr<int> getTMASwizzleMode(Location loc, tt::TensorDescInterface ty) {
   auto blockType = ty.getBlockType();
   auto encoding = blockType.getEncoding();

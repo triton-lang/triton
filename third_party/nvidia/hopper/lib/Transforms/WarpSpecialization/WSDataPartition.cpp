@@ -915,6 +915,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
       int numWarps = mlir::triton::gpu::lookupNumWarps(op);
       builder.setInsertionPoint(op);
 
+      // TODO: This should probably be written as memdesc_subslice
       // calculate new tmem type.
       auto retType = cast<MemDescType>(tmemAllocOp.getType());
       SmallVector<int64_t> shape{retType.getShape().begin(),
@@ -1296,8 +1297,8 @@ static bool doDeepCleanup(triton::FuncOp &funcOp,
     });
 
     // delete block arguments
+    runDeadIterArgElimination(funcOp);
     RewritePatternSet cleanUpPatterns(funcOp.getContext());
-    populateForOpDeadArgumentElimination(cleanUpPatterns);
     scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns,
                                             funcOp.getContext());
     scf::IfOp::getCanonicalizationPatterns(cleanUpPatterns,
