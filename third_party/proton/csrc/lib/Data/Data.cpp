@@ -149,11 +149,12 @@ void Data::dump(const std::string &outputFormat) {
     if (path.empty() || path == "-") {
       out.reset(new std::ostream(std::cout.rdbuf())); // Redirecting to cout
     } else {
+      const bool isProcFdPath = path.rfind("/proc/self/fd/", 0) == 0;
       auto suffix = currentPhase.load(std::memory_order_relaxed) == 0
                         ? ""
                         : ".part_" + std::to_string(phase);
       const auto filePath =
-          path + suffix + "." + outputFormatToString(outputFormatEnum);
+          isProcFdPath ? path : path + suffix + "." + outputFormatToString(outputFormatEnum);
       const auto fileMode =
           (outputFormatEnum == OutputFormat::HatchetMsgPack)
               ? (std::ios::out | std::ios::binary | std::ios::trunc)

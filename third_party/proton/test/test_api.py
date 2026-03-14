@@ -6,6 +6,7 @@ Profile correctness tests involving GPU kernels should be placed in `test_profil
 
 import pytest
 import json
+import os
 import triton.profiler as proton
 import pathlib
 from triton.profiler.hooks.hook import HookManager
@@ -59,6 +60,20 @@ def test_profile_multiple_sessions(tmp_path: pathlib.Path):
     proton.finalize()
     assert temp_file2.exists()
     assert temp_file3.exists()
+
+
+def test_profile_output_to_linux_pipe():
+    read_fd, write_fd = os.pipe()
+
+    with os.fdopen(read_fd, "rb") as reader, os.fdopen(write_fd, "wb") as writer:
+        session_id = proton.start(writer)
+        proton.activate(session_id)
+        proton.deactivate(session_id)
+        proton.finalize(session_id)
+        writer.close()
+        pipe_output = reader.read()
+
+    assert len(pipe_output) > 0
 
 
 def test_profile_mode(tmp_path: pathlib.Path):

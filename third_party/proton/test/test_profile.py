@@ -7,7 +7,10 @@ import torch
 import triton
 import triton.profiler as proton
 import json
+import os
+import subprocess
 import pytest
+import sys
 from typing import NamedTuple
 import pathlib
 import threading
@@ -17,6 +20,28 @@ from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
+
+
+PIPE_PROFILE_PARSER = """
+import json
+import os
+import sys
+import triton.profiler.viewer as viewer
+
+fd = int(sys.argv[1])
+with os.fdopen(fd, "r", encoding="utf-8") as reader:
+    database = json.load(reader)
+
+gf, _, _, _ = viewer.get_raw_metrics(database)
+scope_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_scope.*'").dataframe
+kernel_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_kernel.*' AND c IS LEAF").dataframe
+
+print(json.dumps({
+    "scope_rows": len(scope_frame),
+    "kernel_rows": len(kernel_frame),
+    "kernel_count": int(kernel_frame["count"].sum()) if len(kernel_frame) else 0,
+}))
+""".strip()
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -358,6 +383,45 @@ def test_get_data(tmp_path: pathlib.Path, device: str):
     assert database == database_unpacked
 
     proton.finalize()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Pipe-backed profile output is supported via /proc/self/fd on Linux")
+def test_profile_output_to_pipe_with_parser_process(device: str):
+    read_fd, write_fd = os.pipe()
+    parser = subprocess.Popen(
+        [sys.executable, "-c", PIPE_PROFILE_PARSER, str(read_fd)],
+        pass_fds=(read_fd, ),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    os.close(read_fd)
+
+    try:
+        @triton.jit
+        def pipe_kernel(x, y, size: tl.constexpr):
+            offs = tl.arange(0, size)
+            tl.store(y + offs, tl.load(x + offs))
+
+        with os.fdopen(write_fd, "wb") as writer:
+            session = proton.start(writer, context="shadow")
+            with proton.scope("pipe_scope"):
+                x = torch.ones((16, ), device=device)
+                y = torch.zeros_like(x)
+                pipe_kernel[(1, )](x, y, x.numel())
+            proton.finalize(session)
+
+        stdout, stderr = parser.communicate(timeout=30)
+    finally:
+        if parser.poll() is None:
+            parser.kill()
+            parser.communicate()
+
+    assert parser.returncode == 0, stderr
+    parsed = json.loads(stdout)
+    assert parsed["scope_rows"] == 1
+    assert parsed["kernel_rows"] == 1
+    assert parsed["kernel_count"] == 1
 
 
 def test_clear_data(tmp_path: pathlib.Path, device: str):
