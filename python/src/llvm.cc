@@ -22,6 +22,7 @@
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
@@ -869,6 +870,11 @@ void init_triton_llvm(py::module &&m) {
       llvm::InitializeAllAsmParsers();
       llvm::InitializeAllAsmPrinters();
     });
+    // Disable LLVM's internal parallelism. Triton kernels produce small LLVM
+    // modules where pass-level parallelism is not beneficial, and LLVM's global
+    // thread pool is not fork-safe: a forked child inherits the pool's state
+    // but not its threads, causing SIGABRT on use or cleanup.
+    llvm::parallel::strategy = llvm::hardware_concurrency(1);
   });
 
   m.def("link_extern_libs", [](llvm::Module *dstMod,
