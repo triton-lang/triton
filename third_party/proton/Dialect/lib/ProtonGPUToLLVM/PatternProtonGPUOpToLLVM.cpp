@@ -16,11 +16,18 @@ namespace proton::gpu {
 
 namespace {
 
+enum class ProfileScratchBufferUnit : int32_t {
+  CTA = 0,
+  KERNEL_LAUNCH = 1,
+};
+
 bool usesKernelLaunchProfileScratch(Operation *op) {
   auto mod = op->getParentOfType<ModuleOp>();
   auto attr =
-      mod->getAttrOfType<StringAttr>("ttg.profile_scratch_buffer_unit");
-  return attr && attr.getValue() == "KERNEL_LAUNCH";
+      mod->getAttrOfType<IntegerAttr>("ttg.profile_scratch_buffer_unit");
+  return attr && attr.getInt() ==
+                     static_cast<int32_t>(
+                         ProfileScratchBufferUnit::KERNEL_LAUNCH);
 }
 
 Value getLinearId(Location loc, ConversionPatternRewriter &rewriter) {

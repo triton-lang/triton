@@ -228,6 +228,10 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
     return wrap_handle_tensordesc_impl(launcher, signature, tensordesc_meta, make_tensordesc_arg)
 
 
+PROFILE_SCRATCH_BUFFER_UNIT_CTA = 0
+PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH = 1
+
+
 class CudaLauncher(object):
 
     def __init__(self, src, metadata):
@@ -248,7 +252,7 @@ class CudaLauncher(object):
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
         self.profile_scratch_buffer_unit = getattr(
-            metadata, "profile_scratch_buffer_unit", "CTA"
+            metadata, "profile_scratch_buffer_unit", PROFILE_SCRATCH_BUFFER_UNIT_CTA
         )
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
         self.launch_pdl = metadata.launch_pdl
@@ -262,7 +266,7 @@ class CudaLauncher(object):
                 # KERNEL_LAUNCH means profile_scratch_size already describes the
                 # total launch-sized allocation instead of a per-CTA slice.
                 if (
-                    self.profile_scratch_buffer_unit == "KERNEL_LAUNCH"
+                    self.profile_scratch_buffer_unit == PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH
                     and allocator is _allocation._profile_allocator
                 ):
                     alloc_size = size
@@ -277,7 +281,7 @@ class CudaLauncher(object):
             if size > 0:
                 # The default profile allocator uses the same launch-total
                 # contract when profile_scratch_buffer_unit=KERNEL_LAUNCH.
-                if self.profile_scratch_buffer_unit == "KERNEL_LAUNCH":
+                if self.profile_scratch_buffer_unit == PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH:
                     alloc_size = size
                 else:
                     grid_size = gridX * gridY * gridZ

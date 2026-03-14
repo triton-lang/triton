@@ -439,7 +439,7 @@ class CUDABackend(BaseBackend):
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
-        metadata["profile_scratch_buffer_unit"] = src.get_str_attr("ttg.profile_scratch_buffer_unit") or "CTA"
+        metadata["profile_scratch_buffer_unit"] = src.get_int_attr("ttg.profile_scratch_buffer_unit") or 0
         ret = str(llvm_mod)
         del llvm_mod
         del context
