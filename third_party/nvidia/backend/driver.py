@@ -259,6 +259,8 @@ class CudaLauncher(object):
 
         def allocate_scratch(size, align, allocator):
             if size > 0:
+                # Kernel-trace mode passes one launch-total profile record, so
+                # profile_scratch_size is already the full allocation size.
                 if self.profile_scratch_is_total and allocator is _allocation._profile_allocator:
                     alloc_size = size
                 else:
@@ -270,6 +272,8 @@ class CudaLauncher(object):
 
         def allocate_default_profile_scratch(size, align):
             if size > 0:
+                # The default profile allocator uses the same launch-total
+                # contract when profile_scratch_is_total is set.
                 if self.profile_scratch_is_total:
                     alloc_size = size
                 else:

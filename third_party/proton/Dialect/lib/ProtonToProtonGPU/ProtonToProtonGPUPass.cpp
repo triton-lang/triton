@@ -234,6 +234,8 @@ public:
              llvm::Twine(allocProfileScratchSize) + " bytes.");
       }
 
+      // Mark profile_scratch_size as a launch-total allocation, not a per-CTA
+      // slice, so the runtime does not multiply it by the grid size again.
       mod->setAttr("ttg.profile_scratch_is_total",
                    builder.getI32IntegerAttr(1));
       Value profileMem = triton::gpu::GlobalScratchAllocOp::create(
