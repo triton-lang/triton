@@ -20,6 +20,8 @@ public:
   InstrumentationProfiler() = default;
   virtual ~InstrumentationProfiler();
 
+  /// Returns and clears the launch buffer pointers whose async copies have
+  /// completed since the previous drain.
   std::vector<uint64_t> drainCompletedBufferPtrs();
 
 protected:
