@@ -194,6 +194,25 @@ For one step on one compute stream:
 7. Device slot `i` becomes reusable after `copy_done[i]`.
 8. Host slot `j` becomes reusable after parsing completes.
 
+State machine for one GPU step-buffer slot:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Reusable
+    Reusable --> Open: "first launch in step allocates from slot"
+    Open --> Open: "more launches in same step append records"
+    Open --> Sealed: "mark_step(stream)"
+    Sealed --> Copying: "copy stream waits on step_complete and schedules D2H"
+    Copying --> Reusable: "copy_done event fires"
+    Reusable --> Reusable: "slot not selected for reuse yet"
+
+    note right of Open
+      If mark_step() is never called,
+      the slot stays open until it fills
+      or finalize() drains the remaining launches.
+    end note
+```
+
 ## Chrome Trace Construction
 
 The first artifact target should stay simple:
