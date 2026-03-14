@@ -256,17 +256,32 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier"> {
 
   let description = [{
       Initializes a shared memory allocation with mbarrier information.
-      `alloc` is a descriptor to the shared memory allocation. `count` is the
-      number of arrives expected by the barrier.
+      `alloc` is a descriptor to the shared memory allocation.
+      `count` is the number of arrives expected by the barrier.
+
+      Optionally, `dependentPartitionIds` can be provided to indicate the
+      barrier count will be calculated as the cumulative number of warps
+      in the specified dependent partitions.
 
       This lowers to PTX mbarrier.init.shared::cta.b64.
   }];
 
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$alloc,
-    I32Attr:$count
+    I32Attr:$count,
+    OptionalAttr<DenseI32ArrayAttr>:$dependentPartitionIds
   );
   let assemblyFormat = "$alloc `,` $count attr-dict `:` qualified(type($alloc))";
+
+  let builders = [
+    OpBuilder<(ins "Value":$alloc, "int32_t":$count), [{
+      build($_builder, $_state, alloc, $_builder.getI32IntegerAttr(count), /*dependentPartitionIds=*/nullptr);
+    }]>,
+    OpBuilder<(ins "Value":$alloc, "int32_t":$count, "DenseI32ArrayAttr":$dependentPartitionIds), [{
+      build($_builder, $_state, alloc, $_builder.getI32IntegerAttr(count), dependentPartitionIds);
+    }]>
+  ];
+
   let hasVerifier = 1;
 }
 
@@ -355,9 +370,12 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
   let summary = "perform the arrive operation on an mbarrier";
   let description = [{
     The `ttng.arrive_barrier` operation performs the "arrive" operation on an
-    mbarrier object in shared memory. The operation requires a `count` attribute
-    of at least 1, and decreasing the pending arrival count of the mbarrier by
-    the specific count.
+    mbarrier object in shared memory. The operation requires a `count` operand
+    of at least 1. The `frequency` attribute controls how the arrive is
+    performed:
+
+    `per_grid` (default): only the lead thread of the grid performs the operation.
+    `per_warp`: only the lead thread of each warp performs the operation.
 
     The operation accepts an optional predicate.
 
@@ -365,23 +383,45 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
 
     ```mlir
     ttng.arrive_barrier %barrier, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
-    ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %barrier, 1, %pred {frequency = per_warp} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ```
   }];
 
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
     I32Attr:$count,
+    DefaultValuedAttr<TTNG_ArriveFrequencyAttr, "::mlir::triton::nvidia_gpu::ArriveFrequency::PER_GRID">:$frequency,
     Optional<I1>:$pred
   );
 
   let assemblyFormat = [{
-    $alloc `,` $count (`,` $pred^)? attr-dict `:` qualified(type($alloc))
+    $alloc `,` $count (`,` $pred^)? oilist(`frequency` `=` $frequency) attr-dict `:` qualified(type($alloc))
   }];
 
   let builders = [
+    // Default builders - frequency defaults to PER_GRID
     OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
-      return build($_builder, $_state, alloc, count, /*pred=*/Value());
+      return build($_builder, $_state, alloc, count,
+                   ::mlir::triton::nvidia_gpu::ArriveFrequency::PER_GRID,
+                   /*pred=*/Value());
+    }]>,
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "Value":$pred), [{
+      return build($_builder, $_state, alloc, count,
+                   ::mlir::triton::nvidia_gpu::ArriveFrequency::PER_GRID,
+                   pred);
+    }]>,
+    // Explicit builders for when you need to specify isPerWarp
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "bool":$isPerWarp), [{
+      auto freq = isPerWarp
+        ? ::mlir::triton::nvidia_gpu::ArriveFrequency::PER_WARP
+        : ::mlir::triton::nvidia_gpu::ArriveFrequency::PER_GRID;
+      return build($_builder, $_state, alloc, count, freq, /*pred=*/Value());
+    }]>,
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "bool":$isPerWarp, "Value":$pred), [{
+      auto freq = isPerWarp
+        ? ::mlir::triton::nvidia_gpu::ArriveFrequency::PER_WARP
+        : ::mlir::triton::nvidia_gpu::ArriveFrequency::PER_GRID;
+      return build($_builder, $_state, alloc, count, freq, pred);
     }]>
   ];
 
