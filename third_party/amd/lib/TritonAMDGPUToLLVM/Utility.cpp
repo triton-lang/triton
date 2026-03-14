@@ -83,9 +83,10 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
 
   switch (mode) {
   case ShflKind::bfly:
-    if (strideInt > 16) {
-      Value stride = b.i32_val(32);
-      Value lineId = b.xor_(threadId, stride);
+    if (strideInt > 16 || (strideInt & (strideInt - 1)) != 0) {
+      // Non-power-of-2 masks or strides > 16 cannot use DPP or ds_swizzle.
+      // Fall back to ds_bpermute with an XOR lane index.
+      Value lineId = b.xor_(laneId, b.i32_val(strideInt));
       return bpermute(lineId);
     } else if (strideInt == 16) {
       if (isRDNA(isaFamily)) {
