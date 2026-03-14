@@ -145,11 +145,19 @@ public:
       const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
       const std::string &metadataPath) = 0;
   virtual void destroyFunctionMetadata(uint64_t functionId) = 0;
+  /// Records launch-time state for an instrumented op before the runtime
+  /// returns control to the caller.
   virtual void enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
                                    uint8_t *buffer, size_t size) = 0;
+  /// Enqueues post-launch handling for an instrumented op using the scratch
+  /// buffer assigned to that launch.
   virtual void exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
                                   uint8_t *buffer, size_t size) = 0;
+  /// Seals the current step buffer slot and records a step-complete event on
+  /// the given compute stream so a copy stream can drain it later.
   virtual void markStep(uint64_t streamId, uint64_t stepBufferToken) = 0;
+  /// Makes the compute stream wait only if this exact step buffer slot is
+  /// still in flight on the copy stream and is about to be reused.
   virtual void waitStepBuffer(uint64_t streamId, uint64_t stepBufferToken) = 0;
 };
 
