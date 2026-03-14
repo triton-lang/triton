@@ -21,7 +21,6 @@ import triton.profiler.hooks.launch as proton_launch
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
 
-
 PIPE_PROFILE_PARSER = """
 import json
 import os
@@ -385,7 +384,8 @@ def test_get_data(tmp_path: pathlib.Path, device: str):
     proton.finalize()
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Pipe-backed profile output is supported via /proc/self/fd on Linux")
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="Pipe-backed profile output is supported via /proc/self/fd on Linux")
 def test_profile_output_to_pipe_with_parser_process(device: str):
     read_fd, write_fd = os.pipe()
     parser = subprocess.Popen(
@@ -398,6 +398,7 @@ def test_profile_output_to_pipe_with_parser_process(device: str):
     os.close(read_fd)
 
     try:
+
         @triton.jit
         def pipe_kernel(x, y, size: tl.constexpr):
             offs = tl.arange(0, size)

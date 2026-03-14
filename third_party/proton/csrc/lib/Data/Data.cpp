@@ -154,7 +154,9 @@ void Data::dump(const std::string &outputFormat) {
                         ? ""
                         : ".part_" + std::to_string(phase);
       const auto filePath =
-          isProcFdPath ? path : path + suffix + "." + outputFormatToString(outputFormatEnum);
+          isProcFdPath
+              ? path
+              : path + suffix + "." + outputFormatToString(outputFormatEnum);
       const auto fileMode =
           (outputFormatEnum == OutputFormat::HatchetMsgPack)
               ? (std::ios::out | std::ios::binary | std::ios::trunc)
