@@ -1,3 +1,6 @@
+import threading
+import sys
+
 import torch
 
 import triton
@@ -449,6 +452,61 @@ def test_exceed_threads(device):
     warp_size = triton.runtime.driver.active.get_current_target().warp_size
     assert exception_out_of_resource is not None and f"out of resource: threads, Required: {128 * warp_size}" in str(
         exception_out_of_resource)
+
+
+def test_nogil_safety(device: str):
+    if getattr(sys, "_is_gil_enabled", lambda: True)():
+        pytest.skip("Requires running with the GIL disabled (PYTHON_GIL=0)")
+    if not is_cuda():
+        pytest.skip("CUDA backend is required for autotuner thread safety test")
+
+    num_threads = 8
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty_like(src)
+
+    configs = [
+        triton.Config(kwargs={'BLOCK_SIZE': 32}),
+        triton.Config(kwargs={'BLOCK_SIZE': 64}),
+    ]
+
+    @triton.autotune(configs=configs, key=['N'], do_bench=do_bench)
+    @triton.jit
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < N
+        data = tl.load(src + offsets, mask=mask)
+        tl.store(dst + offsets, data, mask=mask)
+
+    grid = lambda meta: (triton.cdiv(N, meta['BLOCK_SIZE']), )
+
+    ready_barrier = threading.Barrier(num_threads + 1)
+    start_barrier = threading.Barrier(num_threads + 1)
+    results = []
+
+    def worker():
+        ready_barrier.wait()
+        start_barrier.wait()
+        try:
+            _kernel[grid](dst, src, N)
+            results.append(None)
+        except Exception as exc:
+            results.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(num_threads)]
+
+    for thread in threads:
+        thread.start()
+
+    ready_barrier.wait()
+    start_barrier.wait()
+
+    for thread in threads:
+        thread.join()
+
+    assert all(result is None for result in results)
+    assert len(_kernel.cache) == 1
 
 
 def test_prune_all_configs(device):
