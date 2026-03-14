@@ -29,10 +29,9 @@ static unsigned getBufferAtomicScratchSizeInBytes(Operation *op) {
   auto tensorTy = dyn_cast<RankedTensorType>(result.getType());
   if (!tensorTy)
     return 0;
-  auto freeVariableMasks =
-      gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
-  bool hasBroadcast = llvm::any_of(
-      freeVariableMasks, [](auto mask) { return mask.second != 0; });
+  auto freeVariableMasks = gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
+  bool hasBroadcast = llvm::any_of(freeVariableMasks,
+                                   [](auto mask) { return mask.second != 0; });
   if (!hasBroadcast)
     return 0;
   auto smemShape = convertType<unsigned>(gpu::getShapePerCTA(tensorTy));

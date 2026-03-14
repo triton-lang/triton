@@ -2019,8 +2019,8 @@ struct AtomicCASOpConversion
         endBlock->addArgument({valueElemTy}, {loc});
 
         rewriter.setInsertionPointToEnd(curBlock);
-        LLVM::CondBrOp::create(rewriter, loc, threadPred, atomicBlock,
-                               endBlock, undefVal);
+        LLVM::CondBrOp::create(rewriter, loc, threadPred, atomicBlock, endBlock,
+                               undefVal);
 
         rewriter.setInsertionPointToEnd(atomicBlock);
 
@@ -2095,8 +2095,7 @@ struct AtomicCASOpConversion
     }
 
     finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
-                                b, threadPred, targetInfo,
-                                getTypeConverter());
+                                b, threadPred, targetInfo, getTypeConverter());
     return success();
   }
 };
