@@ -20,10 +20,6 @@ public:
   InstrumentationProfiler() = default;
   virtual ~InstrumentationProfiler();
 
-  /// Returns and clears the launch buffer pointers whose async copies have
-  /// completed since the previous drain.
-  std::vector<uint64_t> drainCompletedBufferPtrs();
-
 protected:
   // Profiler
   virtual void doStart() override;
@@ -142,7 +138,6 @@ private:
   std::vector<InFlightInstrumentedStep> inflightInstrumentedSteps;
   // Reusable pinned host staging buffers, keyed by capacity.
   std::multimap<size_t, uint8_t *> availableHostStagingBuffers;
-  std::vector<uint64_t> completedBufferPtrs;
 };
 
 } // namespace proton

@@ -167,10 +167,6 @@ static void initProton(pybind11::module &&m) {
         },
         pybind11::arg("streamId"), pybind11::arg("stepBufferToken"));
 
-  m.def("take_completed_instrumented_buffers", []() {
-    return InstrumentationProfiler::instance().drainCompletedBufferPtrs();
-  });
-
   m.def("enter_state", [](const std::string &state) {
     SessionManager::instance().setState(state);
   });

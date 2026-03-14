@@ -19,12 +19,6 @@ constexpr size_t MAX_HOST_BUFFER_SIZE = 4LL * 1024LL * 1024LL * 1024LL; // 4GB
 
 InstrumentationProfiler::~InstrumentationProfiler() {}
 
-std::vector<uint64_t> InstrumentationProfiler::drainCompletedBufferPtrs() {
-  auto completedPtrs = std::move(completedBufferPtrs);
-  completedBufferPtrs.clear();
-  return completedPtrs;
-}
-
 void InstrumentationProfiler::doStart() {
   // Start the instrumentation profiler.
 }
@@ -77,7 +71,6 @@ void InstrumentationProfiler::doStop() {
   }
   availableHostStagingBuffers.clear();
   currentStepId = 0;
-  completedBufferPtrs.clear();
   // Reset mode options
   modeOptions.clear();
   // Note that we don't clear function metadata and names here, as they may be
@@ -333,8 +326,6 @@ void InstrumentationProfiler::processCompletedCopies(bool blockUntilComplete) {
             inflightStep.stepBufferToken);
         parseCopiedInstrumentedOp(pendingOp, inflightStep.hostBuffer + hostOffset,
                                   pendingOp.size);
-        completedBufferPtrs.push_back(
-            reinterpret_cast<uint64_t>(pendingOp.buffer));
       }
       releaseHostStagingBuffer(inflightStep.hostBuffer,
                                inflightStep.hostBufferSize);
