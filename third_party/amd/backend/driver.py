@@ -339,8 +339,8 @@ class HIPLauncher(object):
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
-        self.profile_scratch_is_total = bool(
-            getattr(metadata, "profile_scratch_is_total", 0)
+        self.profile_scratch_buffer_unit = getattr(
+            metadata, "profile_scratch_buffer_unit", "CTA"
         )
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
@@ -349,9 +349,12 @@ class HIPLauncher(object):
 
         def allocate_scratch(size, align, allocator):
             if size > 0:
-                # Kernel-trace mode passes one launch-total profile record, so
-                # profile_scratch_size is already the full allocation size.
-                if self.profile_scratch_is_total and allocator is _allocation._profile_allocator:
+                # KERNEL_LAUNCH means profile_scratch_size already describes the
+                # total launch-sized allocation instead of a per-CTA slice.
+                if (
+                    self.profile_scratch_buffer_unit == "KERNEL_LAUNCH"
+                    and allocator is _allocation._profile_allocator
+                ):
                     alloc_size = size
                 else:
                     grid_size = gridX * gridY * gridZ
@@ -363,8 +366,8 @@ class HIPLauncher(object):
         def allocate_default_profile_scratch(size, align):
             if size > 0:
                 # The default profile allocator uses the same launch-total
-                # contract when profile_scratch_is_total is set.
-                if self.profile_scratch_is_total:
+                # contract when profile_scratch_buffer_unit=KERNEL_LAUNCH.
+                if self.profile_scratch_buffer_unit == "KERNEL_LAUNCH":
                     alloc_size = size
                 else:
                     grid_size = gridX * gridY * gridZ

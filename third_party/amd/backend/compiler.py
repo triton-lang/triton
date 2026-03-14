@@ -476,7 +476,7 @@ class HIPBackend(BaseBackend):
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
-        metadata["profile_scratch_is_total"] = src.get_int_attr("ttg.profile_scratch_is_total") or 0
+        metadata["profile_scratch_buffer_unit"] = src.get_str_attr("ttg.profile_scratch_buffer_unit") or "CTA"
 
         amd.cleanup_bitcode_metadata(llvm_mod)
         # Disable inlining of print related functions,

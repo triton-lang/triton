@@ -236,8 +236,8 @@ public:
 
       // Mark profile_scratch_size as a launch-total allocation, not a per-CTA
       // slice, so the runtime does not multiply it by the grid size again.
-      mod->setAttr("ttg.profile_scratch_is_total",
-                   builder.getI32IntegerAttr(1));
+      mod->setAttr("ttg.profile_scratch_buffer_unit",
+                   builder.getStringAttr("KERNEL_LAUNCH"));
       Value profileMem = triton::gpu::GlobalScratchAllocOp::create(
           builder, loc, triton::getPointerType(builder.getI64Type()),
           allocProfileScratchSize, profileScratchAlignment,

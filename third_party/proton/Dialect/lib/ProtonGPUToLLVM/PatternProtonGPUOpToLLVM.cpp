@@ -16,10 +16,11 @@ namespace proton::gpu {
 
 namespace {
 
-bool usesPerKernelTraceRecord(Operation *op) {
+bool usesKernelLaunchProfileScratch(Operation *op) {
   auto mod = op->getParentOfType<ModuleOp>();
-  auto attr = mod->getAttrOfType<IntegerAttr>("ttg.profile_scratch_is_total");
-  return attr && attr.getInt() != 0;
+  auto attr =
+      mod->getAttrOfType<StringAttr>("ttg.profile_scratch_buffer_unit");
+  return attr && attr.getValue() == "KERNEL_LAUNCH";
 }
 
 Value getLinearId(Location loc, ConversionPatternRewriter &rewriter) {
@@ -94,7 +95,7 @@ struct InitializeOpConversion
     Value scratchPtr = adaptor.getScratchPtr();
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
 
-    if (usesPerKernelTraceRecord(op.getOperation())) {
+    if (usesKernelLaunchProfileScratch(op.getOperation())) {
       Value threadId = getThreadId(rewriter, loc);
       Value isFirstThread = b.icmp_eq(threadId, b.i32_val(0));
 
@@ -209,7 +210,7 @@ struct FinalizeOpConversion
     Value scratchPtr = adaptor.getScratchPtr();
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
 
-    if (usesPerKernelTraceRecord(op.getOperation())) {
+    if (usesKernelLaunchProfileScratch(op.getOperation())) {
       auto b = TritonLLVMOpBuilder(loc, rewriter);
       Value threadId = getRawThreadId(rewriter, loc);
       Value isBlockFirstThread = b.icmp_eq(threadId, b.i32_val(0));
