@@ -871,6 +871,47 @@ def test_trace(tmp_path: pathlib.Path, device: str):
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
 
 
+def test_trace_msgpack(tmp_path: pathlib.Path, device: str):
+    import msgpack
+
+    temp_file = tmp_path / "test_trace.chrome_trace_msgpack"
+    session = proton.start(str(temp_file.with_suffix("")), data="trace")
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    with proton.scope("init"):
+        x = torch.ones((1024, ), device=device, dtype=torch.float32)
+        y = torch.zeros_like(x)
+
+    with proton.scope("test"):
+        foo[(1, )](x, y, x.size()[0], num_warps=4)
+
+    in_memory_json = proton.data.get(session=session, phase=0)
+    assert len(in_memory_json["traceEvents"]) == 3
+    assert in_memory_json["traceEvents"][-1]["name"] == "foo"
+
+    in_memory = msgpack.loads(
+        proton.data.get_msgpack(session=session, phase=0),
+        raw=False,
+        strict_map_key=False,
+    )
+    assert in_memory["format"] == "chrome_trace_msgpack"
+    assert in_memory["version"] == 1
+    assert in_memory["displayTimeUnit"] == "us"
+    assert len(in_memory["traceEvents"]) == 3
+    assert in_memory["traceEvents"][-1]["name"] == "foo"
+    assert in_memory["traceEvents"][-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
+
+    proton.finalize(output_format="chrome_trace_msgpack")
+
+    with temp_file.open("rb") as f:
+        file_data = msgpack.load(f, raw=False, strict_map_key=False)
+    assert file_data == in_memory
+
+
 def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_scope_threads.hatchet"
     proton.start(str(temp_file.with_suffix("")))

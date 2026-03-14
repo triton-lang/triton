@@ -22,7 +22,13 @@
 
 namespace proton {
 
-enum class OutputFormat { Hatchet, HatchetMsgPack, ChromeTrace, Count };
+enum class OutputFormat {
+  Hatchet,
+  HatchetMsgPack,
+  ChromeTrace,
+  ChromeTraceMsgPack,
+  Count
+};
 
 class Data;
 

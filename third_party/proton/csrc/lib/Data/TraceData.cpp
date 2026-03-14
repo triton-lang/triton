@@ -188,15 +188,36 @@ std::string TraceData::toJsonString(size_t phase) const {
   return os.str();
 }
 
-std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
-  std::ostringstream os;
-  dumpChromeTrace(os, phase);
-  MsgPackWriter writer;
-  writer.packStr(os.str());
-  return std::move(writer).take();
-}
-
 namespace {
+
+void packJsonValue(MsgPackWriter &writer, const json &value) {
+  if (value.is_null()) {
+    writer.packNil();
+  } else if (value.is_boolean()) {
+    writer.packBool(value.get<bool>());
+  } else if (value.is_number_unsigned()) {
+    writer.packUInt(value.get<uint64_t>());
+  } else if (value.is_number_integer()) {
+    writer.packInt(value.get<int64_t>());
+  } else if (value.is_number_float()) {
+    writer.packDouble(value.get<double>());
+  } else if (value.is_string()) {
+    writer.packStr(value.get_ref<const std::string &>());
+  } else if (value.is_array()) {
+    writer.packArray(static_cast<uint32_t>(value.size()));
+    for (const auto &element : value) {
+      packJsonValue(writer, element);
+    }
+  } else if (value.is_object()) {
+    writer.packMap(static_cast<uint32_t>(value.size()));
+    for (auto it = value.begin(); it != value.end(); ++it) {
+      writer.packStr(it.key());
+      packJsonValue(writer, it.value());
+    }
+  } else {
+    throw std::runtime_error("Unsupported json value for msgpack trace");
+  }
+}
 
 // Structure to pair CycleMetric with its context for processing
 struct CycleMetricWithContext {
@@ -389,6 +410,12 @@ void dumpCycleMetricTrace(std::vector<CycleMetricWithContext> &cycleEvents,
   writer.write(os);
 }
 
+json buildCycleMetricTraceJson(std::vector<CycleMetricWithContext> &cycleEvents) {
+  std::ostringstream os;
+  dumpCycleMetricTrace(cycleEvents, os);
+  return json::parse(os.str());
+}
+
 void dumpKernelMetricTrace(
     uint64_t minTimeStamp,
     const std::map<size_t, std::vector<KernelMetricWithContext>>
@@ -430,7 +457,143 @@ void dumpKernelMetricTrace(
     os << object.dump() << "\n";
   }
 }
+
+json buildKernelMetricTraceJson(
+    uint64_t minTimeStamp,
+    const std::map<size_t, std::vector<KernelMetricWithContext>>
+        &streamTraceEvents) {
+  json object = {
+      {"format", "chrome_trace_msgpack"},
+      {"version", 1},
+      {"displayTimeUnit", "us"},
+      {"traceEvents", json::array()},
+  };
+
+  for (const auto &[streamId, events] : streamTraceEvents) {
+    for (const auto &event : events) {
+      auto *kernelMetrics = event.kernelMetric;
+      uint64_t startTimeNs =
+          std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::StartTime));
+      uint64_t endTimeNs =
+          std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::EndTime));
+      double ts = static_cast<double>(startTimeNs - minTimeStamp) / 1000;
+      double dur = static_cast<double>(endTimeNs - startTimeNs) / 1000;
+
+      json element;
+      element["name"] = event.contexts.back().name;
+      element["cat"] = "kernel";
+      element["ph"] = "X";
+      element["ts"] = ts;
+      element["dur"] = dur;
+      element["tid"] = streamId;
+      json callStack = json::array();
+      for (const auto &ctx : event.contexts) {
+        callStack.push_back(ctx.name);
+      }
+      element["args"] = {{"call_stack", std::move(callStack)}};
+      object["traceEvents"].push_back(std::move(element));
+    }
+  }
+
+  return object;
+}
 } // namespace
+
+std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
+  json chromeTraceObject;
+  tracePhases.withPtr(phase, [&](Trace *trace) {
+    std::set<size_t> virtualTargetEntryIds;
+    for (const auto &[_, event] : trace->getEvents()) {
+      for (const auto &[targetEntryId, _] : event.metricSet.linkedMetrics) {
+        virtualTargetEntryIds.insert(targetEntryId);
+      }
+      for (const auto &[targetEntryId, _] :
+           event.metricSet.linkedFlexibleMetrics) {
+        virtualTargetEntryIds.insert(targetEntryId);
+      }
+    }
+
+    std::map<size_t, std::vector<Context>> targetIdToVirtualContexts;
+    if (!virtualTargetEntryIds.empty()) {
+      tracePhases.withPtr(Data::kVirtualPhase, [&](Trace *virtualTrace) {
+        for (auto targetEntryId : virtualTargetEntryIds) {
+          auto &targetEvent = virtualTrace->getEvent(targetEntryId);
+          auto contexts = virtualTrace->getContexts(targetEvent.contextId);
+          contexts.erase(contexts.begin());
+          targetIdToVirtualContexts.emplace(targetEntryId, std::move(contexts));
+        }
+      });
+    }
+
+    auto &events = trace->getEvents();
+    std::map<size_t, std::vector<KernelMetricWithContext>> streamTraceEvents;
+    uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
+    bool hasKernelMetrics = false, hasCycleMetrics = false;
+    std::vector<CycleMetricWithContext> cycleEvents;
+    cycleEvents.reserve(events.size());
+
+    auto processMetricMaps =
+        [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
+            const std::vector<Context> &contexts) {
+          if (auto kernelIt = metrics.find(MetricKind::Kernel);
+              kernelIt != metrics.end()) {
+            auto *kernelMetric =
+                static_cast<KernelMetric *>(kernelIt->second.get());
+            const auto streamId = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::StreamId));
+            streamTraceEvents[streamId].emplace_back(kernelMetric, contexts);
+            const auto startTime = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::StartTime));
+            minTimeStamp = std::min(minTimeStamp, startTime);
+            hasKernelMetrics = true;
+          }
+          if (auto cycleIt = metrics.find(MetricKind::Cycle);
+              cycleIt != metrics.end()) {
+            auto *cycleMetric =
+                static_cast<CycleMetric *>(cycleIt->second.get());
+            cycleEvents.emplace_back(cycleMetric, contexts);
+            hasCycleMetrics = true;
+          }
+        };
+
+    for (const auto &[_, event] : events) {
+      auto baseContexts = trace->getContexts(event.contextId);
+      processMetricMaps(event.metricSet.metrics, baseContexts);
+      for (const auto &[targetEntryId, linkedMetrics] :
+           event.metricSet.linkedMetrics) {
+        auto contexts = baseContexts;
+        auto &virtualContexts = targetIdToVirtualContexts[targetEntryId];
+        contexts.insert(contexts.end(), virtualContexts.begin(),
+                        virtualContexts.end());
+        processMetricMaps(linkedMetrics, contexts);
+      }
+
+      if (hasKernelMetrics && hasCycleMetrics) {
+        throw std::runtime_error("only one active metric type is supported");
+      }
+    }
+
+    if (hasCycleMetrics) {
+      chromeTraceObject = buildCycleMetricTraceJson(cycleEvents);
+      chromeTraceObject["format"] = "chrome_trace_msgpack";
+      chromeTraceObject["version"] = 1;
+    } else if (hasKernelMetrics) {
+      chromeTraceObject =
+          buildKernelMetricTraceJson(minTimeStamp, streamTraceEvents);
+    } else {
+      chromeTraceObject = {
+          {"format", "chrome_trace_msgpack"},
+          {"version", 1},
+          {"displayTimeUnit", "us"},
+          {"traceEvents", json::array()},
+      };
+    }
+  });
+
+  MsgPackWriter writer;
+  packJsonValue(writer, chromeTraceObject);
+  return std::move(writer).take();
+}
 
 void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
   std::set<size_t> virtualTargetEntryIds;
@@ -523,6 +686,9 @@ void TraceData::doDump(std::ostream &os, OutputFormat outputFormat,
                        size_t phase) const {
   if (outputFormat == OutputFormat::ChromeTrace) {
     dumpChromeTrace(os, phase);
+  } else if (outputFormat == OutputFormat::ChromeTraceMsgPack) {
+    auto msgPack = toMsgPack(phase);
+    os.write(reinterpret_cast<const char *>(msgPack.data()), msgPack.size());
   } else {
     throw std::logic_error("Output format not supported");
   }
