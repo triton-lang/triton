@@ -6,6 +6,7 @@ from .profile import (
     activate,
     deactivate,
     finalize,
+    mark_step,
     profile,
     DEFAULT_PROFILE_NAME,
 )

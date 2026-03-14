@@ -294,6 +294,35 @@ void SessionManager::exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
       /*isReversed=*/true);
 }
 
+void SessionManager::markStep(uint64_t streamId, uint64_t stepBufferToken) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](auto *instrumentationInterface) {
+                     instrumentationInterface->markStep(streamId,
+                                                        stepBufferToken);
+                   });
+  // Public mark_step() is defined to both seal the step and immediately
+  // schedule any ready async drains, so we flush each unique profiler here.
+  std::set<Profiler *> flushedProfilers;
+  for (const auto &[sessionId, session] : sessions) {
+    (void)sessionId;
+    auto *profiler = session->profiler;
+    if (flushedProfilers.insert(profiler).second) {
+      profiler->flush();
+    }
+  }
+}
+
+void SessionManager::waitStepBuffer(uint64_t streamId,
+                                    uint64_t stepBufferToken) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](auto *instrumentationInterface) {
+                     instrumentationInterface->waitStepBuffer(
+                         streamId, stepBufferToken);
+                   });
+}
+
 void SessionManager::addMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
     const std::map<std::string, TensorMetric> &tensorMetrics) {

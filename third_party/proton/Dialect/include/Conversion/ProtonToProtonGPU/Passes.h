@@ -20,7 +20,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
     gpu::BufferType bufferType = gpu::BufferType::SHARED,
     int32_t bufferSize = 0, int32_t maxSharedMemSize = 32768,
     int64_t profileScratchSize = 32768, int32_t profileScratchAlignment = 128,
-    bool clkExt = false);
+    bool kernelTraceMode = false, bool clkExt = false);
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION

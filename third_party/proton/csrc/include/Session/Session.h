@@ -124,6 +124,10 @@ public:
   void exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
                           uint8_t *buffer, size_t size);
 
+  void markStep(uint64_t streamId, uint64_t stepBufferToken);
+
+  void waitStepBuffer(uint64_t streamId, uint64_t stepBufferToken);
+
   void addMetrics(size_t scopeId,
                   const std::map<std::string, MetricValueType> &scalarMetrics,
                   const std::map<std::string, TensorMetric> &tensorMetrics);
