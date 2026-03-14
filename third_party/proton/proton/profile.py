@@ -180,23 +180,6 @@ def deactivate(session: Optional[int] = None, flushing: bool = False) -> None:
         HookManager.flush(session)
 
 
-def _flush(session: Optional[int] = None) -> None:
-    """
-    Internal helper to flush profiling data without finalizing the session.
-
-    For instrumentation kernel tracing this schedules async draining work and
-    releases any profile scratch buffers whose copies have already completed.
-    """
-    if flags.command_line and session != 0:
-        raise ValueError("Only one session can be flushed when running from the command line.")
-
-    if session is None:
-        libproton.flush_all()
-    else:
-        libproton.flush(session)
-    HookManager.flush(session)
-
-
 def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -> None:
     """
     Finalizes a profiling session.
@@ -236,7 +219,7 @@ def mark_step(stream: Optional[int] = None) -> None:
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
     HookManager.mark_step(stream)
-    _flush()
+    HookManager.flush()
 
 
 def _profiling(

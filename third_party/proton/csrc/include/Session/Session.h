@@ -91,10 +91,6 @@ public:
 
   void deactivateAllSessions(bool flushing);
 
-  void flushSession(size_t sessionId);
-
-  void flushAllSessions();
-
   size_t getContextDepth(size_t sessionId);
 
   std::vector<uint8_t> getDataMsgPack(size_t sessionId, size_t phase);

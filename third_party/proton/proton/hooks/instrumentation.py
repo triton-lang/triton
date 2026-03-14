@@ -107,7 +107,6 @@ class StepBufferRing:
             # mark_step() already schedules async draining. We only gate the
             # compute stream when the ring wraps and this exact slot must be
             # reused before its copy has completed.
-            libproton.flush_all()
             libproton.wait_step_buffer(stream, slot.token)
         slot.reset()
         return slot_idx

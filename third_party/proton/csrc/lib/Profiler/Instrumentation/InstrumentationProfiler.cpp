@@ -221,14 +221,13 @@ void InstrumentationProfiler::destroyFunctionMetadata(uint64_t functionId) {
   functionMetadata.erase(functionId);
 }
 
-void InstrumentationProfiler::enterInstrumentedOp(uint64_t streamId,
-                                                  uint64_t functionId,
-                                                  uint8_t *buffer,
-                                                  size_t size) {
-  (void)streamId;
-  (void)functionId;
-  (void)buffer;
-  (void)size;
+void InstrumentationProfiler::enterInstrumentedOp(uint64_t /*streamId*/,
+                                                  uint64_t /*functionId*/,
+                                                  uint8_t * /*buffer*/,
+                                                  size_t /*size*/) {
+  // The async step-drain path no longer needs launch-entry work. Host staging
+  // buffers are acquired later, when a sealed step is scheduled onto the copy
+  // stream for D2H.
 }
 
 void InstrumentationProfiler::scheduleReadySteps() {

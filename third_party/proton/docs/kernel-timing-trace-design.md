@@ -213,6 +213,28 @@ stateDiagram-v2
     end note
 ```
 
+State machine for one host staging-buffer slot:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Free
+    Free --> Reserved: "copy scheduler acquires a pinned host slot"
+    Reserved --> Copying: "copy stream starts D2H into this slot"
+    Copying --> ReadyToParse: "D2H completes"
+    ReadyToParse --> Parsing: "CPU parser claims the copied payload"
+    Parsing --> Free: "parsing completes and the slot returns to the pool"
+
+    note right of Reserved
+      The host slot is paired with a sealed device step slot
+      for the duration of the in-flight copy.
+    end note
+
+    note right of ReadyToParse
+      The device slot may already be reusable after copy_done,
+      but the host slot stays busy until parsing finishes.
+    end note
+```
+
 ## Chrome Trace Construction
 
 The first artifact target should stay simple:

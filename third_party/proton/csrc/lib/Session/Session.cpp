@@ -129,24 +129,6 @@ void SessionManager::deactivateAllSessions(bool flushing) {
   }
 }
 
-void SessionManager::flushSession(size_t sessionId) {
-  std::lock_guard<std::mutex> lock(mutex);
-  throwIfSessionNotInitialized(sessions, sessionId);
-  sessions[sessionId]->profiler->flush();
-}
-
-void SessionManager::flushAllSessions() {
-  std::lock_guard<std::mutex> lock(mutex);
-  std::set<Profiler *> flushedProfilers;
-  for (const auto &[sessionId, session] : sessions) {
-    (void)sessionId;
-    auto *profiler = session->profiler;
-    if (flushedProfilers.insert(profiler).second) {
-      profiler->flush();
-    }
-  }
-}
-
 void SessionManager::activateSessionImpl(size_t sessionId) {
   throwIfSessionNotInitialized(sessions, sessionId);
   if (sessionActive[sessionId])
@@ -319,6 +301,16 @@ void SessionManager::markStep(uint64_t streamId, uint64_t stepBufferToken) {
                      instrumentationInterface->markStep(streamId,
                                                         stepBufferToken);
                    });
+  // Public mark_step() is defined to both seal the step and immediately
+  // schedule any ready async drains, so we flush each unique profiler here.
+  std::set<Profiler *> flushedProfilers;
+  for (const auto &[sessionId, session] : sessions) {
+    (void)sessionId;
+    auto *profiler = session->profiler;
+    if (flushedProfilers.insert(profiler).second) {
+      profiler->flush();
+    }
+  }
 }
 
 void SessionManager::waitStepBuffer(uint64_t streamId,
