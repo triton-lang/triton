@@ -441,11 +441,11 @@ def test_trace_kernel_timing(tmp_path: pathlib.Path):
         assert events[0]["name"] == "add_kernel"
         assert events[0]["cat"] == "kernel"
         assert events[0]["dur"] > 0
-        assert events[0]["args"]["call_stack"] == ["add_kernel"]
+        assert events[0]["args"]["call_stack"] == ["ROOT", "add_kernel"]
         assert events[1]["name"] == "sub_kernel"
         assert events[1]["cat"] == "kernel"
         assert events[1]["dur"] > 0
-        assert events[1]["args"]["call_stack"] == ["sub_kernel"]
+        assert events[1]["args"]["call_stack"] == ["ROOT", "sub_kernel"]
 
 
 def test_trace_kernel_timing_mark_step_drains(tmp_path: pathlib.Path, fresh_knobs):
@@ -507,11 +507,11 @@ def test_trace_kernel_timing_mark_step_drains(tmp_path: pathlib.Path, fresh_knob
         assert events[0]["name"] == "add_kernel"
         assert events[0]["cat"] == "kernel"
         assert events[0]["dur"] > 0
-        assert events[0]["args"]["call_stack"] == ["add_kernel"]
+        assert events[0]["args"]["call_stack"] == ["ROOT", "add_kernel"]
         assert events[1]["name"] == "sub_kernel"
         assert events[1]["cat"] == "kernel"
         assert events[1]["dur"] > 0
-        assert events[1]["args"]["call_stack"] == ["sub_kernel"]
+        assert events[1]["args"]["call_stack"] == ["ROOT", "sub_kernel"]
 
 
 def test_trace_kernel_timing_multi_launch_same_step(tmp_path: pathlib.Path, fresh_knobs):
@@ -572,11 +572,11 @@ def test_trace_kernel_timing_multi_launch_same_step(tmp_path: pathlib.Path, fres
         assert events[0]["name"] == "add_kernel"
         assert events[0]["cat"] == "kernel"
         assert events[0]["dur"] > 0
-        assert events[0]["args"]["call_stack"] == ["add_kernel"]
+        assert events[0]["args"]["call_stack"] == ["ROOT", "add_kernel"]
         assert events[1]["name"] == "sub_kernel"
         assert events[1]["cat"] == "kernel"
         assert events[1]["dur"] > 0
-        assert events[1]["args"]["call_stack"] == ["sub_kernel"]
+        assert events[1]["args"]["call_stack"] == ["ROOT", "sub_kernel"]
 
 
 def test_multi_session(tmp_path: pathlib.Path):
