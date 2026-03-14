@@ -1,7 +1,6 @@
 #include "Runtime/HipRuntime.h"
 
 #include "Driver/GPU/HipApi.h"
-#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 
@@ -122,24 +121,4 @@ void HipRuntime::destroyStream(void *stream) {
   (void)hip::streamDestroy<true>(reinterpret_cast<hipStream_t>(stream));
 }
 
-void HipRuntime::processHostBuffer(
-    uint8_t *hostBuffer, size_t hostBufferSize, uint8_t *deviceBuffer,
-    size_t deviceBufferSize, void *stream,
-    std::function<void(uint8_t *, size_t)> callback) {
-  int64_t chunkSize = std::min(hostBufferSize, deviceBufferSize);
-  int64_t sizeLeftOnDevice = deviceBufferSize;
-  while (chunkSize > 0) {
-    (void)hip::memcpyDToHAsync<true>(
-        reinterpret_cast<void *>(hostBuffer),
-        reinterpret_cast<hipDeviceptr_t>(deviceBuffer), chunkSize,
-        reinterpret_cast<hipStream_t>(stream));
-    (void)hip::streamSynchronize<true>(reinterpret_cast<hipStream_t>(stream));
-    callback(hostBuffer, chunkSize);
-    hostBuffer += chunkSize;
-    deviceBuffer += chunkSize;
-    sizeLeftOnDevice -= chunkSize;
-    chunkSize =
-        std::min(static_cast<int64_t>(hostBufferSize), sizeLeftOnDevice);
-  }
-}
 } // namespace proton

@@ -83,7 +83,6 @@ private:
   /// A step-buffer slot with an in-flight async D2H copy into a pinned host
   /// staging buffer.
   struct InFlightInstrumentedStep {
-    size_t stepId;
     uint64_t stepBufferToken;
     std::vector<PendingInstrumentedOp> pendingOps;
     uint8_t *hostBuffer;

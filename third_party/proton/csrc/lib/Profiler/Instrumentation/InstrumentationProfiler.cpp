@@ -263,8 +263,8 @@ void InstrumentationProfiler::scheduleReadySteps() {
     auto *copyDoneEvent = runtime->createEvent();
     runtime->recordEvent(copyDoneEvent, stepFence.copyStream);
     inflightInstrumentedSteps.push_back(
-        InFlightInstrumentedStep{stepFence.stepId, stepFence.stepBufferToken,
-                                 std::move(stepOps), hostBuffer, stepCopySize,
+        InFlightInstrumentedStep{stepFence.stepBufferToken, std::move(stepOps),
+                                 hostBuffer, stepCopySize,
                                  stepFence.copyStream, copyDoneEvent});
     opsByStep.erase(readyOpsIt);
     runtime->destroyEvent(stepFence.completionEvent);

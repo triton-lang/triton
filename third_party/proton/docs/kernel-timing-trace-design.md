@@ -360,7 +360,7 @@ For the Triton instrumentation backend, Proton does use a device-side `profile_s
 
 - each launch gets a `profile_scratch` allocation
 - `InstrumentationProfiler::exitInstrumentedOp()` calls `runtime->synchronizeStream(streamId)`
-- then `CudaRuntime::processHostBuffer(...)` issues `memcpyDToHAsync(...)` but immediately follows each chunk with `streamSynchronize(...)` before parsing
+- then the runtime path issues `memcpyDToHAsync(...)` and immediately follows it with `streamSynchronize(...)` before parsing
 
 So the current instrumentation path also synchronizes. It is not yet an async copy-stream design.
 

@@ -219,7 +219,6 @@ def mark_step(stream: Optional[int] = None) -> None:
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
     HookManager.mark_step(stream)
-    HookManager.flush()
 
 
 def _profiling(

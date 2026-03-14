@@ -105,6 +105,9 @@ struct InitializeOpConversion
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
 
     if (usesKernelLaunchProfileScratch(op.getOperation())) {
+      // Kernel-trace mode uses one launch-wide record in profile scratch:
+      // slot 0 stores the earliest observed CTA start timestamp. We only need
+      // one thread per CTA to participate in the atomic min reduction.
       Value threadId = getThreadId(rewriter, loc);
       Value isFirstThread = b.icmp_eq(threadId, b.i32_val(0));
 
@@ -112,6 +115,8 @@ struct InitializeOpConversion
       Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
       rewriter.setInsertionPointToStart(ifBlock);
 
+      // Atomic min over CTA leaders gives one launch-level start time without
+      // forcing the host to reduce per-CTA records after every launch.
       Value startTimePtr =
           b.gep(scratchPtrTy, i64_ty, scratchPtr, b.i32_val(0));
       Value initTime = targetInfo.globalTime(rewriter, loc);
@@ -127,6 +132,9 @@ struct InitializeOpConversion
       rewriter.setInsertionPointToEnd(ifBlock);
       cf::BranchOp::create(rewriter, loc, thenBlock);
 
+      // The original proton.initialize op is fully lowered into the CFG and
+      // atomic write above, so it must be erased to avoid leaving an illegal
+      // ProtonGPU op behind in the LLVM dialect.
       rewriter.eraseOp(op);
       return success();
     }
@@ -221,6 +229,8 @@ struct FinalizeOpConversion
 
     if (usesKernelLaunchProfileScratch(op.getOperation())) {
       auto b = TritonLLVMOpBuilder(loc, rewriter);
+      // Slot 1 stores the latest observed CTA end timestamp. One thread per
+      // CTA is enough to participate in the atomic max reduction.
       Value threadId = getRawThreadId(rewriter, loc);
       Value isBlockFirstThread = b.icmp_eq(threadId, b.i32_val(0));
 
@@ -233,6 +243,7 @@ struct FinalizeOpConversion
                                continuation);
 
       rewriter.setInsertionPointToStart(leaderBlock);
+      // Atomic max over CTA leaders produces one launch-level end timestamp.
       Value endTimePtr = b.gep(scratchPtrTy, i64_ty, scratchPtr, b.i32_val(1));
       Value postFinalTime = targetInfo.globalTime(rewriter, loc);
       LLVM::AtomicRMWOp::create(rewriter, loc, LLVM::AtomicBinOp::umax,
@@ -241,6 +252,8 @@ struct FinalizeOpConversion
                                 StringRef("device"));
       cf::BranchOp::create(rewriter, loc, continuation);
       rewriter.setInsertionPointToStart(continuation);
+      // The original proton.finalize op has been replaced by the CFG and
+      // atomic write above, so erase it after lowering.
       rewriter.eraseOp(op);
       return success();
     }
