@@ -160,10 +160,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c_pred = arith.constant true
     %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <tensor<64x64xf16, #shared>>
 
-    // CHECK-NOT: rocdl.global.prefetch
+    // CHECK: rocdl.global.prefetch %{{.*}} scope 8
     amdg.tdm_prefetch %0[%c_offset, %c_offset], %c_pred, speculative = false : !tt.tensordesc<tensor<64x64xf16, #shared>>
 
-    // CHECK-NOT: rocdl.global.prefetch
+    // CHECK: rocdl.global.prefetch %{{.*}} scope 9
     amdg.tdm_prefetch %0[%c_offset, %c_offset], %c_pred, speculative = true : !tt.tensordesc<tensor<64x64xf16, #shared>>
     tt.return
   }
