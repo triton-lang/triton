@@ -138,6 +138,7 @@ class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
                              dataflow::Lattice<AxisInfo>> {
 private:
   AxisInfoVisitorList visitors;
+  AxisInfoNCFAVisitorList ncfaVisitors;
 
   void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override {
     propagateIfChanged(
@@ -149,16 +150,22 @@ private:
       Operation *op, const RegionSuccessor & /*successor*/,
       ValueRange /*nonSuccessorInputs*/,
       ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) override {
-    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      visitForOpInductionVar(forOp, argLattices);
-    } else {
+    if (!ncfaVisitors.apply(
+            op, argLattices,
+            [&](Value v) {
+              return getLatticeElementFor(getProgramPointAfter(op), v);
+            },
+            [&](dataflow::Lattice<AxisInfo> *lattice, AxisInfo info) {
+              propagateIfChanged(lattice, lattice->join(info));
+            })) {
       setAllToEntryStates(argLattices);
     }
   }
 
 public:
   AxisInfoAnalysis(DataFlowSolver &solver,
-                   axisinfo::CallbackType callback = nullptr);
+                   axisinfo::CallbackType callback = nullptr,
+                   axisinfo::NCFACallbackType ncfaCallback = nullptr);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
 
@@ -166,9 +173,6 @@ public:
   visitOperation(Operation *op,
                  ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
                  ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
-  void
-  visitForOpInductionVar(scf::ForOp op,
-                         ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
 };
 
 template <typename OpTy>
@@ -1192,12 +1196,43 @@ public:
   }
 };
 
+class ForOpInductionVarVisitor final : public triton::AxisInfoNCFAVisitor {
+public:
+  bool match(Operation *op) final { return isa<scf::ForOp>(op); }
+
+  void
+  visit(Operation *op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices,
+        function_ref<const dataflow::Lattice<AxisInfo> *(Value)> lookupLattice,
+        function_ref<void(dataflow::Lattice<AxisInfo> *, AxisInfo)> propagate)
+      final {
+    auto forOp = cast<scf::ForOp>(op);
+    auto *lbLattice = lookupLattice(forOp.getLowerBound());
+    auto *stepLattice = lookupLattice(forOp.getStep());
+
+    // If lb or step is not yet ready, skip this operation for now.
+    if (lbLattice->getValue().getRank() == 0 ||
+        stepLattice->getValue().getRank() == 0) {
+      return;
+    }
+
+    AxisInfo::DimVectorT knownContiguity(1, 1);
+    AxisInfo::DimVectorT knownDivisibility(1, 1);
+    AxisInfo::DimVectorT knownConstancy(1, 1);
+    knownDivisibility[0] = gcd(lbLattice->getValue().getDivisibility(0),
+                               stepLattice->getValue().getDivisibility(0));
+    auto inductionVar =
+        AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
+    (void)argLattices[0]->join(inductionVar);
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
 
 AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
-                                   axisinfo::CallbackType callback)
+                                   axisinfo::CallbackType callback,
+                                   axisinfo::NCFACallbackType ncfaCallback)
     : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
           solver) {
   // UnrealizedConversionCast:
@@ -1242,6 +1277,11 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
 
   if (callback)
     callback(visitors);
+
+  ncfaVisitors.append<ForOpInductionVarVisitor>();
+
+  if (ncfaCallback)
+    ncfaCallback(ncfaVisitors);
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
@@ -1272,27 +1312,6 @@ LogicalResult AxisInfoAnalysis::visitOperation(
   for (auto *result : results)
     propagateIfChanged(result, result->join(curr));
   return success();
-}
-
-void AxisInfoAnalysis::visitForOpInductionVar(
-    scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
-  ProgramPoint *programPoint = getProgramPointAfter(op);
-  auto *lbLattice = getLatticeElementFor(programPoint, op.getLowerBound());
-  auto *stepLattice = getLatticeElementFor(programPoint, op.getStep());
-  // If lb or step is not yet ready, skip this operation for now.
-  if (lbLattice->getValue().getRank() == 0 ||
-      stepLattice->getValue().getRank() == 0) {
-    return;
-  }
-
-  AxisInfo::DimVectorT knownContiguity(1, 1);
-  AxisInfo::DimVectorT knownDivisibility(1, 1);
-  AxisInfo::DimVectorT knownConstancy(1, 1);
-  knownDivisibility[0] = gcd(lbLattice->getValue().getDivisibility(0),
-                             stepLattice->getValue().getDivisibility(0));
-  auto inductionVar =
-      AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
-  (void)argLattices[0]->join(inductionVar);
 }
 
 } // anonymous namespace
@@ -1478,10 +1497,12 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
-void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
-                                        axisinfo::CallbackType callback) {
+void ModuleAxisInfoAnalysis::initialize(
+    FunctionOpInterface funcOp, axisinfo::CallbackType callback,
+    axisinfo::NCFACallbackType ncfaCallback) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>(callback);
+  AxisInfoAnalysis *analysis =
+      solver->load<AxisInfoAnalysis>(callback, ncfaCallback);
   if (failed(solver->initializeAndRun(funcOp)))
     return;
 
