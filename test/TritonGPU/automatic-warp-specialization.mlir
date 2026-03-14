@@ -286,6 +286,7 @@ tt.func public @attention_forward(
 
 // -----
 
+#indices_layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
   // CHECK-LABEL: @no_eligible_memory_ops
   tt.func @no_eligible_memory_ops(%arg0: i32, %arg1: tensor<128xf32, #indices_layout>) {

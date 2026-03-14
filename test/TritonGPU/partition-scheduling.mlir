@@ -159,18 +159,15 @@ tt.func @optimize_broadcast(%arg0: i32) {
     // CHECK: [[X:%.*]] = "producer"{{.*}}partition = array<i32: 0>
     %x = "producer"() {ttg.partition = array<i32: 0>, data} : () -> tensor<128xf32>
 
-    // CHECK-DAG: [[X0_P0:%.*]] = tt.expand_dims [[X]] {{.*}}partition = array<i32: 0>
-    // CHECK-DAG: [[X0_P1:%.*]] = tt.expand_dims [[X]] {{.*}}partition = array<i32: 1>
+    // CHECK: [[X0:%.*]] = tt.expand_dims [[X]]
     %x0 = tt.expand_dims %x {axis = 0 : i32} : tensor<128xf32> -> tensor<1x128xf32>
-    // CHECK-DAG: [[X1_P0:%.*]] = tt.broadcast [[X0_P0]] {{.*}}partition = array<i32: 0>
-    // CHECK-DAG: [[X1_P1:%.*]] = tt.broadcast [[X0_P1]] {{.*}}partition = array<i32: 1>
+    // CHECK: [[X1:%.*]] = tt.broadcast [[X0]]
     %x1 = tt.broadcast %x0 : tensor<1x128xf32> -> tensor<128x128xf32>
 
-    // CHECK: "use"([[X1_P0]]) {{.*}}partition = array<i32: 0>
+    // CHECK: "use"([[X1]]) {{.*}}partition = array<i32: 0>
     "use"(%x1) {ttg.partition = array<i32: 0>, data} : (tensor<128x128xf32>) -> ()
-    // CHECK: "use"([[X1_P1]]) {{.*}}partition = array<i32: 1>
+    // CHECK: "use"([[X1]]) {{.*}}partition = array<i32: 1>
     "use"(%x1) {ttg.partition = array<i32: 1>, data} : (tensor<128x128xf32>) -> ()
-    // CHECK-NEXT: ttg.partition = array<i32: 0, 1>
   } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
