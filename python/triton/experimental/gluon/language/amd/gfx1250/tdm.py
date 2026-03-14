@@ -110,7 +110,7 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
     ndim = len(shape)
     assert 1 <= ndim <= 5, f"Expected 1 <= ndim <= 5 but got {ndim} dimensions"
     assert len(strides) == ndim, f"Expected {ndim} strides but got {len(strides)}"
-    assert len(block_shape) == ndim, f"Expected block_shape to have {ndim} dimensions but got {len(strides)}"
+    assert len(block_shape) == ndim, f"Expected block_shape to have {ndim} dimensions but got {len(block_shape)}"
     assert isinstance(base.dtype, ttgl.pointer_type), "Expected base to be a pointer"
 
     layout = _unwrap_if_constexpr(layout)
