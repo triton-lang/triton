@@ -101,7 +101,7 @@ using LinearEncodingCache = Cache<CacheKey, LinearEncodingAttr>;
 
 namespace mlir::triton::gpu {
 struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
-  StringRef getName() final { return "<SharedMemory>"; }
+  StringRef getName() const final { return "<SharedMemory>"; }
 };
 
 // Convert a distributed layout to a linear encoding
