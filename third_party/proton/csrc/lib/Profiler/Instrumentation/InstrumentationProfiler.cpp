@@ -352,6 +352,27 @@ void InstrumentationProfiler::parseCopiedInstrumentedOp(
   auto streamId = pendingOp.streamId;
   auto functionId = pendingOp.functionId;
   const auto &functionName = functionNames[functionId];
+  const auto kernelTraceMode = isKernelTraceMode(modeOptions);
+  const auto deviceId = pendingOp.deviceId;
+
+  if (kernelTraceMode) {
+    auto *record = reinterpret_cast<const uint64_t *>(hostBuffer);
+    uint64_t startTime = record[0];
+    uint64_t endTime = record[1];
+    if (startTime != std::numeric_limits<uint64_t>::max() &&
+        endTime >= startTime) {
+      for (const auto &[data, baseEntry] : pendingOp.dataToEntryMap) {
+        if (dynamic_cast<TraceData *>(data) == nullptr) {
+          continue;
+        }
+        auto entry = data->addOp(baseEntry.phase, baseEntry.id, {});
+        entry.upsertMetric(std::make_unique<KernelMetric>(
+            startTime, endTime, 1, deviceId,
+            static_cast<uint64_t>(runtime->getDeviceType()), streamId));
+      }
+    }
+    return;
+  }
 
   auto config = getParserConfig(functionId, size);
   auto circularLayoutConfig =
@@ -374,35 +395,6 @@ void InstrumentationProfiler::parseCopiedInstrumentedOp(
   CircularLayoutParser parser(byteSpan, *circularLayoutConfig);
   parser.parse();
   const auto &blockTraces = parser.getResult()->blockTraces;
-  const auto kernelTraceMode = isKernelTraceMode(modeOptions);
-  const auto deviceId = pendingOp.deviceId;
-
-  if (kernelTraceMode) {
-    // Today we reduce the existing per-CTA timestamps on the host to get
-    // one launch interval. If contention on a single per-launch record is
-    // too high, we can keep per-CTA records and reduce them later; start
-    // with host reduction so we preserve CTA-level detail and avoid an
-    // extra device-side reduction pass.
-    uint64_t startTime = std::numeric_limits<uint64_t>::max();
-    uint64_t endTime = 0;
-    bool sawBlockTrace = false;
-    for (const auto &blockTrace : blockTraces) {
-      startTime = std::min(startTime, blockTrace.initTime);
-      endTime = std::max(endTime, blockTrace.postFinalTime);
-      sawBlockTrace = true;
-    }
-    if (sawBlockTrace && endTime >= startTime) {
-      for (const auto &[data, baseEntry] : pendingOp.dataToEntryMap) {
-        if (dynamic_cast<TraceData *>(data) == nullptr) {
-          continue;
-        }
-        auto entry = data->addOp(baseEntry.phase, baseEntry.id, {});
-        entry.upsertMetric(std::make_unique<KernelMetric>(
-            startTime, endTime, 1, deviceId,
-            static_cast<uint64_t>(runtime->getDeviceType()), streamId));
-      }
-    }
-  }
   for (auto &blockTrace : blockTraces) {
     for (auto &trace : blockTrace.traces) {
       for (auto &event : trace.profileEvents) {
@@ -412,9 +404,6 @@ void InstrumentationProfiler::parseCopiedInstrumentedOp(
                                   (circularLayoutConfig->totalUnits *
                                    circularLayoutConfig->numBlocks);
         for (const auto &[data, baseEntry] : pendingOp.dataToEntryMap) {
-          if (kernelTraceMode && dynamic_cast<TraceData *>(data) != nullptr) {
-            continue;
-          }
           auto kernelId = baseEntry.id;
           auto entry = data->addOp(baseEntry.phase, kernelId, contexts);
           entry.upsertMetric(std::make_unique<CycleMetric>(

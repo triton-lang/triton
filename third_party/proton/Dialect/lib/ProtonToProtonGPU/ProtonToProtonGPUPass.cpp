@@ -202,6 +202,7 @@ public:
     builder.setInsertionPointToStart(&func.getBody().front());
 
     int numWarps = gpu::getTotalNumWarps(mod);
+    int numCTAs = triton::gpu::lookupNumCTAs(func);
 
     llvm::SmallVector<int32_t, 8> selectIdVec;
     int segmentNum = numWarps;
@@ -216,12 +217,68 @@ public:
       }
     }
 
+    if (kernelTraceMode) {
+      if (hasOperator<Operation, proton::RecordOp>(func.getOperation())) {
+        mlir::emitError(
+            loc, "trace_mode=kernel currently supports launch-level timing "
+                     "only and cannot be combined with proton.record ops");
+        return failure();
+      }
+
+      constexpr int kernelTraceRecordSize = 2 * sizeof(uint64_t);
+      int allocProfileScratchSize =
+          llvm::alignTo(kernelTraceRecordSize, profileScratchAlignment);
+      if (profileScratchSize < allocProfileScratchSize) {
+        LDBG("Global scratch memory for proton kernel trace is not large "
+             "enough, we allocate the scratch size as " +
+             llvm::Twine(allocProfileScratchSize) + " bytes.");
+      }
+
+      mod->setAttr("ttg.profile_scratch_is_total",
+                   builder.getI32IntegerAttr(1));
+      Value profileMem = triton::gpu::GlobalScratchAllocOp::create(
+          builder, loc, triton::getPointerType(builder.getI64Type()),
+          allocProfileScratchSize, profileScratchAlignment,
+          builder.getUnitAttr());
+      gpu::InitializeOp::create(builder, loc, profileMem);
+
+      auto cgaLayout =
+          triton::gpu::CGAEncodingAttr::get1DLayout(context, numCTAs);
+      auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
+          context, 1, 1, 1, {0}, cgaLayout);
+      Attribute sharedMemorySpace =
+          triton::gpu::SharedMemorySpaceAttr::get(context);
+      auto sharedBufferType = triton::gpu::MemDescType::get(
+          {1}, builder.getI32Type(), encoding, sharedMemorySpace,
+          /*mutable_memory=*/true);
+      Value buffer =
+          triton::gpu::LocalAllocOp::create(builder, loc, sharedBufferType);
+      Attribute memorySpace =
+          mlir::cast<triton::gpu::MemDescType>(buffer.getType())
+              .getMemorySpace();
+      auto segmentType = gpu::SegmentType::get(context, sizeof(uint32_t),
+                                               memorySpace, granularity,
+                                               selectIdVec);
+      Value segment = gpu::SegmentAllocOp::create(builder, loc, segmentType,
+                                                  buffer);
+
+      func.walk([&](triton::ReturnOp ret) {
+        builder.setInsertionPoint(ret);
+        mlir::triton::gpu::BarrierOp::create(
+            builder, loc,
+            triton::gpu::AddrSpace::Local |
+                triton::gpu::AddrSpace::GlobalRead |
+                triton::gpu::AddrSpace::GlobalWrite);
+        gpu::FinalizeOp::create(builder, loc, segment, profileMem);
+      });
+      return success();
+    }
+
     int sharedMemUsed = 0;
     if (mod->hasAttr("ttg.shared"))
       sharedMemUsed =
           mod->getAttrOfType<mlir::IntegerAttr>("ttg.shared").getInt();
 
-    int numCTAs = triton::gpu::lookupNumCTAs(func);
     auto maxSharedMemSizePerCTA = maxSharedMemSize / numCTAs;
 
     int allocSharedMemSize = getAllocSharedMemSize(maxSharedMemSizePerCTA,

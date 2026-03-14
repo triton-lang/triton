@@ -339,6 +339,9 @@ class HIPLauncher(object):
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
+        self.profile_scratch_is_total = bool(
+            getattr(metadata, "profile_scratch_is_total", 0)
+        )
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
@@ -346,16 +349,22 @@ class HIPLauncher(object):
 
         def allocate_scratch(size, align, allocator):
             if size > 0:
-                grid_size = gridX * gridY * gridZ
-                alloc_size = grid_size * size
+                if self.profile_scratch_is_total and allocator is _allocation._profile_allocator:
+                    alloc_size = size
+                else:
+                    grid_size = gridX * gridY * gridZ
+                    alloc_size = grid_size * size
                 alloc_fn = allocator.get()
                 return alloc_fn(alloc_size, align, stream)
             return None
 
         def allocate_default_profile_scratch(size, align):
             if size > 0:
-                grid_size = gridX * gridY * gridZ
-                alloc_size = grid_size * size
+                if self.profile_scratch_is_total:
+                    alloc_size = size
+                else:
+                    grid_size = gridX * gridY * gridZ
+                    alloc_size = grid_size * size
                 return active_driver.allocate_default_profile_scratch(alloc_size, align, stream)
             return None
 

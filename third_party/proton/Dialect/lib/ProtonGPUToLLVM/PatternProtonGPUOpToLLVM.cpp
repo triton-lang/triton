@@ -16,6 +16,12 @@ namespace proton::gpu {
 
 namespace {
 
+bool usesPerKernelTraceRecord(Operation *op) {
+  auto mod = op->getParentOfType<ModuleOp>();
+  auto attr = mod.getAttrOfType<IntegerAttr>("ttg.profile_scratch_is_total");
+  return attr && attr.getInt() != 0;
+}
+
 Value getLinearId(Location loc, ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // Note:
@@ -87,6 +93,33 @@ struct InitializeOpConversion
 
     Value scratchPtr = adaptor.getScratchPtr();
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
+
+    if (usesPerKernelTraceRecord(op.getOperation())) {
+      Value threadId = getThreadId(rewriter, loc);
+      Value isFirstThread = b.icmp_eq(threadId, b.i32_val(0));
+
+      Block *prevBlock = op->getBlock();
+      Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+      rewriter.setInsertionPointToStart(ifBlock);
+
+      Value startTimePtr =
+          b.gep(scratchPtrTy, i64_ty, scratchPtr, b.i32_val(0));
+      Value initTime = targetInfo.globalTime(rewriter, loc);
+      LLVM::AtomicRMWOp::create(rewriter, loc, LLVM::AtomicBinOp::umin,
+                                startTimePtr, initTime,
+                                LLVM::AtomicOrdering::monotonic,
+                                StringRef("device"));
+
+      Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+      rewriter.setInsertionPointToEnd(prevBlock);
+      cf::CondBranchOp::create(rewriter, loc, isFirstThread, ifBlock,
+                               thenBlock);
+      rewriter.setInsertionPointToEnd(ifBlock);
+      cf::BranchOp::create(rewriter, loc, thenBlock);
+
+      rewriter.eraseOp(op);
+      return success();
+    }
 
     // Header layout (total: circularHeaderSize bytes)
     //  +-------------------------------+ 0
@@ -174,6 +207,33 @@ struct FinalizeOpConversion
     auto segmentObj =
         LLVM::SegmentObject::fromStruct(loc, adaptor.getSegment(), rewriter);
     Value scratchPtr = adaptor.getScratchPtr();
+    auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
+
+    if (usesPerKernelTraceRecord(op.getOperation())) {
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      Value threadId = getRawThreadId(rewriter, loc);
+      Value isBlockFirstThread = b.icmp_eq(threadId, b.i32_val(0));
+
+      Block *prevBlock = op->getBlock();
+      Block *continuation = rewriter.splitBlock(prevBlock, op->getIterator());
+      Block *leaderBlock = rewriter.createBlock(prevBlock->getParent(),
+                                                Region::iterator(continuation));
+      rewriter.setInsertionPointToEnd(prevBlock);
+      cf::CondBranchOp::create(rewriter, loc, isBlockFirstThread, leaderBlock,
+                               continuation);
+
+      rewriter.setInsertionPointToStart(leaderBlock);
+      Value endTimePtr = b.gep(scratchPtrTy, i64_ty, scratchPtr, b.i32_val(1));
+      Value postFinalTime = targetInfo.globalTime(rewriter, loc);
+      LLVM::AtomicRMWOp::create(rewriter, loc, LLVM::AtomicBinOp::umax,
+                                endTimePtr, postFinalTime,
+                                LLVM::AtomicOrdering::monotonic,
+                                StringRef("device"));
+      cf::BranchOp::create(rewriter, loc, continuation);
+      rewriter.setInsertionPointToStart(continuation);
+      rewriter.eraseOp(op);
+      return success();
+    }
 
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -206,7 +266,6 @@ struct FinalizeOpConversion
     bool hasSelectIds = !selectIds.empty();
     int activeWarpCount = hasSelectIds ? selectIds.size() : numWarps;
     const int segmentWordSize = bufferSizeInWords / activeWarpCount;
-    auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
     auto segmentBaseTy =
         mlir::cast<LLVM::LLVMPointerType>(segmentObj.base.getType());
 

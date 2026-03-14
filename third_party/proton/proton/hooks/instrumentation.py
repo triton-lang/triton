@@ -40,6 +40,9 @@ class ProfileScratchAllocation:
     def numel(self) -> int:
         return self.size
 
+    def byte_range(self):
+        return self.slot.buffer[self.offset:self.offset + self.size]
+
 
 class StepBufferSlot:
 
@@ -135,6 +138,8 @@ class CudaAllocator:
                     f"Kernel requested {aligned_size} bytes of profile scratch, which exceeds the preallocated step "
                     f"slot size {self.instrumentation_hook.profile_buffer_size}. Increase TRITON_PROFILE_BUFFER_SIZE.")
             buffer = self.instrumentation_hook.get_step_buffer_ring().allocate(aligned_size, alignment, stream)
+        if self.instrumentation_hook.mode.trace_mode == "kernel":
+            self.instrumentation_hook.initialize_kernel_trace_record(buffer, stream)
         self.instrumentation_hook.current_buffer = buffer
         return buffer
 
@@ -339,6 +344,15 @@ class InstrumentationHook(Hook):
         if device not in self.step_buffer_rings:
             self.step_buffer_rings[device] = StepBufferRing(self, self.profile_buffer_size, self.profile_buffer_slots)
         return self.step_buffer_rings[device]
+
+    def initialize_kernel_trace_record(self, buffer: Any, stream: int) -> None:
+        device = triton.runtime.driver.active.get_active_torch_device()
+        device_interface = triton.runtime.driver.active.get_device_interface()
+        launch_stream = device_interface.ExternalStream(stream, device=device)
+        buffer_view = buffer.byte_range() if isinstance(buffer, ProfileScratchAllocation) else buffer
+        with device_interface.stream(launch_stream):
+            buffer_view.zero_()
+            buffer_view[:8].fill_(0xFF)
 
     def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
         if not function:
