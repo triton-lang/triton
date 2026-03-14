@@ -5,7 +5,6 @@ from .profile import (
     start,
     activate,
     deactivate,
-    flush,
     finalize,
     mark_step,
     profile,

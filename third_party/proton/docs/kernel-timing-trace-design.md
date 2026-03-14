@@ -30,11 +30,12 @@ At a user-defined step boundary:
 
 - the user calls `mark_step(stream)`
 - Proton records a step-complete event on the compute stream
+- `mark_step()` immediately schedules async draining work
 - a separate copy stream waits on that event
 - the copy stream performs async device-to-host copies from the step buffer into pinned host staging buffers
 - CPU parsing happens later, after the copy completes
 
-The key design choice is that `flush()` should enqueue async draining work, not synchronize the host. The compute stream should only wait when it is about to reuse a GPU profiling slot that is still being copied.
+The key design choice is that `mark_step()` should enqueue async draining work without synchronizing the host. The compute stream should only wait when it is about to reuse a GPU profiling slot that is still being copied.
 
 ## Core Model
 
@@ -113,7 +114,7 @@ Using a copy stream is more complex because it requires event wiring and buffer 
 So the preferred design is:
 
 - copy stream for D2H
-- no host sync in `flush()`
+- no host sync in `mark_step()`
 - compute stream waits only on slot reuse
 
 ## Avoiding CUDA Syncs
@@ -128,14 +129,14 @@ Instead:
 
 - launch-time instrumentation writes to device memory only
 - `mark_step(stream)` records `step_complete`
-- `flush()` only enqueues work on the copy stream
+- `mark_step()` only enqueues work on the copy stream
 - parsing happens after D2H completion without blocking the main stream
 
 Only shutdown or explicit "drain everything now" paths should block.
 
 That means:
 
-- `flush()` becomes "schedule async draining work"
+- `mark_step()` becomes "seal the step and schedule async draining work"
 - `finalize()` may still need to block to make sure all pending copies and parsing complete before writing the final artifact
 
 ## Host Buffer Management
@@ -184,7 +185,7 @@ For one step on one compute stream:
 1. Kernels for the step launch and write timing records into device slot `i`.
 2. User calls `mark_step(stream)`.
 3. Proton records `step_complete[i]` on the compute stream.
-4. A later `flush()` enqueues copy work:
+4. `mark_step()` enqueues copy work:
    - copy stream waits on `step_complete[i]`
    - copy stream copies device slot `i` to pinned host slot `j`
    - copy stream records `copy_done[i]`
@@ -210,6 +211,10 @@ This path should not depend on Hatchet tree aggregation.
 
 Hatchet remains the right format for aggregated trees.
 Chrome trace is the right format for exact per-launch timing and cross-rank imbalance at the kernel-invocation level.
+
+For simplicity, the public API now couples step marking and async drain
+scheduling. We can split those again later if we want a separate batching
+control.
 
 ## Why Not Per-Launch Host Parsing
 
@@ -260,7 +265,7 @@ So the sequence should be:
 - one copy stream per device
 - `N` preallocated GPU step slots
 - `N` pinned host staging slots
-- async `flush()` that only schedules D2H copies
+- `mark_step()` that seals the step and schedules async D2H copies
 - blocking `finalize()` that waits for remaining copies and parses all pending data
 - Chrome trace output only for this path
 

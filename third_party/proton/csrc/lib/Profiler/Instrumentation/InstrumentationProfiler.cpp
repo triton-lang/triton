@@ -466,8 +466,8 @@ void InstrumentationProfiler::waitStepBuffer(uint64_t streamId,
   for (const auto &stepFence : pendingStepFences) {
     if (stepFence.stepBufferToken == stepBufferToken) {
       throw std::runtime_error(
-          "Profiling step buffer is still pending flush; call proton.flush() "
-          "before reusing the slot");
+          "Profiling step buffer is still pending drain; the slot cannot be "
+          "reused until its async copy is scheduled and completed");
     }
   }
   for (const auto &inflightStep : inflightInstrumentedSteps) {

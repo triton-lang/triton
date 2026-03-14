@@ -104,8 +104,9 @@ class StepBufferRing:
         slot_idx = self.next_slot_idx
         slot = self.slots[slot_idx]
         if slot.sealed:
-            # Steady-state flush stays async. We only gate the compute stream
-            # when the ring wraps and this exact slot must be reused.
+            # mark_step() already schedules async draining. We only gate the
+            # compute stream when the ring wraps and this exact slot must be
+            # reused before its copy has completed.
             libproton.flush_all()
             libproton.wait_step_buffer(stream, slot.token)
         slot.reset()
