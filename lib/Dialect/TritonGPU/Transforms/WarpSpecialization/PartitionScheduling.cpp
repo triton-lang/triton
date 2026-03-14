@@ -384,7 +384,7 @@ bool hasEligibleMemoryOps(Graph *graph) {
       return;
     auto flags = getNodeFlags(node);
     // We cannot handle none descriptor memory operations
-    if (flags & (Flags::LOAD | Flags::STORE | Flags::TMEM))
+    if (flags & (Flags::LOAD | Flags::STORE))
       found = true;
   });
   return found;
