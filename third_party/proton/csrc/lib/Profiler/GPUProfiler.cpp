@@ -2,12 +2,12 @@
 #include "Profiler/Graph.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cerrno>
+#include <chrono>
 #include <fstream>
 #include <iostream>
-#include <system_error>
 #include <stdexcept>
+#include <system_error>
 #include <unistd.h>
 
 namespace proton {
@@ -118,10 +118,10 @@ void periodicFlushDataPhases(Data &data,
 
   for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
        startPhase++) {
-    auto pathWithPhase =
-        streamToProcFd ? path
-                       : path + ".part_" + std::to_string(startPhase) + "." +
-                             periodicFlushingFormat;
+    auto pathWithPhase = streamToProcFd
+                             ? path
+                             : path + ".part_" + std::to_string(startPhase) +
+                                   "." + periodicFlushingFormat;
 
     if (periodicFlushingFormat == "hatchet" ||
         periodicFlushingFormat == "chrome_trace") {

@@ -59,7 +59,6 @@ print(json.dumps({
 }))
 """.strip()
 
-
 PIPE_PERIODIC_PROFILE_PARSER = """
 import json
 import msgpack
@@ -461,6 +460,7 @@ def test_profile_output_to_pipe_with_parser_process(device: str):
     writer = os.fdopen(write_fd, "wb")
 
     try:
+
         @triton.jit
         def pipe_kernel(x, y, size: tl.constexpr):
             offs = tl.arange(0, size)
@@ -1403,7 +1403,8 @@ def test_periodic_flushing_pipe_streams_before_finalize(fresh_knobs, device: str
     fresh_knobs.proton.profile_buffer_size = 256 * 1024
     read_fd, write_fd = os.pipe()
     parser = subprocess.Popen(
-        [sys.executable, "-c", PIPE_PERIODIC_PROFILE_PARSER, str(read_fd), "1", "10"],
+        [sys.executable, "-c", PIPE_PERIODIC_PROFILE_PARSER,
+         str(read_fd), "1", "10"],
         pass_fds=(read_fd, ),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

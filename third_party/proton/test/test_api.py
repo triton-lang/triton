@@ -16,7 +16,6 @@ from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
 from triton._internal_testing import is_hip
 
-
 PIPE_JSON_PARSER = """
 import json
 import os
