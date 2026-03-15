@@ -3,9 +3,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cerrno>
 #include <fstream>
 #include <iostream>
+#include <system_error>
 #include <stdexcept>
+#include <unistd.h>
 
 namespace proton {
 namespace detail {
@@ -74,6 +77,30 @@ struct PeriodicFlushStats {
   size_t msgPackWriteCalls{0};
 };
 
+bool isProcFdPath(const std::string &path) {
+  return path.rfind("/proc/self/fd/", 0) == 0;
+}
+
+int parseProcFd(const std::string &path) {
+  if (!isProcFdPath(path))
+    return -1;
+  return std::stoi(path.substr(std::string("/proc/self/fd/").size()));
+}
+
+void writeAllToFd(int fd, const uint8_t *data, size_t size) {
+  size_t totalWritten = 0;
+  while (totalWritten < size) {
+    const auto written = ::write(fd, data + totalWritten, size - totalWritten);
+    if (written < 0) {
+      if (errno == EINTR)
+        continue;
+      throw std::system_error(errno, std::generic_category(),
+                              "[PROTON] Failed to write periodic profile data");
+    }
+    totalWritten += static_cast<size_t>(written);
+  }
+}
+
 void periodicFlushDataPhases(Data &data,
                              const std::string &periodicFlushingFormat,
                              size_t minPhaseToFlush, size_t maxPhaseToFlush,
@@ -81,11 +108,20 @@ void periodicFlushDataPhases(Data &data,
                              PeriodicFlushStats &stats) {
   using Clock = std::chrono::steady_clock;
   const auto &path = data.getPath();
+  const bool streamToProcFd = isProcFdPath(path);
+  if (streamToProcFd && periodicFlushingFormat != "hatchet_msgpack") {
+    throw std::invalid_argument(
+        "[PROTON] periodic_flushing only supports hatchet_msgpack when the "
+        "output target is a /proc/self/fd/* stream");
+  }
+  const int outputFd = parseProcFd(path);
 
   for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
        startPhase++) {
-    auto pathWithPhase = path + ".part_" + std::to_string(startPhase) + "." +
-                         periodicFlushingFormat;
+    auto pathWithPhase =
+        streamToProcFd ? path
+                       : path + ".part_" + std::to_string(startPhase) + "." +
+                             periodicFlushingFormat;
 
     if (periodicFlushingFormat == "hatchet" ||
         periodicFlushingFormat == "chrome_trace") {
@@ -130,23 +166,37 @@ void periodicFlushDataPhases(Data &data,
         msgPack = data.toMsgPack(startPhase);
       }
 
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        std::ofstream ofs(pathWithPhase,
-                          std::ios::out | std::ios::binary | std::ios::trunc);
-        ofs.write(reinterpret_cast<const char *>(msgPack.data()),
-                  msgPack.size());
-        ofs.flush();
-        const auto t1 = Clock::now();
-        stats.totalMsgPackWriteUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        ++stats.msgPackWriteCalls;
+      if (streamToProcFd) {
+        if (timingEnabled) {
+          const auto t0 = Clock::now();
+          writeAllToFd(outputFd, msgPack.data(), msgPack.size());
+          const auto t1 = Clock::now();
+          stats.totalMsgPackWriteUs +=
+              std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                  .count();
+          ++stats.msgPackWriteCalls;
+        } else {
+          writeAllToFd(outputFd, msgPack.data(), msgPack.size());
+        }
       } else {
-        std::ofstream ofs(pathWithPhase,
-                          std::ios::out | std::ios::binary | std::ios::trunc);
-        ofs.write(reinterpret_cast<const char *>(msgPack.data()),
-                  msgPack.size());
+        if (timingEnabled) {
+          const auto t0 = Clock::now();
+          std::ofstream ofs(pathWithPhase,
+                            std::ios::out | std::ios::binary | std::ios::trunc);
+          ofs.write(reinterpret_cast<const char *>(msgPack.data()),
+                    msgPack.size());
+          ofs.flush();
+          const auto t1 = Clock::now();
+          stats.totalMsgPackWriteUs +=
+              std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                  .count();
+          ++stats.msgPackWriteCalls;
+        } else {
+          std::ofstream ofs(pathWithPhase,
+                            std::ios::out | std::ios::binary | std::ios::trunc);
+          ofs.write(reinterpret_cast<const char *>(msgPack.data()),
+                    msgPack.size());
+        }
       }
     }
   }

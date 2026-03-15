@@ -8,6 +8,7 @@ import triton
 import triton.profiler as proton
 import json
 import os
+import select
 import subprocess
 import pytest
 import sys
@@ -40,6 +41,39 @@ print(json.dumps({
     "kernel_rows": len(kernel_frame),
     "kernel_count": int(kernel_frame["count"].sum()) if len(kernel_frame) else 0,
 }))
+""".strip()
+
+
+PIPE_PERIODIC_PROFILE_PARSER = """
+import json
+import msgpack
+import os
+import sys
+
+fd = int(sys.argv[1])
+threshold = int(sys.argv[2])
+messages = 0
+scopes = 0
+threshold_emitted = False
+
+with os.fdopen(fd, "rb") as reader:
+    unpacker = msgpack.Unpacker(reader, raw=False, strict_map_key=False)
+    for database in unpacker:
+        messages += 1
+        scopes += len(database[0].get("children", []))
+        if not threshold_emitted and messages >= threshold:
+            print(json.dumps({
+                "event": "threshold",
+                "messages": messages,
+                "scopes": scopes,
+            }), flush=True)
+            threshold_emitted = True
+
+print(json.dumps({
+    "event": "final",
+    "messages": messages,
+    "scopes": scopes,
+}), flush=True)
 """.strip()
 
 
@@ -1334,6 +1368,52 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
         assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
         num_scopes += len(data[0]["children"])
     assert num_scopes == 10000
+
+
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="Pipe-backed periodic flushing is supported via /proc/self/fd on Linux")
+def test_periodic_flushing_pipe_streams_before_finalize(fresh_knobs, device: str):
+    fresh_knobs.proton.profile_buffer_size = 256 * 1024
+    read_fd, write_fd = os.pipe()
+    parser = subprocess.Popen(
+        [sys.executable, "-c", PIPE_PERIODIC_PROFILE_PARSER, str(read_fd), "1"],
+        pass_fds=(read_fd, ),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    os.close(read_fd)
+
+    try:
+        with os.fdopen(write_fd, "wb") as writer:
+            session = proton.start(writer, mode="periodic_flushing:format=hatchet_msgpack")
+
+            for i in range(10000):
+                if i != 0 and i % 1000 == 0:
+                    proton.data.advance_phase(session=session)
+                with proton.scope(f"pipe_stream_{i}", metrics={"count": 1}):
+                    torch.zeros((100, ), device=device)
+
+            ready, _, _ = select.select([parser.stdout], [], [], 30)
+            assert ready, "Timed out waiting for a streamed periodic flush before finalize"
+            threshold = json.loads(parser.stdout.readline())
+            assert threshold["event"] == "threshold"
+            assert threshold["messages"] >= 1
+            assert threshold["scopes"] >= 1000
+
+            proton.finalize(session, output_format="hatchet_msgpack")
+
+        stdout, stderr = parser.communicate(timeout=30)
+    finally:
+        if parser.poll() is None:
+            parser.kill()
+            parser.communicate()
+
+    assert parser.returncode == 0, stderr
+    final = json.loads(stdout.strip().splitlines()[-1])
+    assert final["event"] == "final"
+    assert final["messages"] == 10
+    assert final["scopes"] == 10000
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")

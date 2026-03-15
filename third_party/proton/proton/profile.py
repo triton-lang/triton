@@ -111,6 +111,9 @@ def start(
                                                Each mode has a set of control knobs following with the mode name.
                                                For example, "periodic_flushing" mode has a knob:
                                                - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace"]. Default is "hatchet".
+                                               When the output target is a writable file object such as a Linux pipe,
+                                               `periodic_flushing` streams concatenated MessagePack documents and therefore
+                                               requires `format=hatchet_msgpack`.
                                                The can be set via `mode="periodic_flushing:format=chrome_trace"`.
         hook (Union[str, Hook], optional): The hook to use for profiling.
                                            You may pass either:
