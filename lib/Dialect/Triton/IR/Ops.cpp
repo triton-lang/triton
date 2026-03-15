@@ -361,8 +361,8 @@ LogicalResult DotScaledOp::deduceScaleFactor(
                                  bool kPack) -> int32_t {
     if (!scale)
       return 0;
-    auto scaleTy = cast<RankedTensorType>(scale.getType());
-    if (scaleTy.getNumElements() == 1)
+    auto scaleTy = dyn_cast<RankedTensorType>(scale.getType());
+    if (!scaleTy || scaleTy.getNumElements() == 1)
       return 0;
 
     auto operandShape = cast<RankedTensorType>(operand.getType()).getShape();
