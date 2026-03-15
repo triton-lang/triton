@@ -301,8 +301,9 @@ void SessionManager::markStep(uint64_t streamId, uint64_t stepBufferToken) {
                      instrumentationInterface->markStep(streamId,
                                                         stepBufferToken);
                    });
-  // Public mark_step() is defined to both seal the step and immediately
-  // schedule any ready async drains, so we flush each unique profiler here.
+  // The public advance_phase() path seals the current instrumentation step via
+  // this helper and immediately schedules any ready async drains, so we flush
+  // each unique profiler here.
   std::set<Profiler *> flushedProfilers;
   for (const auto &[sessionId, session] : sessions) {
     (void)sessionId;

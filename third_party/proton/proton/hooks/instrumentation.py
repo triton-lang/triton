@@ -79,7 +79,8 @@ class StepBufferRing:
         offset = _round_up(slot.offset, alignment)
         if offset + size > slot.capacity:
             raise RuntimeError(
-                "Profiling step buffer is full; call proton.mark_step() sooner or increase TRITON_PROFILE_BUFFER_SIZE")
+                "Profiling step buffer is full; call proton.data.advance_phase() sooner or increase "
+                "TRITON_PROFILE_BUFFER_SIZE")
         slot.offset = offset + size
         slot.used = True
         return ProfileScratchAllocation(slot, offset, size)
@@ -104,9 +105,9 @@ class StepBufferRing:
         slot_idx = self.next_slot_idx
         slot = self.slots[slot_idx]
         if slot.sealed:
-            # mark_step() already schedules async draining. We only gate the
-            # compute stream when the ring wraps and this exact slot must be
-            # reused before its copy has completed.
+            # advance_phase() already seals the slot and schedules async
+            # draining. We only gate the compute stream when the ring wraps and
+            # this exact slot must be reused before its copy has completed.
             libproton.wait_step_buffer(stream, slot.token)
         slot.reset()
         return slot_idx

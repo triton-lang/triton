@@ -26,16 +26,16 @@ The target output is a Chrome-trace-compatible timeline built from Triton kernel
 
 Use Triton's hidden profiling scratch path to write one launch record per Triton kernel into a preallocated GPU step buffer.
 
-At a user-defined step boundary:
+At a user-defined phase boundary:
 
-- the user calls `mark_step(stream)`
-- Proton records a step-complete event on the compute stream
-- `mark_step()` immediately schedules async draining work
+- the user calls `advance_phase(session)`
+- Proton records a step-complete event on the current compute stream
+- `advance_phase()` immediately schedules async draining work
 - a separate copy stream waits on that event
 - the copy stream performs async device-to-host copies from the step buffer into pinned host staging buffers
 - CPU parsing happens later, after the copy completes
 
-The key design choice is that `mark_step()` should enqueue async draining work without synchronizing the host. The compute stream should only wait when it is about to reuse a GPU profiling slot that is still being copied.
+The key design choice is that `advance_phase()` should enqueue async draining work without synchronizing the host. The compute stream should only wait when it is about to reuse a GPU profiling slot that is still being copied.
 
 ## Core Model
 
@@ -62,10 +62,10 @@ Profiling storage on GPU should be preallocated and reused as an `N`-slot ring.
 
 Each slot corresponds to one step worth of Triton kernel records.
 
-For step `s`:
+For phase/step `s`:
 
 - compute stream writes profiling records into device slot `slot = s % N`
-- `mark_step(stream)` seals that slot for the step
+- `advance_phase(session)` seals that slot for the step
 - copy stream drains that slot later
 - compute stream may only reuse that slot after the copy for that slot is complete
 
@@ -73,7 +73,7 @@ This is an `N`-way ping-pong design. `N=2` is the smallest usable version, but a
 
 ### 3. Step fences
 
-The user provides the step boundary explicitly with `mark_step(stream)`.
+The user provides the step boundary explicitly by advancing the profiling phase.
 
 This records a `step_complete` event on the compute stream after all kernels for that step have been launched.
 
@@ -114,7 +114,7 @@ Using a copy stream is more complex because it requires event wiring and buffer 
 So the preferred design is:
 
 - copy stream for D2H
-- no host sync in `mark_step()`
+- no host sync in `advance_phase()`
 - compute stream waits only on slot reuse
 
 ## Avoiding CUDA Syncs
@@ -128,15 +128,15 @@ The steady-state path should avoid:
 Instead:
 
 - launch-time instrumentation writes to device memory only
-- `mark_step(stream)` records `step_complete`
-- `mark_step()` only enqueues work on the copy stream
+- `advance_phase(session)` records `step_complete`
+- `advance_phase()` only enqueues work on the copy stream
 - parsing happens after D2H completion without blocking the main stream
 
 Only shutdown or explicit "drain everything now" paths should block.
 
 That means:
 
-- `mark_step()` becomes "seal the step and schedule async draining work"
+- `advance_phase()` becomes "seal the step and schedule async draining work"
 - `finalize()` may still need to block to make sure all pending copies and parsing complete before writing the final artifact
 
 ## Host Buffer Management
@@ -183,9 +183,9 @@ If we later decide to support lossy modes, they should be explicit and observabl
 For one step on one compute stream:
 
 1. Kernels for the step launch and write timing records into device slot `i`.
-2. User calls `mark_step(stream)`.
+2. User calls `advance_phase(session)`.
 3. Proton records `step_complete[i]` on the compute stream.
-4. `mark_step()` enqueues copy work:
+4. `advance_phase()` enqueues copy work:
    - copy stream waits on `step_complete[i]`
    - copy stream copies device slot `i` to pinned host slot `j`
    - copy stream records `copy_done[i]`
@@ -201,13 +201,13 @@ stateDiagram-v2
     [*] --> Reusable
     Reusable --> Open: "first launch in step allocates from slot"
     Open --> Open: "more launches in same step append records"
-    Open --> Sealed: "mark_step(stream)"
+    Open --> Sealed: "advance_phase(session)"
     Sealed --> Copying: "copy stream waits on step_complete and schedules D2H"
     Copying --> Reusable: "copy_done event fires"
     Reusable --> Reusable: "slot not selected for reuse yet"
 
     note right of Open
-      If mark_step() is never called,
+      If advance_phase() is never called,
       the slot stays open until it fills
       or finalize() drains the remaining launches.
     end note
@@ -281,7 +281,7 @@ The current PR branch maps the design above to these main code paths:
   - `InstrumentationHook.initialize_kernel_trace_record(...)` initializes the launch record to `start=UINT64_MAX`, `end=0` before the kernel runs.
 - D2H copy scheduling:
   - `third_party/proton/csrc/lib/Session/Session.cpp`
-  - `SessionManager::markStep(...)` treats public `mark_step()` as both "seal the step" and "schedule async draining now".
+  - `SessionManager::markStep(...)` is the internal helper that seals the current step and schedules async draining for the public `advance_phase()` API.
   - `third_party/proton/csrc/lib/Profiler/Instrumentation/InstrumentationProfiler.cpp`
   - `InstrumentationProfiler::scheduleReadySteps(...)` waits on the step-complete event, acquires a host staging buffer, and enqueues the async D2H copy on the copy stream.
   - `third_party/proton/csrc/lib/Runtime/CudaRuntime.cpp`
@@ -330,7 +330,7 @@ So the sequence should be:
 - Whether one per-kernel record with atomic min/max is cheap enough for very short kernels.
 - How large the device ring should be by default.
 - Whether the host staging pool should be fixed-size or size-tiered.
-- Whether `mark_step` should accept one stream only or support an explicit list of streams.
+- Whether phase advancement should support an explicit list of streams for multi-stream steps.
 - Whether parsing should happen on a dedicated CPU thread or on demand during `finalize()`.
 - How to expose overflow and backpressure stats to users.
 
@@ -338,11 +338,11 @@ So the sequence should be:
 
 - Triton kernel timing only
 - one launch record per Triton kernel
-- explicit `mark_step(stream)` API
+- explicit `advance_phase(session)` API
 - one copy stream per device
 - `N` preallocated GPU step slots
 - `N` pinned host staging slots
-- `mark_step()` that seals the step and schedules async D2H copies
+- `advance_phase()` that seals the step and schedules async D2H copies
 - blocking `finalize()` that waits for remaining copies and parses all pending data
 - Chrome trace output only for this path
 
@@ -419,7 +419,7 @@ Concrete differences:
   - async portion: disk write thread only
 - proposed Triton kernel-timing path:
   - unit of collection: per-step GPU slot containing many Triton kernel launch records
-  - GPU interaction: explicit `mark_step(stream)` fence plus copy-stream D2H
+  - GPU interaction: explicit `advance_phase(session)` boundary plus copy-stream D2H
   - async portion: D2H, host parsing, and file emission
   - target artifact: Chrome trace built from per-launch timing records
 

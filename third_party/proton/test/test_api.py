@@ -448,3 +448,7 @@ def test_data_api(tmp_path: pathlib.Path):
     proton.data.clear(session_id, phase=2, clear_up_to_phase=True)
 
     proton.finalize()
+
+
+def test_mark_step_is_not_public_api():
+    assert not hasattr(proton, "mark_step")

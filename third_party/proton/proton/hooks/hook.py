@@ -110,7 +110,9 @@ class HookManager:
         for session_id in sessions:
             if session_id not in HookManager.session_hooks:
                 continue
-            for hook in HookManager.session_hooks[session_id]:
+            for hook, active in HookManager.session_hooks[session_id].items():
+                if not active:
+                    continue
                 if hook in stepped_hooks:
                     continue
                 hook.mark_step(stream)

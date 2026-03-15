@@ -1,7 +1,5 @@
 import functools
 import triton
-import triton.runtime.driver as driver
-
 from triton._C.libproton import proton as libproton  # type: ignore
 from triton._C.libtriton import getenv  # type: ignore
 from .flags import flags
@@ -199,22 +197,6 @@ def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -
             raise ValueError("Only one session can be finalized when running from the command line.")
         libproton.finalize(session, output_format)
     HookManager.unregister(session)
-
-
-def mark_step(stream: Optional[int] = None) -> None:
-    """
-    Seal the current instrumentation step with an event recorded on `stream`
-    and immediately schedule async draining for that sealed step.
-
-    This keeps the public API simple for kernel tracing: users call
-    `mark_step()` once per logical step and Proton handles the corresponding
-    async drain scheduling. We can decouple step marking from flushing again in
-    the future if batching becomes important.
-    """
-    if stream is None:
-        device = driver.active.get_current_device()
-        stream = driver.active.get_current_stream(device)
-    HookManager.mark_step(stream)
 
 
 def _profiling(

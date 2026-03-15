@@ -1,7 +1,9 @@
 from typing import Optional
+import triton.runtime.driver as driver
 from triton._C.libproton import proton as libproton  # type: ignore
 import json as json
 from .flags import flags
+from .hooks import HookManager
 
 
 def get(session: Optional[int] = 0, phase: int = 0):
@@ -41,6 +43,10 @@ def advance_phase(session: Optional[int] = 0) -> Optional[int]:
     """
     Advances the profiling phase for a given session.
 
+    For Triton instrumentation profiling, advancing the phase also seals the
+    current step on the active stream and schedules the corresponding async
+    drain before incrementing the data phase.
+
     Args:
         session (Optional[int]): The session ID of the profiling session, or None if profiling is inactive.
 
@@ -51,6 +57,10 @@ def advance_phase(session: Optional[int] = 0) -> Optional[int]:
         return None
     if flags.command_line and session != 0:
         raise ValueError("Only one session can advance phase when running from the command line.")
+    if flags.instrumentation_on:
+        device = driver.active.get_current_device()
+        stream = driver.active.get_current_stream(device)
+        HookManager.mark_step(stream, session)
     return libproton.advance_data_phase(session)
 
 

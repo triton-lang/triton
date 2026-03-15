@@ -477,7 +477,7 @@ def test_trace_kernel_timing(tmp_path: pathlib.Path):
         assert events[1]["args"]["call_stack"] == ["ROOT", "sub_kernel"]
 
 
-def test_trace_kernel_timing_mark_step_drains(tmp_path: pathlib.Path, fresh_knobs):
+def test_trace_kernel_timing_advance_phase_drains(tmp_path: pathlib.Path, fresh_knobs):
     fresh_knobs.proton.profile_buffer_slots = 1
 
     @triton.jit
@@ -517,16 +517,16 @@ def test_trace_kernel_timing_mark_step_drains(tmp_path: pathlib.Path, fresh_knob
     size = 256
     x = torch.rand(size, device="cuda")
     y = torch.rand(size, device="cuda")
-    temp_file = tmp_path / "test_trace_kernel_timing_mark_step_drains.chrome_trace"
+    temp_file = tmp_path / "test_trace_kernel_timing_advance_phase_drains.chrome_trace"
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
     mode = proton.mode.Default(trace_mode="kernel")
-    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace", mode=mode)
+    session = proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace", mode=mode)
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
-    proton.mark_step()
+    proton.data.advance_phase(session)
     sub_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
-    proton.mark_step()
+    proton.data.advance_phase(session)
     proton.finalize()
 
     with open(temp_file, "rb") as f:
@@ -588,10 +588,10 @@ def test_trace_kernel_timing_multi_launch_same_step(tmp_path: pathlib.Path, fres
     n_elements = output.numel()
     grid = (1, 1, 1)
     mode = proton.mode.Default(trace_mode="kernel")
-    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace", mode=mode)
+    session = proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace", mode=mode)
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     sub_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
-    proton.mark_step()
+    proton.data.advance_phase(session)
     proton.finalize()
 
     with open(temp_file, "rb") as f:
