@@ -25,12 +25,28 @@ from triton._internal_testing import is_hip, is_cuda, is_blackwell
 PIPE_PROFILE_PARSER = """
 import json
 import os
+import select
 import sys
 import triton.profiler.viewer as viewer
 
 fd = int(sys.argv[1])
-with os.fdopen(fd, "r", encoding="utf-8") as reader:
-    database = json.load(reader)
+decoder = json.JSONDecoder()
+buffer = ""
+os.set_blocking(fd, False)
+
+while True:
+    ready, _, _ = select.select([fd], [], [], 30)
+    if not ready:
+        raise TimeoutError("Timed out waiting for profile data on pipe")
+    chunk = os.read(fd, 65536)
+    if not chunk:
+        raise RuntimeError("Pipe closed before a complete JSON document was received")
+    buffer += chunk.decode("utf-8")
+    try:
+        database, _ = decoder.raw_decode(buffer)
+        break
+    except json.JSONDecodeError:
+        continue
 
 gf, _, _, _ = viewer.get_raw_metrics(database)
 scope_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_scope.*'").dataframe
@@ -48,16 +64,26 @@ PIPE_PERIODIC_PROFILE_PARSER = """
 import json
 import msgpack
 import os
+import select
 import sys
 
 fd = int(sys.argv[1])
 threshold = int(sys.argv[2])
+target = int(sys.argv[3])
 messages = 0
 scopes = 0
 threshold_emitted = False
+os.set_blocking(fd, False)
+unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
 
-with os.fdopen(fd, "rb") as reader:
-    unpacker = msgpack.Unpacker(reader, raw=False, strict_map_key=False)
+while messages < target:
+    ready, _, _ = select.select([fd], [], [], 30)
+    if not ready:
+        raise TimeoutError("Timed out waiting for periodic profile data on pipe")
+    chunk = os.read(fd, 65536)
+    if not chunk:
+        raise RuntimeError("Pipe closed before all MessagePack documents were received")
+    unpacker.feed(chunk)
     for database in unpacker:
         messages += 1
         scopes += len(database[0].get("children", []))
@@ -68,12 +94,14 @@ with os.fdopen(fd, "rb") as reader:
                 "scopes": scopes,
             }), flush=True)
             threshold_emitted = True
+        if messages >= target:
+            print(json.dumps({
+                "event": "final",
+                "messages": messages,
+                "scopes": scopes,
+            }), flush=True)
+            sys.exit(0)
 
-print(json.dumps({
-    "event": "final",
-    "messages": messages,
-    "scopes": scopes,
-}), flush=True)
 """.strip()
 
 
@@ -430,24 +458,23 @@ def test_profile_output_to_pipe_with_parser_process(device: str):
         text=True,
     )
     os.close(read_fd)
+    writer = os.fdopen(write_fd, "wb")
 
     try:
-
         @triton.jit
         def pipe_kernel(x, y, size: tl.constexpr):
             offs = tl.arange(0, size)
             tl.store(y + offs, tl.load(x + offs))
 
-        with os.fdopen(write_fd, "wb") as writer:
-            session = proton.start(writer, context="shadow")
-            with proton.scope("pipe_scope"):
-                x = torch.ones((16, ), device=device)
-                y = torch.zeros_like(x)
-                pipe_kernel[(1, )](x, y, x.numel())
-            proton.finalize(session)
-
+        session = proton.start(writer, context="shadow")
+        with proton.scope("pipe_scope"):
+            x = torch.ones((16, ), device=device)
+            y = torch.zeros_like(x)
+            pipe_kernel[(1, )](x, y, x.numel())
+        proton.finalize(session)
         stdout, stderr = parser.communicate(timeout=30)
     finally:
+        writer.close()
         if parser.poll() is None:
             parser.kill()
             parser.communicate()
@@ -1376,35 +1403,35 @@ def test_periodic_flushing_pipe_streams_before_finalize(fresh_knobs, device: str
     fresh_knobs.proton.profile_buffer_size = 256 * 1024
     read_fd, write_fd = os.pipe()
     parser = subprocess.Popen(
-        [sys.executable, "-c", PIPE_PERIODIC_PROFILE_PARSER, str(read_fd), "1"],
+        [sys.executable, "-c", PIPE_PERIODIC_PROFILE_PARSER, str(read_fd), "1", "10"],
         pass_fds=(read_fd, ),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
     os.close(read_fd)
+    writer = os.fdopen(write_fd, "wb")
 
     try:
-        with os.fdopen(write_fd, "wb") as writer:
-            session = proton.start(writer, mode="periodic_flushing:format=hatchet_msgpack")
+        session = proton.start(writer, mode="periodic_flushing:format=hatchet_msgpack")
 
-            for i in range(10000):
-                if i != 0 and i % 1000 == 0:
-                    proton.data.advance_phase(session=session)
-                with proton.scope(f"pipe_stream_{i}", metrics={"count": 1}):
-                    torch.zeros((100, ), device=device)
+        for i in range(10000):
+            if i != 0 and i % 1000 == 0:
+                proton.data.advance_phase(session=session)
+            with proton.scope(f"pipe_stream_{i}", metrics={"count": 1}):
+                torch.zeros((100, ), device=device)
 
-            ready, _, _ = select.select([parser.stdout], [], [], 30)
-            assert ready, "Timed out waiting for a streamed periodic flush before finalize"
-            threshold = json.loads(parser.stdout.readline())
-            assert threshold["event"] == "threshold"
-            assert threshold["messages"] >= 1
-            assert threshold["scopes"] >= 1000
+        ready, _, _ = select.select([parser.stdout], [], [], 30)
+        assert ready, "Timed out waiting for a streamed periodic flush before finalize"
+        threshold = json.loads(parser.stdout.readline())
+        assert threshold["event"] == "threshold"
+        assert threshold["messages"] >= 1
+        assert threshold["scopes"] >= 1000
 
-            proton.finalize(session, output_format="hatchet_msgpack")
-
+        proton.finalize(session, output_format="hatchet_msgpack")
         stdout, stderr = parser.communicate(timeout=30)
     finally:
+        writer.close()
         if parser.poll() is None:
             parser.kill()
             parser.communicate()

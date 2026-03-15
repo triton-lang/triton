@@ -7,12 +7,45 @@ Profile correctness tests involving GPU kernels should be placed in `test_profil
 import pytest
 import json
 import os
+import subprocess
+import sys
 import triton.profiler as proton
 import pathlib
 from triton.profiler.hooks.hook import HookManager
 from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
 from triton._internal_testing import is_hip
+
+
+PIPE_JSON_PARSER = """
+import json
+import os
+import select
+import sys
+
+fd = int(sys.argv[1])
+decoder = json.JSONDecoder()
+buffer = ""
+os.set_blocking(fd, False)
+
+while True:
+    ready, _, _ = select.select([fd], [], [], 30)
+    if not ready:
+        raise TimeoutError("Timed out waiting for profile data on pipe")
+    chunk = os.read(fd, 65536)
+    if not chunk:
+        raise RuntimeError("Pipe closed before a complete JSON document was received")
+    buffer += chunk.decode("utf-8")
+    try:
+        database, _ = decoder.raw_decode(buffer)
+    except json.JSONDecodeError:
+        continue
+    print(json.dumps({
+        "num_roots": len(database),
+        "num_children": len(database[0].get("children", [])),
+    }), flush=True)
+    break
+""".strip()
 
 
 def test_profile_single_session(tmp_path: pathlib.Path):
@@ -64,16 +97,32 @@ def test_profile_multiple_sessions(tmp_path: pathlib.Path):
 
 def test_profile_output_to_linux_pipe():
     read_fd, write_fd = os.pipe()
+    parser = subprocess.Popen(
+        [sys.executable, "-c", PIPE_JSON_PARSER, str(read_fd)],
+        pass_fds=(read_fd, ),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    os.close(read_fd)
+    writer = os.fdopen(write_fd, "wb")
 
-    with os.fdopen(read_fd, "rb") as reader, os.fdopen(write_fd, "wb") as writer:
+    try:
         session_id = proton.start(writer)
         proton.activate(session_id)
         proton.deactivate(session_id)
         proton.finalize(session_id)
+        stdout, stderr = parser.communicate(timeout=30)
+    finally:
         writer.close()
-        pipe_output = reader.read()
+        if parser.poll() is None:
+            parser.kill()
+            parser.communicate()
 
-    assert len(pipe_output) > 0
+    assert parser.returncode == 0, stderr
+    parsed = json.loads(stdout)
+    assert parsed["num_roots"] > 0
+    assert parsed["num_children"] >= 0
 
 
 def test_profile_mode(tmp_path: pathlib.Path):
