@@ -476,19 +476,6 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
   return aux;
 }
 
-int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
-                                                 bool setNT) {
-  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b10000;
-  int32_t aux = 0;
-  if (setSC0)
-    aux |= sc0Bit;
-  if (setSC1)
-    aux |= sc1Bit;
-  if (setNT)
-    aux |= ntBit;
-  return aux;
-}
-
 static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) {
   return 0;
 }
