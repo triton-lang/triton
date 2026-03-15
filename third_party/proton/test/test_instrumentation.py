@@ -529,18 +529,30 @@ def test_trace_kernel_timing_advance_phase_drains(tmp_path: pathlib.Path, fresh_
     proton.data.advance_phase(session)
     proton.finalize()
 
-    with open(temp_file, "rb") as f:
+    phase0_file = temp_file.with_name(f"{temp_file.stem}.part_0{temp_file.suffix}")
+    phase1_file = temp_file.with_name(f"{temp_file.stem}.part_1{temp_file.suffix}")
+    phase2_file = temp_file.with_name(f"{temp_file.stem}.part_2{temp_file.suffix}")
+
+    with open(phase0_file, "rb") as f:
         data = json.load(f)
         events = data["traceEvents"]
-        assert len(events) == 2
+        assert len(events) == 1
         assert events[0]["name"] == "add_kernel"
         assert events[0]["cat"] == "kernel"
         assert events[0]["dur"] > 0
         assert events[0]["args"]["call_stack"] == ["ROOT", "add_kernel"]
-        assert events[1]["name"] == "sub_kernel"
-        assert events[1]["cat"] == "kernel"
-        assert events[1]["dur"] > 0
-        assert events[1]["args"]["call_stack"] == ["ROOT", "sub_kernel"]
+
+    with open(phase1_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+        assert len(events) == 1
+        assert events[0]["name"] == "sub_kernel"
+        assert events[0]["cat"] == "kernel"
+        assert events[0]["dur"] > 0
+        assert events[0]["args"]["call_stack"] == ["ROOT", "sub_kernel"]
+
+    assert phase2_file.exists()
+    assert phase2_file.stat().st_size == 0
 
 
 def test_trace_kernel_timing_multi_launch_same_step(tmp_path: pathlib.Path, fresh_knobs):
@@ -594,7 +606,10 @@ def test_trace_kernel_timing_multi_launch_same_step(tmp_path: pathlib.Path, fres
     proton.data.advance_phase(session)
     proton.finalize()
 
-    with open(temp_file, "rb") as f:
+    phase0_file = temp_file.with_name(f"{temp_file.stem}.part_0{temp_file.suffix}")
+    phase1_file = temp_file.with_name(f"{temp_file.stem}.part_1{temp_file.suffix}")
+
+    with open(phase0_file, "rb") as f:
         data = json.load(f)
         events = data["traceEvents"]
         assert len(events) == 2
@@ -606,6 +621,9 @@ def test_trace_kernel_timing_multi_launch_same_step(tmp_path: pathlib.Path, fres
         assert events[1]["cat"] == "kernel"
         assert events[1]["dur"] > 0
         assert events[1]["args"]["call_stack"] == ["ROOT", "sub_kernel"]
+
+    assert phase1_file.exists()
+    assert phase1_file.stat().st_size == 0
 
 
 def test_multi_session(tmp_path: pathlib.Path):
