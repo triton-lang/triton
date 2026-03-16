@@ -25,7 +25,6 @@ add_triton_library(TritonAMDGPUToLLVM
     TargetUtils.cpp
     SPMDOpToLLVM.cpp
     SchedInstructions.cpp
-    UpcastMXFPToLLVM.cpp
     Fp4ToFpOpToLLVM.cpp
     MembarUtility.cpp
     ScalarizePackedFOps.cpp

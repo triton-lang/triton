@@ -826,7 +826,7 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
       permuteDimNames(standardOutDimNames(ctx, rank), order);
   dotOperanLayout = dotOperanLayout.transposeOuts(repDimNames);
 
-  return combineCtaCgaWithShape(dotOperanLayout, wmmaLayout.getCGALayout(),
+  return combineCtaCgaWithShape(dotOperanLayout, dotWmmaLayout.getCGALayout(),
                                 shape);
 }
 

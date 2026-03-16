@@ -218,6 +218,13 @@ protected:
         --retries;
       }
     }
+
+    void clear() {
+      corrIdToExternId.clear();
+      externIdToState.clear();
+      maxCompletedCorrelationId.store(0);
+      maxSubmittedCorrelationId.store(0);
+    }
   };
 
   static thread_local ThreadState threadState;

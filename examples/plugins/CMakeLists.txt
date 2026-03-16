@@ -21,6 +21,8 @@ foreach( plugin ${TRITON_PLUGIN_PASSES} )
     add_library(${plugin} SHARED ${${plugin}_SOURCES})
     add_dependencies(${plugin}
       TritonTableGen
+      TritonGPUTableGen
+      TritonNvidiaGPUTableGen
       TritonCanonicalizeIncGen
       TritonPluginsIncGen
     )

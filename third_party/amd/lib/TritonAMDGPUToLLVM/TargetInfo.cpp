@@ -753,7 +753,15 @@ bool TargetInfo::supportVectorizedAtomics() const {
 bool TargetInfo::supportBitwidth16Elementwise() const { return true; }
 
 bool TargetInfo::supportBitwidth32Elementwise() const {
-  return getISAFamily() == ISAFamily::GFX1250;
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+  case ISAFamily::GFX1250:
+    return true;
+  default:
+    return false;
+  }
 }
 
 bool TargetInfo::supportsDirectToLDSScattering() const {
@@ -833,6 +841,11 @@ bool TargetInfo::supportsPermlaneSwap() const {
 
 bool TargetInfo::supportsCvtPkScalePk8() const {
   return getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetInfo::supportsHwScaledUpcast() const {
+  return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::GFX1250;
 }
 
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,

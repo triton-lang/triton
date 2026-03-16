@@ -764,6 +764,72 @@ def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device)
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
+@pytest.mark.skipif(is_hip(), reason="Assumes 32 threads per warp")
+def test_regress_warp_shuffle_convert_layout(tmp_path):
+    rows = 2
+    cols = 8
+    # We have previously incorrectly lowered a layout conversion between these
+    # two layouts when that conversion was forced to use warp shuffles. Test
+    # that it works.
+    src_layout = ttgl.DistributedLinearLayout(
+        reg_bases=[[0, 1], [0, 2], [0, 4]],
+        lane_bases=[[1, 0], [0, 0], [0, 0], [0, 0], [0, 0]],
+        warp_bases=[],
+        block_bases=[],
+        shape=(rows, cols),
+    )
+    dst_layout = ttgl.DistributedLinearLayout(
+        reg_bases=[[1, 0], [0, 4]],
+        lane_bases=[[0, 0], [0, 0], [0, 1], [0, 2], [0, 0]],
+        warp_bases=[],
+        block_bases=[],
+        shape=(rows, cols),
+    )
+    axis0_layout = ttgl.SliceLayout(dim=1, parent=src_layout)
+    axis1_layout = ttgl.SliceLayout(dim=0, parent=src_layout)
+    out_axis0_layout = ttgl.SliceLayout(dim=1, parent=dst_layout)
+    out_axis1_layout = ttgl.SliceLayout(dim=0, parent=dst_layout)
+
+    @gluon.jit
+    def load_cvt_store(out_ptr, in_ptr):
+        offs0 = ttgl.arange(0, 2, layout=axis0_layout)[:, None]
+        offs1 = ttgl.arange(0, 8, layout=axis1_layout)[None, :]
+        offsets = offs0 * 8 + offs1
+        x = ttgl.load(in_ptr + offsets)
+        y = ttgl.convert_layout(x, dst_layout)
+
+        out_offs0 = ttgl.arange(0, 2, layout=out_axis0_layout)[:, None]
+        out_offs1 = ttgl.arange(0, 8, layout=out_axis1_layout)[None, :]
+        out_offsets = out_offs0 * 8 + out_offs1
+        ttgl.store(out_ptr + out_offsets, y)
+
+    torch.manual_seed(0)
+    x = torch.randint(-128, 128, (rows, cols), dtype=torch.int16, device="cuda")
+    ref = torch.zeros_like(x)
+    out = torch.zeros_like(x)
+
+    # Extract the TTGIR and force using warp shuffles for lowering the
+    # convert_layout.
+    compiled_load_cvt_store = load_cvt_store.warmup(ref, x, grid=(1, 1, 1), num_warps=1)
+    ttgir = compiled_load_cvt_store.asm["ttgir"]
+    ttgir = ttgir.replace(
+        "attributes {noinline = false}",
+        "attributes {always_use_warp_shuffle, noinline = false}",
+        1,
+    )
+
+    temp_file = tmp_path / "test_override_ttgir_always_use_warp_shuffle.ttgir"
+    temp_file.write_text(ttgir)
+
+    load_cvt_store_warp_shuffle = triton.compile(str(temp_file))
+
+    load_cvt_store[(1, 1, 1)](ref, x, num_warps=1)
+    load_cvt_store_warp_shuffle[(1, 1, 1)](out, x)
+
+    assert torch.equal(ref, x)
+    assert torch.equal(out, x)
+
+
 _ld_st_dot_layouts = _filter_layouts([
     ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
                           operand_index=0, k_width=4),
