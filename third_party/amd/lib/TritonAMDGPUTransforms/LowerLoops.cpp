@@ -339,7 +339,8 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
 // the same dot operand encoding, return true and get the shared encoding that
 // needs to be used to be compatible with users' layouts.
 static std::optional<ttg::PaddedSharedEncodingAttr>
-getSharedEncIfAllUsersAreDotEncPadded(Value loadedValue) {
+getSharedEncIfAllUsersAreDotEncPadded(
+    Value loadedValue, const triton::AMD::TargetInfo &targetInfo) {
   ttg::PaddedSharedEncodingAttr attr;
   for (Operation *user : loadedValue.getUsers()) {
     LDBG(" getSharedEncIfAllUsersAreDotEnc current user: " << *user);
@@ -353,7 +354,8 @@ getSharedEncIfAllUsersAreDotEncPadded(Value loadedValue) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = cast<ttg::PaddedSharedEncodingAttr>(memDesc.getEncoding());
-      auto newAttr = getSharedEncIfAllUsersAreDotEncPadded(user->getResult(0));
+      auto newAttr =
+          getSharedEncIfAllUsersAreDotEncPadded(user->getResult(0), targetInfo);
 
       if (!newAttr.has_value())
         return std::nullopt;
@@ -390,7 +392,7 @@ getSharedEncIfAllUsersAreDotEncPadded(Value loadedValue) {
         // For async descriptor loads, enable padding.
         tempAttr = getPaddedEncodingForDotOp(
             loadedValue.getContext(), dotOpEnc.getOpIdx(), srcTy.getShape(),
-            sharedOrder, cgaLayout, bitWidth);
+            sharedOrder, cgaLayout, bitWidth, dotOpEnc.getKWidth(), targetInfo);
       } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
         // We use linear layout directly for scaled dot fp8 operands. For such
         // cases, we need to look further down the def-use chain to find the dot
@@ -399,9 +401,9 @@ getSharedEncIfAllUsersAreDotEncPadded(Value loadedValue) {
         unsigned vecSize;
         if (auto dotEnc = getDotEncoding<ttg::AMDWmmaEncodingAttr>(
                 userResult, &opIdx, &vecSize)) {
-          tempAttr = getPaddedEncodingForDotOp(loadedValue.getContext(), opIdx,
-                                               srcTy.getShape(), order,
-                                               cgaLayout, bitWidth);
+          tempAttr = getPaddedEncodingForDotOp(
+              loadedValue.getContext(), opIdx, srcTy.getShape(), order,
+              cgaLayout, bitWidth, vecSize, targetInfo);
         }
       }
     }
@@ -973,9 +975,9 @@ void lowerLoop(scf::ForOp forOp,
       auto useTDM = isa<tt::DescriptorLoadOp>(load);
       if (useTDM) {
         hasTDMLoad = true;
-        auto paddedEncoding =
-            getSharedEncIfAllUsersAreDotEncPadded(load->getResult(0))
-                .value_or(nullptr);
+        auto paddedEncoding = getSharedEncIfAllUsersAreDotEncPadded(
+                                  load->getResult(0), targetInfo)
+                                  .value_or(nullptr);
         LoadInfo ldInfo;
         ldInfo.sharedEncoding = paddedEncoding;
         ldInfo.distToUse = distance;
