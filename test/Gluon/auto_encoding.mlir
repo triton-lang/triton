@@ -148,3 +148,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %2 : tensor<64x128xi32, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @infer_if_yield_propagation(%arg0: i1) -> tensor<16xi32, #blocked> {
+    // CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    // CHECK-DAG: [[BLOCKED1:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    // CHECK: [[C1:%.*]] = arith.constant dense<1> : tensor<16xi32, [[BLOCKED]]>
+    // CHECK: [[C2:%.*]] = arith.constant dense<2> : tensor<16xi32, [[BLOCKED]]>
+    // CHECK: [[IF:%.*]]:2 = scf.if %arg0 -> (tensor<16xi32, [[BLOCKED]]>, tensor<16xi32, [[BLOCKED1]]>) {
+    // CHECK:   [[RANGE:%.*]] = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, [[BLOCKED1]]>
+    // CHECK:   scf.yield [[C1]], [[RANGE]] : tensor<16xi32, [[BLOCKED]]>, tensor<16xi32, [[BLOCKED1]]>
+    // CHECK: } else {
+    // CHECK:   [[CST:%.*]] = arith.constant dense<0> : tensor<16xi32, [[BLOCKED1]]>
+    // CHECK:   scf.yield [[C2]], [[CST]] : tensor<16xi32, [[BLOCKED]]>, tensor<16xi32, [[BLOCKED1]]>
+    // CHECK: }
+    // CHECK: tt.return [[IF]]#0 : tensor<16xi32, [[BLOCKED]]>
+    %c1 = arith.constant dense<1> : tensor<16xi32, #gluon.auto_encoding>
+    %c2 = arith.constant dense<2> : tensor<16xi32, #gluon.auto_encoding>
+    %z:2 = scf.if %arg0 -> (tensor<16xi32, #gluon.auto_encoding>, tensor<16xi32, #gluon.auto_encoding>) {
+      %range = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #gluon.auto_encoding>
+      %use = gluon.set_auto_layout %range : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked1>
+      scf.yield %c1, %range : tensor<16xi32, #gluon.auto_encoding>, tensor<16xi32, #gluon.auto_encoding>
+    } else {
+      %cst = arith.constant dense<0> : tensor<16xi32, #gluon.auto_encoding>
+      %use2 = gluon.set_auto_layout %cst : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked1>
+      scf.yield %c2, %cst : tensor<16xi32, #gluon.auto_encoding>, tensor<16xi32, #gluon.auto_encoding>
+    }
+    %out = gluon.set_auto_layout %z#0 : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked>
+    tt.return %out : tensor<16xi32, #blocked>
+  }
+}
