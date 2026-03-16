@@ -24,6 +24,24 @@ class FileDescriptorOutput:
         return self._fd
 
 
+FD_OUTPUT_CASES = [
+    pytest.param("tree", "hatchet", ".hatchet", id="hatchet"),
+    pytest.param("tree", "hatchet_msgpack", ".hatchet_msgpack", id="hatchet_msgpack"),
+    pytest.param("trace", "chrome_trace", ".chrome_trace", id="chrome_trace"),
+]
+
+
+def load_profile_output(path: pathlib.Path, output_format: str):
+    if output_format == "hatchet_msgpack":
+        import msgpack
+
+        with path.open("rb") as f:
+            return msgpack.load(f, raw=False, strict_map_key=False)
+
+    with path.open() as f:
+        return json.load(f)
+
+
 def test_profile_single_session(tmp_path: pathlib.Path):
     temp_file0 = tmp_path / "test_profile0.hatchet"
     session_id0 = proton.start(str(temp_file0.with_suffix("")))
@@ -73,39 +91,51 @@ def test_profile_multiple_sessions(tmp_path: pathlib.Path):
 
 @pytest.mark.skipif(sys.platform != "linux",
                     reason="File-descriptor-backed profile output is supported via /proc/self/fd on Linux")
-def test_profile_output_to_file_descriptor(tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test_profile_fd.hatchet"
+@pytest.mark.parametrize("data_name, output_format, suffix", FD_OUTPUT_CASES)
+def test_profile_output_to_file_descriptor(tmp_path: pathlib.Path, data_name: str, output_format: str, suffix: str):
+    temp_file = tmp_path / f"test_profile_fd{suffix}"
     with temp_file.open("wb") as f:
-        session_id = proton.start(FileDescriptorOutput(f.fileno()))
-        proton.activate(session_id)
-        proton.deactivate(session_id)
-        proton.finalize(session_id)
+        session_id = proton.start(FileDescriptorOutput(f.fileno()), data=data_name)
+        proton.enter_scope("fd_scope")
+        proton.exit_scope()
+        proton.finalize(session_id, output_format=output_format)
 
-    with temp_file.open() as f:
-        data = json.load(f)
-    assert len(data) > 0
-    assert len(data[0].get("children", [])) >= 0
+    data = load_profile_output(temp_file, output_format)
+    if output_format == "chrome_trace":
+        assert "traceEvents" in data
+        assert any(event["name"] == "fd_scope" for event in data["traceEvents"])
+    else:
+        assert len(data) > 0
+        assert len(data[0].get("children", [])) == 1
+        assert data[0]["children"][0]["frame"]["name"] == "fd_scope"
 
 
 @pytest.mark.skipif(sys.platform != "linux",
                     reason="File-descriptor-backed periodic flushing is supported via /proc/self/fd on Linux")
-def test_profile_periodic_flushing_output_to_file_descriptor(tmp_path: pathlib.Path):
-    import msgpack
-
-    temp_file = tmp_path / "test_profile_periodic_fd.hatchet_msgpack"
+@pytest.mark.parametrize("data_name, output_format, suffix", FD_OUTPUT_CASES)
+def test_profile_periodic_flushing_output_to_file_descriptor(tmp_path: pathlib.Path, data_name: str, output_format: str,
+                                                             suffix: str):
+    temp_file = tmp_path / f"test_profile_periodic_fd{suffix}"
     with temp_file.open("wb") as f:
-        session_id = proton.start(FileDescriptorOutput(f.fileno()), mode="periodic_flushing:format=hatchet_msgpack")
-        with proton.scope("pipe_scope_0"):
+        session_id = proton.start(FileDescriptorOutput(f.fileno()), data=data_name,
+                                  mode=f"periodic_flushing:format={output_format}")
+        with proton.scope("periodic_fd_scope_0"):
             pass
-        with proton.scope("pipe_scope_1"):
+        with proton.scope("periodic_fd_scope_1"):
             pass
-        proton.finalize(session_id, output_format="hatchet_msgpack")
+        proton.finalize(session_id, output_format=output_format)
 
-    with temp_file.open("rb") as f:
-        documents = list(msgpack.Unpacker(f, raw=False, strict_map_key=False))
-    assert len(documents) >= 1
-    assert documents[-1][0]["frame"]["name"] == "ROOT"
-    assert len(documents[-1][0].get("children", [])) >= 1
+    data = load_profile_output(temp_file, output_format)
+    if output_format == "chrome_trace":
+        assert "traceEvents" in data
+        names = {event["name"] for event in data["traceEvents"]}
+        assert "periodic_fd_scope_0" in names
+        assert "periodic_fd_scope_1" in names
+    else:
+        assert data[0]["frame"]["name"] == "ROOT"
+        child_names = [child["frame"]["name"] for child in data[0].get("children", [])]
+        assert "periodic_fd_scope_0" in child_names
+        assert "periodic_fd_scope_1" in child_names
 
 
 def test_profile_mode(tmp_path: pathlib.Path):

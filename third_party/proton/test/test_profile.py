@@ -76,12 +76,30 @@ class FileDescriptorOutput:
         return self._fd
 
 
+FD_OUTPUT_CASES = [
+    pytest.param("tree", "hatchet", ".hatchet", id="hatchet"),
+    pytest.param("tree", "hatchet_msgpack", ".hatchet_msgpack", id="hatchet_msgpack"),
+    pytest.param("trace", "chrome_trace", ".chrome_trace", id="chrome_trace"),
+]
+
+
 def make_pipe_output_target(write_fd: int, target_kind: str):
     if target_kind == "file_descriptor":
         return FileDescriptorOutput(write_fd)
     if target_kind == "file_object":
         return os.fdopen(write_fd, "wb")
     raise ValueError(f"Unsupported target_kind: {target_kind}")
+
+
+def load_profile_output(path: pathlib.Path, output_format: str):
+    if output_format == "hatchet_msgpack":
+        import msgpack
+
+        with path.open("rb") as f:
+            return msgpack.load(f, raw=False, strict_map_key=False)
+
+    with path.open() as f:
+        return json.load(f)
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -427,32 +445,39 @@ def test_get_data(tmp_path: pathlib.Path, device: str):
 
 @pytest.mark.skipif(sys.platform != "linux",
                     reason="File-descriptor-backed profile output is supported via /proc/self/fd on Linux")
-def test_profile_output_to_file_descriptor(tmp_path: pathlib.Path, device: str):
+@pytest.mark.parametrize("data_name, output_format, suffix", FD_OUTPUT_CASES)
+def test_profile_output_to_file_descriptor(tmp_path: pathlib.Path, data_name: str, output_format: str, suffix: str,
+                                          device: str):
 
     @triton.jit
     def pipe_kernel(x, y, size: tl.constexpr):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    temp_file = tmp_path / "test_profile_fd.hatchet"
+    temp_file = tmp_path / f"test_profile_fd{suffix}"
     with temp_file.open("wb") as f:
-        session = proton.start(FileDescriptorOutput(f.fileno()), context="shadow")
+        session = proton.start(FileDescriptorOutput(f.fileno()), context="shadow", data=data_name)
         with proton.scope("pipe_scope"):
             x = torch.ones((16, ), device=device)
             y = torch.zeros_like(x)
             pipe_kernel[(1, )](x, y, x.numel())
-        proton.finalize(session)
+        proton.finalize(session, output_format=output_format)
 
-    with temp_file.open() as f:
-        database = json.load(f)
+    database = load_profile_output(temp_file, output_format)
 
-    gf, _, _, _ = viewer.get_raw_metrics(database)
-    scope_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_scope.*'").dataframe
-    kernel_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_kernel.*' AND c IS LEAF").dataframe
+    if output_format == "chrome_trace":
+        trace_events = database["traceEvents"]
+        kernel_events = [event for event in trace_events if event["name"] == "pipe_kernel"]
+        assert len(kernel_events) == 1
+        assert kernel_events[0]["args"]["call_stack"] == ["ROOT", "pipe_scope", "pipe_kernel"]
+    else:
+        gf, _, _, _ = viewer.get_raw_metrics(database)
+        scope_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_scope.*'").dataframe
+        kernel_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_kernel.*' AND c IS LEAF").dataframe
 
-    assert len(scope_frame) == 1
-    assert len(kernel_frame) == 1
-    assert int(kernel_frame["count"].sum()) == 1
+        assert len(scope_frame) == 1
+        assert len(kernel_frame) == 1
+        assert int(kernel_frame["count"].sum()) == 1
 
 
 def test_clear_data(tmp_path: pathlib.Path, device: str):
@@ -1415,6 +1440,44 @@ def test_periodic_flushing_pipe_streams_before_finalize(target_kind: str, fresh_
     assert final["event"] == "final"
     assert final["messages"] == 10
     assert final["scopes"] == 10000
+
+
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="File-descriptor-backed profile output is supported via /proc/self/fd on Linux")
+@pytest.mark.parametrize("data_name, output_format, suffix", FD_OUTPUT_CASES)
+def test_periodic_flushing_output_to_file_descriptor(tmp_path, fresh_knobs, data_name: str, output_format: str,
+                                                     suffix: str, device: str):
+    fresh_knobs.proton.profile_buffer_size = 256 * 1024
+
+    @triton.jit
+    def pipe_kernel(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    temp_file = tmp_path / f"test_periodic_flushing_fd{suffix}"
+    with temp_file.open("wb") as f:
+        session = proton.start(FileDescriptorOutput(f.fileno()), context="shadow", data=data_name,
+                               mode=f"periodic_flushing:format={output_format}")
+        with proton.scope("pipe_scope"):
+            x = torch.ones((16, ), device=device)
+            y = torch.zeros_like(x)
+            pipe_kernel[(1, )](x, y, x.numel())
+        proton.finalize(session, output_format=output_format)
+
+    data = load_profile_output(temp_file, output_format)
+    if output_format == "chrome_trace":
+        trace_events = data["traceEvents"]
+        kernel_events = [event for event in trace_events if event["name"] == "pipe_kernel"]
+        assert len(kernel_events) == 1
+        assert kernel_events[0]["args"]["call_stack"] == ["ROOT", "pipe_scope", "pipe_kernel"]
+    else:
+        gf, _, _, _ = viewer.get_raw_metrics(data)
+        scope_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_scope.*'").dataframe
+        kernel_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_kernel.*' AND c IS LEAF").dataframe
+
+        assert len(scope_frame) == 1
+        assert len(kernel_frame) == 1
+        assert int(kernel_frame["count"].sum()) == 1
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
