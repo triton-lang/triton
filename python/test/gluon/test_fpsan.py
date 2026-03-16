@@ -1067,8 +1067,8 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
         PACK_FACTOR: gl.constexpr = 2 if IS_FP4 else 1
         PACKED_K: gl.constexpr = BLOCK // PACK_FACTOR
         ELEM_DTYPE: gl.constexpr = gl.uint8 if IS_FP4 else (gl.float8e4nv if TYPE == "e4m3" else gl.float8e5)
-        nvmma_layout: gl.constexpr = gl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False, element_bitwidth=8,
-                                                          rank=2)
+        a_nvmma_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, PACKED_K], ELEM_DTYPE)
+        b_nvmma_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([PACKED_K, BLOCK], ELEM_DTYPE)
         scale_layout: gl.constexpr = TensorMemoryScalesLayout()
 
         offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
@@ -1080,8 +1080,8 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
         b_tile = gl.load(b_ptr + offs_k_row * BLOCK + offs_n)
         c_tile = gl.load(c_ptr + offs_m * BLOCK + offs_n)
 
-        a_smem = gl.allocate_shared_memory(ELEM_DTYPE, [BLOCK, PACKED_K], nvmma_layout, a_tile)
-        b_smem = gl.allocate_shared_memory(ELEM_DTYPE, [PACKED_K, BLOCK], nvmma_layout, b_tile)
+        a_smem = gl.allocate_shared_memory(ELEM_DTYPE, [BLOCK, PACKED_K], a_nvmma_layout, a_tile)
+        b_smem = gl.allocate_shared_memory(ELEM_DTYPE, [PACKED_K, BLOCK], b_nvmma_layout, b_tile)
 
         tmem_layout: gl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
         acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK, BLOCK], layout=tmem_layout)
