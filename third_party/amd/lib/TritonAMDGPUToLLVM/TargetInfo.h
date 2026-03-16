@@ -46,6 +46,8 @@ public:
                     std::optional<Value> ctaId, Type elemTy, Value pred,
                     Operation *localLoadOp = nullptr) const override;
 
+  bool supportDistSharedMem() const override { return false; }
+
   // Describes the parameters of ds_read_tr for a particular data type
   struct LDSTransLoadParams {
     // Number of lanes that cooperate in the instruction

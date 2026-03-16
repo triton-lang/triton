@@ -205,8 +205,11 @@ struct ConvertLayoutOpConversion
     auto affineOffset = b.i32_val(0);
     auto maskSpanAffineOffset = 0;
 
-    bool isWarpSync = mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
-    bool isBlockSync = mlir::isCvtDimSync(srcLayout, dstLayout, kBlock);
+    bool hasDistSharedMem = targetInfo.supportDistSharedMem();
+    bool isWarpSync =
+        mlir::isCvtDimSync(srcLayout, dstLayout, kWarp, hasDistSharedMem);
+    bool isBlockSync =
+        mlir::isCvtDimSync(srcLayout, dstLayout, kBlock, hasDistSharedMem);
     auto emitBarrier = [&]() {
       if (isWarpSync) {
         targetInfo.warpSync(loc, rewriter);

@@ -5,6 +5,7 @@
 #include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
@@ -31,21 +32,23 @@ struct TestMembarPass
     Operation *operation = getOperation();
     ModuleOp moduleOp = cast<ModuleOp>(operation);
     ModuleAllocation allocation(moduleOp);
+    std::unique_ptr<triton::TargetInfoBase> targInfoPtr;
+
     if (moduleOp->hasAttr("ttg.target")) {
       int computeCapability = getNVIDIAComputeCapability(moduleOp);
       int ptxVersion = computeCapability;
-      triton::NVIDIA::TargetInfo targetInfo(computeCapability, ptxVersion);
+      auto ti = new triton::NVIDIA::TargetInfo(computeCapability, ptxVersion);
+      targInfoPtr.reset(ti);
       allocation = ModuleAllocation(
           moduleOp,
-          triton::nvidia_gpu::getNvidiaAllocationAnalysisScratchSizeFn(
-              targetInfo));
+          triton::nvidia_gpu::getNvidiaAllocationAnalysisScratchSizeFn(*ti));
       triton::nvidia_gpu::runClusterBarrierInsertion(allocation,
                                                      computeCapability);
       if (failed(triton::nvidia_gpu::runCrossCTAMBarrierInitSyncInsertion(
               allocation, computeCapability)))
         return signalPassFailure();
     }
-    ModuleMembarAnalysis membarPass(&allocation,
+    ModuleMembarAnalysis membarPass(&allocation, targInfoPtr.get(),
                                     mlir::triton::NVIDIA::canSkipBarSync);
     membarPass.run();
   }

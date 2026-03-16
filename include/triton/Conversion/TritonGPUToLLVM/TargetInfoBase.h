@@ -42,6 +42,8 @@ public:
                             std::optional<Value> ctaId, Type elemTy, Value pred,
                             Operation *localLoadOp = nullptr) const = 0;
 
+  virtual bool supportDistSharedMem() const = 0;
+
   void storeShared(RewriterBase &rewriter, Location loc, Value ptr, Value val,
                    Value pred) const {
     storeDShared(rewriter, loc, ptr, /*ctaId=*/std::nullopt, val, pred);

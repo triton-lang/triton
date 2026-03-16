@@ -113,7 +113,9 @@ bool filterFn(Operation *op, Operation *other, bool /*opIsRead*/,
 class ProxyFenceAnalysis : public MembarOrFenceAnalysis {
 
 public:
-  explicit ProxyFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
+  explicit ProxyFenceAnalysis(Allocation *allocation,
+                              mlir::triton::TargetInfoBase *,
+                              MembarFilterFn filter)
       : MembarOrFenceAnalysis(allocation, filter) {}
 
 private:
@@ -220,7 +222,7 @@ public:
     // so we can use the default allocation analysis scratch size function
     ModuleAllocation allocation(mod);
     ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis> analysis(&allocation,
-                                                             filterFn);
+                                                             nullptr, filterFn);
     analysis.run();
   }
 };

@@ -2,7 +2,7 @@
 #define TRITON_ANALYSIS_MEMBAR_H
 
 #include "Allocation.h"
-
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
 #include <set>
@@ -264,8 +264,10 @@ protected:
 class MembarAnalysis : public MembarOrFenceAnalysis {
 public:
   MembarAnalysis() = default;
-  explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
+  explicit MembarAnalysis(Allocation *allocation,
+                          mlir::triton::TargetInfoBase *_targInfo,
+                          MembarFilterFn filter)
+      : MembarOrFenceAnalysis(allocation, filter), targInfo(_targInfo) {}
 
   ~MembarAnalysis() override = default;
 
@@ -276,6 +278,8 @@ private:
                       OpBuilder *builder) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
+
+  mlir::triton::TargetInfoBase *targInfo = nullptr;
 };
 
 /// Postorder traversal on the callgraph to insert membar instructions
@@ -287,9 +291,11 @@ template <typename AnalysisType>
 class ModuleMembarOrFenceAnalysis : public triton::CallGraph<BlockInfo> {
 public:
   ModuleMembarOrFenceAnalysis(ModuleAllocation *moduleAllocation,
+                              mlir::triton::TargetInfoBase *_targInfo,
                               MembarFilterFn filter = nullptr)
       : triton::CallGraph<BlockInfo>(moduleAllocation->getModuleOp()),
-        moduleAllocation(moduleAllocation), filter(filter) {}
+        moduleAllocation(moduleAllocation), targInfo(_targInfo),
+        filter(filter) {}
 
   void run() {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
@@ -300,7 +306,7 @@ public:
           auto *allocation = moduleAllocation->getFuncData(funcOp);
           auto [it, inserted] = funcMap.try_emplace(funcOp, BlockInfo());
           if (inserted) {
-            AnalysisType analysis(allocation, filter);
+            AnalysisType analysis(allocation, targInfo, filter);
             analysis.run(funcMap);
           }
         });
@@ -308,6 +314,7 @@ public:
 
 private:
   ModuleAllocation *moduleAllocation;
+  mlir::triton::TargetInfoBase *targInfo;
   MembarFilterFn filter;
 };
 

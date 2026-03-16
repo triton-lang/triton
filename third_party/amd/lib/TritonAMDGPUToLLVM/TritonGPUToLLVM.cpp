@@ -110,7 +110,7 @@ struct ConvertTritonAMDGPUToLLVM
     if (targetInfo.requiresAliasInfoForAsyncOps())
       AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
 
-    ModuleMembarAnalysis membarPass(&allocation,
+    ModuleMembarAnalysis membarPass(&allocation, &targetInfo,
                                     mlir::triton::AMD::membarFilter);
     membarPass.run();
 

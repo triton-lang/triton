@@ -98,7 +98,7 @@ struct ConvertTritonGPUToLLVM
     if (failed(mlir::triton::nvidia_gpu::runCrossCTAMBarrierInitSyncInsertion(
             allocation, computeCapability)))
       return signalPassFailure();
-    ModuleMembarAnalysis membarPass(&allocation, canSkipBarSync);
+    ModuleMembarAnalysis membarPass(&allocation, &targetInfo, canSkipBarSync);
     membarPass.run();
 
     mlir::LowerToLLVMOptions option(context);

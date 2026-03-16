@@ -1321,8 +1321,9 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
   return solver;
 }
 
-bool isCvtDimSync(const triton::LinearLayout &srcLayout,
-                  const triton::LinearLayout &dstLayout, StringAttr dim) {
+bool isCvtTrivialOverDims(const triton::LinearLayout &srcLayout,
+                          const triton::LinearLayout &dstLayout,
+                          StringAttr dim) {
   // We can use a dimension-level sync when the conversion is trivial over that
   // dimension and there is no broadcasting over it.
   auto *ctx = srcLayout.getInDimNames().begin()->getContext();
@@ -1333,10 +1334,37 @@ bool isCvtDimSync(const triton::LinearLayout &srcLayout,
          "expected dim to be present in both layouts");
   auto parentTrivial = true;
   if (dim == kWarp) {
-    parentTrivial = isCvtDimSync(srcLayout, dstLayout, kBlock);
+    parentTrivial = isCvtTrivialOverDims(srcLayout, dstLayout, kBlock);
   }
   auto comp = dstLayout.invertAndCompose(srcLayout);
-  return parentTrivial && comp.isTrivialOver(dim) &&
+  return parentTrivial && comp.isTrivialOver(dim);
+}
+
+bool isCvtDimSync(const triton::LinearLayout &srcLayout,
+                  const triton::LinearLayout &dstLayout, StringAttr dim,
+                  bool hasDistSharedMem) {
+  auto *ctx = srcLayout.getInDimNames().begin()->getContext();
+  auto kWarp = StringAttr::get(ctx, "warp");
+  auto kBlock = StringAttr::get(ctx, "block");
+
+  if (dim == kBlock) {
+    if (!isCvtTrivialOverDims(srcLayout, dstLayout, dim))
+      return false;
+
+    // If underlying architecture does not support distributed shared memory,
+    // a CTA cannot access neighboring CTAs' shared memory. A free variable in
+    // CTA dimension implies multi-casting, meaning CTAs in the cluster
+    // duplicate some data to their own shared memory. In this case, even if
+    // the cvt requires shared memory access; it will not cross CTA boundary.
+    if (!hasDistSharedMem)
+      return true;
+    return dstLayout.getFreeVariableMasks()[dim] == 0;
+  }
+
+  assert(dim == kWarp && "expected dim to be warp or block");
+
+  return isCvtDimSync(srcLayout, dstLayout, kBlock, hasDistSharedMem) &&
+         isCvtTrivialOverDims(srcLayout, dstLayout, dim) &&
          srcLayout.getFreeVariableMasks()[dim] == 0 &&
          dstLayout.getFreeVariableMasks()[dim] == 0;
 }

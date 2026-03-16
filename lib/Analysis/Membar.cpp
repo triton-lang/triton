@@ -339,7 +339,12 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       auto srcLayout = triton::gpu::toLinearLayout(srcTy);
       auto dstLayout = triton::gpu::toLinearLayout(dstTy);
       auto kWarp = StringAttr::get(op->getContext(), "warp");
-      isWarpSync = mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
+      // If target-info is not available, set hasDistSharedMem to true; it will
+      // let isCvtDimSync return conservatively correct result.
+      bool hasDistSharedMem =
+          targInfo ? targInfo->supportDistSharedMem() : true;
+      isWarpSync =
+          mlir::isCvtDimSync(srcLayout, dstLayout, kWarp, hasDistSharedMem);
     }
 
     if (!curBlockInfo.syncReadSlices.empty() ||

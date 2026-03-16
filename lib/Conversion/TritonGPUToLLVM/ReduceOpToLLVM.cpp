@@ -82,7 +82,8 @@ public:
         sync(rewriter, loc, lastCvtCrossesCTAs);
       }
       accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs);
-      lastCvtCrossesCTAs = !mlir::isCvtDimSync(regLl, tmpLl, kBlock);
+      lastCvtCrossesCTAs = !mlir::isCvtDimSync(
+          regLl, tmpLl, kBlock, targetInfo.supportDistSharedMem());
 
       std::tie(regLl, accs) =
           reduceWithinWarps(op, std::move(tmpLl), std::move(accs), rewriter);

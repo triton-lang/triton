@@ -315,7 +315,9 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
 
 class ClusterBarrierAnalysis : public MembarOrFenceAnalysis {
 public:
-  explicit ClusterBarrierAnalysis(Allocation *allocation, MembarFilterFn filter)
+  explicit ClusterBarrierAnalysis(Allocation *allocation,
+                                  mlir::triton::TargetInfoBase *,
+                                  MembarFilterFn filter)
       : MembarOrFenceAnalysis(allocation, filter) {}
 
 private:
@@ -447,7 +449,7 @@ void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
   };
 
   ModuleMembarOrFenceAnalysis<ClusterBarrierAnalysis> analysis(
-      &moduleAllocation, filterFn);
+      &moduleAllocation, nullptr, filterFn);
   analysis.run();
 }
 

@@ -30,6 +30,10 @@ public:
                     std::optional<Value> ctaId, Type elemTy, Value pred,
                     Operation *localLoadOp = nullptr) const override;
 
+  virtual bool supportDistSharedMem() const override {
+    return computeCapability >= 90;
+  }
+
   bool supportLdMatrix() const override { return computeCapability >= 75; }
   bool supportStMatrix() const override { return computeCapability >= 90; }
   bool supportLdStMatrixB8() const override { return computeCapability >= 100; }

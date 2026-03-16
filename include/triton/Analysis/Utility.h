@@ -419,8 +419,18 @@ protected:
 // Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
+bool isCvtTrivialOverDims(const triton::LinearLayout &srcLayout,
+                          const triton::LinearLayout &dstLayout,
+                          StringAttr dim);
+
+// Return true if given dimension level sync (within the dimension, not across
+// the dimension) is sufficient if cvt requires accessing shared memory.
+//
+// If the caller does not have target-info, set hasDistSharedMem=true for
+// conservatively correct result.
 bool isCvtDimSync(const triton::LinearLayout &srcLayout,
-                  const triton::LinearLayout &dstLayout, StringAttr dim);
+                  const triton::LinearLayout &dstLayout, StringAttr dim,
+                  bool hasDistSharedMem);
 
 } // namespace mlir
 
