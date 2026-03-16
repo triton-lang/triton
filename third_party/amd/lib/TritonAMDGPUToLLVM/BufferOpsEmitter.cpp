@@ -293,15 +293,7 @@ void BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
   Value sgprOffset = b.int_val(32, 0);
 
   // 3. Create the cache modifiers word
-  int32_t aux = 0;
-  if (hasUsers)
-    aux = getCtrlBitsForBufferAtomicsOnGFX_942_950(/*setSC0*/ true,
-                                                   /*setSC1*/ false,
-                                                   /*setNT*/ false);
-  else
-    aux = getCtrlBitsForBufferAtomicsOnGFX_942_950(
-        /*setSC0*/ false, /*setSC1*/ false, /*setNT*/ false);
-
+  int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
   Value cacheModifiers = b.int_val(32, aux);
 
   // 4. Add the arguments
