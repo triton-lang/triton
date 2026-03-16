@@ -6,8 +6,6 @@ Profile correctness tests involving GPU kernels should be placed in `test_profil
 
 import pytest
 import json
-import os
-import subprocess
 import sys
 import triton.profiler as proton
 import pathlib
@@ -16,35 +14,14 @@ from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
 from triton._internal_testing import is_hip
 
-PIPE_JSON_PARSER = """
-import json
-import os
-import select
-import sys
 
-fd = int(sys.argv[1])
-decoder = json.JSONDecoder()
-buffer = ""
-os.set_blocking(fd, False)
+class FileDescriptorOutput:
 
-while True:
-    ready, _, _ = select.select([fd], [], [], 30)
-    if not ready:
-        raise TimeoutError("Timed out waiting for profile data on pipe")
-    chunk = os.read(fd, 65536)
-    if not chunk:
-        raise RuntimeError("Pipe closed before a complete JSON document was received")
-    buffer += chunk.decode("utf-8")
-    try:
-        database, _ = decoder.raw_decode(buffer)
-    except json.JSONDecodeError:
-        continue
-    print(json.dumps({
-        "num_roots": len(database),
-        "num_children": len(database[0].get("children", [])),
-    }), flush=True)
-    break
-""".strip()
+    def __init__(self, fd: int):
+        self._fd = fd
+
+    def fileno(self) -> int:
+        return self._fd
 
 
 def test_profile_single_session(tmp_path: pathlib.Path):
@@ -94,34 +71,41 @@ def test_profile_multiple_sessions(tmp_path: pathlib.Path):
     assert temp_file3.exists()
 
 
-def test_profile_output_to_linux_pipe():
-    read_fd, write_fd = os.pipe()
-    parser = subprocess.Popen(
-        [sys.executable, "-c", PIPE_JSON_PARSER, str(read_fd)],
-        pass_fds=(read_fd, ),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    os.close(read_fd)
-    writer = os.fdopen(write_fd, "wb")
-
-    try:
-        session_id = proton.start(writer)
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="File-descriptor-backed profile output is supported via /proc/self/fd on Linux")
+def test_profile_output_to_file_descriptor(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_profile_fd.hatchet"
+    with temp_file.open("wb") as f:
+        session_id = proton.start(FileDescriptorOutput(f.fileno()))
         proton.activate(session_id)
         proton.deactivate(session_id)
         proton.finalize(session_id)
-        stdout, stderr = parser.communicate(timeout=30)
-    finally:
-        writer.close()
-        if parser.poll() is None:
-            parser.kill()
-            parser.communicate()
 
-    assert parser.returncode == 0, stderr
-    parsed = json.loads(stdout)
-    assert parsed["num_roots"] > 0
-    assert parsed["num_children"] >= 0
+    with temp_file.open() as f:
+        data = json.load(f)
+    assert len(data) > 0
+    assert len(data[0].get("children", [])) >= 0
+
+
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="File-descriptor-backed periodic flushing is supported via /proc/self/fd on Linux")
+def test_profile_periodic_flushing_output_to_file_descriptor(tmp_path: pathlib.Path):
+    import msgpack
+
+    temp_file = tmp_path / "test_profile_periodic_fd.hatchet_msgpack"
+    with temp_file.open("wb") as f:
+        session_id = proton.start(FileDescriptorOutput(f.fileno()), mode="periodic_flushing:format=hatchet_msgpack")
+        for i in range(100):
+            if i != 0 and i % 10 == 0:
+                proton.data.advance_phase(session=session_id)
+            with proton.scope(f"pipe_scope_{i}"):
+                pass
+        proton.finalize(session_id, output_format="hatchet_msgpack")
+
+    with temp_file.open("rb") as f:
+        documents = list(msgpack.Unpacker(f, raw=False, strict_map_key=False))
+    assert len(documents) == 10
+    assert sum(len(document[0].get("children", [])) for document in documents) == 100
 
 
 def test_profile_mode(tmp_path: pathlib.Path):

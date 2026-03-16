@@ -104,6 +104,23 @@ while messages < target:
 """.strip()
 
 
+class FileDescriptorOutput:
+
+    def __init__(self, fd: int):
+        self._fd = fd
+
+    def fileno(self) -> int:
+        return self._fd
+
+
+def make_pipe_output_target(write_fd: int, target_kind: str):
+    if target_kind == "file_descriptor":
+        return FileDescriptorOutput(write_fd)
+    if target_kind == "file_object":
+        return os.fdopen(write_fd, "wb")
+    raise ValueError(f"Unsupported target_kind: {target_kind}")
+
+
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_torch.hatchet"
@@ -447,7 +464,8 @@ def test_get_data(tmp_path: pathlib.Path, device: str):
 
 @pytest.mark.skipif(sys.platform != "linux",
                     reason="Pipe-backed profile output is supported via /proc/self/fd on Linux")
-def test_profile_output_to_pipe_with_parser_process(device: str):
+@pytest.mark.parametrize("target_kind", ["file_object", "file_descriptor"])
+def test_profile_output_to_pipe_with_parser_process(target_kind: str, device: str):
     read_fd, write_fd = os.pipe()
     parser = subprocess.Popen(
         [sys.executable, "-c", PIPE_PROFILE_PARSER, str(read_fd)],
@@ -457,7 +475,7 @@ def test_profile_output_to_pipe_with_parser_process(device: str):
         text=True,
     )
     os.close(read_fd)
-    writer = os.fdopen(write_fd, "wb")
+    output = make_pipe_output_target(write_fd, target_kind)
 
     try:
 
@@ -466,7 +484,7 @@ def test_profile_output_to_pipe_with_parser_process(device: str):
             offs = tl.arange(0, size)
             tl.store(y + offs, tl.load(x + offs))
 
-        session = proton.start(writer, context="shadow")
+        session = proton.start(output, context="shadow")
         with proton.scope("pipe_scope"):
             x = torch.ones((16, ), device=device)
             y = torch.zeros_like(x)
@@ -474,7 +492,10 @@ def test_profile_output_to_pipe_with_parser_process(device: str):
         proton.finalize(session)
         stdout, stderr = parser.communicate(timeout=30)
     finally:
-        writer.close()
+        if target_kind == "file_object":
+            output.close()
+        else:
+            os.close(write_fd)
         if parser.poll() is None:
             parser.kill()
             parser.communicate()
@@ -1399,7 +1420,8 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
 
 @pytest.mark.skipif(sys.platform != "linux",
                     reason="Pipe-backed periodic flushing is supported via /proc/self/fd on Linux")
-def test_periodic_flushing_pipe_streams_before_finalize(fresh_knobs, device: str):
+@pytest.mark.parametrize("target_kind", ["file_object", "file_descriptor"])
+def test_periodic_flushing_pipe_streams_before_finalize(target_kind: str, fresh_knobs, device: str):
     fresh_knobs.proton.profile_buffer_size = 256 * 1024
     read_fd, write_fd = os.pipe()
     parser = subprocess.Popen(
@@ -1411,10 +1433,10 @@ def test_periodic_flushing_pipe_streams_before_finalize(fresh_knobs, device: str
         text=True,
     )
     os.close(read_fd)
-    writer = os.fdopen(write_fd, "wb")
+    output = make_pipe_output_target(write_fd, target_kind)
 
     try:
-        session = proton.start(writer, mode="periodic_flushing:format=hatchet_msgpack")
+        session = proton.start(output, mode="periodic_flushing:format=hatchet_msgpack")
 
         for i in range(10000):
             if i != 0 and i % 1000 == 0:
@@ -1432,7 +1454,10 @@ def test_periodic_flushing_pipe_streams_before_finalize(fresh_knobs, device: str
         proton.finalize(session, output_format="hatchet_msgpack")
         stdout, stderr = parser.communicate(timeout=30)
     finally:
-        writer.close()
+        if target_kind == "file_object":
+            output.close()
+        else:
+            os.close(write_fd)
         if parser.poll() is None:
             parser.kill()
             parser.communicate()
