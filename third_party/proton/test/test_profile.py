@@ -447,7 +447,7 @@ def test_get_data(tmp_path: pathlib.Path, device: str):
                     reason="File-descriptor-backed profile output is supported via /proc/self/fd on Linux")
 @pytest.mark.parametrize("data_name, output_format, suffix", FD_OUTPUT_CASES)
 def test_profile_output_to_file_descriptor(tmp_path: pathlib.Path, data_name: str, output_format: str, suffix: str,
-                                          device: str):
+                                           device: str):
 
     @triton.jit
     def pipe_kernel(x, y, size: tl.constexpr):
