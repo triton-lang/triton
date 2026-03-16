@@ -303,7 +303,9 @@ void SessionManager::markStep(uint64_t streamId, uint64_t stepBufferToken) {
                    });
   // The public advance_phase() path seals the current instrumentation step via
   // this helper and immediately schedules any ready async drains, so we flush
-  // each unique profiler here.
+  // each unique profiler here. If the opportunistic parse work in flush()
+  // becomes too expensive on the caller thread, this is the hook point to move
+  // the flush scheduling onto a background C++ thread.
   std::set<Profiler *> flushedProfilers;
   for (const auto &[sessionId, session] : sessions) {
     (void)sessionId;

@@ -293,6 +293,83 @@ The current PR branch maps the design above to these main code paths:
   - `InstrumentationProfiler::processCompletedCopies(...)` detects completed async copies and hands each copied launch slice to the parser.
   - `InstrumentationProfiler::parseCopiedInstrumentedOp(...)` decodes the copied launch record and emits `KernelMetric` trace events for `trace_mode="kernel"`.
 
+## Future Cleanup: Move GPU Step Buffers to C++
+
+The current implementation splits ownership awkwardly:
+
+- Python owns the per-device GPU step-buffer ring, per-launch suballocation,
+  and slot reuse state.
+- C++ owns step fencing, copy-stream scheduling, host staging, and parsing.
+
+That split works, but it is not the cleanest long-term boundary. A better end
+state is for C++ to own the entire step-buffer lifecycle.
+
+### What would move out of Python
+
+The following logic in
+`third_party/proton/proton/hooks/instrumentation.py` would become C++-owned:
+
+- `StepBufferRing`
+- `StepBufferSlot`
+- `ProfileScratchAllocation`
+- step-slot allocation/reset/reuse
+- per-launch offset assignment within a step slot
+- slot wraparound and reuse fencing
+
+Python would still decide when instrumentation is enabled and when the phase
+advances, but it would stop tracking GPU slot state directly.
+
+### Proposed API shape
+
+The cleanest boundary is:
+
+- Python asks libproton for one launch allocation for the current stream.
+- C++ returns a lightweight allocation handle that exposes:
+  - device pointer for Triton's hidden `profile_scratch`
+  - allocation size
+  - step-buffer token for later copy/reuse tracking
+- Python passes that allocation through to Triton's existing profile allocator
+  plumbing without knowing which slot it came from.
+
+At the C++ interface level, that likely means replacing the current
+"Python owns the ring, C++ owns only step fences" split with something closer
+to:
+
+- `allocateInstrumentedScratch(deviceId, streamId, size, alignment) -> allocation`
+- `markStep(streamId)` or `markStep(streamId, stepToken)`
+- `waitStepBuffer(streamId, stepToken)`
+
+where `allocation` carries enough metadata for launch bookkeeping and later
+D2H parsing.
+
+### Resulting ownership model
+
+With that refactor:
+
+- Python hook responsibilities:
+  - enable or disable instrumentation
+  - patch Triton lowering and runtime hooks
+  - request a launch allocation
+  - advance the profiling phase
+- C++ responsibilities:
+  - allocate and recycle GPU step slots per device
+  - assign launch offsets inside a slot
+  - seal steps and record step-complete events
+  - schedule copy-stream D2H work
+  - manage host staging buffers
+  - parse copied records
+  - eventually move flush/reap work onto a background thread if needed
+
+### Why this is a good follow-up refactor
+
+Moving GPU step buffers into C++ is not required for correctness, but it has
+clear benefits:
+
+- one owner for slot state, step fences, D2H scheduling, and reuse
+- less Python hot-path logic on every profiled launch
+- fewer cross-language lifetime assumptions
+- a cleaner path to moving `flush()` / reap work onto a background C++ thread
+
 ## Why Not Per-Launch Host Parsing
 
 The current prototype proved correctness by:
