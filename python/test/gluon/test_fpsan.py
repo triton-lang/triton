@@ -1,4 +1,5 @@
 # ruff: noqa: F821
+import itertools
 import numpy as np
 import pytest
 import torch
@@ -625,13 +626,12 @@ def _expected_fma_i32(x_i32: np.ndarray, y_i32: np.ndarray, z_i32: np.ndarray) -
 
 def _expected_trunc_ext_roundtrip_i32(x_i32: np.ndarray) -> np.ndarray:
     x_u32 = _as_u32(x_i32)
-    out_u32 = x_u32 & np.uint32(0xFFFF0000)
+    out_u32 = x_u32 & np.uint32(0x0000FFFF)
     return _u32_to_i32(out_u32)
 
 
 def _expected_ext_f16_to_f32_i32(x_i16: np.ndarray) -> np.ndarray:
-    x_u16 = x_i16.view(np.uint16).astype(np.uint32)
-    out_u32 = (x_u16 << np.uint32(16)).astype(np.uint32)
+    out_u32 = x_i16.view(np.uint16).astype(np.uint32)
     return out_u32.view(np.int32)
 
 
@@ -773,6 +773,42 @@ def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = No
     return out.astype(np.uint32).view(np.int32)
 
 
+def _unpack_element(data: np.ndarray, row: int, col: int, pack: int, pack_axis: int = 1) -> np.uint64:
+    if pack_axis == 1:
+        raw = np.uint64(data[row, col // pack])
+        nibble_idx = col
+    else:
+        raw = np.uint64(data[row // pack, col])
+        nibble_idx = row
+    if pack == 2:
+        return (raw >> np.uint64(4 * (nibble_idx % pack))) & np.uint64(0x0F)
+    return raw
+
+
+def _scale_element(val: np.uint64, scale, idx: int, k: int, mask: np.uint64) -> np.uint64:
+    if scale is not None:
+        return (val * np.uint64(scale[idx, k // 32])) & mask
+    return val
+
+
+def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_scale, a_pack: int,
+                            b_pack: int) -> np.ndarray:
+    M, N = a_data.shape[0], b_data.shape[1]
+    K = a_data.shape[1] * a_pack
+    mask = np.uint64(0xFFFFFFFF)
+    out = np.zeros((M, N), dtype=np.uint64)
+    for i, j in itertools.product(range(M), range(N)):
+        s = np.uint64(0)
+        for kk in range(K):
+            a_val = _unpack_element(a_data, i, kk, a_pack, pack_axis=1)
+            b_val = _unpack_element(b_data, kk, j, b_pack, pack_axis=0)
+            a_val = _scale_element(a_val, a_scale, i, kk, mask)
+            b_val = _scale_element(b_val, b_scale, j, kk, mask)
+            s = (s + a_val * b_val) & mask
+        out[i, j] = s
+    return out.astype(np.uint32).view(np.int32)
+
+
 def test_dot_fma(device, fresh_knobs):
     _require_cuda_backend(device)
 
@@ -821,6 +857,78 @@ def test_dot_fma(device, fresh_knobs):
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
     kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not (is_hip_cdna4() or is_hip_gfx1250()), reason="Requires DotScaledOp support (CDNA4, or GFX1250)")
+@pytest.mark.parametrize("type_a", ["e2m1", "e4m3", "e5m2"])
+@pytest.mark.parametrize("type_b", ["e2m1", "e4m3", "e5m2", "bf16"])
+def test_dot_scaled(device, type_a, type_b, fresh_knobs):
+    _require_cuda_backend(device)
+
+    B = 32
+    K = 64
+    SCALE_K = K // 32
+
+    def allocator(size: int, alignment: int, stream):
+        return torch.empty(size, device="cuda", dtype=torch.int32)
+
+    triton.set_allocator(allocator)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @triton.jit
+    def kernel(a_ptr, a_scale_ptr, b_ptr, b_scale_ptr, out_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+               BLOCK_K: tl.constexpr, TYPE_A: tl.constexpr, TYPE_B: tl.constexpr):
+        DIV_FACTOR_A: tl.constexpr = 2 if TYPE_A == "e2m1" else 1
+        DIV_FACTOR_B: tl.constexpr = 2 if TYPE_B == "e2m1" else 1
+        PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR_A
+        PACKED_BLOCK_K_B: tl.constexpr = BLOCK_K // DIV_FACTOR_B
+        SCALE_BLOCK_K: tl.constexpr = BLOCK_K // 32
+
+        offs_am = tl.arange(0, BLOCK_M)[:, None]
+        offs_bn = tl.arange(0, BLOCK_N)[None, :]
+        offs_ak = tl.arange(0, PACKED_BLOCK_K_A)[None, :]
+        offs_bk = tl.arange(0, PACKED_BLOCK_K_B)[:, None]
+
+        a = tl.load(a_ptr + offs_am * PACKED_BLOCK_K_A + offs_ak)
+        b = tl.load(b_ptr + offs_bk * BLOCK_N + offs_bn)
+
+        offs_scale_ak = tl.arange(0, SCALE_BLOCK_K)[None, :]
+        offs_scale_bk = tl.arange(0, SCALE_BLOCK_K)[None, :]
+        a_scale = tl.load(a_scale_ptr + offs_am * SCALE_BLOCK_K + offs_scale_ak)
+        b_scale = tl.load(b_scale_ptr + tl.arange(0, BLOCK_N)[:, None] * SCALE_BLOCK_K + offs_scale_bk)
+
+        c = tl.dot_scaled(a, a_scale, TYPE_A, b, b_scale, TYPE_B)
+        tl.store(out_ptr + offs_am * BLOCK_N + offs_bn, c)
+
+    a_pack = 2 if type_a == "e2m1" else 1
+    b_pack = 2 if type_b == "e2m1" else 1
+    packed_k_a = K // a_pack
+    packed_k_b = K // b_pack
+
+    rs = np.random.RandomState(1)
+    a_bits = rs.randint(0, 256, size=(B, packed_k_a)).astype(np.uint8)
+    b_bits = rs.randint(0, 256, size=(packed_k_b, B)).astype(np.uint8)
+    a_scale_bits = rs.randint(0, 255, size=(B, SCALE_K)).astype(np.uint8)
+    b_scale_bits = rs.randint(0, 255, size=(B, SCALE_K)).astype(np.uint8)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.uint8)
+    a_scale = torch.tensor(a_scale_bits, device="cuda", dtype=torch.uint8)
+    b_scale = torch.tensor(b_scale_bits, device="cuda", dtype=torch.uint8)
+
+    if type_b == "bf16":
+        b_bits = rs.randint(0, 65536, size=(packed_k_b, B)).astype(np.uint16)
+        b = torch.tensor(b_bits, device="cuda", dtype=torch.uint16).view(torch.bfloat16)
+
+    exp_bits = _dot_scaled_payload_u32(a_bits, b_bits, a_scale_bits, None if type_b == "bf16" else b_scale_bits, a_pack,
+                                       b_pack)
+
+    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    kernel[(1, )](a, a_scale, b, b_scale, outw, BLOCK_M=B, BLOCK_N=B, BLOCK_K=K, TYPE_A=type_a, TYPE_B=type_b)
 
     _assert_payload_equal(out, exp_bits)
 
