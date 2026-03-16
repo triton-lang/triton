@@ -432,112 +432,102 @@ This gets the main performance properties we want:
 
 ## Comparison with Current `proton_profiler`
 
-The current OpenAI `proton_profiler` already solves file naming, phase
-management, and persistence, but the relevant threading model depends on the
-backend.
+The current OpenAI `proton_profiler` already provides the high-level control
+plane:
 
-### What file-output `proton_profiler` does today
+- phase management
+- file naming and persistence
+- background file writing in the OpenAI wrapper when payloads are already
+  host-visible
 
-There are two file-output paths today:
+The interesting comparison for this design is really between the existing CUPTI
+backend and the new Triton instrumentation backend.
 
-- non-periodic flushing in the OpenAI wrapper:
-  - `flush()` calls `_force_read_phase_outputs(...)`
-  - that fetches an already-materialized Proton phase payload with `proton.data.get_msgpack(...)` or `proton.data.get(...)`
-  - only after the payload is host-visible does a background flush thread write it to `rank_<n>.<format>`
-- periodic flushing in libproton:
-  - Proton itself serializes completed phases with `toJsonString(...)` or `toMsgPack(...)`
-  - Proton writes `.part_<phase>.<format>` files directly from C++
+### What CUPTI already provides
 
-So the current "async" behavior is a mix of:
-
-- asynchronous disk write in the OpenAI wrapper
-- CUPTI-side host-buffer parsing on the CUPTI callback/profiler thread
-- periodic host-side serialization and file write in libproton
-- CUPTI-managed asynchronous GPU-to-host activity delivery into host buffers
-- for the new Triton instrumentation backend, explicit Triton-managed async D2H
-  on a dedicated copy stream plus opportunistic inline parsing on
-  `advance_phase()`
-
-What is still backend-specific is where the raw timing records live and where
-the CPU parsing runs:
-
-- CUPTI backend:
-  - host activity buffers owned by CUPTI
-  - asynchronous GPU-to-host activity delivery managed by CUPTI
-  - parsing on the CUPTI callback/profiler thread
-  - no Triton-managed GPU step ring
-- Triton instrumentation backend:
-  - Triton-managed GPU step ring plus copy-stream D2H
-  - parsing of completed copies inline on the caller thread during
-    `advance_phase()`
-
-### How current Proton gets GPU data to the host
-
-This depends on the backend.
-
-For the default CUDA backend, Proton uses CUPTI rather than a Triton-owned
-device timing buffer:
+The CUPTI backend already has asynchronous delivery and deferred parsing:
 
 - CUPTI allocates host activity buffers with `aligned_alloc(...)`
-- completed kernel activities are parsed in `completeBuffer(...)`
-- that parsing happens on the CUPTI callback/profiler thread rather than inline
-  on the application's `advance_phase()` call path
-- `CuptiProfiler::doFlush()` does an opportunistic `cuda::ctxSynchronize(...)` before `cuptiActivityFlushAll(...)`
+- GPU activity records are delivered into those host buffers asynchronously by
+  CUPTI
+- completed buffers are parsed in `completeBuffer(...)`
+- that parsing happens on the CUPTI callback/profiler thread, not inline on the
+  application's `advance_phase()` path
 
-So the common CUDA file-output path already involves a CUDA sync during flush,
-but the CPU parsing itself is not performed inline by the caller. It also does
-not use a Triton-managed GPU step ring or a caller-visible step-fenced copy
-path.
+So "async copy" and "deferred host parsing" are not unique advantages of the
+Triton path.
 
-For the Triton instrumentation backend added in this PR, Proton does use a
-device-side `profile_scratch` buffer:
+One important limitation of the current CUPTI path is that flush is still
+sync-heavy:
 
-- each launch writes into a suballocation of a preallocated GPU step buffer
-- `advance_phase(session)` seals the current step and calls into
-  `SessionManager::markStep(...)`
-- `markStep(...)` flushes the profiler, which schedules async D2H on the copy
-  stream and then calls `processCompletedCopies(false)`
-- `processCompletedCopies(false)` opportunistically parses any completed copies
-  inline on the caller thread
+- `CuptiProfiler::doFlush()` does an opportunistic `cuda::ctxSynchronize(...)`
+  before `cuptiActivityFlushAll(...)`
 
-So this Triton timing path is an async copy-stream design for D2H, but its CPU
-parsing still runs inline on the `advance_phase()` call path whenever completed
-copies are ready to reap.
+That synchronization is a completeness policy in the current implementation:
 
-So "deferred host parsing" is not unique to this Triton path. The real
-difference is:
+- without it, CUPTI can still flush whatever activity records are already ready
+- with it, `libproton` tries to make `flush()` reflect all GPU work completed so
+  far on the current context
+- the downside is that `flush()` can block on unrelated in-flight kernels and
+  copies in that context
 
-- CUPTI backend: deferred parsing on a backend-managed thread over CUPTI-owned
-  host buffers
-- Triton instrumentation backend: deferred parsing after D2H, but currently
-  executed inline on the caller thread over Triton-managed step-buffer copies
+### What the Triton timing path changes
 
-### Why the proposed Triton timing path is different
+The Triton instrumentation backend changes the ownership model and the scope of
+collection:
 
-The design in this document is solving a lower-level problem than today's file-output `proton_profiler` flow:
+- collection is narrowed to Triton kernels only
+- each Triton launch writes one compiler/runtime-owned timing record
+- those records live in a Triton-managed GPU step ring
+- `advance_phase(session)` provides an explicit step boundary for draining
+- D2H is scheduled on a dedicated copy stream under Triton/Proton control
 
-- keep per-kernel timing records in a preallocated GPU step ring
-- let the user mark step completion explicitly
-- copy those records later on a separate copy stream
-- avoid host sync on every launch and avoid host sync as the normal step boundary
-- build Chrome trace after the raw timing records are already safely staged on the host
+In steady state, its flush path is lighter than CUPTI's:
 
-Concrete differences:
+- `InstrumentationProfiler::doFlush()` just schedules ready step copies and
+  reaps already-completed ones
+- it does not do a CUPTI-style context-wide synchronize in steady state
 
-- current file-output `proton_profiler`:
-  - unit of persistence: completed Proton phase payload
-  - write trigger: `flush()` / `finalize()` / periodic phase completion
-  - GPU interaction: backend-specific flush logic
-  - CPU parsing/threading:
-    - CUPTI backend: host activity buffers parsed on the CUPTI callback/profiler thread
-    - deferred host parsing already exists here; it is just not tied to a Triton-managed GPU step ring
-    - OpenAI wrapper: disk write can happen later on a background thread once payloads are host-visible
-- proposed Triton kernel-timing path:
-  - unit of collection: per-step GPU slot containing many Triton kernel launch records
-  - GPU interaction: explicit `advance_phase(session)` boundary plus copy-stream D2H
-  - CPU parsing/threading: completed D2H copies are currently parsed inline by
-    the caller during `advance_phase()`
-  - target artifact: Chrome trace built from per-launch timing records
+The Triton path still blocks at the final drain point:
+
+- `InstrumentationProfiler::doStop()` synchronizes remaining streams and
+  in-flight copy work so finalize output is complete
+
+The main current downside is CPU parsing:
+
+- completed D2H copies are still parsed inline on the caller thread during
+  `advance_phase()`
+- so parse cost can show up directly in the application's phase-advance path
+
+### Practical tradeoffs
+
+Current advantages of the Triton path:
+
+- Triton-only collection, which can be a feature if the goal is to focus on
+  Triton kernel imbalance
+- a simple per-launch start/end record model owned by the Triton compiler and
+  runtime
+- explicit step-fenced draining semantics under Triton/Proton control
+- no CUPTI-style sync-heavy flush in the steady state path
+
+Current caveats of the Triton path:
+
+- narrower scope can also be a bug if the user wants a full CUDA timeline
+- CPU parsing is currently inline on `advance_phase()`, whereas CUPTI parsing
+  already runs on a backend-managed thread
+- so today it is not strictly "better than CUPTI"; it is a different tradeoff
+  with different control points
+
+### Artifact and output layering
+
+Above either backend, `proton_profiler` still handles:
+
+- phase-oriented lifecycle
+- wrapper-level file flushing
+- cross-rank collection and downstream analysis
+
+The Triton kernel-timing path should therefore be treated as a backend beneath
+that API surface, not as a replacement for `proton_profiler` itself.
 
 ### How the approaches fit together
 
