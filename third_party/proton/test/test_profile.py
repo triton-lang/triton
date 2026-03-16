@@ -21,7 +21,6 @@ import triton.profiler.hooks.launch as proton_launch
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
 
-
 FD_OUTPUT_CASES = [
     pytest.param("tree", "hatchet", ".hatchet", id="hatchet"),
     pytest.param("tree", "hatchet_msgpack", ".hatchet_msgpack", id="hatchet_msgpack"),
@@ -1349,7 +1348,8 @@ def test_periodic_flushing_output_to_file_descriptor(data_name: str, output_form
 
     read_fd, write_fd = os.pipe()
     parser = subprocess.Popen(
-        [sys.executable, str(PERIODIC_PROFILE_PARSER), str(read_fd), output_format, "1", "10"],
+        [sys.executable, str(PERIODIC_PROFILE_PARSER),
+         str(read_fd), output_format, "1", "10"],
         pass_fds=(read_fd, ),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
