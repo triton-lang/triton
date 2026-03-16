@@ -85,8 +85,8 @@ void timingWrapper(const bool timingEnabled, uint64_t &totalUs, size_t &calls,
     const auto t0 = Clock::now();
     func();
     const auto t1 = Clock::now();
-    totalUs += std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                   .count();
+    totalUs +=
+        std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
     ++calls;
   } else {
     func();
@@ -149,8 +149,7 @@ void periodicFlushDataPhases(Data &data,
                       [&]() { writeToFd(outputFd, jsonStr); });
       } else {
         timingWrapper(
-            timingEnabled, stats.totalJsonWriteUs, stats.jsonWriteCalls,
-            [&]() {
+            timingEnabled, stats.totalJsonWriteUs, stats.jsonWriteCalls, [&]() {
               std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
               ofs << jsonStr;
               ofs.flush();
@@ -158,16 +157,13 @@ void periodicFlushDataPhases(Data &data,
       }
     } else if (periodicFlushingFormat == "hatchet_msgpack") {
       std::vector<uint8_t> msgPack;
-      timingWrapper(
-          timingEnabled, stats.totalToMsgPackUs, stats.toMsgPackCalls,
-          [&]() { msgPack = data.toMsgPack(startPhase); });
+      timingWrapper(timingEnabled, stats.totalToMsgPackUs, stats.toMsgPackCalls,
+                    [&]() { msgPack = data.toMsgPack(startPhase); });
 
       if (streamToProcFd) {
-        timingWrapper(timingEnabled, stats.totalMsgPackWriteUs,
-                      stats.msgPackWriteCalls,
-                      [&]() {
-                        writeToFd(outputFd, msgPack.data(), msgPack.size());
-                      });
+        timingWrapper(
+            timingEnabled, stats.totalMsgPackWriteUs, stats.msgPackWriteCalls,
+            [&]() { writeToFd(outputFd, msgPack.data(), msgPack.size()); });
       } else {
         timingWrapper(timingEnabled, stats.totalMsgPackWriteUs,
                       stats.msgPackWriteCalls, [&]() {
