@@ -1076,7 +1076,7 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
         offs_k_col = gl.arange(0, PACKED_K, layout=gl.SliceLayout(0, layout))[None, :]
 
         a_tile = gl.load(a_ptr + offs_m * PACKED_K + offs_k_col)
-        b_tile = gl.load(b_ptr + offs_n * PACKED_K + offs_k_col)
+        b_tile = gl.load(b_ptr + offs_m * PACKED_K + offs_k_col)
         c_tile = gl.load(c_ptr + offs_m * BLOCK + offs_n)
 
         a_smem = gl.allocate_shared_memory(ELEM_DTYPE, [BLOCK, PACKED_K], a_nvmma_layout, a_tile)
