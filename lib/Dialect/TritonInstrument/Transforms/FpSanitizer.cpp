@@ -396,10 +396,12 @@ Value castIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
 
   unsigned srcWidth = getIntBitwidth(v.getType());
   unsigned dstWidth = getIntBitwidth(targetTy);
-  if (dstWidth > srcWidth)
+  if (dstWidth > srcWidth) {
     return arith::ExtUIOp::create(rewriter, loc, targetTy, v);
-  if (srcWidth > dstWidth)
+  }
+  if (srcWidth > dstWidth) {
     return arith::TruncIOp::create(rewriter, loc, targetTy, v);
+  }
   return v;
 }
 
@@ -674,20 +676,20 @@ struct DotScaleConfig {
 
 Value loadScaleSlice(PatternRewriter &rewriter, Location loc, bool isLhs,
                      const DotScaleConfig &scale, Value tileIdx, Value kI32) {
+  auto i32Ty = rewriter.getI32Type();
   Value ptr = isLhs ? scale.aScalePtr : scale.bScalePtr;
-  int64_t scaleFactor = isLhs ? scale.aScaleFactor : scale.bScaleFactor;
-  int64_t scaleStride = isLhs ? scale.aScaleStride : scale.bScaleStride;
+  int64_t sFactor = isLhs ? scale.aScaleFactor : scale.bScaleFactor;
+  int64_t sStride = isLhs ? scale.aScaleStride : scale.bScaleStride;
   int64_t loadStride = isLhs ? scale.aScaleStride : 1;
-  RankedTensorType tileTy = isLhs ? scale.aScaleTileTy : scale.bScaleTileTy;
-
+  auto tileTy = isLhs ? scale.aScaleTileTy : scale.bScaleTileTy;
   Value tilePtr =
       tt::AddPtrOp::create(rewriter, loc, ptr.getType(), ptr, tileIdx);
-  Value scaleFactorConst = arith::ConstantOp::create(
-      rewriter, loc, rewriter.getI32IntegerAttr(scaleFactor));
-  Value kGroup = arith::DivUIOp::create(rewriter, loc, kI32, scaleFactorConst);
-  Value scaleStrideConst = arith::ConstantOp::create(
-      rewriter, loc, rewriter.getI32IntegerAttr(scaleStride));
-  Value offset = arith::MulIOp::create(rewriter, loc, kGroup, scaleStrideConst);
+  Value sFactorConst = arith::ConstantOp::create(
+      rewriter, loc, rewriter.getI32IntegerAttr(sFactor));
+  Value kGrp = arith::DivUIOp::create(rewriter, loc, kI32, sFactorConst);
+  Value sStrideConst = arith::ConstantOp::create(
+      rewriter, loc, rewriter.getI32IntegerAttr(sStride));
+  Value offset = arith::MulIOp::create(rewriter, loc, kGrp, sStrideConst);
   Value slicePtr =
       tt::AddPtrOp::create(rewriter, loc, ptr.getType(), tilePtr, offset);
   return loadScratchStrided2D(rewriter, loc, slicePtr, tileTy, loadStride);
