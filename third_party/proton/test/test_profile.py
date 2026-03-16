@@ -8,7 +8,6 @@ import triton
 import triton.profiler as proton
 import json
 import os
-import select
 import subprocess
 import pytest
 import sys
@@ -1428,7 +1427,8 @@ def test_periodic_flushing_output_to_file_descriptor(data_name: str, output_form
     writer = os.fdopen(write_fd, "wb")
 
     try:
-        session = proton.start(writer, context="shadow", data=data_name, mode=f"periodic_flushing:format={output_format}")
+        session = proton.start(writer, context="shadow", data=data_name,
+                               mode=f"periodic_flushing:format={output_format}")
 
         for i in range(100):
             if i != 0 and i % 10 == 0:
