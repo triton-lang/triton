@@ -105,7 +105,7 @@ def sm_arch_from_capability(capability: int):
     # have an "a" variant — using sm_120a causes invalid codegen (tensor
     # memory instructions that don't exist on consumer hardware), leading
     # to runtime segfaults.
-    suffix = "a" if 90 <= capability < 120 else ""
+    suffix = "a" if capability >= 90 and capability != 120 else ""
     return f"sm_{capability}{suffix}"
 
 
@@ -276,11 +276,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding(pm)
         passes.ttir.add_loop_aware_cse(pm)
-        if capability // 10 in [8, 9] or capability >= 120:
-            # Ampere (sm_8x), Hopper (sm_9x), consumer Blackwell (sm_12x+).
-            # Consumer Blackwell uses MMAv2 (no tensor memory, no MMAv5),
-            # so it shares the Hopper pipeline rather than the datacenter
-            # Blackwell pipeline which assumes tensor memory support.
+        if capability // 10 in [8, 9]:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttir.add_triton_licm(pm)
@@ -290,8 +286,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
-        elif 100 <= capability < 120:
-            # Datacenter Blackwell (sm_10x, sm_11x) — has tensor memory.
+        elif capability // 10 >= 10:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttir.add_triton_licm(pm)
@@ -470,7 +465,7 @@ class CUDABackend(BaseBackend):
         # post-process
         ptx_version = f'{ptx_version//10}.{ptx_version%10}'
         ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
-        ret = re.sub(r'\.target sm_\d+a?', f'.target {proc}', ret, flags=re.MULTILINE)
+        ret = re.sub(r'\.target sm_\d+', f'.target sm_{capability}', ret, flags=re.MULTILINE)
         if not knobs.compilation.dump_ir_extract_di_local_variables:
             # Remove the debug flag that prevents ptxas from optimizing the code
             # Note: if this flag is removed, the source var name and type info will be lost when ptx was compiled into cubin
