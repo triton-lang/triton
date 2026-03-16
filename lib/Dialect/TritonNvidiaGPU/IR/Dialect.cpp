@@ -90,6 +90,22 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   return {nRow, nCol};
 }
 
+uint32_t getTMemSubSliceOffset(MemDescType memDescType, int32_t nOffset) {
+  auto llInv = toLinearLayout(memDescType).pseudoinvert();
+  auto dimNames = llvm::to_vector(llInv.getInDimNames());
+  SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
+  logicalOffsets.reserve(dimNames.size());
+  for (auto dim : dimNames)
+    logicalOffsets.push_back({dim, 0});
+  logicalOffsets.back().second = nOffset;
+
+  auto rowCol = llInv.apply(logicalOffsets);
+  uint32_t bitwidth = memDescType.getElementTypeBitWidth();
+  uint32_t offsetRow = rowCol[0].second;
+  uint32_t offsetCol = rowCol[1].second * bitwidth / 32;
+  return offsetCol | offsetRow << 16;
+}
+
 LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
                            bool withWarp) {
   auto str_attr = [&](StringRef str) { return StringAttr::get(ctx, str); };

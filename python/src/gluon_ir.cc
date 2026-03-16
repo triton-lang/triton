@@ -18,6 +18,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
@@ -918,16 +919,18 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttng::TCGen5CommitOp>(barrier, pred, descs);
            })
 
-      .def("create_async_tma_copy_global_to_local",
-           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
-              Value barrier, Value result, Value pred, bool multicast,
-              std::optional<std::vector<Value>> offsets) {
-             ValueRange offsetsRange =
-                 offsets.has_value() ? ValueRange(*offsets) : ValueRange{};
-             self.create<ttng::AsyncTMACopyGlobalToLocalOp>(
-                 descPtr, coord, offsetsRange, barrier, result, pred,
-                 multicast);
-           })
+      .def(
+          "create_async_tma_copy_global_to_local",
+          [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
+             Value barrier, Value result, Value pred, bool multicast,
+             std::optional<std::vector<Value>> offsets) {
+            multicast &=
+                ttng::hasCGABroadcast(cast<ttg::MemDescType>(result.getType()));
+            ValueRange offsetsRange =
+                offsets.has_value() ? ValueRange(*offsets) : ValueRange{};
+            self.create<ttng::AsyncTMACopyGlobalToLocalOp>(
+                descPtr, coord, offsetsRange, barrier, result, pred, multicast);
+          })
       .def("create_async_tma_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
               Value src) {
@@ -1096,8 +1099,8 @@ void init_gluon_ir(py::module &&m) {
   m.def(
       "compute_tmem_reg_layout",
       [](py::object elementTyObj, std::vector<int64_t> shape,
-         py::object layoutObj, unsigned numWarps,
-         const std::string &atomName) -> py::object {
+         std::vector<int64_t> allocShape, py::object layoutObj,
+         unsigned numWarps, const std::string &atomName) -> py::object {
         DialectRegistry registry;
         registry.insert<triton::TritonDialect, ttg::TritonGPUDialect,
                         ttng::TritonNvidiaGPUDialect, gluon::GluonDialect>();
@@ -1112,8 +1115,6 @@ void init_gluon_ir(py::module &&m) {
         auto elementType = elementTyObj.attr("to_ir")(builderObj).cast<Type>();
         auto layoutAttr =
             layoutObj.attr("_to_ir")(builderObj).cast<Attribute>();
-        auto allocShape = shape;
-
         auto ctx = builder.getContext();
         auto memDescTy = builder.getChecked<ttg::MemDescType>(
             shape, elementType, layoutAttr,
@@ -1181,7 +1182,7 @@ void init_gluon_ir(py::module &&m) {
 
   m.def("get_amd_wmma_scale_layout",
         [](unsigned opIdx, std::vector<int64_t> &shape, unsigned wmmaMDim,
-           std::vector<std::vector<int32_t>> &regBases,
+           unsigned scaleFactor, std::vector<std::vector<int32_t>> &regBases,
            std::vector<std::vector<int32_t>> &warpBases,
            std::vector<std::vector<int32_t>> &cgaBases) -> py::object {
           DialectRegistry registry;
@@ -1199,7 +1200,7 @@ void init_gluon_ir(py::module &&m) {
                                tt::standardOutDimNames(&ctx, rank));
           auto cgaLayout = buildCgaLayoutAttr(&ctx, cgaBases, rank);
           auto ll = ttg::chooseScaledWmmaScaleLayout(
-              &ctx, opIdx, shape, wmmaMDim, ctaLayout, cgaLayout);
+              &ctx, opIdx, shape, wmmaMDim, scaleFactor, ctaLayout, cgaLayout);
           auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
           return layoutToGluon(attr);
         });

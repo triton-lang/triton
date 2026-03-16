@@ -408,11 +408,18 @@ void init_triton_ir(py::module &&m) {
              self.print(os);
              return os.str();
            })
-      .def("set_name", [](Location &self, std::string &name) {
-        mlir::StringAttr nameAttr =
-            mlir::StringAttr::get(self.getContext(), name);
-        mlir::NameLoc nameLoc = mlir::NameLoc::get(nameAttr, self);
-        self = dyn_cast<Location>(nameLoc);
+      .def("set_name",
+           [](Location &self, std::string &name) {
+             mlir::StringAttr nameAttr =
+                 mlir::StringAttr::get(self.getContext(), name);
+             mlir::NameLoc nameLoc = mlir::NameLoc::get(nameAttr, self);
+             self = dyn_cast<Location>(nameLoc);
+           })
+      .def("get_name", [](Location &self) -> std::optional<std::string> {
+        if (auto nameLoc = dyn_cast<NameLoc>(self)) {
+          return nameLoc.getName().str();
+        }
+        return std::nullopt;
       });
 
   py::class_<Value>(m, "value", py::module_local())
@@ -764,6 +771,21 @@ void init_triton_ir(py::module &&m) {
         return module->clone();
       },
       ret::take_ownership);
+
+  m.def("deduce_scale_factor",
+        [](Value &lhs, std::optional<Value> &lhsScale,
+           ScaleDotElemType lhsFormat, bool lhsKPack, Value &rhs,
+           std::optional<Value> &rhsScale, ScaleDotElemType rhsFormat,
+           bool rhsKPack) -> int32_t {
+          int32_t scaleFactor = 0;
+          std::string errMsg;
+          if (failed(DotScaledOp::deduceScaleFactor(
+                  lhs, lhsScale.value_or(Value()), lhsFormat, lhsKPack, rhs,
+                  rhsScale.value_or(Value()), rhsFormat, rhsKPack, scaleFactor,
+                  errMsg)))
+            throw std::runtime_error(errMsg);
+          return scaleFactor;
+        });
 
   py::class_<FuncOp, OpState>(m, "function", py::module_local())
       // .def_property_readonly("attrs", &ir::function::attrs)
@@ -1481,23 +1503,6 @@ void init_triton_ir(py::module &&m) {
               EvictionPolicy evictionPolicy) -> void {
              self.create<StoreOp>(ptrs, value, cacheModifier, evictionPolicy);
            })
-      .def("create_tensor_pointer_load",
-           [](TritonOpBuilder &self, Value &ptr,
-              std::vector<int32_t> &boundaryCheck,
-              std::optional<PaddingOption> paddingOption,
-              CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
-              bool isVolatile) -> Value {
-             return self.create<LoadOp>(ptr, boundaryCheck, paddingOption,
-                                        cacheModifier, evictionPolicy,
-                                        isVolatile);
-           })
-      .def("create_tensor_pointer_store",
-           [](TritonOpBuilder &self, Value &ptr, Value &val,
-              std::vector<int32_t> &boundaryCheck, CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy) -> void {
-             self.create<StoreOp>(ptr, val, boundaryCheck, cacheModifier,
-                                  evictionPolicy);
-           })
       .def("create_masked_load",
            [](TritonOpBuilder &self, Value &ptrs, Value &mask,
               std::optional<Value> &other, CacheModifier cacheModifier,
@@ -1828,21 +1833,6 @@ void init_triton_ir(py::module &&m) {
       .def("create_barrier",
            [](TritonOpBuilder &self) {
              self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
-           })
-      // Make a block pointer (tensor pointer in Triton IR)
-      .def("create_make_block_ptr",
-           [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
-              std::vector<Value> &strides, std::vector<Value> &offsets,
-              std::vector<int32_t> &tensorShape,
-              std::vector<int32_t> &order) -> Value {
-             return self.create<MakeTensorPtrOp>(base, shape, strides, offsets,
-                                                 tensorShape, order);
-           })
-      // Advance a block pointer
-      .def("create_advance",
-           [](TritonOpBuilder &self, Value &ptr,
-              std::vector<Value> &offsets) -> Value {
-             return self.create<AdvanceOp>(ptr.getType(), ptr, offsets);
            })
       // Make a tensor descriptor
       .def("create_make_tensor_descriptor",

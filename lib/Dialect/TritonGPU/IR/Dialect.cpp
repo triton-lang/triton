@@ -1081,9 +1081,11 @@ CGAEncodingAttr linearToCGAEncodingAttr(const LinearLayout &ll,
     shape[i].second /= cgaLogicalShape[i];
   }
   auto inDims = to_vector(ll.getInDimNames());
-  auto kBlock = inDims.back();
-  assert(kBlock.str() == "block");
-  inDims.pop_back();
+  auto *ctx = inDims[0].getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
+  assert(llvm::is_contained(inDims, kBlock) &&
+         "layout must have a 'block' dim");
+  llvm::erase(inDims, kBlock);
   auto outDims = to_vector(ll.getOutDimNames());
   auto subLl = ll.sublayout(inDims, outDims);
   // sublayout returns the same output size. We trim it to the
@@ -1093,7 +1095,6 @@ CGAEncodingAttr linearToCGAEncodingAttr(const LinearLayout &ll,
   // the layout in a single CTA.
   auto maybeCgaLayout = divideLeft(ll, subLl);
   assert(maybeCgaLayout.has_value());
-  auto *ctx = inDims[0].getContext();
   auto cgaLayout = maybeCgaLayout->sublayout({kBlock}, outDims);
   return CGAEncodingAttr::get(ctx, std::move(cgaLayout));
 }
@@ -2173,9 +2174,12 @@ PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
   auto outDimNames = standardOutDimNames(context, shape.size());
   StringAttr kOffset = StringAttr::get(context, "offset");
 
+  SmallVector<int64_t> shapePerCTA =
+      getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
+
   // Create identity mapping based on shape and order
-  LinearLayout linearComponent =
-      identityStandardND(kOffset, SmallVector<unsigned>(shape), order);
+  LinearLayout linearComponent = identityStandardND(
+      kOffset, llvm::to_vector_of<unsigned>(shapePerCTA), order);
   linearComponent = combineCtaCgaWithShape(linearComponent, cgaLayout, shape);
 
   return get(context, intervalPads, std::move(linearComponent));
@@ -2970,18 +2974,18 @@ struct TritonGPUInferLayoutInterface
     }
 
     // For AMDWmmaEncodingAttr verify multi-cta CGA layout compatibility
-    auto wmmaAEncoding = dyn_cast<AMDWmmaEncodingAttr>(aEncoding.getParent());
-    auto wmmaBEncoding = dyn_cast<AMDWmmaEncodingAttr>(bEncoding.getParent());
+    auto wmmaAParentEnc = dyn_cast<AMDWmmaEncodingAttr>(aEncoding.getParent());
+    auto wmmaBParentEnc = dyn_cast<AMDWmmaEncodingAttr>(bEncoding.getParent());
     auto wmmaResEncoding = dyn_cast<AMDWmmaEncodingAttr>(resEnc);
-    if (wmmaAEncoding && wmmaBEncoding && wmmaResEncoding) {
+    if (wmmaAParentEnc && wmmaBParentEnc && wmmaResEncoding) {
       auto resLL = wmmaResEncoding.getCGALayout().getLinearLayout();
 
       if (!resLL.isInvertible())
         return op->emitError("Accumulator CGA layout should not broadcast or "
                              "have repeated rows");
 
-      auto aLL = wmmaAEncoding.getCGALayout().getLinearLayout();
-      auto bLL = wmmaBEncoding.getCGALayout().getLinearLayout();
+      auto aLL = aEncoding.getCGALayout().getLinearLayout();
+      auto bLL = bEncoding.getCGALayout().getLinearLayout();
       // In multi-CTA, the CGA layout of operand 0 broadcasts across dim1 and
       // operand 1 broadcasts across dim0.
       auto ctx = op->getContext();
@@ -3380,7 +3384,7 @@ struct TritonGPUInferLayoutInterface
       newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
                      newOrder.end());
       // Remove last dimension from ctall.
-      ctall = ctall.unsqueezeOut(to_vector(ctall.getOutDimNames()).back());
+      ctall = ctall.squeezeOuts(to_vector(ctall.getOutDimNames()).back());
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), //
           ArrayRef(enc.getSizePerThread()).drop_back(1),

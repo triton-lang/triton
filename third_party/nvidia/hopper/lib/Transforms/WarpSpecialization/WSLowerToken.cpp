@@ -1,4 +1,4 @@
-#include "Utility.h"
+#include "CodePartitionUtility.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
@@ -128,6 +128,10 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
         builder, loc, barrierMemDescType, Value());
     Value bufferEmptyArray = mlir::triton::gpu::LocalAllocOp::create(
         builder, loc, barrierMemDescType, Value());
+    bufferFullArray.getDefiningOp()->setAttr(
+        kWarpSpecializeGeneratedBarrierAttrName, builder.getUnitAttr());
+    bufferEmptyArray.getDefiningOp()->setAttr(
+        kWarpSpecializeGeneratedBarrierAttrName, builder.getUnitAttr());
     tokenToFull[createTokenOp.getOperation()] = bufferFullArray;
     tokenToEmpty[createTokenOp.getOperation()] = bufferEmptyArray;
 

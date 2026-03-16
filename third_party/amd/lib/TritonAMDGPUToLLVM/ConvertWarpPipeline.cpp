@@ -178,7 +178,7 @@ private:
         clusterBlocks.push_back(&exeOp->getRegion(0).front());
         bars.push_back(false);
       } else if (isa<ROCDL::BarrierOp, gpu::BarrierOp, triton::gpu::AsyncWaitOp,
-                     triton::amdgpu::AsyncTDMWait,
+                     triton::amdgpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait,
                      triton::amdgpu::AsyncTDMIntrinsicWait>(op)) {
         int currCluster = clusterBlocks.size();
         // Reject if multiple barriers appear without an intervening cluster.
@@ -190,7 +190,6 @@ private:
         if (existingBarrierMap.find(currCluster) != existingBarrierMap.end())
           return failure();
         existingBarrierMap[currCluster] = &op;
-        bars.push_back(false);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
         terminatorOp = &op;
       } else { // Fail conversion if any other op found outside of the cluster.

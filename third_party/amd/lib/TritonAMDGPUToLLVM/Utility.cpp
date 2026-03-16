@@ -512,12 +512,6 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
   }
 }
 
-Value cvtFp32ToFp16RTNE_oneValue(Location loc, RewriterBase &rewriter,
-                                 const Value &v) {
-  LLVM::RoundingMode rm = LLVM::RoundingMode::NearestTiesToEven;
-  return LLVM::FPTruncOp::create(rewriter, loc, f16_ty, v);
-}
-
 Type getPointerTypeWithShape(Value basePtr, Value offset) {
   Type basePtrType = basePtr.getType();
   auto offsetType = cast<RankedTensorType>(offset.getType());
@@ -741,11 +735,29 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   return false;
 }
 
+Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
+                        bool isE4M3FN) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (isE4M3FN) {
+    // Position the 7 magnitude bits at f32 bits [26:20] and multiply by
+    // 2^120 to correct the exponent bias (f32 bias 127 - E4M3 bias 7 = 120).
+    Value absVal = b.and_(fp8Val, b.i8_val(0x7F));
+    Value vi32 = b.shl(b.zext(i32_ty, absVal), b.i32_val(20));
+    Value rawF32 = b.fmul(b.bitcast(vi32, f32_ty), b.f32_val(0x1p120f));
+    Value signBit =
+        b.shl(b.and_(b.zext(i32_ty, fp8Val), b.i32_val(0x80)), b.i32_val(24));
+    return b.bitcast(b.or_(b.bitcast(rawF32, i32_ty), signBit), f32_ty);
+  }
+  // E5M2 -> f16 (same exponent format, simple shift) -> fpext to f32.
+  Value i16Val = b.shl(b.zext(i16_ty, fp8Val), b.i16_val(8));
+  return b.fpext(f32_ty, b.bitcast(i16Val, f16_ty));
+}
+
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                     bool toFp16, Value packedVec,
                                     ISAFamily isaFamily, Value scale) {
-  assert((isa<triton::amdgpu::UpcastMXFPOp, triton::gpu::Fp4ToFpOp>(op)) &&
-         "Expected UpcastMXFPOp or Fp4ToFpOp");
+  assert((isa<triton::gpu::Fp4ToFpOp, triton::amdgpu::ScaledUpcastFp4Op>(op)) &&
+         "Expected Fp4ToFpOp or ScaledUpcastFp4Op");
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto permU32FnTy =

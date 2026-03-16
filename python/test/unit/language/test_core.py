@@ -1035,7 +1035,7 @@ def test_abs(dtype_x, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4nv, tl.float8e5])
+@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4nv, tl.float8e5, tl.float8e4b8, tl.float8e5b16])
 def test_abs_fp8(in_dtype, device):
     if is_hip():
         pytest.skip('test_abs_fp8 not supported on HIP.')
@@ -1045,6 +1045,8 @@ def test_abs_fp8(in_dtype, device):
             pytest.skip("float8e4b15 not supported on CUDA >= 9.0")
         if in_dtype == tl.float8e4nv and cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
+        if in_dtype in (tl.float8e4b8, tl.float8e5b16):
+            pytest.skip("float8e4b8/float8e5b16 not supported on CUDA")
 
     @triton.jit
     def abs_kernel(X, Z, SIZE: tl.constexpr):
@@ -1779,10 +1781,6 @@ def test_atomic_unsupported_type(dtype_str, device):
 @pytest.mark.parametrize("size", [1, 4, 16])
 @pytest.mark.parametrize("op", ["add", "cas"])
 def test_tensor_atomic_use_result(dtype_str, size, op, device):
-    if is_hip():
-        pytest.skip(
-            "HIP is broken because (1) it doesn't support thread predicate in atomic cas, and (2) it doesn't support"
-            " atomic rmw with float16")
 
     @triton.jit
     def kernel(index_ptr, out_ptr, size: tl.constexpr, op: tl.constexpr):
@@ -3512,7 +3510,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f16.f16.f16', ptx)
     elif in_dtype == 'int8':
-        if capability[0] == 7 and capability[1] == 5:  # Turing
+        if is_tcgen5:
+            assert re.search(r'tcgen05.mma.cta_group::1.kind::i8', ptx)
+        elif capability[0] == 7 and capability[1] == 5:  # Turing
             assert 'mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32' in ptx
         else:
             assert 'wgmma.mma_async.sync.aligned' in ptx or\
@@ -5557,19 +5557,24 @@ def test_poison_return(device):
 
 
 def test_num_threads(device):
-    if is_hip():
-        pytest.skip("test_num_threads is not supported in HIP")
+    check_cuda_or_hip(device)
 
     @triton.jit
-    def kernel(Out):
-        num_threads: tl.constexpr = tl.extra.cuda.num_threads()
+    def kernel(Out, get_num_threads: tl.constexpr):
+        num_threads: tl.constexpr = get_num_threads()
         offs = tl.arange(0, num_threads)
         tl.store(Out + offs, 1)
 
+    if is_hip():
+        get_num_threads = tl.extra.hip.num_threads
+        warp_size = triton.runtime.driver.active.get_current_target().warp_size
+    else:
+        get_num_threads = tl.extra.cuda.num_threads
+        warp_size = 32
     num_threads = 256
     out = to_triton(np.zeros((num_threads, ), dtype=np.int32), device=device)
-    kernel[(1, )](out, num_warps=num_threads // 32)
-    assert torch.sum(out) == 256
+    kernel[(1, )](out, get_num_threads=get_num_threads, num_warps=num_threads // warp_size)
+    assert torch.sum(out) == num_threads
 
 
 def test_globaltimer(device):
@@ -5606,18 +5611,23 @@ def test_globaltimer(device):
 
 
 def test_smid(device):
-    if is_hip():
-        pytest.skip("test_smid is not supported in HIP")
     check_cuda_or_hip(device)
 
     @triton.jit
-    def kernel(Out):
-        tl.store(Out + tl.program_id(0), tl.extra.cuda.smid())
+    def kernel(Out, get_smid: tl.constexpr):
+        tl.store(Out + tl.program_id(0), get_smid())
 
+    if is_hip():
+        get_smid = tl.extra.hip.smid
+    else:
+        get_smid = tl.extra.cuda.smid
     out = to_triton(np.zeros((1024, ), dtype=np.int32), device=device)
-    h = kernel[(out.shape[0], )](out)
+    h = kernel[(out.shape[0], )](out, get_smid=get_smid)
     assert out.sort()[0].unique().shape[0] > 0
-    assert h.asm["ptx"].count("%smid") == 1
+    if is_cuda():
+        assert h.asm["ptx"].count("%smid") == 1
+    else:
+        assert h.asm["amdgcn"].count("s_getreg_b32") >= 1
 
 
 @pytest.mark.interpreter

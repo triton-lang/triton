@@ -218,6 +218,13 @@ protected:
         --retries;
       }
     }
+
+    void clear() {
+      corrIdToExternId.clear();
+      externIdToState.clear();
+      maxCompletedCorrelationId.store(0);
+      maxSubmittedCorrelationId.store(0);
+    }
   };
 
   static thread_local ThreadState threadState;
@@ -256,15 +263,15 @@ protected:
               /*metric_id=*/1 + 1); // scalar metric has 1 value
         }
         // Launch metric kernels
-        profiler.metricBuffer->receive(
-            tensorMetrics, scalarMetrics, profiler.tensorMetricKernel,
-            profiler.scalarMetricKernel, profiler.metricKernelStream);
+        auto &metricKernelLaunchState = profiler.metricKernelLaunchState;
+        profiler.metricBuffer->receive(tensorMetrics, scalarMetrics,
+                                       metricKernelLaunchState);
         threadState.isMetricKernelLaunching = false;
       } else { // Eager mode, directly copy
         // Populate tensor metrics
-        auto tensorMetricsHost =
-            collectTensorMetrics(profiler.metricBuffer->getRuntime(),
-                                 tensorMetrics, profiler.metricKernelStream);
+        auto tensorMetricsHost = collectTensorMetrics(
+            profiler.metricBuffer->getRuntime(), tensorMetrics,
+            profiler.metricKernelLaunchState.stream);
         auto &dataToEntry = threadState.dataToEntry;
         if (dataToEntry.empty()) {
           // Add metrics to a specific scope
