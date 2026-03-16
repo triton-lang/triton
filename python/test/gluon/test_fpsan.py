@@ -814,6 +814,7 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
             b_val = _scale_element(b_val, b_scale, j, kk, mask)
             s = (s + a_val * b_val) & mask
         out[i, j] = s
+    return out.astype(np.uint32).view(np.int32)
 
 
 def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.ndarray, b_scale_u8: np.ndarray,
