@@ -315,10 +315,10 @@ def matmul(a, b, bias,
     a_microblock_size = None if a_scale is None else a.shape[-1] // a_scale.shape[-1]
     b_microblock_size = None if b_scale is None else b.shape[-2] // b_scale.shape[-2]
     if a_microblock_size is not None:
-        assert a_microblock_size == int(MXFP_BLOCK_SIZE if a_scale_dtype == torch.uint8 else NVFP_BLOCK_SIZE), \
+        assert a_microblock_size in (int(MXFP_BLOCK_SIZE), int(NVFP_BLOCK_SIZE)), \
             f"Unsupported microscale block size {a_microblock_size}"
     if b_microblock_size is not None:
-        assert b_microblock_size == int(MXFP_BLOCK_SIZE if b_scale_dtype == torch.uint8 else NVFP_BLOCK_SIZE), \
+        assert b_microblock_size in (int(MXFP_BLOCK_SIZE), int(NVFP_BLOCK_SIZE)), \
             f"Unsupported microscale block size {b_microblock_size}"
     if a_microblock_size is not None and b_microblock_size is not None:
         assert a_microblock_size == b_microblock_size, (
