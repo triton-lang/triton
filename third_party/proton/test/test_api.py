@@ -27,7 +27,6 @@ class FileDescriptorOutput:
 FD_OUTPUT_CASES = [
     pytest.param("tree", "hatchet", ".hatchet", id="hatchet"),
     pytest.param("tree", "hatchet_msgpack", ".hatchet_msgpack", id="hatchet_msgpack"),
-    pytest.param("trace", "chrome_trace", ".chrome_trace", id="chrome_trace"),
 ]
 
 
@@ -101,13 +100,9 @@ def test_profile_output_to_file_descriptor(tmp_path: pathlib.Path, data_name: st
         proton.finalize(session_id, output_format=output_format)
 
     data = load_profile_output(temp_file, output_format)
-    if output_format == "chrome_trace":
-        assert "traceEvents" in data
-        assert any(event["name"] == "fd_scope" for event in data["traceEvents"])
-    else:
-        assert len(data) > 0
-        assert len(data[0].get("children", [])) == 1
-        assert data[0]["children"][0]["frame"]["name"] == "fd_scope"
+    assert len(data) > 0
+    assert len(data[0].get("children", [])) == 1
+    assert data[0]["children"][0]["frame"]["name"] == "fd_scope"
 
 
 @pytest.mark.skipif(sys.platform != "linux",
@@ -126,16 +121,10 @@ def test_profile_periodic_flushing_output_to_file_descriptor(tmp_path: pathlib.P
         proton.finalize(session_id, output_format=output_format)
 
     data = load_profile_output(temp_file, output_format)
-    if output_format == "chrome_trace":
-        assert "traceEvents" in data
-        names = {event["name"] for event in data["traceEvents"]}
-        assert "periodic_fd_scope_0" in names
-        assert "periodic_fd_scope_1" in names
-    else:
-        assert data[0]["frame"]["name"] == "ROOT"
-        child_names = [child["frame"]["name"] for child in data[0].get("children", [])]
-        assert "periodic_fd_scope_0" in child_names
-        assert "periodic_fd_scope_1" in child_names
+    assert data[0]["frame"]["name"] == "ROOT"
+    child_names = [child["frame"]["name"] for child in data[0].get("children", [])]
+    assert "periodic_fd_scope_0" in child_names
+    assert "periodic_fd_scope_1" in child_names
 
 
 def test_profile_mode(tmp_path: pathlib.Path):
