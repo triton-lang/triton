@@ -1082,9 +1082,4 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
   }
   return offsets;
 }
-
-bool needsTrailingDimSwapForTDM(ArrayRef<unsigned> sharedOrder) {
-  return sharedOrder[0] != (sharedOrder.size() - 1);
-}
-
 } // namespace mlir::LLVM::AMD

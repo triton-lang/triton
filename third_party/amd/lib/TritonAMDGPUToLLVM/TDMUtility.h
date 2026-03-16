@@ -126,10 +126,6 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
                                    Type elementType, Value laneId, Value warpId,
                                    Value ctaId, bool isSpeculative);
 
-// Returns true if the shared memory encoding has is not row-mjaor, requiring
-// the trailing two dimensions to be swapped for TDM.
-bool needsTrailingDimSwapForTDM(ArrayRef<unsigned> sharedOrder);
-
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H

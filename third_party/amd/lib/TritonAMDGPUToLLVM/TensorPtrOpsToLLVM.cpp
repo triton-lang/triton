@@ -13,11 +13,11 @@ using namespace mlir::triton::gpu;
 
 namespace {
 // Validates that the tensor descriptor's strides and shared layout are
-// compatible with TDM. The shared order must be [rank-1, rank-2, ..., 0],
-// and all stride-1 dimensions are consecutive at the end (trailing dims).
-// Additionally if we have single stride-1 dimension we allow it to be in rank-2
-// position, the lowering will swap the dimensions. However, this also requires
-// the shared order to have rank-2 and rank-1 to be swapped.
+// compatible with TDM. Requirements:
+//  - The shared order must be [rank-1, rank-2, ..., 0].
+//  - All stride-1 dimensions must be consecutive trailing dims.
+// Additionally, a single stride-1 dimension may appear at the rank-2
+// position (col-major) if the shared order has rank-2 and rank-1 swapped.
 LogicalResult validateStridesAndSharedOrder(triton::MakeTensorDescOp op,
                                             Attribute sharedEnc,
                                             ArrayRef<int64_t> shape,
