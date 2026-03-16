@@ -1721,12 +1721,6 @@ public:
     }
 
     bool hasUnsupportedOperations = false;
-    getOperation()->walk([&](ttng::TCGen5MMAScaledOp op) {
-      hasUnsupportedOperations = true;
-      llvm::errs() << "FpSanitizer error: Unsupported operation found: "
-                   << op->getName() << "\n";
-      return WalkResult::interrupt();
-    });
     getOperation()->walk([&](tt::ExternElementwiseOp op) {
       if (!externInvolvesFloatLike(op))
         return WalkResult::advance();
