@@ -220,3 +220,47 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
     src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
     triton.compile(src, target=GPUTarget("cuda", 80, 32))
+
+
+def test_sm_arch_from_capability():
+    """Verify that sm_arch_from_capability generates correct arch strings.
+
+    Consumer Blackwell (sm_120, e.g. RTX 5070 Ti) must NOT get the "a" suffix.
+    Using sm_120a causes LLVM/ptxas to generate tensor memory instructions
+    that don't exist on consumer hardware, producing runtime segfaults.
+    """
+    from triton.backends.nvidia.compiler import sm_arch_from_capability
+    # Pre-Hopper: no suffix
+    assert sm_arch_from_capability(80) == "sm_80"
+    assert sm_arch_from_capability(89) == "sm_89"
+    # Hopper datacenter: "a" suffix
+    assert sm_arch_from_capability(90) == "sm_90a"
+    # Blackwell datacenter: "a" suffix
+    assert sm_arch_from_capability(100) == "sm_100a"
+    # Consumer Blackwell: NO "a" suffix (critical for RTX 5070 Ti/5080/5090)
+    assert sm_arch_from_capability(120) == "sm_120"
+
+
+def test_compile_only_sm120() -> None:
+    """Verify that sm_120 (consumer Blackwell) compiles with correct target.
+
+    sm_120 must use '.target sm_120' (no 'a' suffix) and must NOT
+    contain tensor memory instructions (tcgen05) since consumer
+    Blackwell hardware lacks tensor memory.
+    """
+
+    @triton.jit
+    def kernel_add(a, b, c):
+        idx = tl.arange(0, 32)
+        tl.store(c + idx, tl.load(a + idx) + tl.load(b + idx))
+
+    k = triton.compile(
+        triton.compiler.ASTSource(fn=kernel_add, signature={"a": "*fp32", "b": "*fp32", "c": "*fp32"}, constexprs={}),
+        target=GPUTarget("cuda", 120, 32))
+    ptx = k.asm["ptx"]
+    # Must target sm_120 (no "a" suffix)
+    assert ".target sm_120" in ptx
+    assert ".target sm_120a" not in ptx
+    # Must not contain tensor memory instructions (consumer Blackwell lacks tmem)
+    assert "tcgen05" not in ptx
+    assert k.asm["cubin"] != b""
