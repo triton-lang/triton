@@ -1500,6 +1500,9 @@ struct TCGen5MMAScaledPattern
         (bIsTmem && bMemTy.getRank() != 2) ||
         (aScaleIsTmem && aScaleMemTy.getRank() != 2) ||
         (bScaleIsTmem && bScaleMemTy.getRank() != 2) || dMemTy.getRank() != 2)
+      // TODO: Here and everywhere else, distinguish between intentional cases
+      // where pattern should not apply (failure()), missing fpsan
+      // functionality, and code emission issues (error).
       return failure();
 
     auto aShape = aMemTy.getShape();
