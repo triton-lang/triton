@@ -10,6 +10,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -163,6 +164,10 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
     }
     if (isa<scf::YieldOp>(op)) // End of the loop
       break;
+    // Tolerate pure scalar ops (e.g. IV remap from loop unrolling).
+    // They stay outside execute_regions and don't affect pipelining.
+    if (triton::isPureScalarOp(op))
+      continue;
 
     // Keep collecting ops for a cluster.
     cluster.push_back(op);

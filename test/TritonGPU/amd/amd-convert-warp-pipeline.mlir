@@ -490,3 +490,75 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: rocdl.sched.barrier
 // CHECK: amdg.cond_barrier
 // CHECK: tt.return
+
+// -----
+
+// ---- Unrolled loop with async_wait between stages (FA-like pattern) ----
+//
+// Simulates what the FA kernel looks like after loop unrolling with factor 2:
+// two copies of (stage1 → async_wait → stage2) with scalar IV remap between them.
+// This is the pattern that requires warp_pipeline to run BEFORE loop_unroll:
+// if unrolling ran first, WarpPipeliner would see the async_wait inside a cluster
+// being built (after the IV remap ops) and bail out.
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @unrolled_async_wait_between_stages(%n: index, %ptr: !tt.ptr<f32>) {
+    %c0  = arith.constant 0 : index
+    %c1  = arith.constant 1 : index
+    %v0  = arith.constant 0.0 : f32
+    %v1  = arith.constant 1.0 : f32
+
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %c0) -> index {
+      // Iteration 0: stage1 → async_wait → stage2.
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage1", triton.warp_pipeline.priority = 1 : i32}
+
+      ttg.async_wait {num = 0 : i32}
+
+      scf.execute_region {
+        tt.store %ptr, %v1 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage2", triton.warp_pipeline.priority = 0 : i32}
+
+      // Scalar IV remap from loop unrolling.
+      %next = arith.addi %acc, %c1 : index
+
+      // Iteration 1: stage1 → async_wait → stage2.
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage1", triton.warp_pipeline.priority = 1 : i32}
+
+      ttg.async_wait {num = 0 : i32}
+
+      scf.execute_region {
+        tt.store %ptr, %v1 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage2", triton.warp_pipeline.priority = 0 : i32}
+
+      scf.yield %next : index
+    } {triton.warp_pipeline.pipelined_for}
+
+    tt.return
+  }
+}
+
+// Must convert successfully: async_wait + scalar ops + 4 clusters all handled.
+// CHECK-LABEL: tt.func @unrolled_async_wait_between_stages
+// CHECK: ttg.barrier local
+// CHECK: amdg.cond_barrier
+// CHECK: rocdl.s.setprio 1
+// CHECK: scf.for
+// CHECK-NOT: scf.execute_region
+// Cluster priorities alternate: 0, 1, 0, 1 (for clusters 1-3) + wrap-around 1.
+// CHECK: rocdl.s.setprio 0
+// CHECK: rocdl.s.setprio 1
+// CHECK: rocdl.s.setprio 0
+// CHECK: rocdl.s.setprio 1
+// Post-loop reset.
+// CHECK: rocdl.s.setprio 0
+// CHECK: amdg.cond_barrier
+// CHECK: tt.return
+

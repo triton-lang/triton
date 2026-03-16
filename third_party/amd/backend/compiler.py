@@ -307,7 +307,6 @@ class HIPBackend(BaseBackend):
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         amd.passes.ttgpuir.add_warp_pipeline(pm)
-        # Unroll after pipelining so the s_setprio hints are replicated correctly.
         passes.ttir.add_loop_unroll(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
 
