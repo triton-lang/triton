@@ -66,29 +66,11 @@ while messages < target:
 
 """.strip()
 
-
-class FileDescriptorOutput:
-
-    def __init__(self, fd: int):
-        self._fd = fd
-
-    def fileno(self) -> int:
-        return self._fd
-
-
 FD_OUTPUT_CASES = [
     pytest.param("tree", "hatchet", ".hatchet", id="hatchet"),
     pytest.param("tree", "hatchet_msgpack", ".hatchet_msgpack", id="hatchet_msgpack"),
     pytest.param("trace", "chrome_trace", ".chrome_trace", id="chrome_trace"),
 ]
-
-
-def make_pipe_output_target(write_fd: int, target_kind: str):
-    if target_kind == "file_descriptor":
-        return FileDescriptorOutput(write_fd)
-    if target_kind == "file_object":
-        return os.fdopen(write_fd, "wb")
-    raise ValueError(f"Unsupported target_kind: {target_kind}")
 
 
 def load_profile_output(path: pathlib.Path, output_format: str):
@@ -447,7 +429,7 @@ def test_get_data(tmp_path: pathlib.Path, device: str):
                     reason="File-descriptor-backed profile output is supported via /proc/self/fd on Linux")
 @pytest.mark.parametrize("data_name, output_format, suffix", FD_OUTPUT_CASES)
 def test_profile_output_to_file_descriptor(tmp_path: pathlib.Path, data_name: str, output_format: str, suffix: str,
-                                           device: str):
+                                          device: str):
 
     @triton.jit
     def pipe_kernel(x, y, size: tl.constexpr):
@@ -456,7 +438,7 @@ def test_profile_output_to_file_descriptor(tmp_path: pathlib.Path, data_name: st
 
     temp_file = tmp_path / f"test_profile_fd{suffix}"
     with temp_file.open("wb") as f:
-        session = proton.start(FileDescriptorOutput(f.fileno()), context="shadow", data=data_name)
+        session = proton.start(f, context="shadow", data=data_name)
         with proton.scope("pipe_scope"):
             x = torch.ones((16, ), device=device)
             y = torch.zeros_like(x)
@@ -1393,8 +1375,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
 
 @pytest.mark.skipif(sys.platform != "linux",
                     reason="Pipe-backed periodic flushing is supported via /proc/self/fd on Linux")
-@pytest.mark.parametrize("target_kind", ["file_object", "file_descriptor"])
-def test_periodic_flushing_pipe_streams_before_finalize(target_kind: str, fresh_knobs, device: str):
+def test_periodic_flushing_pipe_streams_before_finalize(fresh_knobs, device: str):
     fresh_knobs.proton.profile_buffer_size = 256 * 1024
     read_fd, write_fd = os.pipe()
     parser = subprocess.Popen(
@@ -1406,10 +1387,10 @@ def test_periodic_flushing_pipe_streams_before_finalize(target_kind: str, fresh_
         text=True,
     )
     os.close(read_fd)
-    output = make_pipe_output_target(write_fd, target_kind)
+    writer = os.fdopen(write_fd, "wb")
 
     try:
-        session = proton.start(output, mode="periodic_flushing:format=hatchet_msgpack")
+        session = proton.start(writer, mode="periodic_flushing:format=hatchet_msgpack")
 
         for i in range(10000):
             if i != 0 and i % 1000 == 0:
@@ -1427,10 +1408,7 @@ def test_periodic_flushing_pipe_streams_before_finalize(target_kind: str, fresh_
         proton.finalize(session, output_format="hatchet_msgpack")
         stdout, stderr = parser.communicate(timeout=30)
     finally:
-        if target_kind == "file_object":
-            output.close()
-        else:
-            os.close(write_fd)
+        writer.close()
         if parser.poll() is None:
             parser.kill()
             parser.communicate()
@@ -1456,8 +1434,7 @@ def test_periodic_flushing_output_to_file_descriptor(tmp_path, fresh_knobs, data
 
     temp_file = tmp_path / f"test_periodic_flushing_fd{suffix}"
     with temp_file.open("wb") as f:
-        session = proton.start(FileDescriptorOutput(f.fileno()), context="shadow", data=data_name,
-                               mode=f"periodic_flushing:format={output_format}")
+        session = proton.start(f, context="shadow", data=data_name, mode=f"periodic_flushing:format={output_format}")
         with proton.scope("pipe_scope"):
             x = torch.ones((16, ), device=device)
             y = torch.zeros_like(x)

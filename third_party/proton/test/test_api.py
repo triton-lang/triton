@@ -14,16 +14,6 @@ from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
 from triton._internal_testing import is_hip
 
-
-class FileDescriptorOutput:
-
-    def __init__(self, fd: int):
-        self._fd = fd
-
-    def fileno(self) -> int:
-        return self._fd
-
-
 FD_OUTPUT_CASES = [
     pytest.param("tree", "hatchet", ".hatchet", id="hatchet"),
     pytest.param("tree", "hatchet_msgpack", ".hatchet_msgpack", id="hatchet_msgpack"),
@@ -94,7 +84,7 @@ def test_profile_multiple_sessions(tmp_path: pathlib.Path):
 def test_profile_output_to_file_descriptor(tmp_path: pathlib.Path, data_name: str, output_format: str, suffix: str):
     temp_file = tmp_path / f"test_profile_fd{suffix}"
     with temp_file.open("wb") as f:
-        session_id = proton.start(FileDescriptorOutput(f.fileno()), data=data_name)
+        session_id = proton.start(f, data=data_name)
         proton.enter_scope("fd_scope")
         proton.exit_scope()
         proton.finalize(session_id, output_format=output_format)
@@ -112,8 +102,7 @@ def test_profile_periodic_flushing_output_to_file_descriptor(tmp_path: pathlib.P
                                                              suffix: str):
     temp_file = tmp_path / f"test_profile_periodic_fd{suffix}"
     with temp_file.open("wb") as f:
-        session_id = proton.start(FileDescriptorOutput(f.fileno()), data=data_name,
-                                  mode=f"periodic_flushing:format={output_format}")
+        session_id = proton.start(f, data=data_name, mode=f"periodic_flushing:format={output_format}")
         with proton.scope("periodic_fd_scope_0"):
             pass
         with proton.scope("periodic_fd_scope_1"):
