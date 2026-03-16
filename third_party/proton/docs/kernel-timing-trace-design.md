@@ -499,6 +499,50 @@ The main current downside is CPU parsing:
   `advance_phase()`
 - so parse cost can show up directly in the application's phase-advance path
 
+### What it would take to remove context sync entirely
+
+For `libproton` to support fully async profile collection with no
+context-wide/device-wide synchronization in the steady-state path, the backend
+contract would need to change from:
+
+- "`flush()` should try to make profiling data complete up to now"
+
+to:
+
+- "`flush()` should only make forward progress on whatever profiling data is
+  already ready"
+
+For the CUPTI backend, that would likely require:
+
+- changes in libproton's CUPTI backend implementation
+- a non-blocking flush mode that skips `cuda::ctxSynchronize(...)`
+- accepting that a given `flush()` may return only a partial prefix of the
+  activity stream
+- an explicit readiness/completeness contract for callers, so phase/file output
+  knows whether it is writing "all work so far" or just "all records currently
+  available"
+- likely more background polling or callback-driven draining in libproton,
+  rather than treating `flush()` as the point where completeness is enforced
+
+This does not automatically mean changes to NVIDIA's CUPTI API itself. The
+first problem is that libproton's current CUPTI backend chooses completeness by
+synchronizing the context before flush.
+
+For the Triton instrumentation backend, the main remaining work is different:
+
+- keep the current copy-stream D2H scheduling
+- move `processCompletedCopies(false)` off the caller thread and onto a
+  background C++ parser/reaper thread
+- keep `doStop()` as the explicit blocking final drain, unless we later add a
+  stronger asynchronous completion API there too
+
+So the blocker is not the same in the two backends:
+
+- CUPTI: changing libproton's CUPTI backend so it can make forward progress
+  without the current completeness-oriented context sync policy
+- Triton instrumentation: removing caller-thread CPU parsing while preserving
+  the current async copy-stream behavior
+
 ### Practical tradeoffs
 
 Current advantages of the Triton path:
