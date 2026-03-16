@@ -1068,19 +1068,27 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
         PACKED_K: gl.constexpr = BLOCK // PACK_FACTOR
         ELEM_DTYPE: gl.constexpr = gl.uint8 if IS_FP4 else (gl.float8e4nv if TYPE == "e4m3" else gl.float8e5)
         a_nvmma_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, PACKED_K], ELEM_DTYPE)
-        b_nvmma_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, PACKED_K], ELEM_DTYPE)
+        b_nvmma_layout: gl.constexpr = (gl.NVMMASharedLayout.get_default_for([BLOCK, PACKED_K], ELEM_DTYPE)
+                                        if IS_FP4 else gl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False,
+                                                                            element_bitwidth=8, rank=2))
         scale_layout: gl.constexpr = TensorMemoryScalesLayout()
 
         offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
         offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
+        offs_k_row = gl.arange(0, PACKED_K, layout=gl.SliceLayout(1, layout))[:, None]
         offs_k_col = gl.arange(0, PACKED_K, layout=gl.SliceLayout(0, layout))[None, :]
 
         a_tile = gl.load(a_ptr + offs_m * PACKED_K + offs_k_col)
-        b_tile = gl.load(b_ptr + offs_m * PACKED_K + offs_k_col)
         c_tile = gl.load(c_ptr + offs_m * BLOCK + offs_n)
-
         a_smem = gl.allocate_shared_memory(ELEM_DTYPE, [BLOCK, PACKED_K], a_nvmma_layout, a_tile)
-        b_smem = gl.allocate_shared_memory(ELEM_DTYPE, [BLOCK, PACKED_K], b_nvmma_layout, b_tile)
+        if IS_FP4:
+            b_tile = gl.load(b_ptr + offs_m * PACKED_K + offs_k_col)
+            b_smem = gl.allocate_shared_memory(ELEM_DTYPE, [BLOCK, PACKED_K], b_nvmma_layout, b_tile)
+            b_mma = b_smem.permute((1, 0))
+        else:
+            b_tile = gl.load(b_ptr + offs_k_row * BLOCK + offs_n)
+            b_smem = gl.allocate_shared_memory(ELEM_DTYPE, [PACKED_K, BLOCK], b_nvmma_layout, b_tile)
+            b_mma = b_smem
 
         tmem_layout: gl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
         acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK, BLOCK], layout=tmem_layout)
@@ -1098,8 +1106,7 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
 
         bar = gl.allocate_shared_memory(gl.int64, [1], gl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
-        tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, TYPE, TYPE,
-                           use_acc=True)
+        tcgen05_mma_scaled(a_smem, b_mma, acc_tmem, a_scale_tmem, b_scale_tmem, TYPE, TYPE, use_acc=True)
         tcgen05_commit(bar)
         mbarrier.wait(bar, phase=0)
         mbarrier.invalidate(bar)
@@ -1112,12 +1119,16 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
     packed_k = B // pack_factor
     a_bits = rs.randint(0 if elem_type == "e2m1" else 20, 256 if elem_type == "e2m1" else 40, size=(B, packed_k),
                         dtype=np.uint8)
-    b_bits = rs.randint(0 if elem_type == "e2m1" else 20, 256 if elem_type == "e2m1" else 40, size=(B, packed_k),
-                        dtype=np.uint8)
+    if elem_type == "e2m1":
+        b_bits = rs.randint(0, 256, size=(B, packed_k), dtype=np.uint8)
+        b_ref_bits = b_bits.T
+    else:
+        b_bits = rs.randint(20, 40, size=(packed_k, B), dtype=np.uint8)
+        b_ref_bits = b_bits
     a_scale_bits = rs.randint(1, 4, size=(B, B // 32), dtype=np.int8)
     b_scale_bits = rs.randint(1, 4, size=(B, B // 32), dtype=np.int8)
     c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    exp_bits = _mm_scaled_payload_u32(a_bits, b_bits.T, a_scale_bits.view(np.uint8), b_scale_bits.view(np.uint8),
+    exp_bits = _mm_scaled_payload_u32(a_bits, b_ref_bits, a_scale_bits.view(np.uint8), b_scale_bits.view(np.uint8),
                                       c_bits, a_pack=pack_factor, b_pack=pack_factor)
 
     if elem_type == "e2m1":
