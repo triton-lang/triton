@@ -244,23 +244,33 @@ def test_sm_arch_from_capability():
 def test_compile_only_sm120() -> None:
     """Verify that sm_120 (consumer Blackwell) compiles with correct target.
 
-    sm_120 must use '.target sm_120' (no 'a' suffix) and must NOT
-    contain tensor memory instructions (tcgen05) since consumer
-    Blackwell hardware lacks tensor memory.
+    Uses a tl.dot kernel (not just elementwise) to exercise the matmul
+    pipeline and confirm that tensor memory / tcgen05 instructions are
+    NOT generated for consumer Blackwell, which lacks tensor memory.
     """
 
     @triton.jit
-    def kernel_add(a, b, c):
-        idx = tl.arange(0, 32)
-        tl.store(c + idx, tl.load(a + idx) + tl.load(b + idx))
+    def simple_dot(a_base, b_base, out):
+        SIZE: tl.constexpr = 64
+        a_ptr = a_base + tl.arange(0, SIZE)[:, None] * SIZE + tl.arange(0, SIZE)[None, :]
+        b_ptr = b_base + tl.arange(0, SIZE)[:, None] * SIZE + tl.arange(0, SIZE)[None, :]
+        a = tl.load(a_ptr)
+        b = tl.load(b_ptr)
+        c = tl.dot(a, b)
+        out_ptr = out + tl.arange(0, SIZE)[:, None] * SIZE + tl.arange(0, SIZE)[None, :]
+        tl.store(out_ptr, c)
 
     k = triton.compile(
-        triton.compiler.ASTSource(fn=kernel_add, signature={"a": "*fp32", "b": "*fp32", "c": "*fp32"}, constexprs={}),
-        target=GPUTarget("cuda", 120, 32))
+        triton.compiler.ASTSource(fn=simple_dot, signature={"a_base": "*fp16", "b_base": "*fp16", "out": "*fp16"},
+                                  constexprs={}), target=GPUTarget("cuda", 120, 32))
     ptx = k.asm["ptx"]
     # Must target sm_120 (no "a" suffix)
     assert ".target sm_120" in ptx
     assert ".target sm_120a" not in ptx
-    # Must not contain tensor memory instructions (consumer Blackwell lacks tmem)
+    # Matmul must NOT use tensor memory or tcgen05 (consumer Blackwell lacks tmem).
+    # This is the key assertion — sm_100 dot uses tcgen05/tmem, sm_120 must not.
     assert "tcgen05" not in ptx
+    ttgir = k.asm["ttgir"]
+    assert "ttng.tmem_alloc" not in str(ttgir)
+    assert "ttng.tc_gen5_mma" not in str(ttgir)
     assert k.asm["cubin"] != b""
