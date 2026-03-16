@@ -249,6 +249,8 @@ def make_default_opt_flags_nvidia(
 
     requires_persistent = (not _is_layout_strided(a_mx_scale_layout) or not _is_layout_strided(b_mx_scale_layout)) and target_info.has_native_mxfp()
     if constraints.get("is_persistent", None) is not None:
+        if requires_persistent and not constraints["is_persistent"]:
+            raise InapplicableConstraint("cannot enforce `is_persistent=False` constraint because persistent kernel is required")
         is_persistent = constraints["is_persistent"]
     elif requires_persistent:
         assert supports_persistent, "persistent kernel required but not supported"

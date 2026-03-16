@@ -108,7 +108,8 @@ def _p_matmul(
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr=False,
              SWAP_XW: tl.constexpr = False,
-             IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
+             IS_EPILOGUE_QUANT_MX: tl.constexpr = False,
+             Y_VALUE_PACK_FACTOR: tl.constexpr = 1,
              FLATTEN_LOOPS: tl.constexpr = True,
              pYPtrs=None,
              map_dst_coord=None,
@@ -185,6 +186,7 @@ def _p_matmul(
     else:
         is_x_fp4: tl.constexpr = False
     is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
+    is_out_fp4: tl.constexpr = is_out_microscaled and Y_VALUE_PACK_FACTOR == 2
 
     if RAGGED_DIMENSION == "M":
         useful_grid_m = tl.load(XBlockOffs + N_SLICES)
@@ -257,6 +259,7 @@ def _p_matmul(
             shape_m = M
         off_n = BLOCK_N * pid_n
         off_w_n = PACKED_BLOCK_N_W * pid_n
+        block_div: tl.constexpr = 2 if is_x_fp4 else 1
 
         # ---- offset x ------
         if USE_GATHER_TMA:
@@ -278,7 +281,6 @@ def _p_matmul(
                 tl.static_assert(HAS_GATHER)
                 offs_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m)
             offs_x_m = offs_m.to(index_type)[:, None] * stride_x_m
-            block_div: tl.constexpr = 2 if is_x_fp4 else 1
             offs_x_k = (off_k_x0.to(index_type) // block_div + tl.arange(0, BLOCK_K // block_div))[None, :] * stride_x_k
 
         XMxScalePtrs = None
@@ -310,7 +312,6 @@ def _p_matmul(
                 off_k_w = off_k_w0 + ki * PACKED_BLOCK_K_W * SPLIT_K
 
             # --- load x ---
-            block_div: tl.constexpr = 2 if is_x_fp4 else 1
             if USE_GATHER_TMA:
                 x = X.gather(offs_x_m, off_k_x // block_div)
             elif X_TMA_MODE == "dense":
@@ -518,7 +519,7 @@ def _p_matmul(
         tl.static_assert(len(accs) == SUBTILE_FACTOR)
 
         if is_out_microscaled:
-            MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MXFP_BLOCK_SIZE
+            MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
 
         for a_i in tl.static_range(len(accs)):
             acc_tile = accs[a_i]
@@ -573,8 +574,8 @@ def _p_matmul(
                 mask_n = offs_y_n < yN
                 out, out_scale = EPILOGUE_FN(out, mask_m[:, None] & mask_n[None, :], *epilogue_fn_args)
                 tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
-                offs_y_n_scale = off_n1 // ACTIVATION_REDUCTION_N // MXFP_BLOCK_SIZE + a_i * MX_SCALE_BLOCK_N + tl.arange(0, MX_SCALE_BLOCK_N)
-                mask_n_scale = offs_y_n_scale < tl.cdiv(yN, MXFP_BLOCK_SIZE)
+                offs_y_n_scale = off_n1 // ACTIVATION_REDUCTION_N // MX_BLOCK_SIZE + a_i * MX_SCALE_BLOCK_N + tl.arange(0, MX_SCALE_BLOCK_N)
+                mask_n_scale = offs_y_n_scale < tl.cdiv(yN, MX_BLOCK_SIZE)
                 offs_y_mx_k = 0
                 if USE_SCATTER_TMA:
                     # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
@@ -591,6 +592,7 @@ def _p_matmul(
                     tl.static_assert(Y_TMA_MODE is None)
                     offs_y_mx_k = pid_k1
                     offs_y_mx_z = start_z1
+                    offs_y_mx_m = offs_y_m
                 YActualScalePtrs = YActualScale + offs_y_mx_k.to(index_type) * stride_y_mx_k + offs_y_mx_z.to(index_type) * stride_y_mx_z + offs_y_mx_m.to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
                 tl.store(YActualScalePtrs, out_scale, mask=mask_m[:, None] & mask_n_scale[None, :])
             else:
@@ -611,10 +613,15 @@ def _p_matmul(
                     None, # mask: out is manually masked to 0
                     YPtr, FLEXPOINT_SATURATE_INF
                 )
-                if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MXFP8:
+                if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MX:
                     out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
 
             out = out.to(YPtr.dtype.element_ty)
+            if is_out_fp4:
+                tl.static_assert(Y_TMA_MODE is None, "FP4 outputs are only supported without output TMA")
+                out_off_n = out_off_n // 2
+                offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N // 2)
+                mask_n = offs_y_n < tl.cdiv(yN, 2)
 
             if pYPtrs is None:
                 if USE_SCATTER_TMA:
@@ -633,10 +640,14 @@ def _p_matmul(
                     tl.static_assert(Y_TMA_MODE is None)
                     offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                     mask_n = offs_y_n < yN
+                    if is_out_fp4:
+                        offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N // 2)
+                        mask_n = offs_y_n < tl.cdiv(yN, 2)
                     mask = mask_m[:, None] & mask_n[None, :]
                     offs_kzmn = pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
                     tl.store(YPtr + offs_kzmn, out, mask=mask)
             else:
+                tl.static_assert(not is_out_fp4, "FP4 outputs are not supported with fused comms")
                 tl.static_assert(Y_TMA_MODE is None, "TMA is not supported with fused comms")
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                 mask_n = offs_y_n < yN

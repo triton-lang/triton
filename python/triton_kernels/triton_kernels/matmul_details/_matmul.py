@@ -81,7 +81,8 @@ def _matmul(
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr = False,
              SWAP_XW: tl.constexpr = False,
-             IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
+             IS_EPILOGUE_QUANT_MX: tl.constexpr = False,
+             Y_VALUE_PACK_FACTOR: tl.constexpr = 1,
              FLATTEN_LOOPS: tl.constexpr = True, # Only relevant to persistent kernel
              pYPtrs=None,
              map_dst_coord=None,
@@ -180,6 +181,7 @@ def _matmul(
     else:
         is_x_fp4: tl.constexpr = False
     is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
+    is_out_fp4: tl.constexpr = is_out_microscaled and Y_VALUE_PACK_FACTOR == 2
 
     if _W_SLICE_SIZES_DIVISIBILITY is None:
         W_SLICE_SIZES_DIVISIBILITY: tl.constexpr = 1
@@ -479,7 +481,14 @@ def _matmul(
         Y += start_m * stride_y_m
         offs_y_m = offs_m
 
-    YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
+    if is_out_fp4:
+        tl.static_assert(Y_TMA_MODE is None, "FP4 outputs are only supported without output TMA")
+        offs_y_n_store = pid_n * (OUT_BLOCK_N // 2) + tl.arange(0, OUT_BLOCK_N // 2)
+        YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n_store.to(index_type)[None, :] * stride_y_n
+        mask_store = mask_m[:, None] & (offs_y_n_store[None, :] < tl.cdiv(yN, 2))
+    else:
+        YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
+        mask_store = mask_m[:, None] & mask_n[None, :]
     mask = mask_m[:, None] & mask_n[None, :]
 
     if OutAcc is not None:
@@ -495,8 +504,8 @@ def _matmul(
         out += tl.load(AccPtrs, mask=mask, other=0.0) * load_scale(ScalePtr)
 
     if is_out_microscaled:
-        MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MXFP_BLOCK_SIZE
-        N_MX_BLOCK = tl.cdiv(N, MXFP_BLOCK_SIZE)
+        MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
+        N_MX_BLOCK = tl.cdiv(N, MX_BLOCK_SIZE)
         tl.static_assert(EPILOGUE_FN is not None)
         out, out_scale = EPILOGUE_FN(out, mask, *epilogue_fn_args)
         tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
@@ -514,11 +523,12 @@ def _matmul(
             YExpectedScale = YExpectedScale + start_z_out
             YActualScale = YActualScale + start_z_out
         out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
-        if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MXFP8:
+        if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MX:
             out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtrs.dtype.element_ty)
     if pYPtrs is None:
-        tl.store(YPtrs, out, mask=mask)
+        tl.store(YPtrs, out, mask=mask_store)
     else:
+        tl.static_assert(not is_out_fp4, "FP4 outputs are not supported with fused comms")
         tl.static_assert(Y_TMA_MODE is None, "TMA is not supported with fused comms")
         dst_shard_idx, dst_y_m, dst_y_n = map_dst_coord.fn(
             off_m if WriteBackIndx is None else None, offs_y_m,

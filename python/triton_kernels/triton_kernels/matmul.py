@@ -43,6 +43,8 @@ class Epilogue:
 
 class FnName(Enum):
     QUANTIZE_MXFP8 = auto()
+    QUANTIZE_MXFP4 = auto()
+    QUANTIZE_NVFP4 = auto()
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,8 @@ class PrecisionConfig:
     a_mx_scale: torch.Tensor | Tensor | None = None
     b_mx_scale: torch.Tensor | Tensor | None = None
     c_mx_scale: torch.Tensor | Tensor | None = None
+    c_microblock_size: int | None = None
+    c_value_pack_factor: int = 1
     out_dtype: torch.dtype | None = None
     enforce_bitwise_invariance: bool = False
 
@@ -162,6 +166,7 @@ def init_allocation(x, w, precision_config, fused_activation,
     y_rows *= n_reduce_shards
     out_shape = (batch_dim, y_rows, N // fused_activation.specs.reduction_n)
     out_dtype = precision_config.out_dtype or x.dtype
+    out_shape = out_shape[:-1] + (out_shape[-1] // precision_config.c_value_pack_factor, )
     output = (out_shape, out_dtype)
     # ---- scratchpad -----#
     scratchpad = dict()
@@ -171,7 +176,11 @@ def init_allocation(x, w, precision_config, fused_activation,
         scratchpad["matmul"] = ((opt_flags.split_k, batch_dim, M, N_scratch), scratch_out_dtype)
     if "matmul" in scratchpad and precision_config.c_mx_scale is not None:
         assert batch_dim == 1, "batch_dim > 1 not supported yet"
-        scratchpad["mx_c_mx_scale"] = ((opt_flags.split_k, 1, M, triton.cdiv(N_scratch, MXFP_BLOCK_SIZE)), torch.uint8)
+        scale_dtype = precision_config.c_mx_scale.storage.data.dtype if isinstance(precision_config.c_mx_scale, Tensor) else precision_config.c_mx_scale.dtype
+        scratchpad["mx_c_mx_scale"] = (
+            (opt_flags.split_k, 1, M, triton.cdiv(N_scratch, precision_config.c_microblock_size)),
+            scale_dtype,
+        )
     return MatmulAllocation(x.device, output, scratchpad)
 
 def apply_allocation(allocation: MatmulAllocation, output):
@@ -316,6 +325,12 @@ def matmul(a, b, bias,
             f"Microscaled operands must share a block size. Got {a_microblock_size} and {b_microblock_size}"
         )
     mx_block_size = b_microblock_size or a_microblock_size or int(MXFP_BLOCK_SIZE)
+    if precision_config.c_mx_scale is not None and precision_config.c_microblock_size is None:
+        precision_config.c_microblock_size = mx_block_size
+    precision_config.c_value_pack_factor = 2 if precision_config.c_mx_scale is not None and epilogue.specs.name in (
+        FnName.QUANTIZE_MXFP4.name,
+        FnName.QUANTIZE_NVFP4.name,
+    ) else 1
     a_transpose = a.stride(-1) != 1
     # determine shapes
     has_gather = gather_indx is not None
@@ -419,7 +434,7 @@ def matmul(a, b, bias,
     # Unified mx-scale pointer; when scratchpad exists, prefer its mx buffer
     out_matmul_scale = precision_config.c_mx_scale
     if out_matmul_scale is not None:
-        out_matmul_scale = out_matmul_scale.data.view(torch.uint8)
+        out_matmul_scale = out_matmul_scale.data
         if has_scratchpad and "mx_c_mx_scale" in memory["scratchpad"]:
             out_matmul_scale = memory["scratchpad"]["mx_c_mx_scale"]
     out_matmul_has_mx = out_matmul_scale is not None and out_matmul.element_size() == 1
@@ -465,6 +480,7 @@ def matmul(a, b, bias,
         opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
         and (c_acc_in is None or c_acc_is_c)
         and fused_comm is None
+        and precision_config.c_value_pack_factor == 1
     )
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
     c_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
@@ -588,7 +604,12 @@ def matmul(a, b, bias,
                    X_TMA_MODE=a_tma_mode,
                    Y_TMA_MODE=c_tma_mode,
                    SWAP_XW=get_swap_xw(precision_config, opt_flags),
-                   IS_EPILOGUE_QUANT_MXFP8=epilogue.specs.name == FnName.QUANTIZE_MXFP8.name,
+                   IS_EPILOGUE_QUANT_MX=epilogue.specs.name in (
+                       FnName.QUANTIZE_MXFP8.name,
+                       FnName.QUANTIZE_MXFP4.name,
+                       FnName.QUANTIZE_NVFP4.name,
+                   ),
+                   Y_VALUE_PACK_FACTOR=precision_config.c_value_pack_factor,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **fused_comm_kwargs,
                    **opt_flags.target_kernel_kwargs)
@@ -608,14 +629,17 @@ def matmul(a, b, bias,
             y_flex = precision_config.flex_ctx.out_data,
             y_flex_saturate_inf = precision_config.flexpoint_saturate_inf,
             y_has_mx = precision_config.c_mx_scale is not None,
+            y_mx_scale_dtype = None if precision_config.c_mx_scale is None else precision_config.c_mx_scale.storage.data.dtype if isinstance(precision_config.c_mx_scale, Tensor) else precision_config.c_mx_scale.dtype,
+            y_microblock_size = precision_config.c_microblock_size,
+            y_value_pack_factor = precision_config.c_value_pack_factor,
             # fused functions
             postprocess_fn1 = postprocess_fn1,
             postprocess_fn2 = postprocess_fn2,
         )
-        y_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
-        out_final = c.view(*y_shape)
+        logical_out_n = out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n
+        out_final = c.view(*memory["output"].shape[1:])
         if y_mx_scale is not None:
-            out_final_mx_scale = y_mx_scale.view(out_matmul.shape[-2], triton.cdiv(out_matmul.shape[-1], 32))
+            out_final_mx_scale = y_mx_scale.view(*memory["output"].shape[1:-1], triton.cdiv(logical_out_n, precision_config.c_microblock_size))
     else:
         out_final = out_matmul.squeeze(0)
         out_final_mx_scale = out_matmul_scale
