@@ -817,18 +817,22 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
 
 
 def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.ndarray, b_scale_u8: np.ndarray,
-                           c_i32: np.ndarray = None) -> np.ndarray:
-    a_u = a_u8.astype(np.uint16)
-    b_u = b_u8.astype(np.uint16)
+                           c_i32: np.ndarray = None, a_pack: int = 1, b_pack: int = 1) -> np.ndarray:
     a_scale = a_scale_u8.astype(np.uint16)
     b_scale = b_scale_u8.astype(np.uint16)
     c_u = c_i32.view(np.uint32).astype(np.uint64) if c_i32 is not None else None
 
-    m, k = a_u.shape
-    k2, n = b_u.shape
-    assert k == k2
+    m = a_u8.shape[0]
+    n = b_u8.shape[1]
+    k = a_u8.shape[1] * a_pack
+    assert k == b_u8.shape[0] * b_pack
     assert a_scale.shape == (m, k // 32)
     assert b_scale.shape == (n, k // 32)
+
+    def unpack(data: np.ndarray, row: int, col: int, pack: int, pack_axis: int) -> np.uint16:
+        if pack == 1:
+            return np.uint16(data[row, col])
+        return np.uint16(_unpack_element(data, row, col, pack, pack_axis=pack_axis))
 
     out = np.empty((m, n), dtype=np.uint64)
     mask16 = np.uint32(0xFFFF)
@@ -837,8 +841,10 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
         for j in range(n):
             s = c_u[i, j] if c_u is not None else 0
             for kk in range(k):
-                lhs = np.uint16((np.uint32(a_u[i, kk]) * np.uint32(a_scale[i, kk // 32])) & mask16)
-                rhs = np.uint16((np.uint32(b_u[kk, j]) * np.uint32(b_scale[j, kk // 32])) & mask16)
+                a_val = unpack(a_u8, i, kk, a_pack, pack_axis=1)
+                b_val = unpack(b_u8, kk, j, b_pack, pack_axis=0)
+                lhs = np.uint16((np.uint32(a_val) * np.uint32(a_scale[i, kk // 32])) & mask16)
+                rhs = np.uint16((np.uint32(b_val) * np.uint32(b_scale[j, kk // 32])) & mask16)
                 s = (s + ((np.uint64(lhs) * np.uint64(rhs)) & mask32)) & mask32
             out[i, j] = s
     return out.astype(np.uint32).view(np.int32)
@@ -1044,7 +1050,8 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_tcgen05_mma_scaled(device, fresh_knobs):
+@pytest.mark.parametrize("elem_type", ["e2m1", "e4m3", "e5m2"])
+def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
     _require_cuda_backend(device)
 
     B = 128
@@ -1054,23 +1061,27 @@ def test_tcgen05_mma_scaled(device, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     @gluon.jit
-    def kernel(a_ptr, b_ptr, a_scale_ptr, b_scale_ptr, c_ptr, out_ptr):
+    def kernel(a_ptr, b_ptr, a_scale_ptr, b_scale_ptr, c_ptr, out_ptr, TYPE: gl.constexpr):
         layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
+        IS_FP4: gl.constexpr = TYPE == "e2m1"
+        PACK_FACTOR: gl.constexpr = 2 if IS_FP4 else 1
+        PACKED_K: gl.constexpr = BLOCK // PACK_FACTOR
+        ELEM_DTYPE: gl.constexpr = gl.uint8 if IS_FP4 else (gl.float8e4nv if TYPE == "e4m3" else gl.float8e5)
         nvmma_layout: gl.constexpr = gl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False, element_bitwidth=8,
                                                           rank=2)
         scale_layout: gl.constexpr = TensorMemoryScalesLayout()
 
         offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
         offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
-        offs_k_row = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
-        offs_k_col = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
+        offs_k_row = gl.arange(0, PACKED_K, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_k_col = gl.arange(0, PACKED_K, layout=gl.SliceLayout(0, layout))[None, :]
 
-        a_tile = gl.load(a_ptr + offs_m * BLOCK + offs_k_col)
+        a_tile = gl.load(a_ptr + offs_m * PACKED_K + offs_k_col)
         b_tile = gl.load(b_ptr + offs_k_row * BLOCK + offs_n)
         c_tile = gl.load(c_ptr + offs_m * BLOCK + offs_n)
 
-        a_smem = gl.allocate_shared_memory(gl.float8e5, [BLOCK, BLOCK], nvmma_layout, a_tile)
-        b_smem = gl.allocate_shared_memory(gl.float8e5, [BLOCK, BLOCK], nvmma_layout, b_tile)
+        a_smem = gl.allocate_shared_memory(ELEM_DTYPE, [BLOCK, PACKED_K], nvmma_layout, a_tile)
+        b_smem = gl.allocate_shared_memory(ELEM_DTYPE, [PACKED_K, BLOCK], nvmma_layout, b_tile)
 
         tmem_layout: gl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
         acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK, BLOCK], layout=tmem_layout)
@@ -1088,7 +1099,7 @@ def test_tcgen05_mma_scaled(device, fresh_knobs):
 
         bar = gl.allocate_shared_memory(gl.int64, [1], gl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
-        tcgen05_mma_scaled(a_smem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, "e5m2", "e5m2", use_acc=True)
+        tcgen05_mma_scaled(a_smem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, TYPE, TYPE, use_acc=True)
         tcgen05_commit(bar)
         mbarrier.wait(bar, phase=0)
         mbarrier.invalidate(bar)
@@ -1097,15 +1108,25 @@ def test_tcgen05_mma_scaled(device, fresh_knobs):
         gl.store(out_ptr + offs_m * BLOCK + offs_n, out)
 
     rs = np.random.RandomState(0)
-    a_bits = rs.randint(20, 40, size=(B, B), dtype=np.uint8)
-    b_bits = rs.randint(20, 40, size=(B, B), dtype=np.uint8)
+    pack_factor = 2 if elem_type == "e2m1" else 1
+    packed_k = B // pack_factor
+    a_bits = rs.randint(0 if elem_type == "e2m1" else 20, 256 if elem_type == "e2m1" else 40, size=(B, packed_k),
+                        dtype=np.uint8)
+    b_bits = rs.randint(0 if elem_type == "e2m1" else 20, 256 if elem_type == "e2m1" else 40, size=(packed_k, B),
+                        dtype=np.uint8)
     a_scale_bits = rs.randint(1, 4, size=(B, B // 32), dtype=np.int8)
     b_scale_bits = rs.randint(1, 4, size=(B, B // 32), dtype=np.int8)
     c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    exp_bits = _mm_scaled_payload_u32(a_bits, b_bits, a_scale_bits.view(np.uint8), b_scale_bits.view(np.uint8), c_bits)
+    exp_bits = _mm_scaled_payload_u32(a_bits, b_bits, a_scale_bits.view(np.uint8), b_scale_bits.view(np.uint8), c_bits,
+                                      a_pack=pack_factor, b_pack=pack_factor)
 
-    a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8).view(torch.float8_e5m2)
-    b = torch.tensor(b_bits, device="cuda", dtype=torch.uint8).view(torch.float8_e5m2)
+    if elem_type == "e2m1":
+        a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8)
+        b = torch.tensor(b_bits, device="cuda", dtype=torch.uint8)
+    else:
+        torch_dtype = torch.float8_e4m3fn if elem_type == "e4m3" else torch.float8_e5m2
+        a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8).view(torch_dtype)
+        b = torch.tensor(b_bits, device="cuda", dtype=torch.uint8).view(torch_dtype)
     a_scale = torch.tensor(a_scale_bits, device="cuda", dtype=torch.int8)
     b_scale = torch.tensor(b_scale_bits, device="cuda", dtype=torch.int8)
     c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
@@ -1114,7 +1135,7 @@ def test_tcgen05_mma_scaled(device, fresh_knobs):
     cw = triton.TensorWrapper(c, dtype=torch.float32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
-    kernel[(1, )](a, b, a_scale, b_scale, cw, outw)
+    kernel[(1, )](a, b, a_scale, b_scale, cw, outw, TYPE=elem_type)
 
     _assert_payload_equal(out, exp_bits)
 
