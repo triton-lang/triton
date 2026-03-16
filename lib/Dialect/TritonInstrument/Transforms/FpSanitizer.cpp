@@ -396,12 +396,10 @@ Value castIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
 
   unsigned srcWidth = getIntBitwidth(v.getType());
   unsigned dstWidth = getIntBitwidth(targetTy);
-  if (dstWidth > srcWidth) {
+  if (dstWidth > srcWidth)
     return arith::ExtUIOp::create(rewriter, loc, targetTy, v);
-  }
-  if (srcWidth > dstWidth) {
+  if (srcWidth > dstWidth)
     return arith::TruncIOp::create(rewriter, loc, targetTy, v);
-  }
   return v;
 }
 
@@ -676,20 +674,20 @@ struct DotScaleConfig {
 
 Value loadScaleSlice(PatternRewriter &rewriter, Location loc, bool isLhs,
                      const DotScaleConfig &scale, Value tileIdx, Value kI32) {
-  auto i32Ty = rewriter.getI32Type();
   Value ptr = isLhs ? scale.aScalePtr : scale.bScalePtr;
-  int64_t sFactor = isLhs ? scale.aScaleFactor : scale.bScaleFactor;
-  int64_t sStride = isLhs ? scale.aScaleStride : scale.bScaleStride;
+  int64_t scaleFactor = isLhs ? scale.aScaleFactor : scale.bScaleFactor;
+  int64_t scaleStride = isLhs ? scale.aScaleStride : scale.bScaleStride;
   int64_t loadStride = isLhs ? scale.aScaleStride : 1;
-  auto tileTy = isLhs ? scale.aScaleTileTy : scale.bScaleTileTy;
+  RankedTensorType tileTy = isLhs ? scale.aScaleTileTy : scale.bScaleTileTy;
+
   Value tilePtr =
       tt::AddPtrOp::create(rewriter, loc, ptr.getType(), ptr, tileIdx);
-  Value sFactorConst = arith::ConstantOp::create(
-      rewriter, loc, rewriter.getI32IntegerAttr(sFactor));
-  Value kGrp = arith::DivUIOp::create(rewriter, loc, kI32, sFactorConst);
-  Value sStrideConst = arith::ConstantOp::create(
-      rewriter, loc, rewriter.getI32IntegerAttr(sStride));
-  Value offset = arith::MulIOp::create(rewriter, loc, kGrp, sStrideConst);
+  Value scaleFactorConst = arith::ConstantOp::create(
+      rewriter, loc, rewriter.getI32IntegerAttr(scaleFactor));
+  Value kGroup = arith::DivUIOp::create(rewriter, loc, kI32, scaleFactorConst);
+  Value scaleStrideConst = arith::ConstantOp::create(
+      rewriter, loc, rewriter.getI32IntegerAttr(scaleStride));
+  Value offset = arith::MulIOp::create(rewriter, loc, kGroup, scaleStrideConst);
   Value slicePtr =
       tt::AddPtrOp::create(rewriter, loc, ptr.getType(), tilePtr, offset);
   return loadScratchStrided2D(rewriter, loc, slicePtr, tileTy, loadStride);
@@ -1469,6 +1467,185 @@ private:
   TmemScratchManager *scratch;
 };
 
+struct TCGen5MMAScaledPattern
+    : public OpRewritePattern<ttng::TCGen5MMAScaledOp> {
+  TCGen5MMAScaledPattern(MLIRContext *ctx, TmemScratchManager *scratch)
+      : OpRewritePattern(ctx), scratch(scratch) {}
+
+  LogicalResult matchAndRewrite(ttng::TCGen5MMAScaledOp op,
+                                PatternRewriter &rewriter) const override {
+    auto aMemTy = cast<ttg::MemDescType>(op.getA().getType());
+    auto bMemTy = cast<ttg::MemDescType>(op.getB().getType());
+    auto dMemTy = cast<ttg::MemDescType>(op.getD().getType());
+    auto aScaleMemTy = cast<ttg::MemDescType>(op.getAScale().getType());
+    auto bScaleMemTy = cast<ttg::MemDescType>(op.getBScale().getType());
+
+    if (!isa<FloatType, IntegerType>(aMemTy.getElementType()) ||
+        !isa<FloatType, IntegerType>(bMemTy.getElementType()) ||
+        !isa<FloatType, IntegerType>(aScaleMemTy.getElementType()) ||
+        !isa<FloatType, IntegerType>(bScaleMemTy.getElementType()) ||
+        !isa<FloatType>(dMemTy.getElementType()))
+      return failure();
+
+    bool aIsTmem = isa<ttng::TensorMemorySpaceAttr>(aMemTy.getMemorySpace());
+    bool bIsTmem = isa<ttng::TensorMemorySpaceAttr>(bMemTy.getMemorySpace());
+    bool aScaleIsTmem =
+        isa<ttng::TensorMemorySpaceAttr>(aScaleMemTy.getMemorySpace());
+    bool bScaleIsTmem =
+        isa<ttng::TensorMemorySpaceAttr>(bScaleMemTy.getMemorySpace());
+
+    if ((aIsTmem && aMemTy.getRank() != 2) ||
+        (bIsTmem && bMemTy.getRank() != 2) ||
+        (aScaleIsTmem && aScaleMemTy.getRank() != 2) ||
+        (bScaleIsTmem && bScaleMemTy.getRank() != 2) || dMemTy.getRank() != 2)
+      return failure();
+
+    auto aShape = aMemTy.getShape();
+    auto bShape = bMemTy.getShape();
+    auto dShape = dMemTy.getShape();
+    auto aScaleShape = aScaleMemTy.getShape();
+    auto bScaleShape = bScaleMemTy.getShape();
+    if (aShape.size() != 2 || bShape.size() != 2 || dShape.size() != 2 ||
+        aScaleShape.size() != 2 || bScaleShape.size() != 2)
+      return failure();
+
+    int64_t m = dShape[0];
+    int64_t n = dShape[1];
+    int64_t aPackedK = aShape[1];
+    int64_t bPackedK = bShape[0];
+    int64_t aKPackFactor = 1;
+    int64_t bKPackFactor = 1;
+    if (op.getAType() == tt::ScaleDotElemType::E2M1) {
+      if (op.getBlockK() == aPackedK * 2) {
+        aKPackFactor = 2;
+      } else {
+        return failure();
+      }
+    }
+    if (op.getBType() == tt::ScaleDotElemType::E2M1) {
+      if (op.getBlockK() == bPackedK * 2) {
+        bKPackFactor = 2;
+      } else {
+        return failure();
+      }
+    }
+
+    int64_t k = aPackedK * aKPackFactor;
+    if (aShape[0] != m || bShape[1] != n || k != bPackedK * bKPackFactor)
+      return failure();
+
+    auto deduceScaleFactor = [&](ArrayRef<int64_t> scaleShape,
+                                 int64_t rows) -> std::optional<int64_t> {
+      if (scaleShape[0] != rows || scaleShape[1] <= 0 ||
+          (k % scaleShape[1]) != 0)
+        return std::nullopt;
+      return k / scaleShape[1];
+    };
+    auto aScaleFactor = deduceScaleFactor(aScaleShape, m);
+    auto bScaleFactor = deduceScaleFactor(bScaleShape, n);
+    if (!aScaleFactor || !bScaleFactor)
+      return failure();
+
+    auto scope = getScratchScopeRegion(op);
+    auto dInfo = scratch->getOrCreate(op.getD(), rewriter, scope);
+    if (!dInfo)
+      return failure();
+
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto accElem =
+        IntegerType::get(ctx, dMemTy.getElementType().getIntOrFloatBitWidth());
+    Value useDInt =
+        arith::ExtUIOp::create(rewriter, loc, accElem, op.getUseD());
+    Value predInt =
+        arith::ExtUIOp::create(rewriter, loc, accElem, op.getPred());
+
+    rewriter.setInsertionPoint(op);
+    auto aScratch = createOperandScratch(rewriter, loc, *scratch, op.getA(),
+                                         aMemTy, aIsTmem, scope);
+    if (!aScratch)
+      return failure();
+    auto bScratch = createOperandScratch(rewriter, loc, *scratch, op.getB(),
+                                         bMemTy, bIsTmem, scope);
+    if (!bScratch)
+      return failure();
+    auto aScaleScratch =
+        createOperandScratch(rewriter, loc, *scratch, op.getAScale(),
+                             aScaleMemTy, aScaleIsTmem, scope);
+    if (!aScaleScratch)
+      return failure();
+    auto bScaleScratch =
+        createOperandScratch(rewriter, loc, *scratch, op.getBScale(),
+                             bScaleMemTy, bScaleIsTmem, scope);
+    if (!bScaleScratch)
+      return failure();
+
+    int64_t tileM = std::min<int64_t>(kTileM, m);
+    int64_t tileN = std::min<int64_t>(kTileN, n);
+
+    auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
+                                                     dMemTy.getElementType());
+    auto accTileTy = RankedTensorType::get(
+        {tileM, tileN}, dMemTy.getElementType(), accTileLayout);
+    auto aTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, aPackedK},
+                                                   aMemTy.getElementType());
+    auto aTileTy = RankedTensorType::get({tileM, aPackedK},
+                                         aMemTy.getElementType(), aTileLayout);
+    auto bTileLayout = getOptimizedBlockedEncoding(rewriter, {bPackedK, tileN},
+                                                   bMemTy.getElementType());
+    auto bTileTy = RankedTensorType::get({bPackedK, tileN},
+                                         bMemTy.getElementType(), bTileLayout);
+
+    DotScaleConfig scale;
+    scale.aScalePtr = aScaleScratch->ptr;
+    scale.bScalePtr = bScaleScratch->ptr;
+    scale.aScaleTileTy = RankedTensorType::get(
+        {tileM, 1}, aScaleMemTy.getElementType(), accTileLayout);
+    scale.bScaleTileTy = RankedTensorType::get(
+        {1, tileN}, bScaleMemTy.getElementType(), accTileLayout);
+    scale.aScaleStride = aScaleShape[0];
+    scale.bScaleStride = bScaleShape[0];
+    scale.aKPackFactor = aKPackFactor;
+    scale.bKPackFactor = bKPackFactor;
+    scale.aScaleFactor = *aScaleFactor;
+    scale.bScaleFactor = *bScaleFactor;
+
+    auto mLoop = emitMmaEmulationLoops(
+        rewriter, loc, aScratch->ptr, bScratch->ptr, dInfo->ptr, m, n, k, tileM,
+        tileN, aTileTy, bTileTy, accTileTy, accTileLayout, accElem, useDInt,
+        predInt, /*aStride=*/m, /*bStride=*/bPackedK, /*dStride=*/m, scale);
+    if (!mLoop)
+      return failure();
+    rewriter.setInsertionPointAfter(*mLoop);
+
+    if (!op.getBarriers().empty()) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointAfter(*mLoop);
+      auto barriers = op.getBarriers();
+      auto barrierPreds = op.getBarrierPreds();
+      for (size_t i = 0; i < barriers.size(); ++i) {
+        Value pred =
+            arith::AndIOp::create(rewriter, loc, op.getPred(), barrierPreds[i]);
+        ttng::ArriveBarrierOp::create(rewriter, loc, barriers[i], 1, pred);
+      }
+    }
+
+    if (op.getNumResults() == 0) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+    SmallVector<Value> deps;
+    if (op.getAccDep())
+      deps.push_back(op.getAccDep());
+    Value token = createAsyncToken(rewriter, loc, deps);
+    rewriter.replaceOp(op, token);
+    return success();
+  }
+
+private:
+  TmemScratchManager *scratch;
+};
+
 template <typename OpTy> struct UnaryPattern : public OpRewritePattern<OpTy> {
   UnaryPattern(MLIRContext *context, UnaryOpId unaryOpId)
       : OpRewritePattern<OpTy>(context), unaryOpId(unaryOpId) {}
@@ -1509,20 +1686,6 @@ class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
 public:
   void runOnOperation() override {
-    bool hasUnsupportedOperations = false;
-    getOperation()->walk([&hasUnsupportedOperations](Operation *op) {
-      if (isa<ttng::TCGen5MMAScaledOp>(op)) {
-        hasUnsupportedOperations = true;
-        llvm::errs() << "FpSanitizer error: Unsupported operation found: "
-                     << op->getName() << "\n";
-        return WalkResult::interrupt();
-      }
-      return WalkResult::advance();
-    });
-    if (hasUnsupportedOperations) {
-      signalPassFailure();
-    }
-
     TmemScratchManager scratch;
     RewritePatternSet patterns(&getContext());
     patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
@@ -1546,7 +1709,8 @@ public:
                                                   UnaryOpId::PreciseSqrt);
     patterns.add<ExternElementwisePattern>(&getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
-                 TCGen5MMAPattern>(&getContext(), &scratch);
+                 TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
+                                                           &scratch);
     patterns.add<TCGen5CommitPattern>(&getContext());
 
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
@@ -1554,6 +1718,13 @@ public:
       signalPassFailure();
     }
 
+    bool hasUnsupportedOperations = false;
+    getOperation()->walk([&](ttng::TCGen5MMAScaledOp op) {
+      hasUnsupportedOperations = true;
+      llvm::errs() << "FpSanitizer error: Unsupported operation found: "
+                   << op->getName() << "\n";
+      return WalkResult::interrupt();
+    });
     getOperation()->walk([&](tt::ExternElementwiseOp op) {
       if (!externInvolvesFloatLike(op))
         return WalkResult::advance();
