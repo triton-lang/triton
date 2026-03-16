@@ -360,13 +360,28 @@ private:
       Value combinedPred = combinePredicates(barrierInfo.pred);
       funcBuilder.createVerifyBarrierInitializedCall(b, barrier, combinedPred,
                                                      op);
-      // If the op has barriers, we treat it as a commit emitted for each
-      // barrier.
-      for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
-        funcBuilder.createTrackVisibleWritesCall(b, barrier, thread,
-                                                 combinedPred, memType, op);
-        funcBuilder.createTrackVisibleReadsCall(b, barrier, thread,
-                                                combinedPred, memType, op);
+      if (barrierInfo.trackingMode ==
+          MemEffectsOpInfo::BarrierTrackingMode::Frontier) {
+        // If the op has barriers, we treat it as a commit emitted for each
+        // barrier.
+        for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
+          funcBuilder.createTrackVisibleWritesCall(b, barrier, thread,
+                                                   combinedPred, memType, op);
+          funcBuilder.createTrackVisibleReadsCall(b, barrier, thread,
+                                                  combinedPred, memType, op);
+        }
+      } else if (barrierInfo.trackingMode ==
+                 MemEffectsOpInfo::BarrierTrackingMode::EffectWrites) {
+        for (const auto &effect : opInfo->operandEffects) {
+          if (effect.rw != MemEffectsOpInfo::Effects::Write)
+            continue;
+          auto bufType = cast<ttg::MemDescType>(effect.buf.getType());
+          MemType memType = MemType::TENSOR_MEM;
+          if (isa<ttg::SharedEncodingTrait>(bufType.getEncoding()))
+            memType = MemType::SHARED_MEM;
+          funcBuilder.createTrackBarrierWriteForBufferCall(
+              b, barrier, effect.buf, effect.length, combinedPred, memType, op);
+        }
       }
       if (barrierInfo.count > 0) {
         funcBuilder.createVerifyBarrierArriveCall(b, barrier, barrierInfo.count,
