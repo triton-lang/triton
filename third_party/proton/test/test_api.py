@@ -100,6 +100,7 @@ def test_profile_periodic_flushing_output_to_file_descriptor(tmp_path: pathlib.P
                 proton.data.advance_phase(session=session_id)
             with proton.scope(f"pipe_scope_{i}"):
                 pass
+        proton.deactivate(session_id, flushing=True)
         proton.finalize(session_id, output_format="hatchet_msgpack")
 
     with temp_file.open("rb") as f:

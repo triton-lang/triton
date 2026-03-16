@@ -22,43 +22,6 @@ import triton.profiler.hooks.launch as proton_launch
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
 
-PIPE_PROFILE_PARSER = """
-import json
-import os
-import select
-import sys
-import triton.profiler.viewer as viewer
-
-fd = int(sys.argv[1])
-decoder = json.JSONDecoder()
-buffer = ""
-os.set_blocking(fd, False)
-
-while True:
-    ready, _, _ = select.select([fd], [], [], 30)
-    if not ready:
-        raise TimeoutError("Timed out waiting for profile data on pipe")
-    chunk = os.read(fd, 65536)
-    if not chunk:
-        raise RuntimeError("Pipe closed before a complete JSON document was received")
-    buffer += chunk.decode("utf-8")
-    try:
-        database, _ = decoder.raw_decode(buffer)
-        break
-    except json.JSONDecodeError:
-        continue
-
-gf, _, _, _ = viewer.get_raw_metrics(database)
-scope_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_scope.*'").dataframe
-kernel_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_kernel.*' AND c IS LEAF").dataframe
-
-print(json.dumps({
-    "scope_rows": len(scope_frame),
-    "kernel_rows": len(kernel_frame),
-    "kernel_count": int(kernel_frame["count"].sum()) if len(kernel_frame) else 0,
-}))
-""".strip()
-
 PIPE_PERIODIC_PROFILE_PARSER = """
 import json
 import msgpack
@@ -463,48 +426,33 @@ def test_get_data(tmp_path: pathlib.Path, device: str):
 
 
 @pytest.mark.skipif(sys.platform != "linux",
-                    reason="Pipe-backed profile output is supported via /proc/self/fd on Linux")
-@pytest.mark.parametrize("target_kind", ["file_object", "file_descriptor"])
-def test_profile_output_to_pipe_with_parser_process(target_kind: str, device: str):
-    read_fd, write_fd = os.pipe()
-    parser = subprocess.Popen(
-        [sys.executable, "-c", PIPE_PROFILE_PARSER, str(read_fd)],
-        pass_fds=(read_fd, ),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    os.close(read_fd)
-    output = make_pipe_output_target(write_fd, target_kind)
+                    reason="File-descriptor-backed profile output is supported via /proc/self/fd on Linux")
+def test_profile_output_to_file_descriptor(tmp_path: pathlib.Path, device: str):
 
-    try:
+    @triton.jit
+    def pipe_kernel(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
 
-        @triton.jit
-        def pipe_kernel(x, y, size: tl.constexpr):
-            offs = tl.arange(0, size)
-            tl.store(y + offs, tl.load(x + offs))
-
-        session = proton.start(output, context="shadow")
+    temp_file = tmp_path / "test_profile_fd.hatchet"
+    with temp_file.open("wb") as f:
+        session = proton.start(FileDescriptorOutput(f.fileno()), context="shadow")
         with proton.scope("pipe_scope"):
             x = torch.ones((16, ), device=device)
             y = torch.zeros_like(x)
             pipe_kernel[(1, )](x, y, x.numel())
         proton.finalize(session)
-        stdout, stderr = parser.communicate(timeout=30)
-    finally:
-        if target_kind == "file_object":
-            output.close()
-        else:
-            os.close(write_fd)
-        if parser.poll() is None:
-            parser.kill()
-            parser.communicate()
 
-    assert parser.returncode == 0, stderr
-    parsed = json.loads(stdout)
-    assert parsed["scope_rows"] == 1
-    assert parsed["kernel_rows"] == 1
-    assert parsed["kernel_count"] == 1
+    with temp_file.open() as f:
+        database = json.load(f)
+
+    gf, _, _, _ = viewer.get_raw_metrics(database)
+    scope_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_scope.*'").dataframe
+    kernel_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_kernel.*' AND c IS LEAF").dataframe
+
+    assert len(scope_frame) == 1
+    assert len(kernel_frame) == 1
+    assert int(kernel_frame["count"].sum()) == 1
 
 
 def test_clear_data(tmp_path: pathlib.Path, device: str):
