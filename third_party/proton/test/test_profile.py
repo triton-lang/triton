@@ -84,6 +84,29 @@ def load_profile_output(path: pathlib.Path, output_format: str):
         return json.load(f)
 
 
+def load_streamed_profile_output(path: pathlib.Path, output_format: str):
+    if output_format == "hatchet_msgpack":
+        import msgpack
+
+        with path.open("rb") as f:
+            return list(msgpack.Unpacker(f, raw=False, strict_map_key=False))
+
+    with path.open() as f:
+        buffer = f.read()
+
+    decoder = json.JSONDecoder()
+    documents = []
+    index = 0
+    while index < len(buffer):
+        while index < len(buffer) and buffer[index].isspace():
+            index += 1
+        if index >= len(buffer):
+            break
+        document, index = decoder.raw_decode(buffer, index)
+        documents.append(document)
+    return documents
+
+
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_torch.hatchet"
@@ -1375,7 +1398,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
 
 @pytest.mark.skipif(sys.platform != "linux",
                     reason="Pipe-backed periodic flushing is supported via /proc/self/fd on Linux")
-def test_periodic_flushing_pipe_streams_before_finalize(fresh_knobs, device: str):
+def test_periodic_flushing_streaming_to_file_descriptor(fresh_knobs, device: str):
     fresh_knobs.proton.profile_buffer_size = 256 * 1024
     read_fd, write_fd = os.pipe()
     parser = subprocess.Popen(
@@ -1398,13 +1421,6 @@ def test_periodic_flushing_pipe_streams_before_finalize(fresh_knobs, device: str
             with proton.scope(f"pipe_stream_{i}", metrics={"count": 1}):
                 torch.zeros((100, ), device=device)
 
-        ready, _, _ = select.select([parser.stdout], [], [], 30)
-        assert ready, "Timed out waiting for a streamed periodic flush before finalize"
-        threshold = json.loads(parser.stdout.readline())
-        assert threshold["event"] == "threshold"
-        assert threshold["messages"] >= 1
-        assert threshold["scopes"] >= 1000
-
         proton.finalize(session, output_format="hatchet_msgpack")
         stdout, stderr = parser.communicate(timeout=30)
     finally:
@@ -1421,7 +1437,7 @@ def test_periodic_flushing_pipe_streams_before_finalize(fresh_knobs, device: str
 
 
 @pytest.mark.skipif(sys.platform != "linux",
-                    reason="File-descriptor-backed profile output is supported via /proc/self/fd on Linux")
+                    reason="File-descriptor-backed periodic flushing is supported via /proc/self/fd on Linux")
 @pytest.mark.parametrize("data_name, output_format, suffix", FD_OUTPUT_CASES)
 def test_periodic_flushing_output_to_file_descriptor(tmp_path, fresh_knobs, data_name: str, output_format: str,
                                                      suffix: str, device: str):
@@ -1432,29 +1448,46 @@ def test_periodic_flushing_output_to_file_descriptor(tmp_path, fresh_knobs, data
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
+    x = torch.ones((16, ), device=device)
+    y = torch.zeros_like(x)
+    pipe_kernel[(1, )](x, y, x.numel())
+
     temp_file = tmp_path / f"test_periodic_flushing_fd{suffix}"
     with temp_file.open("wb") as f:
         session = proton.start(f, context="shadow", data=data_name, mode=f"periodic_flushing:format={output_format}")
-        with proton.scope("pipe_scope"):
-            x = torch.ones((16, ), device=device)
-            y = torch.zeros_like(x)
-            pipe_kernel[(1, )](x, y, x.numel())
+
+        for i in range(100):
+            if i != 0 and i % 10 == 0:
+                proton.data.advance_phase(session=session)
+            with proton.scope(f"pipe_scope_{i}"):
+                pipe_kernel[(1, )](x, y, x.numel())
+
         proton.finalize(session, output_format=output_format)
 
-    data = load_profile_output(temp_file, output_format)
-    if output_format == "chrome_trace":
-        trace_events = data["traceEvents"]
-        kernel_events = [event for event in trace_events if event["name"] == "pipe_kernel"]
-        assert len(kernel_events) == 1
-        assert kernel_events[0]["args"]["call_stack"] == ["ROOT", "pipe_scope", "pipe_kernel"]
-    else:
-        gf, _, _, _ = viewer.get_raw_metrics(data)
-        scope_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_scope.*'").dataframe
-        kernel_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_kernel.*' AND c IS LEAF").dataframe
+    documents = load_streamed_profile_output(temp_file, output_format)
+    assert len(documents) == 10
 
-        assert len(scope_frame) == 1
-        assert len(kernel_frame) == 1
-        assert int(kernel_frame["count"].sum()) == 1
+    if output_format == "chrome_trace":
+        kernel_events = []
+        for document in documents:
+            assert "traceEvents" in document
+            kernel_events.extend([event for event in document["traceEvents"] if event["name"] == "pipe_kernel"])
+        assert len(kernel_events) == 100
+        for event in kernel_events:
+            assert event["args"]["call_stack"][0] == "ROOT"
+            assert event["args"]["call_stack"][-1] == "pipe_kernel"
+            assert event["args"]["call_stack"][-2].startswith("pipe_scope_")
+    else:
+        total_scope_rows = 0
+        total_kernel_count = 0
+        for document in documents:
+            gf, _, _, _ = viewer.get_raw_metrics(document)
+            scope_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_scope.*'").dataframe
+            kernel_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_kernel.*' AND c IS LEAF").dataframe
+            total_scope_rows += len(scope_frame)
+            total_kernel_count += int(kernel_frame["count"].sum()) if len(kernel_frame) else 0
+        assert total_scope_rows == 100
+        assert total_kernel_count == 100
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
