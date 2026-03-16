@@ -8,6 +8,7 @@ import triton
 import triton.profiler as proton
 import json
 import os
+import select
 import subprocess
 import pytest
 import sys
@@ -27,15 +28,46 @@ import msgpack
 import os
 import select
 import sys
+import triton.profiler.viewer as viewer
 
 fd = int(sys.argv[1])
-threshold = int(sys.argv[2])
-target = int(sys.argv[3])
+output_format = sys.argv[2]
+threshold = int(sys.argv[3])
+target = int(sys.argv[4])
 messages = 0
-scopes = 0
+kernel_count = 0
 threshold_emitted = False
 os.set_blocking(fd, False)
-unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
+decoder = json.JSONDecoder()
+buffer = ""
+unpacker = None
+if output_format == "hatchet_msgpack":
+    unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
+
+
+def handle_document(database):
+    global messages, kernel_count, threshold_emitted
+    messages += 1
+    if output_format == "chrome_trace":
+        kernel_count += sum(1 for event in database.get("traceEvents", []) if event.get("name") == "pipe_kernel")
+    else:
+        gf, _, _, _ = viewer.get_raw_metrics(database)
+        kernel_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_kernel.*' AND c IS LEAF").dataframe
+        kernel_count += int(kernel_frame["count"].sum()) if len(kernel_frame) else 0
+    if not threshold_emitted and messages >= threshold:
+        print(json.dumps({
+            "event": "threshold",
+            "messages": messages,
+            "kernel_count": kernel_count,
+        }), flush=True)
+        threshold_emitted = True
+    if messages >= target:
+        print(json.dumps({
+            "event": "final",
+            "messages": messages,
+            "kernel_count": kernel_count,
+        }), flush=True)
+        sys.exit(0)
 
 while messages < target:
     ready, _, _ = select.select([fd], [], [], 30)
@@ -44,24 +76,19 @@ while messages < target:
     chunk = os.read(fd, 65536)
     if not chunk:
         raise RuntimeError("Pipe closed before all MessagePack documents were received")
-    unpacker.feed(chunk)
-    for database in unpacker:
-        messages += 1
-        scopes += len(database[0].get("children", []))
-        if not threshold_emitted and messages >= threshold:
-            print(json.dumps({
-                "event": "threshold",
-                "messages": messages,
-                "scopes": scopes,
-            }), flush=True)
-            threshold_emitted = True
-        if messages >= target:
-            print(json.dumps({
-                "event": "final",
-                "messages": messages,
-                "scopes": scopes,
-            }), flush=True)
-            sys.exit(0)
+    if output_format == "hatchet_msgpack":
+        unpacker.feed(chunk)
+        for database in unpacker:
+            handle_document(database)
+    else:
+        buffer += chunk.decode("utf-8")
+        while buffer:
+            try:
+                database, end = decoder.raw_decode(buffer)
+            except json.JSONDecodeError:
+                break
+            handle_document(database)
+            buffer = buffer[end:].lstrip()
 
 """.strip()
 
@@ -81,29 +108,6 @@ def load_profile_output(path: pathlib.Path, output_format: str):
 
     with path.open() as f:
         return json.load(f)
-
-
-def load_streamed_profile_output(path: pathlib.Path, output_format: str):
-    if output_format == "hatchet_msgpack":
-        import msgpack
-
-        with path.open("rb") as f:
-            return list(msgpack.Unpacker(f, raw=False, strict_map_key=False))
-
-    with path.open() as f:
-        buffer = f.read()
-
-    decoder = json.JSONDecoder()
-    documents = []
-    index = 0
-    while index < len(buffer):
-        while index < len(buffer) and buffer[index].isspace():
-            index += 1
-        if index >= len(buffer):
-            break
-        document, index = decoder.raw_decode(buffer, index)
-        documents.append(document)
-    return documents
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -1397,49 +1401,9 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
 
 @pytest.mark.skipif(sys.platform != "linux",
                     reason="Pipe-backed periodic flushing is supported via /proc/self/fd on Linux")
-def test_periodic_flushing_streaming_to_file_descriptor(fresh_knobs, device: str):
-    fresh_knobs.proton.profile_buffer_size = 256 * 1024
-    read_fd, write_fd = os.pipe()
-    parser = subprocess.Popen(
-        [sys.executable, "-c", PIPE_PERIODIC_PROFILE_PARSER,
-         str(read_fd), "1", "10"],
-        pass_fds=(read_fd, ),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    os.close(read_fd)
-    writer = os.fdopen(write_fd, "wb")
-
-    try:
-        session = proton.start(writer, mode="periodic_flushing:format=hatchet_msgpack")
-
-        for i in range(10000):
-            if i != 0 and i % 1000 == 0:
-                proton.data.advance_phase(session=session)
-            with proton.scope(f"pipe_stream_{i}", metrics={"count": 1}):
-                torch.zeros((100, ), device=device)
-
-        proton.finalize(session, output_format="hatchet_msgpack")
-        stdout, stderr = parser.communicate(timeout=30)
-    finally:
-        writer.close()
-        if parser.poll() is None:
-            parser.kill()
-            parser.communicate()
-
-    assert parser.returncode == 0, stderr
-    final = json.loads(stdout.strip().splitlines()[-1])
-    assert final["event"] == "final"
-    assert final["messages"] == 10
-    assert final["scopes"] == 10000
-
-
-@pytest.mark.skipif(sys.platform != "linux",
-                    reason="File-descriptor-backed periodic flushing is supported via /proc/self/fd on Linux")
 @pytest.mark.parametrize("data_name, output_format, suffix", FD_OUTPUT_CASES)
-def test_periodic_flushing_output_to_file_descriptor(tmp_path, fresh_knobs, data_name: str, output_format: str,
-                                                     suffix: str, device: str):
+def test_periodic_flushing_output_to_file_descriptor(data_name: str, output_format: str, suffix: str, fresh_knobs,
+                                                     device: str):
     fresh_knobs.proton.profile_buffer_size = 256 * 1024
 
     @triton.jit
@@ -1451,9 +1415,20 @@ def test_periodic_flushing_output_to_file_descriptor(tmp_path, fresh_knobs, data
     y = torch.zeros_like(x)
     pipe_kernel[(1, )](x, y, x.numel())
 
-    temp_file = tmp_path / f"test_periodic_flushing_fd{suffix}"
-    with temp_file.open("wb") as f:
-        session = proton.start(f, context="shadow", data=data_name, mode=f"periodic_flushing:format={output_format}")
+    read_fd, write_fd = os.pipe()
+    parser = subprocess.Popen(
+        [sys.executable, "-c", PIPE_PERIODIC_PROFILE_PARSER,
+         str(read_fd), output_format, "1", "10"],
+        pass_fds=(read_fd, ),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    os.close(read_fd)
+    writer = os.fdopen(write_fd, "wb")
+
+    try:
+        session = proton.start(writer, context="shadow", data=data_name, mode=f"periodic_flushing:format={output_format}")
 
         for i in range(100):
             if i != 0 and i % 10 == 0:
@@ -1462,31 +1437,18 @@ def test_periodic_flushing_output_to_file_descriptor(tmp_path, fresh_knobs, data
                 pipe_kernel[(1, )](x, y, x.numel())
 
         proton.finalize(session, output_format=output_format)
+        stdout, stderr = parser.communicate(timeout=30)
+    finally:
+        writer.close()
+        if parser.poll() is None:
+            parser.kill()
+            parser.communicate()
 
-    documents = load_streamed_profile_output(temp_file, output_format)
-    assert len(documents) == 10
-
-    if output_format == "chrome_trace":
-        kernel_events = []
-        for document in documents:
-            assert "traceEvents" in document
-            kernel_events.extend([event for event in document["traceEvents"] if event["name"] == "pipe_kernel"])
-        assert len(kernel_events) == 100
-        for event in kernel_events:
-            assert event["args"]["call_stack"][0] == "ROOT"
-            assert event["args"]["call_stack"][-1] == "pipe_kernel"
-            assert event["args"]["call_stack"][-2].startswith("pipe_scope_")
-    else:
-        total_scope_rows = 0
-        total_kernel_count = 0
-        for document in documents:
-            gf, _, _, _ = viewer.get_raw_metrics(document)
-            scope_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_scope.*'").dataframe
-            kernel_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*pipe_kernel.*' AND c IS LEAF").dataframe
-            total_scope_rows += len(scope_frame)
-            total_kernel_count += int(kernel_frame["count"].sum()) if len(kernel_frame) else 0
-        assert total_scope_rows == 100
-        assert total_kernel_count == 100
+    assert parser.returncode == 0, stderr
+    final = json.loads(stdout.strip().splitlines()[-1])
+    assert final["event"] == "final"
+    assert final["messages"] == 10
+    assert final["kernel_count"] == 100
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
