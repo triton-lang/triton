@@ -77,6 +77,22 @@ struct PeriodicFlushStats {
   size_t msgPackWriteCalls{0};
 };
 
+template <typename T>
+void timingWrapper(const bool timingEnabled, uint64_t &totalUs, size_t &calls,
+                   const T &func) {
+  if (timingEnabled) {
+    using Clock = std::chrono::steady_clock;
+    const auto t0 = Clock::now();
+    func();
+    const auto t1 = Clock::now();
+    totalUs += std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                   .count();
+    ++calls;
+  } else {
+    func();
+  }
+}
+
 bool isProcFdPath(const std::string &path) {
   return path.rfind("/proc/self/fd/", 0) == 0;
 }
@@ -87,7 +103,7 @@ int parseProcFd(const std::string &path) {
   return std::stoi(path.substr(std::string("/proc/self/fd/").size()));
 }
 
-void writeAllToFd(int fd, const uint8_t *data, size_t size) {
+void writeToFd(int fd, const uint8_t *data, size_t size) {
   size_t totalWritten = 0;
   while (totalWritten < size) {
     const auto written = ::write(fd, data + totalWritten, size - totalWritten);
@@ -101,19 +117,17 @@ void writeAllToFd(int fd, const uint8_t *data, size_t size) {
   }
 }
 
+void writeToFd(int fd, const std::string &data) {
+  writeToFd(fd, reinterpret_cast<const uint8_t *>(data.data()), data.size());
+}
+
 void periodicFlushDataPhases(Data &data,
                              const std::string &periodicFlushingFormat,
                              size_t minPhaseToFlush, size_t maxPhaseToFlush,
                              const bool timingEnabled,
                              PeriodicFlushStats &stats) {
-  using Clock = std::chrono::steady_clock;
   const auto &path = data.getPath();
   const bool streamToProcFd = isProcFdPath(path);
-  if (streamToProcFd && periodicFlushingFormat != "hatchet_msgpack") {
-    throw std::invalid_argument(
-        "[PROTON] periodic_flushing only supports hatchet_msgpack when the "
-        "output target is a /proc/self/fd/* stream");
-  }
   const int outputFd = parseProcFd(path);
 
   for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
@@ -126,77 +140,44 @@ void periodicFlushDataPhases(Data &data,
     if (periodicFlushingFormat == "hatchet" ||
         periodicFlushingFormat == "chrome_trace") {
       std::string jsonStr;
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        jsonStr = data.toJsonString(startPhase);
-        const auto t1 = Clock::now();
-        stats.totalToJsonUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        ++stats.toJsonCalls;
-      } else {
-        jsonStr = data.toJsonString(startPhase);
-      }
+      timingWrapper(timingEnabled, stats.totalToJsonUs, stats.toJsonCalls,
+                    [&]() { jsonStr = data.toJsonString(startPhase); });
 
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
-        ofs << jsonStr;
-        ofs.flush();
-        const auto t1 = Clock::now();
-        stats.totalJsonWriteUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        ++stats.jsonWriteCalls;
+      if (streamToProcFd) {
+        timingWrapper(timingEnabled, stats.totalJsonWriteUs,
+                      stats.jsonWriteCalls,
+                      [&]() { writeToFd(outputFd, jsonStr); });
       } else {
-        std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
-        ofs << jsonStr;
+        timingWrapper(
+            timingEnabled, stats.totalJsonWriteUs, stats.jsonWriteCalls,
+            [&]() {
+              std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
+              ofs << jsonStr;
+              ofs.flush();
+            });
       }
     } else if (periodicFlushingFormat == "hatchet_msgpack") {
       std::vector<uint8_t> msgPack;
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        msgPack = data.toMsgPack(startPhase);
-        const auto t1 = Clock::now();
-        stats.totalToMsgPackUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        ++stats.toMsgPackCalls;
-      } else {
-        msgPack = data.toMsgPack(startPhase);
-      }
+      timingWrapper(
+          timingEnabled, stats.totalToMsgPackUs, stats.toMsgPackCalls,
+          [&]() { msgPack = data.toMsgPack(startPhase); });
 
       if (streamToProcFd) {
-        if (timingEnabled) {
-          const auto t0 = Clock::now();
-          writeAllToFd(outputFd, msgPack.data(), msgPack.size());
-          const auto t1 = Clock::now();
-          stats.totalMsgPackWriteUs +=
-              std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                  .count();
-          ++stats.msgPackWriteCalls;
-        } else {
-          writeAllToFd(outputFd, msgPack.data(), msgPack.size());
-        }
+        timingWrapper(timingEnabled, stats.totalMsgPackWriteUs,
+                      stats.msgPackWriteCalls,
+                      [&]() {
+                        writeToFd(outputFd, msgPack.data(), msgPack.size());
+                      });
       } else {
-        if (timingEnabled) {
-          const auto t0 = Clock::now();
-          std::ofstream ofs(pathWithPhase,
-                            std::ios::out | std::ios::binary | std::ios::trunc);
-          ofs.write(reinterpret_cast<const char *>(msgPack.data()),
-                    msgPack.size());
-          ofs.flush();
-          const auto t1 = Clock::now();
-          stats.totalMsgPackWriteUs +=
-              std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                  .count();
-          ++stats.msgPackWriteCalls;
-        } else {
-          std::ofstream ofs(pathWithPhase,
-                            std::ios::out | std::ios::binary | std::ios::trunc);
-          ofs.write(reinterpret_cast<const char *>(msgPack.data()),
-                    msgPack.size());
-        }
+        timingWrapper(timingEnabled, stats.totalMsgPackWriteUs,
+                      stats.msgPackWriteCalls, [&]() {
+                        std::ofstream ofs(pathWithPhase, std::ios::out |
+                                                             std::ios::binary |
+                                                             std::ios::trunc);
+                        ofs.write(
+                            reinterpret_cast<const char *>(msgPack.data()),
+                            msgPack.size());
+                      });
       }
     }
   }
@@ -205,17 +186,10 @@ void periodicFlushDataPhases(Data &data,
 void periodicClearDataPhases(Data &data, size_t maxPhaseToFlush,
                              const bool timingEnabled,
                              PeriodicFlushStats &stats) {
-  using Clock = std::chrono::steady_clock;
-  if (!timingEnabled) {
+  size_t clearCalls = 0;
+  timingWrapper(timingEnabled, stats.clearUs, clearCalls, [&]() {
     data.clear(maxPhaseToFlush, /*clearUpToPhase=*/true);
-    return;
-  }
-
-  const auto t0 = Clock::now();
-  data.clear(maxPhaseToFlush, /*clearUpToPhase=*/true);
-  const auto t1 = Clock::now();
-  stats.clearUs =
-      std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+  });
 }
 
 } // namespace
@@ -272,21 +246,11 @@ void flushDataPhasesImpl(
   auto [flushRanges, phasesToPeek] = computeFlushRangesAndPeekPhases(
       dataFlushedPhases, dataPhases, pendingGraphPool != nullptr);
   if (pendingGraphPool) {
-    using Clock = std::chrono::steady_clock;
     uint64_t totalPeekUs = 0;
     size_t peekCalls = 0;
     for (const auto phase : phasesToPeek) {
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        pendingGraphPool->peek(phase);
-        const auto t1 = Clock::now();
-        totalPeekUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        ++peekCalls;
-      } else {
-        pendingGraphPool->peek(phase);
-      }
+      timingWrapper(timingEnabled, totalPeekUs, peekCalls,
+                    [&]() { pendingGraphPool->peek(phase); });
     }
     if (timingEnabled && peekCalls > 0) {
       auto minPhase = *phasesToPeek.begin();
