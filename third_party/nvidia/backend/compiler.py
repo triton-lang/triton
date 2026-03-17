@@ -97,15 +97,8 @@ def file_hash(path):
 
 
 def sm_arch_from_capability(capability: int):
-    # The "a" suffix enables arch-accelerated features only available on
-    # specific GPU implementations:
-    #   sm_90a  — Hopper datacenter (H100, H200)
-    #   sm_100a — Blackwell datacenter (B100, B200)
-    # Consumer Blackwell (sm_120, e.g. RTX 5070 Ti/5080/5090) does NOT
-    # have an "a" variant — using sm_120a causes invalid codegen (tensor
-    # memory instructions that don't exist on consumer hardware), leading
-    # to runtime segfaults.
-    suffix = "a" if capability >= 90 and capability != 120 else ""
+    # TODO: Handle non-"a" sms
+    suffix = "a" if capability >= 90 else ""
     return f"sm_{capability}{suffix}"
 
 
