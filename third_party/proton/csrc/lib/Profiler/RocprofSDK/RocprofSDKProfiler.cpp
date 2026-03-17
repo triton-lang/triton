@@ -538,7 +538,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
 
 namespace {
 
-int proton_tool_init(rocprofiler_client_finalize_t finiFunc, void *toolData) {
+int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
   auto *state = static_cast<RocprofilerRuntimeState *>(toolData);
   state->finalizeFunc = finiFunc;
 
@@ -657,7 +657,7 @@ protonConfigure(uint32_t version, const char *runtimeVersion, uint32_t priority,
   id->name = "ProtonRocprofSDK";
   state.clientId = id;
   static rocprofiler_tool_configure_result_t config{
-      sizeof(rocprofiler_tool_configure_result_t), &proton_tool_init,
+      sizeof(rocprofiler_tool_configure_result_t), &protonToolInit,
       &proton_tool_fini, static_cast<void *>(&state)};
   return &config;
 }

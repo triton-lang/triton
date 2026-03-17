@@ -4,6 +4,7 @@ set(_profiler_sources
   Graph.cpp
   Cupti/CuptiPCSampling.cpp
   Cupti/CuptiProfiler.cpp
+  RocTracer/RoctracerProfiler.cpp
   Instrumentation/InstrumentationProfiler.cpp
   Instrumentation/Metadata.cpp
 )

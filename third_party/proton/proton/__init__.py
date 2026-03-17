@@ -11,11 +11,11 @@ from .profile import (
 )
 from . import context, specs, mode, data
 
+import sys
 
-# Eagerly configure rocprofiler-sdk on AMD systems so that the interception
-# hooks are installed before any HIP/HSA operations create GPU queues.
-# force_configure must run before the first HSA queue is created, otherwise
-# buffer tracing (kernel dispatch timing) cannot intercept those queues.
+print("[PROTON_DEBUG __init__] eager_init=YES", file=sys.stderr, flush=True)
+
+
 def _eager_rocprofiler_init():
     try:
         from triton.backends import backends
@@ -23,8 +23,9 @@ def _eager_rocprofiler_init():
             return
         from triton._C.libproton import proton as _libproton
         _libproton.ensure_rocprofiler_configured()
-    except Exception:
-        pass
+        print("[PROTON_DEBUG __init__] eager_init CALLED force_configure", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[PROTON_DEBUG __init__] eager_init FAILED: {e}", file=sys.stderr, flush=True)
 
 
 _eager_rocprofiler_init()

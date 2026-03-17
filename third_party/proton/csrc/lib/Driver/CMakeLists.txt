@@ -5,6 +5,7 @@ set(_driver_sources
   GPU/HipApi.cpp
   GPU/HsaApi.cpp
   GPU/NvtxApi.cpp
+  GPU/RoctracerApi.cpp
 )
 
 if(PROTON_BUILD_ROCPROFILER_SDK)

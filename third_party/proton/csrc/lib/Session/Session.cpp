@@ -6,6 +6,7 @@
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "Profiler/RocprofSDK/RocprofSDKProfiler.h"
+#include "Profiler/Roctracer/RoctracerProfiler.h"
 #include "Utility/String.h"
 
 namespace proton {
@@ -17,6 +18,8 @@ Profiler *makeProfiler(const std::string &name) {
     return &CuptiProfiler::instance();
   } else if (proton::toLower(name) == "rocprofiler") {
     return &RocprofSDKProfiler::instance();
+  } else if (proton::toLower(name) == "roctracer") {
+    return &RoctracerProfiler::instance();
   } else if (proton::toLower(name) == "instrumentation") {
     return &InstrumentationProfiler::instance();
   }
