@@ -119,7 +119,6 @@ uint32_t processActivityKernel(
     auto &externState = *state;
     // We have a graph creation captured
     auto *nodeIdToState = externState.nodeIdToState;
-    bool attributeToLaunchEntry = false;
     if (nodeIdToState) {
       const GraphState::NodeState *nodeState = nullptr;
       auto nodeStateIter = nodeIdToState->find(kernel->graphNodeId);
@@ -148,15 +147,10 @@ uint32_t processActivityKernel(
                 detail::updateDataPhases(dataPhases, data, entry.phase);
               }
             }
-          }
+          } 
         }
-      } else if (!nodeState) {
-        attributeToLaunchEntry = true;
-      } // else metric node without attribution
+      }
     } else {
-      attributeToLaunchEntry = true;
-    }
-    if (attributeToLaunchEntry) {
       // This can happen when graph creation is not captured, or the node is
       // skipped during capture. In both cases we don't have per-node info, so
       // we just attach the kernel metric to the graph launch entry without
