@@ -489,6 +489,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        size_t size,
                                                        size_t validSize) {
   CuptiProfiler &profiler = threadState.profiler;
+  auto *pImpl = dynamic_cast<CuptiProfilerPimpl *>(profiler.pImpl.get());
   static thread_local uint64_t completedBufferCount = 0;
   uint32_t maxCorrelationId = 0;
   static thread_local std::map<Data *, size_t> dataFlushedPhases;
@@ -521,7 +522,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   if (cuptiDebugStateEnabled()) {
     logCuptiState("completeBuffer", completedBufferCount,
                   profiler.correlation.corrIdToExternId.size(),
-                  profiler.correlation.externIdToState.size(), graphStates,
+                  profiler.correlation.externIdToState.size(), pImpl->graphStates,
                   profiler.getDataSet(), &dataFlushedPhases);
   }
 }
