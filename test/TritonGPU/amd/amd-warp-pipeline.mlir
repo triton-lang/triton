@@ -143,6 +143,51 @@ tt.func public @triple_buf_two_stages(%arg0: i32, %arg1: i32, %arg2: i32, %arg3:
   tt.return
 }
 
+// -- Scalar IV remap ops before an ignorable op (e.g. loop unrolling + async_wait) ----
+// After MLIR loop unrolling, arith.muli+arith.addi IV remap ops appear between
+// cloned stage bodies.  If an ignorable op (barrier/async_wait) follows, the
+// pending cluster must be flushed rather than causing WarpPipeliner to bail out.
+
+tt.func @scalar_ops_before_ignorable(%n: index) {
+  %c0  = arith.constant 0 : index
+  %c1  = arith.constant 1 : index
+
+  scf.for %i = %c0 to %n step %c1 iter_args(%acc = %c0) -> index {
+    %a = arith.addi %i, %c1 : index
+
+    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage0"}
+
+    // Scalar IV remap -- flushed when the ignorable gpu.barrier is hit.
+    %next = arith.addi %acc, %c1 : index
+
+    gpu.barrier
+
+    %b = arith.muli %i, %c1 : index
+
+    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage1"}
+
+    scf.yield %next : index
+  }
+
+  tt.return
+}
+
+// CHECK-LABEL: tt.func @scalar_ops_before_ignorable(
+// CHECK: scf.for
+// CHECK:   scf.execute_region
+// CHECK:     arith.addi
+// CHECK:     scf.yield
+// Scalar IV remap stays outside execute_regions (flushed at gpu.barrier).
+// CHECK:   arith.addi
+// CHECK:   gpu.barrier
+// CHECK:   scf.execute_region
+// CHECK:     arith.muli
+// CHECK:     scf.yield
+// CHECK: triton.warp_pipeline.pipelined_for
+// CHECK-NOT: rocdl.sched.barrier
+// CHECK: tt.return
+
+
 // -- Negative: no border → no structuring ----
 tt.func @no_split_example(%n: index) {
   %c0  = arith.constant 0 : index

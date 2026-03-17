@@ -17,7 +17,7 @@ def _compile_gluon(fn, signature, constexprs, arch="gfx950"):
 
 @gluon.jit
 def pipeline_simple(A, B, BLOCK: gl.constexpr):
-    """Minimal 2-stage pipeline — baseline for s_setprio check."""
+    """Minimal 2-stage pipeline -- baseline for s_setprio check."""
     blocked: gl.constexpr = gl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[16, 4],
                                              warps_per_cta=[gl.num_warps(), 1], order=[1, 0])
     offs_layout: gl.constexpr = gl.SliceLayout(dim=1, parent=blocked)
@@ -33,7 +33,7 @@ def pipeline_simple(A, B, BLOCK: gl.constexpr):
 
 @gluon.jit
 def pipeline_unrolled(A, B, N, BLOCK: gl.constexpr):
-    """2-stage pipeline with loop unrolling — IV used inside stages.
+    """2-stage pipeline with loop unrolling -- IV used inside stages.
 
     The IV must be referenced inside execute_region bodies so only the
     scalar IV-remap ops (arith.muli + arith.addi on the index) land
@@ -69,7 +69,7 @@ def test_pipeline_with_unroll():
     Gluon kernels skip make_ttir, so loop_unroll_factor survives until the
     Gluon pipeline where add_loop_unroll runs AFTER add_warp_pipeline.  The
     MLIR unroller emits arith.muli+arith.addi for IV remapping between the
-    cloned execute_region clusters — ConvertWarpPipeline must tolerate these.
+    cloned execute_region clusters -- ConvertWarpPipeline must tolerate these.
     """
     signature = {"A": "*fp16", "B": "*fp16", "N": "i32", "BLOCK": "constexpr"}
     constexprs = {"BLOCK": BLOCK}

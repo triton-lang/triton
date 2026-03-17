@@ -157,17 +157,18 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
     }
     if (isIgnorable(op)) {
       // Ignorable ops may appear before or after a stage, but not inside it.
-      // If encountered while building an execute_region, reject warp-pipeline.
-      if (!cluster.empty())
-        return failure();
+      // If the pending cluster contains only pure scalar ops (e.g. IV remap
+      // from loop unrolling), flush them rather than failing.
+      if (!cluster.empty()) {
+        bool allScalar = llvm::all_of(cluster, triton::isPureScalarOp);
+        if (!allScalar)
+          return failure();
+        cluster.clear();
+      }
       continue;
     }
     if (isa<scf::YieldOp>(op)) // End of the loop
       break;
-    // Tolerate pure scalar ops (e.g. IV remap from loop unrolling).
-    // They stay outside execute_regions and don't affect pipelining.
-    if (triton::isPureScalarOp(op))
-      continue;
 
     // Keep collecting ops for a cluster.
     cluster.push_back(op);

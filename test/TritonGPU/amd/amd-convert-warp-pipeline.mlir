@@ -561,4 +561,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: rocdl.s.setprio 0
 // CHECK: amdg.cond_barrier
 // CHECK: tt.return
-
