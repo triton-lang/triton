@@ -118,12 +118,12 @@ uint32_t processActivityKernel(
     }
     auto &externState = *state;
     // We have a graph creation captured
-    auto *graphState = externState.graphState;
+    auto *nodeIdToState = externState.nodeIdToState;
     bool attributeToLaunchEntry = false;
-    if (graphState) {
+    if (nodeIdToState) {
       const GraphState::NodeState *nodeState = nullptr;
-      auto nodeStateIter = graphState->nodeIdToState.find(kernel->graphNodeId);
-      if (nodeStateIter != graphState->nodeIdToState.end())
+      auto nodeStateIter = nodeIdToState->find(kernel->graphNodeId);
+      if (nodeStateIter != nodeIdToState->end())
         nodeState = &nodeStateIter->second;
 
       if (nodeState && !nodeState->status.isMetricNode()) {
@@ -211,7 +211,7 @@ void buildGraphNodeEntries(const DataToEntryMap &dataToEntry,
         {data, data->addOp(entry.phase, entry.id,
                            {Context{GraphState::captureTag}})});
   }
-  externIdState.graphState = &graphState;
+  externIdState.nodeIdToState = &graphState.nodeIdToState;
 }
 
 void queueGraphMetrics(const DataToEntryMap &dataToEntry,

@@ -70,7 +70,7 @@ public:
     // updating it when we have processed each kernel activity record.
     size_t numNodes{1};
     DataToEntryMap dataToGraphEntry;
-    GraphState *graphState{nullptr};
+    GraphState::NodeIdToStateMap *nodeIdToState{nullptr};
   };
 
   using ExternIdToStateMap =
