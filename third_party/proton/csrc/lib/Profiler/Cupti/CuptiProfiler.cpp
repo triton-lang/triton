@@ -24,9 +24,11 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace proton {
 
@@ -56,6 +58,12 @@ bool cuptiDebugStateEnabled() {
   return enabled;
 }
 
+bool reuseCuptiActivityBuffersEnabled() {
+  static const bool enabled =
+      getBoolEnv("PROTON_CUPTI_REUSE_ACTIVITY_BUFFERS", false);
+  return enabled;
+}
+
 struct GraphStateSummary {
   size_t graphs{0};
   size_t graphNodes{0};
@@ -79,6 +87,10 @@ struct BufferLifecycleSummary {
   size_t outstandingBytes{0};
   size_t maxOutstanding{0};
   size_t maxOutstandingBytes{0};
+  size_t pooledBuffers{0};
+  size_t pooledBytes{0};
+  size_t poolHits{0};
+  size_t poolMisses{0};
 };
 
 std::atomic<size_t> cuptiBuffersAllocated{0};
@@ -87,6 +99,12 @@ std::atomic<size_t> cuptiBuffersOutstanding{0};
 std::atomic<size_t> cuptiBufferBytesOutstanding{0};
 std::atomic<size_t> cuptiBuffersMaxOutstanding{0};
 std::atomic<size_t> cuptiBufferBytesMaxOutstanding{0};
+std::atomic<size_t> cuptiPooledBuffers{0};
+std::atomic<size_t> cuptiPooledBufferBytes{0};
+std::atomic<size_t> cuptiPooledBufferHits{0};
+std::atomic<size_t> cuptiPooledBufferMisses{0};
+std::mutex cuptiBufferPoolMutex;
+std::vector<std::pair<uint8_t *, size_t>> cuptiBufferPool;
 
 BufferLifecycleSummary getBufferLifecycleSummary() {
   return BufferLifecycleSummary{
@@ -95,7 +113,48 @@ BufferLifecycleSummary getBufferLifecycleSummary() {
       cuptiBuffersOutstanding.load(std::memory_order_relaxed),
       cuptiBufferBytesOutstanding.load(std::memory_order_relaxed),
       cuptiBuffersMaxOutstanding.load(std::memory_order_relaxed),
-      cuptiBufferBytesMaxOutstanding.load(std::memory_order_relaxed)};
+      cuptiBufferBytesMaxOutstanding.load(std::memory_order_relaxed),
+      cuptiPooledBuffers.load(std::memory_order_relaxed),
+      cuptiPooledBufferBytes.load(std::memory_order_relaxed),
+      cuptiPooledBufferHits.load(std::memory_order_relaxed),
+      cuptiPooledBufferMisses.load(std::memory_order_relaxed)};
+}
+
+uint8_t *tryAcquirePooledCuptiBuffer(size_t size) {
+  std::lock_guard<std::mutex> lock(cuptiBufferPoolMutex);
+  for (auto it = cuptiBufferPool.begin(); it != cuptiBufferPool.end(); ++it) {
+    if (it->second != size) {
+      continue;
+    }
+    auto *buffer = it->first;
+    cuptiBufferPool.erase(it);
+    cuptiPooledBuffers.fetch_sub(1, std::memory_order_relaxed);
+    cuptiPooledBufferBytes.fetch_sub(size, std::memory_order_relaxed);
+    cuptiPooledBufferHits.fetch_add(1, std::memory_order_relaxed);
+    return buffer;
+  }
+  cuptiPooledBufferMisses.fetch_add(1, std::memory_order_relaxed);
+  return nullptr;
+}
+
+void releasePooledCuptiBuffer(uint8_t *buffer, size_t size) {
+  std::lock_guard<std::mutex> lock(cuptiBufferPoolMutex);
+  cuptiBufferPool.emplace_back(buffer, size);
+  cuptiPooledBuffers.fetch_add(1, std::memory_order_relaxed);
+  cuptiPooledBufferBytes.fetch_add(size, std::memory_order_relaxed);
+}
+
+void freeAllPooledCuptiBuffers() {
+  std::vector<std::pair<uint8_t *, size_t>> buffers;
+  {
+    std::lock_guard<std::mutex> lock(cuptiBufferPoolMutex);
+    buffers.swap(cuptiBufferPool);
+  }
+  for (const auto &[buffer, _] : buffers) {
+    std::free(buffer);
+  }
+  cuptiPooledBuffers.store(0, std::memory_order_relaxed);
+  cuptiPooledBufferBytes.store(0, std::memory_order_relaxed);
 }
 
 GraphStateSummary summarizeGraphStates(
@@ -137,6 +196,10 @@ void logCuptiState(const char *tag, uint64_t sequenceId,
             << " cuptiBuffersMaxOutstanding=" << bufferSummary.maxOutstanding
             << " cuptiBufferBytesMaxOutstanding="
             << bufferSummary.maxOutstandingBytes
+            << " cuptiPooledBuffers=" << bufferSummary.pooledBuffers
+            << " cuptiPooledBufferBytes=" << bufferSummary.pooledBytes
+            << " cuptiPooledBufferHits=" << bufferSummary.poolHits
+            << " cuptiPooledBufferMisses=" << bufferSummary.poolMisses
             << " shadowTlsThreads=" << shadowSummary.threads
             << " shadowTlsInitializedKeys=" << shadowSummary.initializedKeys
             << " shadowTlsInitializedTrue=" << shadowSummary.initializedTrue
@@ -534,7 +597,12 @@ void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
                                                     size_t *maxNumRecords) {
   const auto envBufferSize =
       getIntEnv("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024);
-  *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, envBufferSize));
+  *buffer = reuseCuptiActivityBuffersEnabled()
+                ? tryAcquirePooledCuptiBuffer(envBufferSize)
+                : nullptr;
+  if (*buffer == nullptr) {
+    *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, envBufferSize));
+  }
   if (*buffer == nullptr) {
     throw std::runtime_error("[PROTON] aligned_alloc failed");
   }
@@ -587,7 +655,11 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
     }
   } while (true);
 
-  std::free(buffer);
+  if (reuseCuptiActivityBuffersEnabled()) {
+    releasePooledCuptiBuffer(buffer, size);
+  } else {
+    std::free(buffer);
+  }
   cuptiBuffersCompleted.fetch_add(1, std::memory_order_relaxed);
   cuptiBuffersOutstanding.fetch_sub(1, std::memory_order_relaxed);
   cuptiBufferBytesOutstanding.fetch_sub(size, std::memory_order_relaxed);
@@ -1012,6 +1084,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   setNvtxCallbacks(subscriber, /*enable=*/false);
   cupti::unsubscribe<true>(subscriber);
   cupti::finalize<true>();
+  freeAllPooledCuptiBuffers();
   if (cuptiDebugStateEnabled()) {
     const ThreadStateSummary threadStateSummary{
         threadState.scopeStack.size(),
