@@ -69,6 +69,7 @@ public:
     // kernel activity records. We track the expected fanout here and keep
     // updating it when we have processed each kernel activity record.
     size_t numNodes{1};
+    DataToEntryMap dataToGraphEntry;
     GraphState *graphState{nullptr};
   };
 
