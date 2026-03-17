@@ -144,7 +144,7 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 // pad,  r1, r5,  r9, r13, r17, r21, r25
 // r29, pad, r2,  r6, r10, r14, r18, r22
 // r26, r30, pad, r3 ....
-ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
+static ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     ttg::DotOperandEncodingAttr dotOpEnc, ttg::TensorOrMemDesc srcTy,
     ArrayRef<unsigned> sharedOrder, bool useAsyncCopy, unsigned warpSize) {
   auto *ctx = srcTy.getContext();
@@ -397,19 +397,19 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
 // so from a bank-conflict perspective 4-bit behaves identically to 8-bit
 // in both transposed and non-transposed paths below.
 
-triton::gpu::PaddedSharedEncodingAttr
-getPaddedEncodingForDotOp(mlir::MLIRContext *context, int opIdx,
-                          ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
-                          triton::gpu::CGAEncodingAttr CGALayout,
-                          unsigned typeWidthInBit, unsigned vecWidth,
-                          const triton::AMD::TargetInfo &targetInfo) {
+static triton::gpu::PaddedSharedEncodingAttr
+composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
+                        ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> order,
+                        const triton::AMD::TargetInfo &targetInfo) {
+  auto shape = srcTy.getShape();
+  auto CGALayout = ttg::getCGALayout(srcTy.getEncoding());
   auto blockShapePerCTA =
       triton::gpu::getShapePerCTA(CGALayout.getCTASplitNum(), shape);
   int innerDimLength = blockShapePerCTA[order[0]];
-
   bool loadTransposed = (order[0] != (1 - opIdx));
 
   // Fallback: assume padding to match widest load width
+  unsigned typeWidthInBit = srcTy.getElementType().getIntOrFloatBitWidth();
   unsigned padAmount = 128 / typeWidthInBit;
   if (loadTransposed) {
     // Transposed path: pad by twice the elements-per-lane of the transposed
@@ -442,21 +442,33 @@ getPaddedEncodingForDotOp(mlir::MLIRContext *context, int opIdx,
       padAmount = std::min(vecWidth, padAmount);
   }
 
+  if (padAmount == 0)
+    return {};
+
   unsigned padInterval = innerDimLength;
+  auto *context = srcTy.getContext();
   return triton::gpu::PaddedSharedEncodingAttr::get(
       context, {{padInterval, padAmount}}, order, shape, CGALayout);
 }
 
 ttg::PaddedSharedEncodingAttr
-composePaddedLayout(const tt::AMD::TargetInfo &targetInfo,
-                    ttg::DotOperandEncodingAttr dotOpEnc,
-                    ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> sharedOrder,
-                    bool useAsyncCopy) {
-  if (useAsyncCopy &&
-      targetInfo.getISAFamily() == triton::AMD::ISAFamily::CDNA4) {
-    unsigned warpSize = targetInfo.getWarpSize();
-    return composePaddedLayoutForAsyncCopyCDNA4(dotOpEnc, srcTy, sharedOrder,
-                                                useAsyncCopy, warpSize);
+composePaddedLayout(const tt::AMD::TargetInfo &targetInfo, int opIdx,
+                    unsigned vecWidth, ttg::TensorOrMemDesc srcTy,
+                    ArrayRef<unsigned> sharedOrder,
+                    ttg::DotOperandEncodingAttr dotOpEnc, bool useAsyncCopy) {
+  if (targetInfo.getISAFamily() == triton::AMD::ISAFamily::CDNA4) {
+    if (!dotOpEnc)
+      return {};
+    return composePaddedLayoutForAsyncCopyCDNA4(
+        dotOpEnc, srcTy, sharedOrder, useAsyncCopy, targetInfo.getWarpSize());
   }
+
+  if (targetInfo.getISAFamily() == triton::AMD::ISAFamily::GFX1250) {
+    if (!srcTy.getElementType().isIntOrFloat())
+      return {};
+    return composePaddedLayoutWMMA(opIdx, vecWidth, srcTy, sharedOrder,
+                                   targetInfo);
+  }
+
   return {};
 }
