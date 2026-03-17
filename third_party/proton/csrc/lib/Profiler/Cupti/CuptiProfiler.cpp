@@ -224,8 +224,8 @@ void queueGraphMetrics(const DataToEntryMap &dataToEntry,
   }
   std::map<Data *, std::vector<DataEntry>> metricNodeEntries;
   size_t phase = Data::kNoCompletePhase;
-  for (const auto [data, launchEntry] : dataToEntry) {
-    phase = launchEntry.phase;
+  for (const auto [data, graphEntry] : externIdState.dataToGraphEntry) {
+    phase = graphEntry.phase;
     for (const auto &metricNode : graphState.metricNodeIdToNumWords) {
       auto nodeId = metricNode.first;
       auto nodeIter = graphState.nodeIdToState.find(nodeId);
@@ -237,16 +237,14 @@ void queueGraphMetrics(const DataToEntryMap &dataToEntry,
       auto entryIdIter = nodeState.dataToEntryId.find(data);
       if (entryIdIter != nodeState.dataToEntryId.end()) {
         metricNodeEntries[data].emplace_back(
-            DataEntry(entryIdIter->second, phase,
-                      externIdState.dataToGraphEntry[data].metricSet.get()));
+            DataEntry(entryIdIter->second, phase, graphEntry.metricSet.get()));
       } else {
         // Indicate that we'll call upsertFlexibleMetric instead of
         // upsertLinkedFlexibleMetric in queueGraphMetrics, so that the kernel
         // metric can be attached to the graph launch entry when node entry is
         // not found.
         metricNodeEntries[data].emplace_back(
-            DataEntry(Scope::DummyScopeId, phase,
-                      externIdState.dataToGraphEntry[data].metricSet.get()));
+            DataEntry(Scope::DummyScopeId, phase, graphEntry.metricSet.get()));
       }
     }
   }
