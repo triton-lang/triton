@@ -63,6 +63,18 @@ public:
 
   bool empty() const { return nodes.empty(); }
 
+  template <typename FnT> void forEachPresent(FnT &&fn) const {
+    for (size_t i = 0; i < present.size(); ++i) {
+      if (present[i]) {
+        fn(nodes[i]);
+      }
+    }
+  }
+
+  size_t nodeCapacity() const { return nodes.capacity(); }
+
+  size_t presentCapacity() const { return present.capacity(); }
+
 private:
   bool inRange(IdT id) const {
     if (nodes.empty() || id < minId)

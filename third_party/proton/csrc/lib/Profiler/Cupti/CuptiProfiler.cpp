@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <climits>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -197,8 +198,86 @@ GraphStateSummary summarizeGraphStates(
   return summary;
 }
 
+template <typename MapT, typename ValueBytesFnT>
+size_t estimateOrderedMapDynamicBytes(const MapT &map,
+                                      ValueBytesFnT &&valueBytesFn) {
+  // std::map typically stores three tree links plus a color bit per node.
+  size_t bytes =
+      map.size() *
+      (sizeof(typename MapT::value_type) + 3 * sizeof(void *) + sizeof(bool));
+  for (const auto &[_, value] : map) {
+    bytes += valueBytesFn(value);
+  }
+  return bytes;
+}
+
+template <typename MapT, typename ValueBytesFnT>
+size_t estimateUnorderedMapDynamicBytes(const MapT &map,
+                                        ValueBytesFnT &&valueBytesFn) {
+  // Approximate unordered_map storage as the bucket array plus one chained
+  // node per element.
+  size_t bytes = map.bucket_count() * sizeof(void *);
+  bytes +=
+      map.size() * (sizeof(typename MapT::value_type) + sizeof(void *) +
+                    sizeof(size_t));
+  for (const auto &[_, value] : map) {
+    bytes += valueBytesFn(value);
+  }
+  return bytes;
+}
+
+size_t estimateDataToEntryMapDynamicBytes(const DataToEntryMap &map) {
+  return estimateOrderedMapDynamicBytes(map,
+                                        [](const auto &) { return size_t{0}; });
+}
+
+size_t estimateGraphNodeStateTableDynamicBytes(
+    const GPUProfiler<CuptiProfiler>::ExternIdState::GraphNodeStateTable
+        &graphNodeIdToState) {
+  size_t bytes =
+      graphNodeIdToState.nodeCapacity() *
+      sizeof(GPUProfiler<CuptiProfiler>::ExternIdState::GraphNodeState);
+  bytes += (graphNodeIdToState.presentCapacity() + CHAR_BIT - 1) / CHAR_BIT;
+  graphNodeIdToState.forEachPresent([&](const auto &graphNodeState) {
+    bytes += estimateDataToEntryMapDynamicBytes(graphNodeState.dataToEntry);
+  });
+  return bytes;
+}
+
+size_t estimateExternIdStateDynamicBytes(
+    const GPUProfiler<CuptiProfiler>::ExternIdState &state) {
+  return estimateDataToEntryMapDynamicBytes(state.dataToEntry) +
+         estimateGraphNodeStateTableDynamicBytes(state.graphNodeIdToState);
+}
+
+size_t estimateCorrIdToExternIdBytes(
+    const GPUProfiler<CuptiProfiler>::CorrIdToExternIdMap &corrIdToExternId) {
+  size_t bytes = sizeof(corrIdToExternId);
+  corrIdToExternId.withReadAll([&](const auto &map) {
+    bytes += estimateUnorderedMapDynamicBytes(map,
+                                              [](const auto &) {
+                                                return size_t{0};
+                                              });
+  });
+  return bytes;
+}
+
+size_t estimateExternIdToStateBytes(
+    const GPUProfiler<CuptiProfiler>::ExternIdToStateMap &externIdToState) {
+  size_t bytes = sizeof(externIdToState);
+  externIdToState.withReadAll([&](const auto &map) {
+    bytes += estimateUnorderedMapDynamicBytes(map, [](const auto &state) {
+      return estimateExternIdStateDynamicBytes(state);
+    });
+  });
+  return bytes;
+}
+
 void logCuptiState(const char *tag, uint64_t sequenceId,
-                   size_t corrIdToExternIdSize, size_t externIdToStateSize,
+                   const GPUProfiler<CuptiProfiler>::CorrIdToExternIdMap
+                       &corrIdToExternId,
+                   const GPUProfiler<CuptiProfiler>::ExternIdToStateMap
+                       &externIdToState,
                    const ThreadSafeMap<uint32_t, GraphState> &graphStates,
                    const ThreadStateSummary &threadStateSummary,
                    const std::set<Data *> &dataSet,
@@ -206,10 +285,18 @@ void logCuptiState(const char *tag, uint64_t sequenceId,
   auto graphSummary = summarizeGraphStates(graphStates);
   auto bufferSummary = getBufferLifecycleSummary();
   auto shadowSummary = ShadowContextSource::debugStats();
+  const auto corrIdToExternIdSize = corrIdToExternId.size();
+  const auto externIdToStateSize = externIdToState.size();
+  const auto corrIdToExternIdBytes =
+      estimateCorrIdToExternIdBytes(corrIdToExternId);
+  const auto externIdToStateBytes =
+      estimateExternIdToStateBytes(externIdToState);
   std::cerr << "[PROTON][CUPTI_DEBUG] pid=" << getpid() << " " << tag
             << " seq=" << sequenceId
             << " corrIdToExternId=" << corrIdToExternIdSize
+            << " corrIdToExternIdEstimatedCpuBytes=" << corrIdToExternIdBytes
             << " externIdToState=" << externIdToStateSize
+            << " externIdToStateEstimatedCpuBytes=" << externIdToStateBytes
             << " graphStates=" << graphSummary.graphs
             << " graphNodes=" << graphSummary.graphNodes
             << " graphDataMaps=" << graphSummary.dataNodeStateMaps
@@ -697,8 +784,8 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   ++completedBufferCount;
   if (cuptiDebugStateEnabled()) {
     logCuptiState("completeBuffer", completedBufferCount,
-                  profiler.correlation.corrIdToExternId.size(),
-                  profiler.correlation.externIdToState.size(), pImpl->graphStates,
+                  profiler.correlation.corrIdToExternId,
+                  profiler.correlation.externIdToState, pImpl->graphStates,
                   threadStateSummary,
                   profiler.getDataSet(), &dataFlushedPhases);
   }
@@ -909,8 +996,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
             threadState.isStreamCapturing,
             threadState.metricKernelNumWordsQueue.size()};
         logCuptiState("missingGraphExec", callbackData->correlationId,
-                      profiler.correlation.corrIdToExternId.size(),
-                      profiler.correlation.externIdToState.size(), graphStates,
+                      profiler.correlation.corrIdToExternId,
+                      profiler.correlation.externIdToState, graphStates,
                       threadStateSummary,
                       profiler.getDataSet(), nullptr);
       }
@@ -1090,8 +1177,8 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
         threadState.isStreamCapturing,
         threadState.metricKernelNumWordsQueue.size()};
     logCuptiState("doStop.pre", /*sequenceId=*/0,
-                  profiler.correlation.corrIdToExternId.size(),
-                  profiler.correlation.externIdToState.size(), graphStates,
+                  profiler.correlation.corrIdToExternId,
+                  profiler.correlation.externIdToState, graphStates,
                   threadStateSummary,
                   profiler.getDataSet(), nullptr);
   }
@@ -1136,8 +1223,8 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
         threadState.isStreamCapturing,
         threadState.metricKernelNumWordsQueue.size()};
     logCuptiState("doStop.post", /*sequenceId=*/0,
-                  profiler.correlation.corrIdToExternId.size(),
-                  profiler.correlation.externIdToState.size(), graphStates,
+                  profiler.correlation.corrIdToExternId,
+                  profiler.correlation.externIdToState, graphStates,
                   threadStateSummary,
                   profiler.getDataSet(), nullptr);
   }
