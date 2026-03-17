@@ -15,6 +15,15 @@ namespace proton {
 
 class TreeData : public Data {
 public:
+  struct DebugStats {
+    size_t activePhases{0};
+    size_t treePhases{0};
+    size_t retainedTreeNodes{0};
+    size_t currentTreeNodes{0};
+    size_t virtualTreeNodes{0};
+    size_t scopeIdToContextId{0};
+  };
+
   TreeData(const std::string &path, ContextSource *contextSource);
   virtual ~TreeData();
 
@@ -25,6 +34,7 @@ public:
   std::vector<uint8_t> toMsgPack(size_t phase) const override;
 
   size_t debugNumNodes(size_t phase) const;
+  DebugStats debugStats() const;
 
   DataEntry addOp(size_t phase, size_t contextId,
                   const std::vector<Context> &contexts) override;

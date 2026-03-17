@@ -63,6 +63,19 @@ public:
     return std::forward<FnT>(fn)(slot->value.get());
   }
 
+  template <typename FnT>
+  decltype(auto) withPhasesSnapshot(FnT &&fn) const {
+    std::vector<std::pair<size_t, std::shared_ptr<Slot>>> snapshot;
+    {
+      std::shared_lock<std::shared_mutex> lock(phasesMutex);
+      snapshot.reserve(phases.size());
+      for (const auto &[phase, slot] : phases) {
+        snapshot.emplace_back(phase, slot);
+      }
+    }
+    return std::forward<FnT>(fn)(snapshot);
+  }
+
 private:
   void clearRangeInclusive(size_t beginPhase, size_t endPhase) {
     std::vector<std::shared_ptr<Slot>> slotsToClear;

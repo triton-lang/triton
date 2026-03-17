@@ -900,6 +900,31 @@ size_t TreeData::debugNumNodes(size_t phase) const {
       phase, [](Tree *tree) { return tree != nullptr ? tree->size() : 0; });
 }
 
+TreeData::DebugStats TreeData::debugStats() const {
+  DebugStats stats;
+  {
+    std::shared_lock<std::shared_mutex> lock(mutex);
+    stats.activePhases = activePhases.size();
+    stats.scopeIdToContextId = scopeIdToContextId.size();
+  }
+
+  stats.currentTreeNodes = debugNumNodes(getPhaseInfo().current);
+  stats.virtualTreeNodes = debugNumNodes(Data::kVirtualPhase);
+  treePhases.withPhasesSnapshot([&](const auto &phases) {
+    stats.treePhases = phases.size();
+    for (const auto &[phase, slot] : phases) {
+      std::shared_lock<std::shared_mutex> slotLock(slot->mutex);
+      if (slot->value == nullptr) {
+        continue;
+      }
+      if (phase != Data::kVirtualPhase) {
+        stats.retainedTreeNodes += slot->value->size();
+      }
+    }
+  });
+  return stats;
+}
+
 void TreeData::doDump(std::ostream &os, OutputFormat outputFormat,
                       size_t phase) const {
   if (outputFormat == OutputFormat::Hatchet) {

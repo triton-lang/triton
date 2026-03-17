@@ -95,7 +95,13 @@ void logCuptiState(const char *tag, uint64_t sequenceId,
   if (dataFlushedPhases != nullptr) {
     std::cerr << " dataFlushedPhases=" << dataFlushedPhases->size();
   }
-  std::cerr << " dataSets=" << dataSet.size() << std::endl;
+  std::cerr << " dataSets=" << dataSet.size()
+            << " scopeStack=" << threadState.scopeStack.size()
+            << " threadDataEntries=" << threadState.dataToEntry.size()
+            << " isApiExternOp=" << threadState.isApiExternOp
+            << " isStreamCapturing=" << threadState.isStreamCapturing
+            << " metricKernelWordsQueued="
+            << threadState.metricKernelNumWordsQueue.size() << std::endl;
 
   for (auto *data : dataSet) {
     const auto phaseInfo = data->getPhaseInfo();
@@ -103,10 +109,13 @@ void logCuptiState(const char *tag, uint64_t sequenceId,
               << " currentPhase=" << phaseInfo.current
               << " completeUpTo=" << phaseInfo.completeUpTo;
     if (auto *treeData = dynamic_cast<TreeData *>(data)) {
-      std::cerr << " currentTreeNodes="
-                << treeData->debugNumNodes(phaseInfo.current)
-                << " virtualTreeNodes="
-                << treeData->debugNumNodes(Data::kVirtualPhase);
+      auto stats = treeData->debugStats();
+      std::cerr << " activePhases=" << stats.activePhases
+                << " treePhases=" << stats.treePhases
+                << " retainedTreeNodes=" << stats.retainedTreeNodes
+                << " currentTreeNodes=" << stats.currentTreeNodes
+                << " virtualTreeNodes=" << stats.virtualTreeNodes
+                << " scopeIdToContextId=" << stats.scopeIdToContextId;
     }
     std::cerr << std::endl;
   }
