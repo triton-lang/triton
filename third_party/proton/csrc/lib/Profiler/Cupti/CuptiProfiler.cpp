@@ -286,10 +286,8 @@ constexpr std::array<CUpti_CallbackId, 10> kKernelCallbacks = {
     PROTON_KERNEL_CALLBACK_LIST(PROTON_KERNEL_CB_AS_ID)};
 #undef PROTON_KERNEL_CB_AS_ID
 
-constexpr std::array<CUpti_CallbackId, 4> kGraphResourceCallbacks = {
-    CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED, CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED,
-    CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING,
-    CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING};
+constexpr std::array<CUpti_CallbackId, 2> kGraphResourceCallbacks = {
+    CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED, CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED};
 
 constexpr std::array<CUpti_CallbackId, 4> kResourceCallbacks = {
     CUPTI_CBID_RESOURCE_MODULE_LOADED,
@@ -537,24 +535,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         graphState.numMetricWords += numMetricWords;
       }
     }
-  } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
-    if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL) {
-      // We only care about kernel nodes
-      return;
-    }
-    auto &graphState = graphStates[graphId];
-    uint64_t nodeId = 0;
-    cupti::getGraphNodeId<true>(graphData->node, &nodeId);
-    graphState.numMetricWords -= graphState.metricNodeIdToNumWords[nodeId];
-    for (const auto &[data, entryId] :
-         graphState.nodeIdToState[nodeId].dataToEntryId) {
-      graphState.dataToEntryIdToNodeStates[data][entryId].erase(
-          &graphState.nodeIdToState[nodeId]);
-    }
-    graphState.nodeIdToState.erase(nodeId);
-    graphState.metricNodeIdToNumWords.erase(nodeId);
-  } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
-    graphStates.erase(graphId);
   }
 }
 
