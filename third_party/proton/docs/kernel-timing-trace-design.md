@@ -410,6 +410,10 @@ So the sequence should be:
 - Whether phase advancement should support an explicit list of streams for multi-stream steps.
 - Whether parsing should happen on a dedicated CPU thread or on demand during `finalize()`.
 - How to expose overflow and backpressure stats to users.
+- How robust the Triton-managed step-buffer model is under CUDA graph capture and replay:
+  - current code now preallocates the current device's step-buffer ring at hook activation to avoid lazy device-buffer allocation during capture
+  - but captured launches still bake in fixed profile-scratch pointers, so replay-time slot reuse and per-replay phase/drain semantics need dedicated validation
+- Whether the inserted start/end timing IR is stable against NVIDIA backend instruction reordering, or whether we need stronger ordering constraints to keep the timestamps tightly bound to kernel entry/exit.
 
 ## Recommended First Implementation
 

@@ -305,6 +305,12 @@ class InstrumentationHook(Hook):
         # Set the instrumentation mode
         triton.knobs.compilation.instrumentation_mode = str(self.mode)
 
+        # Preallocate the current device's step-buffer ring up front so the
+        # first profiled launch does not need to allocate device buffers while
+        # a CUDA graph capture may already be in progress.
+        if not InstrumentationHook.enable_host_buffer:
+            self.get_step_buffer_ring()
+
     def deactivate(self):
         if InstrumentationHook.active_count == 0:
             return

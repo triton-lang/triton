@@ -626,6 +626,53 @@ def test_trace_kernel_timing_multi_launch_same_step(tmp_path: pathlib.Path, fres
     assert phase1_file.stat().st_size == 0
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
+def test_trace_kernel_timing_cudagraph_capture(tmp_path: pathlib.Path, fresh_knobs):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    temp_file = tmp_path / "test_trace_kernel_timing_cudagraph_capture.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    mode = proton.mode.Default(trace_mode="kernel")
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace", mode=mode)
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+
+    graph.replay()
+    proton.finalize()
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+        assert len(events) == 1
+        assert events[0]["name"] == "add_kernel"
+        assert events[0]["cat"] == "kernel"
+        assert events[0]["dur"] > 0
+        assert events[0]["args"]["call_stack"] == ["ROOT", "add_kernel"]
+
+
 def test_multi_session(tmp_path: pathlib.Path):
 
     @triton.jit
