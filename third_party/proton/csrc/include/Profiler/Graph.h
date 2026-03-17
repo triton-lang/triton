@@ -60,6 +60,7 @@ struct GraphState {
       return nodeId < other.nodeId;
     }
   };
+  using NodeIdToStateMap = std::map<uint64_t, NodeState>;
   // Precomputed per-Data launch links maintained on graph node
   // create/clone/destroy callbacks.
   // data -> (static_entry_id -> graph-node metadata pointers)
@@ -67,7 +68,7 @@ struct GraphState {
       dataToEntryIdToNodeStates;
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation.
-  std::map<uint64_t, NodeState> nodeIdToState;
+  NodeIdToStateMap nodeIdToState;
   // Metric nodes and their per-node metric words, ordered by node id.
   std::map<uint64_t, size_t> metricNodeIdToNumWords;
   // If the graph is launched after profiling started,
