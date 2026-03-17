@@ -30,6 +30,11 @@ public:
     return true;
   }
 
+  template <typename FnT> decltype(auto) withReadAll(FnT &&fn) const {
+    std::shared_lock<std::shared_mutex> lock(mutex);
+    return std::forward<FnT>(fn)(map);
+  }
+
   template <typename FnT> bool withWrite(const Key &key, FnT &&fn) {
     std::unique_lock<std::shared_mutex> lock(mutex);
     auto it = map.find(key);

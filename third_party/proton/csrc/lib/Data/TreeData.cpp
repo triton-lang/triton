@@ -895,6 +895,11 @@ std::vector<uint8_t> TreeData::toMsgPack(size_t phase) const {
   });
 }
 
+size_t TreeData::debugNumNodes(size_t phase) const {
+  return treePhases.withPtr(
+      phase, [](Tree *tree) { return tree != nullptr ? tree->size() : 0; });
+}
+
 void TreeData::doDump(std::ostream &os, OutputFormat outputFormat,
                       size_t phase) const {
   if (outputFormat == OutputFormat::Hatchet) {

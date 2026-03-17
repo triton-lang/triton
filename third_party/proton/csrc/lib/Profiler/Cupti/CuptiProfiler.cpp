@@ -1,6 +1,7 @@
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
+#include "Data/TreeData.h"
 #include "Device.h"
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/CuptiApi.h"
@@ -47,6 +48,68 @@ convertKernelActivityToMetric(CUpti_Activity *activity) {
                                        static_cast<uint64_t>(kernel->streamId));
   } // else: not a valid kernel activity
   return metric;
+}
+
+bool cuptiDebugStateEnabled() {
+  static const bool enabled = getBoolEnv("PROTON_CUPTI_DEBUG_STATE", false);
+  return enabled;
+}
+
+struct GraphStateSummary {
+  size_t graphs{0};
+  size_t graphNodes{0};
+  size_t dataNodeStateMaps{0};
+  size_t metricNodes{0};
+  size_t metricWords{0};
+};
+
+GraphStateSummary summarizeGraphStates(
+    const ThreadSafeMap<uint32_t, GraphState> &graphStates) {
+  GraphStateSummary summary;
+  summary.graphs = graphStates.size();
+  graphStates.withReadAll([&](const auto &states) {
+    for (const auto &[_, state] : states) {
+      summary.graphNodes += state.nodeIdToState.size();
+      summary.dataNodeStateMaps += state.dataToEntryIdToNodeStates.size();
+      summary.metricNodes += state.metricNodeIdToNumWords.size();
+      summary.metricWords += state.numMetricWords;
+    }
+  });
+  return summary;
+}
+
+void logCuptiState(const char *tag, uint64_t sequenceId,
+                   size_t corrIdToExternIdSize, size_t externIdToStateSize,
+                   const ThreadSafeMap<uint32_t, GraphState> &graphStates,
+                   const std::set<Data *> &dataSet,
+                   const std::map<Data *, size_t> *dataFlushedPhases) {
+  auto graphSummary = summarizeGraphStates(graphStates);
+  std::cerr << "[PROTON][CUPTI_DEBUG] " << tag << " seq=" << sequenceId
+            << " corrIdToExternId=" << corrIdToExternIdSize
+            << " externIdToState=" << externIdToStateSize
+            << " graphStates=" << graphSummary.graphs
+            << " graphNodes=" << graphSummary.graphNodes
+            << " graphDataMaps=" << graphSummary.dataNodeStateMaps
+            << " graphMetricNodes=" << graphSummary.metricNodes
+            << " graphMetricWords=" << graphSummary.metricWords;
+  if (dataFlushedPhases != nullptr) {
+    std::cerr << " dataFlushedPhases=" << dataFlushedPhases->size();
+  }
+  std::cerr << " dataSets=" << dataSet.size() << std::endl;
+
+  for (auto *data : dataSet) {
+    const auto phaseInfo = data->getPhaseInfo();
+    std::cerr << "[PROTON][CUPTI_DEBUG] data path=" << data->getPath()
+              << " currentPhase=" << phaseInfo.current
+              << " completeUpTo=" << phaseInfo.completeUpTo;
+    if (auto *treeData = dynamic_cast<TreeData *>(data)) {
+      std::cerr << " currentTreeNodes="
+                << treeData->debugNumNodes(phaseInfo.current)
+                << " virtualTreeNodes="
+                << treeData->debugNumNodes(Data::kVirtualPhase);
+    }
+    std::cerr << std::endl;
+  }
 }
 
 uint32_t processActivityKernel(
@@ -426,6 +489,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        size_t size,
                                                        size_t validSize) {
   CuptiProfiler &profiler = threadState.profiler;
+  static thread_local uint64_t completedBufferCount = 0;
   uint32_t maxCorrelationId = 0;
   static thread_local std::map<Data *, size_t> dataFlushedPhases;
   std::map<Data *, std::pair<size_t, size_t>> dataPhases;
@@ -453,6 +517,13 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   profiler.correlation.complete(maxCorrelationId);
   profiler.flushDataPhases(dataFlushedPhases, dataPhases,
                            profiler.pendingGraphPool.get());
+  ++completedBufferCount;
+  if (cuptiDebugStateEnabled()) {
+    logCuptiState("completeBuffer", completedBufferCount,
+                  profiler.correlation.corrIdToExternId.size(),
+                  profiler.correlation.externIdToState.size(), graphStates,
+                  profiler.getDataSet(), &dataFlushedPhases);
+  }
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
@@ -652,6 +723,12 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 << ", and it may cause memory leak. To avoid this problem, "
                    "please start profiling before the graph is created."
                 << std::endl;
+      if (cuptiDebugStateEnabled()) {
+        logCuptiState("missingGraphExec", callbackData->correlationId,
+                      profiler.correlation.corrIdToExternId.size(),
+                      profiler.correlation.externIdToState.size(), graphStates,
+                      profiler.getDataSet(), nullptr);
+      }
     } else if (findGraph && !graphStates[graphExecId].captureStatusChecked) {
       auto &graphState = graphStates[graphExecId];
 
@@ -812,6 +889,12 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
+  if (cuptiDebugStateEnabled()) {
+    logCuptiState("doStop.pre", /*sequenceId=*/0,
+                  profiler.correlation.corrIdToExternId.size(),
+                  profiler.correlation.externIdToState.size(), graphStates,
+                  profiler.getDataSet(), nullptr);
+  }
   if (profiler.pcSamplingEnabled) {
     profiler.pcSamplingEnabled = false;
     CUcontext cuContext = nullptr;
@@ -836,6 +919,12 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   setNvtxCallbacks(subscriber, /*enable=*/false);
   cupti::unsubscribe<true>(subscriber);
   cupti::finalize<true>();
+  if (cuptiDebugStateEnabled()) {
+    logCuptiState("doStop.post", /*sequenceId=*/0,
+                  profiler.correlation.corrIdToExternId.size(),
+                  profiler.correlation.externIdToState.size(), graphStates,
+                  profiler.getDataSet(), nullptr);
+  }
 }
 
 CuptiProfiler::CuptiProfiler() {
