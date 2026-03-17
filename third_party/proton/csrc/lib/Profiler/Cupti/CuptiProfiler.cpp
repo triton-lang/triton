@@ -200,14 +200,17 @@ uint32_t processActivity(
 }
 
 void buildGraphNodeEntries(const DataToEntryMap &dataToEntry,
-                           const GraphState &graphState) {
+                           GraphState &graphState,
+                           CuptiProfiler::ExternIdState &externIdState) {
   for (auto &[data, entry] : dataToEntry) {
     auto nodeStateIt = graphState.dataToEntryIdToNodeStates.find(data);
     if (nodeStateIt == graphState.dataToEntryIdToNodeStates.end())
       // This is a new data which was not enabled during graph capture
       continue;
-    data->addOp(entry.phase, entry.id, {Context{GraphState::captureTag}});
+    externIdState.dataToGraphEntry[data] =
+        data->addOp(entry.phase, entry.id, {Context{GraphState::captureTag}});
   }
+  externIdState.graphState = &graphState;
 }
 
 void queueGraphMetrics(const DataToEntryMap &dataToEntry,
@@ -653,8 +656,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 << std::endl;
     } else if (findGraph && !graphStates[graphExecId].captureStatusChecked) {
       auto &graphState = graphStates[graphExecId];
-      profiler.correlation.externIdToState[scope.scopeId].graphState =
-          &graphState;
       static const bool timingEnabled =
           getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
       using Clock = std::chrono::steady_clock;
@@ -662,7 +663,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       if (timingEnabled)
         t0 = Clock::now();
 
-      buildGraphNodeEntries(dataToEntry, graphState);
+      buildGraphNodeEntries(
+          dataToEntry, graphState,
+          profiler.correlation.externIdToState[scope.scopeId]);
 
       if (timingEnabled) {
         auto t1 = Clock::now();
