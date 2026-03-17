@@ -18,19 +18,14 @@ using namespace mlir;
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
                              llvm::function_ref<int(Operation *)> countFunc);
 
-// Returns a padded shared encoding minimizing bank conflicts for the given
-// tensor and dot encoding.
+// Returns a padded shared encoding minimizing bank conflicts for a dot
+// operand. Note the CDNA4 path requires both dotOpEnc (parent MFMA encoding's
+// instruction shape) and useAsyncCopy.
 triton::gpu::PaddedSharedEncodingAttr
-composePaddedLayout(const triton::AMD::TargetInfo &targetInfo,
-                    triton::gpu::DotOperandEncodingAttr dotOpEnc,
-                    triton::gpu::TensorOrMemDesc srcTy,
-                    ArrayRef<unsigned> sharedOrder, bool useAsyncCopy);
-
-triton::gpu::PaddedSharedEncodingAttr
-getPaddedEncodingForDotOp(mlir::MLIRContext *context, int opIdx,
-                          ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
-                          triton::gpu::CGAEncodingAttr CGALayout,
-                          unsigned typeWidthInBit, unsigned vecWidth,
-                          const triton::AMD::TargetInfo &targetInfo);
+composePaddedLayout(const triton::AMD::TargetInfo &targetInfo, int opIdx,
+                    unsigned vecWidth, triton::gpu::TensorOrMemDesc srcTy,
+                    ArrayRef<unsigned> sharedOrder,
+                    triton::gpu::DotOperandEncodingAttr dotOpEnc = {},
+                    bool useAsyncCopy = false);
 
 #endif

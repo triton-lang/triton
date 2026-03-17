@@ -257,8 +257,9 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
           canUseAsyncCopy = canBeConvertedToAsyncLoad(
               2, cast<tt::LoadOp>(loadOp), {}, axisInfoAnalysis, targetInfo);
         }
-        tempAttr = composePaddedLayout(targetInfo, dotOpEnc, srcTy, sharedOrder,
-                                       canUseAsyncCopy);
+        tempAttr = composePaddedLayout(targetInfo, dotOpEnc.getOpIdx(),
+                                       dotOpEnc.getKWidth(), srcTy, sharedOrder,
+                                       dotOpEnc, canUseAsyncCopy);
         if (!tempAttr) {
           tempAttr = ttg::SwizzledSharedEncodingAttr::get(
               loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
@@ -369,9 +370,7 @@ getSharedEncIfAllUsersAreDotEncPadded(
         return std::nullopt;
 
       auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
-      auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
       auto order = getOrderForMemory(srcTy);
-      unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
       // TODO rework this when shared -> dotOperand conversions support
@@ -389,10 +388,9 @@ getSharedEncIfAllUsersAreDotEncPadded(
 
       auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
       if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
-        // For async descriptor loads, enable padding.
-        tempAttr = getPaddedEncodingForDotOp(
-            loadedValue.getContext(), dotOpEnc.getOpIdx(), srcTy.getShape(),
-            sharedOrder, cgaLayout, bitWidth, dotOpEnc.getKWidth(), targetInfo);
+        tempAttr =
+            composePaddedLayout(targetInfo, dotOpEnc.getOpIdx(),
+                                dotOpEnc.getKWidth(), srcTy, sharedOrder);
       } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
         // We use linear layout directly for scaled dot fp8 operands. For such
         // cases, we need to look further down the def-use chain to find the dot
@@ -401,9 +399,8 @@ getSharedEncIfAllUsersAreDotEncPadded(
         unsigned vecSize;
         if (auto dotEnc = getDotEncoding<ttg::AMDWmmaEncodingAttr>(
                 userResult, &opIdx, &vecSize)) {
-          tempAttr = getPaddedEncodingForDotOp(
-              loadedValue.getContext(), opIdx, srcTy.getShape(), order,
-              cgaLayout, bitWidth, vecSize, targetInfo);
+          tempAttr =
+              composePaddedLayout(targetInfo, opIdx, vecSize, srcTy, order);
         }
       }
     }
