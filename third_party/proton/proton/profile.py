@@ -13,8 +13,18 @@ DEFAULT_PROFILE_NAME = "proton"
 
 
 def _select_backend() -> str:
+    from triton.backends import backends
+
+    if "nvidia" in backends and backends["nvidia"].driver.is_active():
+        return libproton.select_profiler_from_triton_backend("cuda")
+    if "amd" in backends:
+        return "rocprofiler" if libproton.ensure_rocprofiler_configured() else "roctracer"
+
     backend = triton.runtime.driver.active.get_current_target().backend
-    return libproton.select_profiler_from_triton_backend(backend)
+    profiler = libproton.select_profiler_from_triton_backend(backend)
+    if profiler is not None:
+        return profiler
+    raise ValueError("No backend is available for the current target.")
 
 
 def _get_mode_str(backend: str, mode: Optional[Union[str, BaseMode]]) -> str:
