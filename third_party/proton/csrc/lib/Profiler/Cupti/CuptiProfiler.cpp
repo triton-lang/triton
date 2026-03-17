@@ -147,14 +147,14 @@ uint32_t processActivityKernel(
                 detail::updateDataPhases(dataPhases, data, entry.phase);
               }
             }
-          } 
+          } // else node is skipped during graph capture in a deactivated
+            // session
         }
       }
     } else {
-      // This can happen when graph creation is not captured, or the node is
-      // skipped during capture. In both cases we don't have per-node info, so
-      // we just attach the kernel metric to the graph launch entry without
-      // creating a child entry for the node.
+      // This can happen when graph creation is not captured.
+      // Since we don't have per-node info, we just attach the kernel metric to
+      // the graph launch entry without creating a child entry for the node.
       for (auto &[data, entry] : externState.dataToEntry) {
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
           auto childEntry =
@@ -217,7 +217,8 @@ void buildGraphNodeEntries(const DataToEntryMap &dataToEntry,
 void queueGraphMetrics(const DataToEntryMap &dataToEntry,
                        PendingGraphPool *pendingGraphPool,
                        const CUpti_CallbackData *callbackData,
-                       const GraphState &graphState) {
+                       const GraphState &graphState,
+                       CuptiProfiler::ExternIdState &externIdState) {
   if (graphState.metricNodeIdToNumWords.empty()) {
     return;
   }
@@ -236,7 +237,8 @@ void queueGraphMetrics(const DataToEntryMap &dataToEntry,
       auto entryIdIter = nodeState.dataToEntryId.find(data);
       if (entryIdIter != nodeState.dataToEntryId.end()) {
         metricNodeEntries[data].emplace_back(
-            DataEntry(entryIdIter->second, phase, launchEntry.metricSet.get()));
+            DataEntry(entryIdIter->second, phase,
+                      externIdState.dataToGraphEntry[data].metricSet.get()));
       } else {
         // Indicate that we'll call upsertFlexibleMetric instead of
         // upsertLinkedFlexibleMetric in queueGraphMetrics, so that the kernel
@@ -638,6 +640,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 << std::endl;
     } else if (findGraph && !graphStates[graphExecId].captureStatusChecked) {
       auto &graphState = graphStates[graphExecId];
+      auto &externIdState = profiler.correlation.externIdToState[scope.scopeId];
       static const bool timingEnabled =
           getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
       using Clock = std::chrono::steady_clock;
@@ -646,8 +649,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         t0 = Clock::now();
 
       buildGraphNodeEntries(
-          dataToEntry, graphState,
-          profiler.correlation.externIdToState[scope.scopeId]);
+          dataToEntry, graphState, externIdState);
 
       if (timingEnabled) {
         auto t1 = Clock::now();
@@ -660,7 +662,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       }
 
       queueGraphMetrics(dataToEntry, profiler.pendingGraphPool.get(),
-                        callbackData, graphState);
+                        callbackData, graphState, externIdState);
 
       if (timingEnabled) {
         auto t1 = Clock::now();
