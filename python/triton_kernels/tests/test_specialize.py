@@ -6,6 +6,7 @@ from triton_kernels.specialize import cacheable, specialize
 import triton
 import triton.language as tl
 from triton.experimental import gluon
+import triton.experimental.gluon.language as gl  # noqa: F401
 
 
 @triton.jit
@@ -33,11 +34,12 @@ def retrieve_fn(module, name):
 _specialized_kernels = {}
 
 
-def get_specialized_kernel(is_gluon):
-    if is_gluon in _specialized_kernels:
-        return _specialized_kernels[is_gluon]
+def get_specialized_kernel(language):
+    assert language in ["gluon", "triton"]
+    if language in _specialized_kernels:
+        return _specialized_kernels[language]
     import types
-    if is_gluon:
+    if language == "gluon":
         _identity = gluon_identity
         _template = gluon_template_kernel
     else:
@@ -47,23 +49,23 @@ def get_specialized_kernel(is_gluon):
     spec_tuples = {}
     module = types.ModuleType("specialized_kernel")
     module.specialized = specialize(_template, module, spec_constants, spec_tuples)
-    _specialized_kernels[is_gluon] = module.specialized
-    return _specialized_kernels[is_gluon]
+    _specialized_kernels[language] = module.specialized
+    return _specialized_kernels[language]
 
 
 @cacheable
 def cacheable_kernel():
-    return get_specialized_kernel(False)
+    return get_specialized_kernel("triton")
 
 
 @cacheable
 def cacheable_kernel_gluon():
-    return get_specialized_kernel(True)
+    return get_specialized_kernel("gluon")
 
 
 @pytest.mark.parametrize("is_gluon", [True, False])
 def test_cacheable(device, fresh_triton_cache, monkeypatch, is_gluon):
-    specialized_kernel = get_specialized_kernel(is_gluon)
+    specialized_kernel = get_specialized_kernel("gluon" if is_gluon else "triton")
     expected_fn_name = "cacheable_kernel_gluon" if is_gluon else "cacheable_kernel"
     monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "0")
 
@@ -93,7 +95,7 @@ def test_cacheable(device, fresh_triton_cache, monkeypatch, is_gluon):
     for line in ir_src.split("\n"):
         if loc and loc in line:
             assert "test_specialize.py" in line
-            assert ":21:5" in line
+            assert ":20:5" in line
         if "store" in line:
             loc = line.split("(", 1)[1].split(")", 1)[0]
     assert loc is not None, f"Expected to find a store instruction with location info, got: {ir_src}"
