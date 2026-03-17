@@ -128,7 +128,7 @@ uint32_t processActivityKernel(
 
       if (nodeState && !nodeState->status.isMetricNode()) {
         const bool isMissingName = nodeState->status.isMissingName();
-        for (auto &[data, entry] : externState.dataToEntry) {
+        for (auto &[data, entry] : externState.dataToGraphEntry) {
           auto targetEntryId = nodeState->dataToEntryId.at(data);
           if (!isMissingName) {
             if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
