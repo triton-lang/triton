@@ -118,35 +118,33 @@ uint32_t processActivityKernel(
     }
     auto &externState = *state;
     // We have a graph creation captured
-    auto *graphNodeIdToState = externState.graphState;
+    auto *graphState = externState.graphState;
     bool attributeToLaunchEntry = false;
-    if (graphNodeIdToState) {
-      auto nodeStateIter = graphNodeIdToState->nodeIdToState.find(kernel->graphNodeId);
-      if (nodeStateIter != graphNodeIdToState->nodeIdToState.end() &&
-          !nodeStateIter->second.status.isMetricNode()) {
-        const bool isMissingName = nodeStateIter->second.status.isMissingName();
-        if (!isMissingName) {
-          for (auto &[data, entry] : externState.dataToEntry) {
+    if (graphState) {
+      const GraphState::NodeState *nodeState = nullptr;
+      auto nodeStateIter = graphState->nodeIdToState.find(kernel->graphNodeId);
+      if (nodeStateIter != graphState->nodeIdToState.end())
+        nodeState = &nodeStateIter->second;
+
+      if (nodeState && !nodeState->status.isMetricNode()) {
+        const bool isMissingName = nodeState->status.isMissingName();
+        for (auto &[data, entry] : externState.dataToEntry) {
+          auto targetEntryId = nodeState->dataToEntryId.at(data);
+          if (!isMissingName) {
             if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-              entry.upsertLinkedMetric(
-                  std::move(kernelMetric),
-                  nodeStateIter->second.dataToEntryId.at(data));
+              entry.upsertLinkedMetric(std::move(kernelMetric), targetEntryId);
               detail::updateDataPhases(dataPhases, data, entry.phase);
             }
-          }
-        } else {
-          for (auto &[data, entry] : externState.dataToEntry) {
+          } else {
             if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-              auto childEntry =
-                  data->addOp(Data::kVirtualPhase,
-                              nodeStateIter->second.dataToEntryId.at(data),
-                              {Context(kernel->name)});
+              auto childEntry = data->addOp(Data::kVirtualPhase, targetEntryId,
+                                            {Context(kernel->name)});
               entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
               detail::updateDataPhases(dataPhases, data, entry.phase);
             }
           }
         }
-      } else if (!nodeStateIter->second.status.isMetricNode()) {
+      } else if (!nodeState) {
         attributeToLaunchEntry = true;
       } // else metric node without attribution
     } else {
@@ -219,9 +217,10 @@ void queueGraphMetrics(
               .end()) // The node has been skipped during graph capture
         continue;
       auto &nodeState = nodeIter->second;
-      if (nodeState.dataToEntryId.count(data)) {
+      auto entryIdIter = nodeState.dataToEntryId.find(data);
+      if (entryIdIter != nodeState.dataToEntryId.end()) {
         metricNodeEntries[data].emplace_back(
-            DataEntry(nodeState.dataToEntryId.at(data), phase,
+            DataEntry(entryIdIter->second, phase,
                       launchEntry.metricSet.get()));
       } else {
         // Indicate that we'll call upsertFlexibleMetric instead of
