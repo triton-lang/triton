@@ -171,7 +171,7 @@ def test_atomic_add_release_publishes_token_then_increments(with_gsan):
     snapshot_idx = (token - 1) * state.num_threads + tid
     published_epoch = state.clock_buffer[snapshot_idx]
 
-    assert cell.write_clock.scope == AtomicScope.GPU_TOKEN
+    assert cell.write_clock == ScalarClock(token, tid, AtomicScope.GPU, is_release=True)
     assert token == state.clock_buffer_head
     assert state.clock_buffer_dirty
     assert cell.read_clocks[0] == ScalarClock(published_epoch, tid, AtomicScope.GPU)
@@ -214,7 +214,7 @@ def test_atomic_cas_release_success_publishes_token(with_gsan):
     snapshot_idx = (token - 1) * state.num_threads + tid
     published_epoch = state.clock_buffer[snapshot_idx]
 
-    assert cell.write_clock.scope == AtomicScope.GPU_TOKEN
+    assert cell.write_clock == ScalarClock(token, tid, AtomicScope.GPU, is_release=True)
     assert token == state.clock_buffer_head
     assert cell.read_clocks[0] == ScalarClock(published_epoch, tid, AtomicScope.GPU)
     assert state.vector_clock[tid] == published_epoch + 1
@@ -262,7 +262,8 @@ def test_atomic_release_acquire_transitively_synchronizes_cross_sm(with_gsan, ca
     relay_state = thread_state_from_smid(flag1_cell.write_clock.thread_id)
     snapshot_idx = (flag1_cell.write_clock.epoch - 1) * relay_state.num_threads + producer_tid
 
-    assert flag1_cell.write_clock.scope == AtomicScope.GPU_TOKEN
+    assert flag1_cell.write_clock.scope == AtomicScope.GPU
+    assert flag1_cell.write_clock.is_release
     assert relay_state.clock_buffer[snapshot_idx] >= producer_epoch
 
     consumer_tid = payload_cell.read_clocks[0].thread_id

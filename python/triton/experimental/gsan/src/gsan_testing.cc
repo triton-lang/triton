@@ -18,6 +18,7 @@ struct PyScalarClock {
   uint32_t epoch = 0;
   uint32_t threadId = 0;
   gsan::AtomicScope scope = gsan::AtomicScope::NonAtomic;
+  bool isRelease = false;
 };
 
 struct PyShadowCell {
@@ -59,12 +60,6 @@ const char *atomicScopeName(gsan::AtomicScope scope) {
     return "gpu";
   case gsan::AtomicScope::System:
     return "system";
-  case gsan::AtomicScope::CTAToken:
-    return "cta_token";
-  case gsan::AtomicScope::GPUToken:
-    return "gpu_token";
-  case gsan::AtomicScope::SystemToken:
-    return "system_token";
   }
   return "unknown";
 }
@@ -79,12 +74,6 @@ const char *atomicScopeEnumName(gsan::AtomicScope scope) {
     return "GPU";
   case gsan::AtomicScope::System:
     return "SYSTEM";
-  case gsan::AtomicScope::CTAToken:
-    return "CTA_TOKEN";
-  case gsan::AtomicScope::GPUToken:
-    return "GPU_TOKEN";
-  case gsan::AtomicScope::SystemToken:
-    return "SYSTEM_TOKEN";
   }
   return "UNKNOWN";
 }
@@ -97,7 +86,8 @@ std::string scalarClockStr(const PyScalarClock &c) {
   std::ostringstream oss;
   oss << "ScalarClock(epoch=" << static_cast<uint64_t>(c.epoch)
       << ", thread_id=" << static_cast<uint64_t>(c.threadId)
-      << ", scope=" << atomicScopeStr(c.scope) << ")";
+      << ", scope=" << atomicScopeStr(c.scope)
+      << ", is_release=" << (c.isRelease ? "True" : "False") << ")";
   return oss.str();
 }
 
@@ -163,6 +153,7 @@ PyScalarClock toPyScalarClock(const gsan::ScalarClock &clock) {
   out.epoch = clock.epoch;
   out.threadId = static_cast<uint16_t>(clock.threadId);
   out.scope = clock.scope;
+  out.isRelease = clock.isRelease;
   return out;
 }
 
@@ -248,24 +239,23 @@ void init_gsan_testing(py::module &&m) {
       .value("CTA", gsan::AtomicScope::CTA)
       .value("GPU", gsan::AtomicScope::GPU)
       .value("SYSTEM", gsan::AtomicScope::System)
-      .value("CTA_TOKEN", gsan::AtomicScope::CTAToken)
-      .value("GPU_TOKEN", gsan::AtomicScope::GPUToken)
-      .value("SYSTEM_TOKEN", gsan::AtomicScope::SystemToken)
       .def("__str__",
            [](gsan::AtomicScope scope) { return atomicScopeStr(scope); })
       .def("__repr__",
            [](gsan::AtomicScope scope) { return atomicScopeStr(scope); });
 
   py::class_<PyScalarClock>(m, "ScalarClock")
-      .def(py::init(
-               [](uint64_t epoch, uint64_t threadId, gsan::AtomicScope scope) {
-                 PyScalarClock out;
-                 out.epoch = static_cast<uint32_t>(epoch);
-                 out.threadId = static_cast<uint32_t>(threadId);
-                 out.scope = scope;
-                 return out;
-               }),
-           py::arg("epoch"), py::arg("thread_id"), py::arg("scope"))
+      .def(py::init([](uint64_t epoch, uint64_t threadId,
+                       gsan::AtomicScope scope, bool isRelease) {
+             PyScalarClock out;
+             out.epoch = static_cast<uint32_t>(epoch);
+             out.threadId = static_cast<uint32_t>(threadId);
+             out.scope = scope;
+             out.isRelease = isRelease;
+             return out;
+           }),
+           py::arg("epoch"), py::arg("thread_id"), py::arg("scope"),
+           py::arg("is_release") = false)
       .def_property_readonly(
           "epoch",
           [](const PyScalarClock &c) { return static_cast<uint64_t>(c.epoch); })
@@ -278,11 +268,13 @@ void init_gsan_testing(py::module &&m) {
       .def_property_readonly(
           "scope_name",
           [](const PyScalarClock &c) { return atomicScopeName(c.scope); })
+      .def_property_readonly("is_release",
+                             [](const PyScalarClock &c) { return c.isRelease; })
       .def(
           "__eq__",
           [](const PyScalarClock &lhs, const PyScalarClock &rhs) {
             return lhs.epoch == rhs.epoch && lhs.threadId == rhs.threadId &&
-                   lhs.scope == rhs.scope;
+                   lhs.scope == rhs.scope && lhs.isRelease == rhs.isRelease;
           },
           py::is_operator())
       .def("__str__", [](const PyScalarClock &c) { return scalarClockStr(c); })

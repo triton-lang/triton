@@ -196,7 +196,7 @@ __device__ bool hasRelease(AtomicSem sem) {
 
 __device__ bool scopeCoversPair(AtomicScope scope, thread_id_t lhs,
                                 thread_id_t rhs, GlobalState *globals) {
-  switch (getBaseAtomicScope(scope)) {
+  switch (scope) {
   case AtomicScope::CTA:
     return lhs == rhs;
   case AtomicScope::GPU:
@@ -204,9 +204,6 @@ __device__ bool scopeCoversPair(AtomicScope scope, thread_id_t lhs,
   case AtomicScope::System:
     return true;
   case AtomicScope::NonAtomic:
-  case AtomicScope::CTAToken:
-  case AtomicScope::GPUToken:
-  case AtomicScope::SystemToken:
     return false;
   }
   return false;
@@ -275,28 +272,30 @@ __device__ epoch_t appendClockBufferSnapshot(ThreadState *state,
   auto *globals = getGlobalState(state);
   assert_msg(loc, globals->clockBufferSize != 0,
              "GSan clock buffer size must be non-zero");
-  uint32_t nextHead = state->clockBufferHead + 1;
+  uint32_t curHead = state->clockBufferHead;
+  uint32_t nextHead = curHead + 1;
   assert_msg(loc, nextHead <= std::numeric_limits<epoch_t>::max(),
              "GSan clock buffer token overflowed");
-  epoch_t *slot =
-      getClockBufferBase(state) +
-      ((nextHead - 1) % globals->clockBufferSize) * globals->numThreads;
+  epoch_t *slot = getClockBufferBase(state) +
+                  (curHead % globals->clockBufferSize) * globals->numThreads;
   for (int i = 0; i < globals->numThreads; ++i)
     slot[i] = snapshot[i];
   state->clockBufferHead = nextHead;
+  state->clockBufferDirty = 0;
   return static_cast<epoch_t>(nextHead);
 }
 
 __device__ epoch_t publishCurrentVectorClock(ThreadState *state, Location loc) {
-  auto token = appendClockBufferSnapshot(state, state->vectorClock, loc);
-  state->clockBufferDirty = 0;
-  return token;
+  if (state->clockBufferDirty) {
+    return appendClockBufferSnapshot(state, state->vectorClock, loc);
+  }
+  return state->clockBufferHead - 1;
 }
 
 __device__ const epoch_t *getSnapshotForWrite(ThreadState *state,
                                               const ScalarClock &write,
                                               Location loc) {
-  if (!isTokenScope(write.scope))
+  if (!write.isRelease)
     return nullptr;
   auto *writerState = getThreadStateById(getGlobalState(state), write.threadId);
   return getClockBufferSlot(writerState, write.epoch, loc);
@@ -353,7 +352,7 @@ __device__ void assertOrderedOrCompatible(ThreadState *state,
 
 __device__ void maybeMergeAcquire(ThreadState *state, AtomicScope currentScope,
                                   const ScalarClock &prior, Location loc) {
-  if (!isTokenScope(prior.scope))
+  if (!prior.isRelease)
     return;
   if (!areAtomicScopesCompatible(currentScope, state->threadId, prior.scope,
                                  prior.threadId, getGlobalState(state))) {
@@ -374,12 +373,12 @@ __device__ void maybeMergeAcquire(ThreadState *state, AtomicScope currentScope,
 
 __device__ ScalarClock makeScalarClock(ThreadState *state, AtomicScope scope) {
   auto tid = state->threadId;
-  return ScalarClock{state->vectorClock[tid], tid, scope};
+  return ScalarClock{state->vectorClock[tid], tid, scope, false};
 }
 
-__device__ ScalarClock makeTokenClock(ThreadState *state, AtomicScope scope,
-                                      epoch_t token) {
-  return ScalarClock{token, state->threadId, makeTokenScope(scope)};
+__device__ ScalarClock makePublishedClock(ThreadState *state, AtomicScope scope,
+                                          epoch_t token) {
+  return ScalarClock{token, state->threadId, scope, true};
 }
 
 __device__ void recordRead(ThreadState *state, ShadowCell *cell,
@@ -590,12 +589,12 @@ __device__ void endAtomicAccess(AtomicEventState *event, bool pred,
     ScalarClock newWriteClock;
     if (hasRelease(sem)) {
       auto token = publishCurrentVectorClock(state, loc);
-      newWriteClock = makeTokenClock(state, scope, token);
+      newWriteClock = makePublishedClock(state, scope, token);
     } else {
       auto previousWrite = event->cells[0]->writeClock;
-      if (isTokenScope(previousWrite.scope)) {
+      if (previousWrite.isRelease) {
         auto token = propagateClockBufferSnapshot(state, previousWrite, loc);
-        newWriteClock = makeTokenClock(state, scope, token);
+        newWriteClock = makePublishedClock(state, scope, token);
       } else {
         newWriteClock = makeScalarClock(state, scope);
       }
