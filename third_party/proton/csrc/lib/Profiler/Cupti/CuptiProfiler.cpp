@@ -647,8 +647,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       if (timingEnabled)
         t0 = Clock::now();
 
-      buildGraphNodeEntries(
-          dataToEntry, graphState, externIdState);
+      buildGraphNodeEntries(dataToEntry, graphState, externIdState);
 
       if (timingEnabled) {
         auto t1 = Clock::now();
