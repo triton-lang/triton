@@ -19,6 +19,14 @@ namespace proton {
 ///   - The backward phase spawns multiple CPU threads.
 class ShadowContextSource : public ContextSource, public ScopeInterface {
 public:
+  struct DebugStats {
+    size_t threads{0};
+    size_t initializedKeys{0};
+    size_t initializedTrue{0};
+    size_t stackKeys{0};
+    size_t totalContexts{0};
+  };
+
   ShadowContextSource() {
     mainContextStack = &threadContextStack[this];
     threadContextInitialized[this] = true;
@@ -31,6 +39,8 @@ public:
   size_t getDepth() override;
 
   void clear() override;
+
+  static DebugStats debugStats();
 
 private:
   std::vector<Context> getContextsImpl() override;

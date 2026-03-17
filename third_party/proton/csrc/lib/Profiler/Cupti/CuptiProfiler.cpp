@@ -1,5 +1,6 @@
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Context/Context.h"
+#include "Context/Shadow.h"
 #include "Data/Metric.h"
 #include "Data/TreeData.h"
 #include "Device.h"
@@ -71,6 +72,32 @@ struct ThreadStateSummary {
   size_t metricKernelWordsQueued{0};
 };
 
+struct BufferLifecycleSummary {
+  size_t allocated{0};
+  size_t completed{0};
+  size_t outstanding{0};
+  size_t outstandingBytes{0};
+  size_t maxOutstanding{0};
+  size_t maxOutstandingBytes{0};
+};
+
+std::atomic<size_t> cuptiBuffersAllocated{0};
+std::atomic<size_t> cuptiBuffersCompleted{0};
+std::atomic<size_t> cuptiBuffersOutstanding{0};
+std::atomic<size_t> cuptiBufferBytesOutstanding{0};
+std::atomic<size_t> cuptiBuffersMaxOutstanding{0};
+std::atomic<size_t> cuptiBufferBytesMaxOutstanding{0};
+
+BufferLifecycleSummary getBufferLifecycleSummary() {
+  return BufferLifecycleSummary{
+      cuptiBuffersAllocated.load(std::memory_order_relaxed),
+      cuptiBuffersCompleted.load(std::memory_order_relaxed),
+      cuptiBuffersOutstanding.load(std::memory_order_relaxed),
+      cuptiBufferBytesOutstanding.load(std::memory_order_relaxed),
+      cuptiBuffersMaxOutstanding.load(std::memory_order_relaxed),
+      cuptiBufferBytesMaxOutstanding.load(std::memory_order_relaxed)};
+}
+
 GraphStateSummary summarizeGraphStates(
     const ThreadSafeMap<uint32_t, GraphState> &graphStates) {
   GraphStateSummary summary;
@@ -93,6 +120,8 @@ void logCuptiState(const char *tag, uint64_t sequenceId,
                    const std::set<Data *> &dataSet,
                    const std::map<Data *, size_t> *dataFlushedPhases) {
   auto graphSummary = summarizeGraphStates(graphStates);
+  auto bufferSummary = getBufferLifecycleSummary();
+  auto shadowSummary = ShadowContextSource::debugStats();
   std::cerr << "[PROTON][CUPTI_DEBUG] " << tag << " seq=" << sequenceId
             << " corrIdToExternId=" << corrIdToExternIdSize
             << " externIdToState=" << externIdToStateSize
@@ -100,7 +129,19 @@ void logCuptiState(const char *tag, uint64_t sequenceId,
             << " graphNodes=" << graphSummary.graphNodes
             << " graphDataMaps=" << graphSummary.dataNodeStateMaps
             << " graphMetricNodes=" << graphSummary.metricNodes
-            << " graphMetricWords=" << graphSummary.metricWords;
+            << " graphMetricWords=" << graphSummary.metricWords
+            << " cuptiBuffersAllocated=" << bufferSummary.allocated
+            << " cuptiBuffersCompleted=" << bufferSummary.completed
+            << " cuptiBuffersOutstanding=" << bufferSummary.outstanding
+            << " cuptiBufferBytesOutstanding=" << bufferSummary.outstandingBytes
+            << " cuptiBuffersMaxOutstanding=" << bufferSummary.maxOutstanding
+            << " cuptiBufferBytesMaxOutstanding="
+            << bufferSummary.maxOutstandingBytes
+            << " shadowTlsThreads=" << shadowSummary.threads
+            << " shadowTlsInitializedKeys=" << shadowSummary.initializedKeys
+            << " shadowTlsInitializedTrue=" << shadowSummary.initializedTrue
+            << " shadowTlsStackKeys=" << shadowSummary.stackKeys
+            << " shadowTlsTotalContexts=" << shadowSummary.totalContexts;
   if (dataFlushedPhases != nullptr) {
     std::cerr << " dataFlushedPhases=" << dataFlushedPhases->size();
   }
@@ -499,6 +540,15 @@ void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
   }
   *bufferSize = envBufferSize;
   *maxNumRecords = 0;
+  const auto outstanding =
+      cuptiBuffersOutstanding.fetch_add(1, std::memory_order_relaxed) + 1;
+  const auto outstandingBytes =
+      cuptiBufferBytesOutstanding.fetch_add(envBufferSize,
+                                            std::memory_order_relaxed) +
+      envBufferSize;
+  cuptiBuffersAllocated.fetch_add(1, std::memory_order_relaxed);
+  atomicMax(cuptiBuffersMaxOutstanding, outstanding);
+  atomicMax(cuptiBufferBytesMaxOutstanding, outstandingBytes);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
@@ -538,6 +588,9 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   } while (true);
 
   std::free(buffer);
+  cuptiBuffersCompleted.fetch_add(1, std::memory_order_relaxed);
+  cuptiBuffersOutstanding.fetch_sub(1, std::memory_order_relaxed);
+  cuptiBufferBytesOutstanding.fetch_sub(size, std::memory_order_relaxed);
 
   profiler.correlation.complete(maxCorrelationId);
   profiler.flushDataPhases(dataFlushedPhases, dataPhases,
