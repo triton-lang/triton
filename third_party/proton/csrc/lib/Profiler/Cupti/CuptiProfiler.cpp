@@ -63,6 +63,14 @@ struct GraphStateSummary {
   size_t metricWords{0};
 };
 
+struct ThreadStateSummary {
+  size_t scopeStack{0};
+  size_t threadDataEntries{0};
+  bool isApiExternOp{false};
+  bool isStreamCapturing{false};
+  size_t metricKernelWordsQueued{0};
+};
+
 GraphStateSummary summarizeGraphStates(
     const ThreadSafeMap<uint32_t, GraphState> &graphStates) {
   GraphStateSummary summary;
@@ -81,6 +89,7 @@ GraphStateSummary summarizeGraphStates(
 void logCuptiState(const char *tag, uint64_t sequenceId,
                    size_t corrIdToExternIdSize, size_t externIdToStateSize,
                    const ThreadSafeMap<uint32_t, GraphState> &graphStates,
+                   const ThreadStateSummary &threadStateSummary,
                    const std::set<Data *> &dataSet,
                    const std::map<Data *, size_t> *dataFlushedPhases) {
   auto graphSummary = summarizeGraphStates(graphStates);
@@ -96,12 +105,12 @@ void logCuptiState(const char *tag, uint64_t sequenceId,
     std::cerr << " dataFlushedPhases=" << dataFlushedPhases->size();
   }
   std::cerr << " dataSets=" << dataSet.size()
-            << " scopeStack=" << threadState.scopeStack.size()
-            << " threadDataEntries=" << threadState.dataToEntry.size()
-            << " isApiExternOp=" << threadState.isApiExternOp
-            << " isStreamCapturing=" << threadState.isStreamCapturing
+            << " scopeStack=" << threadStateSummary.scopeStack
+            << " threadDataEntries=" << threadStateSummary.threadDataEntries
+            << " isApiExternOp=" << threadStateSummary.isApiExternOp
+            << " isStreamCapturing=" << threadStateSummary.isStreamCapturing
             << " metricKernelWordsQueued="
-            << threadState.metricKernelNumWordsQueue.size() << std::endl;
+            << threadStateSummary.metricKernelWordsQueued << std::endl;
 
   for (auto *data : dataSet) {
     const auto phaseInfo = data->getPhaseInfo();
@@ -500,6 +509,12 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   CuptiProfiler &profiler = threadState.profiler;
   auto *pImpl = dynamic_cast<CuptiProfilerPimpl *>(profiler.pImpl.get());
   static thread_local uint64_t completedBufferCount = 0;
+  const ThreadStateSummary threadStateSummary{
+      threadState.scopeStack.size(),
+      threadState.dataToEntry.size(),
+      threadState.isApiExternOp,
+      threadState.isStreamCapturing,
+      threadState.metricKernelNumWordsQueue.size()};
   uint32_t maxCorrelationId = 0;
   static thread_local std::map<Data *, size_t> dataFlushedPhases;
   std::map<Data *, std::pair<size_t, size_t>> dataPhases;
@@ -532,6 +547,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
     logCuptiState("completeBuffer", completedBufferCount,
                   profiler.correlation.corrIdToExternId.size(),
                   profiler.correlation.externIdToState.size(), pImpl->graphStates,
+                  threadStateSummary,
                   profiler.getDataSet(), &dataFlushedPhases);
   }
 }
@@ -734,9 +750,16 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                    "please start profiling before the graph is created."
                 << std::endl;
       if (cuptiDebugStateEnabled()) {
+        const ThreadStateSummary threadStateSummary{
+            threadState.scopeStack.size(),
+            threadState.dataToEntry.size(),
+            threadState.isApiExternOp,
+            threadState.isStreamCapturing,
+            threadState.metricKernelNumWordsQueue.size()};
         logCuptiState("missingGraphExec", callbackData->correlationId,
                       profiler.correlation.corrIdToExternId.size(),
                       profiler.correlation.externIdToState.size(), graphStates,
+                      threadStateSummary,
                       profiler.getDataSet(), nullptr);
       }
     } else if (findGraph && !graphStates[graphExecId].captureStatusChecked) {
@@ -900,9 +923,16 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   if (cuptiDebugStateEnabled()) {
+    const ThreadStateSummary threadStateSummary{
+        threadState.scopeStack.size(),
+        threadState.dataToEntry.size(),
+        threadState.isApiExternOp,
+        threadState.isStreamCapturing,
+        threadState.metricKernelNumWordsQueue.size()};
     logCuptiState("doStop.pre", /*sequenceId=*/0,
                   profiler.correlation.corrIdToExternId.size(),
                   profiler.correlation.externIdToState.size(), graphStates,
+                  threadStateSummary,
                   profiler.getDataSet(), nullptr);
   }
   if (profiler.pcSamplingEnabled) {
@@ -930,9 +960,16 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   cupti::unsubscribe<true>(subscriber);
   cupti::finalize<true>();
   if (cuptiDebugStateEnabled()) {
+    const ThreadStateSummary threadStateSummary{
+        threadState.scopeStack.size(),
+        threadState.dataToEntry.size(),
+        threadState.isApiExternOp,
+        threadState.isStreamCapturing,
+        threadState.metricKernelNumWordsQueue.size()};
     logCuptiState("doStop.post", /*sequenceId=*/0,
                   profiler.correlation.corrIdToExternId.size(),
                   profiler.correlation.externIdToState.size(), graphStates,
+                  threadStateSummary,
                   profiler.getDataSet(), nullptr);
   }
 }
