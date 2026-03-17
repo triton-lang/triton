@@ -1,160 +1,129 @@
 #include "triton/Tools/PluginUtils.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/Error.h"
 
-llvm::Error TritonPlugin::checkLibraryValid(const std::string &error) const {
-  if (!library.isValid()) {
-    return llvm::createStringError(
-        llvm::Twine("Failed to load plugin library: ") + error);
-  }
-  return llvm::Error::success();
-}
+#define DEBUG_TYPE "triton-plugins"
 
-llvm::Expected<intptr_t>
-TritonPlugin::getAddressOfSymbol(const std::string &symbol) const {
-  if (auto isValid = checkLibraryValid("not loaded"))
-    return isValid;
-  intptr_t getDetailsFn = (intptr_t)library.getAddressOfSymbol(symbol.c_str());
-  if (!getDetailsFn) {
-    return llvm::createStringError(llvm::Twine("Failed to get symbol: ") +
-                                   symbol);
-  }
-  return getDetailsFn;
-}
+using namespace mlir::triton::plugin;
 
-llvm::Expected<TritonPluginResult>
-TritonPlugin::checkAPIResult(TritonPluginResult result,
-                             const char *handle) const {
-  if (result == TP_SUCCESS)
-    return TP_SUCCESS;
-  return llvm::createStringError(
-      llvm::Twine("Failed to add/register a plugin pass (") + handle +
-      "), error code: " + std::to_string(result));
-}
-
-std::runtime_error TritonPlugin::err2exp(llvm::Error Err) {
-  std::string msg;
-  llvm::raw_string_ostream os(msg);
-  os << Err;
-  return std::runtime_error(msg);
-}
-
-llvm::Error TritonPlugin::loadPlugin() {
-  if (isLoaded)
-    return llvm::Error::success();
-
+llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
   std::string error;
-  library =
+  auto library =
       llvm::sys::DynamicLibrary::getPermanentLibrary(filename.c_str(), &error);
-  if (auto isValid = checkLibraryValid(error))
-    return isValid;
+  if (!library.isValid())
+    return llvm::make_error<llvm::StringError>(
+        Twine("Could not load library '") + filename + "': " + error,
+        llvm::inconvertibleErrorCode());
 
-  if ((intptr_t)library.getAddressOfSymbol(ENUMERATE_PASSES)) {
-    auto enumeratePassesAPIOrErr =
-        getAPI<EnumeratePyBindHandlesType, EnumeratePyBindHandlesCType>(
-            ENUMERATE_PASSES);
-    auto addPassAPIOrErr = getAPI<AddPassType, AddPassCType>(ADD_PASS);
-    auto registerPassAPIOrErr =
-        getAPI<RegisterPassType, RegisterPassCType>(REGISTER_PASS);
+  TritonPlugin plugin{filename, library};
 
-    if (auto Err = enumeratePassesAPIOrErr.takeError())
-      return Err;
-    if (auto Err = addPassAPIOrErr.takeError())
-      return Err;
-    if (auto Err = registerPassAPIOrErr.takeError())
-      return Err;
+  // tritonGetPluginInfo should be resolved to the definition from the
+  // plugin we are currently loading.
+  intptr_t getInfoFn =
+      (intptr_t)library.getAddressOfSymbol("tritonGetPluginInfo");
+  if (!getInfoFn)
+    return llvm::make_error<llvm::StringError>(
+        Twine("Plugin entry point not found in '") + filename,
+        llvm::inconvertibleErrorCode());
 
-    addPassAPI = *addPassAPIOrErr;
-    registerPassAPI = *registerPassAPIOrErr;
-    enumeratePassesAPI = *enumeratePassesAPIOrErr;
+  plugin.info = reinterpret_cast<decltype(tritonGetPluginInfo) *>(getInfoFn)();
+
+  if (plugin.info->apiVersion != TRITON_PLUGIN_API_VERSION)
+    return llvm::make_error<llvm::StringError>(
+        Twine("Wrong API version on plugin '") + filename + "'. Got version " +
+            Twine(plugin.info->apiVersion) + ", supported version is " +
+            Twine(TRITON_PLUGIN_API_VERSION) + ".",
+        llvm::inconvertibleErrorCode());
+
+  return plugin;
+}
+
+const llvm::Expected<std::vector<Pass>> TritonPlugin::listPasses() const {
+  if (!info->passes && info->numPasses > 0)
+    return llvm::make_error<llvm::StringError>(
+        Twine("Invalid pass pointer in plugin '") + filename + "'.'",
+        llvm::inconvertibleErrorCode());
+  LLVM_DEBUG(llvm::dbgs() << "Listing " << info->numPasses
+                          << " passes for plugin " << info->pluginName << ":"
+                          << info->pluginVersion << "\n");
+
+  std::vector<Pass> passes;
+  for (auto i = 0; i < info->numPasses; ++i) {
+    const auto pass = &info->passes[i];
+    if (pass->addPass) {
+      LLVM_DEBUG(llvm::dbgs() << "Listing pass " << pass->name << ":"
+                              << pass->version << "\n");
+      passes.push_back(Pass(pass->name, pass->addPass));
+    }
   }
+  return passes;
+}
 
-  if ((intptr_t)library.getAddressOfSymbol(ENUMERATE_DIALECTS)) {
-    auto enumerateDialectsAPIOrErr =
-        getAPI<EnumeratePyBindHandlesType, EnumeratePyBindHandlesCType>(
-            ENUMERATE_DIALECTS);
-    auto dialectPluginInfoAPIOrErr =
-        getAPI<DialectPluginInfoType, DialectPluginInfoCType>(
-            DIALECT_PLUGININFO);
+llvm::Error TritonPlugin::registerPasses() const {
+  if (!info->passes && info->numPasses > 0)
+    return llvm::make_error<llvm::StringError>(
+        Twine("Invalid pass pointer in plugin '") + filename + "'.'",
+        llvm::inconvertibleErrorCode());
+  LLVM_DEBUG(llvm::dbgs() << "Registering " << info->numPasses
+                          << " passes for plugin " << info->pluginName << ":"
+                          << info->pluginVersion << "\n");
 
-    if (auto Err = enumerateDialectsAPIOrErr.takeError())
-      return Err;
-    if (auto Err = dialectPluginInfoAPIOrErr.takeError())
-      return Err;
-    enumerateDialectsAPI = *enumerateDialectsAPIOrErr;
-    dialectPluginInfoAPI = *dialectPluginInfoAPIOrErr;
+  for (auto i = 0; i < info->numPasses; ++i) {
+    const auto &pass = info->passes[i];
+    if (pass.registerPass) {
+      LLVM_DEBUG(llvm::dbgs() << "Registering pass " << pass.name << ":"
+                              << pass.version << "\n");
+      pass.registerPass();
+    }
   }
-
-  isLoaded = true;
   return llvm::Error::success();
 }
 
-llvm::Expected<TritonPluginResult> TritonPlugin::enumeratePyBindHandles(
-    EnumeratePyBindHandlesType &enumeratePyBindHandles,
-    std::vector<const char *> &handles) {
-  if (auto Err = loadPlugin())
-    return Err;
+llvm::Error
+TritonPlugin::registerDialects(DialectRegistry &dialectRegistry) const {
+  if (!info->dialects && info->numDialects > 0)
+    return llvm::make_error<llvm::StringError>(
+        Twine("Invalid dialect pointer in plugin '") + filename + "'.'",
+        llvm::inconvertibleErrorCode());
+  LLVM_DEBUG(llvm::dbgs() << "Registering " << info->numDialects
+                          << " dialects for plugin " << info->pluginName << ":"
+                          << info->pluginVersion << "\n");
 
-  uint32_t passCount = 0;
-  handles.clear();
-  auto result = enumeratePyBindHandles(&passCount, nullptr);
-  if (result == TP_SUCCESS) {
-    if (passCount == 0)
-      return TP_SUCCESS;
+  for (auto i = 0; i < info->numDialects; ++i) {
+    const auto &dialect = info->dialects[i];
+    if (dialect.registerDialect) {
+      LLVM_DEBUG(llvm::dbgs() << "Registering dialect " << dialect.name << ":"
+                              << dialect.version << "\n");
+      dialect.registerDialect(&dialectRegistry);
+    }
+  }
+  return llvm::Error::success();
+}
 
-    handles.resize(passCount);
-    result = enumeratePyBindHandles(&passCount, handles.data());
+static std::vector<TritonPlugin> plugins;
+static bool pluginsLoaded = false;
+const std::vector<TritonPlugin> &mlir::triton::plugin::loadPlugins() {
+  if (pluginsLoaded)
+    return plugins;
+
+  if (const char *env = std::getenv("TRITON_PLUGIN_PATHS")) {
+    llvm::SmallVector<llvm::StringRef, 4> paths;
+    llvm::StringRef(env).split(paths, ':');
+    for (const auto &path : paths) {
+      LLVM_DEBUG(llvm::dbgs() << "Loading plugin from path: " << path << "\n");
+      auto pluginOrErr = TritonPlugin::load(path.str());
+      if (auto err = pluginOrErr.takeError()) {
+        llvm::Error wrappedErr = llvm::createStringError(
+            llvm::Twine("Failed to load plugin from path: ") + path +
+            ". Error: " + llvm::toString(std::move(err)));
+        llvm::reportFatalUsageError(std::move(wrappedErr));
+      }
+      plugins.push_back(std::move(*pluginOrErr));
+    }
   }
 
-  if (result == TP_SUCCESS)
-    return TP_SUCCESS;
-  return llvm::createStringError(
-      llvm::Twine("Failed to retrieve plugin pass handles, error code: ") +
-      std::to_string(result));
+  pluginsLoaded = true;
+  return plugins;
 }
 
-llvm::Expected<TritonPluginResult>
-TritonPlugin::getPassHandles(std::vector<const char *> &passNames) {
-  if (auto Err = loadPlugin())
-    return Err;
-  // Do a check to see if the enumerate-passes api symbol is present, bail as
-  // if there are 0 passes if not
-  intptr_t isPassPluginSymbolPresent =
-      (intptr_t)library.getAddressOfSymbol(ENUMERATE_PASSES);
-  if (!isPassPluginSymbolPresent)
-    return TP_SUCCESS;
-  return enumeratePyBindHandles(enumeratePassesAPI, passNames);
-}
-
-llvm::Expected<TritonPluginResult>
-TritonPlugin::getDialectHandles(std::vector<const char *> &dialectNames) {
-  if (auto Err = loadPlugin())
-    return Err;
-  // Do a check to see if the enumerate-dialects api symbol is present, bail as
-  // if there are 0 dialects if not
-  intptr_t isDialectPluginSymbolPresent =
-      (intptr_t)library.getAddressOfSymbol(ENUMERATE_DIALECTS);
-  if (!isDialectPluginSymbolPresent)
-    return TP_SUCCESS;
-  return enumeratePyBindHandles(enumerateDialectsAPI, dialectNames);
-}
-
-llvm::Expected<TritonPluginResult>
-TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle,
-                      const std::vector<std::string> &args) {
-  if (auto Err = loadPlugin())
-    return Err;
-  return checkAPIResult(addPassAPI(pm, passHandle, args), passHandle);
-}
-
-llvm::Expected<TritonPluginResult>
-TritonPlugin::registerPass(const char *passHandle) {
-  if (auto Err = loadPlugin())
-    return Err;
-  return checkAPIResult(registerPassAPI(passHandle), passHandle);
-}
-
-llvm::Expected<::mlir::DialectPluginLibraryInfo>
-TritonPlugin::getDialectPluginInfo(const char *dialectName) {
-  if (auto Err = loadPlugin())
-    return Err;
-  return dialectPluginInfoAPI(dialectName);
-}
+#undef DEBUG_TYPE

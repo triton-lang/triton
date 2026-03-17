@@ -1,4 +1,4 @@
-// RUN: TRITON_PASS_PLUGIN_PATH=%shlibdir/../plugins/libMLIRDialectPlugin.so triton-opt -split-input-file --convert-plugin-gpu-to-llvm --convert-triton-gpu-to-llvm %s | \
+// RUN: TRITON_PLUGIN_PATHS=%shlibdir/../plugins/libMLIRDialectPlugin.so triton-opt -split-input-file --convert-plugin-gpu-to-llvm --convert-triton-gpu-to-llvm %s | \
 // RUN: FileCheck %s
 
 // REQUIRES: shared-libs
