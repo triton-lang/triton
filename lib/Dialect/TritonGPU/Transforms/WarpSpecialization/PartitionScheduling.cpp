@@ -377,6 +377,19 @@ bool isTMEM(Node *node) {
   return flags & Flags::TMEM;
 }
 
+bool hasEligibleMemoryOps(Graph *graph) {
+  bool found = false;
+  graph->walk([&](Node *node) {
+    if (!node->isOp() || found)
+      return;
+    auto flags = getNodeFlags(node);
+    // We cannot handle none descriptor memory operations
+    if (flags & (Flags::LOAD | Flags::STORE))
+      found = true;
+  });
+  return found;
+}
+
 bool isSFU(Node *node) {
   auto partition = node->getPartition();
   auto flags = partition->getFlags();
@@ -1444,7 +1457,8 @@ struct PartitionScheduling
     size_t idx = 0;
     for (auto op : ops) {
       analyze(idx, op);
-      cloneMultiPartitionDataOps(op);
+      if (hasPartition(op))
+        cloneMultiPartitionDataOps(op);
       idx++;
     }
   }
@@ -1496,6 +1510,9 @@ private:
       for (auto &partition : graph->getPartitions())
         partition->dump();
     });
+
+    if (!hasEligibleMemoryOps(graph.get()))
+      return;
 
     serialize(idx, op, graph.get());
   }

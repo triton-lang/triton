@@ -2,12 +2,13 @@
 # Make sure to first initialize the build system with:
 #     make dev-install
 
-PYTHON ?= python
-BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
+PYTHON ?= python3
+ROOT_DIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
+BUILD_DIR := $(shell PYTHONPATH="$(ROOT_DIR)/python" $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 INSTALL_DIR ?= $(dir $(BUILD_DIR))install
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
-LLVM_BUILD_PATH ?= "$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/.llvm-project/build"
+LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project/build"
 NUM_PROCS ?= 8
 
 # Incremental builds
