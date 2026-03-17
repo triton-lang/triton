@@ -129,18 +129,21 @@ uint32_t processActivityKernel(
       if (nodeState && !nodeState->status.isMetricNode()) {
         const bool isMissingName = nodeState->status.isMissingName();
         for (auto &[data, entry] : externState.dataToGraphEntry) {
-          auto targetEntryId = nodeState->dataToEntryId.at(data);
-          if (!isMissingName) {
-            if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-              entry.upsertLinkedMetric(std::move(kernelMetric), targetEntryId);
-              detail::updateDataPhases(dataPhases, data, entry.phase);
-            }
-          } else {
-            if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-              auto childEntry = data->addOp(Data::kVirtualPhase, targetEntryId,
-                                            {Context(kernel->name)});
-              entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
-              detail::updateDataPhases(dataPhases, data, entry.phase);
+          auto targetEntryIdIter = nodeState->dataToEntryId.find(data);
+          if (targetEntryIdIter != nodeState->dataToEntryId.end()) {
+            auto targetEntryId = targetEntryIdIter->second;
+            if (!isMissingName) {
+              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+                entry.upsertLinkedMetric(std::move(kernelMetric), targetEntryId);
+                detail::updateDataPhases(dataPhases, data, entry.phase);
+              }
+            } else {
+              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+                auto childEntry = data->addOp(Data::kVirtualPhase, targetEntryId,
+                                              {Context(kernel->name)});
+                entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
+                detail::updateDataPhases(dataPhases, data, entry.phase);
+              }
             }
           }
         }
