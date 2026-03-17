@@ -64,6 +64,30 @@ bool reuseCuptiActivityBuffersEnabled() {
   return enabled;
 }
 
+bool useKernelActivityOnlyEnabled() {
+  static const bool enabled =
+      getBoolEnv("PROTON_CUPTI_USE_KERNEL_ACTIVITY", false);
+  return enabled;
+}
+
+bool disableForcedFlushEnabled() {
+  static const bool enabled =
+      getBoolEnv("PROTON_CUPTI_DISABLE_FORCED_FLUSH", false);
+  return enabled;
+}
+
+bool disableGraphCallbacksEnabled() {
+  static const bool enabled =
+      getBoolEnv("PROTON_CUPTI_DISABLE_GRAPH_CALLBACKS", false);
+  return enabled;
+}
+
+bool disableNvtxCallbacksEnabled() {
+  static const bool enabled =
+      getBoolEnv("PROTON_CUPTI_DISABLE_NVTX_CALLBACKS", false);
+  return enabled;
+}
+
 struct GraphStateSummary {
   size_t graphs{0};
   size_t graphNodes{0};
@@ -1005,14 +1029,20 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
     // Continuous PC sampling is not compatible with concurrent kernel profiling
     cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
   } else {
-    cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
+    if (useKernelActivityOnlyEnabled()) {
+      cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
+    } else {
+      cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
+    }
     if (getBoolEnv("TRITON_ENABLE_HW_TRACE", false))
       cupti::activityEnableHWTrace<true>(/*enable=*/1);
   }
   cupti::activityRegisterCallbacks<true>(allocBuffer, completeBuffer);
-  setGraphCallbacks(subscriber, /*enable=*/true);
+  if (!disableGraphCallbacksEnabled()) {
+    setGraphCallbacks(subscriber, /*enable=*/true);
+  }
   setLaunchCallbacks(subscriber, /*enable=*/true);
-  if (getBoolEnv("TRITON_ENABLE_NVTX", true)) {
+  if (getBoolEnv("TRITON_ENABLE_NVTX", true) && !disableNvtxCallbacksEnabled()) {
     nvtx::enable();
     setNvtxCallbacks(subscriber, /*enable=*/true);
   }
@@ -1041,7 +1071,9 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   // CUPTI_ACTIVITY_FLAG_FLUSH_FORCED is used to ensure that even incomplete
   // activities are flushed so that the next profiling session can start with
   // new activities.
-  cupti::activityFlushAll<true>(/*flag=*/CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
+  if (!disableForcedFlushEnabled()) {
+    cupti::activityFlushAll<true>(/*flag=*/CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
+  }
   // Flush the tensor metric buffer
   profiler.pendingGraphPool->flushAll();
 }
@@ -1069,7 +1101,11 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
     setResourceCallbacks(subscriber, /*enable=*/false);
     cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
   } else {
-    cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
+    if (useKernelActivityOnlyEnabled()) {
+      cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
+    } else {
+      cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
+    }
     if (getBoolEnv("TRITON_ENABLE_HW_TRACE", false))
       cupti::activityEnableHWTrace<true>(/*enable=*/0);
   }
@@ -1078,10 +1114,14 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   // We have to clear the correlation maps before unsubscribing because CUPTI
   // will reset correlation ID after unsubscribing
   profiler.correlation.clear();
-  setGraphCallbacks(subscriber, /*enable=*/false);
+  if (!disableGraphCallbacksEnabled()) {
+    setGraphCallbacks(subscriber, /*enable=*/false);
+  }
   setLaunchCallbacks(subscriber, /*enable=*/false);
-  nvtx::disable();
-  setNvtxCallbacks(subscriber, /*enable=*/false);
+  if (!disableNvtxCallbacksEnabled()) {
+    nvtx::disable();
+    setNvtxCallbacks(subscriber, /*enable=*/false);
+  }
   cupti::unsubscribe<true>(subscriber);
   cupti::finalize<true>();
   freeAllPooledCuptiBuffers();
