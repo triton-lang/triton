@@ -25,6 +25,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <unistd.h>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -205,7 +206,8 @@ void logCuptiState(const char *tag, uint64_t sequenceId,
   auto graphSummary = summarizeGraphStates(graphStates);
   auto bufferSummary = getBufferLifecycleSummary();
   auto shadowSummary = ShadowContextSource::debugStats();
-  std::cerr << "[PROTON][CUPTI_DEBUG] " << tag << " seq=" << sequenceId
+  std::cerr << "[PROTON][CUPTI_DEBUG] pid=" << getpid() << " " << tag
+            << " seq=" << sequenceId
             << " corrIdToExternId=" << corrIdToExternIdSize
             << " externIdToState=" << externIdToStateSize
             << " graphStates=" << graphSummary.graphs
@@ -242,7 +244,8 @@ void logCuptiState(const char *tag, uint64_t sequenceId,
 
   for (auto *data : dataSet) {
     const auto phaseInfo = data->getPhaseInfo();
-    std::cerr << "[PROTON][CUPTI_DEBUG] data path=" << data->getPath()
+    std::cerr << "[PROTON][CUPTI_DEBUG] pid=" << getpid()
+              << " data path=" << data->getPath()
               << " currentPhase=" << phaseInfo.current
               << " completeUpTo=" << phaseInfo.completeUpTo;
     if (auto *treeData = dynamic_cast<TreeData *>(data)) {
