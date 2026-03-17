@@ -627,7 +627,7 @@ def test_trace_kernel_timing_multi_launch_same_step(tmp_path: pathlib.Path, fres
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
-def test_trace_kernel_timing_cudagraph_capture(tmp_path: pathlib.Path, fresh_knobs):
+def test_trace_kernel_timing_rejects_cudagraph_capture(tmp_path: pathlib.Path, fresh_knobs):
 
     @triton.jit
     def add_kernel(
@@ -657,20 +657,11 @@ def test_trace_kernel_timing_cudagraph_capture(tmp_path: pathlib.Path, fresh_kno
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace", mode=mode)
 
     graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):
-        add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    with pytest.raises(RuntimeError, match="trace_mode='kernel' is not supported during CUDA graph capture yet"):
+        with torch.cuda.graph(graph):
+            add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
 
-    graph.replay()
     proton.finalize()
-
-    with open(temp_file, "rb") as f:
-        data = json.load(f)
-        events = data["traceEvents"]
-        assert len(events) == 1
-        assert events[0]["name"] == "add_kernel"
-        assert events[0]["cat"] == "kernel"
-        assert events[0]["dur"] > 0
-        assert events[0]["args"]["call_stack"] == ["ROOT", "add_kernel"]
 
 
 def test_multi_session(tmp_path: pathlib.Path):

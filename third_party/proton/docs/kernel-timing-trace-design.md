@@ -411,9 +411,33 @@ So the sequence should be:
 - Whether parsing should happen on a dedicated CPU thread or on demand during `finalize()`.
 - How to expose overflow and backpressure stats to users.
 - How robust the Triton-managed step-buffer model is under CUDA graph capture and replay:
-  - current code now preallocates the current device's step-buffer ring at hook activation to avoid lazy device-buffer allocation during capture
-  - but captured launches still bake in fixed profile-scratch pointers, so replay-time slot reuse and per-replay phase/drain semantics need dedicated validation
+  - current code now fails fast for `trace_mode="kernel"` during active CUDA graph capture rather than silently accepting replay-time ambiguity
+  - captured launches bake in fixed profile-scratch pointers, and the eager instrumentation path has no replay-time launch accounting yet
 - Whether the inserted start/end timing IR is stable against NVIDIA backend instruction reordering, or whether we need stronger ordering constraints to keep the timestamps tightly bound to kernel entry/exit.
+
+### Future plan: CUDA graph support for Triton kernel timing
+
+To support `trace_mode="kernel"` under CUDA graph replay correctly, we should
+not rely on the current eager step-buffer allocator alone. The likely plan is:
+
+1. Detect graph capture and build graph-private instrumentation state.
+   - assign stable profile-scratch buffers per captured Triton kernel node
+   - record enough metadata to map each captured node back to `functionId`,
+     scratch pointer, and scratch size
+2. Detect graph replay and synthesize replay-time launch bookkeeping.
+   - each replay should enqueue the equivalent of fresh
+     `PendingInstrumentedOp` records even though Python is not allocating new
+     scratch per launch at replay time
+   - those replay-time records need to be attributed to the current profiling
+     phase, not the capture phase
+3. Define replay-safe scratch reuse semantics.
+   - if replays can overlap with draining, use a per-graph double buffer or
+     small ring rather than one fixed scratch region per captured node
+4. Add focused replay tests.
+   - capture once, replay multiple times, and verify per-replay phase
+     attribution
+   - replay multiple times within one phase and verify multiple kernel events
+   - validate that drain/reuse semantics stay correct under repeated replay
 
 ## Recommended First Implementation
 

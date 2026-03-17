@@ -24,6 +24,16 @@ def _round_up(value: int, alignment: int) -> int:
     return ((value + alignment - 1) // alignment) * alignment
 
 
+def _is_current_cuda_graph_capture() -> bool:
+    import torch
+    if _get_backend_name() != "nvidia":
+        return False
+    is_capturing = getattr(torch.cuda, "is_current_stream_capturing", None)
+    if is_capturing is None:
+        return False
+    return bool(is_capturing())
+
+
 class ProfileScratchAllocation:
 
     def __init__(self, slot: "StepBufferSlot", offset: int, size: int):
@@ -128,6 +138,11 @@ class CudaAllocator:
         if stream is None:
             device = triton.runtime.driver.active.get_current_device()
             stream = triton.runtime.driver.active.get_current_stream(device)
+        if self.instrumentation_hook.mode.trace_mode == "kernel" and _is_current_cuda_graph_capture():
+            raise RuntimeError(
+                "trace_mode='kernel' is not supported during CUDA graph capture yet; "
+                "captured launches bake in fixed profile scratch pointers, so replay-time "
+                "slot reuse and phase attribution are unresolved.")
         if InstrumentationHook.enable_host_buffer:
             enter_state(COMPUTE_METADATA_SCOPE_NAME)
             buffer = torch.zeros((max(aligned_size, self.instrumentation_hook.profile_buffer_size), ),
