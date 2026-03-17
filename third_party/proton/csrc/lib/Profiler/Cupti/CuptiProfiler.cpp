@@ -134,14 +134,17 @@ uint32_t processActivityKernel(
             auto targetEntryId = targetEntryIdIter->second;
             if (!isMissingName) {
               if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                entry.upsertLinkedMetric(std::move(kernelMetric), targetEntryId);
+                entry.upsertLinkedMetric(std::move(kernelMetric),
+                                         targetEntryId);
                 detail::updateDataPhases(dataPhases, data, entry.phase);
               }
             } else {
               if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                auto childEntry = data->addOp(Data::kVirtualPhase, targetEntryId,
-                                              {Context(kernel->name)});
-                entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
+                auto childEntry =
+                    data->addOp(Data::kVirtualPhase, targetEntryId,
+                                {Context(kernel->name)});
+                entry.upsertLinkedMetric(std::move(kernelMetric),
+                                         childEntry.id);
                 detail::updateDataPhases(dataPhases, data, entry.phase);
               }
             }
@@ -290,7 +293,8 @@ constexpr std::array<CUpti_CallbackId, 10> kKernelCallbacks = {
 #undef PROTON_KERNEL_CB_AS_ID
 
 constexpr std::array<CUpti_CallbackId, 2> kGraphResourceCallbacks = {
-    CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED, CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED};
+    CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED,
+    CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED};
 
 constexpr std::array<CUpti_CallbackId, 4> kResourceCallbacks = {
     CUPTI_CBID_RESOURCE_MODULE_LOADED,
