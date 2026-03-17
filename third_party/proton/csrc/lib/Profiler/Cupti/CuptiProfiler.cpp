@@ -199,6 +199,17 @@ uint32_t processActivity(
   return correlationId;
 }
 
+void buildGraphNodeEntries(const DataToEntryMap &dataToEntry,
+                           const GraphState &graphState) {
+  for (auto &[data, entry] : dataToEntry) {
+    auto nodeStateIt = graphState.dataToEntryIdToNodeStates.find(data);
+    if (nodeStateIt == graphState.dataToEntryIdToNodeStates.end())
+      // This is a new data which was not enabled during graph capture
+      continue;
+    data->addOp(entry.phase, entry.id, {Context{GraphState::captureTag}});
+  }
+}
+
 void queueGraphMetrics(const DataToEntryMap &dataToEntry,
                        PendingGraphPool *pendingGraphPool,
                        const CUpti_CallbackData *callbackData,
@@ -650,6 +661,18 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       auto t0 = decltype(Clock::now()){};
       if (timingEnabled)
         t0 = Clock::now();
+
+      buildGraphNodeEntries(dataToEntry, graphState);
+
+      if (timingEnabled) {
+        auto t1 = Clock::now();
+        auto elapsed =
+            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                .count();
+        std::cerr << "[PROTON] Graph launch call path time: " << elapsed
+                  << " us for graphExecId: " << graphExecId << std::endl;
+        t0 = Clock::now();
+      }
 
       queueGraphMetrics(dataToEntry, profiler.pendingGraphPool.get(),
                         callbackData, graphState);
