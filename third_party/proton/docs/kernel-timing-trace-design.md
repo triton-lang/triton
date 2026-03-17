@@ -457,19 +457,29 @@ The CUPTI backend already has asynchronous delivery and deferred parsing:
 So "async copy" and "deferred host parsing" are not unique advantages of the
 Triton path.
 
-One important limitation of the current CUPTI path is that flush is still
-sync-heavy:
+One important limitation of the current CUPTI explicit `flush()` path is that
+it is still sync-heavy:
 
 - `CuptiProfiler::doFlush()` does an opportunistic `cuda::ctxSynchronize(...)`
   before `cuptiActivityFlushAll(...)`
 
-That synchronization is a completeness policy in the current implementation:
+That synchronization is a completeness policy in the current explicit-flush
+implementation:
 
 - without it, CUPTI can still flush whatever activity records are already ready
 - with it, `libproton` tries to make `flush()` reflect all GPU work completed so
   far on the current context
 - the downside is that `flush()` can block on unrelated in-flight kernels and
   copies in that context
+
+This does not apply the same way to `periodic_flushing` mode:
+
+- periodic file emission is driven from `completeBuffer(...)` /
+  `flushDataPhasesImpl(...)` on the backend thread when CUPTI activity buffers
+  become ready
+- that path does not go through `CuptiProfiler::doFlush()`
+- so `periodic_flushing` does not incur the explicit `ctxSynchronize()` used by
+  the manual `flush()` path
 
 ### What the Triton timing path changes
 
@@ -482,7 +492,7 @@ collection:
 - `advance_phase(session)` provides an explicit step boundary for draining
 - D2H is scheduled on a dedicated copy stream under Triton/Proton control
 
-In steady state, its flush path is lighter than CUPTI's:
+In steady state, its flush path is lighter than CUPTI's explicit `flush()` path:
 
 - `InstrumentationProfiler::doFlush()` just schedules ready step copies and
   reaps already-completed ones
