@@ -631,7 +631,7 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
   return 0;
 }
 
-void proton_tool_fini(void *toolData) {
+void protonToolFini(void *toolData) {
   auto *state = static_cast<RocprofilerRuntimeState *>(toolData);
   {
     std::lock_guard<std::mutex> lock(state->mutex);
@@ -658,7 +658,7 @@ protonConfigure(uint32_t version, const char *runtimeVersion, uint32_t priority,
   state.clientId = id;
   static rocprofiler_tool_configure_result_t config{
       sizeof(rocprofiler_tool_configure_result_t), &protonToolInit,
-      &proton_tool_fini, static_cast<void *>(&state)};
+      &protonToolFini, static_cast<void *>(&state)};
   return &config;
 }
 
