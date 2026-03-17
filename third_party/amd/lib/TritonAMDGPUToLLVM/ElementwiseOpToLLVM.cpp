@@ -26,6 +26,12 @@ using ConverterT = std::function<SmallVector<Value>(
     Location, ConversionPatternRewriter &, const SmallVector<Value> &)>;
 
 namespace {
+
+static Value cvtFp32ToFp16RTNE_oneValue(Location loc, RewriterBase &rewriter,
+                                        const Value &v) {
+  return LLVM::FPTruncOp::create(rewriter, loc, f16_ty, v);
+}
+
 bool isCDNA4(AMD::ISAFamily family) { return family == AMD::ISAFamily::CDNA4; }
 bool isCDNA4OrHigher(AMD::ISAFamily family) {
   return family == AMD::ISAFamily::CDNA4 || family == AMD::ISAFamily::GFX1250;
@@ -1329,7 +1335,7 @@ Fp8E5M2FNUZ_to_Fp16_HW(Location loc, ConversionPatternRewriter &rewriter,
 
   // Convert fp32 to fp16
   for (size_t i = 0; i < 4; i++)
-    ret[i] = LLVM::AMD::cvtFp32ToFp16RTNE_oneValue(loc, rewriter, ret[i]);
+    ret[i] = cvtFp32ToFp16RTNE_oneValue(loc, rewriter, ret[i]);
 
   return ret;
 }
@@ -1786,7 +1792,7 @@ Fp8E4M3FNUZ_to_Fp16_HW(Location loc, ConversionPatternRewriter &rewriter,
 
   // Convert fp32 to fp16
   for (size_t i = 0; i < 4; i++)
-    ret[i] = LLVM::AMD::cvtFp32ToFp16RTNE_oneValue(loc, rewriter, ret[i]);
+    ret[i] = cvtFp32ToFp16RTNE_oneValue(loc, rewriter, ret[i]);
 
   return ret;
 }
@@ -2042,7 +2048,7 @@ struct FpToFpOpConversion
         inVals = convertFp32ToFp16RTNE(loc, rewriter, inVals, f16_ty);
       else {
         for (Value &v : inVals)
-          v = LLVM::AMD::cvtFp32ToFp16RTNE_oneValue(loc, rewriter, v);
+          v = cvtFp32ToFp16RTNE_oneValue(loc, rewriter, v);
       }
     }
 

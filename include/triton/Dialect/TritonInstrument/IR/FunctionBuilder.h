@@ -158,6 +158,12 @@ public:
   void createTrackVisibleReadsCall(ImplicitLocOpBuilder &b, Value mbar,
                                    int thread, Value pred, MemType memType,
                                    Operation *insertPoint);
+  // trackBarrierWriteForBuffer: mark a specific buffer as tracked by a
+  // barrier in the write-tracking table.
+  void createTrackBarrierWriteForBufferCall(ImplicitLocOpBuilder &b, Value mbar,
+                                            Value buf, uint32_t length,
+                                            Value pred, MemType memType,
+                                            Operation *insertPoint);
   // clearBarrierWriteTracking: clear all write tracking associated with the
   // given barrier row.
   void createClearBarrierWriteTrackingCall(ImplicitLocOpBuilder &b, Value mbar,

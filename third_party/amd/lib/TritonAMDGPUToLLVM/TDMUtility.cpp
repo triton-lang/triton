@@ -44,6 +44,12 @@ SmallVector<Value> TDMDescriptor::getAllGroups() const {
   return result;
 }
 
+// Swap the trailing two dimensions of a vector for TDM operations.
+template <typename T> void swapTrailingDims(SmallVector<T> &vec) {
+  assert(vec.size() >= 2 && "need at least 2 dims to swap");
+  std::swap(vec[vec.size() - 2], vec[vec.size() - 1]);
+}
+
 // Decode a full TDM descriptor from all 4 group vectors for 3D-5D tensors
 // Returns (base, tensorShape[], tensorStride[], blockShape[])
 std::tuple<Value, SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
@@ -143,8 +149,8 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
                                   SmallVector<int64_t> blockShape, int numWarps,
                                   unsigned padInterval, unsigned padAmount,
                                   SmallVector<Value> tensorShape,
-                                  SmallVector<Value> tensorStride,
-                                  Value srcPtr) {
+                                  SmallVector<Value> tensorStride, Value srcPtr,
+                                  bool isRowMajor) {
   size_t numDims = tensorShape.size();
   assert(numDims >= 1 && numDims <= 5 && tensorStride.size() == numDims &&
          "TDM only supported for 1D-5D tensors.");
@@ -153,6 +159,12 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
          "Block/tensor/stride dim count must all be equal.");
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  if (!isRowMajor) {
+    swapTrailingDims(blockShape);
+    swapTrailingDims(tensorStride);
+    swapTrailingDims(tensorShape);
+  }
 
   // Define common values for better readability
   Value v16 = b.i32_val(16);
@@ -406,6 +418,29 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   return TDMDescriptor{group0, group1, group2, group3};
 }
 
+// Returns a copy of `layout` where the semantics of dimA and dimB are
+// exchanged: new.apply(x)[dimA] == old.apply(x)[dimB] and vice versa. The
+// output dimension order is preserved.
+static triton::LinearLayout
+swapOutDimSemantics(const triton::LinearLayout &layout, StringAttr dimA,
+                    StringAttr dimB) {
+  assert(layout.hasOutDim(dimA));
+  assert(layout.hasOutDim(dimB));
+  SmallVector<std::pair<StringAttr, int32_t>> renamedOutDims;
+  for (auto [name, size] : layout.getOutDims()) {
+    if (name == dimA)
+      renamedOutDims.push_back({dimB, size});
+    else if (name == dimB)
+      renamedOutDims.push_back({dimA, size});
+    else
+      renamedOutDims.push_back({name, size});
+  }
+  // Transpose to restore the original output dimension order.
+  return triton::LinearLayout(layout.getBases(), renamedOutDims,
+                              /*requireSurjective=*/false)
+      .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
+}
+
 // Fill TDM descriptor for regular load/store operations (1D-5D tensors)
 void fillTDMDescriptor(
     RewriterBase &rewriter, Location loc,
@@ -416,7 +451,8 @@ void fillTDMDescriptor(
     std::optional<std::reference_wrapper<SmallVector<Value>>> group3,
     SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
     Value multicastMask, Value barrierPtr,
-    const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore) {
+    const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
+    bool isRowMajor) {
   size_t numDims = offset.size();
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors.");
   assert(!dstPtrs.empty() && "dstPtrs cannot be empty");
@@ -426,6 +462,22 @@ void fillTDMDescriptor(
 
   Type globalPtrTy = ptr_ty(ctx, 1);
   Type sharedPtrTy = ptr_ty(ctx, 3);
+
+  // For col-major tensors the TDM descriptor was created with the trailing two
+  // dimensions swapped. Swap shapePerCTA and offset to match that hardware
+  // view, and rename the same two dims in the shared layout to align out dims.
+  std::optional<triton::LinearLayout> adjustedSharedLayout;
+  if (!isRowMajor) {
+    swapTrailingDims(shapePerCTA);
+    swapTrailingDims(offset);
+    if (numDims >= 2) {
+      auto dimN_2 = StringAttr::get(ctx, "dim" + std::to_string(numDims - 2));
+      auto dimN_1 = StringAttr::get(ctx, "dim" + std::to_string(numDims - 1));
+      adjustedSharedLayout = swapOutDimSemantics(sharedLayout, dimN_2, dimN_1);
+    }
+  }
+  const auto &tdmViewSharedLayout =
+      adjustedSharedLayout ? *adjustedSharedLayout : sharedLayout;
 
   // Decode the full TDM descriptor to get all values
   auto [srcPtr, tensorShape, tensorStride, decodedBlockShape] =
@@ -446,7 +498,7 @@ void fillTDMDescriptor(
   auto kPartition = str_attr("partition");
 
   auto cgaLayout = triton::gpu::SharedLinearEncodingAttr::get(
-                       ctx, sharedLayout, /*layoutAlignment=*/16)
+                       ctx, tdmViewSharedLayout, /*layoutAlignment=*/16)
                        .getCGALayout()
                        .getLinearLayout();
 
@@ -474,7 +526,7 @@ void fillTDMDescriptor(
   }
   srcPtr = b.gep(globalPtrTy, elementType, srcPtr, baseOffset);
 
-  auto tdmToShared = tdmLayout.invertAndCompose(sharedLayout);
+  auto tdmToShared = tdmLayout.invertAndCompose(tdmViewSharedLayout);
   auto sharedOffsets = applyLinearLayout(
       loc, rewriter, tdmToShared,
       {{kMessage, b.i32_val(0)}, {kWarp, warpId}, {kBlock, ctaId}});
@@ -750,7 +802,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       ArrayRef<Value> offset, ArrayRef<Value> dstPtrs,
                       Value pred, Value multicastMask, Type elementType,
                       Value barrierPtr, bool isLoad,
-                      const triton::LinearLayout &sharedLayout, Value ctaId) {
+                      const triton::LinearLayout &sharedLayout, Value ctaId,
+                      bool isRowMajor) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   assert(shapePerCTA.size() <= 5);
@@ -768,7 +821,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       to_vector(shapePerCTA), numWarps, padInterval, padAmount,
                       group0Vec, group1Vec, std::ref(group2Vec),
                       std::ref(group3Vec), to_vector(offset), dstPtrs, pred,
-                      multicastMask, barrierPtr, sharedLayout, ctaId, !isLoad);
+                      multicastMask, barrierPtr, sharedLayout, ctaId, !isLoad,
+                      isRowMajor);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -788,7 +842,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       to_vector(shapePerCTA), numWarps, padInterval, padAmount,
                       group0Vec, group1Vec, std::nullopt, std::nullopt,
                       to_vector(offset), dstPtrs, pred, multicastMask,
-                      barrierPtr, sharedLayout, ctaId, !isLoad);
+                      barrierPtr, sharedLayout, ctaId, !isLoad, isRowMajor);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -1028,5 +1082,4 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
   }
   return offsets;
 }
-
 } // namespace mlir::LLVM::AMD
