@@ -199,9 +199,10 @@ uint32_t processActivity(
   return correlationId;
 }
 
-void queueGraphMetrics(
-    const DataToEntryMap &dataToEntry, PendingGraphPool *pendingGraphPool,
-    const CUpti_CallbackData *callbackData, const GraphState &graphState) {
+void queueGraphMetrics(const DataToEntryMap &dataToEntry,
+                       PendingGraphPool *pendingGraphPool,
+                       const CUpti_CallbackData *callbackData,
+                       const GraphState &graphState) {
   if (graphState.metricNodeIdToNumWords.empty()) {
     return;
   }
@@ -220,8 +221,7 @@ void queueGraphMetrics(
       auto entryIdIter = nodeState.dataToEntryId.find(data);
       if (entryIdIter != nodeState.dataToEntryId.end()) {
         metricNodeEntries[data].emplace_back(
-            DataEntry(entryIdIter->second, phase,
-                      launchEntry.metricSet.get()));
+            DataEntry(entryIdIter->second, phase, launchEntry.metricSet.get()));
       } else {
         // Indicate that we'll call upsertFlexibleMetric instead of
         // upsertLinkedFlexibleMetric in queueGraphMetrics, so that the kernel
@@ -272,11 +272,9 @@ constexpr std::array<CUpti_CallbackId, 10> kKernelCallbacks = {
 #undef PROTON_KERNEL_CB_AS_ID
 
 constexpr std::array<CUpti_CallbackId, 4> kGraphResourceCallbacks = {
-    CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED,
-    CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED,
+    CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED, CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED,
     CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING,
-    CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING
-};
+    CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING};
 
 constexpr std::array<CUpti_CallbackId, 4> kResourceCallbacks = {
     CUPTI_CBID_RESOURCE_MODULE_LOADED,
@@ -644,7 +642,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 << std::endl;
     } else if (findGraph && !graphStates[graphExecId].captureStatusChecked) {
       auto &graphState = graphStates[graphExecId];
-      profiler.correlation.externIdToState[scope.scopeId].graphState = &graphState;
+      profiler.correlation.externIdToState[scope.scopeId].graphState =
+          &graphState;
       static const bool timingEnabled =
           getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
       using Clock = std::chrono::steady_clock;
