@@ -245,7 +245,8 @@ void queueGraphMetrics(const DataToEntryMap &dataToEntry,
         // metric can be attached to the graph launch entry when node entry is
         // not found.
         metricNodeEntries[data].emplace_back(
-            DataEntry(Scope::DummyScopeId, phase, launchEntry.metricSet.get()));
+            DataEntry(Scope::DummyScopeId, phase,
+                      externIdState.dataToGraphEntry[data].metricSet.get()));
       }
     }
   }
