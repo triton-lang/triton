@@ -207,6 +207,38 @@ def test_triton_to_gluon_descriptor_load_roundtrip(tmp_path):
 
 
 @triton.jit
+def make_tensor_descriptor_copy_kernel(x_ptr, y_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    in_desc = tl.make_tensor_descriptor(
+        x_ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[BLOCK_M, BLOCK_N],
+    )
+    out_desc = tl.make_tensor_descriptor(
+        y_ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[BLOCK_M, BLOCK_N],
+    )
+    tile = in_desc.load([0, 0])
+    out_desc.store([0, 0], tile)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_triton_to_gluon_make_tensor_descriptor(tmp_path, with_allocator):
+    kernel = convert_kernel(make_tensor_descriptor_copy_kernel, "make_tensor_descriptor_copy_kernel", tmp_path)
+
+    M = N = 64
+    x = torch.randn((M, N), device="cuda", dtype=torch.float16)
+    y = torch.zeros_like(x)
+    grid = (1, )
+
+    kernel[grid](x, y, M, N, M, N)
+
+    torch.testing.assert_close(y, x, atol=0, rtol=0)
+
+
+@triton.jit
 def reshape_trans_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK: tl.constexpr, TRANS_KIND: tl.constexpr):
     pid = tl.program_id(0)
     offsets = pid * BLOCK + tl.arange(0, BLOCK)

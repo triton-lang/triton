@@ -591,7 +591,7 @@ def tl_obj_scatter(obj, value, x_offsets, y_offset):
 
 
 @gluon.jit
-def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option="zero", _semantic=None):
+def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option: ttgl.constexpr = "zero"):
     layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for(block_shape, base.dtype.element_ty)
     return tma.make_tensor_descriptor(base, shape, strides, block_shape, layout, padding_option)
 
