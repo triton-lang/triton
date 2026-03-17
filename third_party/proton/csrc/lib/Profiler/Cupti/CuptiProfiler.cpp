@@ -207,8 +207,9 @@ void buildGraphNodeEntries(const DataToEntryMap &dataToEntry,
     if (nodeStateIt == graphState.dataToEntryIdToNodeStates.end())
       // This is a new data which was not enabled during graph capture
       continue;
-    externIdState.dataToGraphEntry[data] =
-        data->addOp(entry.phase, entry.id, {Context{GraphState::captureTag}});
+    externIdState.dataToGraphEntry.insert(
+        {data, data->addOp(entry.phase, entry.id,
+                           {Context{GraphState::captureTag}})});
   }
   externIdState.graphState = &graphState;
 }
