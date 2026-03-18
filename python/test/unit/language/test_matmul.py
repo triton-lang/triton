@@ -1003,11 +1003,9 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     assert K % BLOCK_K == 0
 
     nvfp4_fallback = BLOCK_M < 128
-    if nvfp4_fallback:
-        if scale_type != "float8_e4m3fn" or not pack_along_k or not (with_a_scale and with_b_scale):
-            pytest.skip("NVFP4 fallback config only exercises packed NVFP4 with both scales")
-
     if is_cuda():
+        if BLOCK_M < 128 and not pack_along_k:
+            pytest.skip("Packing along M/N with BLOCK_M < 128 is not supported on CUDA")
         if scale_type == "float8_e4m3fn" and not pack_along_k:
             pytest.skip("Packing along K is required for float8_e4m3fn")
         if torch.cuda.get_device_capability()[0] != 10 and torch.cuda.get_device_capability()[0] != 12:
