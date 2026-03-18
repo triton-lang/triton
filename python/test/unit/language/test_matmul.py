@@ -1007,9 +1007,6 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if scale_type != "float8_e4m3fn" or not pack_along_k or not (with_a_scale and with_b_scale):
             pytest.skip("NVFP4 fallback config only exercises packed NVFP4 with both scales")
 
-    atol = 1e-3
-    rtol = 1e-3
-
     if is_cuda():
         if scale_type == "float8_e4m3fn" and not pack_along_k:
             pytest.skip("Packing along K is required for float8_e4m3fn")
@@ -1075,7 +1072,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
                                      b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
                                      BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PACK_ALONG_K=pack_along_k,
                                      **kernel_kwargs)
-    torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
+    torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
     if is_cuda() and not nvfp4_fallback:
         ptx = k.asm["ptx"]
         if pack_along_k:
