@@ -1482,24 +1482,12 @@ struct TCGen5MMAScaledPattern
     auto aScaleMemTy = cast<ttg::MemDescType>(op.getAScale().getType());
     auto bScaleMemTy = cast<ttg::MemDescType>(op.getBScale().getType());
 
-    if (!isa<FloatType, IntegerType>(aMemTy.getElementType()) ||
-        !isa<FloatType, IntegerType>(bMemTy.getElementType()) ||
-        !isa<FloatType, IntegerType>(aScaleMemTy.getElementType()) ||
-        !isa<FloatType, IntegerType>(bScaleMemTy.getElementType()) ||
-        !isa<FloatType>(dMemTy.getElementType()))
-      return failure();
-
     bool aIsTmem = isa<ttng::TensorMemorySpaceAttr>(aMemTy.getMemorySpace());
     bool bIsTmem = isa<ttng::TensorMemorySpaceAttr>(bMemTy.getMemorySpace());
-    bool aScaleIsTmem =
-        isa<ttng::TensorMemorySpaceAttr>(aScaleMemTy.getMemorySpace());
-    bool bScaleIsTmem =
-        isa<ttng::TensorMemorySpaceAttr>(bScaleMemTy.getMemorySpace());
 
     if ((aIsTmem && aMemTy.getRank() != 2) ||
-        (bIsTmem && bMemTy.getRank() != 2) ||
-        (aScaleIsTmem && aScaleMemTy.getRank() != 2) ||
-        (bScaleIsTmem && bScaleMemTy.getRank() != 2) || dMemTy.getRank() != 2)
+        (bIsTmem && bMemTy.getRank() != 2) || (aScaleMemTy.getRank() != 2) ||
+        (bScaleMemTy.getRank() != 2) || dMemTy.getRank() != 2)
       // TODO: Here and everywhere else, distinguish between intentional cases
       // where pattern should not apply (failure()), missing fpsan
       // functionality, and code emission issues (error).
