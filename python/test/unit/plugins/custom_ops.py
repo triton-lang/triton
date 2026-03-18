@@ -34,14 +34,6 @@ def _unwrap_if_constexpr(o):
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
-def get_key():
-    return pathlib.Path(__file__).read_text()
-
-
-def get_hash():
-    return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
-
-
 @builtin
 def custom_op(x, sanitize_overflow: tl.constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
