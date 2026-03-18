@@ -44,23 +44,23 @@ using RegisterPassCallback = void (*)();
 using RegisterDialectCallback = void (*)(mlir::DialectRegistry *);
 
 /// Information provided by a plugin for loading its passes.
-typedef struct PassInfo {
+struct PassInfo {
   const char *name;
   const char *version;
   AddPassCallback addPass;
   RegisterPassCallback registerPass;
-} PassInfo;
+};
 
 /// Information provided by a plugin for loading its dialects.
-typedef struct DialectInfo {
+struct DialectInfo {
   const char *name;
   const char *version;
   RegisterDialectCallback registerDialect;
-} DialectInfo;
+};
 
 /// Container for all plugin information; this is returned by the plugin
 /// library's public entry point, @ref tritonGetPluginInfo.
-typedef struct PluginInfo {
+struct PluginInfo {
   /// The API version used by this plugin, see \c TRITON_PLUGIN_API_VERSION.
   uint32_t apiVersion;
 
@@ -77,7 +77,7 @@ typedef struct PluginInfo {
   DialectInfo *dialects;
   size_t numDialects;
   // TODO: do we really want to support multiple dialects per plugin?
-} PluginInfo;
+};
 }
 
 /// A helper structure for storing information about a pass registered by a
