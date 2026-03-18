@@ -1294,10 +1294,8 @@ static Value getScratchPtrImpl(Location loc, RewriterBase &rewriter,
   auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
   if (numCTAs > 1) {
     linearId = b.mul(linearId, b.i32_val(numCTAs));
-    // FIXME: We should always have currentCTA == false. This way we would just
-    // need to set the CTA layout to split the input along the kBlock and
-    // everything would work Even more, it allows us to gather the data from all
-    // CTAs in a given CTA which is sometimes needed.
+    // currentCTA sets whether to rebase the linearId to the CTA id or
+    // just keep the pointer to the whole tensor
     if (currentCTA)
       linearId = b.add(linearId, targetInfo.getClusterCTAId(rewriter, loc));
   }
