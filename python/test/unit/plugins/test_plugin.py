@@ -21,6 +21,12 @@ def kernel2(BLOCK_SIZE: tl.constexpr):
     return
 
 
+@pytest.mark.parametrize(None, [None])
+@triton.jit
+def kernel3(BLOCK_SIZE: tl.constexpr):
+    return
+
+
 def test_op(capfd, device: str):
     if os.environ.get('LLVM_BUILD_SHARED_LIBS', '0') == '0':
         return
@@ -41,3 +47,8 @@ def test_op(capfd, device: str):
     knobs.runtime.add_stages_inspection_hook = None
     h = kernel2[grid](BLOCK_SIZE=1024)
     assert "tt.func public @foo" not in h.asm["ttgir"]
+
+    knobs.runtime.add_stages_inspection_hook = custom_stages.inspect_stages_hook
+    custom_stages.num_warps = 8
+    h = kernel3[grid](BLOCK_SIZE=1024)
+    assert "tt.func public @foo_num_warps_8" in h.asm["ttgir"]
