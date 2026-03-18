@@ -977,19 +977,17 @@ def block_scale_fp4_matmul(  #
 
 
 @pytest.mark.parametrize(
-    "M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, input_scale, atol, rtol, nvfp4_fallback",
+    "M, N, K, BLOCK_M, BLOCK_N, BLOCK_K",
     [
-        pytest.param(1024, 512, 256, 128, 128, 128, 1.0, 1e-2, 1e-2, False, id="bm128_bn128_bk128"),
-        pytest.param(1024, 512, 256, 256, 128, 128, 1.0, 1e-2, 1e-2, False, id="bm256_bn128_bk128"),
-        pytest.param(1024, 512, 256, 128, 256, 128, 1.0, 1e-2, 1e-2, False, id="bm128_bn256_bk128"),
-        pytest.param(1024, 512, 256, 128, 256, 256, 1.0, 1e-2, 1e-2, False, id="bm128_bn256_bk256"),
-        pytest.param(1024, 512, 256, 128, 128, 64, 1.0, 1e-2, 1e-2, False, id="bm128_bn128_bk64"),
-        pytest.param(1024, 512, 256, 128, 64, 128, 1.0, 1e-2, 1e-2, False, id="bm128_bn64_bk128"),
-        pytest.param(16, 256, 256, 16, 256, 256, 4.0, 1e-4, 1e-4, True, id="nvfp4_fallback_bm16"),
-        pytest.param(32, 256, 256, 32, 256, 256, 4.0, 1e-4, 1e-4, True, id="nvfp4_fallback_bm32"),
-        pytest.param(64, 256, 256, 64, 256, 256, 4.0, 1e-4, 1e-4, True, id="nvfp4_fallback_bm64"),
-        pytest.param(128, 256, 256, 128, 256, 256, 4.0, 1e-4, 1e-4, True, id="nvfp4_fallback_bm128"),
-        pytest.param(256, 128, 256, 256, 128, 256, 4.0, 1e-4, 1e-4, True, id="nvfp4_fallback_bm256"),
+        pytest.param(1024, 512, 256, 128, 128, 128, id="bm128_bn128_bk128"),
+        pytest.param(1024, 512, 256, 256, 128, 128, id="bm256_bn128_bk128"),
+        pytest.param(1024, 512, 256, 128, 256, 128, id="bm128_bn256_bk128"),
+        pytest.param(1024, 512, 256, 128, 256, 256, id="bm128_bn256_bk256"),
+        pytest.param(1024, 512, 256, 128, 128, 64, id="bm128_bn128_bk64"),
+        pytest.param(1024, 512, 256, 128, 64, 128, id="bm128_bn64_bk128"),
+        pytest.param(16, 256, 256, 16, 256, 256, id="nvfp4_fallback_bm16"),
+        pytest.param(32, 256, 256, 32, 256, 256, id="nvfp4_fallback_bm32"),
+        pytest.param(64, 256, 256, 64, 256, 256, id="nvfp4_fallback_bm64"),
     ],
 )
 @pytest.mark.parametrize("with_a_scale", [True, False])
@@ -998,18 +996,21 @@ def block_scale_fp4_matmul(  #
 @pytest.mark.parametrize(("scale_type", "VEC_SIZE"), [("float8_e8m0fnu", 32), ("float8_e4m3fn", 16)],
                          ids=["mxfp4", "nvfp4"])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
-def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, input_scale, atol, rtol, nvfp4_fallback, VEC_SIZE,
-                         with_a_scale, with_b_scale, pack_along_k, scale_type, nonKDim, device):
+def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_scale, with_b_scale, pack_along_k,
+                         scale_type, nonKDim, device):
     assert M % BLOCK_M == 0
     assert N % BLOCK_N == 0
     assert K % BLOCK_K == 0
+
+    nvfp4_fallback = BLOCK_M < 128
     if nvfp4_fallback:
-        if not is_cuda():
-            pytest.skip("NVFP4 fallback config only applies to CUDA")
-        if torch.cuda.get_device_capability()[0] != 10:
-            pytest.skip("NVFP4 fallback config requires Blackwell")
         if scale_type != "float8_e4m3fn" or not pack_along_k or not (with_a_scale and with_b_scale):
             pytest.skip("NVFP4 fallback config only exercises packed NVFP4 with both scales")
+
+    input_scale = 4.0 if nvfp4_fallback else 1.0
+    atol = 1e-4 if nvfp4_fallback else 1e-2
+    rtol = 1e-4 if nvfp4_fallback else 1e-2
+
     if is_cuda():
         if scale_type == "float8_e4m3fn" and not pack_along_k:
             pytest.skip("Packing along K is required for float8_e4m3fn")
