@@ -45,11 +45,6 @@ void populateTritonAMDGPUToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         const AMD::TargetInfo &,
                                         PatternBenefit benefit);
 
-void populateUpcastMXFPToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                      RewritePatternSet &patterns,
-                                      const TargetInfo &targetInfo,
-                                      PatternBenefit benefit);
-
 void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
                                    const TargetInfo &targetInfo,
