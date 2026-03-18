@@ -364,6 +364,7 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 // For CTA 7 (0b111): groupOffset = 0b111 & 0b010 = 2 => ctaMask = 0b11001100
 Value emitCtaMulticastMask(RewriterBase &rewriter, Location loc, Value groupId,
                            const LinearLayout &regLayout) {
+  return Value();
   TritonLLVMOpBuilder b(loc, rewriter);
 
   auto kBlock = StringAttr::get(rewriter.getContext(), "block");
