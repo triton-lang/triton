@@ -447,7 +447,7 @@ void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar,
         Value newWaiting =
             arith::SelectOp::create(fb, cond, pendingWaiting, waiting);
         tti::createStoreScratchMemory(fb, fb.getLoc(), waitingPtr, newWaiting,
-                                      waitingType);
+                                      waitingType, /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -530,7 +530,7 @@ void FunctionBuilder::createClearWaitingCall(ImplicitLocOpBuilder &b,
             arith::SelectOp::create(fb, barriersEqBar, clearedWaiting, waiting);
 
         tti::createStoreScratchMemory(fb, fb.getLoc(), waitingPtr, newWaiting,
-                                      waitingType);
+                                      waitingType, /*currentCTAOnly=*/true);
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
       });
@@ -783,7 +783,8 @@ void FunctionBuilder::createInitBarrierStateCall(ImplicitLocOpBuilder &b,
 
         Value updated = arith::SelectOp::create(fb, mask, newState, states);
         tti::createStoreScratchMemory(fb, fb.getLoc(), statesPtr, updated,
-                                      barrierStatesType);
+                                      barrierStatesType,
+                                      /*currentCTAOnly=*/true);
         triton::ReturnOp::create(fb);
       });
 }
@@ -842,9 +843,11 @@ void FunctionBuilder::createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b,
         Value updatedWaiting =
             arith::SelectOp::create(fb, waitingMask, zeroWaiting, waiting);
         tti::createStoreScratchMemory(fb, fb.getLoc(), statesPtr, updatedStates,
-                                      barrierStatesType);
+                                      barrierStatesType,
+                                      /*currentCTAOnly=*/true);
         tti::createStoreScratchMemory(fb, fb.getLoc(), waitingPtr,
-                                      updatedWaiting, waitingType);
+                                      updatedWaiting, waitingType,
+                                      /*currentCTAOnly=*/true);
         triton::ReturnOp::create(fb);
       });
 }
@@ -1017,7 +1020,8 @@ void FunctionBuilder::createUpdateBarrierStateCall(ImplicitLocOpBuilder &b,
 
         Value updated = arith::SelectOp::create(fb, mask, newState, states);
         tti::createStoreScratchMemory(fb, fb.getLoc(), statesPtr, updated,
-                                      barrierStatesType);
+                                      barrierStatesType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1077,7 +1081,8 @@ void FunctionBuilder::createSetWriteVisibilityCall(ImplicitLocOpBuilder &b,
         Value newVisibility = arith::SelectOp::create(
             fb, buffersEqBuf, threadMaskTensor, writeVisibility);
         tti::createStoreScratchMemory(fb, fb.getLoc(), writeVisibilityPtr,
-                                      newVisibility, writeVisibilityType);
+                                      newVisibility, writeVisibilityType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1143,7 +1148,8 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
         Value newVisibility = arith::SelectOp::create(
             fb, bufAndThread, readVisibilityOrThreadBit, readVisibility);
         tti::createStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
-                                      newVisibility, readVisibilityType);
+                                      newVisibility, readVisibilityType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1197,7 +1203,8 @@ void FunctionBuilder::createClearWriteTrackingCall(ImplicitLocOpBuilder &b,
         Value newTracking =
             arith::SelectOp::create(fb, buffersEqBuf, zero, writeTracking);
         tti::createStoreScratchMemory(fb, fb.getLoc(), writeTrackingPtr,
-                                      newTracking, writeTrackingType);
+                                      newTracking, writeTrackingType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1251,7 +1258,8 @@ void FunctionBuilder::createClearReadVisibilityCall(ImplicitLocOpBuilder &b,
         Value newVisibility =
             arith::SelectOp::create(fb, buffersEqBuf, zero, readVisibility);
         tti::createStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
-                                      newVisibility, readVisibilityType);
+                                      newVisibility, readVisibilityType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1306,7 +1314,8 @@ void FunctionBuilder::createClearReadTrackingCall(ImplicitLocOpBuilder &b,
         Value newTracking =
             arith::SelectOp::create(fb, buffersEqBuf, zero, readTracking);
         tti::createStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr,
-                                      newTracking, readTrackingType);
+                                      newTracking, readTrackingType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1387,7 +1396,8 @@ void FunctionBuilder::createTrackVisibleWritesCall(ImplicitLocOpBuilder &b,
         Value newTracking = arith::SelectOp::create(
             fb, barAndVisible, writeTrackingOne, writeTracking);
         tti::createStoreScratchMemory(fb, fb.getLoc(), writeTrackingPtr,
-                                      newTracking, writeTrackingType);
+                                      newTracking, writeTrackingType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1464,7 +1474,8 @@ void FunctionBuilder::createTrackVisibleReadsCall(ImplicitLocOpBuilder &b,
         Value newTracking = arith::SelectOp::create(
             fb, barriersEqBar, readTrackingOrVisible, readTracking);
         tti::createStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr,
-                                      newTracking, readTrackingType);
+                                      newTracking, readTrackingType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1537,7 +1548,8 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
         Value newTracking = arith::SelectOp::create(
             fb, trackMask, writeTrackingOne, writeTracking);
         tti::createStoreScratchMemory(fb, fb.getLoc(), writeTrackingPtr,
-                                      newTracking, writeTrackingType);
+                                      newTracking, writeTrackingType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1594,7 +1606,8 @@ void FunctionBuilder::createClearBarrierWriteTrackingCall(
         Value updated =
             arith::SelectOp::create(fb, barriersEqBar, zero, writeTracking);
         tti::createStoreScratchMemory(fb, fb.getLoc(), writeTrackingPtr,
-                                      updated, writeTrackingType);
+                                      updated, writeTrackingType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1651,7 +1664,8 @@ void FunctionBuilder::createClearBarrierReadTrackingCall(
         Value updated =
             arith::SelectOp::create(fb, barriersEqBar, zero, readTracking);
         tti::createStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr, updated,
-                                      readTrackingType);
+                                      readTrackingType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1737,7 +1751,8 @@ void FunctionBuilder::createTransferVisibleWritesCall(
         Value newVisibility =
             arith::OrIOp::create(fb, writeVisibility, trackingThreadBit);
         tti::createStoreScratchMemory(fb, fb.getLoc(), writeVisibilityPtr,
-                                      newVisibility, writeVisibilityType);
+                                      newVisibility, writeVisibilityType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1813,7 +1828,8 @@ void FunctionBuilder::createTransferVisibleReadsCall(
         Value newVisibility = arith::SelectOp::create(
             fb, threadColumnMask, readVisibilityOrTracking, readVisibility);
         tti::createStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
-                                      newVisibility, readVisibilityType);
+                                      newVisibility, readVisibilityType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -2096,7 +2112,8 @@ void FunctionBuilder::createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b,
 
         Value updatedCurrent = arith::OrIOp::create(fb, cleared, replicated);
         tti::createStoreScratchMemory(fb, fb.getLoc(), writeVisibilityPtr,
-                                      updatedCurrent, writeVisibilityType);
+                                      updatedCurrent, writeVisibilityType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -2156,7 +2173,8 @@ void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
 
         Value updated = arith::OrIOp::create(fb, cleared, replicated);
         tti::createStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
-                                      updated, readVisibilityType);
+                                      updated, readVisibilityType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -2212,7 +2230,8 @@ void FunctionBuilder::createStageAccessForCommitCall(
         Value updated =
             arith::SelectOp::create(fb, bufAndThread, minusOne, commits);
         tti::createStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
-                                      updated, commitsType);
+                                      updated, commitsType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -2267,7 +2286,8 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
         commits = arith::SelectOp::create(fb, commitsEqMinusOne, ones, commits);
 
         tti::createStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
-                                      commits, commitsType);
+                                      commits, commitsType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -2339,9 +2359,9 @@ void FunctionBuilder::createClearOutstandingCommitsTransferWritesCall(
             arith::OrIOp::create(fb, writeVisibility, transferMaskTensor);
         Value writeVisibilityUpdated = arith::SelectOp::create(
             fb, rowMask, writeVisibilityOrThreadBit, writeVisibility);
-        tti::createStoreScratchMemory(fb, fb.getLoc(), writeVisibilityPtr,
-                                      writeVisibilityUpdated,
-                                      writeVisibilityType);
+        tti::createStoreScratchMemory(
+            fb, fb.getLoc(), writeVisibilityPtr, writeVisibilityUpdated,
+            writeVisibilityType, /*currentCTAOnly=*/true);
 
         Value outstandingCommitsZero =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, commitsType);
@@ -2349,7 +2369,8 @@ void FunctionBuilder::createClearOutstandingCommitsTransferWritesCall(
             arith::SelectOp::create(fb, outstandingCommitsGtOutstandingNum,
                                     outstandingCommitsZero, outstandingCommits);
         tti::createStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
-                                      outstandingCommits, commitsType);
+                                      outstandingCommits, commitsType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -2421,8 +2442,8 @@ void FunctionBuilder::createClearOutstandingCommitsTransferReadsCall(
         Value readVisibilityUpdated = arith::SelectOp::create(
             fb, rowMask, readVisibilityOrThreadBit, readVisibility);
         tti::createStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
-                                      readVisibilityUpdated,
-                                      readVisibilityType);
+                                      readVisibilityUpdated, readVisibilityType,
+                                      /*currentCTAOnly=*/true);
 
         Value outstandingCommitsZero =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, commitsType);
@@ -2430,7 +2451,8 @@ void FunctionBuilder::createClearOutstandingCommitsTransferReadsCall(
             arith::SelectOp::create(fb, outstandingCommitsGtOutstandingNum,
                                     outstandingCommitsZero, outstandingCommits);
         tti::createStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
-                                      outstandingCommits, commitsType);
+                                      outstandingCommits, commitsType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);

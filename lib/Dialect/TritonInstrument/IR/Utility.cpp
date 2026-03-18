@@ -378,11 +378,18 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType,
                                     bool currentCTAOnly) {
-  if (currentCTAOnly && tensorType.getRank() > 0 &&
-      tensorType.getShape()[0] > 1) {
-    Value oldTensor = createLoadScratchMemory(b, loc, alloc, tensorType);
-    Value currentCTAMask = createCurrentCTAMask(b, loc, tensorType);
-    tensor = arith::SelectOp::create(b, loc, currentCTAMask, tensor, oldTensor);
+  if (currentCTAOnly) {
+    assert(tensorType.getRank() >= 2 &&
+           "expected currentCTAOnly tensor to have a leading CTA dimension");
+    int64_t numCTAs = lookupNumCTAs(b);
+    assert(tensorType.getShape()[0] == numCTAs &&
+           "expected leading dimension to match numCTAs");
+    if (numCTAs > 1) {
+      Value oldTensor = createLoadScratchMemory(b, loc, alloc, tensorType);
+      Value currentCTAMask = createCurrentCTAMask(b, loc, tensorType);
+      tensor =
+          arith::SelectOp::create(b, loc, currentCTAMask, tensor, oldTensor);
+    }
   }
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
   return StoreOp::create(b, loc, ptrTensor, tensor, Value(),

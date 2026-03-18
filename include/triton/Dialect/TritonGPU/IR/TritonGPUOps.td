@@ -539,6 +539,17 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
   );
   let results = (outs Arg<TT_Ptr, "", [MemAlloc<GlobalMemory>]>:$result);
 
+  let extraClassDeclaration = [{
+    static GlobalScratchAllocOp create(::mlir::OpBuilder &builder,
+                                       ::mlir::Location location,
+                                       ::mlir::Type result, uint32_t nbytes,
+                                       uint32_t alignment,
+                                       ::mlir::UnitAttr third_party_allocation) {
+      return create(builder, location, result, nbytes, alignment,
+                    third_party_allocation, ::mlir::UnitAttr());
+    }
+  }];
+
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
