@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import triton
+from triton.experimental.gluon._runtime import GluonJITFunction
 
 
 def cacheable(f):
@@ -61,7 +62,7 @@ def define_kernel(src, module, attrs=None, is_gluon=False, **extra_globals):
     if attrs is None:
         attrs = dict()
     if is_gluon:
-        f = triton.experimental.gluon._runtime.GluonJITFunction(f, **attrs)
+        f = GluonJITFunction(f, **attrs)
     else:
         f = triton.JITFunction(f, **attrs)
     f._unsafe_update_src(src)
