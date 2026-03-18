@@ -976,20 +976,40 @@ def block_scale_fp4_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
-@pytest.mark.parametrize("M, N, K", [(1024, 512, 256)])
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
-                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128)])
+@pytest.mark.parametrize(
+    "M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, input_scale, atol, rtol, nvfp4_fallback",
+    [
+        pytest.param(1024, 512, 256, 128, 128, 128, 1.0, 1e-2, 1e-2, False, id="bm128_bn128_bk128"),
+        pytest.param(1024, 512, 256, 256, 128, 128, 1.0, 1e-2, 1e-2, False, id="bm256_bn128_bk128"),
+        pytest.param(1024, 512, 256, 128, 256, 128, 1.0, 1e-2, 1e-2, False, id="bm128_bn256_bk128"),
+        pytest.param(1024, 512, 256, 128, 256, 256, 1.0, 1e-2, 1e-2, False, id="bm128_bn256_bk256"),
+        pytest.param(1024, 512, 256, 128, 128, 64, 1.0, 1e-2, 1e-2, False, id="bm128_bn128_bk64"),
+        pytest.param(1024, 512, 256, 128, 64, 128, 1.0, 1e-2, 1e-2, False, id="bm128_bn64_bk128"),
+        pytest.param(16, 256, 256, 16, 256, 256, 4.0, 1e-4, 1e-4, True, id="nvfp4_fallback_bm16"),
+        pytest.param(32, 256, 256, 32, 256, 256, 4.0, 1e-4, 1e-4, True, id="nvfp4_fallback_bm32"),
+        pytest.param(64, 256, 256, 64, 256, 256, 4.0, 1e-4, 1e-4, True, id="nvfp4_fallback_bm64"),
+        pytest.param(128, 256, 256, 128, 256, 256, 4.0, 1e-4, 1e-4, True, id="nvfp4_fallback_bm128"),
+        pytest.param(256, 128, 256, 256, 128, 256, 4.0, 1e-4, 1e-4, True, id="nvfp4_fallback_bm256"),
+    ],
+)
 @pytest.mark.parametrize("with_a_scale", [True, False])
 @pytest.mark.parametrize("with_b_scale", [True, False])
 @pytest.mark.parametrize("pack_along_k", [True, False])
 @pytest.mark.parametrize(("scale_type", "VEC_SIZE"), [("float8_e8m0fnu", 32), ("float8_e4m3fn", 16)],
                          ids=["mxfp4", "nvfp4"])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
-def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_scale, with_b_scale, pack_along_k,
-                         scale_type, nonKDim, device):
+def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, input_scale, atol, rtol, nvfp4_fallback, VEC_SIZE,
+                         with_a_scale, with_b_scale, pack_along_k, scale_type, nonKDim, device):
     assert M % BLOCK_M == 0
     assert N % BLOCK_N == 0
     assert K % BLOCK_K == 0
+    if nvfp4_fallback:
+        if not is_cuda():
+            pytest.skip("NVFP4 fallback config only applies to CUDA")
+        if torch.cuda.get_device_capability()[0] != 10:
+            pytest.skip("NVFP4 fallback config requires Blackwell")
+        if scale_type != "float8_e4m3fn" or not pack_along_k or not (with_a_scale and with_b_scale):
+            pytest.skip("NVFP4 fallback config only exercises packed NVFP4 with both scales")
     if is_cuda():
         if scale_type == "float8_e4m3fn" and not pack_along_k:
             pytest.skip("Packing along K is required for float8_e4m3fn")
@@ -1024,6 +1044,11 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     b_size = (N, (K + VEC_SIZE - 1) // VEC_SIZE)
     a_scale = torch.rand(a_size, device=device)
     b_scale = torch.rand(b_size, device=device)
+    if nvfp4_fallback:
+        a_scale += 1e-3
+        b_scale += 1e-3
+    a_scale *= input_scale
+    b_scale *= input_scale
     if scale_type == "float8_e8m0fnu":
         a_scale_ref = MXScaleTensor(a_scale)
         b_scale_ref = MXScaleTensor(b_scale)
@@ -1055,71 +1080,13 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
                                      b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
                                      BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PACK_ALONG_K=pack_along_k,
                                      **kernel_kwargs)
-    torch.testing.assert_close(ref_out, output, atol=1e-2, rtol=1e-2)
-    if is_cuda():
+    torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
+    if is_cuda() and not nvfp4_fallback:
         ptx = k.asm["ptx"]
         if pack_along_k:
             assert "kind::mxf4" in ptx
         else:
             assert "kind::mxf8f6f4" in ptx
-
-
-@triton.jit
-def nvfp4_blocked_fallback_matmul(
-        a_ptr, a_scale_ptr, b_ptr, b_scale_ptr, output_ptr,
-        stride_am, stride_ak,
-        stride_asm, stride_ask,
-        stride_bk, stride_bn,
-        stride_bsn, stride_bsk,
-        stride_om, stride_on,
-        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, VEC_SIZE: tl.constexpr):
-    offs_m = tl.arange(0, BLOCK_M)
-    offs_n = tl.arange(0, BLOCK_N)
-    offs_k = tl.arange(0, BLOCK_K // 2)
-    offs_scale_k = tl.arange(0, BLOCK_K // VEC_SIZE)
-
-    a = tl.load(a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    a_scale = tl.load(a_scale_ptr + offs_m[:, None] * stride_asm + offs_scale_k[None, :] * stride_ask)
-    b = tl.load(b_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn)
-    b_scale = tl.load(b_scale_ptr + offs_n[:, None] * stride_bsn + offs_scale_k[None, :] * stride_bsk)
-
-    acc = tl.dot_scaled(a, a_scale, "e2m1", b, b_scale, "e2m1", acc=tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32),
-                        lhs_k_pack=True, rhs_k_pack=True, fast_math=False)
-    tl.store(output_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on, acc)
-
-
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
-@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] != 10, reason="Requires Blackwell")
-@pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
-def test_nvfp4_blocked_fallback_blackwell(BLOCK_M, device):
-    BLOCK_N = 128 if BLOCK_M == 256 else 256
-    BLOCK_K = 256
-    VEC_SIZE = 16
-    INPUT_SCALE = 4.0
-
-    torch.manual_seed(0)
-    a_mxfp4 = MXFP4Tensor(size=(BLOCK_M, BLOCK_K), device=device).random()
-    b_mxfp4 = MXFP4Tensor(size=(BLOCK_N, BLOCK_K), device=device).random()
-    a = a_mxfp4.to_packed_tensor(dim=1)
-    b = b_mxfp4.to_packed_tensor(dim=1).T.contiguous()
-    a_scale = ((torch.rand((BLOCK_M, BLOCK_K // VEC_SIZE), device=device) + 1e-3) * INPUT_SCALE).to(
-        torch.float8_e4m3fn)
-    b_scale = ((torch.rand((BLOCK_N, BLOCK_K // VEC_SIZE), device=device) + 1e-3) * INPUT_SCALE).to(
-        torch.float8_e4m3fn)
-
-    output = torch.empty((BLOCK_M, BLOCK_N), device=device, dtype=torch.float32)
-
-    nvfp4_blocked_fallback_matmul[(1, )](a, a_scale, b, b_scale, output, a.stride(0), a.stride(1), a_scale.stride(0),
-                                         a_scale.stride(1), b.stride(0), b.stride(1), b_scale.stride(0),
-                                         b_scale.stride(1), output.stride(0), output.stride(1), BLOCK_M=BLOCK_M,
-                                         BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, VEC_SIZE=VEC_SIZE)
-    torch.cuda.synchronize()
-
-    a_scale_ref = a_scale.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1)[:, :BLOCK_K]
-    b_scale_ref = b_scale.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:BLOCK_K, :BLOCK_N]
-    ref_out = torch.matmul(a_mxfp4.to(torch.float32) * a_scale_ref,
-                           b_mxfp4.to(torch.float32).T.contiguous() * b_scale_ref)
-    torch.testing.assert_close(output, ref_out, atol=1e-4, rtol=1e-4)
 
 
 @triton.jit
