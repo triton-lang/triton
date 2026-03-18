@@ -15,7 +15,10 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 )
 from triton.experimental.gluon.language.nvidia.blackwell import tma as tma_blackwell
 from triton.experimental.gluon.language.nvidia.hopper import mbarrier, tma
-from triton.language.core import _unwrap_if_constexpr
+
+# hack to workaround limited dependencies tracking.
+# TODO: fix this by pulling imports into the generated file.
+from triton.language.target_info import current_target  # noqa: F401
 
 
 @gluon.constexpr_function
@@ -270,7 +273,7 @@ def tl_dot_decomposed_broadcast_scale(scale, dim):
     expand_scale = scale.expand_dims(rank)
     broadcast_scale = expand_scale.broadcast_to(scale.type.shape + (32, ))
     permute_order: ttgl.constexpr = tl_dot_get_permute_order(rank, dim)
-    transposed_scale = broadcast_scale.permute(permute_order.value)
+    transposed_scale = broadcast_scale.permute(permute_order)
     reshape_shape: ttgl.constexpr = tl_dot_get_reshape_shape(broadcast_scale.type, dim)
     return transposed_scale.reshape(reshape_shape)
 
@@ -290,7 +293,7 @@ def tl_dot_decomposed_extend_and_broadcast_scale(v, scale, compute_type, operand
 
     if operand_index == 1:
         order: ttgl.constexpr = tl_dot_decomposed_get_transposed_order(rank)
-        scale = ttgl.permute(scale, order.value)
+        scale = ttgl.permute(scale, order)
 
     scale16 = tl_dot_decomposed_scale_to_16(scale, compute_type)
     reshape_scale = tl_dot_decomposed_broadcast_scale(scale16, k_dim)
@@ -498,9 +501,9 @@ def get_num_threads_per_warp() -> ttgl.constexpr:
     return ttgl.constexpr(32)
 
 
-@ttgl._core.builtin
-def get_num_threads_per_program(_semantic=None, _generator=None):
-    return ttgl.num_warps(_semantic=_semantic, _generator=_generator) * get_num_threads_per_warp(_semantic=_semantic)
+@gluon.jit
+def get_num_threads_per_program():
+    return ttgl.num_warps() * get_num_threads_per_warp()
 
 
 @gluon.constexpr_function
@@ -587,10 +590,10 @@ def tl_obj_scatter(obj, value, x_offsets, y_offset):
         obj.scatter(value, x_offsets, y_offset)
 
 
-@ttgl._core.builtin
-def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option="zero", _semantic=None):
-    layout = ttgl.NVMMASharedLayout.get_default_for(block_shape, base.dtype.element_ty)
-    return tma.make_tensor_descriptor(base, shape, strides, block_shape, layout, padding_option, _semantic=_semantic)
+@gluon.jit
+def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option: ttgl.constexpr = "zero"):
+    layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for(block_shape, base.dtype.element_ty)
+    return tma.make_tensor_descriptor(base, shape, strides, block_shape, layout, padding_option)
 
 
 @gluon.jit
@@ -629,28 +632,10 @@ def tl_full(shape, value, dtype=None):
     return ttgl.full(shape, value, dtype, layout=layout)
 
 
+# Builtin because varargs aren't supported in JIT functions
 @ttgl._core.builtin
 def tl_trans(value, *dims, _semantic=None):
     return value.trans(*dims, _semantic=_semantic)
-
-
-@ttgl._core.builtin
-def cat(input, other, can_reorder=False, layout=None, _semantic=None):
-    """
-    Concatenate the two tensors.
-
-    Args:
-        input (tensor): The first input tensor.
-        other (tensor): The second input tensor.
-        can_reorder (bool): Compiler hint. If true, the compiler is allowed to reorder elements while concatenating inputs.  Only use if the order does not matter (e.g., result is only used in reduction ops).  Current implementation of `cat` supports only can_reorder=True.
-        layout (DistributedLayout): The destination layout of the output tensor.
-
-    Returns:
-        tensor: The concatenated tensor.
-    """
-    can_reorder = ttgl._core._unwrap_if_constexpr(can_reorder)
-    layout = ttgl._core._unwrap_if_constexpr(layout)
-    return _semantic.cat(input, other, can_reorder, layout)
 
 
 def _wrap_axis(axis, ndim):
@@ -660,35 +645,29 @@ def _wrap_axis(axis, ndim):
     return axis if axis >= 0 else axis + ndim
 
 
-@ttgl._core.builtin
-def cat_with_permute(input, other, dim=0, _semantic=None):
-    rank = len(input.shape)
-    assert rank == len(other.shape), (f"tensors must have the same rank, got {rank} and {len(other.shape)}")
-    dim = _wrap_axis(_unwrap_if_constexpr(dim), rank)
-    assert all(input.shape[i] == other.shape[i] for i in range(rank) if i != dim), (
-        f"tensor dims must match except in the concat dimension {dim}, got {input.shape} and {other.shape}")
-
-    # Join introduces a new minor dim; move it before the concat dim and merge.
-    c = ttgl.join(input, other, _semantic=_semantic)
+@gluon.constexpr_function
+def cat_permute_order(rank, dim):
     order = list(range(rank))
     order.insert(dim, rank)
-    c = ttgl.permute(c, order, _semantic=_semantic)
-    new_shape = list(input.shape)
-    new_shape[dim] = input.shape[dim] + other.shape[dim]
-    return ttgl.reshape(c, new_shape, _semantic=_semantic)
+    return order
+
+
+@gluon.constexpr_function
+def cat_result_shape(input_shape, dim):
+    result_shape = list(input_shape)
+    result_shape[dim] *= 2
+    return result_shape
 
 
 @gluon.jit
-def tl_cat(lhs, rhs, can_reorder=False):
-    if can_reorder:
-        return cat(
-            lhs,
-            rhs,
-            can_reorder,
-            layout=default_blocked_layout([lhs.shape[0] + rhs.shape[0]], ttgl.num_warps()),
-        )
-    else:
-        return cat_with_permute(lhs, rhs)
+def tl_cat(input, other, can_reorder=False, dim=0):
+    # Join introduces a new minor dim; move it before the concat dim and merge.
+    c = ttgl.join(input, other)
+    order: ttgl.constexpr = cat_permute_order(len(input.shape), dim)
+    c = ttgl.permute(c, order)
+    shape: ttgl.constexpr = cat_result_shape(input.shape, dim)
+    c = ttgl.reshape(c, shape)
+    return reset_to_default_layout(c)
 
 
 @gluon.jit
@@ -757,45 +736,21 @@ def convert_host_descriptor(desc):
     return gluon.nvidia.hopper.TensorDescriptor(tensor, desc.shape, desc.strides, block_shape, layout)
 
 
-@ttgl._core.builtin
-def convert_to_expand_dims_layout(value, expand_dims: list[int], _semantic=None, _generator=None) -> Any:
-    parent_shape = _unwrap_if_constexpr(value.type.shape)
-    if isinstance(parent_shape, ttgl.tuple):
-        parent_shape = parent_shape.values
-    assert isinstance(parent_shape,
-                      list), (f"expected parent shape to be a list, got {parent_shape} which is {type(parent_shape)}")
+@gluon.constexpr_function
+def build_expand_dims_layout(shape, expand_dims, num_warps):
+    if isinstance(shape, ttgl.tuple):
+        shape = shape.values
+    assert isinstance(shape, list), (f"expected shape to be a list, got {shape} which is {type(shape)}")
+    parent_shape = list(shape)
     for dim in expand_dims:
         parent_shape.insert(dim, 1)
-    num_warps = ttgl.num_warps(_semantic=_semantic, _generator=_generator)
     layout = default_blocked_layout(parent_shape, num_warps)
     for dim in reversed(expand_dims):
         layout = ttgl.SliceLayout(dim=dim, parent=layout)
-    return ttgl.convert_layout(value, layout, _semantic=_semantic)
+    return layout
 
 
-@ttgl._core.builtin
-def tl_atomic_add(ptr, val, mask=None, sem=None, scope=None, _semantic=None):
-    if ptr.type.is_block():
-        if isinstance(val, ttgl.constexpr) or not val.type.is_block():
-            val = ttgl.to_tensor(val, _semantic=_semantic)
-            val = ttgl.full(ptr.shape, val, val.dtype, ptr.type.layout, _semantic=_semantic)
-        if mask is not None and isinstance(mask, ttgl.constexpr) or not mask.type.is_block():
-            mask = ttgl.to_tensor(mask, _semantic=_semantic)
-            mask = ttgl.full(ptr.shape, mask, mask.dtype, ptr.type.layout, _semantic=_semantic)
-    return ttgl.atomic_add(ptr, val=val, mask=mask, sem=sem, scope=scope, _semantic=_semantic)
-
-
-# hacks to workaround limited dependencies tracking.
-# TODO: fix this by pulling imports into the generated file.
-def current_target():
-    from triton.runtime import driver
-
-    try:
-        active_driver = driver.active
-    except RuntimeError:
-        # If there is no active driver, return None
-        return None
-    return active_driver.get_current_target()
-
-
-current_target.__triton_builtin__ = True
+@gluon.jit
+def convert_to_expand_dims_layout(value, expand_dims: list[int]) -> Any:
+    layout: ttgl.constexpr = build_expand_dims_layout(value.shape, expand_dims, ttgl.num_warps())
+    return ttgl.convert_layout(value, layout)

@@ -404,3 +404,32 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// CHECK-DAG: [[LINEAR1:#linear.*]] = #ttg.linear<{{.*}} block = {{\[\[0, 0\], \[64, 0\]\]}}
+// CHECK-DAG: [[LINEAR2:#linear.*]] = #ttg.linear<{{.*}} block = {{\[\[64, 0\], \[0, 0\]\]}}
+// CHECK-DAG: [[MMA:#mma.*]] = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {{.*}}warp = {{\[\[0, 1\], \[1, 0\]\]}}{{.*}} CGALayout = {{\[\[0, 1\], \[1, 0\]\]}}, instrShape = {{\[16, 16, 128\]}}
+// CHECK: tt.func public @mxfp_matmul_multi_cta
+// CHECK: tt.dot_scaled {{.*}} tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<128x2xi8, [[LINEAR1]]> * tensor<64x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<128x2xi8, [[LINEAR2]]> -> tensor<128x128xf32, [[MMA]]>
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0], [1, 0]]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [0, 0]]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>
+#blocked4 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = [[0, 0], [1, 0]]}>
+#blocked5 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1], [0, 0]]}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @mxfp_matmul_multi_cta(
+    %a: tensor<128x64xf8E5M2, #blocked4>,
+    %b: tensor<64x128xf8E5M2, #blocked5>,
+    %a_scale: tensor<128x2xi8, #blocked1>,
+    %b_scale: tensor<128x2xi8, #blocked2>,
+    %d: tensor<128x128x!tt.ptr<f32>, #blocked3>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %res = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %cst lhs = e5m2 rhs = e5m2 {fastMath = false} : tensor<128x64xf8E5M2, #blocked4>, tensor<128x2xi8, #blocked1> * tensor<64x128xf8E5M2, #blocked5>, tensor<128x2xi8, #blocked2> -> tensor<128x128xf32, #blocked>
+    %cvt = ttg.convert_layout %res : tensor<128x128xf32, #blocked> -> tensor<128x128xf32, #blocked3>
+    tt.store %d, %cvt : tensor<128x128x!tt.ptr<f32>, #blocked3>
+    tt.return
+  }
+}

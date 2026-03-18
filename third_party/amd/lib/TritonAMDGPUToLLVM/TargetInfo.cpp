@@ -753,6 +753,32 @@ bool TargetInfo::supportsBufferLoadToLocal() const {
                             getISAFamily());
 }
 
+bool TargetInfo::supportsBufferAtomicRMW() const {
+  return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4,
+                             ISAFamily::RDNA4, ISAFamily::GFX1250},
+                            getISAFamily());
+}
+
+bool TargetInfo::supportsBufferAtomicFadd(mlir::Type elementType) const {
+  auto isaFamily = getISAFamily();
+  if (isaFamily == ISAFamily::CDNA3 && elementType.isBF16())
+    return false;
+  if (isaFamily == ISAFamily::RDNA4 && elementType.isF64())
+    return false;
+  return true;
+}
+
+int32_t TargetInfo::getBufferAtomicCachePolicy(bool hasUsers) const {
+  const int sc0Bit = 0b1;          // TH_ATOMIC_RETURN (cpol bit 0)
+  const int scopeDevBit = 0b10000; // SCOPE_DEV = 2 << 3 (cpol bits [4:3])
+  int32_t aux = 0;
+  if (hasUsers)
+    aux |= sc0Bit;
+  if (getISAFamily() == ISAFamily::GFX1250)
+    aux |= scopeDevBit;
+  return aux;
+}
+
 bool TargetInfo::supportsWaveId() const {
   return getISAFamily() == ISAFamily::RDNA4 ||
          getISAFamily() == ISAFamily::GFX1250;
