@@ -159,7 +159,7 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
             for child in child["children"]:
                 iter_frame = f"iter_{i}" if test_frame != test2_frame else f"new_iter_{i}"
                 if child["frame"]["name"] == iter_frame: # TODO(Keren): remove empty frames
-                    assert child["metrics"]["time (ns)"] > 0
+                    assert child[0]["metrics"]["time (ns)"] > 0
                     total_iters += 1
             # 0...9 iterations
             assert total_iters == 10
