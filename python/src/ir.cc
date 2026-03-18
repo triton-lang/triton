@@ -231,10 +231,40 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 
 } // anonymous namespace
 
+static void
+registerCustomOps(py::class_<TritonOpBuilder> &TritonOpBuilderBinding,
+                  const std::string &filename) {
+  TritonPlugin TP(filename);
+  std::vector<const char *> customOpNames;
+  if (auto result = TP.getCustomOpHandles(customOpNames); !result)
+    throw TP.err2exp(result.takeError());
+
+  for (unsigned i = 0; i < customOpNames.size(); ++i) {
+    const char *customOpName = customOpNames.data()[i];
+
+    TritonOpBuilderBinding.def(
+        customOpName,
+        [customOpName](TritonOpBuilder &self,
+                       std::vector<mlir::Value> &args) -> mlir::Value {
+          std::string filename =
+              mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+          TritonPlugin TP(filename);
+
+          ::mlir::Value dst;
+          std::vector<::mlir::Value> values = {dst};
+          llvm::copy(args, std::back_inserter(values));
+          auto result = TP.addCustomOp(customOpName, self, values);
+          if (!result)
+            throw TP.err2exp(result.takeError());
+          dst = values[0];
+          return dst;
+        });
+  }
+}
+
 /*****************************************************************************/
 /* Python bindings for ir                                                    */
 /*****************************************************************************/
-
 void init_triton_ir(py::module &&m) {
   using ret = py::return_value_policy;
   using namespace pybind11::literals;
@@ -1836,32 +1866,7 @@ void init_triton_ir(py::module &&m) {
   if (std::string filename =
           mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
       !filename.empty()) {
-    TritonPlugin TP(filename);
-    std::vector<const char *> customOpNames;
-    if (auto result = TP.getCustomOpHandles(customOpNames); !result)
-      throw TP.err2exp(result.takeError());
-
-    for (unsigned i = 0; i < customOpNames.size(); ++i) {
-      const char *customOpName = customOpNames.data()[i];
-
-      TritonOpBuilderBinding.def(
-          customOpName,
-          [customOpName](TritonOpBuilder &self,
-                         std::vector<Value> &args) -> Value {
-            std::string filename =
-                mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-            TritonPlugin TP(filename);
-
-            ::mlir::Value dst;
-            std::vector<::mlir::Value> values = {dst};
-            llvm::copy(args, std::back_inserter(values));
-            auto result = TP.addCustomOp(customOpName, self, values);
-            if (!result)
-              throw TP.err2exp(result.takeError());
-            dst = values[0];
-            return dst;
-          });
-    }
+    registerCustomOps(TritonOpBuilderBinding, filename);
   }
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
