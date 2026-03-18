@@ -24,7 +24,6 @@ using mlir::triton::BufferRegion;
 namespace {
 
 constexpr unsigned kMaxVectorLengthBits = 128;
-constexpr StringLiteral kSharedClusterStateAttr = "tti.shared_cluster_state";
 
 DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
                                               ArrayRef<int64_t> shape,
@@ -155,8 +154,8 @@ Value createZeroInitStateTensor(ImplicitLocOpBuilder &b,
   // Allocate scratch buffers with 16-byte alignment so global loads and stores
   // can be vectorized if possible.
   auto alloc = createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, sizeInBytes,
-                                            /*alignment=*/16);
-  alloc->setAttr(kSharedClusterStateAttr, b.getUnitAttr());
+                                            /*alignment=*/16,
+                                            /*sharedClusterState=*/true);
   Value cstZero = arith::ConstantIntOp::create(b, 0, bitWidth);
   funcBuilder.createFillGlobalTensorCall(b, alloc, type, cstZero);
   return alloc;
@@ -207,8 +206,8 @@ bool hasCpAsync(ModuleOp module) {
 
 Value createLockVariable(ImplicitLocOpBuilder &b) {
   Type ptrType = triton::getPointerType(b.getI32Type());
-  auto alloc = createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, 4, 4);
-  alloc->setAttr(kSharedClusterStateAttr, b.getUnitAttr());
+  auto alloc = createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, 4, 4,
+                                            /*sharedClusterState=*/true);
   ExperimentalLockReleaseOp::create(b, alloc, Value());
   return alloc;
 }
@@ -234,9 +233,11 @@ uint32_t getMemDescLength(Value buf) {
 
 gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
-                             int64_t sizeInBytes, int64_t alignment) {
-  return gpu::GlobalScratchAllocOp::create(b, loc, ptrType, sizeInBytes,
-                                           alignment, b.getUnitAttr());
+                             int64_t sizeInBytes, int64_t alignment,
+                             bool sharedClusterState) {
+  return gpu::GlobalScratchAllocOp::create(
+      b, loc, ptrType, sizeInBytes, alignment, b.getUnitAttr(),
+      sharedClusterState ? b.getUnitAttr() : UnitAttr());
 }
 
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,

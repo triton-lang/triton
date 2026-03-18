@@ -169,16 +169,12 @@ struct GlobalScratchAllocOpConversion
     if (!funcOp) {
       return failure();
     }
-    Value ptr =
-        op->hasAttr("third_party_allocation")
-            ? (op->hasAttr("tti.shared_cluster_state")
-                   ? LLVM::getProfileScratchPtr(loc, rewriter, *targetInfo,
-                                                funcOp, b.i32_val(opOffset),
-                                                /*currentCTA=*/false)
-                   : LLVM::getProfileScratchPtr(loc, rewriter, *targetInfo,
-                                                funcOp, b.i32_val(opOffset)))
-            : LLVM::getGlobalScratchPtr(loc, rewriter, *targetInfo, funcOp,
-                                        b.i32_val(opOffset));
+    Value ptr = op.getThirdPartyAllocation()
+                    ? LLVM::getProfileScratchPtr(loc, rewriter, *targetInfo,
+                                                 funcOp, b.i32_val(opOffset),
+                                                 !op.getSharedClusterState())
+                    : LLVM::getGlobalScratchPtr(loc, rewriter, *targetInfo,
+                                                funcOp, b.i32_val(opOffset));
 
     rewriter.replaceOp(op, ptr);
     return success();
