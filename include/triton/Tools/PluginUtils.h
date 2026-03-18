@@ -36,10 +36,10 @@ private:
   using EnumeratePyBindHandlesCType = TritonPluginResult (*)(uint32_t *,
                                                              const char **);
 
-  using AddPassType =
-      std::function<TritonPluginResult(mlir::PassManager *, const char *)>;
-  using AddPassCType = TritonPluginResult (*)(mlir::PassManager *,
-                                              const char *);
+  using AddPassType = std::function<TritonPluginResult(
+      mlir::PassManager *, const char *, const std::vector<std::string> &)>;
+  using AddPassCType = TritonPluginResult (*)(mlir::PassManager *, const char *,
+                                              const std::vector<std::string> &);
 
   using RegisterPassType = std::function<TritonPluginResult(const char *)>;
   using RegisterPassCType = TritonPluginResult (*)(const char *);
@@ -78,8 +78,9 @@ public:
   llvm::Expected<TritonPluginResult>
   getDialectHandles(std::vector<const char *> &handles);
 
-  llvm::Expected<TritonPluginResult> addPass(mlir::PassManager *pm,
-                                             const char *passHandle);
+  llvm::Expected<TritonPluginResult>
+  addPass(mlir::PassManager *pm, const char *passHandle,
+          const std::vector<std::string> &args);
 
   llvm::Expected<TritonPluginResult> registerPass(const char *passHandle);
 

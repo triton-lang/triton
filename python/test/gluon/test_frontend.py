@@ -1859,6 +1859,7 @@ def test_atomic_rmw():
     ptr = x.cast(ttgl.pointer_type(ttgl.int32), bitcast=True)
     val = ttgl.full([BLOCK], 1, ttgl.int32, layout=ttgl.AutoLayout())
     mask = ttgl.full([BLOCK], True, ttgl.int1, layout=ttgl.AutoLayout())
+    scalar_mask = True
     offset = ttgl.arange(0, BLOCK, layout=ttgl.AutoLayout())
     # CHECK: [[val:%.*]] = arith.constant dense<1> : tensor<128xi32, #gluon.auto_encoding>
     # CHECK: {{.*}} = tt.atomic_rmw min, acq_rel, gpu, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
@@ -1869,6 +1870,7 @@ def test_atomic_rmw():
     # CHECK: {{.*}} = tt.atomic_rmw xor, acq_rel, gpu, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
     # CHECK: {{.*}} = tt.atomic_rmw max, acq_rel, gpu, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
     # CHECK: {{.*}} = tt.atomic_rmw add, relaxed, gpu, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_rmw add, acquire, cta, %{{.*}}, [[val]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
     ttgl.atomic_min(offset + ptr, val)
     ttgl.atomic_max(offset + ptr, val)
     ttgl.atomic_add(offset + ptr, val)
@@ -1877,6 +1879,7 @@ def test_atomic_rmw():
     ttgl.atomic_xor(offset + ptr, val)
     ttgl.atomic_max(offset + ptr, val, mask=mask)
     ttgl.atomic_add(offset + ptr, val, mask=mask, sem="relaxed")
+    ttgl.atomic_add(offset + ptr, val, mask=scalar_mask, sem="acquire", scope="cta")
 
 
 @filecheck_test
