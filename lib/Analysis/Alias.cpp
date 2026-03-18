@@ -1,5 +1,6 @@
 #include "triton/Analysis/Alias.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -38,6 +39,10 @@ LogicalResult SharedMemoryAliasAnalysis::visitOperation(
     pessimistic = false;
   } else if (op->hasTrait<OpTrait::MemDescViewTrait>()) {
     aliasInfo = AliasInfo(operands[0]->getValue());
+    pessimistic = false;
+  } else if (isa<arith::SelectOp>(op)) {
+    aliasInfo =
+        AliasInfo::join(operands[1]->getValue(), operands[2]->getValue());
     pessimistic = false;
   } else if (isa<ub::PoisonOp>(op)) {
     aliasInfo = AliasInfo();
