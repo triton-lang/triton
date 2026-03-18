@@ -306,7 +306,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %70 = tt.splat %31 : i1 -> tensor<4x32xi1, #blocked>
     %71 = arith.andi %70, %67 : tensor<4x32xi1, #blocked>
 
-    // CHECK: %[[NEG1:.*]] = llvm.mlir.constant(-1 : i32)
+    // CHECK: %[[NEG1:.*]] = llvm.mlir.constant(2147483647 : i32)
     // CHECK-NEXT: %[[OOB_LDS:.*]] = llvm.inttoptr %[[NEG1]] :
     // CHECK-NEXT: %[[LDS_PTR:.*]] = llvm.select %{{.*}}, %{{.*}}, %[[OOB_LDS]]
     // CHECK-NEXT: rocdl.global.load.async.to.lds{{.*}} %{{.*}}, %[[LDS_PTR]],
