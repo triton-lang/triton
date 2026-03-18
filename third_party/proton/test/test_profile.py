@@ -116,7 +116,7 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
 
     g.reset()
 
-    with torch.cuda.graph(g): # this will create new graphexecs
+    with torch.cuda.graph(g):  # this will create new graphexecs
         for i in range(10):
             with proton.scope(f"new_iter_{i}"):
                 fn()
