@@ -1562,14 +1562,12 @@ struct TCGen5MMAScaledPattern
                                          bMemTy, bIsTmem, scope);
     if (!bScratch)
       return failure();
-    auto aScaleScratch =
-        createOperandScratch(rewriter, loc, *scratch, op.getAScale(),
-                             aScaleMemTy, aScaleIsTmem, scope);
+    auto aScaleScratch = createOperandScratch(
+        rewriter, loc, *scratch, op.getAScale(), aScaleMemTy, true, scope);
     if (!aScaleScratch)
       return failure();
-    auto bScaleScratch =
-        createOperandScratch(rewriter, loc, *scratch, op.getBScale(),
-                             bScaleMemTy, bScaleIsTmem, scope);
+    auto bScaleScratch = createOperandScratch(
+        rewriter, loc, *scratch, op.getBScale(), bScaleMemTy, true, scope);
     if (!bScaleScratch)
       return failure();
 
