@@ -28,10 +28,10 @@ protected:
   doSetMode(const std::vector<std::string> &modeAndOptions) override;
 
   // MetricInterface
-  virtual void addMetrics(
-      size_t scopeId,
-      const std::map<std::string, MetricValueType> &scalarMetrics,
-      const std::map<std::string, TensorMetric> &tensorMetrics) override;
+  virtual void
+  addMetrics(size_t scopeId,
+             const std::map<std::string, MetricValueType> &scalarMetrics,
+             const std::map<std::string, TensorMetric> &tensorMetrics) override;
 
   // InstrumentationInterface
   void initFunctionMetadata(

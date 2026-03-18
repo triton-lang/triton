@@ -77,9 +77,7 @@ public:
   }
 
   /// Get the set of data objects registered to the profiler.
-  std::set<Data *> getDataSet() const {
-    return dataSet;
-  }
+  std::set<Data *> getDataSet() const { return dataSet; }
 
   Profiler *setMode(const std::vector<std::string> &modeAndOptions) {
     this->modeAndOptions = modeAndOptions;
@@ -87,9 +85,7 @@ public:
     return this;
   }
 
-  std::vector<std::string> getMode() const {
-    return modeAndOptions;
-  }
+  std::vector<std::string> getMode() const { return modeAndOptions; }
 
   /// These fields are not persistent, function pointers will be changed
   /// when modules and contexts are switched.
