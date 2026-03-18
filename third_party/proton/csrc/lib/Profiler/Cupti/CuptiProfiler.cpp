@@ -16,8 +16,11 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
+#include <exception>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -389,6 +392,9 @@ struct CuptiProfiler::CuptiProfilerPimpl
   ThreadSafeMap<uint32_t, GraphState> graphStates;
 
 private:
+  using DataPhaseMap =
+      std::map<Data *, std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>;
+
   void handleGraphResourceCallbacks(CuptiProfiler &profiler,
                                     CUpti_CallbackId cbId,
                                     CUpti_GraphData *graphData);
@@ -405,6 +411,21 @@ private:
                                     const CUpti_CallbackData *callbackData);
   void handleApiCallbacks(CuptiProfiler &profiler, CUpti_CallbackId cbId,
                           const void *cbData);
+  void startDataPhaseFlushThread();
+  void stopDataPhaseFlushThread();
+  void enqueueDataPhaseFlush(DataPhaseMap dataPhases);
+  void waitForDataPhaseFlushes();
+  void rethrowDataPhaseFlushException();
+  void dataPhaseFlushLoop();
+
+  std::mutex dataPhaseFlushMutex;
+  std::condition_variable dataPhaseFlushCv;
+  std::deque<DataPhaseMap> pendingDataPhaseFlushes;
+  std::map<Data *, size_t> dataFlushedPhases;
+  std::thread dataPhaseFlushThread;
+  std::exception_ptr dataPhaseFlushException;
+  bool dataPhaseFlushStopRequested{false};
+  bool dataPhaseFlushTaskActive{false};
 };
 
 void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
@@ -426,9 +447,9 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        size_t size,
                                                        size_t validSize) {
   CuptiProfiler &profiler = threadState.profiler;
+  auto *pImpl = dynamic_cast<CuptiProfilerPimpl *>(profiler.pImpl.get());
   uint32_t maxCorrelationId = 0;
-  static thread_local std::map<Data *, size_t> dataFlushedPhases;
-  std::map<Data *, std::pair<size_t, size_t>> dataPhases;
+  DataPhaseMap dataPhases;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
   std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
@@ -451,8 +472,112 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   std::free(buffer);
 
   profiler.correlation.complete(maxCorrelationId);
-  profiler.flushDataPhases(dataFlushedPhases, dataPhases,
-                           profiler.pendingGraphPool.get());
+  pImpl->enqueueDataPhaseFlush(std::move(dataPhases));
+}
+
+void CuptiProfiler::CuptiProfilerPimpl::rethrowDataPhaseFlushException() {
+  std::exception_ptr exception;
+  {
+    std::lock_guard<std::mutex> lock(dataPhaseFlushMutex);
+    exception = dataPhaseFlushException;
+  }
+  if (exception) {
+    std::rethrow_exception(exception);
+  }
+}
+
+void CuptiProfiler::CuptiProfilerPimpl::dataPhaseFlushLoop() {
+  while (true) {
+    DataPhaseMap dataPhases;
+    {
+      std::unique_lock<std::mutex> lock(dataPhaseFlushMutex);
+      dataPhaseFlushCv.wait(lock, [this]() {
+        return dataPhaseFlushStopRequested || !pendingDataPhaseFlushes.empty();
+      });
+      if (dataPhaseFlushStopRequested && pendingDataPhaseFlushes.empty()) {
+        break;
+      }
+      dataPhaseFlushTaskActive = true;
+      dataPhases = std::move(pendingDataPhaseFlushes.front());
+      pendingDataPhaseFlushes.pop_front();
+    }
+
+    try {
+      profiler.flushDataPhases(dataFlushedPhases, dataPhases,
+                               profiler.pendingGraphPool.get());
+    } catch (...) {
+      std::lock_guard<std::mutex> lock(dataPhaseFlushMutex);
+      if (!dataPhaseFlushException) {
+        dataPhaseFlushException = std::current_exception();
+      }
+      pendingDataPhaseFlushes.clear();
+      dataPhaseFlushStopRequested = true;
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(dataPhaseFlushMutex);
+      dataPhaseFlushTaskActive = false;
+    }
+    dataPhaseFlushCv.notify_all();
+  }
+  dataPhaseFlushCv.notify_all();
+}
+
+void CuptiProfiler::CuptiProfilerPimpl::startDataPhaseFlushThread() {
+  std::lock_guard<std::mutex> lock(dataPhaseFlushMutex);
+  if (dataPhaseFlushThread.joinable()) {
+    return;
+  }
+  pendingDataPhaseFlushes.clear();
+  dataFlushedPhases.clear();
+  dataPhaseFlushException = nullptr;
+  dataPhaseFlushStopRequested = false;
+  dataPhaseFlushTaskActive = false;
+  dataPhaseFlushThread = std::thread([this]() { dataPhaseFlushLoop(); });
+}
+
+void CuptiProfiler::CuptiProfilerPimpl::stopDataPhaseFlushThread() {
+  {
+    std::lock_guard<std::mutex> lock(dataPhaseFlushMutex);
+    if (!dataPhaseFlushThread.joinable()) {
+      return;
+    }
+    dataPhaseFlushStopRequested = true;
+  }
+  dataPhaseFlushCv.notify_all();
+  dataPhaseFlushThread.join();
+  {
+    std::lock_guard<std::mutex> lock(dataPhaseFlushMutex);
+    pendingDataPhaseFlushes.clear();
+    dataFlushedPhases.clear();
+    dataPhaseFlushException = nullptr;
+    dataPhaseFlushStopRequested = false;
+    dataPhaseFlushTaskActive = false;
+  }
+}
+
+void CuptiProfiler::CuptiProfilerPimpl::enqueueDataPhaseFlush(
+    DataPhaseMap dataPhases) {
+  rethrowDataPhaseFlushException();
+  if (dataPhases.empty()) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(dataPhaseFlushMutex);
+    pendingDataPhaseFlushes.emplace_back(std::move(dataPhases));
+  }
+  dataPhaseFlushCv.notify_one();
+}
+
+void CuptiProfiler::CuptiProfilerPimpl::waitForDataPhaseFlushes() {
+  rethrowDataPhaseFlushException();
+  std::unique_lock<std::mutex> lock(dataPhaseFlushMutex);
+  dataPhaseFlushCv.wait(lock, [this]() {
+    return dataPhaseFlushException ||
+           (pendingDataPhaseFlushes.empty() && !dataPhaseFlushTaskActive);
+  });
+  lock.unlock();
+  rethrowDataPhaseFlushException();
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
@@ -781,6 +906,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
     nvtx::enable();
     setNvtxCallbacks(subscriber, /*enable=*/true);
   }
+  startDataPhaseFlushThread();
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
@@ -807,6 +933,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   // activities are flushed so that the next profiling session can start with
   // new activities.
   cupti::activityFlushAll<true>(/*flag=*/CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
+  waitForDataPhaseFlushes();
   // Flush the tensor metric buffer
   profiler.pendingGraphPool->flushAll();
 }
@@ -825,6 +952,13 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
     if (getBoolEnv("TRITON_ENABLE_HW_TRACE", false))
       cupti::activityEnableHWTrace<true>(/*enable=*/0);
   }
+  std::exception_ptr dataPhaseFlushError;
+  try {
+    waitForDataPhaseFlushes();
+  } catch (...) {
+    dataPhaseFlushError = std::current_exception();
+  }
+  stopDataPhaseFlushThread();
   profiler.periodicFlushingEnabled = false;
   profiler.periodicFlushingFormat.clear();
   // We have to clear the correlation maps before unsubscribing because CUPTI
@@ -836,6 +970,9 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   setNvtxCallbacks(subscriber, /*enable=*/false);
   cupti::unsubscribe<true>(subscriber);
   cupti::finalize<true>();
+  if (dataPhaseFlushError) {
+    std::rethrow_exception(dataPhaseFlushError);
+  }
 }
 
 CuptiProfiler::CuptiProfiler() {
