@@ -115,6 +115,15 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
         g.replay()
 
     g.reset()
+
+    with torch.cuda.graph(g): # this will create new graphexecs
+        for i in range(10):
+            with proton.scope(f"new_iter_{i}"):
+                fn()
+
+    with proton.scope("test2"):
+        g.replay()
+
     proton.finalize()
 
     with temp_file.open() as f:
@@ -125,20 +134,24 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
     # find the test frame
     test0_frame = None
     test1_frame = None
+    test2_frame = None
     for child in data[0]["children"]:
         if child["frame"]["name"] == "test0":
             test0_frame = child
         if child["frame"]["name"] == "test1":
             test1_frame = child
+        if child["frame"]["name"] == "test2":
+            test2_frame = child
     assert test0_frame is not None
     assert test1_frame is not None
+    assert test2_frame is not None
     # {torch.ones, add, foo}
     if is_hip():
         assert len(test0_frame["children"]) >= 2
         assert test0_frame["children"][0]["metrics"]["time (ns)"] > 0
     else:
         # cuda backend supports "<captured_at>" annotation
-        for test_frame in [test0_frame, test1_frame]:
+        for test_frame in [test0_frame, test1_frame, test2_frame]:
             child = test_frame["children"][0]
             assert child["frame"]["name"] == "<captured_at>"
             # 0...9 iterations
