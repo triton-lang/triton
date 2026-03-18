@@ -14,8 +14,9 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) final {
     auto extractSlice = cast<amdgpu::ExtractSliceOp>(op);
     auto offsetsAttr = extractSlice.getStaticOffsetsAttr();
-    auto outputShape =
-        cast<mlir::RankedTensorType>(op->getResult(0).getType()).getShape();
+    auto outputShape = extractSlice.getResult().getType().getShape();
+
+    assert(extractSlice->getNumOperands() == operands.size());
     auto srcInfo = operands[0]->getValue();
 
     auto contiguity = srcInfo.getContiguity();
@@ -28,6 +29,7 @@ public:
     const int rank = contiguity.size();
     for (int dim = 0; dim < rank; ++dim) {
       int64_t offset = offsetsAttr[dim];
+
       // newContiguity: When extracting at an offset, contiguous groups may be
       // split. If the offset aligns with contiguity boundaries (offset %
       // contiguity == 0), contiguity is preserved. Otherwise, the new
