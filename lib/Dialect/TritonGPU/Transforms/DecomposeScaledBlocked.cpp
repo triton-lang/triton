@@ -160,8 +160,8 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::maskNan(
     auto computeType = cast<FloatType>(mxfp.getType().getElementType());
     auto scaleFp = scaleTo16(rewriter, scale, computeType);
     scaleIsNan = cast<TypedValue<RankedTensorType>>(
-        arith::CmpFOp::create(rewriter, loc, arith::CmpFPredicate::UNO,
-                              scaleFp, scaleFp)
+        arith::CmpFOp::create(rewriter, loc, arith::CmpFPredicate::UNO, scaleFp,
+                              scaleFp)
             .getResult());
   } else {
     auto constFF = arith::ConstantOp::create(
