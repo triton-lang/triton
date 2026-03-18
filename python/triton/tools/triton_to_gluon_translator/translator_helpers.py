@@ -632,29 +632,10 @@ def tl_full(shape, value, dtype=None):
     return ttgl.full(shape, value, dtype, layout=layout)
 
 
-# Varargs aren't supported in JIT functions
+# Builtin because varargs aren't supported in JIT functions
 @ttgl._core.builtin
 def tl_trans(value, *dims, _semantic=None):
     return value.trans(*dims, _semantic=_semantic)
-
-
-@ttgl._core.builtin
-def cat(input, other, can_reorder=False, layout=None, _semantic=None):
-    """
-    Concatenate the two tensors.
-
-    Args:
-        input (tensor): The first input tensor.
-        other (tensor): The second input tensor.
-        can_reorder (bool): Compiler hint. If true, the compiler is allowed to reorder elements while concatenating inputs.  Only use if the order does not matter (e.g., result is only used in reduction ops).  Current implementation of `cat` supports only can_reorder=True.
-        layout (DistributedLayout): The destination layout of the output tensor.
-
-    Returns:
-        tensor: The concatenated tensor.
-    """
-    can_reorder = ttgl._core._unwrap_if_constexpr(can_reorder)
-    layout = ttgl._core._unwrap_if_constexpr(layout)
-    return _semantic.cat(input, other, can_reorder, layout)
 
 
 def _wrap_axis(axis, ndim):
@@ -679,26 +660,14 @@ def cat_result_shape(input_shape, dim):
 
 
 @gluon.jit
-def cat_with_permute(input, other, dim=0, _semantic=None):
+def tl_cat(input, other, can_reorder=False, dim=0):
     # Join introduces a new minor dim; move it before the concat dim and merge.
     c = ttgl.join(input, other)
     order: ttgl.constexpr = cat_permute_order(len(input.shape), dim)
     c = ttgl.permute(c, order)
     shape: ttgl.constexpr = cat_result_shape(input.shape, dim)
-    return ttgl.reshape(c, shape)
-
-
-@gluon.jit
-def tl_cat(lhs, rhs, can_reorder=False):
-    if can_reorder:
-        return cat(
-            lhs,
-            rhs,
-            can_reorder,
-            layout=default_blocked_layout([lhs.shape[0] + rhs.shape[0]], ttgl.num_warps()),
-        )
-    else:
-        return reset_to_default_layout(cat_with_permute(lhs, rhs))
+    c = ttgl.reshape(c, shape)
+    return reset_to_default_layout(c)
 
 
 @gluon.jit
