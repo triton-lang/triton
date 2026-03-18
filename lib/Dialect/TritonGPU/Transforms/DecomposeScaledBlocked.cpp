@@ -24,6 +24,22 @@ SmallVector<int, 2> DecomposeScaledBlocked::getTransposeOrder(int rank) {
 }
 
 LogicalResult
+DecomposeScaledBlocked::verifyScaleTypeSupport(DotScaledOp scaledDotOp) const {
+  auto hasNVFP4Scale = [](TypedValue<RankedTensorType> scale) {
+    return scale && isa<Float8E4M3FNType>(scale.getType().getElementType());
+  };
+  if (!hasNVFP4Scale(scaledDotOp.getAScale()) &&
+      !hasNVFP4Scale(scaledDotOp.getBScale()))
+    return success();
+  auto diag = scaledDotOp.emitOpError(
+      "decomposed scaled block MMA does not support nvfp4");
+  diag.attachNote()
+      << "on NVIDIA, the fallback path only supports integer-encoded "
+         "microscaling factors, try increasing blockM to 128";
+  return failure();
+}
+
+LogicalResult
 DecomposeScaledBlocked::matchAndRewrite(DotScaledOp scaledDotOp,
                                         PatternRewriter &rewriter) const {
   if (isa_and_nonnull<MmaEncodingTrait>(
@@ -32,6 +48,8 @@ DecomposeScaledBlocked::matchAndRewrite(DotScaledOp scaledDotOp,
 
   // TODO: add support for m/n packed formats.
   if (!scaledDotOp.getLhsKPack() || !scaledDotOp.getRhsKPack())
+    return failure();
+  if (failed(verifyScaleTypeSupport(scaledDotOp)))
     return failure();
   // Types
   auto computeType = getComputeType(scaledDotOp.getAElemType(),

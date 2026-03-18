@@ -734,6 +734,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked3_1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked3_2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: sm100_dot_scaled_nvfp4_blocked_error
+  // CHECK: tt.dot_scaled
+  tt.func public @sm100_dot_scaled_nvfp4_blocked_error(%a: tensor<64x128xi8, #blocked3_2>, %scale_a: tensor<64x16xf8E4M3FN, #blocked3_1>, %b: tensor<128x128xi8, #blocked3>, %scale_b: tensor<128x16xf8E4M3FN, #blocked3_1>) -> tensor<64x128xf32, #blocked3> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x128xf32, #blocked3>
+    // expected-error @+2 {{'tt.dot_scaled' op decomposed scaled block MMA does not support nvfp4}}
+    // expected-note @+1 {{on NVIDIA, the fallback path only supports integer-encoded microscaling factors, try increasing blockM to 128}}
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = true, rhs_k_pack = true} : tensor<64x128xi8, #blocked3_2>, tensor<64x16xf8E4M3FN, #blocked3_1> * tensor<128x128xi8, #blocked3>, tensor<128x16xf8E4M3FN, #blocked3_1> -> tensor<64x128xf32, #blocked3>
+    tt.return %d : tensor<64x128xf32, #blocked3>
+  }
+}
+
+// -----
+
 // We previously asserted that a tmem allocation must fit in the available tmem.
 // This would cause an assertion failure if the result matrix was too large.
 // Check that we allow the large result in AccelerateMatmul, and leave it to

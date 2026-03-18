@@ -1015,6 +1015,7 @@ public:
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
+      return;
     }
     // Now that we have picked the mma type, decompose dot that are not natively
     // supported.

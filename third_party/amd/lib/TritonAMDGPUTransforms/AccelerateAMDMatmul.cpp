@@ -787,6 +787,10 @@ public:
     return ttg::DecomposeScaledBlocked::matchAndRewrite(dotOp, rewriter);
   }
 
+  LogicalResult verifyScaleTypeSupport(tt::DotScaledOp) const override {
+    return success();
+  }
+
   RankedTensorType getScaleType(RankedTensorType vType, int32_t kDim,
                                 bool isFp4) const {
     if (!isFp4)
