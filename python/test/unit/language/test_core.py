@@ -36,6 +36,7 @@ from triton._internal_testing import (
     is_hip_rdna3,
     is_hip_rdna4,
     is_hip_gfx1250,
+    is_blackwell_ultra,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
@@ -3244,6 +3245,11 @@ def get_test_small_dots_cases():
             (1, 2, 32, 1, False, False, 'None', 'ieee', 'float8e5', 'float32', 1, None)]
 
 
+def skip_unsupported_i8_dot_on_sm103(in_dtype):
+    if is_cuda() and is_blackwell_ultra() and in_dtype == 'int8':
+        pytest.skip("int8 dot tensorcores are not supported on sm_103")
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size",
@@ -3268,6 +3274,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if input_precision == "bf16x3" or input_precision == "bf16x6":
             pytest.skip(f"input_precision {input_precision} is not supported in the interpreter")
     else:
+        skip_unsupported_i8_dot_on_sm103(in_dtype)
         if not is_hip() and K < 16:
             pytest.skip("small dots are supported only on HIP at the moment")
         if is_cuda():
