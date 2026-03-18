@@ -120,16 +120,13 @@ uint32_t processActivityKernel(
     // We have a graph creation captured
     auto *nodeIdToState = externState.nodeIdToState;
     if (nodeIdToState) {
-      const GraphState::NodeState *nodeState = nullptr;
-      auto nodeStateIter = nodeIdToState->find(kernel->graphNodeId);
-      if (nodeStateIter != nodeIdToState->end())
-        nodeState = &nodeStateIter->second;
-
-      if (nodeState && !nodeState->status.isMetricNode()) {
-        const bool isMissingName = nodeState->status.isMissingName();
+      const GraphState::NodeState &nodeState = nodeIdToState->at(
+          kernel->graphNodeId); // nodeIdToState must have the nodeId
+      if (nodeState.status.isMetricNode()) {
+        const bool isMissingName = nodeState.status.isMissingName();
         for (auto &[data, entry] : externState.dataToGraphEntry) {
-          auto targetEntryIdIter = nodeState->dataToEntryId.find(data);
-          if (targetEntryIdIter != nodeState->dataToEntryId.end()) {
+          auto targetEntryIdIter = nodeState.dataToEntryId.find(data);
+          if (targetEntryIdIter != nodeState.dataToEntryId.end()) {
             auto targetEntryId = targetEntryIdIter->second;
             if (!isMissingName) {
               if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
@@ -147,10 +144,10 @@ uint32_t processActivityKernel(
                 detail::updateDataPhases(dataPhases, data, entry.phase);
               }
             }
-          } // else node is skipped during graph capture in a deactivated
-            // session
+          } // else the profiling session has been deactivated during graph
+            // capture when encountering this node
         }
-      }
+      } // else metric nodes are always skipped
     } else {
       // This can happen when graph creation is not captured.
       // Since we don't have per-node info, we just attach the kernel metric to
@@ -224,7 +221,7 @@ void queueGraphMetrics(const DataToEntryMap &dataToEntry,
   }
   std::map<Data *, std::vector<DataEntry>> metricNodeEntries;
   size_t phase = Data::kNoCompletePhase;
-  for (const auto [data, graphEntry] : externIdState.dataToGraphEntry) {
+  for (const auto &[data, graphEntry] : externIdState.dataToGraphEntry) {
     phase = graphEntry.phase;
     for (const auto &metricNode : graphState.metricNodeIdToNumWords) {
       auto nodeId = metricNode.first;
