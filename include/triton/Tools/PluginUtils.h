@@ -38,10 +38,10 @@ namespace mlir::triton::plugin {
 extern "C" {
 
 // Types for plugin callback functions.
-typedef void (*AddPassCallback)(PassManager *,
-                                const std::vector<std::string> &);
-typedef void (*RegisterPassCallback)();
-typedef void (*RegisterDialectCallback)(DialectRegistry *);
+using AddPassCallback = void (*)(mlir::PassManager *,
+                                 const std::vector<std::string> &);
+using RegisterPassCallback = void (*)();
+using RegisterDialectCallback = void (*)(mlir::DialectRegistry *);
 
 /// Information provided by a plugin for loading its passes.
 typedef struct PassInfo {
