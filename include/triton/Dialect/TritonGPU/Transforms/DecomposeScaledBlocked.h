@@ -12,7 +12,6 @@ public:
                                 PatternRewriter &rewriter) const override;
 
 protected:
-  virtual LogicalResult verifyScaleTypeSupport(DotScaledOp scaledDotOp) const;
   FloatType getComputeType(ScaleDotElemType aType, ScaleDotElemType bType,
                            PatternRewriter &rewriter) const;
   TypedValue<RankedTensorType> scaleTo16(PatternRewriter &rewriter,

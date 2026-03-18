@@ -1065,6 +1065,64 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
 
 
 @triton.jit
+def nvfp4_blocked_fallback_matmul(
+        a_ptr, a_scale_ptr, b_ptr, b_scale_ptr, output_ptr,
+        stride_am, stride_ak,
+        stride_asm, stride_ask,
+        stride_bk, stride_bn,
+        stride_bsn, stride_bsk,
+        stride_om, stride_on,
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, VEC_SIZE: tl.constexpr):
+    offs_m = tl.arange(0, BLOCK_M)
+    offs_n = tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K // 2)
+    offs_scale_k = tl.arange(0, BLOCK_K // VEC_SIZE)
+
+    a = tl.load(a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    a_scale = tl.load(a_scale_ptr + offs_m[:, None] * stride_asm + offs_scale_k[None, :] * stride_ask)
+    b = tl.load(b_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn)
+    b_scale = tl.load(b_scale_ptr + offs_n[:, None] * stride_bsn + offs_scale_k[None, :] * stride_bsk)
+
+    acc = tl.dot_scaled(a, a_scale, "e2m1", b, b_scale, "e2m1", acc=tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32),
+                        lhs_k_pack=True, rhs_k_pack=True, fast_math=False)
+    tl.store(output_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on, acc)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] != 10, reason="Requires Blackwell")
+@pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
+def test_nvfp4_blocked_fallback_blackwell(BLOCK_M, device):
+    BLOCK_N = 128 if BLOCK_M == 256 else 256
+    BLOCK_K = 256
+    VEC_SIZE = 16
+    INPUT_SCALE = 4.0
+
+    torch.manual_seed(0)
+    a_mxfp4 = MXFP4Tensor(size=(BLOCK_M, BLOCK_K), device=device).random()
+    b_mxfp4 = MXFP4Tensor(size=(BLOCK_N, BLOCK_K), device=device).random()
+    a = a_mxfp4.to_packed_tensor(dim=1)
+    b = b_mxfp4.to_packed_tensor(dim=1).T.contiguous()
+    a_scale = ((torch.rand((BLOCK_M, BLOCK_K // VEC_SIZE), device=device) + 1e-3) * INPUT_SCALE).to(
+        torch.float8_e4m3fn)
+    b_scale = ((torch.rand((BLOCK_N, BLOCK_K // VEC_SIZE), device=device) + 1e-3) * INPUT_SCALE).to(
+        torch.float8_e4m3fn)
+
+    output = torch.empty((BLOCK_M, BLOCK_N), device=device, dtype=torch.float32)
+
+    nvfp4_blocked_fallback_matmul[(1, )](a, a_scale, b, b_scale, output, a.stride(0), a.stride(1), a_scale.stride(0),
+                                         a_scale.stride(1), b.stride(0), b.stride(1), b_scale.stride(0),
+                                         b_scale.stride(1), output.stride(0), output.stride(1), BLOCK_M=BLOCK_M,
+                                         BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, VEC_SIZE=VEC_SIZE)
+    torch.cuda.synchronize()
+
+    a_scale_ref = a_scale.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1)[:, :BLOCK_K]
+    b_scale_ref = b_scale.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:BLOCK_K, :BLOCK_N]
+    ref_out = torch.matmul(a_mxfp4.to(torch.float32) * a_scale_ref,
+                           b_mxfp4.to(torch.float32).T.contiguous() * b_scale_ref)
+    torch.testing.assert_close(output, ref_out, atol=1e-4, rtol=1e-4)
+
+
+@triton.jit
 def mxfp8_mxfp4_matmul(  #
         a_ptr, b_ptr, output_ptr,  #
         a_scale, b_scale,  #

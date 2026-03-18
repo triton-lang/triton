@@ -24,22 +24,6 @@ SmallVector<int, 2> DecomposeScaledBlocked::getTransposeOrder(int rank) {
 }
 
 LogicalResult
-DecomposeScaledBlocked::verifyScaleTypeSupport(DotScaledOp scaledDotOp) const {
-  auto hasNVFP4Scale = [](TypedValue<RankedTensorType> scale) {
-    return scale && isa<Float8E4M3FNType>(scale.getType().getElementType());
-  };
-  if (!hasNVFP4Scale(scaledDotOp.getAScale()) &&
-      !hasNVFP4Scale(scaledDotOp.getBScale()))
-    return success();
-  auto diag = scaledDotOp.emitOpError(
-      "decomposed scaled block MMA does not support nvfp4");
-  diag.attachNote()
-      << "on NVIDIA, the fallback path only supports integer-encoded "
-         "microscaling factors, try increasing blockM to 128";
-  return failure();
-}
-
-LogicalResult
 DecomposeScaledBlocked::matchAndRewrite(DotScaledOp scaledDotOp,
                                         PatternRewriter &rewriter) const {
   if (isa_and_nonnull<MmaEncodingTrait>(
@@ -48,8 +32,6 @@ DecomposeScaledBlocked::matchAndRewrite(DotScaledOp scaledDotOp,
 
   // TODO: add support for m/n packed formats.
   if (!scaledDotOp.getLhsKPack() || !scaledDotOp.getRhsKPack())
-    return failure();
-  if (failed(verifyScaleTypeSupport(scaledDotOp)))
     return failure();
   // Types
   auto computeType = getComputeType(scaledDotOp.getAElemType(),
@@ -84,6 +66,12 @@ DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
   auto scaleTy = scale.getType();
   assert(computeType == rewriter.getBF16Type() ||
          computeType == rewriter.getF16Type());
+
+  if (isa<FloatType>(scaleTy.getElementType())) {
+    auto scaleType = scaleTy.clone(computeType);
+    return cast<TypedValue<RankedTensorType>>(
+        FpToFpOp::create(rewriter, loc, scaleType, scale).getResult());
+  }
 
   // Choose an fp type that can fit the scale value.
   FloatType largeFpType = computeType == rewriter.getF16Type()
@@ -134,9 +122,10 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::broadcastScale(
     scale = ConvertLayoutOp::create(rewriter, loc, sliceType, scale);
   }
   auto expandScale = ExpandDimsOp::create(rewriter, loc, scale, rank);
-  // 2.2) Broadcast the dimension to size 32
+  int32_t scaleFactor = scaledDotOp.deduceScaleFactor();
+  // 2.2) Broadcast the dimension to the microscaling factor.
   auto scaleShape = to_vector(scaleTy.getShape());
-  scaleShape.push_back(32);
+  scaleShape.push_back(scaleFactor);
   auto broadcastScale = BroadcastOp::create(
       rewriter, loc, expandScale.getType().clone(scaleShape), expandScale);
   // 2.3) Transpose the dimension to the scaled dimension
@@ -146,7 +135,7 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::broadcastScale(
       TransOp::create(rewriter, loc, broadcastScale, transposeOrder);
   // 2.4) Reshape to the shape of v
   scaleShape.pop_back();
-  scaleShape[dim] *= 32;
+  scaleShape[dim] *= scaleFactor;
   auto reshapeScale =
       ReshapeOp::create(rewriter, loc, scaleShape, transposedScale);
   return reshapeScale;
@@ -166,14 +155,24 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::maskNan(
 
   // Scale is NaN
   auto scaleTy = scale.getType();
-  auto constFF = arith::ConstantOp::create(
-      rewriter, loc, scaleTy,
-      DenseElementsAttr::get(scaleTy,
-                             APInt(scaleTy.getElementTypeBitWidth(), 0xff)));
-  auto scaleIsNan = cast<TypedValue<RankedTensorType>>(
-      arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, scale,
-                            constFF)
-          .getResult());
+  TypedValue<RankedTensorType> scaleIsNan;
+  if (isa<FloatType>(scaleTy.getElementType())) {
+    auto computeType = cast<FloatType>(mxfp.getType().getElementType());
+    auto scaleFp = scaleTo16(rewriter, scale, computeType);
+    scaleIsNan = cast<TypedValue<RankedTensorType>>(
+        arith::CmpFOp::create(rewriter, loc, arith::CmpFPredicate::UNO,
+                              scaleFp, scaleFp)
+            .getResult());
+  } else {
+    auto constFF = arith::ConstantOp::create(
+        rewriter, loc, scaleTy,
+        DenseElementsAttr::get(scaleTy,
+                               APInt(scaleTy.getElementTypeBitWidth(), 0xff)));
+    scaleIsNan = cast<TypedValue<RankedTensorType>>(
+        arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, scale,
+                              constFF)
+            .getResult());
+  }
   auto cond = broadcastScale(rewriter, scaledDotOp, mod, scaleIsNan, dim);
   // Make scale is NaN compatible with mxfp
   auto condTy = cond.getType();
