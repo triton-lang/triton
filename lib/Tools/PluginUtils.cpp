@@ -138,10 +138,11 @@ TritonPlugin::getDialectHandles(std::vector<const char *> &dialectNames) {
 }
 
 llvm::Expected<TritonPluginResult>
-TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle) {
+TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle,
+                      const std::vector<std::string> &args) {
   if (auto Err = loadPlugin())
     return Err;
-  return checkAPIResult(addPassAPI(pm, passHandle), passHandle);
+  return checkAPIResult(addPassAPI(pm, passHandle, args), passHandle);
 }
 
 llvm::Expected<TritonPluginResult>
