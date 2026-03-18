@@ -158,7 +158,8 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
             assert len(child["children"]) == 10
             # check all iterations
             for i in range(10):
-                assert child["children"][i]["frame"]["name"] == f"iter_{i}"
+                iter_frame = f"iter_{i}" if test_frame != test2_frame else f"new_iter_{i}"
+                assert child["children"][i]["frame"]["name"] == iter_frame
                 assert child["children"][i]["children"][0]["metrics"]["time (ns)"] > 0
 
 
