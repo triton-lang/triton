@@ -440,9 +440,10 @@ void RoctracerProfiler::doSetMode(
     const std::vector<std::string> &modeAndOptions) {
   auto mode = modeAndOptions[0];
   if (proton::toLower(mode) == "periodic_flushing") {
-    detail::setPeriodicFlushingMode(periodicFlushingEnabled,
-                                    periodicFlushingFormat, modeAndOptions,
-                                    "RoctracerProfiler");
+    const auto config =
+        detail::parsePeriodicFlushingMode(modeAndOptions, "RoctracerProfiler");
+    periodicFlushingEnabled = config.enabled;
+    periodicFlushingFormat = config.format;
   } else if (!mode.empty()) {
     throw std::invalid_argument(
         "[PROTON] RoctracerProfiler: unsupported mode: " + mode);

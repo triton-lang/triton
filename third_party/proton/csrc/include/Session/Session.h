@@ -97,6 +97,9 @@ public:
 
   std::string getData(size_t sessionId, size_t phase);
 
+  std::vector<std::pair<size_t, std::vector<uint8_t>>>
+  getBufferedProfiles(size_t sessionId, bool clear);
+
   void clearData(size_t sessionId, size_t phase, bool clearUpToPhase = false);
 
   size_t advanceDataPhase(size_t sessionId);

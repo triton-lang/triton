@@ -39,12 +39,24 @@ computeFlushRangesAndPeekPhases(
     // "complete" phase yet. So we flush up to phase.second - 1.
     const size_t endPhaseToFlush = phase.second - 1;
 
+    size_t flushedPhase = Data::kNoCompletePhase;
+    if (flushedPhaseIt != dataFlushedPhases.end()) {
+      flushedPhase = flushedPhaseIt->second;
+    }
+    if (data->getBufferedProfileMaxBytes() > 0) {
+      const auto serializedUpToPhase =
+          data->getBufferedProfileSerializedUpToPhase();
+      if (flushedPhase == Data::kNoCompletePhase) {
+        flushedPhase = serializedUpToPhase;
+      } else if (serializedUpToPhase != Data::kNoCompletePhase) {
+        flushedPhase = std::max(flushedPhase, serializedUpToPhase);
+      }
+    }
+
     size_t minPhaseToFlush = 0;
-    if (flushedPhaseIt == dataFlushedPhases.end() ||
-        flushedPhaseIt->second == Data::kNoCompletePhase) {
+    if (flushedPhase == Data::kNoCompletePhase) {
       minPhaseToFlush = 0;
     } else {
-      const auto flushedPhase = flushedPhaseIt->second;
       if (endPhaseToFlush <= flushedPhase) {
         continue;
       }
@@ -81,6 +93,8 @@ void periodicFlushDataPhases(Data &data,
                              PeriodicFlushStats &stats) {
   using Clock = std::chrono::steady_clock;
   const auto &path = data.getPath();
+  const bool bufferProfiles = data.getBufferedProfileMaxBytes() > 0;
+  const bool writeOutputs = !path.empty();
 
   for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
        startPhase++) {
@@ -100,6 +114,14 @@ void periodicFlushDataPhases(Data &data,
         ++stats.toJsonCalls;
       } else {
         jsonStr = data.toJsonString(startPhase);
+      }
+
+      if (bufferProfiles) {
+        data.appendBufferedProfile(startPhase, jsonStr);
+      }
+
+      if (!writeOutputs) {
+        continue;
       }
 
       if (timingEnabled) {
@@ -128,6 +150,14 @@ void periodicFlushDataPhases(Data &data,
         ++stats.toMsgPackCalls;
       } else {
         msgPack = data.toMsgPack(startPhase);
+      }
+
+      if (bufferProfiles) {
+        data.appendBufferedProfile(startPhase, msgPack);
+      }
+
+      if (!writeOutputs) {
+        continue;
       }
 
       if (timingEnabled) {
@@ -170,31 +200,35 @@ void periodicClearDataPhases(Data &data, size_t maxPhaseToFlush,
 
 } // namespace
 
-void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
-                             std::string &periodicFlushingFormat,
-                             const std::vector<std::string> &modeAndOptions,
-                             const char *profilerName) {
-  periodicFlushingEnabled = true;
-  if (modeAndOptions.size() < 2)
-    periodicFlushingFormat = "hatchet";
-
-  auto delimiterPos = modeAndOptions[1].find('=');
-  if (delimiterPos != std::string::npos) {
-    const std::string key = modeAndOptions[1].substr(0, delimiterPos);
-    const std::string value = modeAndOptions[1].substr(delimiterPos + 1);
-    if (key != "format") {
+PeriodicFlushingConfig
+parsePeriodicFlushingMode(const std::vector<std::string> &modeAndOptions,
+                          const char *profilerName) {
+  PeriodicFlushingConfig config;
+  config.enabled = true;
+  for (size_t i = 1; i < modeAndOptions.size(); ++i) {
+    const auto delimiterPos = modeAndOptions[i].find('=');
+    if (delimiterPos == std::string::npos) {
+      throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
+                                  ": unsupported option: " +
+                                  modeAndOptions[i]);
+    }
+    const std::string key = modeAndOptions[i].substr(0, delimiterPos);
+    const std::string value = modeAndOptions[i].substr(delimiterPos + 1);
+    if (key == "format") {
+      if (value != "hatchet_msgpack" && value != "chrome_trace" &&
+          value != "hatchet") {
+        throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
+                                    ": unsupported format: " + value);
+      }
+      config.format = value;
+    } else if (key == "buffer_max_bytes") {
+      config.bufferMaxBytes = std::stoull(value);
+    } else {
       throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
                                   ": unsupported option key: " + key);
     }
-    if (value != "hatchet_msgpack" && value != "chrome_trace" &&
-        value != "hatchet") {
-      throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
-                                  ": unsupported format: " + value);
-    }
-    periodicFlushingFormat = value;
-  } else {
-    periodicFlushingFormat = "hatchet";
   }
+  return config;
 }
 
 void updateDataPhases(std::map<Data *, std::pair<size_t, size_t>> &dataPhases,

@@ -137,8 +137,82 @@ Data::PhaseInfo Data::getPhaseInfo() const {
                    completeUpToPhase};
 }
 
+void Data::setBufferedProfileMaxBytes(size_t maxBytes) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  bufferedProfileMaxBytes = maxBytes;
+  while (!bufferedProfiles.empty() && bufferedProfileBytes > bufferedProfileMaxBytes) {
+    bufferedProfileBytes -= bufferedProfiles.front().payload.size();
+    bufferedProfiles.pop_front();
+  }
+  if (bufferedProfileMaxBytes == 0) {
+    bufferedProfiles.clear();
+    bufferedProfileBytes = 0;
+  }
+}
+
+size_t Data::getBufferedProfileMaxBytes() const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  return bufferedProfileMaxBytes;
+}
+
+void Data::appendBufferedProfile(size_t phase, std::vector<uint8_t> payload) {
+  const auto payloadBytes = payload.size();
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  if (bufferedProfileMaxBytes == 0) {
+    return;
+  }
+  bufferedProfileSerializedUpToPhase =
+      bufferedProfileSerializedUpToPhase == kNoCompletePhase
+          ? phase
+          : std::max(bufferedProfileSerializedUpToPhase, phase);
+  if (payloadBytes > bufferedProfileMaxBytes) {
+    return;
+  }
+  while (!bufferedProfiles.empty() &&
+         bufferedProfileBytes + payloadBytes > bufferedProfileMaxBytes) {
+    bufferedProfileBytes -= bufferedProfiles.front().payload.size();
+    bufferedProfiles.pop_front();
+  }
+  bufferedProfileBytes += payloadBytes;
+  bufferedProfiles.push_back(BufferedProfile{phase, std::move(payload)});
+}
+
+void Data::appendBufferedProfile(size_t phase, const std::string &payload) {
+  appendBufferedProfile(phase, std::vector<uint8_t>(payload.begin(), payload.end()));
+}
+
+std::vector<Data::BufferedProfile> Data::getBufferedProfiles(bool clear) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  if (!clear) {
+    return {bufferedProfiles.begin(), bufferedProfiles.end()};
+  }
+
+  std::vector<BufferedProfile> profiles;
+  profiles.reserve(bufferedProfiles.size());
+  while (!bufferedProfiles.empty()) {
+    profiles.push_back(std::move(bufferedProfiles.front()));
+    bufferedProfiles.pop_front();
+  }
+  bufferedProfileBytes = 0;
+  return profiles;
+}
+
+Data::BufferedProfileStats Data::getBufferedProfileStats() const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  return BufferedProfileStats{bufferedProfiles.size(), bufferedProfileBytes};
+}
+
+size_t Data::getBufferedProfileSerializedUpToPhase() const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  return bufferedProfileSerializedUpToPhase;
+}
+
 void Data::dump(const std::string &outputFormat) {
   std::shared_lock<std::shared_mutex> lock(mutex);
+
+  if (path.empty() && bufferedProfileMaxBytes > 0) {
+    return;
+  }
 
   OutputFormat outputFormatEnum = outputFormat.empty()
                                       ? getDefaultOutputFormat()

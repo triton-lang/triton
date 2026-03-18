@@ -1270,7 +1270,97 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
         num_scopes += len(data[0]["children"])
     assert num_scopes == 10000
 
+def _child_names_from_msgpack_payload(payload: bytes) -> list[str]:
+    import msgpack
 
+    database = msgpack.unpackb(payload, raw=False, strict_map_key=False)
+    return [child["frame"]["name"] for child in database[0].get("children", [])]
+
+
+def _make_periodic_buffer_kernel():
+
+    @triton.jit
+    def buffered_kernel(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    return buffered_kernel
+
+
+def _run_buffered_periodic_phase(session: int, kernel, x, y, scope_name: str) -> None:
+    with proton.scope(scope_name):
+        kernel[(1, )](x, y, x.numel())
+    proton.data.advance_phase(session=session)
+    proton.deactivate(session, flushing=True)
+
+
+def test_periodic_flushing_buffers_profiles_in_memory(fresh_knobs, device: str):
+    fresh_knobs.proton.profile_buffer_size = 256 * 1024
+    kernel = _make_periodic_buffer_kernel()
+    x = torch.ones((16, ), device=device)
+    y = torch.zeros_like(x)
+
+    session = proton.start(
+        "",
+        context="shadow",
+        data="tree",
+        mode="periodic_flushing:format=hatchet_msgpack:buffer_max_bytes=1048576",
+    )
+
+    try:
+        _run_buffered_periodic_phase(session, kernel, x, y, "phase_zero")
+        buffered_profiles = proton.data.get_buffered_profiles(session=session)
+        assert [phase for phase, _ in buffered_profiles] == [0]
+        assert "phase_zero" in _child_names_from_msgpack_payload(buffered_profiles[0][1])
+
+        proton.activate(session)
+        _run_buffered_periodic_phase(session, kernel, x, y, "phase_one")
+        drained_profiles = proton.data.get_buffered_profiles(session=session, clear=True)
+        assert [phase for phase, _ in drained_profiles] == [0, 1]
+        assert "phase_one" in _child_names_from_msgpack_payload(drained_profiles[1][1])
+        assert proton.data.get_buffered_profiles(session=session) == []
+    finally:
+        proton.finalize(session, output_format="hatchet_msgpack")
+
+
+def test_periodic_flushing_in_memory_buffer_drops_oldest(fresh_knobs, device: str):
+    fresh_knobs.proton.profile_buffer_size = 256 * 1024
+    kernel = _make_periodic_buffer_kernel()
+    x = torch.ones((16, ), device=device)
+    y = torch.zeros_like(x)
+
+    measure_session = proton.start(
+        "",
+        context="shadow",
+        data="tree",
+        mode="periodic_flushing:format=hatchet_msgpack:buffer_max_bytes=1048576",
+    )
+    try:
+        _run_buffered_periodic_phase(measure_session, kernel, x, y, "phase_keep")
+        measured_profiles = proton.data.get_buffered_profiles(
+            session=measure_session,
+            clear=True,
+        )
+        assert [phase for phase, _ in measured_profiles] == [0]
+        measured_size = len(measured_profiles[0][1])
+    finally:
+        proton.finalize(measure_session, output_format="hatchet_msgpack")
+
+    session = proton.start(
+        "",
+        context="shadow",
+        data="tree",
+        mode=f"periodic_flushing:format=hatchet_msgpack:buffer_max_bytes={2 * measured_size - 1}",
+    )
+    try:
+        _run_buffered_periodic_phase(session, kernel, x, y, "phase_keep")
+        proton.activate(session)
+        _run_buffered_periodic_phase(session, kernel, x, y, "phase_drop")
+        buffered_profiles = proton.data.get_buffered_profiles(session=session, clear=True)
+        assert [phase for phase, _ in buffered_profiles] == [1]
+        assert "phase_drop" in _child_names_from_msgpack_payload(buffered_profiles[0][1])
+    finally:
+        proton.finalize(session, output_format="hatchet_msgpack")
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])

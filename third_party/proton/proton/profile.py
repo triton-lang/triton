@@ -96,6 +96,9 @@ def start(
                                                Each mode has a set of control knobs following with the mode name.
                                                For example, "periodic_flushing" mode has a knob:
                                                - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace"]. Default is "hatchet".
+                                               - buffer_max_bytes: Retain completed serialized phase profiles in Proton's
+                                                 native in-memory ring buffer with this total payload byte budget. Retrieve
+                                                 buffered payloads with `triton.profiler.data.get_buffered_profiles()`.
                                                The can be set via `mode="periodic_flushing:format=chrome_trace"`.
         hook (Union[str, Hook], optional): The hook to use for profiling.
                                            You may pass either:

@@ -95,6 +95,13 @@ std::unique_ptr<Session> SessionManager::makeSession(
   profiler = validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
+  auto modeAndOptions = proton::split(mode, ":");
+  if (!modeAndOptions.empty() &&
+      proton::toLower(modeAndOptions[0]) == "periodic_flushing") {
+    const auto config =
+        detail::parsePeriodicFlushingMode(modeAndOptions, profilerName.c_str());
+    data->setBufferedProfileMaxBytes(config.bufferMaxBytes);
+  }
   auto *session = new Session(id, path, profiler, std::move(contextSource),
                               std::move(data));
   return std::unique_ptr<Session>(session);
@@ -347,6 +354,46 @@ std::string SessionManager::getData(size_t sessionId, size_t phase) {
         "Only TreeData is supported for getData() for now");
   }
   return treeData->toJsonString(phase);
+}
+
+std::vector<std::pair<size_t, std::vector<uint8_t>>>
+SessionManager::getBufferedProfiles(size_t sessionId, bool clear) {
+  std::lock_guard<std::mutex> lock(mutex);
+  auto *session = getSessionOrThrow(sessionId);
+  auto *data = session->data.get();
+  if (data->getBufferedProfileMaxBytes() > 0) {
+    const auto phaseInfo = data->getPhaseInfo();
+    if (phaseInfo.completeUpTo != Data::kNoCompletePhase) {
+      const auto serializedUpToPhase =
+          data->getBufferedProfileSerializedUpToPhase();
+      const size_t minPhaseToSerialize =
+          serializedUpToPhase == Data::kNoCompletePhase
+              ? 0
+              : serializedUpToPhase + 1;
+      if (minPhaseToSerialize <= phaseInfo.completeUpTo) {
+        const auto modeAndOptions = session->getProfiler()->getMode();
+        const auto config = detail::parsePeriodicFlushingMode(modeAndOptions,
+                                                              "SessionManager");
+        const auto outputFormat = parseOutputFormat(config.format);
+        for (size_t phase = minPhaseToSerialize; phase <= phaseInfo.completeUpTo;
+             ++phase) {
+          if (outputFormat == OutputFormat::HatchetMsgPack) {
+            data->appendBufferedProfile(phase, data->toMsgPack(phase));
+          } else {
+            data->appendBufferedProfile(phase, data->toJsonString(phase));
+          }
+        }
+        data->clear(phaseInfo.completeUpTo, /*clearUpToPhase=*/true);
+      }
+    }
+  }
+  auto profiles = data->getBufferedProfiles(clear);
+  std::vector<std::pair<size_t, std::vector<uint8_t>>> serializedProfiles;
+  serializedProfiles.reserve(profiles.size());
+  for (auto &profile : profiles) {
+    serializedProfiles.emplace_back(profile.phase, std::move(profile.payload));
+  }
+  return serializedProfiles;
 }
 
 void SessionManager::clearData(size_t sessionId, size_t phase,

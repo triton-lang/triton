@@ -25,6 +25,12 @@ namespace proton {
 
 namespace detail {
 
+struct PeriodicFlushingConfig {
+  bool enabled{false};
+  std::string format{"hatchet"};
+  size_t bufferMaxBytes{0};
+};
+
 void flushDataPhasesImpl(
     const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
     std::map<Data *, size_t> &dataFlushedPhases,
@@ -38,10 +44,9 @@ void updateDataPhases(
         &dataPhases,
     Data *data, size_t phase);
 
-void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
-                             std::string &periodicFlushingFormat,
-                             const std::vector<std::string> &modeAndOptions,
-                             const char *profilerName);
+PeriodicFlushingConfig
+parsePeriodicFlushingMode(const std::vector<std::string> &modeAndOptions,
+                          const char *profilerName);
 } // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,

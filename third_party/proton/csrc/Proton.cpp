@@ -216,6 +216,21 @@ static void initProton(pybind11::module &&m) {
       },
       pybind11::arg("sessionId"), pybind11::arg("phase"));
   m.def(
+      "get_buffered_profiles",
+      [](size_t sessionId, bool clear) {
+        pybind11::list bufferedProfiles;
+        for (auto &profile :
+             SessionManager::instance().getBufferedProfiles(sessionId, clear)) {
+          bufferedProfiles.append(pybind11::make_tuple(
+              profile.first,
+              pybind11::bytes(
+                  reinterpret_cast<const char *>(profile.second.data()),
+                  profile.second.size())));
+        }
+        return bufferedProfiles;
+      },
+      pybind11::arg("sessionId"), pybind11::arg("clear") = false);
+  m.def(
       "clear_data",
       [](size_t sessionId, size_t phase, bool clearUpToPhase) {
         SessionManager::instance().clearData(sessionId, phase, clearUpToPhase);

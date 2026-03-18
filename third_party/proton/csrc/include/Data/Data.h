@@ -6,6 +6,7 @@
 #include "PhaseStore.h"
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <map>
@@ -94,6 +95,16 @@ public:
     }
   };
 
+  struct BufferedProfile {
+    size_t phase{0};
+    std::vector<uint8_t> payload{};
+  };
+
+  struct BufferedProfileStats {
+    size_t profileCount{0};
+    size_t byteCount{0};
+  };
+
   Data(const std::string &path, ContextSource *contextSource)
       : path(path), contextSource(contextSource) {}
   virtual ~Data() = default;
@@ -122,6 +133,33 @@ public:
 
   /// Atomically get current and complete phases.
   PhaseInfo getPhaseInfo() const;
+
+  /// Set the maximum number of buffered profile payload bytes retained in
+  /// memory. When the budget is exceeded, the oldest buffered profiles are
+  /// dropped until the new payload fits.
+  void setBufferedProfileMaxBytes(size_t maxBytes);
+
+  /// Get the maximum number of buffered profile payload bytes retained in
+  /// memory.
+  size_t getBufferedProfileMaxBytes() const;
+
+  /// Append a serialized phase profile payload to the in-memory buffer.
+  void appendBufferedProfile(size_t phase, std::vector<uint8_t> payload);
+
+  /// Append a serialized phase profile payload represented as text.
+  void appendBufferedProfile(size_t phase, const std::string &payload);
+
+  /// Return buffered serialized phase profiles. If `clear` is true, the
+  /// returned profiles are removed from the in-memory buffer.
+  std::vector<BufferedProfile> getBufferedProfiles(bool clear = false);
+
+  /// Return the current buffered profile count and payload byte total.
+  BufferedProfileStats getBufferedProfileStats() const;
+
+  /// Return the highest completed phase that has already been serialized into
+  /// the buffered profile ring, even if it has since been dropped from the
+  /// retained payload queue due to the byte budget.
+  size_t getBufferedProfileSerializedUpToPhase() const;
 
   /// Add an op to the data of the current phase.
   /// If `opName` is empty, just use the current context as is.
@@ -205,6 +243,10 @@ protected:
   mutable std::shared_mutex mutex;
   const std::string path{};
   ContextSource *contextSource{};
+  size_t bufferedProfileMaxBytes{0};
+  size_t bufferedProfileBytes{0};
+  size_t bufferedProfileSerializedUpToPhase{kNoCompletePhase};
+  std::deque<BufferedProfile> bufferedProfiles{};
 
 private:
   PhaseStoreBase *phaseStore{};

@@ -37,6 +37,25 @@ def get_msgpack(session: Optional[int] = 0, phase: int = 0):
     return libproton.get_data_msgpack(session, phase)
 
 
+def get_buffered_profiles(session: Optional[int] = 0, clear: bool = False):
+    """
+    Retrieves phase-tagged serialized profiles buffered in Proton's native
+    in-memory ring buffer.
+
+    Args:
+        session (Optional[int]): The session ID of the profiling session, or None if profiling is inactive.
+        clear (bool): Whether to clear buffered profiles after retrieval.
+
+    Returns:
+        list[tuple[int, bytes]]: A list of ``(phase, payload)`` tuples in FIFO order.
+    """
+    if session is None:
+        return []
+    if flags.command_line and session != 0:
+        raise ValueError("Only one session can retrieve buffered profiles when running from the command line.")
+    return list(libproton.get_buffered_profiles(session, clear))
+
+
 def advance_phase(session: Optional[int] = 0) -> Optional[int]:
     """
     Advances the profiling phase for a given session.
