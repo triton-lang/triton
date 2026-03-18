@@ -8,7 +8,6 @@ from typing import TypeVar, Type
 import builtins
 import os
 import pathlib
-import hashlib
 from triton.compiler.code_generator import flatten_values_to_ir
 
 T = TypeVar('T')

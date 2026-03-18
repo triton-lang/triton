@@ -342,20 +342,7 @@ void init_triton_ir(py::module &&m) {
     if (std::string filename =
             mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
         !filename.empty()) {
-      TritonPlugin TP(filename);
-
-      std::vector<const char *> dialectNames;
-      if (auto result = TP.getDialectHandles(dialectNames); !result)
-        llvm::report_fatal_error(result.takeError());
-
-      for (unsigned i = 0; i < dialectNames.size(); ++i) {
-        const char *dialectName = dialectNames.data()[i];
-        auto result = TP.getDialectPluginInfo(dialectName);
-        if (!result)
-          throw TP.err2exp(result.takeError());
-        ::mlir::DialectPluginLibraryInfo dialectPluginInfo = *result;
-        dialectPluginInfo.registerDialectRegistryCallbacks(&registry);
-      }
+      loadPluginDialects(filename, registry);
     }
 
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,

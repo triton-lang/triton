@@ -117,4 +117,7 @@ private:
   bool isLoaded = false;
 };
 
+void loadPluginDialects(const std::string &filename,
+                        mlir::DialectRegistry &registry);
+
 #endif // TRITON_PLUGIN_UTILS_H
