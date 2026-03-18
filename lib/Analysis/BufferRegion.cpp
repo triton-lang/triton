@@ -133,10 +133,12 @@ uint32_t getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
   }
 
   StringAttr offsetDim = StringAttr::get(ctx, "offset");
+  StringAttr blockDim = StringAttr::get(ctx, "block");
   mlir::triton::LinearLayout inverse = layout.invert();
   auto mapped = inverse.apply(logicalOffsets);
-  assert(mapped.size() == 1 && mapped[0].first == offsetDim &&
-         "expected single offset dimension after inversion");
+  assert(mapped.size() == 2 && mapped[0].first == offsetDim &&
+         mapped[1].first == blockDim && mapped[1].second == 0 &&
+         "expected offset and zero block dimensions after inversion");
   uint64_t elementOffset = static_cast<uint32_t>(mapped[0].second);
 
   uint64_t elementSizeBytes =
