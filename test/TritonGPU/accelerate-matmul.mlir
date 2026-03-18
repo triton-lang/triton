@@ -781,3 +781,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %d : tensor<128x256xi32, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:103", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 4], instrShape = [16, 8]}>
+  // CHECK-LABEL: @mmav5_int8_sm103_fallback
+  //  CHECK-NOT: ttng.tc_gen5_mma
+  //      CHECK: tt.dot %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x128xi8
+  // CHECK-SAME: -> tensor<128x256xi32, #[[$MMA]]>
+  tt.func public @mmav5_int8_sm103_fallback(%a: tensor<128x128xi8, #blocked2>, %b_ptr: tensor<128x256x!tt.ptr<i8>, #blocked1>, %c: tensor<128x256xi32, #blocked>)
+        -> tensor<128x256xi32, #blocked> {
+      %ad = ttg.convert_layout %a : tensor<128x128xi8, #blocked2> -> tensor<128x128xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+      %b = tt.load %b_ptr : tensor<128x256x!tt.ptr<i8>, #blocked1>
+      %bd = ttg.convert_layout %b : tensor<128x256xi8, #blocked1> -> tensor<128x256xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+      %d = tt.dot %ad, %bd, %c : tensor<128x128xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x256xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xi32, #blocked>
+    tt.return %d : tensor<128x256xi32, #blocked>
+  }
+}
