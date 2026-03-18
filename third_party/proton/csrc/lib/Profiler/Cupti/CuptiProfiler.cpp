@@ -122,7 +122,7 @@ uint32_t processActivityKernel(
     if (nodeIdToState) {
       const GraphState::NodeState &nodeState = nodeIdToState->at(
           kernel->graphNodeId); // nodeIdToState must have the nodeId
-      if (nodeState.status.isMetricNode()) {
+      if (!nodeState.status.isMetricNode()) {
         const bool isMissingName = nodeState.status.isMissingName();
         for (auto &[data, entry] : externState.dataToGraphEntry) {
           auto targetEntryIdIter = nodeState.dataToEntryId.find(data);
