@@ -1007,9 +1007,8 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if scale_type != "float8_e4m3fn" or not pack_along_k or not (with_a_scale and with_b_scale):
             pytest.skip("NVFP4 fallback config only exercises packed NVFP4 with both scales")
 
-    input_scale = 4.0 if nvfp4_fallback else 1.0
-    atol = 1e-4 if nvfp4_fallback else 1e-2
-    rtol = 1e-4 if nvfp4_fallback else 1e-2
+    atol = 1e-3
+    rtol = 1e-3
 
     if is_cuda():
         if scale_type == "float8_e4m3fn" and not pack_along_k:
@@ -1045,11 +1044,6 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     b_size = (N, (K + VEC_SIZE - 1) // VEC_SIZE)
     a_scale = torch.rand(a_size, device=device)
     b_scale = torch.rand(b_size, device=device)
-    if nvfp4_fallback:
-        a_scale += 1e-3
-        b_scale += 1e-3
-    a_scale *= input_scale
-    b_scale *= input_scale
     if scale_type == "float8_e8m0fnu":
         a_scale_ref = MXScaleTensor(a_scale)
         b_scale_ref = MXScaleTensor(b_scale)
