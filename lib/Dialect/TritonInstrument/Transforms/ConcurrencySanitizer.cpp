@@ -412,12 +412,11 @@ private:
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc : hooks->getAsyncWriteCommitKinds()) {
-        if (opCommitKind == commitKindDesc.kind &&
-            hooks->isOrderedCommitKind(opCommitKind))
-          continue;
+        bool excludeSelf = (opCommitKind == commitKindDesc.kind &&
+                            hooks->isOrderedCommitKind(opCommitKind));
         funcBuilder.createCheckOutstandingCommitsCall(
             b, buf, length, getBaseThread(thread), commitKindDesc.operationDesc,
-            pred, memType, commitKindDesc.kind, op);
+            pred, memType, commitKindDesc.kind, op, excludeSelf);
       }
     }
   }
@@ -432,12 +431,11 @@ private:
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc : hooks->getAsyncReadCommitKinds()) {
-        if (opCommitKind == commitKindDesc.kind &&
-            hooks->isOrderedCommitKind(opCommitKind))
-          continue;
+        bool excludeSelf = (opCommitKind == commitKindDesc.kind &&
+                            hooks->isOrderedCommitKind(opCommitKind));
         funcBuilder.createCheckOutstandingCommitsCall(
             b, buf, length, getBaseThread(thread), commitKindDesc.operationDesc,
-            pred, memType, commitKindDesc.kind, op);
+            pred, memType, commitKindDesc.kind, op, excludeSelf);
       }
     }
   }

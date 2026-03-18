@@ -393,3 +393,22 @@ def test_consan_tdm_load_store_combined(FAILURE):
     else:
         assert "device assertion failed" not in stderr_str, \
             f"Unexpected ConSan violation in stderr:\n{stderr_str}"
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_consan_tdm_cross_partition(FAILURE):
+    """
+    Two WS partitions both do TDM async load to the same shared memory buffer
+    (commit-tracked, no TDM barrier). FAILURE=True skips async_wait in ws_default
+    partition, leaving its commits outstanding; ws_1's check detects the
+    cross-partition race. FAILURE=False clears commits via async_wait first.
+    """
+    stderr_str = _run_consan_subprocess("tdm_cross_partition_kernel", FAILURE)
+
+    if FAILURE:
+        assert "Accessing buffer with pending access" in stderr_str, \
+            f"Expected 'Accessing buffer with pending access' in stderr, got:\n{stderr_str}"
+    else:
+        assert "device assertion failed" not in stderr_str, \
+            f"Unexpected ConSan violation in stderr:\n{stderr_str}"

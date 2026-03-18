@@ -569,9 +569,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     %pred = arith.constant 1 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_write_visibility
-    // CHECK-NOT: tt.call @__triton_consan_check_outstanding_commits
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits_excl_self_noalias
     // CHECK: tt.call @__triton_consan_verify_read_visibility
-    // CHECK-NOT: tt.call @__triton_consan_check_outstanding_commits
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits_excl_self_noalias
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: tt.call @__triton_consan_commit_accesses
     // CHECK-NOT: tt.call @__triton_consan_verify_barrier_arrive
@@ -594,10 +594,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     ttg.async_copy_global_to_local %ptr, %shmem : tensor<128x128x!tt.ptr<f16>, #blocked> -> <128x128xf16, #shared, #smem, mutable>
 
     // CHECK: tt.call @__triton_consan_verify_write_visibility
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits_noalias
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits_excl_self_noalias
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: tt.call @__triton_consan_commit_accesses
     amdg.async_tdm_copy_local_to_global %desc[%c0_i32, %c0_i32] from %0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> !tt.tensordesc<tensor<32x32xf32>>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [32, 32]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shared = 65544 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // CHECK-LABEL: @async_tdm_load_store_no_barrier
+  tt.func public @async_tdm_load_store_no_barrier(%in_desc: !tt.tensordesc<tensor<32x32xf32>>, %out_desc: !tt.tensordesc<tensor<32x32xf32>>) {
+    %c0_i32 = arith.constant 0 : i32
+    %pred = arith.constant 1 : i32
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits_excl_self_noalias
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit
+    // CHECK: tt.call @__triton_consan_commit_accesses
+    %1 = amdg.async_tdm_copy_global_to_local %in_desc[%c0_i32, %c0_i32] into %0, %pred : !tt.tensordesc<tensor<32x32xf32>> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits_excl_self_noalias
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit
+    // CHECK: tt.call @__triton_consan_commit_accesses
+    amdg.async_tdm_copy_local_to_global %out_desc[%c0_i32, %c0_i32] from %0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> !tt.tensordesc<tensor<32x32xf32>>
     tt.return
   }
 }

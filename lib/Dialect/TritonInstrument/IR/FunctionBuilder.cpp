@@ -2528,7 +2528,7 @@ void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
 void FunctionBuilder::createCheckOutstandingCommitsCall(
     ImplicitLocOpBuilder &b, Value buf, uint32_t length, int thread,
     StringRef pendingAccessType, Value pred, MemType memType,
-    CommitKind::Kind commitKind, Operation *insertPoint) {
+    CommitKind::Kind commitKind, Operation *insertPoint, bool excludeSelf) {
   if (auxData.buffers[(int)memType].empty() ||
       auxData.commits[commitKind].empty() ||
       (auxData.hasNonTrivialAliasing[(int)memType] &&
@@ -2553,7 +2553,7 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
                         commitsType.cloneWith(std::nullopt, b.getI1Type())};
   Type aliasMatrixTypeBase;
   auto buildCheckOutstandingCommitsBody = [&commitsType, &aliasMatrixTypeBase](
-                                              bool useAlias) {
+                                              bool useAlias, bool exclSelf) {
     return [=](ImplicitLocOpBuilder &fb, Block *entryBlock) {
       Value bufOffset = entryBlock->getArgument(0);
       Value lengthVal = entryBlock->getArgument(1);
@@ -2578,6 +2578,11 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
           tti::createConstIntTensor(fb, fb.getLoc(), 0, commitsType);
       Value selectedRows = arith::SelectOp::create(
           fb, buffersEqBuf, outstandingCommits, zeroTensor);
+      if (exclSelf) {
+        Value threadColumnMask = createColumnMask(fb, threadVal, commitsType);
+        selectedRows = arith::SelectOp::create(fb, threadColumnMask, zeroTensor,
+                                               selectedRows);
+      }
       Value selectedEqZero = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
                                                    selectedRows, zeroTensor);
       Value vTrue = tti::createConstIntTensor(
@@ -2596,18 +2601,23 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
         bufOffset,        lengthVal,     pred,
         threadVal,        buffers.value, outstandingCommits.value,
         aliasMatrix.value};
+    std::string funcName = excludeSelf ? "check_outstanding_commits_excl_self"
+                                       : "check_outstanding_commits";
     createCallToCachedFunction(
-        b, "check_outstanding_commits", args, assertInfo,
+        b, funcName, args, assertInfo,
         {buffersType, commitsType, aliasMatrixType, (uint64_t)thread},
-        buildCheckOutstandingCommitsBody(/*useAlias=*/true));
+        buildCheckOutstandingCommitsBody(/*useAlias=*/true, excludeSelf));
   } else {
     SmallVector<Value> args = {bufOffset,     lengthVal,
                                pred,          threadVal,
                                buffers.value, outstandingCommits.value};
+    std::string funcName = excludeSelf
+                               ? "check_outstanding_commits_excl_self_noalias"
+                               : "check_outstanding_commits_noalias";
     createCallToCachedFunction(
-        b, "check_outstanding_commits_noalias", args, assertInfo,
+        b, funcName, args, assertInfo,
         {buffersType, commitsType, (uint64_t)thread},
-        buildCheckOutstandingCommitsBody(/*useAlias=*/false));
+        buildCheckOutstandingCommitsBody(/*useAlias=*/false, excludeSelf));
   }
 }
 

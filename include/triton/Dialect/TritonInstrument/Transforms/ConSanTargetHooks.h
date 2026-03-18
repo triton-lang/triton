@@ -135,9 +135,13 @@ public:
     return {};
   }
 
-  // Returns true to skip the outstanding-commit conflict check between
-  // two consecutive ops of the same commit kind to avoid ConSan false
-  // positives.
+  // Returns true for commit kinds whose ops complete in issue order within a
+  // warp. ConSan's thread model tracks one logical
+  // thread per WS partition, so it cannot distinguish intra-warp ordering from
+  // cross-warp races inside the same partition. For such kinds, the
+  // outstanding-commit check excludes the calling thread's own column, avoiding
+  // intra-partition false positives while still detecting cross-partition
+  // races.
   virtual bool isOrderedCommitKind(CommitKind::Kind kind) const {
     return false;
   }

@@ -809,6 +809,45 @@ def ws_load_wait_store_failure():
     kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)
 
 
+def tdm_cross_partition_kernel():
+    FAILURE = sys.argv[2] == "True"
+    XBLOCK_C: ttgl.constexpr = ttgl.constexpr(XBLOCK)
+
+    @gluon.jit
+    def ws_default(desc, smem, sync_bar, FAILURE: ttgl.constexpr):
+        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem)
+        if not FAILURE:
+            ttgl.amd.gfx1250.tdm.async_wait(0)
+        ttgl.amd.gfx1250.mbarrier.arrive(sync_bar, count=1)
+
+    @gluon.jit
+    def ws_1(desc, smem, sync_bar, FAILURE: ttgl.constexpr):
+        ttgl.amd.gfx1250.mbarrier.wait(sync_bar, phase=0)
+        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem)
+        ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    @gluon.jit
+    def kernel(input_ptr, FAILURE: ttgl.constexpr):
+        WARP_SIZE: ttgl.constexpr = 32
+        NUM_WARPS: ttgl.constexpr = 4
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+
+        desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                           strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                           layout=smem_layout)
+        smem = ttgl.allocate_shared_memory(ttgl.float16, shape=desc.block_shape, layout=desc.layout)
+        sync_bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        ttgl.amd.gfx1250.mbarrier.init(sync_bar.index(0), count=NUM_WARPS * WARP_SIZE)
+
+        ttgl.warp_specialize([
+            (ws_default, (desc, smem, sync_bar.index(0), FAILURE)),
+            (ws_1, (desc, smem, sync_bar.index(0), FAILURE)),
+        ], [NUM_WARPS])
+
+    input_t = torch.randn((XBLOCK, XBLOCK), dtype=torch.float16).cuda()
+    kernel[(1, )](input_t, FAILURE=FAILURE, num_warps=4)
+
+
 if __name__ == "__main__":
     tests = {
         "ws_store_wait_load_failure": ws_store_wait_load_failure, "ws_load_wait_store_failure":
@@ -821,6 +860,7 @@ if __name__ == "__main__":
         "async_tdm_kernel_2bufs_1bar": async_tdm_kernel_2bufs_1bar, "tdm_interleave_kernel": tdm_interleave_kernel,
         "async_copy_kernel": async_copy_kernel, "tdm_store_kernel": tdm_store_kernel, "tdm_load_no_barrier_kernel":
         tdm_load_no_barrier_kernel, "tdm_load_store_combined_kernel": tdm_load_store_combined_kernel,
-        "tdm_two_bufs_one_wait_kernel": tdm_two_bufs_one_wait_kernel
+        "tdm_two_bufs_one_wait_kernel": tdm_two_bufs_one_wait_kernel, "tdm_cross_partition_kernel":
+        tdm_cross_partition_kernel
     }
     tests[sys.argv[1]]()
