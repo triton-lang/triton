@@ -26,7 +26,9 @@ protected:
   virtual void doStop() override;
   virtual void
   doSetMode(const std::vector<std::string> &modeAndOptions) override;
-  virtual void doAddMetrics(
+
+  // MetricInterface
+  virtual void addMetrics(
       size_t scopeId,
       const std::map<std::string, MetricValueType> &scalarMetrics,
       const std::map<std::string, TensorMetric> &tensorMetrics) override;

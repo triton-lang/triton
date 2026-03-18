@@ -146,7 +146,7 @@ private:
 
   void activateSessionImpl(size_t sessionId);
 
-  void deActivateSessionImpl(size_t sessionId, bool flushing);
+  void deactivateSessionImpl(size_t sessionId, bool flushing);
 
   size_t getSessionId(const std::string &path) { return sessionPaths[path]; }
 
