@@ -123,30 +123,30 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
       TRITON_WMMA_v(2, 16, 16, ocpFp8T, ocpFp8T, 8, f32T,
                     "llvm.amdgcn.wmma.f32.16x16x16.fp8.fp8", 16, 8),
       // wmma_f32_16x16x128_fp8_fp8 & wmma_f32_16x16x64_fp8_fp8
-      TRITON_WMMA_v_2case(3, 16, 16, ocpFp8T, ocpFp8T, 8, f32T,
-                          "llvm.amdgcn.wmma.f32.16x16x128.fp8.fp8", 128, 64,
-                          "llvm.amdgcn.wmma.f32.16x16x64.fp8.fp8", 64, 32),
+      TRITON_WMMA_v(3, 16, 16, ocpFp8T, ocpFp8T, 8, f32T,
+                    // "llvm.amdgcn.wmma.f32.16x16x128.fp8.fp8", 128, 64,
+                    "llvm.amdgcn.wmma.f32.16x16x64.fp8.fp8", 64, 32),
       // wmma_f32_16x16x16_fp8_bf8
       TRITON_WMMA_v(2, 16, 16, ocpFp8T, ocpBf8T, 8, f32T,
                     "llvm.amdgcn.wmma.f32.16x16x16.fp8.bf8", 16, 8),
       // wmma_f32_16x16x128_fp8_bf8 & wmma_f32_16x16x64_fp8_bf8
-      TRITON_WMMA_v_2case(3, 16, 16, ocpFp8T, ocpBf8T, 8, f32T,
-                          "llvm.amdgcn.wmma.f32.16x16x128.fp8.bf8", 128, 64,
-                          "llvm.amdgcn.wmma.f32.16x16x64.fp8.bf8", 64, 32),
+      TRITON_WMMA_v(3, 16, 16, ocpFp8T, ocpBf8T, 8, f32T,
+                    // "llvm.amdgcn.wmma.f32.16x16x128.fp8.bf8", 128, 64,
+                    "llvm.amdgcn.wmma.f32.16x16x64.fp8.bf8", 64, 32),
       // wmma_f32_16x16x16_bf8_fp8
       TRITON_WMMA_v(2, 16, 16, ocpBf8T, ocpFp8T, 8, f32T,
                     "llvm.amdgcn.wmma.f32.16x16x16.bf8.fp8", 16, 8),
       // wmma_f32_16x16x128_bf8_fp8 & wmma_f32_16x16x64_bf8_fp8
-      TRITON_WMMA_v_2case(3, 16, 16, ocpBf8T, ocpFp8T, 8, f32T,
-                          "llvm.amdgcn.wmma.f32.16x16x128.bf8.fp8", 128, 64,
-                          "llvm.amdgcn.wmma.f32.16x16x64.bf8.fp8", 64, 32),
+      TRITON_WMMA_v(3, 16, 16, ocpBf8T, ocpFp8T, 8, f32T,
+                    // "llvm.amdgcn.wmma.f32.16x16x128.bf8.fp8", 128, 64,
+                    "llvm.amdgcn.wmma.f32.16x16x64.bf8.fp8", 64, 32),
       // wmma_f32_16x16x16_bf8_bf8
       TRITON_WMMA_v(2, 16, 16, ocpBf8T, ocpBf8T, 8, f32T,
                     "llvm.amdgcn.wmma.f32.16x16x16.bf8.bf8", 16, 8),
       // wmma_f32_16x16x128_bf8_bf8 & wmma_f32_16x16x64_bf8_bf8
-      TRITON_WMMA_v_2case(3, 16, 16, ocpBf8T, ocpBf8T, 8, f32T,
-                          "llvm.amdgcn.wmma.f32.16x16x128.bf8.bf8", 128, 64,
-                          "llvm.amdgcn.wmma.f32.16x16x64.bf8.bf8", 64, 32),
+      TRITON_WMMA_v(3, 16, 16, ocpBf8T, ocpBf8T, 8, f32T,
+                    // "llvm.amdgcn.wmma.f32.16x16x128.bf8.bf8", 128, 64,
+                    "llvm.amdgcn.wmma.f32.16x16x64.bf8.bf8", 64, 32),
 
       // iu8 inputs
       // wmma_i32_16x16x16_iu8

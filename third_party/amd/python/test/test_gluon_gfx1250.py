@@ -84,7 +84,7 @@ def get_test_gemm_variants():
         # float8e4m3/float8e5m2 * float8e4m3/float8e5m2 -> float32/float16
         *[(a, b, k) for a in ["float8_e4m3fn", "float8_e5m2"] \
                        for b in ["float8_e4m3fn", "float8_e5m2"] \
-                       for k in [64, 128]],
+                       for k in [64]],
     ]
 
 
