@@ -695,6 +695,57 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
   let hasCustomAssemblyFormat = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Generic Linear Layout Encoding
+//===----------------------------------------------------------------------===//
+
+def GenericLinearEncodingAttr : DistributedEncoding<"GenericLinearEncoding", "generic_linear_encoding"> {
+  let mnemonic = "generic_linear";
+
+  let description = [{
+    A linear layout encoding with relaxed constraints compared to LinearEncoding.
+    Like LinearEncoding, it wraps a LinearLayout with input dims
+    {register, lane, warp, block} and output dims {dim0, dim1, ...}.
+
+    Unlike LinearEncoding:
+    - Warp bases MAY be swizzled (non-zero in multiple output dims).
+    - The layout is NOT required to be bijective after removing broadcast bases,
+      but it's still required to be surjective.
+
+    Register, lane, and block bases must still be non-swizzled (at most one
+    non-zero output component per basis vector), which preserves existing
+    within-thread, within-warp, and CGA lowering paths.
+  }];
+
+  let parameters = (ins LinearLayoutParam:$linearLayout);
+
+  let extraClassDeclaration = extraDistributedDeclaration # [{
+    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape) const;
+    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape) const;
+
+    SmallVector<unsigned int> getContig(const char *, SmallVector<unsigned int>) const;
+    SmallVector<unsigned> getContigPerThread() const;
+    SmallVector<unsigned> getContigPerWarp() const;
+    SmallVector<unsigned> getOrder() const;
+    SmallVector<unsigned> getWarpOrder() const;
+    SmallVector<unsigned> getThreadOrder() const;
+
+    SmallVector<unsigned> orderPerDim(StringAttr dimName,
+                                      ArrayRef<unsigned> defaultOrder) const;
+
+    SmallVector<unsigned> basesPerDim(StringAttr dimName,
+                                      bool skipBroadcast = true) const;
+    SmallVector<unsigned> getThreadsPerWarp() const;
+    SmallVector<unsigned> getWarpsPerCTA() const;
+
+    unsigned getRank() const { return getLinearLayout().getNumOutDims(); }
+
+    SmallVector<unsigned> getSizePerThread() const;
+  }];
+
+  let genVerifyDecl = 1;
+  let hasCustomAssemblyFormat = 1;
+}
 
 //===----------------------------------------------------------------------===//
 // Blocked Layout Encoding

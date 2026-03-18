@@ -28,6 +28,7 @@
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -690,6 +691,15 @@ LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
          "DotOp's $c operand should pass the same number of values as $d");
 
+  auto aLayout = gpu::toLinearLayout(rankedTType(op.getA()));
+  auto bLayout = gpu::toLinearLayout(rankedTType(op.getB()));
+  auto dLayout = gpu::toLinearLayout(dTensorTy);
+  if (!gpu::isLinearEncodingCompatible(aLayout) ||
+      !gpu::isLinearEncodingCompatible(bLayout) ||
+      !gpu::isLinearEncodingCompatible(dLayout))
+    return op.emitError(
+        "WMMA requires layouts compatible with LinearEncodingAttr");
+
   return convertDot(op, adaptor, rewriter, typeConverter);
 }
 
@@ -710,9 +720,17 @@ LogicalResult convertScaledWMMA(triton::DotScaledOp op,
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
          "DotOp's C operand should pass the same number of values as D.");
 
-  auto loc = op.getLoc();
-  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(
-      cast<RankedTensorType>(op.getResult().getType()).getEncoding());
+  auto aTy = cast<RankedTensorType>(op.getA().getType());
+  auto bTy = cast<RankedTensorType>(op.getB().getType());
+  auto aLayout = gpu::toLinearLayout(aTy);
+  auto bLayout = gpu::toLinearLayout(bTy);
+  auto dLayout = gpu::toLinearLayout(dTensorTy);
+  if (!gpu::isLinearEncodingCompatible(aLayout) ||
+      !gpu::isLinearEncodingCompatible(bLayout) ||
+      !gpu::isLinearEncodingCompatible(dLayout))
+    return op.emitError(
+        "Scaled WMMA requires layouts compatible with LinearEncodingAttr");
+
   return convertScaledDot(op, adaptor, rewriter, typeConverter);
 }
 } // namespace mlir::triton::AMD

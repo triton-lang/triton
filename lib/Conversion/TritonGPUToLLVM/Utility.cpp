@@ -7,6 +7,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -1471,10 +1472,12 @@ delinearize(RewriterBase &rewriter, Location loc,
     linear = pext_i32(rewriter, loc, linear, nonFreeVarMask);
   }
 
-  auto linearLayout = triton::gpu::LinearEncodingAttr::get(
-      rewriter.getContext(), std::move(ll));
-  auto orderDim = linearLayout.orderPerDim(dimName, linearLayout.getOrder());
-  auto shapeDim = linearLayout.basesPerDim(dimName);
+  auto [orderDim, shapeDim] = triton::gpu::dispatchEncoding(
+      layout, shape,
+      [&](auto enc) -> std::pair<SmallVector<unsigned>, SmallVector<unsigned>> {
+        return {enc.orderPerDim(dimName, enc.getOrder()),
+                enc.basesPerDim(dimName)};
+      });
   auto multiDim = delinearize(rewriter, loc, linear, shapeDim, orderDim);
 
   return std::make_tuple(std::move(multiDim), isRepresentative);
@@ -1570,11 +1573,18 @@ Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
 }
 
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
-                triton::gpu::LinearEncodingAttr encoding, StringAttr dimName) {
-  auto orderDim = encoding.orderPerDim(dimName, encoding.getOrder());
-  auto shapeDim = encoding.basesPerDim(dimName);
+                Attribute encoding, StringAttr dimName) {
+  using DispatchResult =
+      std::tuple<SmallVector<unsigned>, SmallVector<unsigned>, LinearLayout>;
+  auto dispatch = [&](auto enc) -> DispatchResult {
+    return {enc.orderPerDim(dimName, enc.getOrder()), enc.basesPerDim(dimName),
+            enc.getLinearLayout()};
+  };
+  auto [orderDim, shapeDim, ll] =
+      isa<triton::gpu::LinearEncodingAttr>(encoding)
+          ? dispatch(cast<triton::gpu::LinearEncodingAttr>(encoding))
+          : dispatch(cast<triton::gpu::GenericLinearEncodingAttr>(encoding));
   auto linear = linearize(rewriter, loc, multiDim, shapeDim, orderDim);
-  auto ll = encoding.getLinearLayout();
   int32_t freeVarMask = ll.getFreeVariableMasks().lookup(dimName);
   if (freeVarMask != 0) {
     int32_t nonFreeVarMask = ~freeVarMask & (ll.getInDimSize(dimName) - 1);

@@ -475,7 +475,7 @@ Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape);
 
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
-                triton::gpu::LinearEncodingAttr encoding, StringAttr dimName);
+                Attribute encoding, StringAttr dimName);
 
 size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
                  ArrayRef<unsigned> order);

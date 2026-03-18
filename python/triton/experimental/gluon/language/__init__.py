@@ -91,6 +91,7 @@ from ._layouts import (
     AutoLayout,
     BlockedLayout,
     SliceLayout,
+    GenericLinearLayout,
     DistributedLinearLayout,
     DotOperandLayout,
     NVMMADistributedLayout,

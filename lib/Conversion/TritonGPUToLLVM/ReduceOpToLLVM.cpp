@@ -33,6 +33,10 @@ public:
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ReduceOpHelper helper(op);
+    auto srcLayout = triton::gpu::toLinearLayout(helper.getSrcTy());
+    if (!triton::gpu::isLinearEncodingCompatible(srcLayout))
+      return op.emitError(
+          "ReduceOp requires a layout compatible with LinearEncodingAttr");
     Location loc = op->getLoc();
     auto accs = unpackInputs(loc, op, adaptor, rewriter);
     unsigned axis = op.getAxis();
