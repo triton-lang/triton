@@ -154,13 +154,15 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
         for test_frame in [test0_frame, test1_frame, test2_frame]:
             child = test_frame["children"][0]
             assert child["frame"]["name"] == "<captured_at>"
-            # 0...9 iterations
-            assert len(child["children"]) == 10
             # check all iterations
-            for i in range(10):
+            total_iters = 0
+            for child in child["children"]:
                 iter_frame = f"iter_{i}" if test_frame != test2_frame else f"new_iter_{i}"
-                assert child["children"][i]["frame"]["name"] == iter_frame
-                assert child["children"][i]["children"][0]["metrics"]["time (ns)"] > 0
+                if child["frame"]["name"] == iter_frame: # TODO(Keren): remove empty frames
+                    assert child["metrics"]["time (ns)"] > 0
+                    total_iters += 1
+            # 0...9 iterations
+            assert total_iters == 10
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
