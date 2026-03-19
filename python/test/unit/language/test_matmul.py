@@ -976,20 +976,10 @@ def block_scale_fp4_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
-@pytest.mark.parametrize(
-    "M, N, K, BLOCK_M, BLOCK_N, BLOCK_K",
-    [
-        pytest.param(1024, 512, 256, 128, 128, 128, id="bm128_bn128_bk128"),
-        pytest.param(1024, 512, 256, 256, 128, 128, id="bm256_bn128_bk128"),
-        pytest.param(1024, 512, 256, 128, 256, 128, id="bm128_bn256_bk128"),
-        pytest.param(1024, 512, 256, 128, 256, 256, id="bm128_bn256_bk256"),
-        pytest.param(1024, 512, 256, 128, 128, 64, id="bm128_bn128_bk64"),
-        pytest.param(1024, 512, 256, 128, 64, 128, id="bm128_bn64_bk128"),
-        pytest.param(16, 256, 256, 16, 256, 256, id="nvfp4_fallback_bm16"),
-        pytest.param(32, 256, 256, 32, 256, 256, id="nvfp4_fallback_bm32"),
-        pytest.param(64, 256, 256, 64, 256, 256, id="nvfp4_fallback_bm64"),
-    ],
-)
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 256)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
+                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128),
+                                                       (16, 256, 256), (32, 256, 256), (64, 256, 256)])
 @pytest.mark.parametrize("with_a_scale", [True, False])
 @pytest.mark.parametrize("with_b_scale", [True, False])
 @pytest.mark.parametrize("pack_along_k", [True, False])
