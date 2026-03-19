@@ -1,36 +1,13 @@
 #include "Data/Data.h"
 #include "Utility/String.h"
 
-#include <chrono>
 #include <fstream>
 #include <iostream>
-#include <mutex>
 #include <stdexcept>
 
 #include <shared_mutex>
 
 namespace proton {
-
-namespace {
-
-void maybeLogOversizedBufferedProfileDrop(size_t payloadBytes,
-                                          size_t bufferedProfileMaxBytes) {
-  using Clock = std::chrono::steady_clock;
-  static std::mutex warningMutex;
-  static auto lastWarning = Clock::time_point::min();
-
-  std::lock_guard<std::mutex> guard(warningMutex);
-  const auto now = Clock::now();
-  if (now - lastWarning < std::chrono::seconds(10)) {
-    return;
-  }
-  lastWarning = now;
-  std::cerr << "[PROTON] Dropping buffered profile payload of " << payloadBytes
-            << " bytes because it exceeds buffer_max_bytes="
-            << bufferedProfileMaxBytes << std::endl;
-}
-
-} // namespace
 
 void DataEntry::upsertMetric(std::unique_ptr<Metric> metric) const {
   auto &metrics = metricSet.get().metrics;
@@ -189,8 +166,9 @@ void Data::appendBufferedProfile(size_t phase, std::vector<uint8_t> payload) {
           ? phase
           : std::max(bufferedProfileSerializedUpToPhase, phase);
   if (payloadBytes > bufferedProfileMaxBytes) {
-    maybeLogOversizedBufferedProfileDrop(payloadBytes,
-                                         bufferedProfileMaxBytes);
+    std::cerr << "[PROTON] Dropping buffered profile payload of "
+              << payloadBytes << " bytes because it exceeds buffer_max_bytes="
+              << bufferedProfileMaxBytes << std::endl;
     return;
   }
   while (!bufferedProfiles.empty() &&
