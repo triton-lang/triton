@@ -354,6 +354,13 @@ OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
         // clang-format on
     });
   }
+  if (version == 3) {
+    applicableTypes.append({
+        // clang-format off
+        {f32, f32, f32, f32},
+        // clang-format on
+    });
+  }
   return selectMatrixCoreOperandTypes(dot, applicableTypes);
 }
 
@@ -1496,14 +1503,26 @@ public:
     auto newAcc =
         convertAndCastTensor(rewriter, oldAcc, wmmaEnc, operandTypes[2]);
 
+    // deduce `kWidth` - the number of consecutive elements along K dimension
+    // for a lane derive it from `kBase` the number of elements along K
+    // dimension in a wmma instruction for a lane Note, kBase can consist of a
+    // several separated groups of consecutive elements. This depends on
+    // instruction encoding
     auto kWidth = 0;
-    // Adjust kWidth=kDimTensor/2 when kDimTensor < kDim
     if (kDimTensor < kDim) {
+      // TODO: implement zero padding for small K
+      // For now, adjust kWidth=kDimTensor/2 when kDimTensor < kDim
       kWidth = kDimTensor / 2;
-    } else {
-      // kWidth is always 8 for WMMA v3, and equals to kBase for WMMA v1/2
-      kWidth = wmmaVersion == 3 ? 8 : kBase;
+    } else if ((wmmaVersion == 1) || (wmmaVersion == 2)) {
+      // kWidth is always equals to kBase for WMMA v1/2
+      kWidth = kBase;
+    } else if (wmmaVersion == 3) {
+      const bool isF32 = oldAType.getElementType().isF32();
+      // kBase always consits of several groups of 8 elments except F32 case
+      kWidth = isF32 ? 2 : 8;
     }
+    assert(kWidth != 0);
+
     auto newAType = RankedTensorType::get(
         aShape, operandTypes[0],
         ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEnc, kWidth));
