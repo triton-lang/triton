@@ -25,6 +25,7 @@ void DialectPluginDialect::initialize() {
 
 #include "DialectPlugin/DialectPluginDialect.h"
 #include "DialectPlugin/DialectPluginPasses.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Tools/Plugins/PassPlugin.h"
 #include "triton/Tools/PluginUtils.h"
 #include "llvm/Config/llvm-config.h"
@@ -103,4 +104,26 @@ tritonGetDialectPluginInfo(const char *name) {
             registry->insert<mlir::triton::plugin::DialectPluginDialect>();
             mlir::triton::plugin::registerpluginPasses();
           }};
+}
+
+TRITON_PLUGIN_API
+tritonEnumeratePluginCustomOps(uint32_t *count, const char **handles) {
+  if (!count)
+    return TP_GENERIC_FAILURE;
+  *count = 1;
+  if (!handles)
+    return TP_SUCCESS;
+  handles[0] = "create_custom_op";
+  return TP_SUCCESS;
+}
+
+TRITON_PLUGIN_API
+tritonAddPluginCustomOp(const char *handle, TritonOpBuilder &self,
+                        std::vector<mlir::Value> &operands) {
+  ::mlir::Value &dst = operands[0];
+  ::mlir::Value &src = operands[1];
+
+  dst = self.create<arith::AddFOp>(src, src);
+  operands[0] = dst;
+  return TP_SUCCESS;
 }
