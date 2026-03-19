@@ -267,7 +267,7 @@ Value expandAliases(ImplicitLocOpBuilder &b, Value bufferMask,
          "Alias matrix expected to be rank-3");
   auto bufferMaskType = cast<RankedTensorType>(bufferMask.getType());
   Value bufMaskMatrix =
-      convertAndBroadcast(b, bufferMask, {0, 2}, aliasMatrixType);
+      convertAndBroadcast(b, bufferMask, {0, 1}, aliasMatrixType);
   Value aliasingMask = arith::AndIOp::create(b, aliasMatrix, bufMaskMatrix);
   Value aliasVector = reduce<arith::OrIOp>(b, aliasingMask, /*axis=*/1);
   return createConvertLayout(b, aliasVector, bufferMaskType.getEncoding());

@@ -1823,8 +1823,7 @@ def test_barrier_underflow(device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_barrier_underflow, (device, False, monkeypatch, num_ctas))
         assert_expected_cuda_failure(result.exc)
-        if result.driver_stderr_output:
-            assert "Barrier arrive underflow: current count would become negative" in result.driver_stderr_output
+        assert "Barrier arrive underflow: current count would become negative" in result.driver_stderr_output
         return
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
@@ -1943,10 +1942,10 @@ def test_aliasing_shared_visibility_outstanding_write(MISSING_BAR, OVERLAP, devi
         result = run_in_process(test_aliasing_shared_visibility_outstanding_write,
                                 (MISSING_BAR, OVERLAP, device, False, monkeypatch, num_ctas))
         if MISSING_BAR and OVERLAP:
-            if result.exc is not None:
-                assert_expected_cuda_failure(result.exc)
-                if result.driver_stderr_output:
-                    assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+            assert result.exc is not None
+            assert_expected_cuda_failure(result.exc)
+            # The race can be reported from either side depending on timing.
+            assert "Buffer being accessed has outstanding" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -2006,11 +2005,10 @@ def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrappe
         result = run_in_process(test_aliasing_tensor_visibility_outstanding_read,
                                 (FAILURE, device, False, monkeypatch, num_ctas))
         if FAILURE:
-            if result.exc is not None:
-                assert_expected_cuda_failure(result.exc)
-                if result.driver_stderr_output:
-                    # outstanding reads or writes depends on the timing of the operations.
-                    assert "Buffer being accessed has outstanding" in result.driver_stderr_output
+            assert result.exc is not None
+            assert_expected_cuda_failure(result.exc)
+            # outstanding reads or writes depends on the timing of the operations.
+            assert "Buffer being accessed has outstanding" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -2070,10 +2068,9 @@ def test_aliasing_commit_tracking(MISSING_WAIT, OVERLAP, device, run_wrapper, mo
         result = run_in_process(test_aliasing_commit_tracking,
                                 (MISSING_WAIT, OVERLAP, device, False, monkeypatch, num_ctas))
         if MISSING_WAIT and OVERLAP:
-            if result.exc is not None:
-                assert_expected_cuda_failure(result.exc)
-                if result.driver_stderr_output:
-                    assert "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared" in result.driver_stderr_output
+            assert result.exc is not None
+            assert_expected_cuda_failure(result.exc)
+            assert "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
