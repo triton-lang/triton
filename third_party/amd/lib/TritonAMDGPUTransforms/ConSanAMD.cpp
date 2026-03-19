@@ -135,12 +135,12 @@ public:
     return info;
   }
 
-  SmallVector<CommitKindDesc> getAsyncWriteCommitKinds() const override {
+  SmallVector<CommitKindDesc> getOutstandingWriteCommitKinds() const override {
     return {{tti::CommitKind::AsyncCp, "async_copy_global_to_shared"},
             {tti::CommitKind::TmaStore, "async_tdm_global_to_shared"}};
   }
 
-  SmallVector<CommitKindDesc> getAsyncReadCommitKinds() const override {
+  SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const override {
     return {{tti::CommitKind::TmaStore, "async_tdm_shared_to_global"}};
   }
 

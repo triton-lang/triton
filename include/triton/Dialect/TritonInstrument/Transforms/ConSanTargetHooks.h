@@ -123,15 +123,15 @@ public:
     return info;
   }
 
-  // Returns commit kinds that represent async writes to shared memory.
-  // Used by addWriteChecks to detect outstanding write conflicts.
-  virtual SmallVector<CommitKindDesc> getAsyncWriteCommitKinds() const {
+  // Returns commit kinds used by addWriteChecks to detect outstanding
+  // write accesses to shared memory.
+  virtual SmallVector<CommitKindDesc> getOutstandingWriteCommitKinds() const {
     return {{CommitKind::AsyncCp, "async_copy_global_to_shared"}};
   }
 
-  // Returns commit kinds that represent async reads from shared memory.
-  // Used by addReadChecks to detect outstanding read conflicts.
-  virtual SmallVector<CommitKindDesc> getAsyncReadCommitKinds() const {
+  // Returns commit kinds used by addReadChecks to detect outstanding
+  // read accesses to shared memory.
+  virtual SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const {
     return {};
   }
 

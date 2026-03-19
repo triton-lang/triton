@@ -337,7 +337,7 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         amd.passes.ttgpuir.add_allocate_shared_memory(pm)
-        # # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after shared
+        # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after shared
         if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)

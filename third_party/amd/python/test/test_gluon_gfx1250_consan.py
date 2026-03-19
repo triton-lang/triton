@@ -425,7 +425,7 @@ def test_consan_tdm_cross_partition_load_store(FAILURE):
     the cross-partition race.
     """
     stderr_str = _run_consan_subprocess("tdm_cross_partition_load_store_kernel", FAILURE)
-    print(stderr_str)
+
     if FAILURE:
         assert "Accessing buffer with pending access" in stderr_str, \
             f"Expected 'Accessing buffer with pending access' in stderr, got:\n{stderr_str}"

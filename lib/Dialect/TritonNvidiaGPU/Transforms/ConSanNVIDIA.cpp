@@ -176,7 +176,7 @@ public:
     return info;
   }
 
-  SmallVector<CommitKindDesc> getAsyncReadCommitKinds() const override {
+  SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const override {
     return {{tti::CommitKind::Wgmma, "warpgroup_mma operand read"},
             {tti::CommitKind::TmaStore, "async_copy_shared_to_global"}};
   }
