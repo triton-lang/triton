@@ -51,9 +51,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 //   queryLDSTransLoadParams(16) → instBitWidth=128, padAmount = 2*128/16 = 16
 //   innerDimLength = shape[order[0]] = shape[1] = 64 (N dim)
 //   → padded_shared<[64:+16]>
-// CHECK:     #ttg.padded_shared<[32:+8] {
+// CHECK:     #ttg.padded_shared<[128:+8] {
 // CHECK-NOT: #ttg.padded_shared
-// CHECK:     #ttg.padded_shared<[64:+16] {
+// CHECK:     #ttg.padded_shared<[128:+16] {
 // CHECK-NOT: #ttg.padded_shared
 
 // CHECK-LABEL: tt.func @matmul_kernel_make_tensor_descriptor
@@ -81,9 +81,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 //   queryLDSTransLoadParams(8) → instBitWidth=64, padAmount = 2*64/8 = 16
 //   innerDimLength = shape[1] = 64 (N dim)
 //   → padded_shared<[64:+16]>
-// CHECK:     #ttg.padded_shared<[64:+16] {
+// CHECK:     #ttg.padded_shared<[256:+16] {
 // CHECK-NOT: #ttg.padded_shared
-// CHECK:     #ttg.padded_shared<[64:+16] {
+// CHECK:     #ttg.padded_shared<[256:+16] {
 // CHECK-NOT: #ttg.padded_shared
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -146,7 +146,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 //   queryLDSTransLoadParams(32) → nullopt, falls back to padAmount = 128/32 = 4
 //   innerDimLength = shape[1] = 64 (N dim)
 //   → padded_shared<[64:+4]>
-// CHECK:     #ttg.padded_shared<[16:+4] {
+// CHECK:     #ttg.padded_shared<[64:+4] {
 // CHECK-NOT: #ttg.padded_shared
 // CHECK:     #ttg.padded_shared<[64:+4] {
 // CHECK-NOT: #ttg.padded_shared
