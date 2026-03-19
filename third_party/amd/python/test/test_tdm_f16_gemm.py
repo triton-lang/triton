@@ -110,17 +110,16 @@ def _run_kernel(x, y, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device_tensor_desc=Fal
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(32, 32, 64)])
 @pytest.mark.parametrize("device_tensor_desc, host_tensor_desc", [(True, False), (False, True), (False, False)])
 def test_gemm_fp16(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device_tensor_desc, host_tensor_desc):
-    x = torch.randn(M, K, dtype=torch.float16).cuda()
-    y = torch.randn(K, N, dtype=torch.float16).cuda()
-
-    z_ref = torch.matmul(x.to(torch.float32), y.to(torch.float32))
-
     if device_tensor_desc and not HAS_TENSOR_DESC:
         pytest.skip("Skip unsupported test with device tensor descriptor")
 
     if host_tensor_desc and not HAS_HOST_TENSOR_DESC:
         pytest.skip("Skip unsupported test with host tensor descriptor")
 
+    x = torch.randn(M, K, dtype=torch.float16).cuda()
+    y = torch.randn(K, N, dtype=torch.float16).cuda()
+
+    z_ref = torch.matmul(x.to(torch.float32), y.to(torch.float32))
     z = _run_kernel(x, y, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device_tensor_desc, host_tensor_desc)
 
     assert torch.allclose(z_ref, z, rtol=1e-4, atol=1e-4)
