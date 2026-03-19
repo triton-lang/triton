@@ -67,7 +67,14 @@ TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
   static plugin::PassInfo pass = {PASS_NAME, VERSION, addTritonPluginPass,
                                   registerTritonPluginPass};
   static plugin::PassInfo passes[] = {pass};
-  static plugin::PluginInfo info = {
-      TRITON_PLUGIN_API_VERSION, PLUGIN_NAME, VERSION, passes, 1, nullptr, 0};
+  static plugin::PluginInfo info = {TRITON_PLUGIN_API_VERSION,
+                                    PLUGIN_NAME,
+                                    VERSION,
+                                    passes,
+                                    1,
+                                    nullptr,
+                                    0,
+                                    nullptr,
+                                    0};
   return &info;
 }
