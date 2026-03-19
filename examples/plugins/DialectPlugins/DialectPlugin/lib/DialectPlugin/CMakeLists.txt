@@ -23,6 +23,7 @@ add_mlir_dialect_library(MLIRDialectPlugin
         MLIRPass
         LLVMSupport
         MLIRSupport
+        MLIRArithDialect
         TritonNVIDIAGPUToLLVM
         "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>"
         )
