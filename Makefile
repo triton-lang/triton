@@ -48,6 +48,8 @@ test-unit: all
 	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
 		$(PYTEST) -s -vvv python/test/unit/plugins/test_dialect_plugin.py
 	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/gluon
+	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
+		$(PYTEST) -s -vvv python/test/unit/plugins/custom_ops.py
 
 .PHONY: test-gluon
 test-gluon: all

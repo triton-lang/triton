@@ -3,6 +3,7 @@
 
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Tools/Plugins/DialectPlugin.h"
+#include "python/src/ir.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
 #include <cstdint>
@@ -29,6 +30,9 @@ public:
   static constexpr char DIALECT_PLUGININFO[] = "tritonGetDialectPluginInfo";
   static constexpr char ADD_PASS[] = "tritonAddPluginPass";
   static constexpr char REGISTER_PASS[] = "tritonRegisterPluginPass";
+  static constexpr char ENUMERATE_CUSTOMOPS[] =
+      "tritonEnumeratePluginCustomOps";
+  static constexpr char ADD_CUSTOMOP[] = "tritonAddPluginCustomOp";
 
 private:
   using EnumeratePyBindHandlesType =
@@ -48,6 +52,13 @@ private:
       std::function<::mlir::DialectPluginLibraryInfo(const char *)>;
   using DialectPluginInfoCType =
       ::mlir::DialectPluginLibraryInfo (*)(const char *);
+
+  using AddCustomOpType = std::function<TritonPluginResult(
+      const char *handle, TritonOpBuilder &self,
+      std::vector<mlir::Value> &operands)>;
+  using AddCustomOpCType =
+      TritonPluginResult (*)(const char *handle, TritonOpBuilder &self,
+                             std::vector<mlir::Value> &operands);
 
   llvm::Expected<intptr_t> getAddressOfSymbol(const std::string &symbol) const;
 
@@ -79,8 +90,15 @@ public:
   getDialectHandles(std::vector<const char *> &handles);
 
   llvm::Expected<TritonPluginResult>
+  getCustomOpHandles(std::vector<const char *> &handles);
+
+  llvm::Expected<TritonPluginResult>
   addPass(mlir::PassManager *pm, const char *passHandle,
           const std::vector<std::string> &args);
+
+  llvm::Expected<TritonPluginResult>
+  addCustomOp(const char *handle, TritonOpBuilder &self,
+              std::vector<mlir::Value> &operands);
 
   llvm::Expected<TritonPluginResult> registerPass(const char *passHandle);
 
@@ -92,10 +110,15 @@ private:
   mutable llvm::sys::DynamicLibrary library;
   EnumeratePyBindHandlesType enumeratePassesAPI;
   EnumeratePyBindHandlesType enumerateDialectsAPI;
+  EnumeratePyBindHandlesType enumerateCustomOpAPI;
   AddPassType addPassAPI;
   RegisterPassType registerPassAPI;
   DialectPluginInfoType dialectPluginInfoAPI;
+  AddCustomOpType addCustomOpAPI;
   bool isLoaded = false;
 };
+
+void loadPluginDialects(const std::string &filename,
+                        mlir::DialectRegistry &registry);
 
 #endif // TRITON_PLUGIN_UTILS_H
