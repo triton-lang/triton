@@ -35,7 +35,8 @@ thread_local GPUProfiler<CuptiProfiler>::ThreadState
 namespace {
 
 std::unique_ptr<Metric>
-convertKernelActivityToMetric(CUpti_Activity *activity, bool isMetricKernel = false) {
+convertKernelActivityToMetric(CUpti_Activity *activity,
+                              bool isMetricKernel = false) {
   std::unique_ptr<Metric> metric;
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   if (kernel->start < kernel->end) {

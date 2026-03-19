@@ -220,8 +220,7 @@ struct KernelMetricWithContext {
   KernelMetricWithContext(const KernelMetric *metric,
                           const DataEntry::FlexibleMetricMap *flexibleMetrics,
                           std::vector<Context> ctx)
-      : kernelMetric(metric),
-        flexibleMetrics(flexibleMetrics),
+      : kernelMetric(metric), flexibleMetrics(flexibleMetrics),
         contexts(std::move(ctx)) {}
 };
 
@@ -533,8 +532,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
                 kernelMetric->getValue(KernelMetric::StreamId));
             auto &streamTrace = streamTraceEvents[streamId];
             if (isMetricKernel) {
-              streamTrace.emplace_back(kernelMetric, flexibleMetrics,
-                                       contexts);
+              streamTrace.emplace_back(kernelMetric, flexibleMetrics, contexts);
             } else {
               streamTrace.emplace_back(kernelMetric, contexts);
             }
