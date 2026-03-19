@@ -521,6 +521,7 @@ class SliceRewriter(ReferenceRewriter):
     translate_to_gluon: bool = False
     inline_helpers: ordered_set[str] = field(default_factory=ordered_set[str])
     cvt_context: list[bool] = field(default_factory=lambda: [False])
+    target: str = "nvidia"
 
     def __post_init__(self) -> None:
         # Special rules for sugaring imports.
@@ -551,6 +552,9 @@ class SliceRewriter(ReferenceRewriter):
                 return node
             raise e
 
+    def _is_amd_target(self) -> bool:
+        return self.target.startswith("gfx")
+
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         if not self.translate_to_gluon:
             return super().visit_Attribute(node)
@@ -562,7 +566,10 @@ class SliceRewriter(ReferenceRewriter):
             self.imports.add("import triton.experimental.gluon._runtime as gluon_runtime")
             new_node = parse_expr("gluon_runtime.GluonJITFunction")
         elif value is tl.tensor_descriptor:
-            self.imports.add("from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor")
+            if self._is_amd_target():
+                self.imports.add("from triton.experimental.gluon.language.amd.gfx1250.tdm import tensor_descriptor")
+            else:
+                self.imports.add("from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor")
             new_node = ast.Name(id="tensor_descriptor", ctx=ast.Load())
         return new_node
 
@@ -709,6 +716,7 @@ def slice_kernel(
     leaf_paths: list[str] | None = None,
     translate_to_gluon: bool = False,
     ignored_decorator_matchers: Sequence[DecoratorMatcher] | None = None,
+    target: str = "nvidia",
 ) -> str:
     base_values: list[GlobalValue] = [get_base_value(root_path) for root_path in root_paths]
     base_value_ids: set[int] = set()
@@ -736,7 +744,7 @@ def slice_kernel(
             ignored_decorator_matchers=ignored_decorator_matchers,
         )
         jit_functions = [fn for fn in jit_functions if not fn.original_value.is_gluon()]
-        converted_functions = translate_kernels(jit_functions)
+        converted_functions = translate_kernels(jit_functions, target=target)
         module_file = tempfile.NamedTemporaryFile(delete=False, prefix="translated_", suffix=".py")
         module_path = Path(module_file.name)
         module_path.write_text(converted_functions)
@@ -782,6 +790,7 @@ def slice_kernel(
             ignored_decorator_matchers=tuple(ignored_decorator_matchers or ()),
             translate_to_gluon=translate_to_gluon,
             inline_helpers=inline_helpers,
+            target=target,
         )
         tree = rewriter.visit(tree)
         source = ast.unparse(tree)
@@ -807,6 +816,7 @@ def slice_kernel_from_trace(
     translate_to_gluon: bool,
     extra_modules: dict[str, str],
     ignored_decorator_matchers: Sequence[DecoratorMatcher] | None = None,
+    target: str = "nvidia",
 ) -> str:
     module_remap: dict[str, str] = {}
     for name, path in extra_modules.items():
@@ -831,6 +841,7 @@ def slice_kernel_from_trace(
         leaf_paths=sorted(leaf_paths),
         translate_to_gluon=translate_to_gluon,
         ignored_decorator_matchers=ignored_decorator_matchers,
+        target=target,
     )
 
     fn_name = lambda path: path.split(":")[1]
@@ -853,6 +864,7 @@ def main(
     translate_to_gluon: bool = False,
     output_path: str = "/tmp/reference.py",
     ignored_decorator_matchers: Sequence[DecoratorMatcher] | None = None,
+    target: str = "nvidia",
 ) -> None:
     output = slice_kernel(
         root_paths,
@@ -861,6 +873,7 @@ def main(
         leaf_paths,
         translate_to_gluon,
         ignored_decorator_matchers,
+        target=target,
     )
     with open(output_path, "w") as f:
         f.write(output)
