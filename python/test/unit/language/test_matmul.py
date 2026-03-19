@@ -978,8 +978,8 @@ def block_scale_fp4_matmul(  #
 
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 256)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
-                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128),
-                                                       (16, 256, 256), (32, 256, 256), (64, 256, 256)])
+                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128), (16, 256, 256),
+                                                       (32, 256, 256), (64, 256, 256)])
 @pytest.mark.parametrize("with_a_scale", [True, False])
 @pytest.mark.parametrize("with_b_scale", [True, False])
 @pytest.mark.parametrize("pack_along_k", [True, False])
@@ -992,7 +992,6 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     assert N % BLOCK_N == 0
     assert K % BLOCK_K == 0
 
-    nvfp4_fallback = BLOCK_M < 128
     if is_cuda():
         if BLOCK_M < 128 and not pack_along_k:
             pytest.skip("Packing along M/N with BLOCK_M < 128 is not supported on CUDA")
@@ -1061,6 +1060,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
                                      BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PACK_ALONG_K=pack_along_k,
                                      **kernel_kwargs)
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
+    nvfp4_fallback = BLOCK_M < 128
     if is_cuda() and not nvfp4_fallback:
         ptx = k.asm["ptx"]
         if pack_along_k:
