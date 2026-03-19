@@ -36,7 +36,6 @@
 #define TRITON_PLUGIN_API extern "C" __attribute__((visibility("default")))
 
 namespace mlir::triton::plugin {
-extern "C" {
 
 // Types for plugin callback functions.
 using AddPassCallback = void (*)(mlir::PassManager *,
@@ -89,7 +88,6 @@ struct PluginInfo {
   OpInfo *ops;
   size_t numOps;
 };
-}
 
 /// A helper structure for storing information about a pass registered by a
 /// plugin.
