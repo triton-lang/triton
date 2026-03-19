@@ -15,6 +15,7 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Tools/Plugins/DialectPlugin.h"
+#include "python/src/ir.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
@@ -42,6 +43,7 @@ using AddPassCallback = void (*)(mlir::PassManager *,
                                  const std::vector<std::string> &);
 using RegisterPassCallback = void (*)();
 using RegisterDialectCallback = void (*)(mlir::DialectRegistry *);
+using AddOpCallback = void (*)(TritonOpBuilder &, std::vector<mlir::Value> &);
 
 /// Information provided by a plugin for loading its passes.
 struct PassInfo {
@@ -56,6 +58,12 @@ struct DialectInfo {
   const char *name;
   const char *version;
   RegisterDialectCallback registerDialect;
+};
+
+/// Information provided by a plugin for loading its custom ops.
+struct OpInfo {
+  const char *name;
+  AddOpCallback addOp;
 };
 
 /// Container for all plugin information; this is returned by the plugin
@@ -76,7 +84,10 @@ struct PluginInfo {
   /// The list of dialects.
   DialectInfo *dialects;
   size_t numDialects;
-  // TODO: do we really want to support multiple dialects per plugin?
+
+  /// The list of custom ops.
+  OpInfo *ops;
+  size_t numOps;
 };
 }
 
@@ -90,17 +101,26 @@ struct Pass {
   const AddPassCallback addPass;
 };
 
+/// A helper structure for storing information about a pass registered by a
+/// plugin.
+struct Op {
+  Op(const char *name, AddOpCallback addOp) : name(name), addOp(addOp) {}
+
+  const char *name;
+  const AddOpCallback addOp;
+};
+
 /// A loaded Triton plugin.
 ///
-/// An instance of this class wraps a loaded dialect plugin and gives access to
-/// its interface defined by the \c PluginInfo it exposes.
+/// An instance of this class wraps a loaded dialect plugin and gives access
+/// to its interface defined by the \c PluginInfo it exposes.
 class TritonPlugin {
 public:
   /// Attempts to load a Triton plugin from a given file.
   ///
-  /// \returns Returns an error if either the library cannot be found or loaded,
-  /// there is no public entry point, or the plugin implements the wrong API
-  /// version.
+  /// \returns Returns an error if either the library cannot be found or
+  /// loaded, there is no public entry point, or the plugin implements the
+  /// wrong API version.
   static llvm::Expected<TritonPlugin> load(const std::string &filename);
 
   /// Get the filename of the loaded plugin.
@@ -123,9 +143,13 @@ public:
   /// plugin.
   llvm::Error registerPasses() const;
 
-  /// Invoke the \c RegisterDialectCallback for each dialect registered in this
-  /// plugin.
+  /// Invoke the \c RegisterDialectCallback for each dialect registered in
+  /// this plugin.
   llvm::Error registerDialects(DialectRegistry &dialectRegistry) const;
+
+  /// List the custom operations; this allows us invoke the \c
+  /// AddOpCallback while knowing the operation name.
+  const llvm::Expected<std::vector<Op>> listOps() const;
 
 private:
   TritonPlugin(const std::string &filename,

@@ -64,6 +64,21 @@ def TTI_ExperimentalMemDescToI32Op : TTI_Op<"experimental_memdesc_to_i32", [Pure
   let assemblyFormat = "$memdesc attr-dict `:` type($memdesc)";
 }
 
+def TTI_ExperimentalClusterCTAIdOp
+    : TTI_Op<"experimental_cluster_cta_id", [Pure]> {
+  let summary = "Get the CTA id within the current cluster";
+  let description = [{
+    Return the cluster-local CTA id used to index ConSan's multi-CTA scratch
+    slabs. For single-CTA kernels this is always zero.
+  }];
+  let results = (outs I32:$result);
+  let builders = [
+    OpBuilder<(ins), [{
+      build($_builder, $_state, $_builder.getI32Type());
+    }]>
+  ];
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
 
 // ===== Critical section lock ops =====
 

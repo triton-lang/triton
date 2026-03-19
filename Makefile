@@ -44,11 +44,17 @@ test-unit: all
 		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
 	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
 		$(PYTEST) -vvv python/test/unit/plugins/test_dialect_plugin.py
+	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
+		$(PYTEST) -s -vvv python/test/unit/plugins/custom_ops.py
 
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
 	$(PYTEST) -n 2 python/examples/gluon/
+
+.PHONY: test-gsan
+test-gsan: all
+	$(PYTEST) -n $(NUM_PROCS) python/test/gsan
 
 .PHONY: test-regression
 test-regression: all

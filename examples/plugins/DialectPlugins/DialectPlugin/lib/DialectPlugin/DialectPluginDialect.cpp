@@ -26,6 +26,7 @@ void DialectPluginDialect::initialize() {
 
 #include "DialectPlugin/DialectPluginDialect.h"
 #include "DialectPlugin/DialectPluginPasses.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Tools/Plugins/PassPlugin.h"
 #include "triton/Tools/PluginUtils.h"
 #include "llvm/Config/llvm-config.h"
@@ -51,6 +52,15 @@ static void registerTritonPluginDialect(DialectRegistry *registry) {
   mlir::triton::plugin::registerpluginPasses();
 }
 
+static void addTritonPluginCustomOp(TritonOpBuilder &self,
+                                    std::vector<mlir::Value> &operands) {
+  ::mlir::Value &dst = operands[0];
+  ::mlir::Value &src = operands[1];
+
+  dst = self.create<arith::AddFOp>(src, src);
+  operands[0] = dst;
+}
+
 TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
   static plugin::PassInfo pass = {PASS_NAME, VERSION, addTritonPluginPass,
                                   registerTritonPluginPass};
@@ -58,7 +68,16 @@ TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
   static plugin::DialectInfo dialect = {DIALECT_NAME, VERSION,
                                         registerTritonPluginDialect};
   static plugin::DialectInfo dialects[] = {dialect};
-  static plugin::PluginInfo info = {
-      TRITON_PLUGIN_API_VERSION, PLUGIN_NAME, VERSION, passes, 1, dialects, 1};
+  static plugin::OpInfo op = {"create_custom_op", addTritonPluginCustomOp};
+  static plugin::OpInfo ops[] = {op};
+  static plugin::PluginInfo info = {TRITON_PLUGIN_API_VERSION,
+                                    PLUGIN_NAME,
+                                    VERSION,
+                                    passes,
+                                    1,
+                                    dialects,
+                                    1,
+                                    ops,
+                                    1};
   return &info;
 }

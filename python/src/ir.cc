@@ -234,7 +234,6 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 /*****************************************************************************/
 /* Python bindings for ir                                                    */
 /*****************************************************************************/
-
 void init_triton_ir(py::module &&m) {
   using ret = py::return_value_policy;
   using namespace pybind11::literals;
@@ -810,9 +809,10 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<OpBuilder::InsertPoint>(m, "InsertPoint", py::module_local());
 
-  py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
-                              py::dynamic_attr())
-      .def(py::init<MLIRContext *>())
+  py::class_<TritonOpBuilder> TritonOpBuilderBinding =
+      py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
+                                  py::dynamic_attr());
+  TritonOpBuilderBinding.def(py::init<MLIRContext *>())
       .def("get_op_builder", &TritonOpBuilder::getBuilder, ret::reference)
       // getters
       .def("create_module",
@@ -1161,7 +1161,8 @@ void init_triton_ir(py::module &&m) {
            })
 
       // Cast instructions
-      // Conversions for custom FP types (FP8 and non-standard rounding modes)
+      // Conversions for custom FP types (FP8 and non-standard rounding
+      // modes)
       .def("create_fp_to_fp",
            [](TritonOpBuilder &self, Value &src, Type &dstType,
               std::optional<RoundingMode> roundingMode) -> Value {
@@ -1302,8 +1303,8 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::MinUIOp>(lhs, rhs));
            })
-      // minimumf follows the torch.minimum convention and returns NaN if either
-      // operand is NaN
+      // minimumf follows the torch.minimum convention and returns NaN if
+      // either operand is NaN
       .def("create_minimumf",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::MinimumFOp>(lhs, rhs));
@@ -1322,8 +1323,8 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::MaxUIOp>(lhs, rhs));
            })
-      // maximumf follows the torch.maximum convention and returns NaN if either
-      // operand is NaN
+      // maximumf follows the torch.maximum convention and returns NaN if
+      // either operand is NaN
       .def("create_maximumf",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::MaximumFOp>(lhs, rhs));
@@ -1830,6 +1831,21 @@ void init_triton_ir(py::module &&m) {
                                                   tensorShape, isSignedInteger,
                                                   paddingOption);
            });
+
+  // Add custom operations.
+  for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
+    auto opsOrError = plugin.listOps();
+    if (auto err = opsOrError.takeError()) {
+      llvm::reportFatalUsageError(std::move(err));
+    } else {
+      for (const auto &op : opsOrError.get()) {
+        TritonOpBuilderBinding.def(
+            op.name, [op](TritonOpBuilder &self, std::vector<Value> args) {
+              op.addOp(self, args);
+            });
+      }
+    }
+  }
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
       .def(py::init<MLIRContext *>())

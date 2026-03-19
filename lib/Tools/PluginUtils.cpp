@@ -100,6 +100,26 @@ TritonPlugin::registerDialects(DialectRegistry &dialectRegistry) const {
   return llvm::Error::success();
 }
 
+const llvm::Expected<std::vector<Op>> TritonPlugin::listOps() const {
+  if (!info->ops && info->numOps > 0)
+    return llvm::make_error<llvm::StringError>(
+        Twine("Invalid custom op pointer in plugin '") + filename + "'.'",
+        llvm::inconvertibleErrorCode());
+  LLVM_DEBUG(llvm::dbgs() << "Listing " << info->numOps
+                          << " custom ops for plugin " << info->pluginName
+                          << ":" << info->pluginVersion << "\n");
+
+  std::vector<Op> ops;
+  for (auto i = 0; i < info->numOps; ++i) {
+    const auto op = &info->ops[i];
+    if (op->addOp) {
+      LLVM_DEBUG(llvm::dbgs() << "Listing custom op " << op->name << "\n");
+      ops.push_back(Op(op->name, op->addOp));
+    }
+  }
+  return ops;
+}
+
 static std::vector<TritonPlugin> plugins;
 static bool pluginsLoaded = false;
 const std::vector<TritonPlugin> &mlir::triton::plugin::loadPlugins() {
