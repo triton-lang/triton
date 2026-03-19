@@ -35,7 +35,7 @@ thread_local GPUProfiler<CuptiProfiler>::ThreadState
 namespace {
 
 std::unique_ptr<Metric>
-convertKernelActivityToMetric(CUpti_Activity *activity) {
+convertKernelActivityToMetric(CUpti_Activity *activity, bool isMetricKernel = false) {
   std::unique_ptr<Metric> metric;
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   if (kernel->start < kernel->end) {
@@ -44,7 +44,8 @@ convertKernelActivityToMetric(CUpti_Activity *activity) {
                                        static_cast<uint64_t>(kernel->end), 1,
                                        static_cast<uint64_t>(kernel->deviceId),
                                        static_cast<uint64_t>(DeviceType::CUDA),
-                                       static_cast<uint64_t>(kernel->streamId));
+                                       static_cast<uint64_t>(kernel->streamId),
+                                       static_cast<uint64_t>(isMetricKernel));
   } // else: not a valid kernel activity
   return metric;
 }
@@ -122,32 +123,30 @@ uint32_t processActivityKernel(
     if (nodeIdToState) {
       const GraphState::NodeState &nodeState = nodeIdToState->at(
           kernel->graphNodeId); // nodeIdToState must have the nodeId
-      if (!nodeState.status.isMetricNode()) {
-        const bool isMissingName = nodeState.status.isMissingName();
-        for (auto &[data, entry] : externState.dataToGraphEntry) {
-          auto targetEntryIdIter = nodeState.dataToEntryId.find(data);
-          if (targetEntryIdIter != nodeState.dataToEntryId.end()) {
-            auto targetEntryId = targetEntryIdIter->second;
-            if (!isMissingName) {
-              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                entry.upsertLinkedMetric(std::move(kernelMetric),
-                                         targetEntryId);
-                detail::updateDataPhases(dataPhases, data, entry.phase);
-              }
-            } else {
-              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                auto childEntry =
-                    data->addOp(Data::kVirtualPhase, targetEntryId,
-                                {Context(kernel->name)});
-                entry.upsertLinkedMetric(std::move(kernelMetric),
-                                         childEntry.id);
-                detail::updateDataPhases(dataPhases, data, entry.phase);
-              }
+      const bool isMetricKernel = nodeState.status.isMetricNode();
+      const bool isMissingName = nodeState.status.isMissingName();
+      for (auto &[data, entry] : externState.dataToGraphEntry) {
+        auto targetEntryIdIter = nodeState.dataToEntryId.find(data);
+        if (targetEntryIdIter != nodeState.dataToEntryId.end()) {
+          auto targetEntryId = targetEntryIdIter->second;
+          if (!isMissingName) {
+            if (auto kernelMetric =
+                    convertKernelActivityToMetric(activity, isMetricKernel)) {
+              entry.upsertLinkedMetric(std::move(kernelMetric), targetEntryId);
+              detail::updateDataPhases(dataPhases, data, entry.phase);
             }
-          } // else the profiling session has been deactivated during graph
-            // capture when encountering this node
-        }
-      } // else metric nodes are always skipped
+          } else {
+            if (auto kernelMetric =
+                    convertKernelActivityToMetric(activity, isMetricKernel)) {
+              auto childEntry = data->addOp(Data::kVirtualPhase, targetEntryId,
+                                            {Context(kernel->name)});
+              entry.upsertLinkedMetric(std::move(kernelMetric), childEntry.id);
+              detail::updateDataPhases(dataPhases, data, entry.phase);
+            }
+          }
+        } // else the profiling session has been deactivated during graph
+          // capture when encountering this node
+      }
     } else {
       // This can happen when graph creation is not captured.
       // Since we don't have per-node info, we just attach the kernel metric to
