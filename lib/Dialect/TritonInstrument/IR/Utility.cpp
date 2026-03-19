@@ -208,7 +208,6 @@ Value createLockVariable(ImplicitLocOpBuilder &b) {
   Type ptrType = triton::getPointerType(b.getI32Type());
   auto alloc = createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, 4, 4,
                                             /*sharedClusterState=*/true);
-  ExperimentalLockReleaseOp::create(b, alloc, Value());
   return alloc;
 }
 
@@ -560,6 +559,19 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
 
   // Create lock variable allocation
   Value lockVal = createLockVariable(b);
+  // Initialize the shared-cluster lock once, then synchronize before any CTA
+  // can enter the first instrumented critical section.
+  Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value zero = arith::ConstantIntOp::create(b, 0, 32);
+  Value isCTA0 =
+      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
+  ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
+  if (numCTAs > 1) {
+    ClusterBarrierOp::create(b, b.getLoc());
+  } else {
+    BarrierOp::create(b, b.getLoc(),
+                      AddrSpace::GlobalRead | AddrSpace::GlobalWrite);
+  }
   lock.insert(entryRegion, {lockVal, lockVal.getType()});
   passToWarpSpecialize(entryPoint, lock.at(entryRegion), lock);
 
