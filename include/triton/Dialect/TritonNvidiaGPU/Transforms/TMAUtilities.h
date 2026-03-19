@@ -16,10 +16,6 @@ inline bool isFp4Padded(Attribute encoding) {
   return mmaEnc && mmaEnc.getFp4Padded();
 }
 
-gpu::SharedEncodingTrait
-updateEncodingForShape(Operation *op, gpu::SharedEncodingTrait encoding,
-                       RankedTensorType tensorType);
-
 triton::gpu::SharedEncodingTrait
 getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
                           Value desc);

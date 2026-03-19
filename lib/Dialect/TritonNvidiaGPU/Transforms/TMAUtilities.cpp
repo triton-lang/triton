@@ -8,51 +8,6 @@ namespace ttg = mlir::triton::gpu;
 
 namespace mlir::triton::nvidia_gpu {
 
-ttg::SharedEncodingTrait
-updateEncodingForShape(Operation *op, ttg::SharedEncodingTrait encoding,
-                       RankedTensorType tensorType) {
-  auto ctx = encoding.getContext();
-  auto cgaLayout = ttg::getCGALayout(encoding);
-  if (auto nvmmaEnc = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding)) {
-    auto existingCga = nvmmaEnc.getCGALayout();
-    if (!existingCga)
-      return nvmmaEnc;
-
-    auto newCgaEnc =
-        ttg::updateCGALayoutForShape(cgaLayout, tensorType.getShape());
-    return ttg::NVMMASharedEncodingAttr::get(
-        ctx, nvmmaEnc.getSwizzlingByteWidth(), nvmmaEnc.getTransposed(),
-        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCgaEnc);
-  }
-  if (auto swizEnc = dyn_cast<ttg::SwizzledSharedEncodingAttr>(encoding)) {
-    auto existingCga = swizEnc.getCGALayout();
-    if (!existingCga)
-      return swizEnc;
-
-    auto rank = tensorType.getRank();
-    auto oldOrder = swizEnc.getOrder();
-    SmallVector<unsigned> order;
-    for (int i = 0; i + oldOrder.size() < rank; ++i)
-      order.push_back(rank - i - 1);
-    for (int i = 0; i < oldOrder.size(); ++i) {
-      // If it is a rank-reducing load, we need to drop the last dimensions.
-      if (oldOrder[i] >= rank)
-        continue;
-      order.push_back(oldOrder[i]);
-    }
-    auto newCgaEnc =
-        ttg::updateCGALayoutForShape(cgaLayout, tensorType.getShape());
-    return ttg::SwizzledSharedEncodingAttr::get(
-        ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
-        order, newCgaEnc);
-  }
-
-  constexpr auto msg = "Internal Error: Unhandled tensor descriptor encoding";
-  if (op)
-    op->emitError() << msg;
-  llvm::report_fatal_error(msg);
-}
-
 ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
                                                    RankedTensorType tensorType,
                                                    Value desc) {
@@ -69,7 +24,7 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
   if (descBlockType.getShape() == tensorType.getShape())
     return sharedEnc;
 
-  return updateEncodingForShape(op, sharedEnc, tensorType);
+  return ttg::updateEncodingForShape(op, sharedEnc, tensorType);
 }
 
 bool hasCGABroadcast(ttg::MemDescType memDescType) {
