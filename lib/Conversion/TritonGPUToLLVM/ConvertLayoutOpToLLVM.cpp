@@ -549,12 +549,20 @@ struct ConvertLayoutOpConversion
     Value lBitOff = b.icmp_eq(lBitVal, b.i32_val(0));
     SmallVector<Value> outVals(numRegs);
 
-    auto shipDiagSels = [](auto postSel) {
-      if (postSel == 0x3120)
-        return std::pair{0x7564, 0x7564};
-      auto high = (postSel & 0x4444) >> 2;
-      auto sel10 = postSel ^ ((postSel & 0x1000) ? high << 1 : high);
-      return std::pair{sel10, sel10 ^ 0x4444};
+    auto postShipSel = [](uint16_t preSel, uint16_t postSel, bool rBitOn) {
+      // When selecting non-shipped values, we need to compose with the
+      // preshuffle masks since the values were not previously permuted.
+      uint16_t ret = 0;
+      for (size_t k = 0; k < 4; ++k) {
+        uint16_t postNib = (postSel >> (4 * k)) & 0xF;
+        uint16_t nib = postNib;
+        if (postNib < 4) {
+          uint16_t preNib = (preSel >> (4 * postNib)) & 0xF;
+          nib = rBitOn ? (preNib - 4) : preNib;
+        }
+        ret |= nib << (4 * k);
+      }
+      return ret;
     };
 
     for (int tileIdx = 0; tileIdx < numTiles; ++tileIdx) {
@@ -576,12 +584,16 @@ struct ConvertLayoutOpConversion
           Value valToShip = targetInfo.permute(rewriter, loc, v0, v1, shipSel);
           Value shippedVal =
               targetInfo.shuffleXor(rewriter, loc, valToShip, (1 << lIdx));
-          Value sel00 = b.i32_val(t.topPostSel);
-          Value sel01 = b.i32_val(shipDiagSels(t.topPostSel).second);
-          Value sel10 = b.i32_val(shipDiagSels(t.topPostSel).first);
-          Value sel11 = b.i32_val(t.botPostSel ^ 0x4444);
-          Value sel1 = b.select(lBitOff, sel00, sel01);
-          Value sel2 = b.select(lBitOff, sel10, sel11);
+          uint16_t sel00 =
+              postShipSel(t.topPreSel, t.topPostSel, /*rBitOn=*/false);
+          uint16_t sel01 =
+              postShipSel(t.botPreSel, t.topPostSel ^ 0x4444, /*rBitOn=*/false);
+          uint16_t sel10 =
+              postShipSel(t.topPreSel, t.botPostSel, /*rBitOn=*/true);
+          uint16_t sel11 =
+              postShipSel(t.botPreSel, t.botPostSel ^ 0x4444, /*rBitOn=*/true);
+          Value sel1 = b.select(lBitOff, b.i32_val(sel00), b.i32_val(sel01));
+          Value sel2 = b.select(lBitOff, b.i32_val(sel10), b.i32_val(sel11));
           outVals[r0] = targetInfo.permute(rewriter, loc, v0, shippedVal, sel1);
           outVals[r1] = targetInfo.permute(rewriter, loc, v1, shippedVal, sel2);
         }
