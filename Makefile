@@ -50,6 +50,10 @@ test-gluon: all
 	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
 	$(PYTEST) -n 2 python/examples/gluon/
 
+.PHONY: test-gsan
+test-gsan: all
+	$(PYTEST) -n $(NUM_PROCS) python/test/gsan
+
 .PHONY: test-regression
 test-regression: all
 	$(PYTEST) -n $(NUM_PROCS) python/test/regression
