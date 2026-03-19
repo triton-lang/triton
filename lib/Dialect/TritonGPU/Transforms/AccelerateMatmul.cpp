@@ -1025,9 +1025,8 @@ public:
     patterns.add<BlockedToMMAv5, ScaledBlockedToMMAv5>(
         context, computeCapability, benefitMMAv5);
 
-    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
-      signalPassFailure();
-    }
+    if (applyPatternsGreedily(m, std::move(patterns)).failed())
+      return signalPassFailure();
     // Now that we have picked the mma type, decompose dot that are not natively
     // supported.
     decomposeMixedModeDotOp(m, computeCapability);
