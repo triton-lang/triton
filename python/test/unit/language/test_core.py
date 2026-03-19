@@ -1781,10 +1781,6 @@ def test_atomic_unsupported_type(dtype_str, device):
 @pytest.mark.parametrize("size", [1, 4, 16])
 @pytest.mark.parametrize("op", ["add", "cas"])
 def test_tensor_atomic_use_result(dtype_str, size, op, device):
-    if is_hip():
-        pytest.skip(
-            "HIP is broken because (1) it doesn't support thread predicate in atomic cas, and (2) it doesn't support"
-            " atomic rmw with float16")
 
     @triton.jit
     def kernel(index_ptr, out_ptr, size: tl.constexpr, op: tl.constexpr):
@@ -3514,7 +3510,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f16.f16.f16', ptx)
     elif in_dtype == 'int8':
-        if capability[0] == 7 and capability[1] == 5:  # Turing
+        if is_tcgen5 and capability[0:2] != (10, 3):
+            assert re.search(r'tcgen05.mma.cta_group::1.kind::i8', ptx)
+        elif capability[0] == 7 and capability[1] == 5:  # Turing
             assert 'mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32' in ptx
         else:
             assert 'wgmma.mma_async.sync.aligned' in ptx or\

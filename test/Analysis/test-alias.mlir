@@ -81,6 +81,16 @@ tt.func @if_alias(%i1 : i1) {
   tt.return
 }
 
+tt.func @select_alias(%i1 : i1) {
+  // expected-remark @below {{%0 -> %0}}
+  %a = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{%1 -> %1}}
+  %b = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{%2 -> %0,%1}}
+  %c = arith.select %i1, %a, %b : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  tt.return
+}
+
 tt.func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   // expected-remark @below {{%0 -> %0}}
   %a = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>

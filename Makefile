@@ -2,12 +2,13 @@
 # Make sure to first initialize the build system with:
 #     make dev-install
 
-PYTHON ?= python
-BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
+PYTHON ?= python3
+ROOT_DIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
+BUILD_DIR := $(shell PYTHONPATH="$(ROOT_DIR)/python" $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 INSTALL_DIR ?= $(dir $(BUILD_DIR))install
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
-LLVM_BUILD_PATH ?= "$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/.llvm-project/build"
+LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project/build"
 NUM_PROCS ?= 8
 
 # Incremental builds
@@ -43,11 +44,17 @@ test-unit: all
 		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
 	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
 		$(PYTEST) -vvv python/test/unit/plugins/test_dialect_plugin.py
+	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
+		$(PYTEST) -s -vvv python/test/unit/plugins/custom_ops.py
 
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
 	$(PYTEST) -n 2 python/examples/gluon/
+
+.PHONY: test-gsan
+test-gsan: all
+	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -n $(NUM_PROCS) python/test/gsan
 
 .PHONY: test-regression
 test-regression: all

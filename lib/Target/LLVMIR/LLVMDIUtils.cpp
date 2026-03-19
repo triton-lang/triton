@@ -68,8 +68,9 @@ LLVM::DITypeAttr LLVMDIUtils::convertPtrType(MLIRContext *context,
   LLVM::DITypeAttr diElTypeAttr = convertType(context, pointeeType);
   LLVM::DITypeAttr diTypeAttr = mlir::LLVM::DIDerivedTypeAttr::get(
       context, llvm::dwarf::DW_TAG_pointer_type,
-      mlir::StringAttr::get(context, "pointer"), diElTypeAttr, sizeInBits,
-      /*alignInBits=*/0, /*offset=*/0, addrSpace, mlir::LLVM::DIFlags::Zero,
+      mlir::StringAttr::get(context, "pointer"), /*file=*/nullptr, /*line=*/0,
+      /*scope=*/nullptr, diElTypeAttr, sizeInBits, /*alignInBits=*/0,
+      /*offset=*/0, addrSpace, mlir::LLVM::DIFlags::Zero,
       /*extra data=*/nullptr);
   return diTypeAttr;
 }
