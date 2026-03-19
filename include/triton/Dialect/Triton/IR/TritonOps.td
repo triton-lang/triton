@@ -284,7 +284,8 @@ def TT_StoreOp : TT_Op<"store", [
       TT_Type:$value,
       Optional<TT_BoolLike>:$mask,
       DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-      DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict
+      DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+      UnitAttr:$ignore_cta
     );
 
     let builders = [
