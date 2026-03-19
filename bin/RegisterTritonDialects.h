@@ -151,10 +151,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
   // Register plugin passes and dialects.
   for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
-    if (auto err = plugin.registerPasses())
-      llvm::reportFatalUsageError(std::move(err));
-    if (auto err = plugin.registerDialects(registry))
-      llvm::reportFatalUsageError(std::move(err));
+    plugin.registerPasses();
+    plugin.registerDialects(registry);
   }
 
   registry.insert<

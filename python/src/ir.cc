@@ -340,8 +340,7 @@ void init_triton_ir(py::module &&m) {
 
     // Register plugin dialects.
     for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
-      if (auto err = plugin.registerDialects(registry))
-        llvm::reportFatalUsageError(std::move(err));
+      plugin.registerDialects(registry);
     }
 
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
@@ -1834,16 +1833,11 @@ void init_triton_ir(py::module &&m) {
 
   // Add custom operations.
   for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
-    auto opsOrError = plugin.listOps();
-    if (auto err = opsOrError.takeError()) {
-      llvm::reportFatalUsageError(std::move(err));
-    } else {
-      for (const auto &op : opsOrError.get()) {
-        TritonOpBuilderBinding.def(
-            op.name, [op](TritonOpBuilder &self, std::vector<Value> args) {
-              op.addOp(self, args);
-            });
-      }
+    for (const auto &op : plugin.listOps()) {
+      TritonOpBuilderBinding.def(
+          op.name, [op](TritonOpBuilder &self, std::vector<Value> args) {
+            op.addOp(self, args);
+          });
     }
   }
 

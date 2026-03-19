@@ -103,18 +103,13 @@ void init_triton_passes_ttgpuir(py::module &&m) {
 
 void init_plugin_passes(py::module &&m) {
   for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
-    auto passesOrError = plugin.listPasses();
-    if (auto err = passesOrError.takeError()) {
-      llvm::reportFatalUsageError(std::move(err));
-    } else {
-      for (const auto &pass : passesOrError.get()) {
-        m.def(
-            pass.name,
-            [pass](mlir::PassManager &pm, std::vector<std::string> args) {
-              pass.addPass(&pm, args);
-            },
-            py::arg("pm"), py::arg("args") = std::vector<std::string>());
-      }
+    for (const auto &pass : plugin.listPasses()) {
+      m.def(
+          pass.name,
+          [pass](mlir::PassManager &pm, std::vector<std::string> args) {
+            pass.addPass(&pm, args);
+          },
+          py::arg("pm"), py::arg("args") = std::vector<std::string>());
     }
   }
 }

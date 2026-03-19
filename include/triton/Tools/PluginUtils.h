@@ -133,21 +133,25 @@ public:
   /// Get the plugin API version.
   uint32_t getAPIVersion() const { return info->apiVersion; }
 
-  /// List the available passes; this allows us invoke the \c
-  /// AddPassCallback while knowing the pass name.
-  const llvm::Expected<std::vector<Pass>> listPasses() const;
+  /// List the available passes; this allows us invoke the \c AddPassCallback
+  /// while knowing the pass name. This function will crash with an LLVM usage
+  /// error if the plugin provides invalid \c PluginInfo.
+  const std::vector<Pass> listPasses() const;
 
   /// Invoke the \c RegisterPassCallback for each pass registered in this
-  /// plugin.
-  llvm::Error registerPasses() const;
+  /// plugin. This function will crash with an LLVM usage
+  /// error if the plugin provides invalid \c PluginInfo.
+  void registerPasses() const;
 
   /// Invoke the \c RegisterDialectCallback for each dialect registered in
-  /// this plugin.
-  llvm::Error registerDialects(DialectRegistry &dialectRegistry) const;
+  /// this plugin. This function will crash with an LLVM usage
+  /// error if the plugin provides invalid \c PluginInfo.
+  void registerDialects(DialectRegistry &dialectRegistry) const;
 
   /// List the custom operations; this allows us invoke the \c
-  /// AddOpCallback while knowing the operation name.
-  const llvm::Expected<std::vector<Op>> listOps() const;
+  /// AddOpCallback while knowing the operation name. This function will crash
+  /// with an LLVM usage error if the plugin provides invalid \c PluginInfo.
+  const std::vector<Op> listOps() const;
 
 private:
   TritonPlugin(const std::string &filename,
