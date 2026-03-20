@@ -27,7 +27,7 @@ struct DescriptorAnalysisCallbacks {
 /// Utility class to assign memory layouts to tensor descriptors in a module.
 class AssignDescriptorMemoryLayouts {
 public:
-  AssignDescriptorMemoryLayouts() = default;
+  AssignDescriptorMemoryLayouts() = delete;
   explicit AssignDescriptorMemoryLayouts(
       const DescriptorAnalysisCallbacks &callbacks);
   void assignMemoryLayouts(ModuleOp &mod);

@@ -16,6 +16,16 @@ static bool isTMACompatibleEncoding(Attribute enc) {
   return false;
 }
 
+// Build fallback encoding given shape, order, cga layout and element type
+static Attribute buildFallbackSharedEncoding(mlir::MLIRContext *ctx,
+                                             ArrayRef<int64_t> shape,
+                                             ArrayRef<unsigned> order,
+                                             ttg::CGAEncodingAttr cgaLayout,
+                                             Type elementType) {
+  return ttg::NVMMASharedEncodingAttr::get(ctx, shape, order, cgaLayout,
+                                           elementType, /*fp4Padded*/ false);
+}
+
 #define GEN_PASS_DEF_TRITONNVIDIAGPUOPTIMIZEDESCRIPTORENCODINGPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
@@ -30,15 +40,6 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
-
-    // Fallback shared encoding callback
-    auto buildFallbackSharedEncoding =
-        [](mlir::MLIRContext *ctx, ArrayRef<int64_t> shape,
-           ArrayRef<unsigned> order, ttg::CGAEncodingAttr cgaLayout,
-           Type elementType) {
-          return ttg::NVMMASharedEncodingAttr::get(
-              ctx, shape, order, cgaLayout, elementType, /*fp4Padded*/ false);
-        };
 
     ttg::DescriptorAnalysisCallbacks callbacks;
     callbacks.isCompatibleSharedEncoding = isTMACompatibleEncoding;
