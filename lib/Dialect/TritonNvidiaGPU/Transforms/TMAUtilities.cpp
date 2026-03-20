@@ -1,4 +1,4 @@
-#include <triton/Dialect/TritonGPU/Transforms/DescriptorUtils.h>
+#include <triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h>
 #include <triton/Dialect/TritonNvidiaGPU/IR/Dialect.h>
 #include <triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h>
 #include <triton/Tools/LayoutUtils.h>

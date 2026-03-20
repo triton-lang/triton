@@ -1,6 +1,7 @@
-#include "triton/Dialect/TritonGPU/Transforms/DescriptorUtils.h"
+#include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -12,39 +13,6 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace mlir::triton::gpu {
 
-namespace {
-struct UseInfo {
-  TypedValue<TensorDescType> descriptor;
-  Operation *use;
-  Attribute desiredSharedEncoding;
-  SmallVector<int64_t> shape;
-  CGAEncodingAttr cgaLayout;
-};
-
-Attribute findLoadEncodingFromUsers(
-    Operation *op, llvm::function_ref<bool(Attribute)> isCompatibleEncoding) {
-  // Check if there are any desired encodings available on the op
-  if (auto attr = op->getDiscardableAttr("tt.desired_encoding")) {
-    if (auto enc = dyn_cast<ttg::SharedEncodingTrait>(attr)) {
-      if (isCompatibleEncoding(enc))
-        return enc;
-    }
-  }
-  // Ignore multiple users and just pick the first compatible layout
-  for (auto use : op->getUsers()) {
-    if (auto alloc = dyn_cast<ttg::LocalAllocOp>(use)) {
-      auto enc = alloc.getType().getEncoding();
-      if (isCompatibleEncoding(enc))
-        return enc;
-    } else if (auto store = dyn_cast<ttg::LocalStoreOp>(use)) {
-      auto enc = store.getDst().getType().getEncoding();
-      if (isCompatibleEncoding(enc))
-        return enc;
-    }
-  }
-  return {};
-}
-
 static SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
   SmallVector<int64_t> result(rank, 1);
   assert(shape.size() <= rank);
@@ -53,46 +21,104 @@ static SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
   return result;
 }
 
-static std::optional<UseInfo>
-getUseInfo(Operation *op,
-           llvm::function_ref<bool(Attribute)> isCompatibleEncoding) {
-  UseInfo info;
-  info.use = op;
-  if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
-    info.descriptor = load.getDesc();
-    info.desiredSharedEncoding =
-        findLoadEncodingFromUsers(op, isCompatibleEncoding);
-    auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
-                                               : load.getType().getEncoding();
-    info.cgaLayout = getCGALayout(encoding);
-    auto shape = load.getResult().getType().getShape();
-    auto rank = load.getDesc().getType().getBlockType().getRank();
-    info.shape = expandToRank(shape, rank);
-    return info;
+CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
+                                        ArrayRef<int64_t> shape) {
+  auto rank = shape.size();
+  if (cgaLayout.getRank() == rank)
+    return cgaLayout;
+
+  auto ctx = cgaLayout.getContext();
+  if (cgaLayout.getRank() > rank) {
+    auto ll = cgaLayout.getLinearLayout();
+    // Broadcast over the first rankDiff dims
+    unsigned rankDiff = cgaLayout.getRank() - rank;
+    for (int i = 0; i < rankDiff; ++i) {
+      ll = removeStandardDim(ll, 0);
+    }
+    return CGAEncodingAttr::get(ctx, std::move(ll));
   }
-  if (auto gather = dyn_cast<DescriptorGatherOp>(op)) {
-    info.descriptor = gather.getDesc();
-    info.desiredSharedEncoding =
-        findLoadEncodingFromUsers(op, isCompatibleEncoding);
-    auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
-                                               : gather.getType().getEncoding();
-    info.cgaLayout = getCGALayout(encoding);
-    auto shape = gather.getResult().getType().getShape();
-    auto rank = gather.getDesc().getType().getBlockType().getRank();
-    info.shape = expandToRank(shape, rank);
-    return info;
+  // For rank-reducing loads, we need to rank-increase the CTA Layout
+  auto rankDiff = rank - cgaLayout.getRank();
+  for (unsigned i = 0; i < rankDiff; ++i) {
+    assert(shape[i] == 1 && "Should only happen for rank-reducing loads");
   }
-  if (auto store = dyn_cast<DescriptorStoreLikeOpInterface>(op)) {
-    info.descriptor = store.getDesc();
-    auto encoding = store.getSrc().getType().getEncoding();
-    info.cgaLayout = getCGALayout(encoding);
-    auto shape = store.getSrc().getType().getShape();
-    auto rank = store.getDesc().getType().getBlockType().getRank();
-    info.shape = expandToRank(shape, rank);
-    return info;
+  auto ll = cgaLayout.getLinearLayout();
+  auto kBlock = *ll.getInDimNames().begin();
+  auto standardOuts = standardOutDimNames(ctx, rank);
+  // Append to front
+  for (int i = cgaLayout.getRank(); i < rank; ++i) {
+    ll = LinearLayout::identity1D(1, kBlock, standardOuts[i]) * ll;
   }
-  return std::nullopt;
+  // Rename out dims to dim0..dimn-1
+  auto dimSizes = ll.getOutDims();
+  for (auto [i, dim] : llvm::enumerate(standardOuts)) {
+    dimSizes[i].first = dim;
+  }
+  ll = LinearLayout(ll.getBases(), dimSizes, false);
+  return CGAEncodingAttr::get(ctx, std::move(ll));
 }
+
+SharedEncodingTrait updateEncodingForShape(Operation *op,
+                                           SharedEncodingTrait encoding,
+                                           RankedTensorType tensorType) {
+  auto ctx = encoding.getContext();
+  auto cgaLayout = getCGALayout(encoding);
+  if (auto nvmmaEnc = dyn_cast<NVMMASharedEncodingAttr>(encoding)) {
+    auto existingCga = nvmmaEnc.getCGALayout();
+    if (!existingCga)
+      return nvmmaEnc;
+
+    auto newCgaEnc = updateCGALayoutForShape(cgaLayout, tensorType.getShape());
+    return NVMMASharedEncodingAttr::get(
+        ctx, nvmmaEnc.getSwizzlingByteWidth(), nvmmaEnc.getTransposed(),
+        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCgaEnc);
+  }
+  if (auto swizEnc = dyn_cast<SwizzledSharedEncodingAttr>(encoding)) {
+    auto existingCga = swizEnc.getCGALayout();
+    if (!existingCga)
+      return swizEnc;
+
+    auto rank = tensorType.getRank();
+    auto oldOrder = swizEnc.getOrder();
+    SmallVector<unsigned> order;
+    for (int i = 0; i + oldOrder.size() < rank; ++i)
+      order.push_back(rank - i - 1);
+    for (int i = 0; i < oldOrder.size(); ++i) {
+      // If it is a rank-reducing load, we need to drop the last dimensions.
+      if (oldOrder[i] >= rank)
+        continue;
+      order.push_back(oldOrder[i]);
+    }
+    auto newCgaEnc = updateCGALayoutForShape(cgaLayout, tensorType.getShape());
+    return SwizzledSharedEncodingAttr::get(
+        ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
+        order, newCgaEnc);
+  }
+
+  constexpr auto msg = "Internal Error: Unhandled tensor descriptor encoding";
+  if (op)
+    op->emitError() << msg;
+  llvm::report_fatal_error(msg);
+}
+
+// Build shared encoding for a tensor descriptor by applying callback to adjust
+// for block shape of the descriptor
+TensorDescType getTensorDescTypeWithEncoding(Operation *op,
+                                             RankedTensorType existingTy,
+                                             Attribute encoding) {
+  auto sharedEnc = cast<SharedEncodingTrait>(encoding);
+  encoding = updateEncodingForShape(op, sharedEnc, existingTy);
+  auto blockTy = existingTy.cloneWithEncoding(encoding);
+  return TensorDescType::get(existingTy.getContext(), blockTy);
+}
+
+struct UseInfo {
+  TypedValue<TensorDescType> descriptor;
+  Operation *use;
+  Attribute desiredSharedEncoding;
+  SmallVector<int64_t> shape;
+  CGAEncodingAttr cgaLayout;
+};
 
 struct EncodingInfo {
   Attribute desiredEncoding;
@@ -108,7 +134,7 @@ struct EncodingInfo {
            forcedToDefault == other.forcedToDefault && shape == other.shape;
   }
 };
-} // namespace
+
 } // namespace mlir::triton::gpu
 
 template <> struct std::hash<ttg::EncodingInfo> {
@@ -120,13 +146,17 @@ template <> struct std::hash<ttg::EncodingInfo> {
 };
 
 namespace mlir::triton::gpu {
-static const EncodingInfo *
-internEncoding(std::unordered_set<EncodingInfo> &encodings, EncodingInfo info) {
+//===----------------------------------------------------------------------===//
+// AssignDescriptorMemoryLayouts
+//===----------------------------------------------------------------------===//
+
+const EncodingInfo *AssignDescriptorMemoryLayouts::internEncoding(
+    std::unordered_set<EncodingInfo> &encodings, EncodingInfo info) {
   return &*encodings.insert(info).first;
 }
 
-static EncodingInfo combineEncodings(const EncodingInfo &lhs,
-                                     const EncodingInfo &rhs, unsigned rank) {
+EncodingInfo AssignDescriptorMemoryLayouts::combineEncodings(
+    const EncodingInfo &lhs, const EncodingInfo &rhs, unsigned rank) {
   EncodingInfo result;
   // Always propagate forcedToDefault
   result.forcedToDefault = lhs.forcedToDefault || rhs.forcedToDefault;
@@ -200,95 +230,72 @@ static EncodingInfo combineEncodings(const EncodingInfo &lhs,
   return result;
 }
 
-ttg::CGAEncodingAttr updateCGALayoutForShape(ttg::CGAEncodingAttr cgaLayout,
-                                             ArrayRef<int64_t> shape) {
-  auto rank = shape.size();
-  if (cgaLayout.getRank() == rank)
-    return cgaLayout;
-
-  auto ctx = cgaLayout.getContext();
-  if (cgaLayout.getRank() > rank) {
-    auto ll = cgaLayout.getLinearLayout();
-    // Broadcast over the first rankDiff dims
-    unsigned rankDiff = cgaLayout.getRank() - rank;
-    for (int i = 0; i < rankDiff; ++i) {
-      ll = removeStandardDim(ll, 0);
+Attribute
+AssignDescriptorMemoryLayouts::findLoadEncodingFromUsers(Operation *op) {
+  // Check if there are any desired encodings available on the op
+  if (auto attr = op->getDiscardableAttr("tt.desired_encoding")) {
+    if (auto enc = dyn_cast<ttg::SharedEncodingTrait>(attr)) {
+      if (isCompatibleSharedEncoding(enc))
+        return enc;
     }
-    return ttg::CGAEncodingAttr::get(ctx, std::move(ll));
   }
-  // For rank-reducing loads, we need to rank-increase the CTA Layout
-  auto rankDiff = rank - cgaLayout.getRank();
-  for (unsigned i = 0; i < rankDiff; ++i) {
-    assert(shape[i] == 1 && "Should only happen for rank-reducing loads");
+  // Ignore multiple users and just pick the first compatible layout
+  for (auto use : op->getUsers()) {
+    if (auto alloc = dyn_cast<ttg::LocalAllocOp>(use)) {
+      auto enc = alloc.getType().getEncoding();
+      if (isCompatibleSharedEncoding(enc))
+        return enc;
+    } else if (auto store = dyn_cast<ttg::LocalStoreOp>(use)) {
+      auto enc = store.getDst().getType().getEncoding();
+      if (isCompatibleSharedEncoding(enc))
+        return enc;
+    }
   }
-  auto ll = cgaLayout.getLinearLayout();
-  auto kBlock = *ll.getInDimNames().begin();
-  auto standardOuts = standardOutDimNames(ctx, rank);
-  // Append to front
-  for (int i = cgaLayout.getRank(); i < rank; ++i) {
-    ll = LinearLayout::identity1D(1, kBlock, standardOuts[i]) * ll;
-  }
-  // Rename out dims to dim0..dimn-1
-  auto dimSizes = ll.getOutDims();
-  for (auto [i, dim] : llvm::enumerate(standardOuts)) {
-    dimSizes[i].first = dim;
-  }
-  ll = LinearLayout(ll.getBases(), dimSizes, false);
-  return ttg::CGAEncodingAttr::get(ctx, std::move(ll));
+  return {};
 }
 
-ttg::SharedEncodingTrait
-updateEncodingForShape(Operation *op, ttg::SharedEncodingTrait encoding,
-                       RankedTensorType tensorType) {
-  auto ctx = encoding.getContext();
-  auto cgaLayout = ttg::getCGALayout(encoding);
-  if (auto nvmmaEnc = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding)) {
-    auto existingCga = nvmmaEnc.getCGALayout();
-    if (!existingCga)
-      return nvmmaEnc;
-
-    auto newCgaEnc =
-        ttg::updateCGALayoutForShape(cgaLayout, tensorType.getShape());
-    return ttg::NVMMASharedEncodingAttr::get(
-        ctx, nvmmaEnc.getSwizzlingByteWidth(), nvmmaEnc.getTransposed(),
-        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCgaEnc);
+std::optional<UseInfo>
+AssignDescriptorMemoryLayouts::getUseInfo(Operation *op) {
+  UseInfo info;
+  info.use = op;
+  if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
+    info.descriptor = load.getDesc();
+    info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
+    auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
+                                               : load.getType().getEncoding();
+    info.cgaLayout = getCGALayout(encoding);
+    auto shape = load.getResult().getType().getShape();
+    auto rank = load.getDesc().getType().getBlockType().getRank();
+    info.shape = expandToRank(shape, rank);
+    return info;
   }
-  if (auto swizEnc = dyn_cast<ttg::SwizzledSharedEncodingAttr>(encoding)) {
-    auto existingCga = swizEnc.getCGALayout();
-    if (!existingCga)
-      return swizEnc;
-
-    auto rank = tensorType.getRank();
-    auto oldOrder = swizEnc.getOrder();
-    SmallVector<unsigned> order;
-    for (int i = 0; i + oldOrder.size() < rank; ++i)
-      order.push_back(rank - i - 1);
-    for (int i = 0; i < oldOrder.size(); ++i) {
-      // If it is a rank-reducing load, we need to drop the last dimensions.
-      if (oldOrder[i] >= rank)
-        continue;
-      order.push_back(oldOrder[i]);
-    }
-    auto newCgaEnc =
-        ttg::updateCGALayoutForShape(cgaLayout, tensorType.getShape());
-    return ttg::SwizzledSharedEncodingAttr::get(
-        ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
-        order, newCgaEnc);
+  if (auto gather = dyn_cast<DescriptorGatherOp>(op)) {
+    info.descriptor = gather.getDesc();
+    info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
+    auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
+                                               : gather.getType().getEncoding();
+    info.cgaLayout = getCGALayout(encoding);
+    auto shape = gather.getResult().getType().getShape();
+    auto rank = gather.getDesc().getType().getBlockType().getRank();
+    info.shape = expandToRank(shape, rank);
+    return info;
   }
-
-  constexpr auto msg = "Internal Error: Unhandled tensor descriptor encoding";
-  if (op)
-    op->emitError() << msg;
-  llvm::report_fatal_error(msg);
+  if (auto store = dyn_cast<DescriptorStoreLikeOpInterface>(op)) {
+    info.descriptor = store.getDesc();
+    auto encoding = store.getSrc().getType().getEncoding();
+    info.cgaLayout = getCGALayout(encoding);
+    auto shape = store.getSrc().getType().getShape();
+    auto rank = store.getDesc().getType().getBlockType().getRank();
+    info.shape = expandToRank(shape, rank);
+    return info;
+  }
+  return std::nullopt;
 }
 
 // Build fallback shared encoding with callback
-Attribute getFallbackSharedEncoding(
+Attribute AssignDescriptorMemoryLayouts::getFallbackSharedEncoding(
     RankedTensorType tensorType, ttg::CGAEncodingAttr cgaLayout,
-    ArrayRef<int64_t> usageShape, unsigned numCTAs,
-    llvm::function_ref<Attribute(mlir::MLIRContext *, ArrayRef<int64_t>,
-                                 ArrayRef<unsigned>, CGAEncodingAttr, Type)>
-        callback) {
+    ArrayRef<int64_t> usageShape, unsigned numCTAs) {
   auto ctx = tensorType.getContext();
   SmallVector<unsigned> order;
   for (int i = tensorType.getRank() - 1; i >= 0; --i)
@@ -303,28 +310,11 @@ Attribute getFallbackSharedEncoding(
     cgaLayout = ttg::CGAEncodingAttr::fromSplitParams(ctx, ctasPerCGA,
                                                       ctasPerCGA, order);
   } else if (cgaLayout.getRank() != tensorType.getRank())
-    cgaLayout = ttg::updateCGALayoutForShape(cgaLayout, shape);
+    cgaLayout = updateCGALayoutForShape(cgaLayout, shape);
 
-  return callback(ctx, shape, order, cgaLayout, tensorType.getElementType());
+  return buildFallbackSharedEncoding(ctx, shape, order, cgaLayout,
+                                     tensorType.getElementType());
 }
-
-// Build shared encoding for a tensor descriptor by applying callback to adjust
-// for block shape of the descriptor
-TensorDescType getTensorDescTypeWithEncoding(Operation *op,
-                                             RankedTensorType existingTy,
-                                             Attribute encoding) {
-  auto sharedEnc = cast<SharedEncodingTrait>(encoding);
-  encoding = updateEncodingForShape(op, sharedEnc, existingTy);
-  auto blockTy = existingTy.cloneWithEncoding(encoding);
-  return TensorDescType::get(existingTy.getContext(), blockTy);
-}
-
-//===----------------------------------------------------------------------===//
-// AssignDescriptorMemoryLayouts
-//===----------------------------------------------------------------------===//
-AssignDescriptorMemoryLayouts::AssignDescriptorMemoryLayouts(
-    const DescriptorAnalysisCallbacks &callbacks)
-    : callbacks(callbacks) {}
 
 // For each function compute shared memory encodings for all descriptors. The
 // encodings are derived from the uses by applying findEncodingFromUsers on ops.
@@ -369,12 +359,8 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
       updateEncoding({desc},
                      EncodingInfo{{}, {}, {}, /*forcedToDefault=*/!isKernel});
 
-  // Callbacks
-  auto isCompatibleSharedEncoding = callbacks.isCompatibleSharedEncoding;
-  auto buildFallbackSharedEncoding = callbacks.buildFallbackSharedEncoding;
-
   func.walk([&](Operation *op) {
-    if (auto info = getUseInfo(op, isCompatibleSharedEncoding)) {
+    if (auto info = getUseInfo(op)) {
       updateEncoding(info->descriptor,
                      EncodingInfo{info->desiredSharedEncoding, info->cgaLayout,
                                   info->shape});
@@ -443,12 +429,10 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
     if (einfo->desiredEncoding) {
       newEncoding = einfo->desiredEncoding;
     } else if (einfo->forcedToDefault) {
-      newEncoding = getFallbackSharedEncoding(existingTy, {}, {}, numCTAs,
-                                              buildFallbackSharedEncoding);
+      newEncoding = getFallbackSharedEncoding(existingTy, {}, {}, numCTAs);
     } else {
-      newEncoding =
-          getFallbackSharedEncoding(existingTy, einfo->cgaLayout, einfo->shape,
-                                    numCTAs, buildFallbackSharedEncoding);
+      newEncoding = getFallbackSharedEncoding(existingTy, einfo->cgaLayout,
+                                              einfo->shape, numCTAs);
     }
     desc.setType(getTensorDescTypeWithEncoding(desc.getDefiningOp(), existingTy,
                                                newEncoding));
@@ -458,8 +442,8 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
   SmallVector<Type> resultTys(func.getResultTypes());
   for (auto [i, resultTy] : llvm::enumerate(resultTys)) {
     if (auto descTy = dyn_cast<TensorDescType>(resultTy)) {
-      auto encoding = getFallbackSharedEncoding(
-          descTy.getBlockType(), {}, {}, numCTAs, buildFallbackSharedEncoding);
+      auto encoding =
+          getFallbackSharedEncoding(descTy.getBlockType(), {}, {}, numCTAs);
       resultTys[i] = getTensorDescTypeWithEncoding(
           nullptr, descTy.getBlockType(), encoding);
     }
@@ -474,4 +458,4 @@ void AssignDescriptorMemoryLayouts::assignMemoryLayouts(ModuleOp &mod) {
     }
   }
 }
-}; // namespace mlir::triton::gpu
+} // namespace mlir::triton::gpu

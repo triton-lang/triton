@@ -1,7 +1,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonGPU/Transforms/DescriptorUtils.h"
+#include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
@@ -9,7 +9,22 @@ namespace ttg = mlir::triton::gpu;
 
 namespace mlir::triton::nvidia_gpu {
 
-static bool isTMACompatibleEncoding(Attribute enc) {
+class NvidiaGPUAssignDescriptorMemoryLayouts
+    : public ttg::AssignDescriptorMemoryLayouts {
+public:
+  NvidiaGPUAssignDescriptorMemoryLayouts() = default;
+
+private:
+  Attribute buildFallbackSharedEncoding(mlir::MLIRContext *ctx,
+                                        ArrayRef<int64_t> shape,
+                                        ArrayRef<unsigned> order,
+                                        ttg::CGAEncodingAttr cgaLayout,
+                                        Type elementType) override;
+  bool isCompatibleSharedEncoding(Attribute enc) override;
+};
+
+bool NvidiaGPUAssignDescriptorMemoryLayouts::isCompatibleSharedEncoding(
+    Attribute enc) {
   if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(enc)) {
     return !nvmma.getTransposed();
   }
@@ -17,11 +32,9 @@ static bool isTMACompatibleEncoding(Attribute enc) {
 }
 
 // Build fallback encoding given shape, order, cga layout and element type
-static Attribute buildFallbackSharedEncoding(mlir::MLIRContext *ctx,
-                                             ArrayRef<int64_t> shape,
-                                             ArrayRef<unsigned> order,
-                                             ttg::CGAEncodingAttr cgaLayout,
-                                             Type elementType) {
+Attribute NvidiaGPUAssignDescriptorMemoryLayouts::buildFallbackSharedEncoding(
+    mlir::MLIRContext *ctx, ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
+    ttg::CGAEncodingAttr cgaLayout, Type elementType) {
   return ttg::NVMMASharedEncodingAttr::get(ctx, shape, order, cgaLayout,
                                            elementType, /*fp4Padded*/ false);
 }
@@ -40,11 +53,7 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
-
-    ttg::DescriptorAnalysisCallbacks callbacks;
-    callbacks.isCompatibleSharedEncoding = isTMACompatibleEncoding;
-    callbacks.buildFallbackSharedEncoding = buildFallbackSharedEncoding;
-    ttg::AssignDescriptorMemoryLayouts assignMemoryLayouts(callbacks);
+    NvidiaGPUAssignDescriptorMemoryLayouts assignMemoryLayouts;
     assignMemoryLayouts.assignMemoryLayouts(m);
   }
 };
