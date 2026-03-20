@@ -1,4 +1,5 @@
-add_library(faketriton SHARED empty.c)
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/empty.c "")
+add_library(faketriton SHARED ${CMAKE_CURRENT_BINARY_DIR}/empty.c)
 
 set_target_properties(faketriton PROPERTIES
   OUTPUT_NAME "triton"
