@@ -452,11 +452,16 @@ void dumpKernelMetricTrace(
       const auto &contexts = event.contexts;
 
       json element;
-      element["name"] = contexts.back().name;
       if (flexibleMetrics) {
         element["cat"] = "metadata";
+        std::string name = "";
+        for (const auto &[metricName, metric] : *flexibleMetrics) {
+          name += metricName + "=" +
+                  formatFlexibleMetricValue(metric.getValues()[0]) + " ";
+        }
       } else {
         element["cat"] = "kernel";
+        element["name"] = contexts.back().name;
       }
       element["ph"] = "X";
       element["ts"] = ts;
@@ -467,13 +472,6 @@ void dumpKernelMetricTrace(
         callStack.push_back(ctx.name);
       }
       element["args"]["call_stack"] = std::move(callStack);
-      if (flexibleMetrics) {
-        for (const auto &[metricName, metric] : *flexibleMetrics) {
-          element["args"]["metrics"][metricName] =
-              formatFlexibleMetricValue(metric.getValues()[0]);
-        }
-      }
-
       object["traceEvents"].push_back(element);
     }
   }
