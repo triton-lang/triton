@@ -449,9 +449,9 @@ def async_tdm_kernel():
     @gluon.jit
     def kernel(input_ptr, out, FAILURE: ttgl.constexpr):
         NUM_WARPS: ttgl.constexpr = 4
-        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
-                                                            warps_per_cta=[4, 1], order=[0, 1])
+                                                            warps_per_cta=[4, 1], order=[1, 0])
 
         desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
                                                            strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
@@ -486,9 +486,9 @@ def async_tdm_kernel_2bufs_1bar():
     @gluon.jit
     def kernel(a_ptr, b_ptr, out, FAILURE: ttgl.constexpr):
         NUM_WARPS: ttgl.constexpr = 4
-        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
-                                                            warps_per_cta=[4, 1], order=[0, 1])
+                                                            warps_per_cta=[4, 1], order=[1, 0])
 
         a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(XBLOCK_C, XBLOCK_C),
                                                              strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
@@ -529,9 +529,9 @@ def tdm_interleave_kernel():
     @gluon.jit
     def kernel(input_ptr, out, FAILURE: ttgl.constexpr):
         NUM_WARPS: ttgl.constexpr = 4
-        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
-                                                            warps_per_cta=[4, 1], order=[0, 1])
+                                                            warps_per_cta=[4, 1], order=[1, 0])
 
         desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
                                                            strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
@@ -599,9 +599,9 @@ def tdm_store_kernel():
 
     @gluon.jit
     def kernel(output_ptr, FAILURE: ttgl.constexpr):
-        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
-                                                            warps_per_cta=[4, 1], order=[0, 1])
+                                                            warps_per_cta=[4, 1], order=[1, 0])
         smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK_C, XBLOCK_C], smem_layout)
         val = ttgl.full([XBLOCK_C, XBLOCK_C], 42, ttgl.float16, blocked_layout)
 
@@ -627,9 +627,9 @@ def tdm_load_no_barrier_kernel():
 
     @gluon.jit
     def kernel(input_ptr, out, FAILURE: ttgl.constexpr):
-        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
-                                                            warps_per_cta=[4, 1], order=[0, 1])
+                                                            warps_per_cta=[4, 1], order=[1, 0])
 
         desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
                                                            strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
@@ -659,9 +659,9 @@ def tdm_load_store_combined_kernel():
 
     @gluon.jit
     def kernel(input_ptr, output_ptr, FAILURE: ttgl.constexpr):
-        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
-                                                            warps_per_cta=[4, 1], order=[0, 1])
+                                                            warps_per_cta=[4, 1], order=[1, 0])
 
         in_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
                                                               strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
@@ -695,9 +695,9 @@ def tdm_two_bufs_one_wait_kernel():
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, out, FAILURE: ttgl.constexpr):
-        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
-                                                            warps_per_cta=[4, 1], order=[0, 1])
+                                                            warps_per_cta=[4, 1], order=[1, 0])
 
         a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(XBLOCK_C, XBLOCK_C),
                                                              strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
@@ -830,7 +830,7 @@ def tdm_cross_partition_kernel():
     def kernel(input_ptr, FAILURE: ttgl.constexpr):
         WARP_SIZE: ttgl.constexpr = 32
         NUM_WARPS: ttgl.constexpr = 4
-        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
         desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
                                                            strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
@@ -869,7 +869,7 @@ def tdm_cross_partition_load_store_kernel():
     def kernel(input_ptr, output_ptr, FAILURE: ttgl.constexpr):
         WARP_SIZE: ttgl.constexpr = 32
         NUM_WARPS: ttgl.constexpr = 4
-        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
         in_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
                                                               strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
