@@ -20,7 +20,6 @@ target_link_libraries(triton-opt PRIVATE
 
 mlir_check_all_link_libraries(triton-opt)
 if(TRITON_EXT_ENABLED)
-  add_subdirectory(FakeLibTriton)
   export_executable_symbols_for_plugins(triton-opt)
 endif()
 

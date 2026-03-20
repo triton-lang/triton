@@ -118,6 +118,9 @@ private:
   bool isLoaded = false;
 };
 
+void registerPluginPasses(TritonPlugin &TP);
+void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry);
+
 void loadPluginDialects(const std::string &filename,
                         mlir::DialectRegistry &registry);
 

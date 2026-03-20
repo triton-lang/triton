@@ -7,5 +7,5 @@ set_target_properties(faketriton PROPERTIES
 if(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
   set_target_properties(faketriton PROPERTIES
       LIBRARY_OUTPUT_DIRECTORY
-  "${CMAKE_BINARY_DIR}/bin/faketriton")
+  "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../plugins")
 endif(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
