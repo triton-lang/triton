@@ -75,8 +75,6 @@ __device__ uint32_t getSmId() {
   return smid;
 }
 
-__device__ void ctaBarrier() { asm volatile("bar.sync 0;" : : : "memory"); }
-
 __device__ uintptr_t getThreadStateStrideBytes(GlobalState *globals) {
   auto clocksPerThread = 1u + globals->clockBufferSize;
   return sizeof(ThreadState) +
@@ -127,8 +125,6 @@ __device__ void initThread(GlobalState *globals, Location loc) {
                "Vector clock overflowed");
     clock[tid] += 1;
   }
-
-  ctaBarrier();
 }
 
 struct Range {
