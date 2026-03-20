@@ -262,7 +262,11 @@ private:
 
 struct LockReleaseOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalLockReleaseOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  explicit LockReleaseOpConversion(LLVMTypeConverter &typeConverter,
+                                   const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalLockReleaseOp>(typeConverter),
+        targetInfo(targetInfo) {}
+
   LogicalResult matchAndRewrite(tti::ExperimentalLockReleaseOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
@@ -281,24 +285,35 @@ struct LockReleaseOpConversion
     triton::gpu::BarrierOp::create(b, loc,
                                    triton::gpu::AddrSpace::GlobalRead |
                                        triton::gpu::AddrSpace::GlobalWrite);
-    Value elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
 
     auto i32 = b.getI32Type();
     Value zero =
         arith::ConstantOp::create(b, loc, i32, b.getIntegerAttr(i32, 0));
 
-    PTXBuilder ptx;
-    auto *dstOpr = ptx.newOperand("=r", /*init=*/true);
-    auto *ptrOpr = ptx.newAddrOperand(adaptor.getLock(), "l");
-    auto *valOpr = ptx.newOperand(zero, "r");
-    auto &atom = *ptx.create("atom");
-    atom.global().o("acq_rel").o("gpu").o("exch").o("b32");
-    atom(dstOpr, ptrOpr, valOpr).predicate(elect);
-    ptx.launch(b, loc, i32);
+    if (targetInfo.isCuda()) {
+      Value elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
+
+      PTXBuilder ptx;
+      auto *dstOpr = ptx.newOperand("=r", /*init=*/true);
+      auto *ptrOpr = ptx.newAddrOperand(adaptor.getLock(), "l");
+      auto *valOpr = ptx.newOperand(zero, "r");
+      auto &atom = *ptx.create("atom");
+      atom.global().o("acq_rel").o("gpu").o("exch").o("b32");
+      atom(dstOpr, ptrOpr, valOpr).predicate(elect);
+      ptx.launch(b, loc, i32);
+    } else {
+      LLVM::AtomicRMWOp::create(b, loc, LLVM::AtomicBinOp::xchg,
+                                adaptor.getLock(), zero,
+                                LLVM::AtomicOrdering::release,
+                                StringAttr::get(b.getContext(), "agent"));
+    }
 
     b.eraseOp(op);
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 struct MemDescToI32OpConversion
@@ -349,7 +364,7 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<AssertUniformOpConversion>(typeConverter);
   patterns.add<BufferDescriptorsOpConversion>(typeConverter);
   patterns.add<LockAcquireOpConversion>(typeConverter, targetInfo);
-  patterns.add<LockReleaseOpConversion>(typeConverter);
+  patterns.add<LockReleaseOpConversion>(typeConverter, targetInfo);
   patterns.add<MemDescToI32OpConversion>(typeConverter);
   patterns.add<ClusterCTAIdOpConversion>(typeConverter, targetInfo);
 }

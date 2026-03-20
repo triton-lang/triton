@@ -2546,8 +2546,7 @@ void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
 
         // Update write visibility
         Value writeRowMask =
-            createBitwiseOrReduce(fb, outstandingCommitsGtOutstandingNum,
-                                  /*axis=*/1);
+            reduceLastDim<arith::OrIOp>(fb, outstandingCommitsGtOutstandingNum);
         writeRowMask = createConvertLayout(fb, writeRowMask,
                                            writeVisibilityType.getEncoding());
         Value writeTransferMaskElem = adjustIntegerWidth(
@@ -2561,14 +2560,14 @@ void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
             fb, writeRowMask, writeVisibilityOrThreadBit, writeVisibility);
         tti::createStoreScratchMemory(fb, fb.getLoc(), writeVisibilityPtr,
                                       writeVisibilityUpdated,
-                                      writeVisibilityType);
+                                      writeVisibilityType,
+                                      /*currentCTAOnly=*/true);
 
         // Update read visibility
         Value readRowMask =
-            createBitwiseOrReduce(fb, outstandingCommitsGtOutstandingNum,
-                                  /*axis=*/1);
+            reduceLastDim<arith::OrIOp>(fb, outstandingCommitsGtOutstandingNum);
         readRowMask =
-            convertAndBroadcast(fb, readRowMask, /*dim=*/1, readVisibilityType);
+            convertAndBroadcast(fb, readRowMask, {0, 1}, readVisibilityType);
         Value readTransferMaskElem = adjustIntegerWidth(
             fb, transferMaskVal,
             cast<IntegerType>(readVisibilityType.getElementType()));
@@ -2579,8 +2578,8 @@ void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
         Value readVisibilityUpdated = arith::SelectOp::create(
             fb, readRowMask, readVisibilityOrThreadBit, readVisibility);
         tti::createStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
-                                      readVisibilityUpdated,
-                                      readVisibilityType);
+                                      readVisibilityUpdated, readVisibilityType,
+                                      /*currentCTAOnly=*/true);
 
         // Clear outstanding commits once
         Value outstandingCommitsZero =
@@ -2589,7 +2588,8 @@ void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
             arith::SelectOp::create(fb, outstandingCommitsGtOutstandingNum,
                                     outstandingCommitsZero, outstandingCommits);
         tti::createStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
-                                      outstandingCommits, commitsType);
+                                      outstandingCommits, commitsType,
+                                      /*currentCTAOnly=*/true);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -2624,6 +2624,7 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
       commitsType.cloneWith(std::nullopt, b.getI1Type()));
   AssertInfo assertInfo{message, checkCommitsResultType};
   Type aliasMatrixTypeBase;
+
   auto buildCheckOutstandingCommitsBody = [&commitsType, &aliasMatrixTypeBase,
                                            checkCommitsResultType](
                                               bool useAlias, bool exclSelf) {
