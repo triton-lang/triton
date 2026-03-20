@@ -469,7 +469,7 @@ void dumpKernelMetricTrace(
       element["args"]["call_stack"] = std::move(callStack);
       if (flexibleMetrics) {
         for (const auto &[metricName, metric] : *flexibleMetrics) {
-          element["args"][metricName] =
+          element["args"]["metrics"][metricName] =
               formatFlexibleMetricValue(metric.getValues()[0]);
         }
       }
