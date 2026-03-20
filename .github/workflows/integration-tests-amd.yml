@@ -137,6 +137,7 @@ jobs:
           TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py
           pytest --capture=tee-sys -rfs -n 12 third_party/amd/python/test/test_tdm_f16_gemm.py
           pytest --capture=tee-sys -rfs -n 12 third_party/amd/python/test/test_tdm_mxfp_gemm.py
+          pytest --capture=tee-sys -rfs -n 12 third_party/amd/python/test/test_tdm_mxfp_fa.py
           cd python/test/unit
           pytest --capture=tee-sys -rfs -n 12 \
                  --ignore=blackwell \

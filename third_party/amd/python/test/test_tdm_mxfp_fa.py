@@ -37,7 +37,6 @@ import torch
 import triton
 import triton.language as tl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-import argparse
 import math
 from einops import repeat
 from triton._internal_testing import is_hip_gfx1250, is_hip_cdna4
@@ -649,7 +648,6 @@ def generate_configs(args):
 
 
 if __name__ == "__main__":
-    '''
     parser = argparse.ArgumentParser()
     parser.add_argument("--q-type", choices=["e5m2", "e4m3"], default="e4m3",
                         help="data type for K and V (default e4m3)")
@@ -680,4 +678,3 @@ if __name__ == "__main__":
         file.write(f'{args.disable_masking=}\n')
 
     run_mha(config, args)
-    '''
