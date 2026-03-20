@@ -746,32 +746,28 @@ LogicalResult UnsplatOp::inferReturnTypes(
 }
 
 //-- ExpandDimsOp --
-LogicalResult ExpandDimsOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> loc, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
-  // infer shape
-  auto arg = operands[0];
-  auto argTy = cast<RankedTensorType>(arg.getType());
-  auto retShape = argTy.getShape().vec();
-  Properties *prop = properties.as<Properties *>();
-  int axis = prop->axis.getInt();
-  retShape.insert(retShape.begin() + axis, 1);
-  // infer encoding
-  Attribute argEncoding = argTy.getEncoding();
-  Attribute retEncoding;
-  if (argEncoding) {
-    Dialect &dialect = argEncoding.getDialect();
-    auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
-    if (failed(inferLayoutInterface->inferExpandDimsOpEncoding(
-            argEncoding, axis, retEncoding, loc)))
-      return emitOptionalError(loc, "failed to infer layout for ExpandDimsOp");
-  }
-  // create type
-  auto argEltTy = argTy.getElementType();
-  inferredReturnTypes.push_back(
-      RankedTensorType::get(retShape, argEltTy, retEncoding));
-  return success();
+static Attribute inferExpandDimsDstEncoding(int axis, Attribute encoding,
+                                            ArrayRef<int64_t> srcShape) {
+  Attribute dstEnc;
+  auto *layoutInterface =
+      cast<triton::DialectInferLayoutInterface>(&encoding.getDialect());
+  auto result = layoutInterface->inferExpandDimsOpEncoding(
+      srcShape, encoding, axis, dstEnc, /*location=*/std::nullopt);
+  assert(succeeded(result));
+  return dstEnc;
+}
+
+void ExpandDimsOp::build(OpBuilder &builder, OperationState &state, Value src,
+                         int axis) {
+  auto srcTy = cast<RankedTensorType>(src.getType());
+  SmallVector<int64_t> dstShape = SmallVector<int64_t>(srcTy.getShape());
+  dstShape.insert(dstShape.begin() + axis, 1);
+  SmallVector<int64_t> srcShape = SmallVector<int64_t>(srcTy.getShape());
+  Attribute dstEnc;
+  if (auto srcEnc = srcTy.getEncoding())
+    dstEnc = inferExpandDimsDstEncoding(axis, srcEnc, srcShape);
+  auto dstTy = RankedTensorType::get(dstShape, srcTy.getElementType(), dstEnc);
+  build(builder, state, dstTy, src, axis);
 }
 
 LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
@@ -803,7 +799,8 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
       Dialect &dialect = srcEnc.getDialect();
       auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
       if (failed(inferLayoutInterface->inferExpandDimsOpEncoding(
-              srcEnc, op.getAxis(), newExpandEnc, op.getLoc()))) {
+              srcTy.getShape(), srcEnc, op.getAxis(), newExpandEnc,
+              op.getLoc()))) {
         return emitOptionalError(op.getLoc(),
                                  "failed to infer layout for ExpandDimsOp");
       }
@@ -840,6 +837,51 @@ static OpFoldResult foldViewLikeOp(ViewLikeOp op, Attribute value) {
 
 OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
   return foldViewLikeOp(*this, adaptor.getSrc());
+}
+
+LogicalResult ExpandDimsOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  int64_t axis = getAxis();
+
+  if (dstTy.getRank() != srcTy.getRank() + 1)
+    return emitError("result rank must be one greater than source rank");
+  if (axis < 0 || axis >= dstTy.getRank())
+    return emitError("axis must be in range [0, ") << dstTy.getRank() << ")";
+
+  ArrayRef<int64_t> srcShape = srcTy.getShape();
+  ArrayRef<int64_t> dstShape = dstTy.getShape();
+  unsigned srcIdx = 0;
+  for (int64_t i = 0; i < dstTy.getRank(); ++i) {
+    if (i == axis) {
+      if (dstShape[i] != 1)
+        return emitError("expanded dimension must have size 1, got ")
+               << dstShape[i] << " at axis " << axis;
+      continue;
+    }
+    if (dstShape[i] != srcShape[srcIdx])
+      return emitError("dimension ")
+             << i << " mismatch (src=" << srcShape[srcIdx]
+             << ", dst=" << dstShape[i] << ", axis=" << axis << ")";
+    ++srcIdx;
+  }
+
+  Attribute srcEnc = srcTy.getEncoding();
+  Attribute dstEnc = dstTy.getEncoding();
+  if (!!srcEnc != !!dstEnc)
+    return emitError("op requires that either (a) src and dst both have "
+                     "encodings, or (b) neither does");
+  if (!srcEnc)
+    return success();
+
+  auto *layoutInterface =
+      cast<DialectInferLayoutInterface>(&dstEnc.getDialect());
+  Attribute inferredDstEnc;
+  if (failed(layoutInterface->inferExpandDimsOpEncoding(
+          srcShape, srcEnc, axis, inferredDstEnc, getLoc())))
+    return failure();
+  return layoutInterface->verifyLayoutsAreEqual(dstShape, inferredDstEnc,
+                                                dstEnc, getLoc());
 }
 
 //-- ReshapeOp --

@@ -6,6 +6,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
+from triton.tools.mxfp import MXFP4Tensor
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
@@ -36,6 +37,50 @@ def _is_layout_applicable(layout) -> bool:
 
 def _filter_layouts(layouts):
     return [l for l in layouts if _is_layout_applicable(l)]
+
+
+@gluon.jit
+def fp4_to_fp_linear_kernel(inp_ptr, out_ptr, packed_m: ttgl.constexpr, n: ttgl.constexpr, src_layout: ttgl.constexpr,
+                            dst_layout: ttgl.constexpr):
+    src_offs_m = ttgl.arange(0, packed_m, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+    src_offs_n = ttgl.arange(0, n, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+    packed = ttgl.load(inp_ptr + src_offs_m * n + src_offs_n)
+    unpacked = ttgl.fp4_to_fp(packed, ttgl.float16, axis=0)
+    unpacked = ttgl.convert_layout(unpacked, dst_layout)
+
+    dst_offs_m = ttgl.arange(0, packed_m * 2, layout=ttgl.SliceLayout(1, dst_layout))[:, None]
+    dst_offs_n = ttgl.arange(0, n, layout=ttgl.SliceLayout(0, dst_layout))[None, :]
+    ttgl.store(out_ptr + dst_offs_m * n + dst_offs_n, unpacked)
+
+
+def test_fp4_to_fp_linear_path(device):
+    m = 16
+    n = THREADS_PER_WARP // 2
+    packed_m = m // 2
+
+    lane_bases = [[0, 2**i] for i in range(n.bit_length() - 1)]
+    lane_bases.append([2, 0])
+    src_layout = ttgl.DistributedLinearLayout(
+        reg_bases=[[1, 0], [4, 0]],
+        lane_bases=lane_bases,
+        warp_bases=[],
+        block_bases=[],
+        shape=[packed_m, n],
+    )
+    dst_layout = ttgl.BlockedLayout([4, 2], [4, THREADS_PER_WARP // 4], [1, 1], [1, 0])
+
+    inp_mxfp4 = MXFP4Tensor(size=(m, n), device=device).random()
+    inp = inp_mxfp4.to_packed_tensor(dim=0)
+    out = torch.empty((m, n), device=device, dtype=torch.float16)
+
+    compiled = fp4_to_fp_linear_kernel[(1, )](inp, out, packed_m, n, src_layout, dst_layout, num_warps=1)
+
+    ttgir = compiled.asm["ttgir"]
+    assert "ttg.fp4_to_fp" in ttgir
+    assert "#ttg.linear<" in ttgir
+
+    ref = inp_mxfp4.to(torch.float32).to(torch.float16)
+    torch.testing.assert_close(out, ref)
 
 
 @gluon.jit

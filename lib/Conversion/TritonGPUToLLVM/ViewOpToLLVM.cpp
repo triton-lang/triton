@@ -336,8 +336,10 @@ struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
     auto resultTy = cast<RankedTensorType>(op.getType());
     auto srcLayout = dyn_cast<SliceEncodingAttr>(srcTy.getEncoding());
     if (!srcLayout) {
-      return emitOptionalError(
-          loc, "ExpandDimsOp only supports SliceEncodingAttr as its input");
+      Value ret =
+          packLLElements(loc, typeConverter, srcVals, rewriter, resultTy);
+      rewriter.replaceOp(op, ret);
+      return success();
     }
     auto resultLayout = resultTy.getEncoding();
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);

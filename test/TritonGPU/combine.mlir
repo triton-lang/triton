@@ -4104,6 +4104,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @fold_non_slice_cvt_through_expand_dims_into_local_store
+  // CHECK: %[[LOAD:.+]] = tt.load %arg0 : tensor<128x!tt.ptr<i32>, #blocked>
+  // CHECK-NEXT: %[[EXPAND:.+]] = tt.expand_dims %[[LOAD]] {axis = 0 : i32} : tensor<128xi32, #blocked> -> tensor<1x128xi32, #linear>
+  // CHECK-NEXT: %[[ALLOC:.+]] = ttg.local_alloc %[[EXPAND]] : (tensor<1x128xi32, #linear>) -> !ttg.memdesc<1x128xi32, #shared, #smem, mutable>
+  tt.func @fold_non_slice_cvt_through_expand_dims_into_local_store(%arg0: tensor<128x!tt.ptr<i32>, #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>>) -> !ttg.memdesc<1x128xi32, #shared, #smem, mutable> {
+    %0 = tt.load %arg0 : tensor<128x!tt.ptr<i32>, #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>>
+    %1 = ttg.convert_layout %0 : tensor<128xi32, #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>> -> tensor<128xi32, #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>>
+    %2 = tt.expand_dims %1 {axis = 0 : i32} : tensor<128xi32, #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>> -> tensor<1x128xi32, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>>
+    %3 = ttg.local_alloc %2 : (tensor<1x128xi32, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>>) -> !ttg.memdesc<1x128xi32, #shared, #smem, mutable>
+    tt.return %3 : !ttg.memdesc<1x128xi32, #shared, #smem, mutable>
+  }
+}
+
+// -----
+
 // Test that we correctly process existing rematerializations when hoisting
 // converts on top of ext/broadcast ops.
 
