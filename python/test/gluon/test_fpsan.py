@@ -1,4 +1,5 @@
 # ruff: noqa: F821
+import itertools
 import numpy as np
 import pytest
 import torch
@@ -122,6 +123,102 @@ def _expected_unary_tag_i32(x_i32: np.ndarray, op: str) -> np.ndarray:
     tag = OP_TO_TAG_U32[op]
     out_u32 = _as_u32(x_i32) ^ tag
     return _u32_to_i32(out_u32)
+
+
+def stable_string_hash_u64(s: str) -> np.uint64:
+    with np.errstate(over="ignore"):
+        h = np.uint64(14695981039346656037)
+        for c in s.encode("utf-8"):
+            h ^= np.uint64(c)
+            h = np.uint64(h * np.uint64(1099511628211))
+        return h
+
+
+def _expected_extern_unary_tag_i32(x_i32: np.ndarray, symbol: str) -> np.ndarray:
+    return _expected_extern_variadic_tag_i32([x_i32], symbol)
+
+
+def _expected_extern_binary_tag_i32(x_i32: np.ndarray, y_i32: np.ndarray, symbol: str) -> np.ndarray:
+    return _expected_extern_variadic_tag_i32([x_i32, y_i32], symbol)
+
+
+def _rotl_u32(x_u32: np.ndarray, amount: int) -> np.ndarray:
+    amount = amount & 31
+    if amount == 0:
+        return x_u32
+    x = x_u32.astype(np.uint64)
+    out_u32 = ((x << np.uint64(amount)) | (x >> np.uint64(32 - amount))) & np.uint64(0xFFFFFFFF)
+    return out_u32.astype(np.uint32)
+
+
+def _expected_extern_variadic_tag_i32(args_i32: list[np.ndarray], symbol: str) -> np.ndarray:
+    tag = np.uint64(stable_string_hash_u64(symbol) & np.uint64(0xFFFFFFFF))
+    total_u64 = np.zeros_like(_as_u32(args_i32[0]), dtype=np.uint64)
+    for i, arg in enumerate(args_i32):
+        rotated = _rotl_u32(_as_u32(arg), i).astype(np.uint64)
+        total_u64 = (total_u64 + rotated) & np.uint64(0xFFFFFFFF)
+    out_u32 = (total_u64 ^ tag).astype(np.uint32)
+    return _u32_to_i32(out_u32)
+
+
+UNARY_EXTERN_SYMBOLS = {
+    "cuda": [
+        ("tan", "__nv_tanf"),
+        ("tanh", "__nv_tanhf"),
+        ("log1p", "__nv_log1pf"),
+        ("cbrt", "__nv_cbrtf"),
+        ("round", "__nv_roundf"),
+    ],
+    "hip": [
+        ("tan", "__ocml_tan_f32"),
+        ("tanh", "__ocml_tanh_f32"),
+        ("log1p", "__ocml_log1p_f32"),
+        ("round", "__ocml_round_f32"),
+    ],
+}
+
+BINARY_EXTERN_SYMBOLS = {
+    "cuda": [
+        ("atan2", "__nv_atan2f"),
+        ("hypot", "__nv_hypotf"),
+        ("pow", "__nv_powf"),
+    ],
+    "hip": [
+        ("atan2", "__ocml_atan2_f32"),
+        ("hypot", "__ocml_hypot_f32"),
+        ("pow", "__ocml_pow_f32"),
+    ],
+}
+
+TERNARY_EXTERN_SYMBOLS = {
+    "cuda": [
+        ("fma", "__nv_fmaf"),
+    ],
+    "hip": [
+        ("fma", "__ocml_fma_f32"),
+    ],
+}
+
+MIXED_EXTERN_SYMBOLS = {
+    "cuda": [
+        ("ldexp", "__nv_ldexpf"),
+    ],
+    "hip": [
+        ("ldexp", "__ocml_ldexp_f32"),
+    ],
+}
+
+
+def _extern_backend_name() -> str:
+    if is_hip():
+        return "hip"
+    return "cuda"
+
+
+EXTERN_UNARY_CASES = UNARY_EXTERN_SYMBOLS[_extern_backend_name()]
+EXTERN_BINARY_CASES = BINARY_EXTERN_SYMBOLS[_extern_backend_name()]
+EXTERN_TERNARY_CASES = TERNARY_EXTERN_SYMBOLS[_extern_backend_name()]
+EXTERN_MIXED_CASES = MIXED_EXTERN_SYMBOLS[_extern_backend_name()]
 
 
 def _as_payload_np_i32(x) -> np.ndarray:
@@ -308,19 +405,233 @@ def test_unary_math_identity(device, op, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+@gluon.jit
+def _extern_unary_math_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
+                              THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    if OP == "tan":
+        z = gl.extra.libdevice.tan(x)
+    elif OP == "tanh":
+        z = gl.extra.libdevice.tanh(x)
+    elif OP == "log1p":
+        z = gl.extra.libdevice.log1p(x)
+    elif OP == "cbrt":
+        z = gl.extra.libdevice.cbrt(x)
+    elif OP == "round":
+        z = gl.extra.libdevice.round(x)
+    else:
+        gl.static_assert(False, "unsupported OP")
+    gl.store(out_ptr + offs, z, mask=mask)
+
+
+@pytest.mark.parametrize(
+    "op,symbol",
+    EXTERN_UNARY_CASES,
+)
+def test_extern_unary_payload_semantics(device, op, symbol, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    rs = np.random.RandomState(11)
+    xf = rs.randn(n_elements).astype(np.float32)
+    x_bits = xf.view(np.int32)
+
+    x = torch.tensor(x_bits, dtype=torch.int32, device="cuda")
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _extern_unary_math_kernel[grid](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        n_elements,
+        OP=op,
+        BLOCK=BLOCK,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+
+    exp_bits = _expected_extern_unary_tag_i32(x_bits, symbol)
+    _assert_payload_equal(out, exp_bits)
+
+
+@gluon.jit
+def _extern_binary_math_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
+                               THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offs, mask=mask, other=0.0)
+    if OP == "atan2":
+        z = gl.extra.libdevice.atan2(x, y)
+    elif OP == "hypot":
+        z = gl.extra.libdevice.hypot(x, y)
+    elif OP == "pow":
+        z = gl.extra.libdevice.pow(x, y)
+    else:
+        gl.static_assert(False, "unsupported OP")
+    gl.store(out_ptr + offs, z, mask=mask)
+
+
+@gluon.jit
+def _extern_ternary_math_kernel(x_ptr, y_ptr, z_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
+                                THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offs, mask=mask, other=0.0)
+    z = gl.load(z_ptr + offs, mask=mask, other=0.0)
+    if OP == "fma":
+        out = gl.extra.libdevice.fma(x, y, z)
+    else:
+        gl.static_assert(False, "unsupported OP")
+    gl.store(out_ptr + offs, out, mask=mask)
+
+
+@gluon.jit
+def _extern_mixed_math_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
+                              THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offs, mask=mask, other=0)
+    if OP == "ldexp":
+        out = gl.extra.libdevice.ldexp(x, y)
+    else:
+        gl.static_assert(False, "unsupported OP")
+    gl.store(out_ptr + offs, out, mask=mask)
+
+
+@pytest.mark.parametrize(
+    "op,symbol",
+    EXTERN_BINARY_CASES,
+)
+def test_extern_binary_payload_semantics(device, op, symbol, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    g = torch.Generator(device="cuda")
+    g.manual_seed(23)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    yw = triton.TensorWrapper(y, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _extern_binary_math_kernel[grid](xw, yw, outw, n_elements, OP=op, BLOCK=BLOCK, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    exp_bits = _expected_extern_binary_tag_i32(
+        x.cpu().numpy().astype(np.int32, copy=False),
+        y.cpu().numpy().astype(np.int32, copy=False),
+        symbol,
+    )
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.parametrize(
+    "op,symbol",
+    EXTERN_TERNARY_CASES,
+)
+def test_extern_ternary_payload_semantics(device, op, symbol, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    g = torch.Generator(device="cuda")
+    g.manual_seed(29)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    z = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    yw = triton.TensorWrapper(y, dtype=torch.float32)
+    zw = triton.TensorWrapper(z, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _extern_ternary_math_kernel[grid](xw, yw, zw, outw, n_elements, OP=op, BLOCK=BLOCK,
+                                      THREADS_PER_WARP=THREADS_PER_WARP)
+
+    exp_bits = _expected_extern_variadic_tag_i32(
+        [
+            x.cpu().numpy().astype(np.int32, copy=False),
+            y.cpu().numpy().astype(np.int32, copy=False),
+            z.cpu().numpy().astype(np.int32, copy=False),
+        ],
+        symbol,
+    )
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.parametrize(
+    "op,symbol",
+    EXTERN_MIXED_CASES,
+)
+def test_extern_mixed_payload_semantics(device, op, symbol, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    g = torch.Generator(device="cuda")
+    g.manual_seed(31)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _extern_mixed_math_kernel[grid](xw, y, outw, n_elements, OP=op, BLOCK=BLOCK, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    exp_bits = _expected_extern_variadic_tag_i32(
+        [
+            x.cpu().numpy().astype(np.int32, copy=False),
+            y.cpu().numpy().astype(np.int32, copy=False),
+        ],
+        symbol,
+    )
+    _assert_payload_equal(out, exp_bits)
+
+
 def _expected_fma_i32(x_i32: np.ndarray, y_i32: np.ndarray, z_i32: np.ndarray) -> np.ndarray:
     return _expected_add_i32(_expected_mul_i32(x_i32, y_i32), z_i32)
 
 
 def _expected_trunc_ext_roundtrip_i32(x_i32: np.ndarray) -> np.ndarray:
     x_u32 = _as_u32(x_i32)
-    out_u32 = x_u32 & np.uint32(0xFFFF0000)
+    out_u32 = x_u32 & np.uint32(0x0000FFFF)
     return _u32_to_i32(out_u32)
 
 
 def _expected_ext_f16_to_f32_i32(x_i16: np.ndarray) -> np.ndarray:
-    x_u16 = x_i16.view(np.uint16).astype(np.uint32)
-    out_u32 = (x_u16 << np.uint32(16)).astype(np.uint32)
+    out_u32 = x_i16.view(np.uint16).astype(np.uint32)
     return out_u32.view(np.int32)
 
 
@@ -462,6 +773,42 @@ def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = No
     return out.astype(np.uint32).view(np.int32)
 
 
+def _unpack_element(data: np.ndarray, row: int, col: int, pack: int, pack_axis: int = 1) -> np.uint64:
+    if pack_axis == 1:
+        raw = np.uint64(data[row, col // pack])
+        nibble_idx = col
+    else:
+        raw = np.uint64(data[row // pack, col])
+        nibble_idx = row
+    if pack == 2:
+        return (raw >> np.uint64(4 * (nibble_idx % pack))) & np.uint64(0x0F)
+    return raw
+
+
+def _scale_element(val: np.uint64, scale, idx: int, k: int, mask: np.uint64) -> np.uint64:
+    if scale is not None:
+        return (val * np.uint64(scale[idx, k // 32])) & mask
+    return val
+
+
+def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_scale, a_pack: int,
+                            b_pack: int) -> np.ndarray:
+    M, N = a_data.shape[0], b_data.shape[1]
+    K = a_data.shape[1] * a_pack
+    mask = np.uint64(0xFFFFFFFF)
+    out = np.zeros((M, N), dtype=np.uint64)
+    for i, j in itertools.product(range(M), range(N)):
+        s = np.uint64(0)
+        for kk in range(K):
+            a_val = _unpack_element(a_data, i, kk, a_pack, pack_axis=1)
+            b_val = _unpack_element(b_data, kk, j, b_pack, pack_axis=0)
+            a_val = _scale_element(a_val, a_scale, i, kk, mask)
+            b_val = _scale_element(b_val, b_scale, j, kk, mask)
+            s = (s + a_val * b_val) & mask
+        out[i, j] = s
+    return out.astype(np.uint32).view(np.int32)
+
+
 def test_dot_fma(device, fresh_knobs):
     _require_cuda_backend(device)
 
@@ -510,6 +857,78 @@ def test_dot_fma(device, fresh_knobs):
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
     kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not (is_hip_cdna4() or is_hip_gfx1250()), reason="Requires DotScaledOp support (CDNA4, or GFX1250)")
+@pytest.mark.parametrize("type_a", ["e2m1", "e4m3", "e5m2"])
+@pytest.mark.parametrize("type_b", ["e2m1", "e4m3", "e5m2", "bf16"])
+def test_dot_scaled(device, type_a, type_b, fresh_knobs):
+    _require_cuda_backend(device)
+
+    B = 32
+    K = 64
+    SCALE_K = K // 32
+
+    def allocator(size: int, alignment: int, stream):
+        return torch.empty(size, device="cuda", dtype=torch.int32)
+
+    triton.set_allocator(allocator)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @triton.jit
+    def kernel(a_ptr, a_scale_ptr, b_ptr, b_scale_ptr, out_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+               BLOCK_K: tl.constexpr, TYPE_A: tl.constexpr, TYPE_B: tl.constexpr):
+        DIV_FACTOR_A: tl.constexpr = 2 if TYPE_A == "e2m1" else 1
+        DIV_FACTOR_B: tl.constexpr = 2 if TYPE_B == "e2m1" else 1
+        PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR_A
+        PACKED_BLOCK_K_B: tl.constexpr = BLOCK_K // DIV_FACTOR_B
+        SCALE_BLOCK_K: tl.constexpr = BLOCK_K // 32
+
+        offs_am = tl.arange(0, BLOCK_M)[:, None]
+        offs_bn = tl.arange(0, BLOCK_N)[None, :]
+        offs_ak = tl.arange(0, PACKED_BLOCK_K_A)[None, :]
+        offs_bk = tl.arange(0, PACKED_BLOCK_K_B)[:, None]
+
+        a = tl.load(a_ptr + offs_am * PACKED_BLOCK_K_A + offs_ak)
+        b = tl.load(b_ptr + offs_bk * BLOCK_N + offs_bn)
+
+        offs_scale_ak = tl.arange(0, SCALE_BLOCK_K)[None, :]
+        offs_scale_bk = tl.arange(0, SCALE_BLOCK_K)[None, :]
+        a_scale = tl.load(a_scale_ptr + offs_am * SCALE_BLOCK_K + offs_scale_ak)
+        b_scale = tl.load(b_scale_ptr + tl.arange(0, BLOCK_N)[:, None] * SCALE_BLOCK_K + offs_scale_bk)
+
+        c = tl.dot_scaled(a, a_scale, TYPE_A, b, b_scale, TYPE_B)
+        tl.store(out_ptr + offs_am * BLOCK_N + offs_bn, c)
+
+    a_pack = 2 if type_a == "e2m1" else 1
+    b_pack = 2 if type_b == "e2m1" else 1
+    packed_k_a = K // a_pack
+    packed_k_b = K // b_pack
+
+    rs = np.random.RandomState(1)
+    a_bits = rs.randint(0, 256, size=(B, packed_k_a)).astype(np.uint8)
+    b_bits = rs.randint(0, 256, size=(packed_k_b, B)).astype(np.uint8)
+    a_scale_bits = rs.randint(0, 255, size=(B, SCALE_K)).astype(np.uint8)
+    b_scale_bits = rs.randint(0, 255, size=(B, SCALE_K)).astype(np.uint8)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.uint8)
+    a_scale = torch.tensor(a_scale_bits, device="cuda", dtype=torch.uint8)
+    b_scale = torch.tensor(b_scale_bits, device="cuda", dtype=torch.uint8)
+
+    if type_b == "bf16":
+        b_bits = rs.randint(0, 65536, size=(packed_k_b, B)).astype(np.uint16)
+        b = torch.tensor(b_bits, device="cuda", dtype=torch.uint16).view(torch.bfloat16)
+
+    exp_bits = _dot_scaled_payload_u32(a_bits, b_bits, a_scale_bits, None if type_b == "bf16" else b_scale_bits, a_pack,
+                                       b_pack)
+
+    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    kernel[(1, )](a, a_scale, b, b_scale, outw, BLOCK_M=B, BLOCK_N=B, BLOCK_K=K, TYPE_A=type_a, TYPE_B=type_b)
 
     _assert_payload_equal(out, exp_bits)
 
@@ -665,3 +1084,148 @@ def test_reduction(device, fresh_knobs):
     reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
     reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
     assert _payload_equal(c1, c2)
+
+
+def test_reduction_matches_loop(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    @triton.jit
+    def reduce_sum_kernel(x_ptr, out_ptr, N: tl.constexpr):
+        x = tl.load(x_ptr + tl.arange(0, N))
+        tl.store(out_ptr, tl.sum(x, axis=0))
+
+    @triton.jit
+    def loop_sum_kernel(x_ptr, out_ptr, N: tl.constexpr):
+        acc = tl.full([], 0.0, tl.float32)
+        for i in tl.static_range(0, N):
+            acc += tl.load(x_ptr + i)
+        tl.store(out_ptr, acc)
+
+    N = 256
+    pattern = torch.tensor([1e20, 1.0, -1e20, 1.0], dtype=torch.float32, device="cuda")
+    x = pattern.repeat(N // pattern.numel())
+    reduce_out = torch.empty((1, ), dtype=torch.float32, device="cuda")
+    loop_out = torch.empty((1, ), dtype=torch.float32, device="cuda")
+
+    reduce_sum_kernel[(1, )](x, reduce_out, N=N)
+    loop_sum_kernel[(1, )](x, loop_out, N=N)
+    assert not _payload_equal(reduce_out, loop_out)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    reduce_sum_kernel[(1, )](x, reduce_out, N=N)
+    loop_sum_kernel[(1, )](x, loop_out, N=N)
+    _assert_payload_equal(reduce_out, loop_out)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+def test_mfma_dot(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    M, N, K = 16, 16, 32
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    cdna_version = 3 if is_hip_cdna3() else 4
+    nonkdim = 32
+    kdim = 8 if cdna_version == 3 else 16
+    k_width_val = 4 if cdna_version == 3 else 8
+
+    blocked = gl.BlockedLayout([4, 4], [4, 16], [4, 1], [1, 0])
+    mfma_layout = gl.amd.AMDMFMALayout(cdna_version, [nonkdim, nonkdim, kdim], True, [4, 1])
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr,
+               blocked: gl.constexpr, k_width: gl.constexpr, mfma_layout: gl.constexpr):
+        dot_a_layout: gl.constexpr = gl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=k_width)
+        dot_b_layout: gl.constexpr = gl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=k_width)
+
+        offs_am = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, blocked))
+        offs_bn = gl.arange(0, BLOCK_N, layout=gl.SliceLayout(0, blocked))
+        offs_ak = gl.arange(0, BLOCK_K, layout=gl.SliceLayout(0, blocked))
+        offs_bk = gl.arange(0, BLOCK_K, layout=gl.SliceLayout(1, blocked))
+
+        a = gl.load(a_ptr + offs_am[:, None] * BLOCK_K + offs_ak[None, :])
+        b = gl.load(b_ptr + offs_bk[:, None] * BLOCK_N + offs_bn[None, :])
+        c = gl.load(c_ptr + offs_am[:, None] * BLOCK_N + offs_bn[None, :])
+
+        a1 = gl.convert_layout(a, layout=dot_a_layout)
+        b1 = gl.convert_layout(b, layout=dot_b_layout)
+        c_acc = gl.convert_layout(c, layout=mfma_layout)
+
+        result = gl.amd.cdna3.mfma(a1, b1, c_acc)
+        result = gl.convert_layout(result, layout=blocked)
+        gl.store(out_ptr + offs_am[:, None] * BLOCK_N + offs_bn[None, :], result)
+
+    rs = np.random.RandomState(0)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(M, K), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(K, N), dtype=np.int32)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(M, N), dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
+    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
+    out = torch.empty((M, N), device="cuda", dtype=torch.int32)
+
+    aw = triton.TensorWrapper(a, dtype=torch.float32)
+    bw = triton.TensorWrapper(b, dtype=torch.float32)
+    cw = triton.TensorWrapper(c, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    kernel[(1, )](aw, bw, cw, outw, BLOCK_M=M, BLOCK_N=N, BLOCK_K=K, blocked=blocked, k_width=k_width_val,
+                  mfma_layout=mfma_layout)
+
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+def test_wmma_dot(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    B = 32
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, BLOCK: gl.constexpr, INSTR_SHAPE_K: gl.constexpr, K_WIDTH: gl.constexpr):
+        blocked: gl.constexpr = gl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+        wmma: gl.constexpr = gl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, INSTR_SHAPE_K])
+
+        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, blocked))[:, None]
+        offs_k = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, blocked))[None, :]
+        offs_bk = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, blocked))[:, None]
+        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, blocked))[None, :]
+
+        a = gl.load(a_ptr + offs_m * BLOCK + offs_k)
+        b = gl.load(b_ptr + offs_bk * BLOCK + offs_n)
+        c = gl.load(c_ptr + offs_m * BLOCK + offs_n)
+        c = gl.convert_layout(c, wmma)
+
+        a = gl.convert_layout(a, gl.DotOperandLayout(0, wmma, K_WIDTH))
+        b = gl.convert_layout(b, gl.DotOperandLayout(1, wmma, K_WIDTH))
+        acc = gl.amd.gfx1250.wmma(a, b, c)
+
+        out_layout: gl.constexpr = gl.SliceLayout(1, wmma)
+        offs_cm = gl.arange(0, BLOCK, layout=out_layout)[:, None]
+        offs_cn = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, wmma))[None, :]
+        gl.store(out_ptr + offs_cm * BLOCK + offs_cn, acc)
+
+    rs = np.random.RandomState(0)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
+    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
+    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+
+    aw = triton.TensorWrapper(a, dtype=torch.float32)
+    bw = triton.TensorWrapper(b, dtype=torch.float32)
+    cw = triton.TensorWrapper(c, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    kernel[(1, )](aw, bw, cw, outw, BLOCK=B, INSTR_SHAPE_K=4, K_WIDTH=2)
+
+    _assert_payload_equal(out, exp_bits)

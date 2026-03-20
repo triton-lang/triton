@@ -43,8 +43,6 @@ void init_triton_passes_ttir(py::module &&m) {
   using namespace mlir::triton;
   ADD_PASS_WRAPPER_0("add_combine", createTritonCombineOps);
   ADD_PASS_WRAPPER_0("add_reorder_broadcast", createTritonReorderBroadcast);
-  ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
-                     createTritonRewriteTensorPointer);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_descriptor_to_pointer",
                      createTritonRewriteTensorDescriptorToPointer);
   ADD_PASS_WRAPPER_0("add_loop_unroll", createTritonLoopUnroll);
@@ -93,6 +91,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fuse_nested_loops", createTritonGPUFuseNestedLoops);
   ADD_PASS_WRAPPER_0("add_coalesce_async_copy",
                      createTritonGPUCoalesceAsyncCopy);
+  ADD_PASS_WRAPPER_0("add_global_sanitizer",
+                     createTritonInstrumentGlobalSanitizer);
   ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
                      createTritonInstrumentConcurrencySanitizer);
   ADD_PASS_WRAPPER_0("add_fp_sanitizer", createTritonInstrumentFpSanitizer);
@@ -117,13 +117,16 @@ void init_plugin_passes(py::module &&m) {
   for (unsigned i = 0; i < passNames.size(); ++i) {
     const char *passName = passNames.data()[i];
 
-    m.def(passName, [passName](mlir ::PassManager &pm) {
-      std::string filename =
-          mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-      TritonPlugin TP(filename);
-      if (auto result = TP.addPass(&pm, passName); !result)
-        throw TP.err2exp(result.takeError());
-    });
+    m.def(
+        passName,
+        [passName](mlir ::PassManager &pm, std::vector<std::string> args) {
+          std::string filename =
+              mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+          TritonPlugin TP(filename);
+          if (auto result = TP.addPass(&pm, passName, args); !result)
+            throw TP.err2exp(result.takeError());
+        },
+        py::arg("pm"), py::arg("args") = std::vector<std::string>());
   }
 }
 

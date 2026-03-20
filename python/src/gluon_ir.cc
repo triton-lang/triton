@@ -1042,9 +1042,9 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tdm_gather",
            [](GluonOpBuilder &self, Value descPtr, Value srcRowIndices,
-              Value srcColOffset, Value dst, Value barrier) {
-             self.create<ttag::AsyncTDMGatherOp>(descPtr, srcRowIndices,
-                                                 srcColOffset, dst, barrier);
+              Value srcColOffset, Value dst, Value pred, Value barrier) {
+             self.create<ttag::AsyncTDMGatherOp>(
+                 descPtr, srcRowIndices, srcColOffset, dst, pred, barrier);
            })
       .def("create_tdm_prefetch",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
@@ -1182,7 +1182,7 @@ void init_gluon_ir(py::module &&m) {
 
   m.def("get_amd_wmma_scale_layout",
         [](unsigned opIdx, std::vector<int64_t> &shape, unsigned wmmaMDim,
-           std::vector<std::vector<int32_t>> &regBases,
+           unsigned scaleFactor, std::vector<std::vector<int32_t>> &regBases,
            std::vector<std::vector<int32_t>> &warpBases,
            std::vector<std::vector<int32_t>> &cgaBases) -> py::object {
           DialectRegistry registry;
@@ -1200,7 +1200,7 @@ void init_gluon_ir(py::module &&m) {
                                tt::standardOutDimNames(&ctx, rank));
           auto cgaLayout = buildCgaLayoutAttr(&ctx, cgaBases, rank);
           auto ll = ttg::chooseScaledWmmaScaleLayout(
-              &ctx, opIdx, shape, wmmaMDim, ctaLayout, cgaLayout);
+              &ctx, opIdx, shape, wmmaMDim, scaleFactor, ctaLayout, cgaLayout);
           auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
           return layoutToGluon(attr);
         });

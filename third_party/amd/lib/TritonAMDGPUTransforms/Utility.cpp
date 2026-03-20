@@ -144,7 +144,7 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 // pad,  r1, r5,  r9, r13, r17, r21, r25
 // r29, pad, r2,  r6, r10, r14, r18, r22
 // r26, r30, pad, r3 ....
-ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
+static ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     ttg::DotOperandEncodingAttr dotOpEnc, ttg::TensorOrMemDesc srcTy,
     ArrayRef<unsigned> sharedOrder, bool useAsyncCopy, unsigned warpSize) {
   auto *ctx = srcTy.getContext();
@@ -169,8 +169,7 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   unsigned bitWidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
   unsigned elemByteWidth = std::max(bitWidth / 8u, 1u);
 
-  // NYI: dtypes != 16bit
-  if (elemByteWidth != 2) {
+  if (!llvm::is_contained({1, 2}, elemByteWidth)) {
     return {};
   }
 
@@ -191,38 +190,78 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     return {};
   }
 
-  if (!llvm::is_contained({4, 8}, kWidth)) {
+  if (!llvm::is_contained({4, 8, 16}, kWidth)) {
     return {};
   }
+
+  unsigned kWidthBytes = kWidth * elemByteWidth;
+  // TODO: if the actual vecSize is smaller than 16 bytes we can do better by
+  // using smaller padding intervals
+  unsigned vecSize = 16 / elemByteWidth;
+  unsigned elemsPer8Bytes = 8 / elemByteWidth;
 
   // Determine row(contig) size
   unsigned contigDim = isKContig ? kDim : nonKDim;
   unsigned nonContigDim = isKContig ? nonKDim : kDim;
 
   // padding to avoid bank conflict
-  // For ds_read_b128. Lanes access LDS in 4 pairs of 16 lanes. we have 64 banks
-  // and each lane loads 4 banks. These lane groups are:
-  //  1: 0-3, 12-15, 20-23, 24-27
-  //  2: 4-7, 8-11, 16-19, 28-31
+  // The bank conflict pattern depends on the ds_load instruction:
+  // 1) ds_read_b128: Uses 64 banks and lanes are grouped into 4 pairs:
+  //  Group1: 0-3, 12-15, 20-23, 24-27
+  //  Group2: 4-7, 8-11, 16-19, 28-31
   // The upper half of the lanes follow the same pattern.
-  // For ds_read_b64, it splits conseuctive lanes into 2 groups which access LDS
-  // one after another
+  // 2) ds_read_b64_tr (and ds_read_b64): Uses 64 banks and lanes are split into
+  // 2 groups which access LDS one after another.
+  // 3) Others: Use only 32 banks and lanes are split into groups each loading
+  // 32 banks.
+
+  bool useDsReadB128 = isKContig && kWidthBytes == 16;
+  bool useDsReadB64Tr = !isKContig && kWidthBytes >= 8;
+
+  // Note for isKContig && kWidthBytes == 8 we do use ds_read2_b64 which uses 32
+  // banks
+  unsigned numberOfBanks = (useDsReadB128 || useDsReadB64Tr) ? 64 : 32;
+  unsigned bytesPerBank = 4;
+  unsigned elemPerBankRow = (numberOfBanks * bytesPerBank) / elemByteWidth;
+
   unsigned padding = 0;
-  if (isKContig) {
+  if (useDsReadB128) {
     padding = mfmaNonKDim == 16 ? (kWidth * 2) : kWidth;
-  } else {
+  } else if (useDsReadB64Tr) {
     padding = mfmaNonKDim == 16 ? 16 : 32;
+  } else {
+    padding = elemsPer8Bytes;
   }
-  constexpr unsigned vecSize = 8; // in favor of dwordX4
+
   unsigned contigLanes = contigDim / vecSize;
-  unsigned wrap = std::min(contigDim, 128u) / padding;
+  unsigned wrap = std::min(contigDim, elemPerBankRow) / padding;
   // wrap == 0 means padding > contigDim, which is not a valid configuration
   if (wrap == 0) {
     return {};
   }
-  unsigned requiredDim = warpSize / contigLanes * wrap;
-  if (nonContigDim < requiredDim) {
+
+  // The staggering of rows only works if we have enough (wrap) rows to stagger.
+  // If we have less rows we get bank conflicts. For each pow2 too small we will
+  // get 2 times more conflicts.
+  unsigned requiredRows = warpSize / contigLanes * wrap;
+  unsigned xWayConflicts =
+      (nonContigDim >= requiredRows)
+          ? 1
+          : (llvm::Log2_32(requiredRows / nonContigDim) + 1);
+  // Heuristic, for ds_read_b128 we do not tolerate any conflicts but for
+  // ds_read_b64(_tr) we tolerate 2-way because swizzling will produce the same
+  // number of conflicts.
+  if ((useDsReadB128 && xWayConflicts > 1) || xWayConflicts > 2) {
     return {};
+  }
+
+  if (xWayConflicts > 1) {
+    // We need to adjust the warp to allow for bank conflicts and to produce a
+    // valid layout
+    wrap /= (1 << (xWayConflicts - 1));
+    if (wrap == 0) {
+      return {};
+    }
   }
 
   // Use 16 rows wrap if block large enough
@@ -236,7 +275,7 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   // We create linear bases mapping from [contigDim, nonContigDim] -> offset,
   std::vector<std::vector<int>> bases;
 
-  // Keep contigSize numbers of elments contiguous in shared memory
+  // Keep contigSize numbers of elements contiguous in shared memory
   for (int elemLog2 = 0; elemLog2 < llvm::Log2_32(contigDim); elemLog2++)
     bases.push_back({1 << elemLog2, 0});
 
@@ -256,25 +295,27 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   for (; rowBase < llvm::Log2_32(nonContigDim); rowBase++)
     bases.push_back({0, 1 << rowBase});
 
-  // Fixup for nonKContig and mfma16
-  if (!isKContig && mfmaNonKDim == 16) {
-    unsigned row4 = 0;
-    unsigned row8 = 0;
+  // Fixup: One ds_read_tr loads 8 bytes so kWidthBytes > 8 will load strided.
+  // To account for this we swap rows which are accessed by the rows 16-31
+  if (useDsReadB64Tr && mfmaNonKDim == 16 && kWidthBytes == 16) {
+    // lane groups wrap at 16 bytes, so we have to exchange
+    // rows representing 16 and 8 bytes to avoid bank conflict
+    unsigned baseIdxGroup0 = 0;
+    unsigned baseIdxGroup1 = 0;
     for (unsigned i = 0; i < bases.size(); i++) {
-      if (bases[i][1] == 8)
-        row8 = i;
-      if (bases[i][1] == 4)
-        row4 = i;
+      if (bases[i][1] == 16 / elemByteWidth)
+        baseIdxGroup1 = i;
+      if (bases[i][1] == 8 / elemByteWidth)
+        baseIdxGroup0 = i;
     }
-    assert(row4 != 0 && row8 != 0);
-    // lane groups wrap at row8, so we have to exchange
-    // row4 and row8 to avoid bank conflict
-    std::swap(bases[row4], bases[row8]);
+    assert(baseIdxGroup0 != 0 && baseIdxGroup1 != 0);
+    std::swap(bases[baseIdxGroup0], bases[baseIdxGroup1]);
   }
 
   // Fixup for KContig and mfma32 when reordered rows can not fit in 64banks
-  if (isKContig && mfmaNonKDim == 32 && useBestWrap && kDim < 128) {
-    bool useWideLayout = kWidth == 8;
+  if (useDsReadB128 && mfmaNonKDim == 32 && useBestWrap &&
+      kDim < (256 / elemByteWidth)) {
+    bool useWideLayout = kWidth == (16 / elemByteWidth);
 
     // For narrow layouts we need to shift every 16th row to the other half of
     // shared memory banks to read from all banks. For the wide layout we need
@@ -309,42 +350,134 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
                                             std::move(linearComponent));
 }
 
-// Get a padded encoding instead of going through the classical swizzled one.
-// Please note that padding here is in terms of elements and not bytes or dwords
-triton::gpu::PaddedSharedEncodingAttr
-getPaddedEncodingForDotOp(mlir::MLIRContext *context, int opIdx,
-                          ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
-                          triton::gpu::CGAEncodingAttr CGALayout,
-                          unsigned typeWidthInBit) {
-  // LDS padding strategy to reduce bank conflicts for dot operand loads.
-  //
-  // Both ds_load_tr (transposed) and ds_load (non-transposed) use 128-bit
-  // loads where 16 lanes cooperatively access 16 different rows. The bank
-  // conflict pattern is identical for both instructions since each lane
-  // reads contiguously within its row.
-  //
-  // Always pad by maxVecSize (128 bits / element size) to spread accesses
-  // across different banks.
+// LDS padding strategy for TDM (descriptor) loads.
+//
+// Currently only invoked for gfx1250 TDM loads (via
+// getSharedEncIfAllUsersAreDotEncPadded in LowerLoops.cpp when useTDM is
+// true).
+//
+// Padding is chosen per-dtype and per-access-path to minimize bank conflicts
+// while avoiding unnecessary LDS waste.  The two load paths have different
+// access patterns and therefore different optimal padding values.
+//
+//   Transposed (ds_load_tr*):
+//     Used when K is contiguous in shared memory but the dot instruction
+//     needs the non-K dimension contiguous in registers. The instruction
+//     cooperatively loads a fixed sub-tile across shuffle groups. In each
+//     execution cycle, two shuffle groups (16 lanes total) access a combined
+//     row of 2 × (instBitWidth/elemBits) elements. To avoid bank conflicts,
+//     the padding must equal this combined row width so that each successive
+//     LDS row lands on a completely disjoint set of banks.
+//
+//       16-bit (fp16/bf16): ds_load_tr16_b128 → 2 × 128/16 = 16 elems → pad 16
+//        8-bit (fp8/i8):    ds_load_tr8_b64   → 2 ×  64/8  = 16 elems → pad 16
+//       32-bit (f32):       no transposed instruction; falls back to
+//                           non-transposed ds_load_b* where each thread
+//                           loads sequentially.
+//
+//   Non-transposed (ds_load_b*):
+//     Used when the shared memory layout already matches what the dot
+//     instruction expects. Each thread issues a vector load of consecutive
+//     elements.  Padding ensures the LDS row stride (in dwords) avoids
+//     periodic bank aliasing across the 16 nonK-positions per cycle.
+//
+//     For dword-or-wider elements (f32+): pad = min(vecWidth, 128/elemBits).
+//     The load width in dwords equals vecWidth, so pad = vecWidth gives
+//     gcd(stride_dwords, 64) = vecWidth — optimal bank separation.
+//       32-bit kWidth=4: min(4, 4) = 4 elems (MFMA 16x16x4)
+//       32-bit kWidth=2: min(2, 4) = 2 elems (MFMA 32x32x2)
+//
+//     For sub-dword elements (fp16/fp8): pad = 128/elemBits (= 4 dwords).
+//     Dual-address loads (e.g. ds_load_2addr_b64) need the full 4-dword
+//     stride separation to avoid cross-address bank conflicts.
+//       16-bit (fp16): 128/16 =  8 elems
+//        8-bit (fp8):  128/8  = 16 elems
+//
+// Note on 4-bit types (i4): two i4 elements are packed into one i8 in LDS,
+// so from a bank-conflict perspective 4-bit behaves identically to 8-bit
+// in both transposed and non-transposed paths below.
+
+static triton::gpu::PaddedSharedEncodingAttr
+composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
+                        ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> order,
+                        const triton::AMD::TargetInfo &targetInfo) {
+  auto shape = srcTy.getShape();
+  auto CGALayout = ttg::getCGALayout(srcTy.getEncoding());
   auto blockShapePerCTA =
       triton::gpu::getShapePerCTA(CGALayout.getCTASplitNum(), shape);
   int innerDimLength = blockShapePerCTA[order[0]];
-  unsigned maxVecSize = 128 / typeWidthInBit;
-  unsigned padAmount = maxVecSize;
-  unsigned padInterval = innerDimLength;
+  bool loadTransposed = (order[0] != (1 - opIdx));
+
+  // Fallback: assume padding to match widest load width
+  unsigned typeWidthInBit = srcTy.getElementType().getIntOrFloatBitWidth();
+  unsigned padAmount = 128 / typeWidthInBit;
+  if (loadTransposed) {
+    // Transposed path: pad by twice the elements-per-lane of the transposed
+    // instruction.  Two shuffle groups execute per cycle, each reading
+    // instBitWidth/elemBits elements from the same row set.  Padding by
+    // 2× ensures the stride (in dwords) is an odd multiple of the combined
+    // row-access width, distributing all 16 lanes' bank accesses across
+    // disjoint banks and eliminating conflicts for tile widths >= 32.
+    if (auto ldsParams = targetInfo.queryLDSTransLoadParams(typeWidthInBit)) {
+      padAmount = 2 * ldsParams->instBitWidth / typeWidthInBit;
+    }
+  } else {
+    // Non-transposed path: each cycle 16 lanes at distinct nonK rows load
+    // vecWidth consecutive K elements.  Padding shifts the row stride so
+    // that gcd(stride_dwords, 64) is small enough for all lanes' bank
+    // sets to be disjoint.
+    //
+    // For dword-or-wider elements (f32+): pad = min(vecWidth, 128/elemBits).
+    // vecWidth elements = vecWidth dwords, giving gcd(stride_dwords, 64) =
+    // vecWidth for power-of-2 BLOCK_K.  This is optimal:
+    //   MFMA 16x16x4 f32 (kWidth=4): pad=4 → conflict-free
+    //   MFMA 32x32x2 f32 (kWidth=2): pad=2 → conflict-free
+    //
+    // For sub-dword elements (fp16/fp8): keep pad = 128/elemBits (4 dwords).
+    // On architectures with dual-address LDS loads (e.g. gfx1250
+    // ds_load_2addr_b64 for fp8), two addresses are served simultaneously,
+    // requiring the full 4-dword stride separation to avoid cross-address
+    // bank conflicts.
+    if (typeWidthInBit >= 32)
+      padAmount = std::min(vecWidth, padAmount);
+  }
+
+  if (padAmount == 0 || padAmount >= static_cast<unsigned>(innerDimLength))
+    return {};
+
+  // When innerDimLength doesn't span all LDS banks, widen the padding
+  // interval to the bank-wrap boundary so padding is inserted every N
+  // rows instead of every row, at the point where the bank pattern
+  // would repeat.
+  constexpr unsigned ldsNumBanks = 64;
+  constexpr unsigned ldsBankWidthInBytes = 4;
+  unsigned elemBytes = typeWidthInBit / 8;
+  unsigned bankWrapInterval = ldsNumBanks * ldsBankWidthInBytes / elemBytes;
+  unsigned padInterval =
+      std::max(static_cast<unsigned>(innerDimLength), bankWrapInterval);
+  auto *context = srcTy.getContext();
   return triton::gpu::PaddedSharedEncodingAttr::get(
       context, {{padInterval, padAmount}}, order, shape, CGALayout);
 }
 
 ttg::PaddedSharedEncodingAttr
-composePaddedLayout(const tt::AMD::TargetInfo &targetInfo,
-                    ttg::DotOperandEncodingAttr dotOpEnc,
-                    ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> sharedOrder,
-                    bool useAsyncCopy) {
-  if (useAsyncCopy &&
-      targetInfo.getISAFamily() == triton::AMD::ISAFamily::CDNA4) {
-    unsigned warpSize = targetInfo.getWarpSize();
-    return composePaddedLayoutForAsyncCopyCDNA4(dotOpEnc, srcTy, sharedOrder,
-                                                useAsyncCopy, warpSize);
+composePaddedLayout(const tt::AMD::TargetInfo &targetInfo, int opIdx,
+                    unsigned vecWidth, ttg::TensorOrMemDesc srcTy,
+                    ArrayRef<unsigned> sharedOrder,
+                    ttg::DotOperandEncodingAttr dotOpEnc, bool useAsyncCopy) {
+  if (targetInfo.getISAFamily() == triton::AMD::ISAFamily::CDNA4) {
+    if (!dotOpEnc)
+      return {};
+    return composePaddedLayoutForAsyncCopyCDNA4(
+        dotOpEnc, srcTy, sharedOrder, useAsyncCopy, targetInfo.getWarpSize());
   }
+
+  if (targetInfo.getISAFamily() == triton::AMD::ISAFamily::GFX1250) {
+    if (!srcTy.getElementType().isIntOrFloat())
+      return {};
+    return composePaddedLayoutWMMA(opIdx, vecWidth, srcTy, sharedOrder,
+                                   targetInfo);
+  }
+
   return {};
 }
