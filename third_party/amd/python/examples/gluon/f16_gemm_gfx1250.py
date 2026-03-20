@@ -53,8 +53,10 @@ def persistent_gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
                                          SHARED_LAYOUT_A: ttgl.constexpr,  #
                                          SHARED_LAYOUT_B: ttgl.constexpr,  #
                                          ACCUMULATOR_LAYOUT: ttgl.constexpr,  #
-                                         OPERAND_LAYOUT_A: ttgl.constexpr,  #
-                                         OPERAND_LAYOUT_B: ttgl.constexpr, L2_PREFETCH_DISTANCE: ttgl.constexpr):
+                                         L2_PREFETCH_DISTANCE: ttgl.constexpr):
+
+    OPERAND_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(0, ACCUMULATOR_LAYOUT, 8)
+    OPERAND_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(1, ACCUMULATOR_LAYOUT, 8)
 
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
@@ -123,9 +125,11 @@ def persistent_gemm_tdm_pipelined_lds_prefetch_kernel(a_ptr, b_ptr, c_ptr,  #
                                                       SHARED_LAYOUT_A: ttgl.constexpr,  #
                                                       SHARED_LAYOUT_B: ttgl.constexpr,  #
                                                       ACCUMULATOR_LAYOUT: ttgl.constexpr,  #
-                                                      OPERAND_LAYOUT_A: ttgl.constexpr,  #
-                                                      OPERAND_LAYOUT_B: ttgl.constexpr,
                                                       L2_PREFETCH_DISTANCE: ttgl.constexpr):
+
+    OPERAND_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(0, ACCUMULATOR_LAYOUT, 8)
+    OPERAND_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(1, ACCUMULATOR_LAYOUT, 8)
+
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
@@ -192,10 +196,18 @@ def persistent_gemm_tdm_pipelined_lds_prefetch_kernel(a_ptr, b_ptr, c_ptr,  #
         ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
 
 
-def _build_gemm_layouts(BLOCK_M, BLOCK_N, BLOCK_K, cga_layout_a, cga_layout_b, cga_layout_c, WARP_BASES, TRANSPOSE_B):
+def _build_gemm_layouts(BLOCK_M, BLOCK_N, BLOCK_K, cga_layout_c, WARP_BASES, TRANSPOSE_B):
     """
     Build all layouts for the GEMM kernel.
     """
+    parent_layout = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32], cga_layout_c)
+    operand_layout_a = ttgl.DotOperandLayout(0, parent_layout, 8)
+    operand_layout_b = ttgl.DotOperandLayout(1, parent_layout, 8)
+    ACCUMULATOR_LAYOUT = parent_layout
+
+    cga_layout_a = operand_layout_a.cga_layout
+    cga_layout_b = operand_layout_b.cga_layout
+
     # If TRANSPOSE_B we need to transpose each basis vector of the CGALayout for the
     # shared allocation because the permute will transpose the basis vectors before we
     # load them for wmmas.
@@ -214,13 +226,7 @@ def _build_gemm_layouts(BLOCK_M, BLOCK_N, BLOCK_K, cga_layout_a, cga_layout_b, c
         SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_K, 8]], [BLOCK_N, BLOCK_K],
                                                                                     [1, 0], cga_layout_b_transposed)
 
-    WMMA_LAYOUT_A = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32], cga_layout_a)
-    WMMA_LAYOUT_B = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32], cga_layout_b)
-    ACCUMULATOR_LAYOUT = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32], cga_layout_c)
-    OPERAND_LAYOUT_A = ttgl.DotOperandLayout(0, WMMA_LAYOUT_A, 8)
-    OPERAND_LAYOUT_B = ttgl.DotOperandLayout(1, WMMA_LAYOUT_B, 8)
-
-    return SHARED_LAYOUT_A, SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT, OPERAND_LAYOUT_A, OPERAND_LAYOUT_B
+    return SHARED_LAYOUT_A, SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT
 
 
 @gluon.jit
@@ -233,13 +239,15 @@ def gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
                               NUM_BUFFERS: ttgl.constexpr,  #
                               TRANSPOSE_B: ttgl.constexpr,  #
                               SHARED_LAYOUT_A: ttgl.constexpr, SHARED_LAYOUT_B: ttgl.constexpr,
-                              ACCUMULATOR_LAYOUT: ttgl.constexpr, OPERAND_LAYOUT_A: ttgl.constexpr,
-                              OPERAND_LAYOUT_B: ttgl.constexpr, L2_PREFETCH_DISTANCE: ttgl.constexpr):
+                              ACCUMULATOR_LAYOUT: ttgl.constexpr, L2_PREFETCH_DISTANCE: ttgl.constexpr):
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
     ttgl.static_assert(b_dtype.is_fp16() or b_dtype.is_bf16(), "Only fp16/bf16 supported for B")
     ttgl.static_assert(NUM_BUFFERS >= 2, "NUM_BUFFERS must be at least 2")
+
+    OPERAND_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(0, ACCUMULATOR_LAYOUT, 8)
+    OPERAND_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(1, ACCUMULATOR_LAYOUT, 8)
 
     pid = ttgl.program_id(axis=0)
     num_pid_m = ttgl.cdiv(M, BLOCK_M)
@@ -417,13 +425,11 @@ def _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
         warp_bases.append((1 << i, 0))
     warp_bases = tuple(warp_bases)
 
-    cga_layout_a = make_cga_layout(ctas_per_cga, [ctas_per_cga[0], 1], [0, 1])
-    cga_layout_b = make_cga_layout(ctas_per_cga, [1, ctas_per_cga[1]], [0, 1])
     cga_layout_c = make_cga_layout(ctas_per_cga, [ctas_per_cga[0], ctas_per_cga[1]], [0, 1])
 
     # Build all layouts in wrapper function (outside kernel)
-    SHARED_LAYOUT_A, SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT, OPERAND_LAYOUT_A, OPERAND_LAYOUT_B = _build_gemm_layouts(
-        BLOCK_M, BLOCK_N, BLOCK_K, cga_layout_a, cga_layout_b, cga_layout_c, warp_bases, TRANSPOSE_B)
+    SHARED_LAYOUT_A, SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT = _build_gemm_layouts(BLOCK_M, BLOCK_N, BLOCK_K, cga_layout_c,
+                                                                               warp_bases, TRANSPOSE_B)
 
     if not PERSISTENT:
 
@@ -437,8 +443,8 @@ def _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
             NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B,  #
             SHARED_LAYOUT_A=SHARED_LAYOUT_A, SHARED_LAYOUT_B=SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT=ACCUMULATOR_LAYOUT,
-            OPERAND_LAYOUT_A=OPERAND_LAYOUT_A, OPERAND_LAYOUT_B=OPERAND_LAYOUT_B, num_warps=num_warps,
-            waves_per_eu=num_warps // 4, num_ctas=num_ctas, L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE)
+            num_warps=num_warps, waves_per_eu=num_warps // 4, num_ctas=num_ctas,
+            L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE)
         static_profile(kernel)
     else:
         # num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
@@ -455,7 +461,6 @@ def _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
                 BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
                 NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B,  #
                 SHARED_LAYOUT_A=SHARED_LAYOUT_A, SHARED_LAYOUT_B=SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT=ACCUMULATOR_LAYOUT,
-                OPERAND_LAYOUT_A=OPERAND_LAYOUT_A, OPERAND_LAYOUT_B=OPERAND_LAYOUT_B,  #
                 num_warps=num_warps, num_ctas=num_ctas, waves_per_eu=num_warps // 4,
                 L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE)
             static_profile(kernel)
@@ -469,7 +474,6 @@ def _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
                 BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
                 NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B,  #
                 SHARED_LAYOUT_A=SHARED_LAYOUT_A, SHARED_LAYOUT_B=SHARED_LAYOUT_B, ACCUMULATOR_LAYOUT=ACCUMULATOR_LAYOUT,
-                OPERAND_LAYOUT_A=OPERAND_LAYOUT_A, OPERAND_LAYOUT_B=OPERAND_LAYOUT_B,  #
                 num_warps=num_warps, num_ctas=num_ctas, waves_per_eu=num_warps // 4,
                 L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE)
             static_profile(kernel)

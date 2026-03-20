@@ -83,9 +83,10 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
 
   switch (mode) {
   case ShflKind::bfly:
-    if (strideInt > 16) {
-      Value stride = b.i32_val(32);
-      Value lineId = b.xor_(threadId, stride);
+    if (strideInt > 16 || (strideInt & (strideInt - 1)) != 0) {
+      // Non-power-of-2 masks or strides > 16 cannot use DPP or ds_swizzle.
+      // Fall back to ds_bpermute with an XOR lane index.
+      Value lineId = b.xor_(laneId, b.i32_val(strideInt));
       return bpermute(lineId);
     } else if (strideInt == 16) {
       if (isRDNA(isaFamily)) {
@@ -479,19 +480,6 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
   default:
     aux = 0;
   }
-  return aux;
-}
-
-int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
-                                                 bool setNT) {
-  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b10000;
-  int32_t aux = 0;
-  if (setSC0)
-    aux |= sc0Bit;
-  if (setSC1)
-    aux |= sc1Bit;
-  if (setNT)
-    aux |= ntBit;
   return aux;
 }
 

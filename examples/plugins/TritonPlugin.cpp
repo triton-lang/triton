@@ -10,17 +10,27 @@ namespace mlir {
 namespace triton {
 namespace plugin {
 
+#define GEN_PASS_DECL_TRITONGPUMLIRPLUGIN
 #define GEN_PASS_DEF_TRITONGPUMLIRPLUGIN
 #include "Passes.h.inc"
 
 struct MLIRPluginPass : public impl::TritonGPUMLIRPluginBase<MLIRPluginPass> {
+  using TritonGPUMLIRPluginBase::TritonGPUMLIRPluginBase;
+
   void runOnOperation() override {
 
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+
+    std::string name;
+    llvm::raw_string_ostream sstr(name);
+    sstr << "foo";
+    if (num_warps != 4)
+      sstr << "_num_warps_" << num_warps;
+
     mod.walk([&](FunctionOpInterface funcOp) {
       StringAttr funcNameAttr = funcOp.getNameAttr();
-      funcOp.setName("foo");
+      funcOp.setName(name);
     });
   }
 };
@@ -29,8 +39,16 @@ struct MLIRPluginPass : public impl::TritonGPUMLIRPluginBase<MLIRPluginPass> {
 } // namespace triton
 } // namespace mlir
 
-static void addTritonPluginPass(mlir::PassManager *pm) {
-  pm->addPass(mlir::triton::plugin::createTritonGPUMLIRPlugin());
+static void addTritonPluginPass(mlir::PassManager *pm,
+                                const std::vector<std::string> &args) {
+  if (args.empty()) {
+    pm->addPass(mlir::triton::plugin::createTritonGPUMLIRPlugin());
+    return;
+  }
+
+  mlir::triton::plugin::TritonGPUMLIRPluginOptions opts;
+  opts.num_warps = std::atoi(args[0].c_str());
+  pm->addPass(mlir::triton::plugin::createTritonGPUMLIRPlugin((opts)));
 }
 
 static void registerTritonPluginPass() {
@@ -40,20 +58,21 @@ static void registerTritonPluginPass() {
 }
 
 static const char *ADD_PLUGIN_PASS_NAME = "add_plugin";
-static std::unordered_map<std::string, void (*)(mlir::PassManager *)> passMap =
+static std::unordered_map<std::string, decltype(&addTritonPluginPass)> passMap =
     {{ADD_PLUGIN_PASS_NAME, addTritonPluginPass}};
-static std::unordered_map<std::string, void (*)()> registryMap = {
-    {ADD_PLUGIN_PASS_NAME, registerTritonPluginPass}};
+static std::unordered_map<std::string, decltype(&registerTritonPluginPass)>
+    registryMap = {{ADD_PLUGIN_PASS_NAME, registerTritonPluginPass}};
 static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME};
 
 // Key APIs:
 
 TRITON_PLUGIN_API
-tritonAddPluginPass(mlir::PassManager *pm, const char *passName) {
+tritonAddPluginPass(mlir::PassManager *pm, const char *passName,
+                    const std::vector<std::string> &args) {
   std::string passNameStr(passName);
   if (passMap.find(passNameStr) == passMap.end())
     return TP_GENERIC_FAILURE;
-  passMap[passNameStr](pm);
+  passMap[passNameStr](pm, args);
   return TP_SUCCESS;
 }
 

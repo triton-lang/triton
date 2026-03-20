@@ -230,7 +230,7 @@ def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, dst_col
 
 @builtin
 def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_offset, dst: shared_memory_descriptor,
-                 mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+                 pred=1, mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
     """Gather data from non-contiguous rows in global memory to shared memory asynchronously.
 
     This operation uses TDM gather mode to read data from non-contiguous rows in global memory.
@@ -248,6 +248,7 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_
         src_col_offset (int or tensor): the starting column offset in the source tensor
                                         for all gathered rows.
         dst (shared_memory_descriptor): the shared memory destination to store gathered data. Must be 2D.
+        pred (int, optional): Predicate to enable or disable the gather. Defaults to 1.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
     ndim = len(desc.block_shape)
@@ -259,11 +260,14 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_
     # Convert src_col_offset to i32
     src_col_offset_handle = _semantic._convert_to_ir_values([src_col_offset], require_i64=False)[0]
 
+    pred = _semantic.to_tensor(pred)
+    pred_handle = pred.handle
+
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
 
     _semantic.builder.create_async_tdm_gather(desc.handle, src_row_indices.handle, src_col_offset_handle, dst.handle,
-                                              mbarrier_handle)
+                                              pred_handle, mbarrier_handle)
 
 
 @builtin

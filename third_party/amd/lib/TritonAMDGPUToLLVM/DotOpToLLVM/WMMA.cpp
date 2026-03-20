@@ -40,7 +40,8 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::LinearEncodingAttr;
 
 Value prepareOperands(ConversionPatternRewriter &rewriter, Value rawElems,
-                      Type type, int wmmaVer, int kBase, Location loc) {
+                      Type type, int wmmaVer, int kBase, Location loc,
+                      bool isScale = false) {
   Value convertedElems;
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   if (type.isF32() || type.isF16()) {
@@ -52,7 +53,8 @@ Value prepareOperands(ConversionPatternRewriter &rewriter, Value rawElems,
       convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kBase));
   } else {
     // When scaleFactor == 16, scales are stored in i64
-    Type targetTy = kBase == 8 ? i64_ty : i32_ty;
+    // This only applies to scale operands, not regular dot operands
+    Type targetTy = (isScale && kBase == 8) ? i64_ty : i32_ty;
     auto elems =
         kBase * type.getIntOrFloatBitWidth() / targetTy.getIntOrFloatBitWidth();
     assert(elems >= 1 && "unexpected number of elements");
@@ -633,7 +635,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
           /*padding*/ 0, &scaleOpSelA, aScaleTensorTy.getElementType(), loc,
           /*isScale*/ true);
       sa = prepareOperands(rewriter, sa, aScaleTensorTy.getElementType(),
-                           wmmaVer, KBaseScale, loc);
+                           wmmaVer, KBaseScale, loc, /*isScale=*/true);
 
       auto sb = getOperandVals(
           rewriter, typeConverter, bScaleLayout, loadedBScale,
@@ -641,7 +643,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
           /*padding*/ 0, &scaleOpSelB, bScaleTensorTy.getElementType(), loc,
           /*isScale*/ true);
       sb = prepareOperands(rewriter, sb, bScaleTensorTy.getElementType(),
-                           wmmaVer, KBaseScale, loc);
+                           wmmaVer, KBaseScale, loc, /*isScale=*/true);
 
       acc = wmmaLayout.getIsTransposed()
                 ? generateScaledWMMAIntrinsic(
