@@ -87,7 +87,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
     pid_s1 = tl.program_id(1)
     tl.static_assert(BLOCK_X_S1 % 32 == 0)
     BLOCK_X_SMX1: tl.constexpr = BLOCK_X_S1 // 32
-    BLOCK_Y_SMX1: tl.constexpr = BLOCK_Y_S1 // Y_MX_BLOCK_SIZE
+    BLOCK_Y_SMX1: tl.constexpr = BLOCK_Y_S1 // (1 if Y_MX_BLOCK_SIZE is None else Y_MX_BLOCK_SIZE)
     offs_s0 = pid_s0 * BLOCK_S0 + tl.arange(0, BLOCK_S0)
     offs_x_s1 = pid_s1 * BLOCK_X_S1 + tl.arange(0, BLOCK_X_S1)
     offs_x_smx1 = pid_s1 * BLOCK_X_SMX1 + tl.arange(0, BLOCK_X_SMX1)
@@ -135,7 +135,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
     offs_y_s1 = pid_s1 * BLOCK_Y_S1 + tl.arange(0, BLOCK_Y_S1)
     offs_y_smx1 = pid_s1 * BLOCK_Y_SMX1 + tl.arange(0, BLOCK_Y_SMX1)
     valid_y_s1 = offs_y_s1 < Y_S1
-    valid_y_smx1 = offs_y_smx1 < tl.cdiv(Y_S1, Y_MX_BLOCK_SIZE)
+    valid_y_smx1 = offs_y_smx1 < tl.cdiv(Y_S1, 1 if Y_MX_BLOCK_SIZE is None else Y_MX_BLOCK_SIZE)
     is_out_fp4: tl.constexpr = YMx is not None and Y_VALUE_PACK_FACTOR == 2
     y = float_to_flex(y, YFlexExpected, YFlexActual, YFlexChecksum, None, Y, Y_FLEX_SATURATE_INF)
     # TODO (phil): keeping for backward compatibility, but will remove !
@@ -289,7 +289,7 @@ def reduce_forward(
         scale, stride_sr, stride_s0, stride_s1,  #
         unpadded_batch_size,  #
         K, S0, X_S1, Y_S1,  #
-        *postprocess_fn1.fn_args, *postprocess_fn2.fn_args, *postprocess_mx_fn.fn_args,  #
+        *postprocess_fn1.fn_args, *postprocess_fn2.fn_args,  #
         x_flex.scale, x_global_scale, y_flex.expected_scale, y_flex.actual_scale, y_flex.checksum_scale,  #
         y_flex_saturate_inf,  #
         IS_MASK_NONE=(mask is None),  #
