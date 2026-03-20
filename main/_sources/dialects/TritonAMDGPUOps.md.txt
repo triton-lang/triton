@@ -119,7 +119,7 @@ _Copy data based on descriptor from global memory to local memory asynchronously
 Syntax:
 
 ```
-operation ::= `amdg.async_tdm_copy_global_to_local` $desc `[` $indices `]` `into` $result `,` $pred (`,` `barrier` `=` $barrier^)?
+operation ::= `amdg.async_tdm_copy_global_to_local` $desc `[` $indices `]` `into` $result `,` `pred` `=` $pred (`,` `barrier` `=` $barrier^)?
               attr-dict `:` qualified(type($desc)) (`,` qualified(type($barrier))^)? `->` qualified(type($result))
 ```
 
@@ -193,7 +193,7 @@ _Gather data from non-contiguous global memory rows to local memory asynchronous
 Syntax:
 
 ```
-operation ::= `amdg.async_tdm_gather` $desc `[` $src_row_indices `,` $src_col_offset `]` `to` $dst (`,` `barrier` `=` $barrier^)?
+operation ::= `amdg.async_tdm_gather` $desc `[` $src_row_indices `,` $src_col_offset `]` `to` $dst `,` `pred` `=` $pred (`,` `barrier` `=` $barrier^)?
               attr-dict `:` qualified(type($src_row_indices)) `,` qualified(type($dst)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
 ```
 
@@ -221,6 +221,7 @@ Interfaces: `InferTypeOpInterface`
 | `src_row_indices` | tensor of 16-bit signless integer or 32-bit signless integer values |
 | `src_col_offset` | 32-bit signless integer |
 | `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `pred` | 32-bit signless integer |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 #### Results:

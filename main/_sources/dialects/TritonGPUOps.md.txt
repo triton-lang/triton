@@ -261,6 +261,8 @@ operation ::= `ttg.global_scratch_alloc` attr-dict `:` qualified(type($result))
 This operation allocates a buffer in global memory that is private to the current program.
 A custom third-party allocation can be marked using the optional
 `third_party_allocation` unit attribute.
+Concurrency sanitizer allocations that hold cluster-wide state can be marked
+using the optional `shared_cluster_state` unit attribute.
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
@@ -271,6 +273,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 <tr><td><code>nbytes</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>alignment</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>third_party_allocation</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+<tr><td><code>shared_cluster_state</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 
 #### Results:

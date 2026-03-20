@@ -420,7 +420,7 @@ If the pending count becomes zero, the phase changes (is decremented in a wrapar
 <h2><code class="docutils literal notranslate"><span class="pre">amdg.async_tdm_copy_global_to_local</span></code> (triton::amdgpu::AsyncTDMCopyGlobalToLocalOp)<a class="headerlink" href="#amdg-async-tdm-copy-global-to-local-triton-amdgpu-asynctdmcopyglobaltolocalop" title="Link to this heading">¶</a></h2>
 <p><em>Copy data based on descriptor from global memory to local memory asynchronously</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_copy_global_to_local` $desc `[` $indices `]` `into` $result `,` $pred (`,` `barrier` `=` $barrier^)?
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_copy_global_to_local` $desc `[` $indices `]` `into` $result `,` `pred` `=` $pred (`,` `barrier` `=` $barrier^)?
               attr-dict `:` qualified(type($desc)) (`,` qualified(type($barrier))^)? `-&gt;` qualified(type($result))
 </pre></div>
 </div>
@@ -522,7 +522,7 @@ it sends an “LDS atomic arrive” to signal its completion.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">amdg.async_tdm_gather</span></code> (triton::amdgpu::AsyncTDMGatherOp)<a class="headerlink" href="#amdg-async-tdm-gather-triton-amdgpu-asynctdmgatherop" title="Link to this heading">¶</a></h2>
 <p><em>Gather data from non-contiguous global memory rows to local memory asynchronously</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_gather` $desc `[` $src_row_indices `,` $src_col_offset `]` `to` $dst (`,` `barrier` `=` $barrier^)?
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_gather` $desc `[` $src_row_indices `,` $src_col_offset `]` `to` $dst `,` `pred` `=` $pred (`,` `barrier` `=` $barrier^)?
               attr-dict `:` qualified(type($src_row_indices)) `,` qualified(type($dst)) (`,` qualified(type($barrier))^)? `-&gt;` qualified(type($desc))
 </pre></div>
 </div>
@@ -561,7 +561,10 @@ all gathered rows.</p>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">dst</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">pred</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 </tbody>
