@@ -277,12 +277,12 @@ class CudaLauncher(object):
         signature = {idx: value for idx, value in src.signature.items()}
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
 
-        launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "nvTmaDesc")
-
         self.gsan_enabled = "gsan" in getattr(metadata, "instrumentation_mode", "")
         if self.gsan_enabled:
-            expanded_signature.append("*i8")
+            signature["_gsan_globals_ptr"] = "*i8"
+
+        launcher = triton.runtime.driver.active.utils.launch
+        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "nvTmaDesc")
         self.arg_annotations = annotate_arguments(expanded_signature)
         self.kernel_signature = make_kernel_signature(expanded_signature)
         self.num_ctas = getattr(metadata, "num_ctas", 1)
