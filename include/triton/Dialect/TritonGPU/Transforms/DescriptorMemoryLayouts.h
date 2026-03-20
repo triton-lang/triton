@@ -9,7 +9,6 @@
 #include <unordered_set>
 
 namespace mlir::triton::gpu {
-// Forward declarations
 struct UseInfo;
 struct EncodingInfo;
 
