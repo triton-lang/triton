@@ -18,11 +18,37 @@ if(TRITON_BUILD_PYTHON_MODULE)
     message(FATAL_ERROR "clang++ is required to build gsan.ll")
   endif()
 
+  set(GSAN_RUNTIME_CUDA_PATH "${CMAKE_CURRENT_SOURCE_DIR}/backend")
+  foreach(candidate "$ENV{CUDA_PATH}" "$ENV{CUDA_HOME}" "/usr/local/cuda")
+    if(candidate AND EXISTS "${candidate}/include/cuda_runtime.h")
+      set(GSAN_RUNTIME_CUDA_PATH "${candidate}")
+      break()
+    endif()
+  endforeach()
+
   set(GSAN_RUNTIME_PLATFORM_FLAGS
-      "--cuda-path=${CMAKE_CURRENT_SOURCE_DIR}/backend")
+      "--cuda-path=${GSAN_RUNTIME_CUDA_PATH}")
   if(APPLE)
     list(APPEND GSAN_RUNTIME_PLATFORM_FLAGS -isysroot "${CMAKE_OSX_SYSROOT}")
   endif()
+
+  set(GSAN_RUNTIME_TOOLCHAIN_FLAGS)
+  if(CMAKE_LIBRARY_ARCHITECTURE)
+    file(GLOB GSAN_RUNTIME_GCC_INSTALL_DIRS LIST_DIRECTORIES true
+         "/usr/lib/gcc/${CMAKE_LIBRARY_ARCHITECTURE}/*")
+  endif()
+  if(NOT GSAN_RUNTIME_GCC_INSTALL_DIRS)
+    file(GLOB GSAN_RUNTIME_GCC_INSTALL_DIRS LIST_DIRECTORIES true
+         "/usr/lib/gcc/*/*")
+  endif()
+  list(SORT GSAN_RUNTIME_GCC_INSTALL_DIRS COMPARE NATURAL ORDER DESCENDING)
+  foreach(candidate ${GSAN_RUNTIME_GCC_INSTALL_DIRS})
+    get_filename_component(version "${candidate}" NAME)
+    if(EXISTS "/usr/include/c++/${version}/climits")
+      list(APPEND GSAN_RUNTIME_TOOLCHAIN_FLAGS "--gcc-install-dir=${candidate}")
+      break()
+    endif()
+  endforeach()
 
   add_custom_command(
       OUTPUT "${GSAN_RUNTIME_IR}"
@@ -38,6 +64,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
               -fcuda-flush-denormals-to-zero
               --cuda-gpu-arch=sm_80
               -Wno-unknown-cuda-version
+              ${GSAN_RUNTIME_TOOLCHAIN_FLAGS}
               ${GSAN_RUNTIME_PLATFORM_FLAGS}
               -isystem "${CMAKE_CURRENT_SOURCE_DIR}/clang_cuda_shims"
               -isystem "${CMAKE_CURRENT_SOURCE_DIR}/backend/include"
