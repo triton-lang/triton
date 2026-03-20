@@ -6,6 +6,7 @@
 #include "python/src/ir.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FileSystem.h"
 #include <cstdint>
 
 extern "C" {
@@ -123,5 +124,9 @@ void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry);
 
 void loadPluginDialects(const std::string &filename,
                         mlir::DialectRegistry &registry);
+
+inline bool fileExists(const std::string &filename) {
+  return !filename.empty() && llvm::sys::fs::exists(filename);
+}
 
 #endif // TRITON_PLUGIN_UTILS_H

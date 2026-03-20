@@ -224,6 +224,8 @@ void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry) {
 
 void loadPluginDialects(const std::string &filename,
                         mlir::DialectRegistry &registry) {
+  if (!fileExists(filename))
+    return;
   TritonPlugin TP(filename);
   loadPluginDialects(TP, registry);
 }

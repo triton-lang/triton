@@ -1865,7 +1865,7 @@ void init_triton_ir(py::module &&m) {
 
   if (std::string filename =
           mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-      !filename.empty()) {
+      fileExists(filename)) {
     registerCustomOps(TritonOpBuilderBinding, filename);
   }
 
