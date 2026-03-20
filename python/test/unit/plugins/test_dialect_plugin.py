@@ -43,9 +43,6 @@ def test_override(tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("plugin not supported/tested on AMD yet")
 
-    if is_hip():
-        pytest.skip("plugin not supported/tested on AMD yet")
-
     filename = str(list(tmp_path.rglob("*.ttir"))[0])
 
     with open(filename, "r") as infile:
