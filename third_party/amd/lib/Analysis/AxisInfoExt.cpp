@@ -60,8 +60,14 @@ public:
 };
 } // namespace
 
-void AxisInfoExt::addVisitors(mlir::triton::AxisInfoVisitorList &visitors) {
+AxisInfoAnalysisExt::AxisInfoAnalysisExt(DataFlowSolver &solver)
+    : triton::AxisInfoAnalysis(solver) {
   visitors.append<ExtractSliceOpAxisInfoVisitor>();
-  return;
 }
+
+triton::AxisInfoAnalysis *
+AxisInfoAnalysisExt::loadAnalysis(DataFlowSolver *solver) {
+  return solver->load<AxisInfoAnalysisExt>();
+}
+
 } // namespace mlir::triton::AMD
