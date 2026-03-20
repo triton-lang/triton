@@ -459,6 +459,7 @@ void dumpKernelMetricTrace(
           name += metricName + "=" +
                   formatFlexibleMetricValue(metric.getValues()[0]) + " ";
         }
+        element["name"] = name;
       } else {
         element["cat"] = "kernel";
         element["name"] = contexts.back().name;
