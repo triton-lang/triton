@@ -37,8 +37,8 @@ import torch
 import triton
 import triton.language as tl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
+import argparse
 import math
-from einops import repeat
 from triton._internal_testing import is_hip_gfx1250, is_hip_cdna4
 
 # For FA, the P=softmax(S) is performed very accurately in fp32 and
@@ -478,8 +478,8 @@ def attn_ref(q, k, v, q_scale, k_scale, v_scale):
     k = k * k_scale
     v = v * v_scale
 
-    k = repeat(k, "b s h d -> b s (h g) d", g=q.shape[2] // k.shape[2])
-    v = repeat(v, "b s h d -> b s (h g) d", g=q.shape[2] // v.shape[2])
+    k = k.repeat_interleave(q.shape[2] // k.shape[2], dim=2)
+    v = v.repeat_interleave(q.shape[2] // v.shape[2], dim=2)
     d = q.shape[-1]
 
     scores = torch.einsum("bthd,bshd->bhts", q, k / math.sqrt(d))
