@@ -145,6 +145,9 @@ public:
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                              Operation *llLoadOp) const override;
 
+  void annotateSharedMemoryAlias(Operation *llOp,
+                                 Operation *sourceOp) const override;
+
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   ArrayRef<bool> isSigned, RewriterBase &rewriter,

@@ -422,6 +422,11 @@ private:
           triton::gpu::ConvertLayoutOp::create(rewriter, loc, dstTy, srcTensor);
       cvt->setAttr("allocation.offset",
                    IntegerAttr::get(offsetTy, baseOffset + smemBaseOffsets[i]));
+      // Propagate alias scope info from the reduce op to the inner cvt
+      if (auto scopeId = op->getAttr("allocation.scope"))
+        cvt->setAttr("allocation.scope", scopeId);
+      if (auto noalias = op->getAttr("allocation.scope.noalias"))
+        cvt->setAttr("allocation.scope.noalias", noalias);
       Type packedDstTy = getTypeConverter()->convertType(dstTy);
       auto packedDst = UnrealizedConversionCastOp::create(
                            rewriter, loc, packedDstTy, cvt.getResult())

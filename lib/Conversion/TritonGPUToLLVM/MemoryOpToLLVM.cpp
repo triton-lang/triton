@@ -124,7 +124,8 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
                               ArrayRef<Value> inVals,
                               const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter,
-                              const TargetInfoBase &targetInfo) {
+                              const TargetInfoBase &targetInfo,
+                              Operation *aliasScopeSourceOp = nullptr) {
   auto regTy = cast<RankedTensorType>(regVal.getType());
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
 
@@ -140,7 +141,8 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
     return failure();
   }
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
-                 rewriter, targetInfo);
+                 rewriter, targetInfo, /*localLoadOp=*/nullptr,
+                 aliasScopeSourceOp);
 
   return success();
 }
@@ -210,8 +212,8 @@ struct LocalAllocOpConversion
       auto *ctx = op.getContext();
       auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
       if (failed(lowerLocalStore(loc, ctx, op.getSrc(), memDescTy, smemObj,
-                                 inVals, typeConverter, rewriter,
-                                 targetInfo))) {
+                                 inVals, typeConverter, rewriter, targetInfo,
+                                 op.getOperation()))) {
         return failure();
       }
     }
@@ -272,8 +274,9 @@ public:
       return failure();
     }
 
-    auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
-                                  smemObj, rewriter, targetInfo, op);
+    auto outVals =
+        lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy, smemObj,
+                       rewriter, targetInfo, op, op.getOperation());
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, regTy);
     rewriter.replaceOp(op, result);
@@ -311,7 +314,8 @@ public:
                                                          llvmElemTy, rewriter);
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     if (failed(lowerLocalStore(loc, ctx, regVal, memDescTy, smemObj, inVals,
-                               typeConverter, rewriter, targetInfo))) {
+                               typeConverter, rewriter, targetInfo,
+                               op.getOperation()))) {
       return failure();
     }
 

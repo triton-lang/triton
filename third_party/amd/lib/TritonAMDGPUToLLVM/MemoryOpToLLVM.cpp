@@ -263,11 +263,12 @@ private:
       default:
         return {};
       }
-      // GFX1250 is currently using LLVM intrinsics so it cannot cast it to
-      // AliasAnalysisOpInterface
-      if (targetInfo.getISAFamily() != AMD::ISAFamily::GFX1250)
+      if (targetInfo.getISAFamily() != AMD::ISAFamily::GFX1250) {
         AMD::addLocalLoadNoAliasScope(
             op, cast<LLVM::AliasAnalysisOpInterface>(dsReadTr.getDefiningOp()));
+        // Propagate shared memory alias scope metadata
+        targetInfo.annotateSharedMemoryAlias(dsReadTr.getDefiningOp(), op);
+      }
       Value vecVal = b.bitcast(dsReadTr, vTy);
       SmallVector<Value> loadedVals;
       for (int v = 0; v < vTy.getNumElements(); v++) {
@@ -425,6 +426,8 @@ private:
       auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
       Value dsReadTr =
           ROCDL::ds_read_tr4_b64::create(rewriter, loc, vTyI32, vecAddr);
+      // Propagate shared memory alias scope metadata
+      targetInfo.annotateSharedMemoryAlias(dsReadTr.getDefiningOp(), op);
       Value vecVal = b.bitcast(dsReadTr, vTy);
       SmallVector<Value> loadedVals;
       for (int v = 0; v < vTy.getNumElements(); v++) {

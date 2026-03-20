@@ -802,6 +802,85 @@ void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                        Operation *llLoadOp) const {
   if (requiresAliasInfoForAsyncOps())
     AMD::addLocalLoadNoAliasScope(localLoadOp, cast<LLVM::LoadOp>(llLoadOp));
+  // Merge shared memory alias scope from allocation analysis
+  annotateSharedMemoryAlias(llLoadOp, localLoadOp);
+}
+
+namespace {
+LLVM::AliasScopeDomainAttr getLdsScopeDomain(MLIRContext *ctx) {
+  Builder b(ctx);
+  return b.getAttr<LLVM::AliasScopeDomainAttr>(
+      b.getStringAttr("triton.lds"),
+      b.getStringAttr("Domain for LDS(shared memory) alias scopes"));
+}
+
+LLVM::AliasScopeAttr getSharedMemoryScopeAttr(MLIRContext *ctx,
+                                              int64_t bufferId) {
+  Builder b(ctx);
+  auto name = b.getStringAttr("triton.lds.buffer." + std::to_string(bufferId));
+  auto desc =
+      b.getStringAttr("Scope for LDS buffer " + std::to_string(bufferId));
+  return b.getAttr<LLVM::AliasScopeAttr>(name, getLdsScopeDomain(ctx), desc);
+}
+
+void addSharedMemoryAliasScope(Operation *sourceOp,
+                               LLVM::AliasAnalysisOpInterface llOp) {
+  if (!sourceOp)
+    return;
+  auto scopeIdAttr = sourceOp->getAttrOfType<IntegerAttr>("allocation.scope");
+  if (!scopeIdAttr)
+    return;
+
+  auto ctx = llOp->getContext();
+  int64_t scopeId = scopeIdAttr.getValue().getSExtValue();
+
+  // Build alias scope: this op belongs to buffer <scopeId>
+  auto bufferScope = getSharedMemoryScopeAttr(ctx, scopeId);
+
+  // Merge with any existing alias scopes on llOp
+  SmallVector<Attribute> aliasScopes;
+  if (auto existing = llOp.getAliasScopesOrNull()) {
+    for (auto attr : existing)
+      aliasScopes.push_back(attr);
+  }
+  aliasScopes.push_back(bufferScope);
+  llOp.setAliasScopes(ArrayAttr::get(ctx, aliasScopes));
+
+  // Build noalias: this op does not alias with non-overlapping buffers
+  auto noaliasArrayAttr =
+      sourceOp->getAttrOfType<ArrayAttr>("allocation.scope.noalias");
+  if (!noaliasArrayAttr)
+    return;
+
+  SmallVector<Attribute> noAliasScopes;
+  if (auto existing = llOp.getNoAliasScopesOrNull()) {
+    for (auto attr : existing)
+      noAliasScopes.push_back(attr);
+  }
+  for (auto attr : noaliasArrayAttr) {
+    int64_t noaliasId = cast<IntegerAttr>(attr).getValue().getSExtValue();
+    noAliasScopes.push_back(getSharedMemoryScopeAttr(ctx, noaliasId));
+  }
+  llOp.setNoAliasScopes(ArrayAttr::get(ctx, noAliasScopes));
+}
+} // namespace
+
+void TargetInfo::annotateSharedMemoryAlias(Operation *llOp,
+                                           Operation *sourceOp) const {
+  if (!sourceOp || !llOp)
+    return;
+  // If the target op implements LLVM's AliasAnalysisOpInterface, attach
+  // alias scope metadata directly.
+  if (auto aaOp = dyn_cast<LLVM::AliasAnalysisOpInterface>(llOp)) {
+    addSharedMemoryAliasScope(sourceOp, aaOp);
+    return;
+  }
+  // Otherwise (e.g. MaskedStoreOp/MaskedLoadOp), propagate the allocation
+  // attrs so that downstream lowering can emit the metadata.
+  if (auto scopeId = sourceOp->getAttr("allocation.scope"))
+    llOp->setAttr("allocation.scope", scopeId);
+  if (auto noalias = sourceOp->getAttr("allocation.scope.noalias"))
+    llOp->setAttr("allocation.scope.noalias", noalias);
 }
 
 bool TargetInfo::supportDppBroadcast() const {

@@ -586,7 +586,8 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
-                std::optional<int> maybeMaxVecElems, Operation *localLoadOp) {
+                std::optional<int> maybeMaxVecElems, Operation *localLoadOp,
+                Operation *aliasScopeSourceOp) {
 
   bool isStore = !valsArray.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -601,12 +602,23 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
           packLLVector(loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
       targetInfo.storeDShared(rewriter, loc, shmemAddr, ctaId, valsVec,
                               /*pred=*/b.true_val());
+      // Propagate shared memory alias scope attrs to the just-created op so
+      // that downstream lowering (e.g. MaskedOpsToLLVM) can emit LLVM metadata
+      if (aliasScopeSourceOp) {
+        auto *lastOp = &*std::prev(rewriter.getInsertionPoint());
+        targetInfo.annotateSharedMemoryAlias(lastOp, aliasScopeSourceOp);
+      }
       return {};
     } else {
       assert(vals.empty());
       Value valsVec =
           targetInfo.loadDShared(rewriter, loc, shmemAddr, ctaId, vecTy,
                                  /*pred=*/b.true_val(), localLoadOp);
+      // Propagate shared memory alias scope attrs to the just-created op
+      if (aliasScopeSourceOp) {
+        auto *lastOp = &*std::prev(rewriter.getInsertionPoint());
+        targetInfo.annotateSharedMemoryAlias(lastOp, aliasScopeSourceOp);
+      }
       return unpackLLVector(loc, valsVec, rewriter);
     }
   };
@@ -799,7 +811,8 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                ArrayRef<Value> valsArray, // Input for store, empty for load
                Type llvmElemTy, triton::gpu::MemDescType srcTy,
                SharedMemoryObject smemObj, RewriterBase &rewriter,
-               const TargetInfoBase &targetInfo, Operation *localLoadOp) {
+               const TargetInfoBase &targetInfo, Operation *localLoadOp,
+               Operation *aliasScopeSourceOp) {
 
   auto isStore = !valsArray.empty();
   // Remove broadcasting in the registers
@@ -810,8 +823,9 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
     if (isStore) {
       inVals = removeBroadcastSrc.apply(inVals);
     }
-    auto outVals = lowerLocalLdSt(loc, ctx, prmtCvt, inVals, llvmElemTy, srcTy,
-                                  smemObj, rewriter, targetInfo, localLoadOp);
+    auto outVals =
+        lowerLocalLdSt(loc, ctx, prmtCvt, inVals, llvmElemTy, srcTy, smemObj,
+                       rewriter, targetInfo, localLoadOp, aliasScopeSourceOp);
     if (!isStore) {
       outVals = broadcastAs(outVals, cvt);
     }
@@ -838,7 +852,8 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                                smemObj.getBases().end());
   return lowerLdStShared(loc, ctx, cvt, valsArray, llvmElemTy, smemBases,
                          paddingShifts, affineOffset, maskSpanAffineOffset,
-                         rewriter, targetInfo, maybeMaxVecElems, localLoadOp);
+                         rewriter, targetInfo, maybeMaxVecElems, localLoadOp,
+                         aliasScopeSourceOp);
 }
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
@@ -1859,6 +1874,9 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
         packLLVector(loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
     targetInfo.storeDShared(rewriter, loc, shmemAddr, ctaId, valsVec,
                             threadPred);
+    // Annotate the just-created store with shared memory alias scope info
+    auto *lastOp = &*std::prev(rewriter.getInsertionPoint());
+    targetInfo.annotateSharedMemoryAlias(lastOp, op);
     return {};
   };
 
@@ -1867,6 +1885,9 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                     std::optional<Value> ctaId) -> SmallVector<Value> {
     Value loadedVec = targetInfo.loadDShared(rewriter, loc, shmemAddr, ctaId,
                                              vecTy, b.true_val());
+    // Annotate the just-created load with shared memory alias scope info
+    auto *lastOp = &*std::prev(rewriter.getInsertionPoint());
+    targetInfo.annotateSharedMemoryAlias(lastOp, op);
     return unpackLLVector(loc, loadedVec, rewriter);
   };
 

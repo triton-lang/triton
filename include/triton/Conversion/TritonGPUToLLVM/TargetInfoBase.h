@@ -52,6 +52,11 @@ public:
                        pred);
   }
 
+  // Called after a shared memory store/load to attach shared memory alias scope
+  // metadata. Default implementation is a no-op; AMD backend overrides this.
+  virtual void annotateSharedMemoryAlias(Operation *llOp,
+                                         Operation *sourceOp) const {};
+
   virtual Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
   virtual Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
