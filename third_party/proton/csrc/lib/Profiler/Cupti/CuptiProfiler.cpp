@@ -125,8 +125,7 @@ uint32_t processActivityKernel(
       const GraphState::NodeState &nodeState = nodeIdToState->at(
           kernel->graphNodeId); // nodeIdToState must have the nodeId
       if (nodeState.status.isMissingName()) {
-        throw std::runtime_error(
-            "Kernel name is missing for a graph node.");
+        throw std::runtime_error("Kernel name is missing for a graph node.");
       }
       const bool isMetricKernel = nodeState.status.isMetricNode();
       for (auto &[data, entry] : externState.dataToGraphEntry) {
