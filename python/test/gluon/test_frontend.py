@@ -2947,7 +2947,7 @@ def test_amd_wmma_scaled_scalar(target):
 #linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [], block = []}>
 #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {}, instrShape = [16, 16, 64]}>
 #mma1 = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {}, instrShape = [16, 16, 128]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %c17_i8 = arith.constant 17 : i8
     %cst = arith.constant dense<17> : tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
