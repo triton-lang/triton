@@ -419,12 +419,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
 
 
-  if(TRITON_EXT_ENABLED)
-    # Do not propagate libraries that libtriton depends on. This ensures that
-    # targets that link against libtriton do not accidentally link in their own
-    # copies of core Triton code and LLVM.
-    set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
-  endif()
+  # Do not propagate libraries that libtriton depends on. This ensures that
+  # targets that link against libtriton do not accidentally link in their own
+  # copies of core Triton code and LLVM.
+  set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
 
   if(WIN32)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
