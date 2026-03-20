@@ -6,6 +6,7 @@ import triton.language as tl
 from triton._internal_testing import is_hip_gfx1250, is_hip_cdna4
 from triton.tools.tensor_descriptor import TensorDescriptor
 
+
 def supports_tensor_descriptor():
     # AMD GPUs with tensor ops support
     return (is_hip_gfx1250() or is_hip_cdna4()) and hasattr(tl, "make_tensor_descriptor")
@@ -100,10 +101,11 @@ def _run_kernel(x, y, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device_tensor_desc=Fal
         a_desc = TensorDescriptor.from_tensor(x, (BLOCK_M, BLOCK_K))
         b_desc = TensorDescriptor.from_tensor(y, (BLOCK_K, BLOCK_N))
         c_desc = TensorDescriptor.from_tensor(z, (BLOCK_M, BLOCK_N))
-        kernel = gemm_tdm_kernel[grid](a_desc, b_desc, c_desc, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K)
+        gemm_tdm_kernel[grid](a_desc, b_desc, c_desc, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K)
+        return c_desc
     else:
-        kernel = gemm_kernel[grid](x, y, z, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device_tensor_desc)
-    return z
+        gemm_kernel[grid](x, y, z, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device_tensor_desc)
+        return z
 
 
 @pytest.mark.parametrize("M,N,K", [(256, 256, 512), [256, 256, 455]])
