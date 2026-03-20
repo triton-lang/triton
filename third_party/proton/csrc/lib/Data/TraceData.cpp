@@ -452,12 +452,12 @@ void dumpKernelMetricTrace(
       const auto &contexts = event.contexts;
 
       json element;
+      element["name"] = contexts.back().name;
       if (flexibleMetrics) {
-        element["name"] = "metadata";
+        element["cat"] = "metadata";
       } else {
-        element["name"] = contexts.back().name;
+        element["cat"] = "kernel";
       }
-      element["cat"] = "kernel";
       element["ph"] = "X";
       element["ts"] = ts;
       element["dur"] = dur;
