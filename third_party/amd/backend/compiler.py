@@ -338,6 +338,9 @@ class HIPBackend(BaseBackend):
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
 
+        # Reserve LDS space for ConSan captures before allocation computes offsets.
+        if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
+            amd.passes.ttgpuir.add_prepare_consan_captures(pm)
         amd.passes.ttgpuir.add_allocate_shared_memory(pm)
         # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after shared
         if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
