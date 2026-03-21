@@ -256,10 +256,16 @@ Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivat
 
 The tutorial [`tutorials/cupti_memory_growth.py`](tutorials/cupti_memory_growth.py) compares process RSS across CUPTI library variants while running the same Triton + Proton workload. It is useful for isolating host-memory growth that appears only with a specific CUPTI build.
 
+If that process also loads framework-bundled CUPTI libraries, use the cleaner
+[`tutorials/cupti_memory_growth_cuda_core.py`](tutorials/cupti_memory_growth_cuda_core.py)
+variant instead. It drives CUDA work through `cuda.core.experimental` and
+controls Proton through `triton._C.libproton` directly, so the process only
+loads the selected `libcupti.so`.
+
 Recommended workflow:
 
 1. Prepare the target GPU machine.
-If you are iterating on the script from a laptop, do that there first, then sync either the Triton checkout or just `third_party/proton/tutorials/cupti_memory_growth.py` to the target GPU machine.
+If you are iterating on the script from a laptop, do that there first, then sync either the Triton checkout or just the tutorial script you want to run to the target GPU machine.
 
 If `"$HOME/code/triton"` does not exist on the target GPU machine and you want the
 repo-relative workflow, create a checkout first:
@@ -290,6 +296,22 @@ This repo-relative form only uses checkout code if the Triton Python package on 
 machine was installed from that checkout. If `triton_version_file` in the summary still
 points at `site-packages`, then the run used the installed wheel, not the checkout.
 
+For the cleaner CUDA-core-based comparison:
+
+```bash
+cd "$HOME/code/triton"
+python third_party/proton/tutorials/cupti_memory_growth_cuda_core.py \
+  --output-dir /tmp/proton-cuda-core-direct-200x32 \
+  --iterations 200 \
+  --warmup 5 \
+  --phase-every 1 \
+  --sample-every 20 \
+  --lifecycle step \
+  --kernels-per-step 32 \
+  --clear-completed-phases \
+  --workload direct
+```
+
 If the target GPU machine only has an installed Triton wheel, copy the script there and run:
 
 ```bash
@@ -302,6 +324,21 @@ python /tmp/cupti_memory_growth.py \
   --lifecycle step \
   --kernels-per-step 32 \
   --clear-completed-phases
+```
+
+Or, for the CUDA-core-based comparison:
+
+```bash
+python /tmp/cupti_memory_growth_cuda_core.py \
+  --output-dir /tmp/proton-cuda-core-direct-200x32 \
+  --iterations 200 \
+  --warmup 5 \
+  --phase-every 1 \
+  --sample-every 20 \
+  --lifecycle step \
+  --kernels-per-step 32 \
+  --clear-completed-phases \
+  --workload direct
 ```
 
 3. Inspect the generated artifacts.
@@ -317,8 +354,18 @@ The script writes one `summary_<label>.json` per CUPTI variant, plus `comparison
 
 If the issue is CUPTI-specific, one variant should show higher host RSS growth while `nvidia_smi_gpu_delta_mb` stays near zero in both runs.
 
+For the CUDA-core-based comparison, `loaded_cupti_libs_after_start` should contain
+exactly one path. If it contains more than one `libcupti.so`, you are no longer
+running in the clean single-CUPTI configuration.
+
 4. Verify that the machine actually switched CUPTI variants.
 If both runs report the same `loaded_cupti_libs_after_start` value, the target machine did not switch to a different `libcupti.so`, so the comparison is not valid yet. In that case, inspect `selected_cupti`, `loaded_cupti_libs_after_start`, and `env` in both summary files before drawing conclusions from the RSS numbers.
+
+Current interpretation guidance for the CUDA-core-based tutorial:
+
+- `--workload direct` keeps retained RSS near zero in a clean process for both CUPTI variants.
+- `--workload graph --capture-before-start` reproduces Proton's `Cannot find graph for graphExecId` warning and shows stable retained RSS growth that is similar for both variants.
+- `--workload graph` captured after profiling starts can show transient differences if you sample immediately after `finalize()`. Use `--post-finalize-sleep-ms 1000` before treating a retained RSS gap as a stable CUPTI-version effect.
 
 ### Visualizing the profile data
 
