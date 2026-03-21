@@ -871,7 +871,8 @@ def test_trace(tmp_path: pathlib.Path, device: str):
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
 
 
-@pytest.mark.parametrize("profile_kind,suffix", [("tree", ".hatchet"), ("trace", ".chrome_trace")], ids=["tree", "trace"])
+@pytest.mark.parametrize("profile_kind,suffix", [("tree", ".hatchet"), ("trace", ".chrome_trace")],
+                         ids=["tree", "trace"])
 def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, device: str):
 
     @triton.jit
