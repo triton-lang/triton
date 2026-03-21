@@ -832,6 +832,16 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
             queue.extend(cur["children"])
         return names
 
+    def get_nodes_with_metric(node, metric_name: str):
+        matches = []
+        queue = [node]
+        while queue:
+            cur = queue.pop(0)
+            if metric_name in cur["metrics"]:
+                matches.append(cur)
+            queue.extend(cur["children"])
+        return matches
+
     with temp_file0.open() as f:
         data0 = json.load(f)
     with temp_file1.open() as f:
@@ -854,6 +864,15 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
     assert bar_frame0 is None
     assert foo_frame1 is None
     assert bar_frame1 is not None
+
+    sum_metric_nodes = get_nodes_with_metric(capture0, "sum_metric")
+    assert len(sum_metric_nodes) == 1
+    assert sum_metric_nodes[0] is foo_frame0
+
+    metric_nodes = get_nodes_with_metric(capture0, "count")
+    for node in metric_nodes:
+        if node["frame"]["name"] == "<metric_node>":
+            assert "sum_metric" not in node["metrics"]
 
     assert foo_frame0["metrics"]["sum_metric"] == float(foo_iters * x.numel())
     assert int(foo_frame0["metrics"]["count"]) == foo_iters

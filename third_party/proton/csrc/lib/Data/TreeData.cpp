@@ -2,6 +2,7 @@
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Device.h"
+#include "Profiler/Graph.h"
 #include "Utility/MsgPackWriter.h"
 #include <array>
 #include <cstdint>
@@ -229,8 +230,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
   auto appendMetrics =
       [&](json &metricsJson,
-          const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
-          const std::map<std::string, FlexibleMetric> &flexibleMetrics) {
+          const std::map<MetricKind, std::unique_ptr<Metric>> &metrics) {
         metricSummary.observeMetrics(metrics);
         for (const auto &[metricKind, metric] : metrics) {
           if (metricKind == MetricKind::Kernel) {
@@ -298,6 +298,10 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
             throw std::runtime_error("MetricKind not supported");
           }
         }
+      };
+  auto appendFlexibleMetrics =
+      [&](json &metricsJson,
+          const std::map<std::string, FlexibleMetric> &flexibleMetrics) {
         for (const auto &[_, flexibleMetric] : flexibleMetrics) {
           const auto &valueName = flexibleMetric.getValueName(0);
           std::visit(
@@ -333,8 +337,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
         auto &metricsJson = (*jsonNode)["metrics"];
-        appendMetrics(metricsJson, treeNode.metricSet.metrics,
-                      treeNode.metricSet.flexibleMetrics);
+        appendMetrics(metricsJson, treeNode.metricSet.metrics);
+        appendFlexibleMetrics(metricsJson, treeNode.metricSet.flexibleMetrics);
         auto &childrenArray = (*jsonNode)["children"];
         childrenArray = json::array();
         const bool hasLinkedTargets =
@@ -350,8 +354,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         if (!hasLinkedTargets) {
           return;
         }
-        std::function<void(size_t, json &)> appendLinkedVirtualNode =
-            [&](size_t virtualNodeId, json &outNode) {
+        std::function<void(size_t, json &, json &)> appendLinkedVirtualNode =
+            [&](size_t virtualNodeId, json &outNode, json &parentMetricsJson) {
               const auto &virtualNode = virtualTree->getNode(virtualNodeId);
               const auto metricsIt =
                   treeNode.metricSet.linkedMetrics.find(virtualNodeId);
@@ -373,8 +377,13 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
                      treeNode.metricSet.linkedFlexibleMetrics.end())
                         ? flexibleIt->second
                         : emptyFlexibleMetrics;
-                appendMetrics(outNode["metrics"], linkedMetrics,
-                              linkedFlexibleMetrics);
+                appendMetrics(outNode["metrics"], linkedMetrics);
+                json &flexibleMetricsJson =
+                    (virtualNode.name == GraphState::metricTag)
+                        ? parentMetricsJson
+                        : outNode["metrics"];
+                appendFlexibleMetrics(flexibleMetricsJson,
+                                      linkedFlexibleMetrics);
               }
               outNode["children"] = json::array();
               auto &linkedChildren = outNode["children"];
@@ -382,13 +391,15 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
                   virtualNode.children.size());
               for (const auto &child : virtualNode.children) {
                 linkedChildren.push_back(json::object());
-                appendLinkedVirtualNode(child.id, linkedChildren.back());
+                appendLinkedVirtualNode(child.id, linkedChildren.back(),
+                                        outNode["metrics"]);
               }
             };
 
         for (const auto &virtualChild : virtualRootNode.children) {
           json linkedRootChildNode;
-          appendLinkedVirtualNode(virtualChild.id, linkedRootChildNode);
+          appendLinkedVirtualNode(virtualChild.id, linkedRootChildNode,
+                                  metricsJson);
           childrenArray.push_back(std::move(linkedRootChildNode));
         }
       });
