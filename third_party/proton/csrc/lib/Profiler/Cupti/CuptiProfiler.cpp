@@ -490,8 +490,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       }
       for (auto *data : profiler.dataSet) {
         auto contexts = data->getContexts();
-        if (!threadState.isMetricKernelLaunching)
-          contexts.push_back(name);
+        contexts.push_back(name);
+        if (threadState.isMetricKernelLaunching)
+          contexts.push_back(std::string(GraphState::metricTag));
         auto staticEntry =
             data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
         nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);

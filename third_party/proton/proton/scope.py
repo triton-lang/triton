@@ -114,9 +114,7 @@ def enter_scope(name: str, *, metrics: Optional[dict[str, Any]] = None) -> Optio
     libproton.enter_scope(id, name)
     if metrics:
         set_metric_kernels()
-        enter_state(ATTRIBUTE_METADATA_SCOPE_NAME)
         libproton.add_metrics(id, *transform_tensor_metrics(metrics))
-        exit_state()
     return id
 
 
@@ -131,8 +129,6 @@ def exit_scope(name: Optional[str] = None, *, metrics: Optional[dict[str, Any]] 
         name = popped_name
     if metrics:
         set_metric_kernels()
-        enter_state(ATTRIBUTE_METADATA_SCOPE_NAME)
         libproton.add_metrics(id, *transform_tensor_metrics(metrics))
-        exit_state()
     libproton.exit_scope(id, name)
     return id

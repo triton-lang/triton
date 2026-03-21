@@ -45,6 +45,7 @@ struct NodeStatus {
 struct GraphState {
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";
+  static constexpr const char *metricTag = "<metric_node>";
   struct NodeState {
     // The graph node id for this node
     uint64_t nodeId{};
