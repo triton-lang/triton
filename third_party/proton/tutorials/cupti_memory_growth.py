@@ -4,8 +4,9 @@
 
 Examples:
 
-  Compare Triton's packaged generic and Blackwell CUPTI builds:
+  On the target GPU machine, from a Triton checkout:
 
+    cd "$HOME/code/triton"
     python third_party/proton/tutorials/cupti_memory_growth.py \
       --output-dir /tmp/proton-cupti-compare \
       --iterations 200 \
@@ -21,7 +22,20 @@ Examples:
     `blackwell` runs. A CUPTI-specific host-memory issue should show up as
     larger RSS growth for one library variant while GPU memory stays flat.
 
-  Run a single configuration with an explicit CUPTI directory:
+  If you only copied this file to the target GPU machine:
+
+    python /tmp/cupti_memory_growth.py \
+      --output-dir /tmp/proton-cupti-compare \
+      --iterations 200 \
+      --warmup 5 \
+      --phase-every 1 \
+      --sample-every 20 \
+      --lifecycle step \
+      --kernels-per-step 32 \
+      --clear-completed-phases
+
+  Run a single configuration with an explicit CUPTI directory on the target GPU
+  machine:
 
     python third_party/proton/tutorials/cupti_memory_growth.py \
       --single-run \

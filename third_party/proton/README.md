@@ -256,10 +256,27 @@ Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivat
 
 The tutorial [`tutorials/cupti_memory_growth.py`](tutorials/cupti_memory_growth.py) compares process RSS across CUPTI library variants while running the same Triton + Proton workload. It is useful for isolating host-memory growth that appears only with a specific CUPTI build.
 
-Run the packaged generic and Blackwell CUPTI variants back-to-back:
+If you are iterating on the script from a laptop, do that there first, then sync either the Triton checkout or just `third_party/proton/tutorials/cupti_memory_growth.py` to the target GPU machine.
+
+On the target GPU machine, if you have a Triton checkout:
 
 ```bash
+cd "$HOME/code/triton"
 python third_party/proton/tutorials/cupti_memory_growth.py \
+  --output-dir /tmp/proton-cupti-compare \
+  --iterations 200 \
+  --warmup 5 \
+  --phase-every 1 \
+  --sample-every 20 \
+  --lifecycle step \
+  --kernels-per-step 32 \
+  --clear-completed-phases
+```
+
+If the target GPU machine only has an installed Triton wheel, copy the script there and run:
+
+```bash
+python /tmp/cupti_memory_growth.py \
   --output-dir /tmp/proton-cupti-compare \
   --iterations 200 \
   --warmup 5 \
