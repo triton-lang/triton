@@ -474,7 +474,7 @@ void dumpKernelMetricTrace(
               formatFlexibleMetricValue(metricValue.getValues()[0]);
         }
         element["args"]["metrics"] = std::move(metrics);
-      } 
+      }
       object["traceEvents"].push_back(element);
     }
   }
