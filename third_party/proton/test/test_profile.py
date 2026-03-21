@@ -871,7 +871,6 @@ def test_trace(tmp_path: pathlib.Path, device: str):
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Only CUDA/HIP backend supports multi-stream profiling")
 @pytest.mark.parametrize("profile_kind,suffix", [("tree", ".hatchet"), ("trace", ".chrome_trace")], ids=["tree", "trace"])
 def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, device: str):
 
@@ -879,27 +878,6 @@ def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, de
     def foo(x, y, size: tl.constexpr):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
-
-    def find_frame_by_name(node, name: str):
-        queue = [node]
-        while queue:
-            cur = queue.pop(0)
-            if cur["frame"]["name"] == name:
-                return cur
-            queue.extend(cur["children"])
-        return None
-
-    def has_positive_kernel_metric(node):
-        queue = [node]
-        while queue:
-            cur = queue.pop(0)
-            metrics = cur["metrics"]
-            if cur["frame"]["name"] == "foo" and (
-                metrics.get("time (ns)", 0) > 0 or int(metrics.get("count", 0)) > 0
-            ):
-                return True
-            queue.extend(cur["children"])
-        return False
 
     temp_file = tmp_path / f"test_multi_stream{suffix}"
     device_obj = torch.device(device)
@@ -936,11 +914,12 @@ def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, de
             assert len(matching_events) == 1
     else:
         root = data[0]
-        for scope_name in scope_names:
-            scope_frame = find_frame_by_name(root, scope_name)
-            assert scope_frame is not None
-            assert len(scope_frame["children"]) > 0
-            assert has_positive_kernel_metric(scope_frame)
+        scope_0 = next(child for child in root["children"] if child["frame"]["name"] == "stream_scope_0")
+        scope_1 = next(child for child in root["children"] if child["frame"]["name"] == "stream_scope_1")
+        assert len(scope_0["children"]) > 0
+        assert len(scope_1["children"]) > 0
+        assert scope_0["children"][0]["metrics"]["time (ns)"] > 0
+        assert scope_1["children"][0]["metrics"]["time (ns)"] > 0
 
 
 def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
