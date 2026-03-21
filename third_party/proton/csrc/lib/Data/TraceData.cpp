@@ -1,4 +1,5 @@
 #include "Data/TraceData.h"
+#include "Profiler/Graph.h"
 #include "TraceDataIO/TraceWriter.h"
 #include "Utility/MsgPackWriter.h"
 #include "nlohmann/json.hpp"
@@ -450,7 +451,7 @@ void dumpKernelMetricTrace(
 
       json element;
       if (flexibleMetrics) {
-        element["name"] = "metadata";
+        element["name"] = GraphState::metricTag;
       } else {
         element["name"] = contexts.back().name;
       }
