@@ -15,6 +15,8 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
 
+#include <optional>
+
 #define DEBUG_TYPE "ttgpu_to_llvm"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -54,205 +56,206 @@ struct TritonLLVMOpBuilder {
   // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
   // Operators
   template <typename... Args> LLVM::SIToFPOp inttofloat(Args &&...args) {
-    return builder->create<LLVM::SIToFPOp>(loc, std::forward<Args>(args)...);
+    return LLVM::SIToFPOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::IntToPtrOp inttoptr(Args &&...args) {
-    return builder->create<LLVM::IntToPtrOp>(loc, std::forward<Args>(args)...);
+    return LLVM::IntToPtrOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::PtrToIntOp ptrtoint(Args &&...args) {
-    return builder->create<LLVM::PtrToIntOp>(loc, std::forward<Args>(args)...);
+    return LLVM::PtrToIntOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ZExtOp zext(Args &&...args) {
-    return builder->create<LLVM::ZExtOp>(loc, std::forward<Args>(args)...);
+    return LLVM::ZExtOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::SExtOp sext(Args &&...args) {
-    return builder->create<LLVM::SExtOp>(loc, std::forward<Args>(args)...);
+    return LLVM::SExtOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::FPExtOp fpext(Args &&...args) {
-    return builder->create<LLVM::FPExtOp>(loc, std::forward<Args>(args)...);
+    return LLVM::FPExtOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::FPTruncOp fptrunc(Args &&...args) {
-    return builder->create<LLVM::FPTruncOp>(loc, std::forward<Args>(args)...);
+    return LLVM::FPTruncOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::TruncOp trunc(Args &&...args) {
-    return builder->create<LLVM::TruncOp>(loc, std::forward<Args>(args)...);
+    return LLVM::TruncOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::UDivOp udiv(Args &&...args) {
-    return builder->create<LLVM::UDivOp>(loc, std::forward<Args>(args)...);
+    return LLVM::UDivOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::SDivOp sdiv(Args &&...args) {
-    return builder->create<LLVM::SDivOp>(loc, std::forward<Args>(args)...);
+    return LLVM::SDivOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::URemOp urem(Args &&...args) {
-    return builder->create<LLVM::URemOp>(loc, std::forward<Args>(args)...);
+    return LLVM::URemOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::AddOp add(Args &&...args) {
-    return builder->create<LLVM::AddOp>(loc, std::forward<Args>(args)...);
+    return LLVM::AddOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::SubOp sub(Args &&...args) {
-    return builder->create<LLVM::SubOp>(loc, std::forward<Args>(args)...);
+    return LLVM::SubOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::FAddOp fadd(Args &&...args) {
-    return builder->create<LLVM::FAddOp>(loc, std::forward<Args>(args)...);
+    return LLVM::FAddOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::MulOp mul(Args &&...args) {
-    return builder->create<LLVM::MulOp>(loc, std::forward<Args>(args)...);
+    return LLVM::MulOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::FMulOp fmul(Args &&...args) {
-    return builder->create<LLVM::FMulOp>(loc, std::forward<Args>(args)...);
+    return LLVM::FMulOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::FMAOp fma(Args &&...args) {
-    return builder->create<LLVM::FMAOp>(loc, std::forward<Args>(args)...);
+    return LLVM::FMAOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::FNegOp neg(Args &&...args) {
-    return builder->create<LLVM::FNegOp>(loc, std::forward<Args>(args)...);
+    return LLVM::FNegOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::SMaxOp smax(Args &&...args) {
-    return builder->create<LLVM::SMaxOp>(loc, std::forward<Args>(args)...);
+    return LLVM::SMaxOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::UMaxOp umax(Args &&...args) {
-    return builder->create<LLVM::UMaxOp>(loc, std::forward<Args>(args)...);
+    return LLVM::UMaxOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::MaxNumOp fmax(Args &&...args) {
-    return builder->create<LLVM::MaxNumOp>(loc, std::forward<Args>(args)...);
+    return LLVM::MaxNumOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::SMinOp smin(Args &&...args) {
-    return builder->create<LLVM::SMinOp>(loc, std::forward<Args>(args)...);
+    return LLVM::SMinOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::UMinOp umin(Args &&...args) {
-    return builder->create<LLVM::UMinOp>(loc, std::forward<Args>(args)...);
+    return LLVM::UMinOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::MinNumOp fmin(Args &&...args) {
-    return builder->create<LLVM::MinNumOp>(loc, std::forward<Args>(args)...);
+    return LLVM::MinNumOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ShlOp shl(Args &&...args) {
-    return builder->create<LLVM::ShlOp>(loc, std::forward<Args>(args)...);
+    return LLVM::ShlOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::LShrOp lshr(Args &&...args) {
-    return builder->create<LLVM::LShrOp>(loc, std::forward<Args>(args)...);
+    return LLVM::LShrOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::AShrOp ashr(Args &&...args) {
-    return builder->create<LLVM::AShrOp>(loc, std::forward<Args>(args)...);
+    return LLVM::AShrOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::AndOp and_(Args &&...args) {
-    return builder->create<LLVM::AndOp>(loc, std::forward<Args>(args)...);
+    return LLVM::AndOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::XOrOp xor_(Args &&...args) {
-    return builder->create<LLVM::XOrOp>(loc, std::forward<Args>(args)...);
+    return LLVM::XOrOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::OrOp or_(Args &&...args) {
-    return builder->create<LLVM::OrOp>(loc, std::forward<Args>(args)...);
+    return LLVM::OrOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   LLVM::BitcastOp bitcast(Value val, Type type) {
-    return builder->create<LLVM::BitcastOp>(loc, type, val);
+    return LLVM::BitcastOp::create(*builder, loc, type, val);
   }
   template <typename... Args>
   LLVM::AddrSpaceCastOp addrspacecast(Args &&...args) {
-    return builder->create<LLVM::AddrSpaceCastOp>(loc,
-                                                  std::forward<Args>(args)...);
+    return LLVM::AddrSpaceCastOp::create(*builder, loc,
+                                         std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::GEPOp gep(Args &&...args) {
-    return builder->create<LLVM::GEPOp>(loc, std::forward<Args>(args)...);
+    return LLVM::GEPOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::InsertValueOp insert_val(Args &&...args) {
-    return builder->create<LLVM::InsertValueOp>(loc,
-                                                std::forward<Args>(args)...);
+    return LLVM::InsertValueOp::create(*builder, loc,
+                                       std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ExtractValueOp extract_val(Args &&...args) {
-    return builder->create<LLVM::ExtractValueOp>(loc,
-                                                 std::forward<Args>(args)...);
+    return LLVM::ExtractValueOp::create(*builder, loc,
+                                        std::forward<Args>(args)...);
   }
   template <typename... Args>
   LLVM::InsertElementOp insert_element(Args &&...args) {
-    return builder->create<LLVM::InsertElementOp>(loc,
-                                                  std::forward<Args>(args)...);
+    return LLVM::InsertElementOp::create(*builder, loc,
+                                         std::forward<Args>(args)...);
   }
   template <typename... Args>
   LLVM::ExtractElementOp extract_element(Args &&...args) {
-    return builder->create<LLVM::ExtractElementOp>(loc,
-                                                   std::forward<Args>(args)...);
+    return LLVM::ExtractElementOp::create(*builder, loc,
+                                          std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::LoadOp load(Args &&...args) {
-    return builder->create<LLVM::LoadOp>(loc, std::forward<Args>(args)...);
+    return LLVM::LoadOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::StoreOp store(Args &&...args) {
-    return builder->create<LLVM::StoreOp>(loc, std::forward<Args>(args)...);
+    return LLVM::StoreOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   LLVM::FCmpOp fcmp_ogt(Value lhs, Value rhs) {
-    return builder->create<LLVM::FCmpOp>(loc, builder->getI1Type(),
-                                         LLVM::FCmpPredicate::ogt, lhs, rhs);
+    return LLVM::FCmpOp::create(*builder, loc, builder->getI1Type(),
+                                LLVM::FCmpPredicate::ogt, lhs, rhs);
   }
   LLVM::FCmpOp fcmp_olt(Value lhs, Value rhs) {
-    return builder->create<LLVM::FCmpOp>(loc, builder->getI1Type(),
-                                         LLVM::FCmpPredicate::olt, lhs, rhs);
+    return LLVM::FCmpOp::create(*builder, loc, builder->getI1Type(),
+                                LLVM::FCmpPredicate::olt, lhs, rhs);
   }
   LLVM::FCmpOp fcmp_eq(Value lhs, Value rhs) {
-    return builder->create<LLVM::FCmpOp>(loc, builder->getI1Type(),
-                                         LLVM::FCmpPredicate::oeq, lhs, rhs);
+    return LLVM::FCmpOp::create(*builder, loc, builder->getI1Type(),
+                                LLVM::FCmpPredicate::oeq, lhs, rhs);
   }
   template <typename... Args> LLVM::ICmpOp icmp_eq(Args &&...args) {
-    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::eq,
-                                         std::forward<Args>(args)...);
+    return LLVM::ICmpOp::create(*builder, loc, LLVM::ICmpPredicate::eq,
+                                std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ICmpOp icmp_ne(Args &&...args) {
-    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
-                                         std::forward<Args>(args)...);
+    return LLVM::ICmpOp::create(*builder, loc, LLVM::ICmpPredicate::ne,
+                                std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ICmpOp icmp_slt(Args &&...args) {
-    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::slt,
-                                         std::forward<Args>(args)...);
+    return LLVM::ICmpOp::create(*builder, loc, LLVM::ICmpPredicate::slt,
+                                std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ICmpOp icmp_sle(Args &&...args) {
-    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sle,
-                                         std::forward<Args>(args)...);
+    return LLVM::ICmpOp::create(*builder, loc, LLVM::ICmpPredicate::sle,
+                                std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ICmpOp icmp_sgt(Args &&...args) {
-    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sgt,
-                                         std::forward<Args>(args)...);
+    return LLVM::ICmpOp::create(*builder, loc, LLVM::ICmpPredicate::sgt,
+                                std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ICmpOp icmp_sge(Args &&...args) {
-    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sge,
-                                         std::forward<Args>(args)...);
+    return LLVM::ICmpOp::create(*builder, loc, LLVM::ICmpPredicate::sge,
+                                std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ICmpOp icmp_ult(Args &&...args) {
-    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ult,
-                                         std::forward<Args>(args)...);
+    return LLVM::ICmpOp::create(*builder, loc, LLVM::ICmpPredicate::ult,
+                                std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ICmpOp icmp_ule(Args &&...args) {
-    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ule,
-                                         std::forward<Args>(args)...);
+    return LLVM::ICmpOp::create(*builder, loc, LLVM::ICmpPredicate::ule,
+                                std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ICmpOp icmp_ugt(Args &&...args) {
-    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ugt,
-                                         std::forward<Args>(args)...);
+    return LLVM::ICmpOp::create(*builder, loc, LLVM::ICmpPredicate::ugt,
+                                std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ICmpOp icmp_uge(Args &&...args) {
-    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::uge,
-                                         std::forward<Args>(args)...);
+    return LLVM::ICmpOp::create(*builder, loc, LLVM::ICmpPredicate::uge,
+                                std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::SelectOp select(Args &&...args) {
-    return builder->create<LLVM::SelectOp>(loc, std::forward<Args>(args)...);
+    return LLVM::SelectOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::AddressOfOp address_of(Args &&...args) {
-    return builder->create<LLVM::AddressOfOp>(loc, std::forward<Args>(args)...);
+    return LLVM::AddressOfOp::create(*builder, loc,
+                                     std::forward<Args>(args)...);
   }
-  mlir::gpu::BarrierOp barrier() {
-    return builder->create<mlir::gpu::BarrierOp>(loc);
+  mlir::triton::gpu::BarrierOp barrier(triton::gpu::AddrSpace addrspace) {
+    return mlir::triton::gpu::BarrierOp::create(*builder, loc, addrspace);
   }
   template <typename... Args> LLVM::UndefOp undef(Args &&...args) {
-    return builder->create<LLVM::UndefOp>(loc, std::forward<Args>(args)...);
+    return LLVM::UndefOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::ZeroOp null(Args &&...args) {
-    return builder->create<LLVM::ZeroOp>(loc, std::forward<Args>(args)...);
+    return LLVM::ZeroOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   template <typename... Args> LLVM::CallOp call(Args &&...args) {
-    return builder->create<LLVM::CallOp>(loc, std::forward<Args>(args)...);
+    return LLVM::CallOp::create(*builder, loc, std::forward<Args>(args)...);
   }
   // Constants
   Value int_val(short bitwidth, int64_t val) {
     Type ty = builder->getIntegerType(bitwidth);
-    return builder->create<LLVM::ConstantOp>(loc, ty,
-                                             builder->getIntegerAttr(ty, val));
+    return LLVM::ConstantOp::create(*builder, loc, ty,
+                                    builder->getIntegerAttr(ty, val));
   }
   Value i1_val(int64_t val) { return int_val(1, val); }
   Value true_val() { return int_val(1, true); }
@@ -330,7 +333,7 @@ namespace triton {
 namespace gpu {
 
 std::pair<SmallVector<LocalMemOpTile>, SmallVector<LocalMemOpTile>>
-getSrcDstTiles(const TargetInfoBase &targetInfo, int bitwidth);
+getSrcDstTiles(const TargetInfoBase &targetInfo, int bitwidth, bool crossCTA);
 
 Type getFunctionType(Type resultType, ValueRange operands);
 
@@ -341,6 +344,21 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
 
 // Multiply a square layout with 1 input and output dimension with a vector
 Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x);
+
+// Whether the convert layout should be forced to use warp shuffles.
+bool cvtAlwaysUseWarpShuffle(triton::gpu::ConvertLayoutOp cvt);
+
+// Return a predicate that is true only if the current thread holds unique data,
+// according to freeVarsMask. The predicate may be null to indicate no
+// predication is required.
+Value emitRedundantThreadPredicate(
+    const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, Location loc,
+    const TargetInfoBase &targetInfo);
+
+// Takes two values that may be boolean, or null to represent constant True.
+Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b);
+
 } // namespace gpu
 
 } // namespace triton
@@ -348,15 +366,49 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x);
 namespace LLVM {
 using namespace mlir::triton;
 
+/// Represents a shared memory allocation for tensor operations.
+///
+/// For non-partitioned tensors, this contains a single base pointer.
+/// For partitioned tensors (PartitionedEncodingAttr), this contains multiple
+/// base pointers, one per partition.
 class SharedMemoryObject {
 public:
+  /// Single-base constructor (for non-partitioned tensors)
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> offsets);
 
+  /// Multi-base constructor (for partitioned tensors)
+  SharedMemoryObject(ArrayRef<Value> bases, Type baseElemType,
+                     ArrayRef<Value> offsets);
+
+  /// Single-base constructor
   SharedMemoryObject(Value base, Type baseElemType, int64_t rank, Location loc,
                      RewriterBase &rewriter);
 
+  /// Multi-base constructor with zero offsets
+  SharedMemoryObject(ArrayRef<Value> bases, Type baseElemType, int64_t rank,
+                     Location loc, RewriterBase &rewriter);
+
   SmallVector<Value> getOffsets() const { return offsets; }
-  Value getBase() const { return base; }
+
+  /// Returns the single base pointer.
+  /// IMPORTANT: This asserts that there is exactly one base. For partitioned
+  /// tensors (multiple bases), use getBases() instead.
+  /// Callers should use getBases() and handle all partitions appropriately.
+  Value getBase() const {
+    assert(bases.size() == 1 &&
+           "getBase() called on partitioned tensor with multiple bases. "
+           "Use getBases() and handle all partitions.");
+    return bases[0];
+  }
+
+  /// Returns all base pointers. For partitioned tensors, returns one base
+  /// per partition.
+  ArrayRef<Value> getBases() const { return bases; }
+
+  /// Returns the number of base pointers (1 for non-partitioned, N for
+  /// partitioned).
+  size_t getNumBases() const { return bases.size(); }
+
   Type getBaseElemType() const { return baseElemType; }
 
   SmallVector<Value> getElems() const;
@@ -386,11 +438,10 @@ public:
     return offsets[dim];
   }
 
-  // TODO(Keren): deprecate the method once AMD backend has cleaned up
-  Value getBaseBeforeSlice(int dim, Location loc, RewriterBase &rewriter) const;
-
 private:
-  Value base; // i32 ptr. The start address of the shared memory object.
+  SmallVector<Value>
+      bases; // Shared memory base pointers. One for non-partitioned tensors,
+             // multiple for partitioned tensors (one per partition).
   Type baseElemType;
   SmallVector<Value>
       offsets; // i32 int. The offsets are zero at the initial allocation.
@@ -435,8 +486,14 @@ Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape);
 
+Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
+                triton::gpu::LinearEncodingAttr encoding, StringAttr dimName);
+
 size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
                  ArrayRef<unsigned> order);
+
+GlobalOp getOrInsertGlobalConstant(RewriterBase &rewriter, ModuleOp module,
+                                   Type type, Attribute content, StringRef key);
 
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
                         StringRef content);
@@ -445,13 +502,28 @@ Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp);
 
 Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &targetInfo,
-                          FunctionOpInterface funcOp, Value allocOffset);
+                          FunctionOpInterface funcOp, Value allocOffset = {});
 
 Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
-                           FunctionOpInterface funcOp);
+                           const TargetInfoBase &targetInfo,
+                           FunctionOpInterface funcOp, Value allocOffset = {},
+                           bool currentCTA = true);
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &target, Operation *op);
+
+/// Returns the allocation offsets for the given operation.
+/// For non-partitioned tensors, returns a single offset.
+/// For partitioned tensors, returns multiple offsets (one per partition).
+SmallVector<int64_t> getPartitionOffsets(Operation *op);
+
+/// Returns all shared memory bases for the given operation.
+/// For non-partitioned tensors, returns a single base pointer.
+/// For partitioned tensors, returns multiple base pointers (one per
+/// partition).
+SmallVector<Value> getSharedMemoryBases(Location loc, RewriterBase &rewriter,
+                                        const TargetInfoBase &target,
+                                        Operation *op);
 
 // -----------------------------------------------------------------------
 // MXFP utilities
@@ -466,6 +538,10 @@ Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
 // -----------------------------------------------------------------------
 // Hardware Indices
 // -----------------------------------------------------------------------
+
+// If an operation is contained within a warp specialize region, this returns
+// the warp ID offset of that warpgroup.
+std::optional<int> getWarpGroupStartWarpId(Block *block);
 
 // If an operation is contained within a warp specialize region, this returns
 // the thread ID offset of that warpgroup.
@@ -488,7 +564,6 @@ using ::mlir::LLVM::delinearize;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
-using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -520,27 +595,29 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
-// Emits the required padding given shared memory offset
-// - If `offsetInBytes` is true, smemOffset and padding is assumed in bytes.
-// - If false, smemOffset and padding are assumed to be scaled by element
-// bitwidth, in which case, `bitwidth` is not used.
-Value emitPadding(Location loc, RewriterBase &rewriter,
-                  triton::gpu::PaddedSharedEncodingAttr layout,
-                  unsigned bitwidth, Value smemOffset, bool offsetInBytes);
+// Calculates the required interval chunking and padding logical-shift values
+// for shared memory padding, depending on elements' bit width and whether
+// offsets count the number of bytes or number of elements.
+SmallVector<std::pair<unsigned, unsigned>>
+getPaddedSharedShifts(Attribute enc, unsigned bitwidth, bool offsetInBytes);
+
+// Applies padding to base offset values in shared memory.
+Value applyPadding(Location loc, RewriterBase &rewriter, Value baseOffset,
+                   ArrayRef<std::pair<unsigned, unsigned>> shifts);
+uint32_t applyPadding(uint32_t baseOffset,
+                      ArrayRef<std::pair<unsigned, unsigned>> shifts);
 
 // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
 // We might want to merge them at some point, but having to support
 // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
 // Lowers to st when valArrays is empty, and to ld when it is not,
 // and returns the output values.
-// calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
-// and computes a new offset (mlir::Value) by applying padding based on
-// shared memory layout.
+// `paddingShifts` encodes shared memory padding if any.
 SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
-                Type llvmElemTy, Value smemBase,
-                std::function<Value(Value)> calcPaddedOffset,
+                Type llvmElemTy, ArrayRef<Value> smemBases,
+                ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
                 std::optional<int> maybeMaxVecElems = {},
@@ -552,17 +629,19 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
 // calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
 // and computes a new offset (mlir::Value) by applying padding based on
 // shared memory layout.
-SmallVector<Value> lowerLdSt(
-    Location loc, MLIRContext *ctx, LinearLayout cvt,
-    ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase,
-    std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
-    uint64_t maskSpanAffineOffset, Value laneId, Value warpId,
-    RewriterBase &rewriter, const TargetInfoBase &targetInfo,
-    std::optional<int> maybeMaxVecElems,
-    std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
-                                     Value, int, VectorType)>
-        lowerInst);
+// cvt: Maps (reg, lane, warp, block) → (offset[, partition]).
+SmallVector<Value>
+lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
+          ArrayRef<Value> valsArray, // Input for store, output for load
+          Type llvmElemTy, ArrayRef<Value> smemBases,
+          ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
+          Value affineOffset, uint64_t maskSpanAffineOffset, Value laneId,
+          Value warpId, RewriterBase &rewriter,
+          const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
+          std::function<SmallVector<Value>(RewriterBase &, Location,
+                                           ArrayRef<Value>, Value, int,
+                                           VectorType, std::optional<Value>)>
+              lowerInst);
 
 // Lower local_load/local_store via ld.shared/st.shared
 SmallVector<Value>
@@ -604,10 +683,10 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
 
-void transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
-                                  const TargetInfoBase &targetInfo,
-                                  const LLVMTypeConverter *typeConverter,
-                                  RewriterBase &rewriter);
+void transferSwizzlingLocalMem(triton::gpu::ConvertLayoutOp op, Value src,
+                               const TargetInfoBase &targetInfo,
+                               const LLVMTypeConverter *typeConverter,
+                               RewriterBase &rewriter);
 
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
                                     ArrayRef<Value> args,
@@ -621,6 +700,14 @@ SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
                           mlir::TypeID::get<TerminatorOp>(), loc);
 }
 
+// #prevBlock
+// if (condition) {
+//   #ifBlock
+// }
+// #thenBlock
+std::tuple</*prevBlock=*/Block *, /*ifBlock=*/Block *, /*thenBlock=*/Block *>
+createIfBlock(RewriterBase &b, Location loc, Value cnd);
+
 void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                                  ConversionPatternRewriter &rewriter,
                                  SmallVector<Value> &resultVals,
@@ -628,6 +715,16 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                                  Value threadPred,
                                  const TargetInfoBase &targetInfo,
                                  const LLVMTypeConverter *typeConverter);
+
+// -----------------------------------------------------------------------
+// FuncOp conversion utilities
+// -----------------------------------------------------------------------
+void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
+                          SmallVectorImpl<NamedAttribute> &result);
+triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
+                           ConversionPatternRewriter &rewriter,
+                           const TargetInfoBase &targetInfo);
+void handleArgPtrDatatype(triton::FuncOp funcOp, LLVM::LLVMFuncOp &llvmFuncOp);
 } // namespace mlir
 
 #endif

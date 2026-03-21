@@ -25,7 +25,7 @@ namespace mlir {
 namespace triton {
 
 struct GlobalMemory : public SideEffects::Resource::Base<GlobalMemory> {
-  StringRef getName() final { return "<GlobalMemory>"; }
+  StringRef getName() const final { return "<GlobalMemory>"; }
 };
 
 class DialectInferLayoutInterface
@@ -101,7 +101,19 @@ public:
   virtual LogicalResult
   verifyTensorLayout(Attribute layout, RankedTensorType type, Operation *op,
                      function_ref<InFlightDiagnostic()> emitError) const = 0;
+
+  virtual LogicalResult
+  verifyMemDescLayout(Attribute layout, Type type, Operation *op,
+                      function_ref<InFlightDiagnostic()> emitError) const = 0;
 };
+
+// Descriptor gather and scatter have restrictions on the tile sizes.
+LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
+                                    ShapedType resultType,
+                                    ShapedType indicesType);
+LogicalResult verifyDescriptorLoadStoreOp(Operation *op,
+                                          TensorDescInterface desc,
+                                          ShapedType tensor);
 
 } // namespace triton
 } // namespace mlir

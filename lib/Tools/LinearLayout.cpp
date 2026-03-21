@@ -65,56 +65,6 @@ void dumpMatrix(uint64_t *m, int numRows, int numCols) {
   }
 }
 
-// Build a matrix of size sum(outDimSizeLog2) x sum(inDimSizeLog2) representing
-// the bases of the given layout.  This can then be used by f2reduce.
-//
-// This function is called from the constructor of LinearLayout, so be careful
-// not to use any functions that create LLs in here.
-std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
-  int numRows = layout.getTotalOutDimSizeLog2();
-  int numCols = layout.getTotalInDimSizeLog2();
-
-  // Don't handle giant LLs.  This makes some things easier; for example, each
-  // row can be a single uint64_t.
-  assert(numCols <= 64 && "LinearLayout too large");
-  assert(numRows <= 64 && "LinearLayout too large");
-
-  // Suppose we have a layout specified by the following values.
-  //
-  //   L(0,1) = (0b01, 0b1)
-  //   L(0,2) = (0b10, 0b0)
-  //   L(1,0) = (0b10, 0b0)
-  //   L(2,0) = (0b11, 0b0)
-  //
-  // We will create one column per entry above.  The max bit width of the
-  // codomain is (2,1), so our matrix will have 2+1=3 rows.  The final matrix
-  // will be
-  //
-  //  | L(0,1)[0] L(0,2)[0] L(1,0)[0] L(2,0)[0] |   | 0b1001 |
-  //  |    ↓         ↓         ↓         ↓      |   | 0b0111 |
-  //  | L(0,1)[1] L(0,2)[1] L(1,0)[1] L(2,0)[1] | = | 0b1000 |
-  //  |    ↓         ↓         ↓         ↓      |
-  //
-  // Note `new uint64_t[n]()` is zero-initialized, but `new uint64_t[n]` is not.
-  std::unique_ptr<uint64_t[]> m(new uint64_t[numRows]());
-  int r = 0;
-  for (StringAttr outDim : layout.getOutDimNames()) {
-    int c = 0;
-    for (StringAttr inDim : layout.getInDimNames()) {
-      for (int i = 0; i < layout.getInDimSizeLog2(inDim); i++) {
-        uint64_t basis = layout.getBasis(inDim, i, outDim);
-        for (int j = 0; j < layout.getOutDimSizeLog2(outDim); j++) {
-          m[r + j] |= ((basis >> j) & 1) << c;
-        }
-        c++;
-      }
-    }
-    r += layout.getOutDimSizeLog2(outDim);
-  }
-
-  return m;
-}
-
 // Compute the rank of the matrix formed by taking the bases for the given
 // outDim as columns.  In other words, finds the number of linearly-independent
 // bases for this output dimension.
@@ -213,7 +163,6 @@ LinearLayout::LinearLayout(BasesT bases,
 
 std::optional<std::string>
 LinearLayout::checkInvariants(bool requireSurjective) {
-  LDBG("checkInvariants: " << toString());
   // Check that basis values are non-negative.
   for (const auto &[inDim, inDimBases] : bases) {
     for (const auto &basis : inDimBases) {
@@ -340,7 +289,7 @@ int32_t LinearLayout::getOutDimIndex(StringAttr outDim) const {
 
 int32_t LinearLayout::getInDimSizeLog2(StringAttr inDim) const {
   auto it = bases.find(inDim);
-  assert(it != bases.end());
+  assert(it != bases.end() && "inDim not found in layout");
   return it->second.size();
 }
 
@@ -353,7 +302,7 @@ int32_t LinearLayout::getTotalInDimSizeLog2() const {
 
 int32_t LinearLayout::getOutDimSizeLog2(StringAttr outDim) const {
   auto it = outDims.find(outDim);
-  assert(it != outDims.end());
+  assert(it != outDims.end() && "outDim not found in layout");
   return llvm::Log2_32(it->second);
 }
 
@@ -510,6 +459,40 @@ LinearLayout LinearLayout::reshapeOuts(
   }
 
   return LinearLayout(std::move(newBases), newOutDims, isSurjective());
+}
+
+LinearLayout LinearLayout::resizeInDim(StringAttr inDim,
+                                       int32_t newSize) const {
+  assert(llvm::isPowerOf2_32(newSize));
+  assert(newSize <= getInDimSize(inDim));
+  auto newBases = bases;
+  newBases[inDim].resize(llvm::Log2_32(newSize));
+  return LinearLayout(std::move(newBases), getOutDims(),
+                      /*requiresSurjective=*/false);
+}
+
+LinearLayout LinearLayout::resizeOutDim(StringAttr outDim,
+                                        int32_t newSize) const {
+  assert(llvm::isPowerOf2_32(newSize));
+  assert(newSize <= getOutDimSize(outDim));
+  auto newBases = bases;
+  // Zero-out the basis vectors that are greater than or equal to the new size
+  for (auto &[inDim, inDimBases] : newBases) {
+    for (auto &basis : inDimBases) {
+      auto &b = basis[getOutDimIndex(outDim)];
+      if (b >= newSize) {
+        b = 0;
+      }
+    }
+  }
+  auto outDims = getOutDims();
+  for (auto &[dim, size] : outDims) {
+    if (dim == outDim) {
+      size = newSize;
+    }
+  }
+  return LinearLayout(std::move(newBases), outDims,
+                      /*requiresSurjective=*/false);
 }
 
 LinearLayout LinearLayout::concatIns(const LinearLayout &other) const {
@@ -782,9 +765,9 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
 
 bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
   for (StringAttr dim : dimNames) {
-    if (!llvm::is_contained(getInDimNames(), dim) &&
-        !llvm::is_contained(getOutDimNames(), dim)) {
-      return false;
+    if (!hasInDim(dim) || !hasOutDim(dim)) {
+      llvm::report_fatal_error(
+          ("dim " + dim.str() + " must be present in the layout").c_str());
     }
   }
 
@@ -816,6 +799,10 @@ bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
 
 std::optional<LinearLayout>
 LinearLayout::quotient(ArrayRef<StringAttr> dimNames) const {
+  if (llvm::any_of(dimNames,
+                   [this](StringAttr dim) { return !hasInDim(dim); })) {
+    return std::nullopt;
+  }
   if (!isTrivialOver(dimNames)) {
     return std::nullopt;
   }
@@ -1129,7 +1116,7 @@ LinearLayout LinearLayout::pseudoinvert() const {
   return identity.invertAndCompose(*this);
 }
 
-LinearLayout LinearLayout::unsqueezeIn(StringAttr dim) const {
+LinearLayout LinearLayout::squeezeIns(StringAttr dim) const {
   assert(getInDimSize(dim) == 1);
   SmallVector<std::pair<StringAttr, int32_t>> newInDims;
   for (auto inDim : getInDimNames()) {
@@ -1140,7 +1127,7 @@ LinearLayout LinearLayout::unsqueezeIn(StringAttr dim) const {
   return reshapeIns(newInDims);
 }
 
-LinearLayout LinearLayout::unsqueezeOut(StringAttr dim) const {
+LinearLayout LinearLayout::squeezeOuts(StringAttr dim) const {
   assert(getOutDimSize(dim) == 1);
   SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
   for (auto [outDim, outDimSize] : getOutDims()) {
@@ -1148,7 +1135,7 @@ LinearLayout LinearLayout::unsqueezeOut(StringAttr dim) const {
       newOutDims.push_back({outDim, outDimSize});
     }
   }
-  return LinearLayout(bases, newOutDims, isSurjective());
+  return reshapeOuts(newOutDims);
 }
 
 llvm::MapVector<StringAttr, int32_t>
@@ -1368,6 +1355,56 @@ std::string ColumnAction::toString() const {
   ret += join(action, ", ");
   ret += "], " + inDim.str() + ", " + std::to_string(inSizeLog2) + ")";
   return ret;
+}
+
+// Build a matrix of size sum(outDimSizeLog2) x sum(inDimSizeLog2) representing
+// the bases of the given layout.  This can then be used by f2reduce.
+//
+// This function is called from the constructor of LinearLayout, so be careful
+// not to use any functions that create LLs in here.
+std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
+  int numRows = layout.getTotalOutDimSizeLog2();
+  int numCols = layout.getTotalInDimSizeLog2();
+
+  // Don't handle giant LLs.  This makes some things easier; for example, each
+  // row can be a single uint64_t.
+  assert(numCols <= 64 && "LinearLayout too large");
+  assert(numRows <= 64 && "LinearLayout too large");
+
+  // Suppose we have a layout specified by the following values.
+  //
+  //   L(0,1) = (0b01, 0b1)
+  //   L(0,2) = (0b10, 0b0)
+  //   L(1,0) = (0b10, 0b0)
+  //   L(2,0) = (0b11, 0b0)
+  //
+  // We will create one column per entry above.  The max bit width of the
+  // codomain is (2,1), so our matrix will have 2+1=3 rows.  The final matrix
+  // will be
+  //
+  //  | L(0,1)[0] L(0,2)[0] L(1,0)[0] L(2,0)[0] |   | 0b1001 |
+  //  |    ↓         ↓         ↓         ↓      |   | 0b0111 |
+  //  | L(0,1)[1] L(0,2)[1] L(1,0)[1] L(2,0)[1] | = | 0b1000 |
+  //  |    ↓         ↓         ↓         ↓      |
+  //
+  // Note `new uint64_t[n]()` is zero-initialized, but `new uint64_t[n]` is not.
+  std::unique_ptr<uint64_t[]> m(new uint64_t[numRows]());
+  int r = 0;
+  for (StringAttr outDim : layout.getOutDimNames()) {
+    int c = 0;
+    for (StringAttr inDim : layout.getInDimNames()) {
+      for (int i = 0; i < layout.getInDimSizeLog2(inDim); i++) {
+        uint64_t basis = layout.getBasis(inDim, i, outDim);
+        for (int j = 0; j < layout.getOutDimSizeLog2(outDim); j++) {
+          m[r + j] |= ((basis >> j) & 1) << c;
+        }
+        c++;
+      }
+    }
+    r += layout.getOutDimSizeLog2(outDim);
+  }
+
+  return m;
 }
 
 } // namespace mlir::triton

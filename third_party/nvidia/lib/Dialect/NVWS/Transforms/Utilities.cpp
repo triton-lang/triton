@@ -12,10 +12,10 @@ namespace mlir::triton::nvws {
 Operation *createAlloc(OpBuilder &builder, Location loc,
                        MemDescType memDescType, Value src) {
   if (isa<SharedMemorySpaceAttr>(memDescType.getMemorySpace())) {
-    return builder.create<LocalAllocOp>(loc, memDescType, src);
+    return LocalAllocOp::create(builder, loc, memDescType, src);
   } else {
     assert(isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace()));
-    return builder.create<TMEMAllocOp>(loc, memDescType, src);
+    return TMEMAllocOp::create(builder, loc, memDescType, src);
   }
 }
 
@@ -23,7 +23,7 @@ ArefCreateOp createArefCreateOp(OpBuilder &builder, ArrayRef<Type> arefTypes,
                                 ValueRange allocOps, Location loc) {
   auto ctx = builder.getContext();
   auto arefTy = ArefType::get(ctx, TypeArrayAttr::get(ctx, arefTypes));
-  return builder.create<ArefCreateOp>(loc, arefTy, allocOps);
+  return ArefCreateOp::create(builder, loc, arefTy, allocOps);
 }
 
 int getArefDepth(MemDescType bufTy) {
@@ -52,6 +52,14 @@ MemDescType getArefMultiBufferedType(MemDescType bufTy, int depth) {
   return gpu::MemDescType::get(bufferShape, bufTy.getElementType(),
                                bufTy.getEncoding(), bufTy.getMemorySpace(),
                                /*mutableMemory*/ true);
+}
+
+scf::ForOp getOuterWSLoop(scf::ForOp innerFor) {
+  auto wsLoop = innerFor;
+  while (wsLoop && !wsLoop->hasAttr(triton::kWarpSpecializeAttrName)) {
+    wsLoop = wsLoop->getParentOfType<scf::ForOp>();
+  }
+  return wsLoop;
 }
 
 } // namespace mlir::triton::nvws

@@ -8,6 +8,7 @@
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -209,80 +210,7 @@ maybeGetAssumedRangeHelper(Operation *assumption, Value anchor, Block *useBlock,
   if (!useBlock || !domInfo->dominates(cmpOp->getBlock(), useBlock))
     return {};
 
-  bool isSigned = true;
-  switch (cmpOp.getPredicate()) {
-  case arith::CmpIPredicate::uge:
-  case arith::CmpIPredicate::ugt:
-  case arith::CmpIPredicate::ule:
-  case arith::CmpIPredicate::ult:
-    isSigned = false;
-  default:
-    break;
-  }
-
-  bool anchorIsLhs = cmpOp.getLhs() == anchor;
-  auto maybeConstantIntValue = getConstantIntValue(
-      getAsOpFoldResult(anchorIsLhs ? cmpOp.getRhs() : cmpOp.getLhs()));
-  if (auto constValue = maybeConstantIntValue) {
-    unsigned bitWidth = ConstantIntRanges::getStorageBitwidth(anchor.getType());
-    assert(bitWidth > 0 && "expected non-zero bitwdith");
-    APInt apVal = {bitWidth, static_cast<uint64_t>(*constValue), isSigned};
-    APInt min, max;
-    if (isSigned) {
-      min = APInt::getSignedMinValue(bitWidth);
-      if (llvm::isa_and_nonnull<mlir::triton::GetProgramIdOp,
-                                mlir::triton::GetNumProgramsOp>(
-              anchor.getDefiningOp())) {
-        min = APInt::getZero(bitWidth);
-      } else
-        min = APInt::getSignedMinValue(bitWidth);
-      max = APInt::getSignedMaxValue(bitWidth);
-    } else {
-      min = APInt::getMinValue(bitWidth);
-      max = APInt::getMaxValue(bitWidth);
-    }
-
-    switch (cmpOp.getPredicate()) {
-    case arith::CmpIPredicate::eq:
-      return mlir::ConstantIntRanges::constant(apVal);
-    case arith::CmpIPredicate::uge:
-    case arith::CmpIPredicate::sge: {
-      // K >= apVal implies K ∈ [apVal, max]
-      if (anchorIsLhs)
-        return mlir::ConstantIntRanges::range(apVal, max, isSigned);
-      // apVal >= K implies K ∈ [min, apVal]
-      return mlir::ConstantIntRanges::range(min, apVal, isSigned);
-    }
-    case arith::CmpIPredicate::ugt:
-    case arith::CmpIPredicate::sgt: {
-      // K > apVal implies K >= apVal + 1 implies K ∈ [apVal + 1, max]
-      if (anchorIsLhs)
-        return mlir::ConstantIntRanges::range(apVal + 1, max, isSigned);
-      // apVal > K implies apVal - 1 >= K implies K ∈ [min, apVal - 1]
-      return mlir::ConstantIntRanges::range(min, apVal - 1, isSigned);
-    }
-    case arith::CmpIPredicate::ule:
-    case arith::CmpIPredicate::sle: {
-      // K <= apVal implies K ∈ [min, apVal]
-      if (anchorIsLhs)
-        return mlir::ConstantIntRanges::range(min, apVal, isSigned);
-      // apVal <= K implies K ∈ [apVal, max]
-      return mlir::ConstantIntRanges::range(apVal, max, isSigned);
-    }
-    case arith::CmpIPredicate::ult:
-    case arith::CmpIPredicate::slt: {
-      // K < apVal implies K <= apVal -1 implies K ∈ [min, apVal - 1]
-      if (anchorIsLhs)
-        return mlir::ConstantIntRanges::range(min, apVal - 1, isSigned);
-      // apVal < K implies apVal + 1 <= K implies K ∈ [apVal + 1, max]
-      return mlir::ConstantIntRanges::range(apVal + 1, max, isSigned);
-    }
-    default:
-      emitRemark(cmpOp.getLoc(), "unsupported cmp predicate for assumption");
-      return {};
-    }
-  }
-  return {};
+  return triton::getBoundFromCmpOp(cmpOp, anchor);
 }
 
 std::optional<ConstantIntRanges>
@@ -346,14 +274,15 @@ TritonIntegerRangeAnalysis::maybeGetTripCount(LoopLikeOpInterface loop) {
         const dataflow::IntegerValueRangeLattice *lattice =
             getLatticeElementFor(getProgramPointBefore(block), value);
         if (lattice != nullptr && !lattice->getValue().isUninitialized())
-          return getUpper ? lattice->getValue().getValue().smax()
-                          : lattice->getValue().getValue().smin();
+          return getUpper.value_or(false)
+                     ? lattice->getValue().getValue().smax()
+                     : lattice->getValue().getValue().smin();
       }
     }
     if (defaultVal)
       return *defaultVal;
-    return getUpper ? APInt::getSignedMaxValue(width)
-                    : APInt::getSignedMinValue(width);
+    return getUpper.value_or(false) ? APInt::getSignedMaxValue(width)
+                                    : APInt::getSignedMinValue(width);
   };
 
   Block *block = iv->getParentBlock();
@@ -702,7 +631,7 @@ void TritonIntegerRangeAnalysis::initializeFuncOp(tt::FuncOp op) {
 
 void TritonIntegerRangeAnalysis::visitRegionSuccessors(
     ProgramPoint *point, RegionBranchOpInterface branch,
-    RegionBranchPoint successor,
+    RegionSuccessor successor,
     ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) {
   LLVM_DEBUG({
     DBGS() << "Visit Region Succesors of ";
@@ -783,24 +712,34 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
 
     unsigned firstIndex = 0;
     if (inputs.size() != lattices.size()) {
-      if (!point->isBlockStart()) {
+      auto appendNonSuccessorInputs = [&](ValueRange allInputs) {
+        SmallVector<Value> nonSuccessorInputs;
+        SmallVector<dataflow::IntegerValueRangeLattice *> nonSuccessorLattices;
+        auto appendRange = [&](unsigned start, unsigned end) {
+          for (unsigned i = start; i < end; ++i) {
+            nonSuccessorInputs.push_back(allInputs[i]);
+            nonSuccessorLattices.push_back(lattices[i]);
+          }
+        };
+
+        appendRange(0, firstIndex);
+        appendRange(firstIndex + inputs.size(), allInputs.size());
+
+        if (!nonSuccessorInputs.empty())
+          visitNonControlFlowArguments(branch, successor, nonSuccessorInputs,
+                                       nonSuccessorLattices);
+      };
+
+      if (successor.isParent()) {
         if (!inputs.empty()) {
           firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
         }
-        visitNonControlFlowArguments(branch,
-                                     RegionSuccessor(branch->getResults().slice(
-                                         firstIndex, inputs.size())),
-                                     lattices, firstIndex);
+        appendNonSuccessorInputs(branch->getResults());
       } else {
         if (!inputs.empty()) {
           firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();
         }
-        Region *region = point->getBlock()->getParent();
-        visitNonControlFlowArguments(
-            branch,
-            RegionSuccessor(region, region->getArguments().slice(
-                                        firstIndex, inputs.size())),
-            lattices, firstIndex);
+        appendNonSuccessorInputs(successor.getSuccessor()->getArguments());
       }
     }
 
@@ -808,7 +747,14 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
          llvm::zip(*operands, ArrayRef(lattices).drop_front(firstIndex))) {
       std::pair loopArgLat = {loop, argLat};
       // If we've "run the loop" #tripcount times, stop propagating.
-      if (loop && loopVisits[loopArgLat] >= loopTripCounts[loop])
+      bool reachedTripCount =
+          loop && loopVisits[loopArgLat] >= loopTripCounts[loop];
+      // However, if trip count is 0, we still need to initialize loop-carried
+      // values from the initial iter_args (so loop results equal initial
+      // values).
+      bool needsZeroTripInit = loop && loopTripCounts[loop] == 0 &&
+                               argLat->getValue().isUninitialized();
+      if (reachedTripCount && !needsZeroTripInit)
         continue;
 
       ChangeResult changed;
@@ -836,7 +782,9 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
       // lattice because otherwise we will over count the number of visits
       // (since not all iter_arg lattices are updated/propagated on each
       // visit).
-      if (loop && changed == ChangeResult::Change)
+      // For initial iterations of zero trip count loops we do not increment
+      // the visit count to avoid overcounting.
+      if (loop && changed == ChangeResult::Change && !needsZeroTripInit)
         ++loopVisits[loopArgLat];
     }
   }

@@ -12,7 +12,6 @@ import triton.profiler.language as pl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.hopper import (
-    fence_async_shared,
     mbarrier,
     tma,
     warpgroup_mma,
@@ -59,6 +58,12 @@ def config_helper(description: str):
         default="0, 2",
         help="Comma-separated list of warp IDs for warp sampling (default: '0, 2')",
     )
+    parser.add_argument(
+        "--gmem_buffer",
+        action="store_true",
+        default=False,
+        help="Use global memory as the internal buffer during profiling (default: False).",
+    )
 
     args = parser.parse_args()
 
@@ -69,6 +74,11 @@ def config_helper(description: str):
     if args.increase_accuracy:
         opts = "clock32,time_shift"
 
+    if args.gmem_buffer:
+        buf = "global"
+    else:
+        buf = "shared"
+
     # Set up profiling mode based on warp sampling preferences
     if args.warp_sampling:
         # Selective warp sampling allows capturing more events within buffer constraints
@@ -77,10 +87,11 @@ def config_helper(description: str):
             optimizations=opts,
             sampling_strategy="selective",
             sampling_options=args.warp_ids,
+            buffer_type=buf,
         )
     else:
         # Profile all warps - provides complete picture but uses more buffer space
-        mode = proton.mode.Default(optimizations=opts)
+        mode = proton.mode.Default(optimizations=opts, buffer_type=buf)
 
     return args.op_measure, mode
 
@@ -251,7 +262,6 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
 
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
     c_smem.store(acc.to(dtype))
-    fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
 

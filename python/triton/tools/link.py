@@ -34,13 +34,16 @@ class HeaderParser:
         # [kernel_name, c signature]
         self.linker_directives = re.compile("//[\\s]*tt-linker:[\\s]*([\\w]+):(.+):(.+)")
         # [name, hash, suffix]
-        self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]+)$")
+        self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]*)$")
         # [(type, name)]
         self.c_sig = re.compile("[\\s]*(\\w+)\\s(\\w+)[,]?")
         # [d|c]
         self.arg_suffix = re.compile("[c,d]")
+        # [backend_name]
+        self.backend_name_re = re.compile("//[\\s]*tt-linker-backend:[\\s]*([\\w]+)")
 
         self.kernels = defaultdict(list)
+        self.backend_name = None
 
     def extract_linker_meta(self, header: str):
         for ln in header.splitlines():
@@ -64,6 +67,14 @@ class HeaderParser:
                             num_specs=num_specs,
                         ),
                     )
+                else:
+                    m = self.backend_name_re.match(ln)
+                    if _exists(m):
+                        backend_name = m.group(1)
+                        if self.backend_name is None:
+                            self.backend_name = backend_name
+                        elif self.backend_name != backend_name:
+                            raise RuntimeError(f"differing backend {self.backend_name} vs. {backend_name}")
 
     def _match_name(self, ker_name: str):
         m = self.kernel_name.match(ker_name)
@@ -88,22 +99,24 @@ class HeaderParser:
         s2i = {"c": 1, "d": 16}
         num_specs = 0
         sizes = []
-        # scan through suffix, first find the index,
-        # then see if it is followed by d or c
+        # scan through suffix, suffix only includes indexes followed by d or c.
         for i in range(len(args)):
-            pos = suffix.find(str(i))
-            if pos == -1:
-                raise LinkerError(f"{suffix} is not a valid kernel suffix")
+            pos = 0
+            idx_matched = suffix.startswith(str(i))
+            if not idx_matched:
+                continue
             pos += len(str(i))
             if self.arg_suffix.match(suffix, pos):
                 num_specs += 1
                 sizes.extend([None] * (i - len(sizes)))
                 sizes.append(s2i[suffix[pos]])
                 pos += 1
-            if i < len(args) - 1:
-                suffix = suffix[pos:]
-            else:
-                sizes.extend([None] * (len(args) - len(sizes)))
+            suffix = suffix[pos:]
+
+        if len(suffix) > 0:
+            raise Exception(f"Has invalid extra suffix: {suffix}")
+        sizes.extend([None] * (len(args) - len(sizes)))
+
         return num_specs, sizes
 
     def _add_kernel(self, name: str, ker: KernelLinkerMeta):
@@ -133,7 +146,7 @@ def gen_signature(m):
 # generate declarations of kernels with meta-parameter and constant values
 def make_algo_decls(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     return f"""
-CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])});
+TT_ResultTy {name}(TT_StreamTy stream, {gen_signature_with_full_args(metas[-1])});
 void load_{name}();
 void unload_{name}();
     """
@@ -142,8 +155,8 @@ void unload_{name}();
 # generate declarations of kernels with meta-parameter and constant values
 def make_global_decl(meta: KernelLinkerMeta) -> str:
     return f"""
-CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)});
-CUresult {meta.orig_kernel_name}(CUstream stream, {gen_signature_with_full_args(meta)}, int algo_id);
+TT_ResultTy {meta.orig_kernel_name}_default(TT_StreamTy stream, {gen_signature_with_full_args(meta)});
+TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id);
 void load_{meta.orig_kernel_name}();
 void unload_{meta.orig_kernel_name}();
     """
@@ -151,7 +164,7 @@ void unload_{meta.orig_kernel_name}();
 
 # generate dispatcher function for kernels with different meta-parameter and constant values
 def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
-    src = f"CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)}){{\n"
+    src = f"TT_ResultTy {meta.orig_kernel_name}_default(TT_StreamTy stream, {gen_signature_with_full_args(meta)}){{\n"
     src += (f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n")
     src += "}\n"
     return src
@@ -161,14 +174,14 @@ def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
 def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     src = f"// launcher for: {name}\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        src += f"CUresult {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(CUstream stream, {gen_signature(meta)});\n"
+        src += f"TT_ResultTy {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(TT_StreamTy stream, {gen_signature(meta)});\n"
     src += "\n"
 
-    src += (f"CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])}){{")
+    src += (f"TT_ResultTy {name}(TT_StreamTy stream, {gen_signature_with_full_args(metas[-1])}){{")
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
         cond_fn = (  #
-            lambda val, hint: f"({val} % {hint} == 0)"  #
+            lambda val, hint: f"((uintptr_t){val} % {hint} == 0)"  #
             if hint == 16  #
             else f"({val} == {hint})"  #
             if hint == 1  #
@@ -183,7 +196,7 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
         arg_names = [arg for arg, hint in zip(meta.arg_names, meta.sizes) if hint != 1]
         src += f"    return {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(stream, {', '.join(arg_names)});\n"
     src += "\n"
-    src += "  return CUDA_ERROR_INVALID_VALUE;\n"
+    src += "  return TT_ERROR_INVALID_VALUE;\n"
     src += "}\n"
 
     for mode in ["load", "unload"]:
@@ -200,7 +213,7 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
 
 # generate dispatcher function for kernels with different meta-parameter and constant values
 def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
-    src = f"CUresult {meta.orig_kernel_name}(CUstream stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
+    src = f"TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
     src += f"  assert (algo_id < (int)sizeof({meta.orig_kernel_name}_kernels));\n"
     src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
     src += "}\n"
@@ -210,7 +223,7 @@ def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
 # generate definition of function pointers of kernel dispatchers based on meta-parameter and constant values
 def make_func_pointers(names: str, meta: KernelLinkerMeta) -> str:
     # the table of hint dispatchers
-    src = f"typedef CUresult (*kernel_func_t)(CUstream stream, {gen_signature_with_full_args(meta)});\n"
+    src = f"typedef TT_ResultTy (*kernel_func_t)(TT_StreamTy stream, {gen_signature_with_full_args(meta)});\n"
     src += f"kernel_func_t {meta.orig_kernel_name}_kernels[] = {{\n"
     for name in names:
         src += f"  {name},\n"
@@ -285,8 +298,9 @@ if __name__ == "__main__":
     meta = meta_lists[0][0]
     get_num_algos_decl = make_get_num_algos_decl(meta)
     global_decl = make_global_decl(meta)
+    backend_prelude = (Path(__file__).parent / "extra" / parser.backend_name / "link.h").read_text()
     with args.out.with_suffix(".h").open("w") as fp:
-        out = "#include <cuda.h>\n"
+        out = backend_prelude
         out += "\n".join(algo_decls)
         out += "\n"
         out += get_num_algos_decl
@@ -303,8 +317,7 @@ if __name__ == "__main__":
     get_num_algos_def = make_get_num_algos_def(meta)
     default_algo_kernel = make_default_algo_kernel(meta)
     with args.out.with_suffix(".c").open("w") as fp:
-        out = ""
-        out += "#include <cuda.h>\n"
+        out = backend_prelude
         out += "#include <stdint.h>\n"
         out += "#include <assert.h>\n"
         out += "\n"

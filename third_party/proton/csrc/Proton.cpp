@@ -1,7 +1,10 @@
 #include "Proton.h"
 
+#include <cstdint>
 #include <map>
 #include <stdexcept>
+#include <variant>
+#include <vector>
 
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
@@ -9,9 +12,66 @@
 
 using namespace proton;
 
+// For simplicity, the Python interface restricts *scalar* metrics to int64_t
+// and double (i.e. no uint64_t) to avoid subtle signed-vs-unsigned differences
+// for the same metric name. For vector-valued (FlexibleMetric) metrics, mirror
+// the scalar restriction (int64_t / double).
+using PythonMetricValueType =
+    std::variant<int64_t, double, std::vector<int64_t>, std::vector<double>>;
+namespace {
+
+std::map<std::string, MetricValueType> convertPythonMetrics(
+    const std::map<std::string, PythonMetricValueType> &metrics) {
+  std::map<std::string, MetricValueType> converted;
+  for (const auto &[name, value] : metrics) {
+    converted.emplace(name, std::visit(
+                                [](auto &&v) -> MetricValueType {
+                                  return MetricValueType(v);
+                                },
+                                value));
+  }
+  return converted;
+}
+
+} // namespace
+
 static void initProton(pybind11::module &&m) {
   using ret = pybind11::return_value_policy;
   using namespace pybind11::literals;
+
+  // Accept raw integer pointers from Python (e.g., Tensor.data_ptr()) instead
+  // of requiring a PyCapsule, which matches how tensor metric values are passed
+  // in transform_tensor_metrics.
+  pybind11::class_<TensorMetric>(m, "TensorMetric")
+      .def(pybind11::init<>())
+      .def(pybind11::init([](uintptr_t ptr, size_t typeIndex, uint64_t size) {
+             return TensorMetric{reinterpret_cast<uint8_t *>(ptr), typeIndex,
+                                 size};
+           }),
+           pybind11::arg("ptr"), pybind11::arg("index"),
+           pybind11::arg("size") = 1)
+      .def_property_readonly("ptr",
+                             [](const TensorMetric &metric) {
+                               return reinterpret_cast<uintptr_t>(metric.ptr);
+                             })
+      .def_property_readonly(
+          "index", [](const TensorMetric &metric) { return metric.typeIndex; })
+      .def_property_readonly(
+          "size", [](const TensorMetric &metric) { return metric.size; });
+
+  auto metricTypeInt64Index =
+      pybind11::cast(variant_index_v<int64_t, MetricValueType>);
+  auto metricTypeDoubleIndex =
+      pybind11::cast(variant_index_v<double, MetricValueType>);
+  auto metricTypeVectorInt64Index =
+      pybind11::cast(variant_index_v<std::vector<int64_t>, MetricValueType>);
+  auto metricTypeVectorDoubleIndex =
+      pybind11::cast(variant_index_v<std::vector<double>, MetricValueType>);
+
+  m.attr("metric_type_int64_index") = metricTypeInt64Index;
+  m.attr("metric_type_double_index") = metricTypeDoubleIndex;
+  m.attr("metric_type_vector_int64_index") = metricTypeVectorInt64Index;
+  m.attr("metric_type_vector_double_index") = metricTypeVectorDoubleIndex;
 
   m.def(
       "start",
@@ -34,12 +94,13 @@ static void initProton(pybind11::module &&m) {
   m.def("activate_all",
         []() { SessionManager::instance().activateAllSessions(); });
 
-  m.def("deactivate", [](size_t sessionId) {
-    SessionManager::instance().deactivateSession(sessionId);
+  m.def("deactivate", [](size_t sessionId, bool flushing) {
+    SessionManager::instance().deactivateSession(sessionId, flushing);
   });
 
-  m.def("deactivate_all",
-        []() { SessionManager::instance().deactivateAllSessions(); });
+  m.def("deactivate_all", [](bool flushing) {
+    SessionManager::instance().deactivateAllSessions(flushing);
+  });
 
   m.def("finalize", [](size_t sessionId, const std::string &outputFormat) {
     SessionManager::instance().finalizeSession(sessionId, outputFormat);
@@ -76,6 +137,9 @@ static void initProton(pybind11::module &&m) {
               functionId, functionName, scopeIdNames, scopeIdParents,
               metadataPath);
         });
+  m.def("destroy_function_metadata", [](uint64_t functionId) {
+    SessionManager::instance().destroyFunctionMetadata(functionId);
+  });
 
   m.def("enter_instrumented_op", [](uint64_t streamId, uint64_t functionId,
                                     uint64_t buffer, size_t size) {
@@ -96,17 +160,80 @@ static void initProton(pybind11::module &&m) {
   m.def("exit_state",
         []() { SessionManager::instance().setState(std::nullopt); });
 
-  m.def("add_metrics",
-        [](size_t scopeId,
-           const std::map<std::string, MetricValueType> &metrics) {
-          SessionManager::instance().addMetrics(scopeId, metrics);
-        });
+  m.def(
+      "add_metrics",
+      [](size_t scopeId,
+         const std::map<std::string, PythonMetricValueType> &metrics,
+         const std::map<std::string, TensorMetric> &tensorMetrics) {
+        auto convertedMetrics = convertPythonMetrics(metrics);
+        SessionManager::instance().addMetrics(scopeId, convertedMetrics,
+                                              tensorMetrics);
+      },
+      pybind11::arg("scopeId"), pybind11::arg("metrics"),
+      pybind11::arg("tensorMetrics") = std::map<std::string, TensorMetric>());
+
+  m.def(
+      "set_metric_kernels",
+      [](uintptr_t tensorMetricKernel, uintptr_t scalarMetricKernel,
+         uintptr_t stream, unsigned int tensorMetricKernelNumThreads,
+         unsigned int tensorMetricKernelSharedMemBytes,
+         unsigned int scalarMetricKernelNumThreads,
+         unsigned int scalarMetricKernelSharedMemBytes) {
+        MetricKernelLaunchState metricKernelLaunchState{
+            MetricKernelLaunchConfig{
+                reinterpret_cast<void *>(tensorMetricKernel),
+                tensorMetricKernelNumThreads, tensorMetricKernelSharedMemBytes},
+            MetricKernelLaunchConfig{
+                reinterpret_cast<void *>(scalarMetricKernel),
+                scalarMetricKernelNumThreads, scalarMetricKernelSharedMemBytes},
+            reinterpret_cast<void *>(stream)};
+        SessionManager::instance().setMetricKernels(metricKernelLaunchState);
+      },
+      pybind11::arg("tensorMetricKernel"), pybind11::arg("scalarMetricKernel"),
+      pybind11::arg("stream"),
+      pybind11::arg("tensorMetricKernelNumThreads") = 1,
+      pybind11::arg("tensorMetricKernelSharedMemBytes") = 0,
+      pybind11::arg("scalarMetricKernelNumThreads") = 1,
+      pybind11::arg("scalarMetricKernelSharedMemBytes") = 0);
 
   m.def("get_context_depth", [](size_t sessionId) {
     return SessionManager::instance().getContextDepth(sessionId);
   });
 
-  pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
+  m.def(
+      "get_data",
+      [](size_t sessionId, size_t phase) {
+        return SessionManager::instance().getData(sessionId, phase);
+      },
+      pybind11::arg("sessionId"), pybind11::arg("phase"));
+
+  m.def(
+      "get_data_msgpack",
+      [](size_t sessionId, size_t phase) {
+        auto data = SessionManager::instance().getDataMsgPack(sessionId, phase);
+        return pybind11::bytes(reinterpret_cast<const char *>(data.data()),
+                               data.size());
+      },
+      pybind11::arg("sessionId"), pybind11::arg("phase"));
+  m.def(
+      "clear_data",
+      [](size_t sessionId, size_t phase, bool clearUpToPhase) {
+        SessionManager::instance().clearData(sessionId, phase, clearUpToPhase);
+      },
+      pybind11::arg("sessionId"), pybind11::arg("phase"),
+      pybind11::arg("clearUpToPhase") = false);
+  m.def(
+      "advance_data_phase",
+      [](size_t sessionId) {
+        return SessionManager::instance().advanceDataPhase(sessionId);
+      },
+      pybind11::arg("sessionId"));
+  m.def(
+      "is_data_phase_complete",
+      [](size_t sessionId, size_t phase) {
+        return SessionManager::instance().isDataPhaseComplete(sessionId, phase);
+      },
+      pybind11::arg("sessionId"), pybind11::arg("phase"));
 }
 
 PYBIND11_MODULE(libproton, m) {

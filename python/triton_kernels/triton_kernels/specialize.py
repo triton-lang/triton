@@ -2,6 +2,9 @@ import inspect
 import re
 import textwrap
 import types
+from dataclasses import dataclass
+from typing import Optional
+
 import triton
 
 
@@ -60,6 +63,19 @@ def define_kernel(src, module, attrs=None, **extra_globals):
     f = triton.JITFunction(f, **attrs)
     f._unsafe_update_src(src)
     return f
+
+
+@dataclass(frozen=True)
+class FnSpecs:
+    name: str
+    fn: Optional["triton.runtime.jit.JITFunction"]
+    fn_arg_names: tuple[str, ...] = tuple()
+    fn_arg_do_not_specialize: tuple[str, ...] = tuple()
+    reduction_n: int = 1
+
+    @staticmethod
+    def default():
+        return FnSpecs("dflt", None, tuple())
 
 
 def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple()):
@@ -127,7 +143,8 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
         for spec_fn in spec_fns.values():
             spec_repr = spec_fn.repr(None)
             if spec_repr:
-                spec_repr = spec_repr.strip("_")
+                # Avoid dots in the appended repr so kernel name keeps the base kernel's name.
+                spec_repr = spec_repr.rsplit(".", 1)[-1].strip("_")
             if spec_repr:
                 ret += f"_{spec_repr}"
         return ret
@@ -140,12 +157,54 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
 
     # Reuse the original kernel's metadata so that stack traces and other
     # source-based tooling report the correct file and line numbers.
+    adjust_line_number = lambda line_num: max(1, line_num - line_delta)
+
     ret.raw_src = list(fn.raw_src)
-    adjusted_start = max(1, fn.starting_line_number - line_delta)
-    ret.starting_line_number = adjusted_start
+    ret.starting_line_number = adjust_line_number(fn.starting_line_number)
+    ret.def_file_line_number = adjust_line_number(fn.def_file_line_number)
+    ret.def_file_col_number = fn.def_file_col_number
+
     orig_code = fn.fn.__code__
+    ret.file_name = orig_code.co_filename
     ret.fn.__code__ = ret.fn.__code__.replace(
         co_filename=orig_code.co_filename,
-        co_firstlineno=max(1, orig_code.co_firstlineno - line_delta),
+        co_firstlineno=adjust_line_number(orig_code.co_firstlineno),
     )
     return ret
+
+
+@dataclass(frozen=True)
+class ClosureArg:
+    fn_name: str
+    fn_params_name: str
+
+
+class SpecializationModule:
+
+    def __init__(self, module_name: str, kernels: list[tuple[str, object]], closure_args: dict[str, ClosureArg]):
+        self.module_name = module_name
+        self.kernels = kernels
+        self.closure_args = closure_args
+        self._modules = dict()
+
+    def get(self, **kwargs):
+        import sys
+        import types
+        specs = [FnSpecs.default()] * len(self.closure_args)
+        for key, value in kwargs.items():
+            specs[list(self.closure_args.keys()).index(key)] = value
+        key = tuple(spec.name for spec in specs)
+        if key in self._modules:
+            return self._modules[key]
+        spec_constants = {arg.fn_name: spec.fn for arg, spec in zip(self.closure_args.values(), specs)}
+        spec_tuples = {arg.fn_params_name: spec.fn_arg_names for arg, spec in zip(self.closure_args.values(), specs)}
+        do_not_specialize = []
+        for spec in specs:
+            do_not_specialize.extend(spec.fn_arg_do_not_specialize)
+        module = types.ModuleType(self.module_name + '_'.join(key))
+        sys.modules[module.__name__] = module
+        for kernel_name, kernel_fn in self.kernels:
+            setattr(module, kernel_name,
+                    specialize(kernel_fn, module, spec_constants, spec_tuples, do_not_specialize=do_not_specialize))
+        self._modules[key] = module
+        return module

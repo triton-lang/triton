@@ -13,25 +13,25 @@
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter can only be non-zero for Ampere or Hopper MMA parent}}
-#mma = #ttg.nvidia_mma<{versionMajor = 1, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 1, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
 
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter is mandatory for Ampere or Hopper MMA parent}}
-#mma = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
 #dot_op = #ttg.dot_op<{opIdx = 0, parent = #mma}>
 
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter is mandatory for Ampere or Hopper MMA parent}}
-#mma = #ttg.nvidia_mma<{versionMajor = 3, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
 #dot_op = #ttg.dot_op<{opIdx = 0, parent = #mma}>
 
 // -----
 
 // expected-error@+2 {{ttg.dot_op opIdx parameter must be 0 for Hopper MMA parent, since Hopper WGMMA only allows first operand to be in registers}}
-#mma = #ttg.nvidia_mma<{versionMajor = 3, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
 
 // -----
@@ -43,29 +43,29 @@
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter must be 8/16 for WMMA v1 (including packed cases for `scaled_dot`)}}
-#wmma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
+#wmma = #ttg.amd_wmma<{version = 1, ctaLayout = {warp = [[0, 1], [0, 2]]}}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma}>
 
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter must be 4/8/16 for WMMA v2 (including packed cases for `scaled_dot`)}}
-#wmma = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 4]}>
+#wmma = #ttg.amd_wmma<{version = 2, ctaLayout = {warp = [[0, 1], [0, 2]]}}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma, kWidth = 32}>
 
 // -----
 
 // expected-error@+1 {{invalid WMMA v1 instruction shape}}
-#wmma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 1], instrShape = [16, 16, 32]}>
+#wmma = #ttg.amd_wmma<{version = 1, ctaLayout = {warp = []}, instrShape = [16, 16, 32]}>
 
 // -----
 
 // expected-error@+1 {{invalid WMMA v2 instruction shape}}
-#wmma = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 1], instrShape = [16, 16, 64]}>
+#wmma = #ttg.amd_wmma<{version = 2, ctaLayout = {warp = []}, instrShape = [16, 16, 64]}>
 
 // -----
 
 // expected-error@+1 {{invalid WMMA v3 instruction shape}}
-#wmma = #ttg.amd_wmma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 16]}>
+#wmma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = []}, instrShape = [16, 16, 16]}>
 
 // -----
 
@@ -81,63 +81,3 @@
 
 // expected-error@+1 {{elementBitWidth must be 32 or 64}}
 #mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 16, 16], isTransposed = false, elementBitWidth = 16}>
-
-// -----
-
-// expected-error@+1 {{interval values must all be power of two}}
-#shared = #ttg.padded_shared<[3:+2] {offset=[[0]], block=[]}>
-
-// -----
-
-// expected-error@+1 {{interval values must all be power of two}}
-#shared = #ttg.padded_shared<[0:+2] {offset=[[0]], block=[]}>
-
-// -----
-
-// expected-error@+1 {{padding values must all be power of two}}
-#shared = #ttg.padded_shared<[2:+3] {offset=[[0]], block=[]}>
-
-// -----
-
-// expected-error@+1 {{padding values must all be power of two}}
-#shared = #ttg.padded_shared<[2:+0] {offset=[[0]], block=[]}>
-
-// -----
-
-// expected-error@+1 {{interval values cannot have duplicates}}
-#shared = #ttg.padded_shared<[2:+1, 2:+4] {offset=[[0]], block=[]}>
-
-// -----
-
-// expected-error@+1 {{Unexpected attribute}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {unknown = 5}>
-
-// -----
-
-// expected-error@+1 {{Unexpected attribute "order" found}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {offset = [[1, 0], [2, 0]], block = [], order=[0, 1]}>
-
-// -----
-
-// expected-error@+1 {{Each offset basis must be 0 or a power of two}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {offset = [[1, 0], [3, 0]], block = []}>
-
-// -----
-
-// expected-error@+1 {{Unexpected attribute "register" found}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], register = [[0, 1], [0, 2]]}>
-
-// -----
-
-// expected-error@+1 {{Expected basis of 'block' not found}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {offset = [[1, 0], [1, 1]]}>
-
-// -----
-
-// expected-error@+1 {{Expected basis of 'block' not found}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {offset = [[0 , 1]]}>
-
-// -----
-
-// expected-error@+1 {{Expected basis of 'offset' not found}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {block = [[0 , 1]]}>

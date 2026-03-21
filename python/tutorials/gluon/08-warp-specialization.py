@@ -35,7 +35,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     tensor_memory_descriptor,
     allocate_tensor_memory,
-    get_tmem_32x32b_reg_layout,
     tcgen05_mma,
     tcgen05_commit,
 )
@@ -50,6 +49,7 @@ else:
 # Re-use utilities from the previous tutorial.
 t3 = importlib.import_module("03-async-copy")
 t4 = importlib.import_module("04-tma")
+t7 = importlib.import_module("07-persistence")
 
 
 def is_hopper_or_newer():
@@ -400,22 +400,6 @@ class PartitionArgs:
     SUBTILE_FACTOR: gl.constexpr
     num_warps: gl.constexpr
 
-    @gluon.constexpr_function
-    def __init__(self, a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_bufs,
-                 acc_empty_bars, acc_ready_bars, SUBTILE_FACTOR, num_warps):
-        self.a_desc = a_desc
-        self.b_desc = b_desc
-        self.c_desc = c_desc
-        self.a_bufs = a_bufs
-        self.b_bufs = b_bufs
-        self.load_empty_bars = load_empty_bars
-        self.load_ready_bars = load_ready_bars
-        self.acc_bufs = acc_bufs
-        self.acc_empty_bars = acc_empty_bars
-        self.acc_ready_bars = acc_ready_bars
-        self.SUBTILE_FACTOR = gl.constexpr(SUBTILE_FACTOR)
-        self.num_warps = gl.constexpr(num_warps)
-
 
 # Counter abstraction for tracking barrier index and phase.
 @aggregate
@@ -424,20 +408,14 @@ class Counter:
     phase: gl.tensor
     num_barriers: gl.constexpr
 
-    @gluon.constexpr_function
-    def __init__(self, index, phase, num_barriers):
-        self.index = index
-        self.phase = phase
-        self.num_barriers = gl.constexpr(num_barriers)
-
     @gluon.jit
     def create(phase, num_barriers: gl.constexpr):
         return Counter(gl.to_tensor(0), gl.to_tensor(phase), num_barriers)
 
     @gluon.must_use_result
     @gluon.jit
-    def next(self):
-        incr = self.index + 1
+    def next(self, pred=True):
+        incr = self.index + gl.where(pred, 1, 0)
         rollover = incr == self.num_barriers
         index = gl.where(rollover, 0, incr)
         phase = gl.where(rollover, self.phase ^ 1, self.phase)
@@ -446,8 +424,8 @@ class Counter:
 
 @gluon.jit
 def matmul_load_partition(p, SchedulerImpl: gl.constexpr):
-    BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
+    BLOCK_M: gl.constexpr = p.a_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = p.b_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = p.a_desc.block_type.shape[1]
     K = p.a_desc.shape[1]
 
@@ -473,8 +451,8 @@ def matmul_load_partition(p, SchedulerImpl: gl.constexpr):
 
 @gluon.jit
 def matmul_mma_partition(p, SchedulerImpl: gl.constexpr):
-    BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
+    BLOCK_M: gl.constexpr = p.a_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = p.b_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = p.a_desc.block_type.shape[1]
     K = p.a_desc.shape[1]
 
@@ -524,14 +502,13 @@ def _split_n(x, SUBTILE_FACTOR: gl.constexpr):
 
 @gluon.jit
 def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
-    BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
+    BLOCK_M: gl.constexpr = p.a_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = p.b_desc.block_type.shape[1]
     dtype: gl.constexpr = p.c_desc.dtype
 
     acc_empty_bars = p.acc_empty_bars
     acc_ready_bars = p.acc_ready_bars
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
-    acc_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], p.num_warps)
     SPLIT_N: gl.constexpr = BLOCK_N // p.SUBTILE_FACTOR
     acc_smem = gl.allocate_shared_memory(dtype, [BLOCK_M, SPLIT_N], p.c_desc.layout)
 
@@ -544,7 +521,7 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
         # Wait for the accumulator. Since BLOCK_N=256, we need to interleave
         # the TMEM loads with the SMEM stores to avoid spilling.
         mbarrier.wait(acc_ready_bars.index(acc_state.index), acc_state.phase)
-        acc = p.acc_bufs.index(acc_state.index).load(acc_layout)
+        acc = p.acc_bufs.index(acc_state.index).load()
         acc_state = acc_state.next()
 
         accs = _split_n(acc, p.SUBTILE_FACTOR)
@@ -564,8 +541,8 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
 @gluon.jit
 def matmul_warp_specialized_kernel(a_desc, b_desc, c_desc, SchedulerImpl: gl.constexpr, num_buffers: gl.constexpr,
                                    SUBTILE_FACTOR: gl.constexpr, num_warps: gl.constexpr):
-    BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
+    BLOCK_M: gl.constexpr = a_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = b_desc.block_type.shape[1]
     dtype: gl.constexpr = a_desc.dtype
 
     a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
@@ -602,16 +579,14 @@ def matmul_warp_specialized(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, SUB
 
     a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
     b_desc = TensorDescriptor.from_tensor(B, [BLOCK_K, BLOCK_N], b_layout)
-    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
+    # Reduce the block size of the C tensor descriptor to account for the subtiled epilogue.
+    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N // SUBTILE_FACTOR], c_layout)
 
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
     grid = (min(num_sms, num_pid), )
     matmul_warp_specialized_kernel[grid](a_desc, b_desc, c_desc, SchedulerImpl, num_buffers, SUBTILE_FACTOR,
                                          num_warps=num_warps)
-
-
-t7 = importlib.import_module("07-persistence")
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
@@ -652,19 +627,19 @@ if __name__ == "__main__" and is_blackwell():
         A = torch.randn(M, K, device="cuda", dtype=torch.float16)
         B = torch.randn(K, N, device="cuda", dtype=torch.float16)
         BT = B.T.contiguous()
-        r0 = as_flops(triton.testing.do_bench_cudagraph(lambda: matmul_warp_specialized(A, B, C, **args)))
+        r0 = as_flops(triton.testing.do_bench(lambda: matmul_warp_specialized(A, B, C, **args)))
         r1 = as_flops(triton.testing.do_bench(lambda: cublas.matmul(A, BT, C)))
         print(f"{K:>5} {r0:>17.2f} {r1:>9.2f}")
 
 # %%
 #     K  warp-specialized    cublas
-#   512           1160.28   1130.67
-#  1024           1249.69   1148.52
-#  2048           1347.18   1261.59
-#  4096           1390.95   1299.38
-#  8192           1350.01   1401.10
-# 16384           1448.14   1508.76
+#   512           1004.18   1191.77
+#  1024           1182.61   1334.85
+#  2048           1313.71   1400.35
+#  4096           1317.58   1432.32
+#  8192           1291.56   1301.11
+# 16384           1256.74   1335.24
 #
-# Much better! We are beating cublas on small K, even though there is still lots
-# of tuning we can do to improve performance. On Blackwell, warp specialization
-# is critical for achieving peak performance.
+# Much better! We are now quite competitive with cublas.
+# We will show in tutorial 14-multicta.py how we can use multicta and a few other
+# tricks to consistently beat cublas in a wide range of shapes.

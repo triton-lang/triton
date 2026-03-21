@@ -30,10 +30,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: %[[dst:.*]] = rocdl.raw.ptr.buffer.atomic.cmpswap %[[cas_val_cast2]], %[[cas_cmp_cast2]], %[[resource]], %{{.*}}, %{{.*}}, %{{.*}} : i64
     // CHECK: %[[dst:.*]] = rocdl.raw.ptr.buffer.atomic.cmpswap %{{.*}}, %{{.*}}, %[[resource]], %{{.*}}, %{{.*}}, %{{.*}} : i64
     // CHECK: llvm.fence syncscope("agent") acquire
-    %4 = amdgpu.buffer_atomic_cas acq_rel, gpu, %cmp, %val, %scalar_ptr[%offsets] : tensor<512xi64, #blocked>
+    %4 = amdg.buffer_atomic_cas acq_rel, gpu, %cmp, %val, %scalar_ptr[%offsets] : tensor<512xi64, #blocked>
 
     %5 = tt.addptr %arg1, %1 : !tt.ptr<i64>, i32
-    amdgpu.buffer_store %4, %5[%offsets] : tensor<512xi64, #blocked>
+    amdg.buffer_store %4, %5[%offsets] : tensor<512xi64, #blocked>
     tt.return
   }
 }

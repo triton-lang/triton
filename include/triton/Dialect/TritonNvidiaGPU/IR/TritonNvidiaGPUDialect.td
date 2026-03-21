@@ -42,7 +42,7 @@ def TritonNvidiaGPU_Dialect : Dialect {
   ];
 
   let useDefaultAttributePrinterParser = 1;
-  let usePropertiesForAttributes = 1;
+  let useDefaultTypePrinterParser = 1;
 }
 
 #endif

@@ -1,6 +1,6 @@
 import pytest
 import subprocess
-from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, read, format_frames, derive_metrics, filter_frames, parse
+from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, read, format_frames, derive_metrics, filter_frames, parse, apply_diff_profile
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import numpy as np
 
@@ -190,3 +190,10 @@ def test_flops_derivation():
         },
         sample_file=cuda_example_file,
     )
+
+
+def test_diff_profile():
+    gf, derived_metrics = parse(["time/s"], triton_example_file)
+    gf2, _ = parse(["time/s"], cuda_example_file)
+    gf = apply_diff_profile(gf, derived_metrics, cuda_example_file, ["time/s"], None, None, 0.0)
+    assert "time/s (inc)" in gf.dataframe.columns

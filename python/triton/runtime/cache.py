@@ -75,8 +75,12 @@ class FileCacheManager(CacheManager):
         if not self.has_file(grp_filename):
             return None
         grp_filepath = self._make_path(grp_filename)
-        with open(grp_filepath) as f:
-            grp_data = json.load(f)
+        try:
+            with open(grp_filepath) as f:
+                grp_data = json.load(f)
+        except Exception:
+            # exit on corrupted cache.
+            return None
         child_paths = grp_data.get("child_paths", None)
         # Invalid group data.
         if child_paths is None:
@@ -214,8 +218,12 @@ class RemoteCacheManager(CacheManager):
         grp_filepath = self.get_file(grp_filename)
         if grp_filepath is None:
             return None
-        with open(grp_filepath) as f:
-            grp_data = json.load(f)
+        try:
+            with open(grp_filepath) as f:
+                grp_data = json.load(f)
+        except Exception:
+            # exit on corrupted cache.
+            return None
         child_paths = grp_data.get("child_paths", None)
 
         result = None

@@ -173,7 +173,7 @@ module {
         %120 = tt.addptr %arg32, %68 : tensor<64x128x!tt.ptr<f16>>, tensor<64x128xi32>
         scf.yield %118, %116, %100, %119, %120 : tensor<256x128xf32>, tensor<256xf32>, tensor<256xf32>, tensor<128x64x!tt.ptr<f16>>, tensor<64x128x!tt.ptr<f16>>
       }
-      gpu.barrier
+      ttg.barrier local
       %92 = tt.expand_dims %91#1 {axis = 1 : i32} : tensor<256xf32> -> tensor<256x1xf32>
       %93 = arith.divf %cst_5, %92 : tensor<256x1xf32>
       %94 = tt.broadcast %93 : tensor<256x1xf32> -> tensor<256x128xf32>

@@ -86,6 +86,9 @@ template <bool CheckSuccess>
 CUptiResult getGraphId(CUgraph graph, uint32_t *pId);
 
 template <bool CheckSuccess>
+CUptiResult getGraphNodeId(CUgraphNode node, uint64_t *pId);
+
+template <bool CheckSuccess>
 CUptiResult getCubinCrc(CUpti_GetCubinCrcParams *pParams);
 
 template <bool CheckSuccess>

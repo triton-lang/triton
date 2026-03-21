@@ -1,9 +1,13 @@
+#include "Dialect/NVWS/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/hopper/include/Transforms/Passes.h"
+#include "nvidia/hopper/lib/Transforms/WarpSpecialization/CodePartitionUtility.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Tools/Sys/Dump.hpp"
 
 #define DEBUG_TYPE "nvgpu-warp-specialization"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -29,7 +33,8 @@ public:
   void runOnFuncOp(triton::FuncOp funcOp) {
     SmallVector<scf::ForOp> loops;
     funcOp->walk([&](scf::ForOp forOp) {
-      if (forOp->hasAttr(mlir::triton::kWarpSpecializeAttrName))
+      if (forOp->hasAttr(mlir::triton::kWarpSpecializeAttrName) &&
+          triton::getNumStagesOrDefault(forOp, numStages) > 1)
         loops.push_back(forOp);
     });
     if (loops.empty())
@@ -61,7 +66,7 @@ public:
       // Partition key ops into multiple async tasks.
       doTaskPartition(funcOp, numWarpGroups);
       if (dumpIntermediateSteps) {
-        llvm::dbgs()
+        ::mlir::triton::tools::mlirDumpsOrDbgs()
             << "// -----// WarpSpec internal IR Dump After: doTaskPartition\n"
             << moduleOp << "\n\n\n";
       }
@@ -70,7 +75,7 @@ public:
       if (retCode == -1)
         continue;
       if (dumpIntermediateSteps) {
-        llvm::dbgs()
+        ::mlir::triton::tools::mlirDumpsOrDbgs()
             << "// -----// WarpSpec internal IR Dump After: doTaskIdPropagate\n"
             << moduleOp << "\n\n\n";
       }
@@ -78,7 +83,7 @@ public:
       // Partition ops into parallel sub ops.
       if (doDataPartition(funcOp, numWarpGroups - 1)) {
         if (dumpIntermediateSteps) {
-          llvm::dbgs()
+          ::mlir::triton::tools::mlirDumpsOrDbgs()
               << "// -----// WarpSpec internal IR Dump After: doDataPartition\n"
               << moduleOp << "\n\n\n";
         }
@@ -87,16 +92,21 @@ public:
       }
       // Clear async_task.
     }
-    if (!success)
-      signalPassFailure();
+    if (!success) {
+      mlir::emitError(
+          getOperation()->getLoc(),
+          "failed to partition the function into warp-specialized code");
+      return signalPassFailure();
+    }
 
     doCodePartition(funcOp, numStages);
     if (dumpIntermediateSteps) {
-      llvm::dbgs()
+      ::mlir::triton::tools::mlirDumpsOrDbgs()
           << "// -----// WarpSpec internal IR Dump After: doCodePartition\n"
           << moduleOp << "\n\n\n";
     }
     doTokenLowering(funcOp, numWarpGroups - 1);
+    invalidateWarpSpecializeBarriers(funcOp);
     // Clear num_stages to disable SWP.
     funcOp->walk([&](scf::ForOp forOp) {
       forOp->setAttr(mlir::triton::kNumStagesAttrName,
@@ -105,6 +115,9 @@ public:
   }
 
   void runOnOperation() override {
+    if (numStages <= 1)
+      return;
+
     getOperation()->walk([&](triton::FuncOp funcOp) { runOnFuncOp(funcOp); });
   }
 };

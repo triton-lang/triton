@@ -84,7 +84,7 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   /// the loop operands and all users and all users of the results of the loop.
   void visitRegionSuccessors(
       ProgramPoint *point, RegionBranchOpInterface branch,
-      RegionBranchPoint successor,
+      RegionSuccessor successor,
       ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) override;
 
   /// Collect all operands that participate in assumptions (see description of

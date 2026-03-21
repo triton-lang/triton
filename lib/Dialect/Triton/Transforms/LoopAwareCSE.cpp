@@ -13,29 +13,6 @@ namespace mlir::triton {
 } // namespace mlir::triton
 
 namespace {
-class ValueEquivalence {
-public:
-  std::optional<bool> getKnownEquivalence(Value a, Value b) {
-    if (auto it = equalValues.find(normalizeKey(a, b)); it != equalValues.end())
-      return it->second;
-    return std::nullopt;
-  }
-  void setKnownEquivalence(Value a, Value b, bool eq) {
-    equalValues.insert_or_assign(normalizeKey(a, b), eq);
-  }
-
-private:
-  // Commutatively query the equivalence of two values by sorting the key by
-  // pointer value.
-  std::pair<Value, Value> normalizeKey(Value a, Value b) {
-    if ((uintptr_t)a.getAsOpaquePointer() < (uintptr_t)b.getAsOpaquePointer())
-      return {a, b};
-    return {b, a};
-  }
-
-  DenseMap<std::pair<Value, Value>, bool> equalValues;
-};
-
 struct LoopCSEDriver {
   LoopCSEDriver(scf::ForOp loop) : loop(loop) {}
 

@@ -349,6 +349,11 @@ if __name__ == "__main__":
 #
 # We get another modest speedup by increasing the block size and pipeline depth.
 #
+# Note the following restrctions for TMA operations:
+# - The innermost coordinate must be 16-byte aligned. For example, for dtype float16,
+#   an async_copy_global_to_shared with coordinates [8, 4] is illegal, but [4, 8] is legal.
+# - If the shared memory layout is fp4_padded, the innermost coordinate must be 128-byte aligned.
+#
 # Main takeaways:
 #
 # - TMAs use a separate, often faster, hardware path for transferring between

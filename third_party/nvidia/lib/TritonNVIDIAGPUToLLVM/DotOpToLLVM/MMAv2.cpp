@@ -44,7 +44,7 @@ Value loadC(Value tensor, Value llTensor,
     int numCPackedElem = 4 / numMmaRets;
     Type cPackTy = vec_ty(cElemTy, numCPackedElem);
     for (int i = 0; i < fcSize; i += numCPackedElem) {
-      Value pack = rewriter.create<LLVM::UndefOp>(loc, cPackTy);
+      Value pack = LLVM::UndefOp::create(rewriter, loc, cPackTy);
       for (int j = 0; j < numCPackedElem; ++j) {
         pack = b.insert_element(cPackTy, pack,
                                 b.extract_val(cElemTy, llTensor, i + j),

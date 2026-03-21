@@ -1,6 +1,6 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
 #include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -57,51 +57,24 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     }
 
     // Algorithm:
-    // 1. for all registers in src tensor
-    // 2.   compute src location in tensor relative to tile beginnig
-    // 3.   save mapping from src elem coordinates to register idx
-    // 4. for all elements in dst tensor
-    // 5.   get dst value location in tensor
-    // 6.   find, which input tile holds the dst value
-    // 7.   subtract dst coordinates and start coordinates of the tile
-    // 8.   find source register number which holds dst value
-    // 9.   copy dst element from computed tile and register
+    // 1. for all elements in dst tensor
+    // 2.   get dst value location in tensor
+    // 3.   find, which input tile holds the dst value
+    // 4.   subtract dst coordinates and start coordinates of the tile
+    // 5.   find source register number which holds dst value
+    // 6.   copy dst element from computed tile and register
     auto ctx = rewriter.getContext();
     StringAttr kReg = StringAttr::get(ctx, "register");
-    auto srcRegBases = linearLayoutSrc.getBases().lookup(kReg);
     auto dstRegBases = linearLayoutDst.getBases().lookup(kReg);
 
-    using ElemLocationKey = decltype(linearLayoutSrc.apply({}));
-    llvm::MapVector<ElemLocationKey, unsigned> srcElemToReg;
-    int srcRegNum = 1 << srcRegBases.size();
-    // 1. for all registers in src tensor
-    for (int regId = 0; regId < srcRegNum; ++regId) {
-      // 2.   compute src location in tensor relative to tile beginnig
-      SmallVector<std::pair<StringAttr, int32_t>> hardwareLocation;
-      for (auto dimName : linearLayoutSrc.getInDimNames()) {
-        if (dimName == kReg)
-          hardwareLocation.push_back({dimName, regId});
-        else
-          hardwareLocation.push_back({dimName, 0});
-      }
-      auto elemCoords = linearLayoutSrc.apply(hardwareLocation);
-      // 3.  save mapping from src elem coordinates to register idx
-      srcElemToReg[elemCoords] = regId;
-    }
     // for every output register get element coords,
     // find corresponding operand and copy src register
     int dstRegNum = 1 << dstRegBases.size();
-    // 4. for all elements in dst tensor
+    // 1. for all elements in dst tensor
     for (int regId = 0; regId < dstRegNum; ++regId) {
-      SmallVector<std::pair<StringAttr, int32_t>> hardwareLocation;
-      // 5.   get dst value location in tensor
-      for (auto dimName : linearLayoutDst.getInDimNames()) {
-        if (dimName == kReg)
-          hardwareLocation.push_back({dimName, regId});
-        else
-          hardwareLocation.push_back({dimName, 0});
-      }
-      auto elemCoords = linearLayoutDst.apply(hardwareLocation);
+      // 2.   get dst value location in tensor
+      auto elemCoords = mlir::triton::AMD::getElemCoordinatesFromRegisters(
+          linearLayoutDst, regId, ctx);
       auto elemCoordsArray =
           llvm::to_vector(llvm::make_second_range(elemCoords));
       // The n-dim destination tensor is built by arranging n-dim source tensors
@@ -112,21 +85,22 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
               elemCoordsArray, srcShape, std::divides<unsigned>());
       // Compute linear index of the current source tensor.
       // Concat operands are laid out in the destination tensor
-      // in fastest slowest varying dimension order.
-      // 6.   find, which input tile holds the dst value
+      // in fastest  varying dimension order.
+      // 3.   find, which input tile holds the dst value
       auto linearOperandIdx = mlir::LLVM::linearize(
           multiDimOperandIdx, srcToDstShape, defaultOrder);
 
-      // 7.   subtract dst coordinates and start coordinates of the tile
+      // 4.   subtract dst coordinates and start coordinates of the tile
       for (int dim = 0; dim < rank; ++dim)
         elemCoords[dim].second -= multiDimOperandIdx[dim] * srcShape[dim];
 
-      assert(srcElemToReg.contains(elemCoords));
-      // 8.   find source register number which holds dst value
-      int srcRegIdx = srcElemToReg.lookup(elemCoords);
+      // 5.   find source register number which holds dst value
+      std::optional<int> srcReg = mlir::triton::AMD::getRegFromCoordinates(
+          linearLayoutSrc, elemCoords, ctx);
+      assert(srcReg.has_value());
 
-      // 9.   copy dst element from found tile and register
-      resultVals.push_back(unpackedSources[linearOperandIdx][srcRegIdx]);
+      // 6.   copy dst element from found tile and register
+      resultVals.push_back(unpackedSources[linearOperandIdx][srcReg.value()]);
     }
 
     Value packedResult = packLLElements(loc, this->getTypeConverter(),

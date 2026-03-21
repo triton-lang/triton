@@ -12,20 +12,20 @@ static Value getNumPrograms(OpBuilder &rewriter, int numCTAs, Location loc,
   if (numCTAs == 1) {
     switch (axis) {
     case ProgramIDDim::X:
-      return rewriter.create<NVVM::GridDimXOp>(loc, i32_ty);
+      return NVVM::GridDimXOp::create(rewriter, loc, i32_ty);
     case ProgramIDDim::Y:
-      return rewriter.create<NVVM::GridDimYOp>(loc, i32_ty);
+      return NVVM::GridDimYOp::create(rewriter, loc, i32_ty);
     case ProgramIDDim::Z:
-      return rewriter.create<NVVM::GridDimZOp>(loc, i32_ty);
+      return NVVM::GridDimZOp::create(rewriter, loc, i32_ty);
     }
   } else {
     switch (axis) {
     case ProgramIDDim::X:
-      return rewriter.create<NVVM::ClusterDimXOp>(loc, i32_ty);
+      return NVVM::ClusterDimXOp::create(rewriter, loc, i32_ty);
     case ProgramIDDim::Y:
-      return rewriter.create<NVVM::ClusterDimYOp>(loc, i32_ty);
+      return NVVM::ClusterDimYOp::create(rewriter, loc, i32_ty);
     case ProgramIDDim::Z:
-      return rewriter.create<NVVM::ClusterDimZOp>(loc, i32_ty);
+      return NVVM::ClusterDimZOp::create(rewriter, loc, i32_ty);
     }
   }
   llvm_unreachable("invalid axis");

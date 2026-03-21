@@ -7,11 +7,13 @@ import torch
 import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
 from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE, _quantize_mxfp8_fn
-
+from triton.tools.tensor_descriptor import TensorDescriptor
+from triton_kernels.tensor import Tensor, wrap_torch_tensor, empty
+from triton_kernels.tensor_details.layout import StridedLayout
+from triton_kernels.tensor_details.dtype import FP4, FP8_E4M3FN, FP8_E5M2, UINT8
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
 # -----------------------------------------------------------------------------
-
 
 class DequantScaleRoundingMode(Enum):
     # 2^round_up(log2(max/max_q)) avoids clipping the max value
@@ -20,8 +22,7 @@ class DequantScaleRoundingMode(Enum):
     # chance of clipping the max value.
     ROUND_DOWN = 1
 
-
-def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int,
+def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
                      DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP):
     """
          Convert the src weights to mx format. The src weight is quantized along the axis dimension.
@@ -32,43 +33,51 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
          If weight_quant_type is torch.float8_e4m3fn or torch.float8_e5m2, we output mxfp8 with the float8s are stored
          in their respective formats.
     """
-    ndim = src_tensor.ndim
-    assert -ndim <= axis < ndim, f"Invalid axis {axis=}"
-    axis = axis if axis >= 0 else axis + ndim
+    if not isinstance(x, Tensor):
+        x = wrap_torch_tensor(x)
+    if isinstance(out_dtype, torch.dtype):
+        out_dtype = {
+            torch.uint8: FP4,
+            torch.float8_e4m3fn: FP8_E4M3FN,
+            torch.float8_e5m2: FP8_E5M2,
+        }[out_dtype]
+    assert x.shape[axis] % MXFP_BLOCK_SIZE.value == 0, f"axis dim must be divisible by {MXFP_BLOCK_SIZE.value}. Got {x.shape[axis]}"
+    assert isinstance(x.storage.layout, StridedLayout), "input data must be strided"
+    assert -x.ndim <= axis < x.ndim, f"Invalid axis {axis=}"
+    assert out_dtype in (FP4, FP8_E4M3FN, FP8_E5M2), f"Invalid output dtype {out_dtype=}"
+    # handle negative `axis``
+    axis = axis if axis >= 0 else axis + x.ndim
     # downcast
-    src_tensor = src_tensor.transpose(axis, src_tensor.ndim - 1)
-    is_fp4 = out_quant_type == torch.uint8
-    is_fp8 = out_quant_type in (torch.float8_e4m3fn, torch.float8_e5m2)
-    assert is_fp4 or is_fp8
-    divisor = 2 if is_fp4 else 1
-    L = src_tensor.shape[-1]
-    if is_fp4:
-        assert L % 2 == 0, f"axis dim must be divisible by 2 for e2m1. Got {L}"
-    out_shape = src_tensor.shape[:-1] + (L // divisor, )
-    out_scale_shape = src_tensor.shape[:-1] + (triton.cdiv(L, MXFP_BLOCK_SIZE), )
-
-    out_quant_tensor = src_tensor.new_empty(out_shape, dtype=out_quant_type)
-    out_scale = src_tensor.new_empty(out_scale_shape, dtype=torch.uint8)
-
-    if src_tensor.numel() > 0:
-        kernel_src_tensor = src_tensor.reshape(-1, src_tensor.shape[-1])
-        kernel_quant_tensor = out_quant_tensor.view(-1, out_quant_tensor.shape[-1])
-        kernel_scale = out_scale.view(-1, out_scale.shape[-1])
-
-        BLOCK_OUT_DIM = 128
-        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value
-        grid_out = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
-        grid_quant = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
-
-        _downcast_to_mxfp[(grid_out, grid_quant)](kernel_quant_tensor, *kernel_quant_tensor.stride(), kernel_scale,
-                                                *kernel_scale.stride(), kernel_src_tensor, *kernel_src_tensor.stride(),
-                                                *kernel_src_tensor.shape, BLOCK_OUT_DIM, BLOCK_QUANT_DIM,
-                                                DEQUANT_SCALE_ROUNDING_MODE.value, num_warps=8)
-
-    out_quant_tensor = out_quant_tensor.transpose(axis, src_tensor.ndim - 1)
-    out_scale = out_scale.transpose(axis, src_tensor.ndim - 1)
-    return out_quant_tensor, out_scale
-
+    L = x.shape[axis]
+    # Ensure last dimension is a multiple of MXFP_BLOCK_SIZE. This is expected by the kernel.
+    # output value storage
+    y_layout = StridedLayout(major_dim=axis - x.ndim)
+    y_scale_shape = (*x.shape[:axis], triton.cdiv(L, MXFP_BLOCK_SIZE), *x.shape[axis+1:])
+    y_value = empty(x.shape, out_dtype, x.device, y_layout)
+    y_scale = empty(y_scale_shape, UINT8, x.device, y_layout)
+    if x.numel() > 0:
+        # canonicalize to a 2D tensor that paxks 4-bit values on its inner-most dimension
+        x_storage = x.storage.data.transpose(axis, -1).reshape(-1, x.shape[axis])
+        y_storage_value = y_value.storage.data.transpose(axis, -1).view(-1, y_value.storage.data.shape[axis])
+        y_storage_scale = y_scale.storage.data.transpose(axis, -1).view(-1, y_scale.storage.data.shape[axis])
+        # performance hyper-parameters
+        BLOCK_OUT_DIM = 32
+        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value * 4
+        NUM_WARPS = 4 if x.dtype == torch.float32 else 8
+        # launch kernel
+        blocks_out_dim = triton.cdiv(x_storage.shape[0], BLOCK_OUT_DIM)
+        blocks_quant_dim = triton.cdiv(x_storage.shape[1], BLOCK_QUANT_DIM)
+        _downcast_to_mxfp[(blocks_out_dim, blocks_quant_dim)](
+            y_storage_value, *y_storage_value.stride(),
+            y_storage_scale, *y_storage_scale.stride(),
+            x_storage, *x_storage.stride(), *x_storage.shape,
+            BLOCK_OUT_DIM,
+            BLOCK_QUANT_DIM,
+            DEQUANT_SCALE_ROUNDING_MODE.value,
+            num_warps=NUM_WARPS,
+        )
+    # TODO: return tensor object instead of its storage
+    return y_value.storage.data, y_scale.storage.data
 
 def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: torch.dtype, axis: int):
     """
@@ -89,23 +98,56 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: to
     assert scale.dtype == torch.uint8, f"Invalid scale dtype {scale.dtype=}"
     assert target_dtype in (torch.float16, torch.bfloat16, torch.float32), f"Invalid output dtype {target_dtype=}"
     # upcast
-    logical_quant_dim = tensor.shape[axis] * (2 if tensor.dtype == torch.uint8 else 1)
+    pack_multiple = 2 if tensor.dtype == torch.uint8 else 1
+    logical_quant_dim = tensor.shape[axis] * pack_multiple
     tensor = tensor.transpose(axis, tensor.ndim - 1).contiguous()
     scale = scale.transpose(axis, scale.ndim - 1).contiguous()
-    out = torch.empty((*tensor.shape[:-1], logical_quant_dim), dtype=target_dtype, device=tensor.device)
+    original_out_shape = tensor.shape[:-1] + (logical_quant_dim, )
 
     if tensor.numel() > 0:
-        reshaped_out = out.view(-1, out.shape[-1])
         reshaped_tensor = tensor.view(-1, tensor.shape[-1])
         reshaped_scale = scale.view(-1, scale.shape[-1])
-        BLOCK_OUT_DIM = 128
-        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value
+
+        # Pad the tensor and output if needed for tensor descriptor spec requirements.
+        TENSOR_DESC_PAD_REQ = 16
+        needs_padding = reshaped_tensor.shape[-1] % TENSOR_DESC_PAD_REQ != 0
+        if needs_padding:
+            tensor_pad_amount = TENSOR_DESC_PAD_REQ - (reshaped_tensor.shape[-1] % TENSOR_DESC_PAD_REQ)
+            reshaped_tensor = F.pad(reshaped_tensor, (0, tensor_pad_amount), "constant", 0)
+            pad_elems_count = tensor_pad_amount * pack_multiple
+            out_shape = original_out_shape[:-1] + (original_out_shape[-1] + pad_elems_count, )
+        else:
+            out_shape = original_out_shape
+        out = torch.empty(out_shape, dtype=target_dtype, device=tensor.device)
+        reshaped_out = out.view(-1, out.shape[-1])
+
+        is_fp4 = reshaped_tensor.dtype == torch.uint8
+
+        # performance hyper-parameters
+        BLOCK_OUT_DIM = 64
+        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value * 4
+        NUM_WARPS = 4
+
         blocks_out_dim = triton.cdiv(reshaped_out.shape[0], BLOCK_OUT_DIM)
         blocks_quant_dim = triton.cdiv(reshaped_out.shape[1], BLOCK_QUANT_DIM)
-        _upcast_from_mxfp[(blocks_out_dim, blocks_quant_dim)](reshaped_out, *reshaped_out.stride(), reshaped_scale,
-                                                              *reshaped_scale.stride(), reshaped_tensor,
-                                                              *reshaped_tensor.stride(), *reshaped_out.shape, BLOCK_OUT_DIM,
-                                                              BLOCK_QUANT_DIM, num_warps=8)
+        k_divisor = 2 if is_fp4 else 1
+        block_size_quant_mx_tensor = BLOCK_QUANT_DIM // k_divisor
+        out_desc = TensorDescriptor.from_tensor(reshaped_out, [BLOCK_OUT_DIM, BLOCK_QUANT_DIM])
+        tensor_desc = TensorDescriptor.from_tensor(reshaped_tensor, [BLOCK_OUT_DIM, block_size_quant_mx_tensor])
+        _upcast_from_mxfp[(blocks_out_dim, blocks_quant_dim)](
+            out_desc,
+            tensor_desc,
+            reshaped_scale,
+            *reshaped_scale.stride(),
+            *reshaped_out.shape,
+            BLOCK_OUT_DIM,
+            BLOCK_QUANT_DIM,
+            num_warps=NUM_WARPS,
+        )
+        if needs_padding:
+            out = out[..., :original_out_shape[-1]]
+    else:
+        out = torch.empty(original_out_shape, dtype=target_dtype, device=tensor.device)
     out = out.transpose(axis, scale.ndim - 1).contiguous()
     return out
 
@@ -218,19 +260,25 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
         # Extract sign, exponent, and mantissa.
         signs = q_int & 0x80000000
         exponents = right_shift_unsigned(q_int, 23) & 0xFF
-        mantissas = q_int & 0x7FFFFF
+        mantissas_orig = q_int & 0x7FFFFF
 
         E8_BIAS = 127
         E2_BIAS = 1
         # Adjust mantissas for subnormals.
-        mantissas = torch.where(exponents < E8_BIAS, (0x400000 | right_shift_unsigned(mantissas, 1)) >>
-                                (E8_BIAS - exponents - 1), mantissas)
+        is_subnormal = exponents < E8_BIAS
+        shift = E8_BIAS - exponents - 1
+        mantissas_pre = (0x400000 | right_shift_unsigned(mantissas_orig, 1))
+        bit0_dropped = (mantissas_orig & 0x1) != 0
+        mask = (1 << shift.clamp(max=31)) - 1
+        dropped_post = (mantissas_pre & mask) != 0
+        sticky = is_subnormal & (bit0_dropped | dropped_post)
+        mantissas = torch.where(is_subnormal, mantissas_pre >> shift, mantissas_orig)
         exponents = torch.maximum(exponents, torch.tensor(E8_BIAS - E2_BIAS, device=device)) - (E8_BIAS - E2_BIAS)
         # Round to nearest, ties to even (RTNE)
         m2bits = right_shift_unsigned(mantissas, 21) & 0x3
         lsb_keep = right_shift_unsigned(m2bits, 1) & 0x1
         guard = m2bits & 0x1
-        sticky = (mantissas & ((1 << 21) - 1)) != 0
+        sticky |= (mantissas & ((1 << 21) - 1)) != 0
         round_inc = guard & (sticky.to(torch.int32) | lsb_keep)
         e2m1_tmp = right_shift_unsigned(((exponents << 2) | m2bits) + round_inc, 1)
         e2m1_tmp = torch.minimum(e2m1_tmp, torch.tensor(0x7, device=device))

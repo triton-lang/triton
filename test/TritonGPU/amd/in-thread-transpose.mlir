@@ -2,7 +2,7 @@
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
 
@@ -24,11 +24,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // CHECK-DAG: [[TMP1_VAL1:%.*]] = ttg.convert_layout [[LOAD_VAL1]] : tensor<256x32xf16, [[$TRANSPOSABLE_LAYOUT1]]> -> tensor<256x32xf16, [[$OLD_LAYOUT1]]>
 // CHECK-DAG: [[TMP2_VAL1:%.*]] = ttg.convert_layout [[TMP1_VAL1]] : tensor<256x32xf16, [[$OLD_LAYOUT1]]> -> tensor<256x32xf16, [[$TRANSPOSABLE_LAYOUT1]]>
-// CHECK-DAG: [[TRANSPOSED_VAL1:%.*]] = amdgpu.in_thread_transpose [[TMP2_VAL1]] : tensor<256x32xf16, [[$TRANSPOSABLE_LAYOUT1]]> -> tensor<256x32xf16, [[$LINEAR1]]>
+// CHECK-DAG: [[TRANSPOSED_VAL1:%.*]] = amdg.in_thread_transpose [[TMP2_VAL1]] : tensor<256x32xf16, [[$TRANSPOSABLE_LAYOUT1]]> -> tensor<256x32xf16, [[$LINEAR1]]>
 
 // CHECK-DAG: [[TMP1_VAL2:%.*]] = ttg.convert_layout [[LOAD_VAL2]] : tensor<32x128xf16, [[$TRANSPOSABLE_LAYOUT2]]> -> tensor<32x128xf16, [[$OLD_LAYOUT2]]>
 // CHECK-DAG: [[TMP2_VAL2:%.*]] = ttg.convert_layout [[TMP1_VAL2]] : tensor<32x128xf16, [[$OLD_LAYOUT2]]> -> tensor<32x128xf16, [[$TRANSPOSABLE_LAYOUT2]]>
-// CHECK-DAG: [[TRANSPOSED_VAL2:%.*]] = amdgpu.in_thread_transpose [[TMP2_VAL2]] : tensor<32x128xf16, [[$TRANSPOSABLE_LAYOUT2]]> -> tensor<32x128xf16, [[$LINEAR2]]>
+// CHECK-DAG: [[TRANSPOSED_VAL2:%.*]] = amdg.in_thread_transpose [[TMP2_VAL2]] : tensor<32x128xf16, [[$TRANSPOSABLE_LAYOUT2]]> -> tensor<32x128xf16, [[$LINEAR2]]>
 
 // CHECK-DAG: [[ALLOC1:%.*]] = ttg.local_alloc [[TRANSPOSED_VAL1]] : (tensor<256x32xf16, [[$LINEAR1]]>) -> !ttg.memdesc<256x32xf16, [[$SHARED1]], #smem>
 // CHECK-DAG: [[ALLOC2:%.*]] = ttg.local_alloc [[TRANSPOSED_VAL2]] : (tensor<32x128xf16, [[$LINEAR2]]>) -> !ttg.memdesc<32x128xf16, [[$SHARED2]], #smem>
@@ -56,7 +56,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [16, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [1, 8], order = [0, 1]}>
-#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
 
@@ -93,7 +93,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
 
@@ -140,7 +140,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // CHECK-DAG: [[TMP1_VAL_preloop:%.*]] = ttg.convert_layout [[LOAD_VAL_preloop]] : tensor<64x64xf16, [[$TRANSPOSABLE_LAYOUT]]> -> tensor<64x64xf16, [[$OLD_LAYOUT]]>
 // CHECK-DAG: [[TMP2_VAL_preloop:%.*]] = ttg.convert_layout [[TMP1_VAL_preloop]] : tensor<64x64xf16, [[$OLD_LAYOUT]]> -> tensor<64x64xf16, [[$TRANSPOSABLE_LAYOUT]]>
-// CHECK-DAG: [[TRANSPOSED_VAL_preloop:%.*]] = amdgpu.in_thread_transpose [[TMP2_VAL_preloop]] : tensor<64x64xf16, [[$TRANSPOSABLE_LAYOUT]]> -> tensor<64x64xf16, [[$LINEAR]]>
+// CHECK-DAG: [[TRANSPOSED_VAL_preloop:%.*]] = amdg.in_thread_transpose [[TMP2_VAL_preloop]] : tensor<64x64xf16, [[$TRANSPOSABLE_LAYOUT]]> -> tensor<64x64xf16, [[$LINEAR]]>
 
 // CHECK-DAG: ttg.local_store [[TRANSPOSED_VAL_preloop]], {{.*}} : tensor<64x64xf16, [[$LINEAR]]> -> !ttg.memdesc<64x64xf16, [[$SHARED]], #smem, mutable>
 // CHECK: scf.for
@@ -149,7 +149,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // CHECK-DAG: [[TMP1_VAL_loop:%.*]] = ttg.convert_layout [[LOAD_VAL_loop]] : tensor<64x64xf16, [[$TRANSPOSABLE_LAYOUT]]> -> tensor<64x64xf16, [[$OLD_LAYOUT]]>
 // CHECK-DAG: [[TMP2_VAL_loop:%.*]] = ttg.convert_layout [[TMP1_VAL_loop]] : tensor<64x64xf16, [[$OLD_LAYOUT]]> -> tensor<64x64xf16, [[$TRANSPOSABLE_LAYOUT]]>
-// CHECK-DAG: [[TRANSPOSED_VAL_loop:%.*]] = amdgpu.in_thread_transpose [[TMP2_VAL_loop]] : tensor<64x64xf16, [[$TRANSPOSABLE_LAYOUT]]> -> tensor<64x64xf16, [[$LINEAR]]>
+// CHECK-DAG: [[TRANSPOSED_VAL_loop:%.*]] = amdg.in_thread_transpose [[TMP2_VAL_loop]] : tensor<64x64xf16, [[$TRANSPOSABLE_LAYOUT]]> -> tensor<64x64xf16, [[$LINEAR]]>
 
 // CHECK: ttg.local_store [[TRANSPOSED_VAL_loop]], {{.*}} : tensor<64x64xf16, [[$LINEAR]]> -> !ttg.memdesc<64x64xf16, [[$SHARED]], #smem, mutable>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
@@ -228,7 +228,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 // CHECK-DAG: [[LOAD_VAL1:%.*]] = tt.load [[LOAD_ADDR_CVT1]]
 // CHECK-DAG: [[LOAD_VAL1_CVT1:%.*]] = ttg.convert_layout [[LOAD_VAL1]]
 // CHECK-DAG: [[LOAD_VAL1_CVT2:%.*]] = ttg.convert_layout [[LOAD_VAL1_CVT1:%.*]]
-// CHECK-DAG: [[TRANSPOSED_IN_REG1:%.*]] = amdgpu.in_thread_transpose [[LOAD_VAL1_CVT2]]
+// CHECK-DAG: [[TRANSPOSED_IN_REG1:%.*]] = amdg.in_thread_transpose [[LOAD_VAL1_CVT2]]
 // CHECK-DAG: [[LOCAL_ALLOC1:%.*]] = ttg.local_alloc [[TRANSPOSED_IN_REG1]]
 // CHECK-DAG: [[LOCAL_LOAD1:%.*]] = ttg.local_load [[LOCAL_ALLOC1]]
 // CHECK-DAG: scf.yield [[LOCAL_LOAD1]]
@@ -237,14 +237,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 // CHECK-DAG: [[LOAD_VAL2:%.*]] = tt.load [[LOAD_ADDR_CVT2]]
 // CHECK-DAG: [[LOAD_VAL2_CVT1:%.*]] = ttg.convert_layout [[LOAD_VAL2]]
 // CHECK-DAG: [[LOAD_VAL2_CVT2:%.*]] = ttg.convert_layout [[LOAD_VAL2_CVT1:%.*]]
-// CHECK-DAG: [[TRANSPOSED_IN_REG2:%.*]] = amdgpu.in_thread_transpose [[LOAD_VAL2_CVT2]]
+// CHECK-DAG: [[TRANSPOSED_IN_REG2:%.*]] = amdg.in_thread_transpose [[LOAD_VAL2_CVT2]]
 // CHECK-DAG: [[LOCAL_ALLOC2:%.*]] = ttg.local_alloc [[TRANSPOSED_IN_REG2]]
 // CHECK-DAG: [[LOCAL_LOAD2:%.*]] = ttg.local_load [[LOCAL_ALLOC2]]
 // CHECK-DAG: scf.yield [[LOCAL_LOAD2]]
 // CHECK: tt.dot {{.*}}, [[IF]]
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
 
@@ -279,17 +279,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK:   scf.if {{.*}} -> (tensor<32x128xf16, #blocked>) {
 // CHECK:   } else {
 // CHECK:   }
-// CHECK:   [[TRANS1:%.*]] = amdgpu.in_thread_transpose {{.*}} : tensor<32x128xf16
+// CHECK:   [[TRANS1:%.*]] = amdg.in_thread_transpose {{.*}} : tensor<32x128xf16
 // CHECK:   [[ALLOC1:%.*]] = ttg.local_alloc [[TRANS1]] : {{.*}} !ttg.memdesc<32x128xf16
 // CHECK:   scf.yield [[ALLOC1]] : !ttg.memdesc<32x128xf16, #shared, #smem>
 // CHECK: } else {
-// CHECK:   [[TRANS2:%.*]] = amdgpu.in_thread_transpose {{.*}} : tensor<32x128xf16
+// CHECK:   [[TRANS2:%.*]] = amdg.in_thread_transpose {{.*}} : tensor<32x128xf16
 // CHECK:   [[ALLOC2:%.*]] = ttg.local_alloc [[TRANS2]] : {{.*}} -> !ttg.memdesc<32x128xf16
 // CHECK:   scf.yield [[ALLOC2]] : !ttg.memdesc<32x128xf16
 // CHECK: }
 // CHECK: ttg.local_load [[IF]]
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
@@ -327,15 +327,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // }
 //
 // CHECK-LABEL: inThreadTranspose_inbound_df_while_regression
-// CHECK: [[TRANS1:%.*]] = amdgpu.in_thread_transpose
+// CHECK: [[TRANS1:%.*]] = amdg.in_thread_transpose
 // CHECK: ttg.local_alloc [[TRANS1]] : (tensor<32x128xf16
 // CHECK: scf.while
 // CHECK: } do {
-// CHECK:  [[TRANS2:%.*]] = amdgpu.in_thread_transpose
+// CHECK:  [[TRANS2:%.*]] = amdg.in_thread_transpose
 // CHECK:  ttg.local_store [[TRANS2]], {{.*}} : tensor<32x128xf16
 // CHECK: }
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
@@ -369,15 +369,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // use %w
 //
 // CHECK-LABEL: inThreadTranspose_outbound_df_while_regression
-// CHECK: [[TRANS1:%.*]] = amdgpu.in_thread_transpose
+// CHECK: [[TRANS1:%.*]] = amdg.in_thread_transpose
 // CHECK: ttg.local_alloc [[TRANS1]] : (tensor<32x128xf16
 // CHECK: scf.while
 // CHECK: } do {
 // CHECK: }
-// CHECK: [[TRANS2:%.*]] = amdgpu.in_thread_transpose
+// CHECK: [[TRANS2:%.*]] = amdg.in_thread_transpose
 // CHECK: ttg.local_store [[TRANS2]], {{.*}} : tensor<32x128xf16
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
@@ -409,14 +409,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // }
 //
 // CHECK-LABEL: inThreadTranspose_inbound_df_for_regression
-// CHECK: [[TRANS1:%.*]] = amdgpu.in_thread_transpose
+// CHECK: [[TRANS1:%.*]] = amdg.in_thread_transpose
 // CHECK: ttg.local_alloc [[TRANS1]] : (tensor<32x128xf16
 // CHECK: scf.for
-// CHECK:   [[TRANS2:%.*]] = amdgpu.in_thread_transpose
+// CHECK:   [[TRANS2:%.*]] = amdg.in_thread_transpose
 // CHECK:   ttg.local_store [[TRANS2]], {{.*}} : tensor<32x128xf16
 // CHECK: }
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
@@ -449,12 +449,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 //
 // CHECK-LABEL: inThreadTranspose_outbound_df_for_regression
 // CHECK: scf.for
-// CHECK:   [[TRANS:%.*]] = amdgpu.in_thread_transpose
+// CHECK:   [[TRANS:%.*]] = amdg.in_thread_transpose
 // CHECK:   ttg.local_store [[TRANS]], {{.*}} : tensor<32x128xf16
 // CHECK: }
 // CHECK: ttg.local_load
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
@@ -496,11 +496,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK:   [[ALLOC2:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<32x128xf16
 // CHECK:   scf.yield [[ALLOC2]]
 // CHECK: }
-// CHECK: [[TRANS:%.*]] = amdgpu.in_thread_transpose
+// CHECK: [[TRANS:%.*]] = amdg.in_thread_transpose
 // CHECK: ttg.local_store [[TRANS]], [[IF]] : tensor<32x128xf16
 // CHECK: ttg.local_load [[IF]] : !ttg.memdesc<32x128xf16
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
@@ -523,7 +523,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // -----
 // Test that ITT is not used for direct-to-lds loads
 // CHECK-LABEL: inThreadTranspose_async_copy
-// CHECK-NOT: amdgpu.in_thread_transpose
+// CHECK-NOT: amdg.in_thread_transpose
 // CHECK: tt.return
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
@@ -540,7 +540,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %2 = ttg.async_copy_global_to_local %0, %1 : tensor<256x32x!tt.ptr<f16>, #blocked1> -> <256x32xf16, #shared, #smem, mutable>
     %3 = ttg.local_load %1 : !ttg.memdesc<256x32xf16, #shared, #smem, mutable> -> tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
     %4 = ttg.local_alloc : () -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
-    %5 = amdgpu.buffer_load_to_local %arg1[%cst_0] into %4 : <f16>[tensor<32x128xi32, #blocked>]  -> <32x128xf16, #shared, #smem, mutable>
+    %5 = amdg.buffer_load_to_local %arg1[%cst_0] into %4 : <f16>[tensor<32x128xi32, #blocked>]  -> <32x128xf16, #shared, #smem, mutable>
     %6 = ttg.local_load %4 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
     %7 = tt.dot %3, %6, %cst : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
     tt.return

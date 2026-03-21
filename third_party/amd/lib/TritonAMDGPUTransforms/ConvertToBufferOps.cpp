@@ -26,7 +26,6 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using ::mlir::LLVM::AMD::getVectorSize;
-using mlir::triton::AMD::ISAFamily;
 
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
@@ -128,11 +127,15 @@ bool isFuncArgWith32bitPtrRange(mlir::Value value) {
 }
 
 // Quick analysis on the Triton IR to decide if we can safely use
-// buffer operations
+// buffer operations. When returning true and the offset is 64-bit,
+// this function inserts an arith.trunci to narrow the offset to i32,
+// mutating the addPtrOp's offset operand in place so all callers
+// automatically see the truncated offset.
 bool canUseBufferOps(Value ptr,
                      const DenseMap<Value, SetVector<Operation *>> &assumptions,
                      std::shared_ptr<DataFlowSolver> solver,
-                     bool analyzeSmallTensorOfst) {
+                     bool analyzeSmallTensorOfst, PatternRewriter &rewriter,
+                     Location loc) {
   // 1. Check if the pointer is uniform: i.e., if it comes from a uniform
   // pointer(splatted) and non-uniform offset addition
 
@@ -146,32 +149,37 @@ bool canUseBufferOps(Value ptr,
     return false;
   LDBG("Pattern matched");
 
-  // 2. check if the offset is either 32 or 64-bit.
+  // 2. Get offset bit width.
   Value offset = addPtrOp.getOffset();
   auto ofstBit =
       cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth();
   LLVM_DEBUG(llvm::dbgs() << "offset bits:" << ofstBit << "\n");
 
-  // TODO: step 3 and 4 can be reversed to further optimize for performance.
-  // When the base-ptr is func argument and has tt.pointer_range=32 attribute,
-  // it's safe to promote the mem-op into buffer-op even if offset is a 64-bit
-  // value. If this is the case, offset need to be cast down to 32-bit.
-
-  // 3. Bail out if ofst cannot fit in 32-bit.
-  if (ofstBit != 32)
-    return false;
-
-  // 4. If the base is function formal argument which has attribute
-  //  tt.point_range=32, then it's safe to promote this memory op into
-  //  bufferOp. In this case, if offset is 64-bit, we should cast it down to
-  //  32-bit.
+  // 3. Determine if buffer op conversion is safe via pointer_range attribute
+  //    or range analysis.
+  bool isSafe = false;
   if (!analyzeSmallTensorOfst &&
       isFuncArgWith32bitPtrRange(maybeSplatOp.getSrc())) {
-    LDBG("base-ptr as tt.pointer_range=32 attribute");
-    return true;
+    LDBG("base-ptr has tt.pointer_range=32 attribute");
+    isSafe = true;
+  } else {
+    isSafe = isByteOffsetSmallerThan2GB(addPtrOp, std::move(solver));
   }
 
-  return isByteOffsetSmallerThan2GB(addPtrOp, std::move(solver));
+  if (!isSafe)
+    return false;
+
+  // 4. Buffer ops require i32 offsets. Truncate i64 offsets to i32 now that
+  //    we've proven the byte offset fits in 32 bits.
+  if (ofstBit == 64) {
+    auto offsetTy = cast<RankedTensorType>(offset.getType());
+    auto i32Ty = RankedTensorType::get(
+        offsetTy.getShape(), rewriter.getI32Type(), offsetTy.getEncoding());
+    Value truncated = arith::TruncIOp::create(rewriter, loc, i32Ty, offset);
+    addPtrOp.getOffsetMutable().assign(truncated);
+  }
+
+  return true;
 }
 
 // Extract stride of the blocked offset of LD/ST ops.
@@ -215,7 +223,8 @@ struct ConvertTritonAtomicCASOpToBufferAtomicCAS
     auto sem = op.getSem();
     auto scope = op.getScope();
 
-    if (!canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst)) {
+    if (!canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst,
+                         rewriter, op->getLoc())) {
       return rewriter.notifyMatchFailure(op, "canUseBufferOps check failed");
     }
 
@@ -292,11 +301,11 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       mlir::MLIRContext *context,
       DenseMap<Value, SetVector<Operation *>> &assumptions,
       ModuleAxisInfoAnalysis &axisAnalysisPass,
-      std::shared_ptr<DataFlowSolver> solver, ISAFamily isaFamily,
-      bool analyzeSmallTensorOfst_)
+      std::shared_ptr<DataFlowSolver> solver,
+      const triton::AMD::TargetInfo &targetInfo, bool analyzeSmallTensorOfst_)
       : mlir::OpRewritePattern<triton::AtomicRMWOp>(context),
         assumptions(assumptions), axisAnalysisPass(axisAnalysisPass),
-        solver(std::move(solver)), isaFamily(isaFamily),
+        solver(std::move(solver)), targetInfo(targetInfo),
         analyzeSmallTensorOfst(analyzeSmallTensorOfst_) {}
 
   mlir::LogicalResult
@@ -310,7 +319,8 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
 
     // In addition to the `canUserBufferOps` check, we should ensure that
     // 1. Perform the canUserBufferOps check
-    if (!canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst)) {
+    if (!canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst,
+                         rewriter, op->getLoc())) {
       return rewriter.notifyMatchFailure(op, "canUseBufferOps check failed");
     }
 
@@ -355,15 +365,17 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
     LDBG("RMW supported type");
 
-    // float16 is the only 16-bit dtype supported by buffer atomic fadd on
-    // gfx942
-    if (isaFamily == ISAFamily::CDNA3 && checkType.isBF16() &&
-        atomicRmwOp == RMWOp::FADD) {
-      return rewriter.notifyMatchFailure(op, "RMW FADD does not support bf16");
+    if (atomicRmwOp == RMWOp::FADD &&
+        !targetInfo.supportsBufferAtomicFadd(checkType)) {
+      return rewriter.notifyMatchFailure(
+          op, "RMW FADD unsupported for this type on target");
     }
-    LDBG("RMW FADD supported 16-bit type");
+    LDBG("RMW FADD supported type");
 
     auto vecSize = getVectorSize(ptr, axisAnalysisPass);
+    if (auto mask = op.getMask()) {
+      vecSize = std::min(vecSize, axisAnalysisPass.getMaskAlignment(mask));
+    }
     // f16/bf16 dtypes could only be efficiently calculated using instructions
     // that pack 2 elements (e.g. @llvm.amdgcn.raw.buffer.atomic.fadd.v2f16)
     if (vecSize % 2 != 0 && (checkType.isF16() || checkType.isBF16())) {
@@ -433,7 +445,7 @@ private:
   DenseMap<Value, SetVector<Operation *>> assumptions;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
   std::shared_ptr<DataFlowSolver> solver;
-  ISAFamily isaFamily;
+  triton::AMD::TargetInfo targetInfo;
   bool analyzeSmallTensorOfst;
 };
 
@@ -449,22 +461,18 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   ConvertTritonLoadToBufferLoad(
       mlir::MLIRContext *context,
       DenseMap<Value, SetVector<Operation *>> &assumptions,
+      ModuleAxisInfoAnalysis &axisAnalysisPass,
       std::shared_ptr<DataFlowSolver> solver, bool analyzeSmallTensorOfst_)
       : mlir::OpRewritePattern<SourceOp>(context), assumptions(assumptions),
-        solver(std::move(solver)),
+        axisAnalysisPass(axisAnalysisPass), solver(std::move(solver)),
         analyzeSmallTensorOfst(analyzeSmallTensorOfst_) {}
-
   mlir::LogicalResult
   matchAndRewrite(SourceOp op, PatternRewriter &rewriter) const override {
     LDBG("Try to convert: " << op);
     Value ptr = op.getOperand(0);
 
-    if (toDodgeBug(op)) {
-      LDBG("To dodge a llc bug arising from f32 load fed to tt.dot " << op);
-      return rewriter.notifyMatchFailure(op, "Failed to convert LoadOp");
-    }
-
-    if (canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst)) {
+    if (canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst,
+                        rewriter, op->getLoc())) {
       auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
       Value tensorPtr = addPtrOp.getPtr();
       Value tensorOffset = addPtrOp.getOffset();
@@ -480,15 +488,20 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
 
       auto bufferLoadOp = [&]() {
         if constexpr (std::is_same_v<SourceOp, triton::LoadOp>) {
-          return rewriter.create<triton::amdgpu::BufferLoadOp>(
-              op->getLoc(), op.getType(), basePtr, tensorOffset, blockStride,
-              op.getCache(), maybeMask, maybeOther);
+          unsigned contig = getVectorSize(ptr, axisAnalysisPass);
+          if (maybeMask)
+            contig = std::min<unsigned>(
+                contig, axisAnalysisPass.getMaskAlignment(maybeMask));
+          return triton::amdgpu::BufferLoadOp::create(
+              rewriter, op->getLoc(), op.getType(), basePtr, tensorOffset,
+              blockStride, op.getCache(), maybeMask, maybeOther, contig);
         } else if constexpr (std::is_same_v<
                                  SourceOp,
                                  triton::gpu::AsyncCopyGlobalToLocalOp>) {
-          return rewriter.create<triton::amdgpu::BufferLoadToLocalOp>(
-              op->getLoc(), op.getType(), op.getResult(), basePtr, tensorOffset,
-              maybeMask, maybeOther, blockStride, op.getCache());
+          return triton::amdgpu::BufferLoadToLocalOp::create(
+              rewriter, op->getLoc(), op.getType(), op.getResult(), basePtr,
+              tensorOffset, maybeMask, maybeOther, blockStride, op.getCache(),
+              op.getContiguity());
         } else {
           static_assert(always_false<SourceOp>::value,
                         "Unsupported type in ConvertTritonLoadToBufferLoad");
@@ -506,31 +519,9 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   }
 
 private:
-  // Currently, we need to dodge a LLC bug arising from f32 load fed to
-  // tt.dot.
-  mutable llvm::SmallMapVector<tt::FuncOp, std::optional<bool>, 2> hasDotOpMap;
-  bool toDodgeBug(SourceOp ld) const {
-    auto ty = getElementTypeOrSelf(ld.getResult());
-    if (!ty.isF32())
-      return false;
-
-    auto func = ld->template getParentOfType<tt::FuncOp>();
-    if (!func)
-      return true;
-
-    bool mayHaveDot = false;
-    if (auto iter = hasDotOpMap.find(func); iter != hasDotOpMap.end()) {
-      mayHaveDot = iter->second.value();
-    } else {
-      mayHaveDot = false;
-      func.walk([&](tt::DotOp dot) { mayHaveDot = true; });
-      hasDotOpMap.insert(std::make_pair(func, std::optional<bool>(mayHaveDot)));
-    }
-    return mayHaveDot;
-  }
-
   // Assumptions collected through the function
   DenseMap<Value, SetVector<Operation *>> assumptions;
+  ModuleAxisInfoAnalysis &axisAnalysisPass;
   std::shared_ptr<DataFlowSolver> solver;
   bool analyzeSmallTensorOfst;
 };
@@ -542,9 +533,11 @@ struct ConvertTritonStoreToBufferStore
   ConvertTritonStoreToBufferStore(
       mlir::MLIRContext *context,
       DenseMap<Value, SetVector<Operation *>> &assumptions,
+      ModuleAxisInfoAnalysis &axisAnalysisPass,
       std::shared_ptr<DataFlowSolver> solver, bool analyzeSmallTensorOfst_)
       : mlir::OpRewritePattern<triton::StoreOp>(context),
-        assumptions(assumptions), solver(std::move(solver)),
+        assumptions(assumptions), axisAnalysisPass(axisAnalysisPass),
+        solver(std::move(solver)),
         analyzeSmallTensorOfst(analyzeSmallTensorOfst_) {}
 
   mlir::LogicalResult
@@ -553,19 +546,25 @@ struct ConvertTritonStoreToBufferStore
     LDBG("Try to convert: " << op);
     Value ptr = op.getPtr();
 
-    if (canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst)) {
+    if (canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst,
+                        rewriter, op->getLoc())) {
       auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
       Value tensorPtr = addPtrOp.getPtr();
       Value tensorOffset = addPtrOp.getOffset();
       auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
       Value basePtr = splatOp.getSrc();
       Value maybeMask{};
-      if (op.getMask() && !isSplatOneConstTensor(op.getMask()))
+      unsigned contig = getVectorSize(ptr, axisAnalysisPass);
+      if (op.getMask() && !isSplatOneConstTensor(op.getMask())) {
         maybeMask = op.getMask();
+        contig = std::min<unsigned>(
+            contig, axisAnalysisPass.getMaskAlignment(maybeMask));
+      }
       Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
+
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
           op, op.getValue(), basePtr, tensorOffset, blockStride, op.getCache(),
-          maybeMask);
+          maybeMask, contig);
       return success();
     }
     LDBG("Failed to convert: " << op);
@@ -575,6 +574,7 @@ struct ConvertTritonStoreToBufferStore
 private:
   // Assumptions collected through the function
   DenseMap<Value, SetVector<Operation *>> assumptions;
+  ModuleAxisInfoAnalysis &axisAnalysisPass;
   std::shared_ptr<DataFlowSolver> solver;
   bool analyzeSmallTensorOfst;
 };
@@ -590,8 +590,7 @@ struct TritonAMDGPUConvertToBufferOpsPass
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp mod = getOperation();
-    auto arch = getAMDArch(mod);
-    triton::AMD::TargetInfo targetInfo(arch ? arch->str() : "");
+    triton::AMD::TargetInfo targetInfo(archGenerationName);
 
     // Collect assumptions in the function
     DenseMap<Value, SetVector<Operation *>> assumptions =
@@ -607,25 +606,19 @@ struct TritonAMDGPUConvertToBufferOpsPass
 
     AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     patterns.add<ConvertTritonLoadToBufferLoad<tt::LoadOp>,
-                 ConvertTritonStoreToBufferStore>(context, assumptions, solver,
+                 ConvertTritonStoreToBufferStore>(context, assumptions,
+                                                  axisInfoAnalysis, solver,
                                                   this->analyzeSmallTensorOfst);
-    // BufferLoadToLds is only supported on CDNA3 and CDNA4
-    if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
-                           targetInfo.getISAFamily())) {
+    if (targetInfo.supportsBufferLoadToLocal()) {
       patterns
           .add<ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>>(
-              context, assumptions, solver, this->analyzeSmallTensorOfst);
+              context, assumptions, axisInfoAnalysis, solver,
+              this->analyzeSmallTensorOfst);
     }
 
-    // Gate buffer atomics behind CDNA3 for now
-    // GFX942-specific assumptions regarding cache coherence are made when
-    // lowering to LLVM
-    triton::AMD::ISAFamily isaFamily =
-        triton::AMD::deduceISAFamily(archGenerationName);
-    if (this->allowBufferAtomics &&
-        (ISAFamily::CDNA3 == isaFamily || ISAFamily::CDNA4 == isaFamily))
+    if (this->allowBufferAtomics && targetInfo.supportsBufferAtomicRMW())
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
-          context, assumptions, axisInfoAnalysis, solver, isaFamily,
+          context, assumptions, axisInfoAnalysis, solver, targetInfo,
           this->analyzeSmallTensorOfst);
     patterns.add<ConvertTritonAtomicCASOpToBufferAtomicCAS>(
         context, assumptions, axisInfoAnalysis, solver,

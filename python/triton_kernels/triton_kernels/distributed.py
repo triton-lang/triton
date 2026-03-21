@@ -1,12 +1,10 @@
 # fmt: off
-
 import torch
-import torch.distributed as dist
-import torch.distributed._symmetric_memory as symm_mem
 import triton
 import triton.language as tl
 import random
 from dataclasses import dataclass
+from .distributed_details.mesh import SymmetricMemoryPool
 
 @dataclass
 class ExptAssignment:
@@ -114,10 +112,10 @@ def _convert_launch_metadata(grid, kernel, args):
     local_expt_indx = expt_indx[src_row_start:src_row_start + n_tokens_local]
     src_rank_filter = expt_filter[src_rank]
     local_filter = ((src_rank_filter[local_expt_indx // 32] >> (local_expt_indx % 32)) & 1).to(torch.int32)
-    dst_local_tokens = torch.sum(local_filter).item()
+    dst_local_tokens = torch.sum(local_filter)
     dst_output_tokens = local_filter.numel() - dst_local_tokens
     global_filter = ((src_rank_filter[expt_indx // 32] >> (expt_indx % 32)) & 1).to(torch.int32)
-    dst_input_tokens = torch.sum(global_filter).item() - dst_local_tokens
+    dst_input_tokens = torch.sum(global_filter) - dst_local_tokens
     # Calculate the number of bytes transferred out from this GPU
     dram_bytes = src_bytes + dst_local_tokens * d_model * elem_bytes
     if "dp_to_ep" in kernel.name:
@@ -175,26 +173,25 @@ def _convert_dp_to_ep(
         dst_ptrs += BLOCK
 
 
-def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
+def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx, symm_mem_pool: SymmetricMemoryPool):
     expt_bitmask = expt_assignment.expt_bitmask
     # extract problem dimensions
-    rank = dist.get_rank()
-    n_ranks = dist.get_world_size()
     device = src.device
     n_tokens_local, d_model = src.shape
     n_tokens_global, n_expt_act = expt_indx.shape
     # validate invariants
-    assert n_ranks == expt_bitmask.size(0)
+    assert symm_mem_pool.mesh.world_size == expt_bitmask.size(0)
     assert all(t.device == device for t in [expt_bitmask, expt_indx, gate_indx]), "all tensors must be on the same device"
     assert expt_bitmask.dtype == torch.int32, "expt_bitmask must be int32 bitmask words"
     assert expt_bitmask.stride(-1) == 1 and expt_indx.stride(-1) == 1 and gate_indx.stride(-1) == 1
-    assert n_tokens_local * n_ranks <= n_tokens_global
-    assert gate_indx.shape == (n_tokens_global*n_expt_act, ), f"{tuple(gate_indx.shape)} != {(n_tokens_global*n_expt_act,)}"
-    # allocate symmetric memory
-    dst_local = symm_mem.empty((n_tokens_global*n_expt_act, d_model), dtype=src.dtype, device=device)
-    # create tensor of peer pointers
-    hdl = symm_mem.rendezvous(dst_local, dist.group.WORLD)
-    peer_bufs = [hdl.get_buffer(r, dst_local.shape, dst_local.dtype) for r in range(n_ranks)]
+    assert n_tokens_local * symm_mem_pool.mesh.world_size <= n_tokens_global
+    peer_bufs = symm_mem_pool.make_empty(
+        region="dp_to_ep",
+        shape=(n_tokens_global * n_expt_act, d_model),
+        dtype=src.dtype,
+    )
+    dst_local = peer_bufs[symm_mem_pool.mesh.local_rank]
+    hdl = symm_mem_pool.hdl
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_local,)
@@ -205,9 +202,9 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
         expt_indx, expt_indx.stride(0),
         gate_indx, n_expt_act,
         n_tokens_local,
-        SRC_RANK=rank,
+        SRC_RANK=symm_mem_pool.mesh.local_rank,
         N_EXPT_ACT=n_expt_act,
-        N_RANKS=n_ranks,
+        N_RANKS=symm_mem_pool.mesh.world_size,
         BLOCK=BLOCK,
     )
     hdl.barrier(channel=0)
@@ -256,18 +253,18 @@ def _convert_ep_to_dp(
         dst_ptrs += BLOCK
 
 
-def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
+def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx, symm_mem_pool: SymmetricMemoryPool):
     expt_bitmask = expt_assignment.expt_bitmask
     # extract problem dimensions
-    rank = dist.get_rank()
-    n_ranks = dist.get_world_size()
-    device = src.device
     n_tokens_global, d_model = src.shape
-    n_tokens_local = n_tokens_global // n_ranks
-    # allocate symmetric memory
-    dst_local = symm_mem.empty((n_tokens_local, d_model), dtype=src.dtype, device=device)
-    hdl = symm_mem.rendezvous(dst_local, dist.group.WORLD)
-    peer_bufs = [hdl.get_buffer(r, dst_local.shape, dst_local.dtype) for r in range(n_ranks)]
+    n_tokens_local = n_tokens_global // symm_mem_pool.mesh.world_size
+    peer_bufs = symm_mem_pool.make_empty(
+        region="ep_to_dp",
+        shape=(n_tokens_local, d_model),
+        dtype=src.dtype,
+    )
+    dst_local = peer_bufs[symm_mem_pool.mesh.local_rank]
+    hdl = symm_mem_pool.hdl
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_global,)
@@ -279,8 +276,8 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
         topk_indx,
         n_tokens_local,
         BLOCK=BLOCK,
-        SRC_RANK=rank,
-        N_RANKS=n_ranks,
+        SRC_RANK=symm_mem_pool.mesh.local_rank,
+        N_RANKS=symm_mem_pool.mesh.world_size,
     )
     hdl.barrier(channel=0)
     return dst_local

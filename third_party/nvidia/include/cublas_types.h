@@ -67,6 +67,13 @@ typedef enum {
   CUBLASLT_MATMUL_DESC_ATOMIC_SYNC_NUM_CHUNKS_D_COLS = 28,
   CUBLASLT_MATMUL_DESC_ATOMIC_SYNC_IN_COUNTERS_POINTER = 29,
   CUBLASLT_MATMUL_DESC_ATOMIC_SYNC_OUT_COUNTERS_POINTER = 30,
+  CUBLASLT_MATMUL_DESC_A_SCALE_MODE = 31,
+  CUBLASLT_MATMUL_DESC_B_SCALE_MODE = 32,
+  CUBLASLT_MATMUL_DESC_C_SCALE_MODE = 33,
+  CUBLASLT_MATMUL_DESC_D_SCALE_MODE = 34,
+  CUBLASLT_MATMUL_DESC_EPILOGUE_AUX_SCALE_MODE = 35,
+  CUBLASLT_MATMUL_DESC_D_OUT_SCALE_POINTER = 36,
+  CUBLASLT_MATMUL_DESC_D_OUT_SCALE_MODE = 37,
 } cublasLtMatmulDescAttributes_t;
 
 typedef enum {
@@ -77,6 +84,21 @@ typedef enum {
   CUBLAS_OP_CONJG =
       3 /* conjugate, placeholder - not supported in the current release */
 } cublasOperation_t;
+
+typedef enum {
+  CUBLASLT_MATMUL_MATRIX_SCALE_SCALAR_32F =
+      0, /* FP32 scalar applied to the whole tensor */
+  CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3 =
+      1, /* FP8 E4M3 scales (nvfp4) for each 16-elem. block in innermost dim */
+  CUBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0 =
+      2, /* E8M0 scales (mxfp8) for each 32-elem. block in innermost dim */
+  CUBLASLT_MATMUL_MATRIX_SCALE_OUTER_VEC_32F =
+      3, /* FP32 vector scales, see documentation for details */
+  CUBLASLT_MATMUL_MATRIX_SCALE_VEC128_32F =
+      4, /* FP32 scales for each 128-elem. block in innermost dim */
+  CUBLASLT_MATMUL_MATRIX_SCALE_BLK128x128_32F =
+      5, /* FP32 scales for each 128x128-elem. block in innermost dim */
+} cublasLtMatmulMatrixScale_t;
 
 typedef enum {
   CUBLASLT_MATMUL_PREF_SEARCH_MODE = 0,
@@ -112,39 +134,40 @@ typedef struct {
 } cublasLtMatmulHeuristicResult_t;
 
 typedef enum cudaDataType_t {
-  CUDA_R_16F = 2,      /* real as a half */
-  CUDA_C_16F = 6,      /* complex as a pair of half numbers */
-  CUDA_R_16BF = 14,    /* real as a nv_bfloat16 */
-  CUDA_C_16BF = 15,    /* complex as a pair of nv_bfloat16 numbers */
-  CUDA_R_32F = 0,      /* real as a float */
-  CUDA_C_32F = 4,      /* complex as a pair of float numbers */
-  CUDA_R_64F = 1,      /* real as a double */
-  CUDA_C_64F = 5,      /* complex as a pair of double numbers */
-  CUDA_R_4I = 16,      /* real as a signed 4-bit int */
-  CUDA_C_4I = 17,      /* complex as a pair of signed 4-bit int numbers */
-  CUDA_R_4U = 18,      /* real as a unsigned 4-bit int */
-  CUDA_C_4U = 19,      /* complex as a pair of unsigned 4-bit int numbers */
-  CUDA_R_8I = 3,       /* real as a signed 8-bit int */
-  CUDA_C_8I = 7,       /* complex as a pair of signed 8-bit int numbers */
-  CUDA_R_8U = 8,       /* real as a unsigned 8-bit int */
-  CUDA_C_8U = 9,       /* complex as a pair of unsigned 8-bit int numbers */
-  CUDA_R_16I = 20,     /* real as a signed 16-bit int */
-  CUDA_C_16I = 21,     /* complex as a pair of signed 16-bit int numbers */
-  CUDA_R_16U = 22,     /* real as a unsigned 16-bit int */
-  CUDA_C_16U = 23,     /* complex as a pair of unsigned 16-bit int numbers */
-  CUDA_R_32I = 10,     /* real as a signed 32-bit int */
-  CUDA_C_32I = 11,     /* complex as a pair of signed 32-bit int numbers */
-  CUDA_R_32U = 12,     /* real as a unsigned 32-bit int */
-  CUDA_C_32U = 13,     /* complex as a pair of unsigned 32-bit int numbers */
-  CUDA_R_64I = 24,     /* real as a signed 64-bit int */
-  CUDA_C_64I = 25,     /* complex as a pair of signed 64-bit int numbers */
-  CUDA_R_64U = 26,     /* real as a unsigned 64-bit int */
-  CUDA_C_64U = 27,     /* complex as a pair of unsigned 64-bit int numbers */
-  CUDA_R_8F_E4M3 = 28, /* real as a nv_fp8_e4m3 */
-  CUDA_R_8F_E5M2 = 29, /* real as a nv_fp8_e5m2 */
+  CUDA_R_16F = 2,       /* real as a half */
+  CUDA_C_16F = 6,       /* complex as a pair of half numbers */
+  CUDA_R_16BF = 14,     /* real as a nv_bfloat16 */
+  CUDA_C_16BF = 15,     /* complex as a pair of nv_bfloat16 numbers */
+  CUDA_R_32F = 0,       /* real as a float */
+  CUDA_C_32F = 4,       /* complex as a pair of float numbers */
+  CUDA_R_64F = 1,       /* real as a double */
+  CUDA_C_64F = 5,       /* complex as a pair of double numbers */
+  CUDA_R_4I = 16,       /* real as a signed 4-bit int */
+  CUDA_C_4I = 17,       /* complex as a pair of signed 4-bit int numbers */
+  CUDA_R_4U = 18,       /* real as a unsigned 4-bit int */
+  CUDA_C_4U = 19,       /* complex as a pair of unsigned 4-bit int numbers */
+  CUDA_R_8I = 3,        /* real as a signed 8-bit int */
+  CUDA_C_8I = 7,        /* complex as a pair of signed 8-bit int numbers */
+  CUDA_R_8U = 8,        /* real as a unsigned 8-bit int */
+  CUDA_C_8U = 9,        /* complex as a pair of unsigned 8-bit int numbers */
+  CUDA_R_16I = 20,      /* real as a signed 16-bit int */
+  CUDA_C_16I = 21,      /* complex as a pair of signed 16-bit int numbers */
+  CUDA_R_16U = 22,      /* real as a unsigned 16-bit int */
+  CUDA_C_16U = 23,      /* complex as a pair of unsigned 16-bit int numbers */
+  CUDA_R_32I = 10,      /* real as a signed 32-bit int */
+  CUDA_C_32I = 11,      /* complex as a pair of signed 32-bit int numbers */
+  CUDA_R_32U = 12,      /* real as a unsigned 32-bit int */
+  CUDA_C_32U = 13,      /* complex as a pair of unsigned 32-bit int numbers */
+  CUDA_R_64I = 24,      /* real as a signed 64-bit int */
+  CUDA_C_64I = 25,      /* complex as a pair of signed 64-bit int numbers */
+  CUDA_R_64U = 26,      /* real as a unsigned 64-bit int */
+  CUDA_C_64U = 27,      /* complex as a pair of unsigned 64-bit int numbers */
+  CUDA_R_8F_E4M3 = 28,  /* real as a nv_fp8_e4m3 */
+  CUDA_R_8F_E5M2 = 29,  /* real as a nv_fp8_e5m2 */
+  CUDA_R_8F_UE8M0 = 30, /* real as a nv_fp8_ue8m0 */
+  CUDA_R_4F_E2M1 = 33,  /* real as a nv_fp4_e2m1 */
 } cudaDataType;
 
-struct cublasContext;
 typedef struct cublasLtContext *cublasLtHandle_t;
 struct cublasLtMatmulDescOpaque_t;
 typedef cublasLtMatmulDescOpaque_t *cublasLtMatmulDesc_t;

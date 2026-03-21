@@ -25,9 +25,9 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     %1 = arith.divsi %0, %c256_i32 : i32
     %2 = arith.cmpi ne, %1, %c0_i32 : i32
     %3 = arith.cmpi eq, %1, %c0_i32 : i32
-    amdgpu.cond_barrier %2
+    amdg.cond_barrier %2
     %4 = arith.addi %0, %c256_i32 : i32
-    amdgpu.cond_barrier %3
+    amdg.cond_barrier %3
     tt.return
   }
 }

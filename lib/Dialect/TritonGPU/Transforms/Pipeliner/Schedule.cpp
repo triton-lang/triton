@@ -12,7 +12,6 @@
 
 using namespace mlir;
 namespace tt = mlir::triton;
-namespace ttg = mlir::triton::gpu;
 
 bool tt::CoarseSchedule::insertMinimum(Operation *op, int stage,
                                        Cluster cluster) {
@@ -295,6 +294,115 @@ LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp,
 // TODO: Should this be moved somewhere else?
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
 // the same stage and ordering cluster as the anchor op.
+// ============================================================
+// LinearizedIterator Implementation
+// ============================================================
+
+tt::CoarseSchedule::LinearizedIterator::LinearizedIterator(
+    scf::ForOp forOp, const CoarseSchedule &schedule, Operation *initialOp)
+    : forOp(forOp), schedule(&schedule), initialOp(initialOp), atEnd(false),
+      maxStages(schedule.getNumStages()) {
+  clusterBegin = schedule.clusters.begin();
+  clusterEnd = schedule.clusters.end();
+  opIt = forOp.getBody()->without_terminator().begin();
+  opEnd = forOp.getBody()->without_terminator().end();
+
+  // Find the cluster containing initialOp and its stage
+  auto it = schedule.opToStageAndCluster.find(initialOp);
+  if (it != schedule.opToStageAndCluster.end()) {
+    auto [stage, cluster] = it->second;
+    clusterIt = cluster;
+    currStageLimit = stage;
+    // Find initialOp within its cluster
+    while (opIt != opEnd) {
+      Operation *op = &*opIt;
+      if (op == initialOp) {
+        break;
+      }
+      ++opIt;
+    }
+    // Move past initialOp to start iteration from the next op
+    ++opIt;
+    advanceToNextScheduledOp();
+  } else {
+    atEnd = true;
+    currentOp = nullptr;
+  }
+}
+
+void tt::CoarseSchedule::LinearizedIterator::advanceToNextScheduledOp() {
+  while (true) {
+    while (opIt != opEnd) {
+      Operation *op = &*opIt;
+      auto it = schedule->opToStageAndCluster.find(op);
+      if (it != schedule->opToStageAndCluster.end()) {
+        auto [stage, cluster] = it->second;
+        if (cluster == clusterIt) {
+          // Check if we've come back to initialOp
+          if (op == initialOp) {
+            // Check termination condition
+            if (currStageLimit >= maxStages) {
+              atEnd = true;
+              currentOp = nullptr;
+              return;
+            }
+          }
+          // Only yield if stage <= currStageLimit
+          if (stage <= currStageLimit) {
+            currentOp = op;
+            return;
+          }
+        }
+      }
+      ++opIt;
+    }
+    // Move to next cluster
+    ++clusterIt;
+    opIt = forOp.getBody()->without_terminator().begin();
+
+    // Wrap around to the beginning if we've reached the end
+    if (clusterIt == clusterEnd) {
+      clusterIt = clusterBegin;
+      // Increment stage limit as we are in the next iteration.
+      currStageLimit++;
+    }
+  }
+}
+
+tt::CoarseSchedule::LinearizedIterator &
+tt::CoarseSchedule::LinearizedIterator::operator++() {
+  if (atEnd)
+    return *this;
+  ++opIt;
+  advanceToNextScheduledOp();
+  return *this;
+}
+
+tt::CoarseSchedule::LinearizedIterator
+tt::CoarseSchedule::LinearizedIterator::operator++(int) {
+  LinearizedIterator tmp = *this;
+  ++(*this);
+  return tmp;
+}
+
+Operation *tt::CoarseSchedule::LinearizedIterator::operator*() const {
+  return currentOp;
+}
+
+bool tt::CoarseSchedule::LinearizedIterator::operator==(
+    const LinearizedIterator &other) const {
+  if (atEnd && other.atEnd)
+    return true;
+  if (atEnd != other.atEnd)
+    return false;
+  return currentOp == other.currentOp;
+}
+
+bool tt::CoarseSchedule::LinearizedIterator::operator!=(
+    const LinearizedIterator &other) const {
+  return !(*this == other);
+}
+
 void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule) {
   int numStages = schedule.getNumStages();
   SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>

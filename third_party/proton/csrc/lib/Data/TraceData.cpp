@@ -1,10 +1,12 @@
 #include "Data/TraceData.h"
 #include "TraceDataIO/TraceWriter.h"
-#include "Utility/Errors.h"
+#include "Utility/MsgPackWriter.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 
 using json = nlohmann::json;
@@ -44,13 +46,12 @@ public:
 
   struct TraceEvent {
     TraceEvent() = default;
-    TraceEvent(size_t id, size_t scopeId, size_t contextId)
-        : id(id), scopeId(scopeId), contextId(contextId) {}
+    TraceEvent(size_t id, size_t contextId) : id(id), contextId(contextId) {}
     size_t id = 0;
     size_t scopeId = Scope::DummyScopeId;
     size_t contextId = TraceContext::DummyId;
-    std::map<MetricKind, std::shared_ptr<Metric>> metrics = {};
-    std::map<std::string, FlexibleMetric> flexibleMetrics = {};
+    // Direct and linked metrics emitted for this trace event.
+    DataEntry::MetricSet metricSet{};
 
     const static inline size_t DummyId = std::numeric_limits<size_t>::max();
   };
@@ -60,24 +61,24 @@ public:
                                 "ROOT");
   }
 
-  size_t addContext(const std::vector<Context> &contexts, size_t parentId) {
+  size_t addContext(const Context &context, size_t parentId) {
+    if (traceContextMap[parentId].hasChild(context)) {
+      return traceContextMap[parentId].getChild(context);
+    }
+    auto id = nextTreeContextId++;
+    traceContextMap.try_emplace(id, id, parentId, context.name);
+    traceContextMap[parentId].addChild(context, id);
+    return id;
+  }
+
+  size_t addContexts(const std::vector<Context> &contexts, size_t parentId) {
     for (const auto &context : contexts) {
       parentId = addContext(context, parentId);
     }
     return parentId;
   }
 
-  size_t addContext(const Context &context, size_t parentId) {
-    if (traceContextMap[parentId].hasChild(context)) {
-      return traceContextMap[parentId].getChild(context);
-    }
-    auto id = nextContextId++;
-    traceContextMap.try_emplace(id, id, parentId, context.name);
-    traceContextMap[parentId].addChild(context, id);
-    return id;
-  }
-
-  size_t addContext(const std::vector<Context> &indices) {
+  size_t addContexts(const std::vector<Context> &indices) {
     auto parentId = TraceContext::RootId;
     for (auto index : indices) {
       parentId = addContext(index, parentId);
@@ -101,33 +102,31 @@ public:
     return contexts;
   }
 
-  void addEvent(size_t scopeId, size_t contextId) {
-    if (scopeIdEventIdMap.count(scopeId))
-      return;
-    scopeIdEventIdMap[scopeId] = nextEventId;
-    traceEvents.emplace_back(nextEventId, scopeId, contextId);
-    nextEventId++;
+  size_t addEvent(size_t contextId) {
+    traceEvents.try_emplace(nextEventId, nextEventId, contextId);
+    return nextEventId++;
   }
 
-  bool hasEvent(size_t scopeId) {
-    return scopeIdEventIdMap.find(scopeId) != scopeIdEventIdMap.end();
+  bool hasEvent(size_t eventId) {
+    return traceEvents.find(eventId) != traceEvents.end();
   }
 
-  TraceEvent &getEvent(size_t scopeId) {
-    if (!hasEvent(scopeId)) {
+  TraceEvent &getEvent(size_t eventId) {
+    auto it = traceEvents.find(eventId);
+    if (it == traceEvents.end()) {
       throw std::runtime_error("Event not found");
     }
-    return traceEvents[scopeIdEventIdMap[scopeId]];
+    return it->second;
   }
 
-  std::vector<TraceEvent> &getEvents() { return traceEvents; }
+  void removeEvent(size_t eventId) { traceEvents.erase(eventId); }
+
+  const std::map<size_t, TraceEvent> &getEvents() const { return traceEvents; }
 
 private:
-  size_t nextContextId = TraceContext::RootId + 1;
+  size_t nextTreeContextId = TraceContext::RootId + 1;
   size_t nextEventId = 0;
-  std::vector<TraceEvent> traceEvents;
-  // scope id -> event id
-  std::unordered_map<size_t, size_t> scopeIdEventIdMap;
+  std::map<size_t, TraceEvent> traceEvents;
   // tree node id -> trace context
   std::map<size_t, TraceContext> traceContextMap;
 };
@@ -135,127 +134,99 @@ private:
 void TraceData::enterScope(const Scope &scope) {
   // enterOp and addMetric maybe called from different threads
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto *currentTrace = currentPhasePtrAs<Trace>();
   std::vector<Context> contexts;
   if (contextSource != nullptr)
     contexts = contextSource->getContexts();
   else
     contexts.push_back(scope.name);
-  auto contextId = trace->addContext(contexts);
-  scopeIdToContextId[scope.scopeId] = contextId;
+  auto eventId = currentTrace->addEvent(currentTrace->addContexts(contexts));
+  scopeIdToEventId[scope.scopeId] = eventId;
 }
 
-void TraceData::exitScope(const Scope &scope) {}
+void TraceData::exitScope(const Scope &scope) {
+  scopeIdToEventId.erase(scope.scopeId);
+}
 
-size_t TraceData::addOp(size_t scopeId, const std::string &name) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  if (scopeIdIt == scopeIdToContextId.end()) {
-    // Obtain the current context
-    std::vector<Context> contexts;
-    if (contextSource != nullptr)
-      contexts = contextSource->getContexts();
-    // If name is empty, this is a placeholder event. Add an op under the
-    // current context
-    if (!name.empty())
-      contexts.emplace_back(name);
-    scopeIdToContextId[scopeId] = trace->addContext(contexts);
+DataEntry TraceData::addOp(size_t phase, size_t eventId,
+                           const std::vector<Context> &contexts) {
+  auto lock = lockIfCurrentOrVirtualPhase(phase);
+  auto *trace = phasePtrAs<Trace>(phase);
+  auto parentContextId = 0;
+  if (eventId == Data::kRootEntryId) {
+    parentContextId = Trace::TraceContext::RootId;
   } else {
-    // Add a new context under it and update the context
-    scopeId = Scope::getNewScopeId();
-    scopeIdToContextId[scopeId] =
-        trace->addContext(Context(name), scopeIdIt->second);
+    auto &event = trace->getEvent(eventId);
+    parentContextId = event.contextId;
   }
-  if (!name.empty()) // not a placeholder event
-    trace->addEvent(scopeId, scopeIdToContextId[scopeId]);
-  return scopeId;
-}
-
-size_t TraceData::addOp(size_t scopeId, const std::vector<Context> &contexts) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  if (scopeIdIt == scopeIdToContextId.end()) {
-    // Obtain the current context
-    std::vector<Context> currentContexts;
-    if (contextSource != nullptr)
-      currentContexts = contextSource->getContexts();
-    // Add an op under the current context
-    if (!currentContexts.empty())
-      std::merge(currentContexts.begin(), currentContexts.end(),
-                 contexts.begin(), contexts.end(), currentContexts.begin());
-    scopeIdToContextId[scopeId] = trace->addContext(currentContexts);
-  } else {
-    // Add a new context under it and update the context
-    scopeId = Scope::getNewScopeId();
-    scopeIdToContextId[scopeId] =
-        trace->addContext(contexts, scopeIdIt->second);
-  }
-  if (!contexts.empty()) // not a placeholder event
-    trace->addEvent(scopeId, scopeIdToContextId[scopeId]);
-  return scopeId;
-}
-
-void TraceData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  if (scopeIdIt == scopeIdToContextId.end())
-    return;
-  if (!trace->hasEvent(scopeId))
-    return;
-  auto &event = trace->getEvent(scopeId);
-  if (event.metrics.find(metric->getKind()) == event.metrics.end())
-    event.metrics.emplace(metric->getKind(), metric);
-  else
-    event.metrics[metric->getKind()]->updateMetric(*metric);
+  const auto contextId = trace->addContexts(contexts, parentContextId);
+  const auto newEventId = trace->addEvent(contextId);
+  auto &newEvent = trace->getEvent(newEventId);
+  return DataEntry(newEventId, phase, newEvent.metricSet);
 }
 
 void TraceData::addMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  // The profile data is deactivated, ignore the metric
-  if (scopeIdIt == scopeIdToContextId.end())
-    return;
-  auto contextId = scopeIdIt->second;
-  if (!trace->hasEvent(scopeId))
-    return;
-  auto &event = trace->getEvent(scopeId);
+  auto *currentTrace = currentPhasePtrAs<Trace>();
+  auto eventId = scopeIdToEventId.at(scopeId);
+  auto &event = currentTrace->getEvent(eventId);
+  auto &flexibleMetrics = event.metricSet.flexibleMetrics;
   for (auto [metricName, metricValue] : metrics) {
-    if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
-      event.flexibleMetrics.emplace(metricName,
-                                    FlexibleMetric(metricName, metricValue));
+    if (flexibleMetrics.find(metricName) == flexibleMetrics.end()) {
+      flexibleMetrics.emplace(metricName,
+                              FlexibleMetric(metricName, metricValue));
     } else {
-      event.flexibleMetrics.at(metricName).updateValue(metricValue);
+      flexibleMetrics.at(metricName).updateValue(metricValue);
     }
   }
 }
 
-void TraceData::clear() {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  scopeIdToContextId.clear();
+std::string TraceData::toJsonString(size_t phase) const {
+  std::ostringstream os;
+  dumpChromeTrace(os, phase);
+  return os.str();
+}
+
+std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
+  std::ostringstream os;
+  dumpChromeTrace(os, phase);
+  MsgPackWriter writer;
+  writer.packStr(os.str());
+  return std::move(writer).take();
 }
 
 namespace {
 
 // Structure to pair CycleMetric with its context for processing
 struct CycleMetricWithContext {
-  std::shared_ptr<CycleMetric> cycleMetric;
-  uint32_t contextId;
+  const CycleMetric *cycleMetric;
+  // Full call path captured for this cycle metric event.
+  std::vector<Context> contexts;
 
-  CycleMetricWithContext(std::shared_ptr<CycleMetric> metric, uint32_t ctx)
-      : cycleMetric(metric), contextId(ctx) {}
+  CycleMetricWithContext(const CycleMetric *metric, std::vector<Context> ctx)
+      : cycleMetric(metric), contexts(std::move(ctx)) {}
+};
+
+struct KernelMetricWithContext {
+  const KernelMetric *kernelMetric;
+  // Full call path captured for this kernel metric event.
+  std::vector<Context> contexts;
+
+  KernelMetricWithContext(const KernelMetric *metric, std::vector<Context> ctx)
+      : kernelMetric(metric), contexts(std::move(ctx)) {}
 };
 
 std::vector<KernelTrace>
-convertToTimelineTrace(TraceData::Trace *trace,
-                       std::vector<CycleMetricWithContext> &cycleEvents) {
+convertToTimelineTrace(std::vector<CycleMetricWithContext> &cycleEvents) {
   std::vector<KernelTrace> results;
 
-  auto getInt64Value = [](const std::shared_ptr<CycleMetric> &metric,
+  auto getInt64Value = [](const CycleMetric *metric,
                           CycleMetric::CycleMetricKind kind) {
     return std::get<uint64_t>(metric->getValue(kind));
   };
 
-  auto getStringValue = [](const std::shared_ptr<CycleMetric> &metric,
+  auto getStringValue = [](const CycleMetric *metric,
                            CycleMetric::CycleMetricKind kind) {
     return std::get<std::string>(metric->getValue(kind));
   };
@@ -366,7 +337,7 @@ convertToTimelineTrace(TraceData::Trace *trace,
             break;
           }
 
-          auto scopeName = trace->getContexts(event.contextId).back().name;
+          auto scopeName = event.contexts.back().name;
           if (scopeNameToId.count(scopeName) == 0) {
             scopeIdToName[curScopeId] = scopeName;
             scopeNameToId[scopeName] = curScopeId;
@@ -393,7 +364,7 @@ convertToTimelineTrace(TraceData::Trace *trace,
     }
     std::vector<std::string> callStack;
     if (!sortedEvents.empty()) {
-      auto contexts = trace->getContexts(kernelEvent.contextId);
+      auto &contexts = kernelEvent.contexts;
       if (!contexts.empty()) {
         callStack.resize(contexts.size() - 1);
         std::transform(contexts.begin(), contexts.end() - 1, callStack.begin(),
@@ -411,26 +382,24 @@ convertToTimelineTrace(TraceData::Trace *trace,
   return results;
 }
 
-void dumpCycleMetricTrace(TraceData::Trace *trace,
-                          std::vector<CycleMetricWithContext> &cycleEvents,
+void dumpCycleMetricTrace(std::vector<CycleMetricWithContext> &cycleEvents,
                           std::ostream &os) {
-  auto timeline = convertToTimelineTrace(trace, cycleEvents);
+  auto timeline = convertToTimelineTrace(cycleEvents);
   auto writer = StreamChromeTraceWriter(timeline, "");
   writer.write(os);
 }
 
 void dumpKernelMetricTrace(
-    TraceData::Trace *trace, uint64_t minTimeStamp,
-    std::map<size_t, std::vector<TraceData::Trace::TraceEvent>>
+    uint64_t minTimeStamp,
+    const std::map<size_t, std::vector<KernelMetricWithContext>>
         &streamTraceEvents,
     std::ostream &os) {
   // for each streamId in ascending order, emit one JSON line
   for (auto const &[streamId, events] : streamTraceEvents) {
     json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
 
-    for (auto const &event : events) {
-      auto kernelMetrics = std::dynamic_pointer_cast<KernelMetric>(
-          event.metrics.at(MetricKind::Kernel));
+    for (const auto &event : events) {
+      auto *kernelMetrics = event.kernelMetric;
       uint64_t startTimeNs =
           std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::StartTime));
       uint64_t endTimeNs =
@@ -439,8 +408,7 @@ void dumpKernelMetricTrace(
       double ts = static_cast<double>(startTimeNs - minTimeStamp) / 1000;
       double dur = static_cast<double>(endTimeNs - startTimeNs) / 1000;
 
-      auto contextId = event.contextId;
-      auto contexts = trace->getContexts(contextId);
+      const auto &contexts = event.contexts;
 
       json element;
       element["name"] = contexts.back().name;
@@ -450,7 +418,7 @@ void dumpKernelMetricTrace(
       element["dur"] = dur;
       element["tid"] = streamId; // thread id = stream
       json callStack = json::array();
-      for (auto const &ctx : contexts) {
+      for (const auto &ctx : contexts) {
         callStack.push_back(ctx.name);
       }
       element["args"]["call_stack"] = std::move(callStack);
@@ -464,63 +432,105 @@ void dumpKernelMetricTrace(
 }
 } // namespace
 
-void TraceData::dumpChromeTrace(std::ostream &os) const {
-  auto &events = trace->getEvents();
-  // stream id -> trace event
-  std::map<size_t, std::vector<Trace::TraceEvent>> streamTraceEvents;
-  uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
-  bool hasKernelMetrics = false, hasCycleMetrics = false;
-  // Data structure for efficient cycle metrics conversion
-  std::map<uint64_t, int> kernelBlockNum;
-  std::vector<CycleMetricWithContext> cycleEvents;
-  cycleEvents.reserve(events.size());
-  for (auto &event : events) {
-    if (event.metrics.count(MetricKind::Kernel)) {
-      std::shared_ptr<KernelMetric> kernelMetric =
-          std::dynamic_pointer_cast<KernelMetric>(
-              event.metrics.at(MetricKind::Kernel));
-      auto streamId =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId));
-      streamTraceEvents[streamId].push_back(event);
+void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
+  std::set<size_t> virtualTargetEntryIds;
+  tracePhases.withPtr(phase, [&](Trace *trace) {
+    for (const auto &[_, event] : trace->getEvents()) {
+      for (const auto &[targetEntryId, _] : event.metricSet.linkedMetrics) {
+        virtualTargetEntryIds.insert(targetEntryId);
+      }
+      for (const auto &[targetEntryId, _] :
+           event.metricSet.linkedFlexibleMetrics) {
+        virtualTargetEntryIds.insert(targetEntryId);
+      }
+    }
+  });
 
-      uint64_t startTime =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
-      minTimeStamp = std::min(minTimeStamp, startTime);
-      hasKernelMetrics = true;
-    }
-    if (event.metrics.count(MetricKind::Cycle)) {
-      std::shared_ptr<CycleMetric> cycleMetric =
-          std::dynamic_pointer_cast<CycleMetric>(
-              event.metrics.at(MetricKind::Cycle));
-      cycleEvents.emplace_back(cycleMetric, event.contextId);
-      hasCycleMetrics = true;
-    }
-
-    if (hasKernelMetrics && hasCycleMetrics) {
-      throw std::runtime_error("only one active metric type is supported");
-    }
+  std::map<size_t, std::vector<Context>> targetIdToVirtualContexts;
+  if (!virtualTargetEntryIds.empty()) {
+    tracePhases.withPtr(Data::kVirtualPhase, [&](Trace *virtualTrace) {
+      for (auto targetEntryId : virtualTargetEntryIds) {
+        // Linked target ids are event ids, so resolve through the event first.
+        auto &targetEvent = virtualTrace->getEvent(targetEntryId);
+        auto contexts = virtualTrace->getContexts(targetEvent.contextId);
+        contexts.erase(contexts.begin());
+        targetIdToVirtualContexts.emplace(targetEntryId, std::move(contexts));
+      }
+    });
   }
 
-  if (hasCycleMetrics) {
-    dumpCycleMetricTrace(trace.get(), cycleEvents, os);
-  }
+  tracePhases.withPtr(phase, [&](Trace *trace) {
+    auto &events = trace->getEvents();
+    // stream id -> trace event
+    std::map<size_t, std::vector<KernelMetricWithContext>> streamTraceEvents;
+    uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
+    bool hasKernelMetrics = false, hasCycleMetrics = false;
+    std::vector<CycleMetricWithContext> cycleEvents;
+    cycleEvents.reserve(events.size());
 
-  if (hasKernelMetrics) {
-    dumpKernelMetricTrace(trace.get(), minTimeStamp, streamTraceEvents, os);
-  }
+    auto processMetricMaps =
+        [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
+            const std::vector<Context> &contexts) {
+          if (auto kernelIt = metrics.find(MetricKind::Kernel);
+              kernelIt != metrics.end()) {
+            auto *kernelMetric =
+                static_cast<KernelMetric *>(kernelIt->second.get());
+            const auto streamId = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::StreamId));
+            streamTraceEvents[streamId].emplace_back(kernelMetric, contexts);
+            const auto startTime = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::StartTime));
+            minTimeStamp = std::min(minTimeStamp, startTime);
+            hasKernelMetrics = true;
+          }
+          if (auto cycleIt = metrics.find(MetricKind::Cycle);
+              cycleIt != metrics.end()) {
+            auto *cycleMetric =
+                static_cast<CycleMetric *>(cycleIt->second.get());
+            cycleEvents.emplace_back(cycleMetric, contexts);
+            hasCycleMetrics = true;
+          }
+        };
+
+    for (const auto &[_, event] : events) {
+      auto baseContexts = trace->getContexts(event.contextId);
+      processMetricMaps(event.metricSet.metrics, baseContexts);
+      for (const auto &[targetEntryId, linkedMetrics] :
+           event.metricSet.linkedMetrics) {
+        auto contexts = baseContexts;
+        auto &virtualContexts = targetIdToVirtualContexts[targetEntryId];
+        contexts.insert(contexts.end(), virtualContexts.begin(),
+                        virtualContexts.end());
+        processMetricMaps(linkedMetrics, contexts);
+      }
+
+      if (hasKernelMetrics && hasCycleMetrics) {
+        throw std::runtime_error("only one active metric type is supported");
+      }
+    }
+
+    if (hasCycleMetrics) {
+      dumpCycleMetricTrace(cycleEvents, os);
+    }
+
+    if (hasKernelMetrics) {
+      dumpKernelMetricTrace(minTimeStamp, streamTraceEvents, os);
+    }
+  });
 }
 
-void TraceData::doDump(std::ostream &os, OutputFormat outputFormat) const {
+void TraceData::doDump(std::ostream &os, OutputFormat outputFormat,
+                       size_t phase) const {
   if (outputFormat == OutputFormat::ChromeTrace) {
-    dumpChromeTrace(os);
+    dumpChromeTrace(os, phase);
   } else {
-    std::logic_error("Output format not supported");
+    throw std::logic_error("Output format not supported");
   }
 }
 
 TraceData::TraceData(const std::string &path, ContextSource *contextSource)
     : Data(path, contextSource) {
-  trace = std::make_unique<Trace>();
+  initPhaseStore(tracePhases);
 }
 
 TraceData::~TraceData() {}

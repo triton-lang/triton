@@ -35,6 +35,22 @@ namespace mlir {
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+static bool isWarpSpecializeBarrierAlloc(Value value) {
+  auto alloc = dyn_cast_or_null<ttg::LocalAllocOp>(value.getDefiningOp());
+  return alloc && alloc->hasAttr(kWarpSpecializeGeneratedBarrierAttrName);
+}
+
+static void invalidateBarrierAlloc(OpBuilder &builder, Value barrierAlloc) {
+  auto barrierType = cast<ttg::MemDescType>(barrierAlloc.getType());
+  int64_t numBarriers = barrierType.getShape().front();
+  assert(numBarriers > 0 && "expected at least one barrier");
+  for (int64_t i = 0; i < numBarriers; ++i) {
+    Value barrierView = mlir::triton::createSingleBufferView(
+        builder, barrierAlloc, static_cast<int>(i));
+    ttng::InvalBarrierOp::create(builder, barrierAlloc.getLoc(), barrierView);
+  }
+}
+
 Operation *SpecializeOp(Operation *op, IRMapping &mapping,
                         OpBuilderWithAsyncTaskIds &builder,
                         AsyncTaskId asyncTaskId);
@@ -302,7 +318,7 @@ Operation *SpecializeForOp(scf::ForOp forOp, IRMapping &mapping,
   }
   if (createNewYield) {
     auto newYieldOp =
-        forBuilder.create<scf::YieldOp>(yieldOp.getLoc(), newYieldOperands);
+        scf::YieldOp::create(forBuilder, yieldOp.getLoc(), newYieldOperands);
     setAsyncTaskIds(newYieldOp, {asyncTaskId});
   }
 
@@ -396,8 +412,8 @@ void specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters) {
   ArrayRef<Type> dummyTypes;
   ImplicitLocOpBuilder impB(opList[0]->getLoc(), opList[0]);
   impB.setInsertionPoint(returnOp);
-  auto wsOp = impB.create<ttg::WarpSpecializeOp>(dummyTypes, partitionNumWarps,
-                                                 nTaskIds.size() - 1);
+  auto wsOp = ttg::WarpSpecializeOp::create(impB, dummyTypes, partitionNumWarps,
+                                            nTaskIds.size() - 1);
 
   // Clone all operations into the corresponding if blocks. If the operation
   // has multiple taskIds, it will be cloned for multiple if blocks.
@@ -415,7 +431,7 @@ void specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters) {
       SpecializeOp(op, mapping, taskBuilder, asyncTaskId);
     }
     SmallVector<Value> opnds;
-    taskBuilder.create<ttg::WarpYieldOp>(loc, opnds);
+    ttg::WarpYieldOp::create(taskBuilder, loc, opnds);
   }
 
   unsigned idx = 1;
@@ -433,7 +449,7 @@ void specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters) {
     for (Operation *op : opList) {
       SpecializeOp(op, mapping, taskBuilder, asyncTaskId);
     }
-    taskBuilder.create<ttg::WarpReturnOp>(loc);
+    ttg::WarpReturnOp::create(taskBuilder, loc);
     auto regAlloc =
         scanRegUsage(partitionBlock, asyncTaskId, requestedRegisters);
     estRegUsage.push_back(regAlloc);
@@ -463,7 +479,8 @@ void specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters) {
                         "FIXME: capturing tensor values into warp "
                         "partitions is not supported");
     }
-    wsOp->insertOperands(wsOp.getNumOperands(), capture);
+    auto partOp = wsOp.getPartitionOp();
+    partOp->insertOperands(partOp.getNumOperands(), capture);
     for (Region *region : wsOp.getPartitionRegions()) {
       // Does this include default region?
       BlockArgument arg =
@@ -496,6 +513,29 @@ void specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters) {
       }
     }
     op->erase();
+  }
+}
+
+void invalidateWarpSpecializeBarriers(triton::FuncOp funcOp) {
+  SmallVector<ttg::WarpSpecializeOp> wsOps;
+  funcOp.walk([&](ttg::WarpSpecializeOp wsOp) { wsOps.push_back(wsOp); });
+
+  for (ttg::WarpSpecializeOp wsOp : wsOps) {
+    SetVector<Value> barrierAllocs;
+    auto partitionOp = wsOp.getPartitionOp();
+    for (Value operand : partitionOp->getOperands()) {
+      if (!isWarpSpecializeBarrierAlloc(operand))
+        continue;
+      barrierAllocs.insert(operand);
+    }
+
+    if (barrierAllocs.empty())
+      continue;
+
+    ImplicitLocOpBuilder builder(wsOp.getLoc(), wsOp);
+    builder.setInsertionPointAfter(wsOp);
+    for (Value barrierAlloc : barrierAllocs)
+      invalidateBarrierAlloc(builder, barrierAlloc);
   }
 }
 

@@ -16,9 +16,9 @@ struct RewriteArithSelectOp : mlir::OpConversionPattern<mlir::arith::SelectOp> {
                   mlir::ConversionPatternRewriter &rewriter) const override {
     // Note we're replacing the select op with an if op because we are
     // converting one value into many values.
-    auto newIf = rewriter.create<mlir::scf::IfOp>(
-        op.getLoc(), mlir::TypeRange(adaptor.getTrueValue()), op.getCondition(),
-        true);
+    auto newIf = mlir::scf::IfOp::create(
+        rewriter, op.getLoc(), mlir::TypeRange(adaptor.getTrueValue()),
+        op.getCondition(), true);
     // We set the attributes from the op in case the op has any additional
     // attributes
     newIf->setAttrs(op->getAttrs());
@@ -26,10 +26,11 @@ struct RewriteArithSelectOp : mlir::OpConversionPattern<mlir::arith::SelectOp> {
     {
       mlir::ConversionPatternRewriter::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToStart(newIf.thenBlock());
-      rewriter.create<mlir::scf::YieldOp>(op->getLoc(), adaptor.getTrueValue());
+      mlir::scf::YieldOp::create(rewriter, op->getLoc(),
+                                 adaptor.getTrueValue());
       rewriter.setInsertionPointToStart(newIf.elseBlock());
-      rewriter.create<mlir::scf::YieldOp>(op->getLoc(),
-                                          adaptor.getFalseValue());
+      mlir::scf::YieldOp::create(rewriter, op->getLoc(),
+                                 adaptor.getFalseValue());
     }
 
     // Replace the old operation results

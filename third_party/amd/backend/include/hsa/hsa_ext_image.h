@@ -1090,8 +1090,8 @@ hsa_status_t HSA_API hsa_ext_image_clear(
 
 /**
  * @brief Sampler handle. Samplers are populated by
- * ::hsa_ext_sampler_create. Sampler handles are only unique within an
- * agent, not across agents.
+ * ::hsa_ext_sampler_create or ::hsa_ext_sampler_create_v2. Sampler handles are only unique
+ *  within an agent, not across agents.
  */
 typedef struct hsa_ext_sampler_s {
   /**
@@ -1218,8 +1218,29 @@ typedef struct hsa_ext_sampler_descriptor_s {
    * coordinates.
    */
   hsa_ext_sampler_addressing_mode32_t address_mode;
-
 } hsa_ext_sampler_descriptor_t;
+
+/**
+ * @brief Implementation independent sampler descriptor v2 which supports
+ *  different address modes in X, Y and Z axises.
+ */
+typedef struct hsa_ext_sampler_descriptor_v2_s {
+  /**
+   * Sampler coordinate mode describes the normalization of image coordinates.
+   */
+  hsa_ext_sampler_coordinate_mode32_t coordinate_mode;
+
+  /**
+   * Sampler filter type describes the type of sampling performed.
+   */
+  hsa_ext_sampler_filter_mode32_t filter_mode;
+
+  /**
+   * Sampler address mode describes the processing of out-of-range image
+   * coordinates.
+   */
+  hsa_ext_sampler_addressing_mode32_t address_modes[3]; // in X, Y and Z axises
+} hsa_ext_sampler_descriptor_v2_t;
 
 /**
  * @brief Create an agent specific sampler handle for a given agent
@@ -1256,7 +1277,42 @@ hsa_status_t HSA_API hsa_ext_sampler_create(
     hsa_ext_sampler_t *sampler);
 
 /**
- * @brief Destroy a sampler handle previously created using ::hsa_ext_sampler_create.
+ * @brief Create an agent specific sampler handle for a given agent
+ * independent sampler descriptor v2 and agent.
+ *
+ * @param[in] agent Agent to be associated with the sampler handle created.
+ *
+ * @param[in] sampler_descriptor v2 Pointer to a sampler descriptor. Must not be
+ * NULL.
+ *
+ * @param[out] sampler Memory location where the HSA runtime stores the newly
+ * created sampler handle. Must not be NULL.
+ *
+ * @retval ::HSA_STATUS_SUCCESS The function has been executed successfully.
+ *
+ * @retval ::HSA_STATUS_ERROR_NOT_INITIALIZED The HSA runtime has not been
+ * initialized.
+ *
+ * @retval ::HSA_STATUS_ERROR_INVALID_AGENT The agent is invalid.
+ *
+ * @retval ::HSA_EXT_STATUS_ERROR_SAMPLER_DESCRIPTOR_UNSUPPORTED The
+ * @p agent does not have the capability to support the properties
+ * specified by @p sampler_descriptor or it is invalid.
+ *
+ * @retval ::HSA_STATUS_ERROR_OUT_OF_RESOURCES The HSA runtime failed to allocate
+ * the required resources.
+ *
+ * @retval ::HSA_STATUS_ERROR_INVALID_ARGUMENT @p sampler_descriptor is NULL, or
+ * @p sampler is NULL.
+ */
+hsa_status_t HSA_API hsa_ext_sampler_create_v2(
+    hsa_agent_t agent,
+    const hsa_ext_sampler_descriptor_v2_t *sampler_descriptor,
+    hsa_ext_sampler_t *sampler);
+
+/**
+ * @brief Destroy a sampler handle previously created using ::hsa_ext_sampler_create or
+ * ::hsa_ext_sampler_create_v2.
  *
  * @details The sampler handle should not be destroyed while there are
  * references to it queued for execution or currently being used in a
@@ -1443,6 +1499,11 @@ typedef struct hsa_ext_images_1_pfn_s {
     size_t image_data_row_pitch,
     size_t image_data_slice_pitch,
     hsa_ext_image_t *image);
+
+  hsa_status_t (*hsa_ext_sampler_create_v2)(
+    hsa_agent_t agent,
+    const hsa_ext_sampler_descriptor_v2_t *sampler_descriptor,
+    hsa_ext_sampler_t *sampler);
 
 } hsa_ext_images_1_pfn_t;
 /** @} */

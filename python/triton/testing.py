@@ -235,7 +235,7 @@ def assert_close(x, y, atol=None, rtol=None, err_msg=''):
     # we handle size==1 case separately as we can
     # provide better error message there
     if x.size > 1 or y.size > 1:
-        np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True)
+        np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True, err_msg=err_msg)
         return
     if not np.allclose(x, y, atol=atol, rtol=rtol):
         raise AssertionError(f'{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})')
@@ -320,11 +320,11 @@ class Mark:
 
         import matplotlib.pyplot as plt
         import pandas as pd
-        y_mean = bench.line_names
-        y_min = [f'{x}-min' for x in bench.line_names]
-        y_max = [f'{x}-max' for x in bench.line_names]
+        y_mean_labels = [f'{x} ({bench.ylabel})' for x in bench.line_names]
+        y_min_labels = [f'{x}-min ({bench.ylabel})' for x in bench.line_names]
+        y_max_labels = [f'{x}-max ({bench.ylabel})' for x in bench.line_names]
         x_names = list(bench.x_names)
-        df = pd.DataFrame(columns=x_names + y_mean + y_min + y_max)
+        df = pd.DataFrame(columns=x_names + y_mean_labels + y_min_labels + y_max_labels)
         for x in bench.x_vals:
             # x can be a single value or a sequence of values.
             if not isinstance(x, (list, tuple)):
@@ -351,11 +351,11 @@ class Mark:
             ax = plt.subplot()
             # Plot first x value on x axis if there are multiple.
             first_x = x_names[0]
-            for i, y in enumerate(bench.line_names):
-                y_min, y_max = df[y + '-min'], df[y + '-max']
+            for i, (mean_label, min_label, max_label) in enumerate(zip(y_mean_labels, y_min_labels, y_max_labels)):
+                y_min, y_max = df[min_label], df[max_label]
                 col = bench.styles[i][0] if bench.styles else None
                 sty = bench.styles[i][1] if bench.styles else None
-                ax.plot(df[first_x], df[y], label=y, color=col, ls=sty)
+                ax.plot(df[first_x], df[mean_label], label=mean_label, color=col, ls=sty)
                 if not y_min.isnull().all() and not y_max.isnull().all():
                     y_min = y_min.astype(float)
                     y_max = y_max.astype(float)
@@ -370,7 +370,7 @@ class Mark:
                 plt.show()
             if save_path:
                 plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
-        df = df[x_names + bench.line_names]
+        df = df[x_names + y_mean_labels]
         if diff_col and df.shape[1] == 2:
             col0, col1 = df.columns.tolist()
             df['Diff'] = df[col1] - df[col0]
@@ -420,11 +420,10 @@ def perf_report(benchmarks):
 
 def get_dram_gbps(device=None):
     ''' return DRAM bandwidth in GB/s '''
-    import torch
 
     from .runtime import driver
-    if not device:
-        device = torch.cuda.current_device()
+    if device is None:
+        device = driver.active.get_device_interface().current_device()
     mem_clock_khz = driver.active.utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
     bus_width = driver.active.utils.get_device_properties(device)["mem_bus_width"]
     bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s

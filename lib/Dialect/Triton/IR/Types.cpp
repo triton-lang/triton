@@ -9,6 +9,8 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+#include "triton/Dialect/Triton/IR/TypeInterfaces.cpp.inc"
+
 #define GET_TYPEDEF_CLASSES
 #include "triton/Dialect/Triton/IR/Types.cpp.inc"
 
@@ -48,6 +50,14 @@ void PointerType::print(AsmPrinter &printer) const {
   } else {
     printer << "<" << getPointeeType() << ", " << getAddressSpace() << ">";
   }
+}
+
+LogicalResult PointerType::verify(function_ref<InFlightDiagnostic()> emitError,
+                                  Type pointeeType, int addressSpace) {
+  if (isa<RankedTensorType>(pointeeType)) {
+    return emitError() << "pointer types cannot point to ranked tensor types";
+  }
+  return success();
 }
 
 namespace mlir {
@@ -114,23 +124,6 @@ int getAddressSpace(Type type) {
   if (auto ptrType = dyn_cast<PointerType>(type))
     return ptrType.getAddressSpace();
   return 1;
-}
-
-bool isTensorPointerType(Type type) {
-  if (auto ptrType = dyn_cast<PointerType>(type))
-    return isa<RankedTensorType>(ptrType.getPointeeType());
-  return false;
-}
-
-bool isTensorOrTensorPointerType(Type type) {
-  return isa<RankedTensorType>(type) || isTensorPointerType(type);
-}
-
-Type getElementTypeOfTensorPointerType(Type type) {
-  if (auto ptrType = dyn_cast<PointerType>(type))
-    if (auto tensorTy = dyn_cast<RankedTensorType>(ptrType.getPointeeType()))
-      return tensorTy.getElementType();
-  return {};
 }
 
 } // namespace triton

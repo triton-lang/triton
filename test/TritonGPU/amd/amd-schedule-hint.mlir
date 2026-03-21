@@ -16,8 +16,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   ) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
     // INSTR_HINT: scf.for
-    // INSTR_HINT-NEXT: amdgpu.instruction_sched_hint
-    // INSTR_HINT-SAME: variant = #amdgpu.SchedHintVariant<attention>
+    // INSTR_HINT-NEXT: amdg.instruction_sched_hint
+    // INSTR_HINT-SAME: variant = #amdg.SchedHintVariant<attention>
 
     // LOWER_HINT: scf.for
     // LOWER_HINT-NEXT: rocdl.sched.barrier 0

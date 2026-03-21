@@ -22,13 +22,41 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
   // to optimize the select away as redundant.
   if (auto dotOp = dyn_cast<tt::DotOpInterface>(op)) {
     auto loc = dotOp->getLoc();
-    auto ifOp = rewriter.create<scf::IfOp>(loc, dotOp->getResult(0).getType(),
-                                           pred, /*withElseRegion=*/true);
+    auto ifOp = scf::IfOp::create(rewriter, loc, dotOp->getResult(0).getType(),
+                                  pred, /*withElseRegion=*/true);
     auto thenB = ifOp.getThenBodyBuilder();
-    auto yield = thenB.create<scf::YieldOp>(loc, dotOp->getResult(0));
+    auto yield = scf::YieldOp::create(thenB, loc, dotOp->getResult(0));
     dotOp->moveBefore(yield);
-    ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp->getOperand(2));
+    auto ifOpBuilder = ifOp.getElseBodyBuilder();
+    scf::YieldOp::create(ifOpBuilder, loc, dotOp->getOperand(2));
     return ifOp;
+  } else if (auto copyOp =
+                 dyn_cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(op)) {
+    rewriter.setInsertionPoint(copyOp);
+    // TDM requires the mask as I32
+    auto predI32 = arith::ExtUIOp::create(rewriter, copyOp->getLoc(),
+                                          copyOp.getPred().getType(), pred);
+    Value mask = arith::AndIOp::create(rewriter, copyOp->getLoc(),
+                                       copyOp.getPred(), predI32);
+    copyOp.getPredMutable().assign(mask);
+    return op;
+  } else if (auto gatherOp = dyn_cast<triton::amdgpu::AsyncTDMGatherOp>(op)) {
+    rewriter.setInsertionPoint(gatherOp);
+    // TDM requires the mask as I32
+    auto predI32 = arith::ExtUIOp::create(rewriter, gatherOp->getLoc(),
+                                          gatherOp.getPred().getType(), pred);
+    Value mask = arith::AndIOp::create(rewriter, gatherOp->getLoc(),
+                                       gatherOp.getPred(), predI32);
+    gatherOp.getPredMutable().assign(mask);
+    return op;
+  } else if (auto prefetchOp = dyn_cast<triton::amdgpu::TDMPrefetchOp>(op)) {
+    rewriter.setInsertionPoint(prefetchOp);
+    Value mask = arith::AndIOp::create(rewriter, prefetchOp->getLoc(),
+                                       prefetchOp.getPred(), pred);
+    prefetchOp.getPredMutable().assign(mask);
+    return op;
+  } else if (auto waitOp = dyn_cast<triton::amdgpu::AsyncTDMWait>(op)) {
+    return op;
   }
   return tt::wrapInMaskOp(rewriter, op, pred);
 }
@@ -93,9 +121,7 @@ void expandLoops(ModuleOp moduleOp) {
       continue;
   }
 
-  // NOTE: Leave empty for now, until we utilize customEpiloguePeeling
-  DenseSet<ttg::MaskOp> peeledMaskOps;
-  tt::resolveMaskOp(moduleOp, peeledMaskOps);
+  tt::resolveMaskOp(moduleOp);
 }
 } // namespace
 

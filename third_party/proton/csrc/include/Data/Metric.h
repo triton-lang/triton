@@ -1,9 +1,17 @@
 #ifndef PROTON_DATA_METRIC_H_
 #define PROTON_DATA_METRIC_H_
 
+#include "Runtime/Runtime.h"
 #include "Utility/String.h"
 #include "Utility/Traits.h"
+#include <atomic>
+#include <map>
+#include <mutex>
+#include <set>
+#include <shared_mutex>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -11,9 +19,11 @@ namespace proton {
 
 enum class MetricKind { Flexible, Kernel, PCSampling, Cycle, Count };
 
-using MetricValueType = std::variant<uint64_t, int64_t, double, std::string>;
+using MetricValueType =
+    std::variant<uint64_t, int64_t, double, std::string, std::vector<uint64_t>,
+                 std::vector<int64_t>, std::vector<double>>;
 
-inline const char *typeNameForIndex(std::size_t idx) {
+inline const char *getTypeNameForIndex(std::size_t idx) {
   switch (idx) {
   case 0:
     return "uint64_t";
@@ -23,6 +33,12 @@ inline const char *typeNameForIndex(std::size_t idx) {
     return "double";
   case 3:
     return "std::string";
+  case 4:
+    return "std::vector<uint64_t>";
+  case 5:
+    return "std::vector<int64_t>";
+  case 6:
+    return "std::vector<double>";
   default:
     return "<unknown>";
   }
@@ -44,17 +60,17 @@ public:
 
   virtual ~Metric() = default;
 
-  virtual const std::string getName() const = 0;
+  virtual const std::string &getName() const = 0;
 
-  virtual const std::string getValueName(int valueId) const = 0;
+  virtual const std::string &getValueName(int valueId) const = 0;
 
   virtual bool isProperty(int valueId) const = 0;
 
   virtual bool isExclusive(int valueId) const = 0;
 
-  std::vector<MetricValueType> getValues() const { return values; }
+  const std::vector<MetricValueType> &getValues() const { return values; }
 
-  MetricValueType getValue(int valueId) { return values[valueId]; }
+  const MetricValueType &getValue(int valueId) const { return values[valueId]; }
 
   /// Update a specific value id with the new value.
   void updateValue(int valueId, MetricValueType value) {
@@ -63,8 +79,8 @@ public:
       throw std::runtime_error(
           std::string("Metric value type mismatch for valueId ") +
           std::to_string(valueId) + " (" + getValueName(valueId) + ")" +
-          ": current=" + typeNameForIndex(values[valueId].index()) +
-          ", new=" + typeNameForIndex(value.index()));
+          ": current=" + getTypeNameForIndex(values[valueId].index()) +
+          ", new=" + getTypeNameForIndex(value.index()));
     }
     // Handle string and other values separately
     if (std::holds_alternative<std::string>(value)) {
@@ -77,8 +93,28 @@ public:
             if constexpr (std::is_same_v<ValueType, CurrentType>) {
               if (isProperty(valueId)) {
                 currentValue = otherValue;
-              } else {
+              } else if constexpr (std::is_arithmetic_v<CurrentType>) {
                 currentValue += otherValue;
+              } else if constexpr (is_std_vector_v<CurrentType> &&
+                                   std::is_arithmetic_v<
+                                       typename CurrentType::value_type>) {
+                if (currentValue.size() != otherValue.size()) {
+                  throw std::runtime_error(
+                      std::string("[PROTON] Vector metric size mismatch for "
+                                  "valueId ") +
+                      std::to_string(valueId) + " (" + getValueName(valueId) +
+                      "): current=" + std::to_string(currentValue.size()) +
+                      ", new=" + std::to_string(otherValue.size()));
+                }
+                for (size_t i = 0; i < currentValue.size(); ++i) {
+                  currentValue[i] += otherValue[i];
+                }
+              } else {
+                throw std::runtime_error(
+                    std::string("[PROTON] Metric aggregation not supported for "
+                                "valueId ") +
+                    std::to_string(valueId) + " (" + getValueName(valueId) +
+                    "): type=" + getTypeNameForIndex(values[valueId].index()));
               }
             }
           },
@@ -94,7 +130,7 @@ public:
   }
 
   /// Update all values with another metric.
-  void updateMetric(Metric &other) {
+  void updateMetric(const Metric &other) {
     for (int i = 0; i < values.size(); ++i) {
       updateValue(i, other.values[i]);
     }
@@ -104,7 +140,6 @@ public:
 
 private:
   const MetricKind kind;
-  const std::string name;
 
 protected:
   std::vector<MetricValueType> values;
@@ -132,9 +167,9 @@ public:
     std::visit([&](auto &&v) { this->values[0] = v; }, value);
   }
 
-  const std::string getName() const override { return "FlexibleMetric"; }
+  const std::string &getName() const override { return name; }
 
-  const std::string getValueName(int valueId) const override {
+  const std::string &getValueName(int valueId) const override {
     return valueName;
   }
 
@@ -145,6 +180,7 @@ public:
 private:
   bool property{};
   bool exclusive{};
+  const static inline std::string name = "FlexibleMetric";
   std::string valueName;
 };
 
@@ -175,15 +211,15 @@ public:
     this->values[StreamId] = streamId;
   }
 
-  virtual const std::string getName() const { return "KernelMetric"; }
+  const std::string &getName() const override { return name; }
 
-  virtual const std::string getValueName(int valueId) const {
+  const std::string &getValueName(int valueId) const override {
     return VALUE_NAMES[valueId];
   }
 
-  virtual bool isProperty(int valueId) const { return PROPERTY[valueId]; }
+  bool isProperty(int valueId) const override { return PROPERTY[valueId]; }
 
-  virtual bool isExclusive(int valueId) const { return EXCLUSIVE[valueId]; }
+  bool isExclusive(int valueId) const override { return EXCLUSIVE[valueId]; }
 
 private:
   const static inline bool PROPERTY[kernelMetricKind::Count] = {
@@ -194,6 +230,7 @@ private:
       "start_time (ns)", "end_time (ns)", "count",     "time (ns)",
       "device_id",       "device_type",   "stream_id",
   };
+  const static inline std::string name = "KernelMetric";
 };
 
 class PCSamplingMetric : public Metric {
@@ -233,17 +270,15 @@ public:
     this->values[PCSamplingMetricKind::NumStalledSamples] = stalledSamples;
   }
 
-  virtual const std::string getName() const { return "PCSamplingMetric"; }
+  const std::string &getName() const override { return name; }
 
-  virtual const std::string getValueName(int valueId) const {
+  const std::string &getValueName(int valueId) const override {
     return VALUE_NAMES[valueId];
   }
 
-  virtual bool isProperty(int valueId) const { return false; }
+  bool isProperty(int valueId) const override { return false; }
+  bool isExclusive(int valueId) const override { return false; }
 
-  virtual bool isExclusive(int valueId) const { return false; }
-
-private:
   const static inline std::string VALUE_NAMES[PCSamplingMetricKind::Count] = {
       "num_samples",
       "num_stalled_samples",
@@ -266,6 +301,7 @@ private:
       "stalled_sleeping",
       "stalled_selected",
   };
+  const static inline std::string name = "PCSamplingMetric";
 };
 
 class CycleMetric : public Metric {
@@ -315,15 +351,15 @@ public:
     this->values[PostFinalTime] = postFinalTime;
   }
 
-  virtual const std::string getName() const { return "CycleMetric"; }
+  const std::string &getName() const override { return name; }
 
-  virtual const std::string getValueName(int valueId) const {
+  const std::string &getValueName(int valueId) const override {
     return VALUE_NAMES[valueId];
   }
 
-  virtual bool isProperty(int valueId) const { return PROPERTY[valueId]; }
+  bool isProperty(int valueId) const override { return PROPERTY[valueId]; }
 
-  virtual bool isExclusive(int valueId) const { return EXCLUSIVE[valueId]; }
+  bool isExclusive(int valueId) const override { return EXCLUSIVE[valueId]; }
 
 private:
   const static inline bool PROPERTY[CycleMetricKind::Count] = {
@@ -337,6 +373,195 @@ private:
       "kernel_id",   "kernel_name",    "block_id",       "processor_id",
       "unit_id",     "device_id",      "device_type",    "time_shift_cost",
       "init_time",   "pre_final_time", "post_final_time"};
+  const static inline std::string name = "CycleMetric";
+};
+
+/// Each TensorMetric represents a metric stored in a device buffer.
+struct TensorMetric {
+  uint8_t *ptr{};     // device pointer
+  size_t typeIndex{}; // MetricValueType variant index
+  uint64_t size{1};   // number of uint64 words stored at ptr
+};
+
+struct MetricKernelLaunchConfig {
+  void *kernel{nullptr};
+  unsigned int numThreads{1};
+  unsigned int sharedMemBytes{0};
+};
+
+struct MetricKernelLaunchState {
+  MetricKernelLaunchConfig tensor{};
+  MetricKernelLaunchConfig scalar{};
+  void *stream{nullptr};
+};
+
+/// Collect tensor metrics from device to host.
+std::map<std::string, MetricValueType>
+collectTensorMetrics(Runtime *runtime,
+                     const std::map<std::string, TensorMetric> &tensorMetrics,
+                     void *stream);
+
+/// A MetricBuffer stores tensor metrics generated by GPU kernels.
+/// The synchronization behaviors are handled by the runtime of the device.
+/// A kernel can be associated with multiple tensor metrics but we do not
+/// store the association on the device side.
+///
+/// Here's the layout of the buffer and it's meta data that are maintained on
+/// the host:
+///
+///  host ->                             -------- kernel0 --------
+///                                     /                         \
+/// [device0] -> metric buffer -> {metric_id, value, metric_id, value, ...}
+///                   |                            /|\
+///                   |                             |
+///                   | deviceOffsetPtr -------------
+///                   | devicePtr
+class MetricBuffer {
+public:
+  struct MetricDescriptor {
+    size_t id{};
+    size_t typeIndex{};
+    size_t size{};
+    std::string name{};
+  };
+
+public:
+  MetricBuffer(size_t capacity, Runtime *runtime, bool mappedHostBuffer = true)
+      : capacity(capacity), runtime(runtime),
+        mappedHostBuffer(mappedHostBuffer) {}
+
+  ~MetricBuffer();
+
+  void receive(const std::map<std::string, TensorMetric> &tensorMetrics,
+               const std::map<std::string, MetricValueType> &scalarMetrics,
+               const MetricKernelLaunchState &metricKernelLaunchState);
+
+  void reserve() { getOrCreateBuffer(); }
+
+  Runtime *getRuntime() const { return runtime; }
+
+  // no sync flush
+  template <typename Func> void peek(Device *device, Func callback) {
+    std::lock_guard<std::mutex> lock(bufferMutex);
+    auto it = deviceBuffers.find(device);
+    if (it != deviceBuffers.end()) {
+      auto &buffer = it->second;
+      callback(buffer.hostPtr);
+    }
+  }
+
+  template <typename Func> void flush(Func callback, bool flushAll = false) {
+    std::vector<std::pair<void *, DeviceBuffer>> buffersToFlush;
+    if (flushAll) {
+      std::lock_guard<std::mutex> lock(bufferMutex);
+      for (auto &[device, buffer] : deviceBuffers) {
+        buffersToFlush.emplace_back(device, buffer);
+      }
+    } else {
+      buffersToFlush.emplace_back(runtime->getDevice(), getOrCreateBuffer());
+    }
+    for (auto &[device, buffer] : buffersToFlush) {
+      synchronize(buffer);
+      callback(device, buffer.hostPtr);
+    }
+  }
+
+  size_t getCapacity() const { return capacity; }
+
+  MetricDescriptor &getMetricDescriptor(size_t id) {
+    std::shared_lock<std::shared_mutex> lock(metricDescriptorMutex);
+    auto it = metricDescriptors.find(id);
+    if (it == metricDescriptors.end()) {
+      throw std::runtime_error("[PROTON] MetricBuffer: unknown metric id: " +
+                               std::to_string(id));
+    }
+    return it->second;
+  }
+
+private:
+  struct DeviceBuffer {
+    uint8_t *devicePtr{};
+    uint8_t *deviceOffsetPtr{};
+    uint8_t *hostPtr{};
+    uint64_t *hostOffset{};
+    void *priorityStream{};
+  };
+
+  DeviceBuffer &getOrCreateBuffer();
+
+  void queue(size_t metricId, TensorMetric tensorMetric, void *stream,
+             const MetricKernelLaunchConfig &launchConfig);
+
+  void queue(size_t metricId, MetricValueType scalarMetric, void *stream,
+             const MetricKernelLaunchConfig &launchConfig);
+
+  void synchronize(DeviceBuffer &buffer);
+
+  template <typename MetricT>
+  size_t getMetricTypeIndex(const MetricT &metric) const {
+    using MetricType = std::decay_t<MetricT>;
+    if constexpr (std::is_same_v<MetricValueType, MetricType>) {
+      return metric.index();
+    } else if constexpr (std::is_same_v<TensorMetric, MetricType>) {
+      return metric.typeIndex;
+    } else {
+      static_assert(always_false<MetricType>::value,
+                    "Unsupported metric type for getMetricTypeIndex");
+    }
+  }
+
+  template <typename MetricT>
+  size_t getMetricSize(const MetricT &metric) const {
+    using MetricType = std::decay_t<MetricT>;
+    if constexpr (std::is_same_v<MetricValueType, MetricType>) {
+      return 1; // FIXME: We don't queue a scalar metric with vector type yet
+    } else if constexpr (std::is_same_v<TensorMetric, MetricType>) {
+      return metric.size;
+    } else {
+      static_assert(always_false<MetricType>::value,
+                    "Unsupported metric type for getMetricSize");
+    }
+  }
+
+  template <typename MetricsT>
+  void queueMetrics(const MetricsT &metrics, void *stream,
+                    const MetricKernelLaunchConfig &launchConfig) {
+    for (const auto &[name, metric] : metrics) {
+      size_t typeIndex = getMetricTypeIndex(metric);
+      size_t size = getMetricSize(metric);
+      auto descriptor = getOrCreateMetricDescriptor(name, typeIndex, size);
+      queue(descriptor.id, metric, stream, launchConfig);
+    }
+  }
+
+  MetricDescriptor getOrCreateMetricDescriptor(const std::string &name,
+                                               size_t typeIndex, size_t size);
+
+protected:
+  static std::atomic<size_t> metricId;
+  static std::map<size_t, MetricDescriptor> metricDescriptors;
+  static std::map<std::string, size_t> metricNameToId;
+  static std::shared_mutex metricDescriptorMutex;
+
+  size_t capacity; // byte
+  Runtime *runtime{};
+  const bool mappedHostBuffer{true};
+
+  std::map<void *, DeviceBuffer> deviceBuffers;
+  std::mutex bufferMutex;
+};
+
+class MetricInterface {
+public:
+  virtual ~MetricInterface() = default;
+
+  virtual void
+  addMetrics(size_t scopeId,
+             const std::map<std::string, MetricValueType> &scalarMetrics,
+             const std::map<std::string, TensorMetric> &tensorMetrics) = 0;
+
+  virtual void
+  setMetricKernels(const MetricKernelLaunchState &metricKernelLaunchState) = 0;
 };
 
 } // namespace proton

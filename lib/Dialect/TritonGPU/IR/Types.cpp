@@ -103,6 +103,8 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     return emitError()
            << "shape must have power-of-2 and non-zero dimensions; got "
            << shape;
+  if (shape.front() == 0)
+    return emitError() << "shape has 0 dimension";
   if (allocShape.size() < shape.size())
     return emitError()
            << "alloc shape must have at least as many dimensions as shape";
@@ -126,16 +128,20 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
              << "bitwidth * colStride must be less than or equal to 32. Got "
              << bitwidth << " and " << enc.getColStride();
     }
-    shape = shape.take_back(2);
+    // Takes subslices into account and figures out whether we can construct
+    // the linear layout at all
     allocShape = allocShape.take_back(2);
-    if (allocShape[0] < enc.getBlockM() * enc.getCTASplitM() ||
-        allocShape[1] < enc.getBlockN() * enc.getCTASplitN()) {
+    auto ctaSplit = enc.getCGALayout().getCTASplitNum();
+    auto blockN = std::min<int32_t>(enc.getBlockN(), shape.back());
+    if (allocShape[0] < enc.getBlockM() * ctaSplit[0] ||
+        allocShape[1] < blockN * ctaSplit[1]) {
       return emitError() << "the allocation shape must be at least "
-                         << enc.getBlockM() * enc.getCTASplitM() << "x"
-                         << enc.getBlockN() * enc.getCTASplitN() << ". Got "
-                         << allocShape;
+                         << enc.getBlockM() * ctaSplit[0] << "x"
+                         << blockN * ctaSplit[1] << ". Got " << allocShape;
     }
+    // Checks the layout of the allocation
     auto ll = toLinearLayout(allocShape, enc);
+    // Sanity check that the layout is of the right shape
     auto dims = standardOutDimNames(ctx, 2);
     if (ll.getOutDimSize(dims[0]) != allocShape[0] ||
         ll.getOutDimSize(dims[1]) != allocShape[1]) {
@@ -148,6 +154,12 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
       return emitError()
              << "memorySpace must be SharedMemorySpace for shared encoding. "
              << "Got " << memorySpace;
+    }
+    auto rank = cast<LayoutEncodingTrait>(enc).getRank();
+    if (!(rank == shape.size() || rank == shape.size() - 1)) {
+      return emitError() << "rank must be equal to or one less than "
+                         << "the shape size. Got " << rank << " and "
+                         << shape.size();
     }
   } else if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
                  encoding)) {
@@ -169,12 +181,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   // additional rules to verify.
   if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
     auto rank = enc.getRank();
-
-    if (rank != shape.size() && rank != shape.size() - 1) {
-      return emitError() << "padding rank must be equal to or one less than "
-                         << "the shape size when pipelining.";
-    }
-
     // Ensure linear component's outDims match the alloc size ignoring
     // pipelining dimension
     auto outDims = standardOutDimNames(ctx, rank);
@@ -189,6 +195,24 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                            << ". Expected: " << expectedShape[d]
                            << ", got: " << ll.getOutDimSize(outDims[d]);
       }
+    }
+  } else if (auto enc = dyn_cast<NVMMASharedEncodingAttr>(encoding)) {
+    SmallVector<int64_t> shapePerCTA(getShapePerCTA(enc, allocShape));
+    auto blockShape = ArrayRef(shapePerCTA).take_back(enc.getRank());
+    if (failed(getTMABlockShape(blockShape, enc.getElementBitWidth(),
+                                enc.getSwizzlingByteWidth(), enc.getFp4Padded(),
+                                enc.getTransposed(), /*packedSize=*/false,
+                                emitError, TMAMode::Tiled)))
+      return failure();
+  } else if (auto enc = dyn_cast<SharedLinearEncodingAttr>(encoding)) {
+    auto blockShape = ArrayRef(allocShape).take_back(enc.getRank());
+    const LinearLayout &ll = enc.getLinearLayout();
+    for (auto [dim, size, llSize] :
+         llvm::enumerate(blockShape, ll.getOutDimSizes())) {
+      if (size == llSize)
+        continue;
+      return emitError() << "Mismatch in expected shape for dimension " << dim
+                         << ". Expected: " << size << ", got: " << llSize;
     }
   }
 

@@ -12,7 +12,7 @@ defvar DefOverflow = ConstantEnumCase<Arith_IntegerOverflowAttr, "none">;
 
 def CopyDiscardableAttrs: NativeCodeCallVoid<
         "$1.getOwner()->setDiscardableAttrs(triton::filterDiscardableAttrs($0.getOwner(), "
-        "{\"tt.divisibility\", \"tt.contiguity\", \"tt.constancy\"}))">;
+        "{\"tt.divisibility\", \"tt.contiguity\", \"tt.constancy\", \"tt.pointee_type\"}))">;
 
 def CombineAddPtrPattern : Pat<
         (TT_AddPtrOp:$src (TT_AddPtrOp $ptr, $idx0), $idx1),

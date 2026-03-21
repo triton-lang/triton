@@ -1,7 +1,9 @@
 #pragma once
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/DialectRegistry.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <memory>
+#include <string>
 
 // A custom op builder that keeps track of the last location
 class TritonOpBuilder {
@@ -66,7 +68,7 @@ public:
 
   template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
     auto loc = getLastLoc();
-    return builder->create<OpTy>(loc, std::forward<Args>(args)...);
+    return OpTy::create(*builder, loc, std::forward<Args>(args)...);
   }
 
   // Overload to create or fold a single result operation.

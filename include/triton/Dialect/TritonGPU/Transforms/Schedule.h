@@ -169,6 +169,76 @@ public:
 
   LLVM_DUMP_METHOD void dump();
 
+  // ============================================================
+  // Linearized Schedule Iterator API
+  // ============================================================
+
+  /// A stateful iterator over operations in linearized schedule order.
+  /// Operations are yielded lazily in order: (stage, cluster,
+  /// IR-order-within-cluster).
+  ///
+  /// The iterator is circular and stage-aware: it starts from initialOp at its
+  /// stage, traverses to the end of clusters, wraps around to the beginning,
+  /// and when it reaches initialOp again, increments the stage limit. An op is
+  /// only yielded if its stage <= currStageLimit. The iterator stops when it
+  /// reaches initialOp and currStageLimit >= numStages.
+  class LinearizedIterator {
+  public:
+    /// Construct an iterator for the given forOp and schedule.
+    /// The iterator starts at initialOp and wraps around circularly with
+    /// stage-based filtering.
+    LinearizedIterator(scf::ForOp forOp, const CoarseSchedule &schedule,
+                       Operation *initialOp);
+
+    // Standard iterator operations
+    LinearizedIterator &operator++();
+    LinearizedIterator operator++(int);
+    Operation *operator*() const;
+    bool operator==(const LinearizedIterator &other) const;
+    bool operator!=(const LinearizedIterator &other) const;
+
+    bool isEnd() const { return atEnd; }
+
+    /// Advance the iterator to the next operation that satisfies the optional
+    /// predicate. Returns the found operation, or std::nullopt if not found.
+    /// The iterator position is updated to the found operation (or end).
+    std::optional<Operation *>
+    findNext(std::function<bool(Operation *)> predicate = nullptr) {
+      while (!isEnd()) {
+        Operation *op = *(*this);
+        ++(*this);
+        if (!predicate || predicate(op)) {
+          return op;
+        }
+      }
+      return std::nullopt;
+    }
+
+  private:
+    /// Advance to the next valid operation in the schedule.
+    void advanceToNextScheduledOp();
+
+    scf::ForOp forOp;
+    const CoarseSchedule *schedule;
+    ClusterList::const_iterator clusterIt;
+    ClusterList::const_iterator clusterBegin;
+    ClusterList::const_iterator clusterEnd;
+    Block::iterator opIt;
+    Block::iterator opEnd;
+    Operation *currentOp = nullptr;
+    Operation *initialOp = nullptr;
+    int currStageLimit = 0;
+    int maxStages = 0;
+    bool atEnd = false;
+  };
+
+  /// Get a circular iterator over the linearized schedule starting from
+  /// initialOp. The iterator will traverse from initialOp to the end, wrap
+  /// around to the beginning, and stop when it reaches initialOp again.
+  LinearizedIterator linearized(scf::ForOp forOp, Operation *initialOp) const {
+    return LinearizedIterator(forOp, *this, initialOp);
+  }
+
 private:
   int numStages = 0;
 };

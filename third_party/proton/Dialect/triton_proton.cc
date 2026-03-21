@@ -6,6 +6,7 @@
 #include "Dialect/Proton/IR/Dialect.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "Dialect/ProtonGPU/Transforms/Passes.h"
+#include "ir.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
@@ -73,12 +74,11 @@ void init_triton_proton(py::module &&m) {
 
   // Proton operations
   m.def("create_proton_record",
-        [](mlir::OpBuilder &opBuilder, bool isStart,
+        [](TritonOpBuilder &opBuilder, bool isStart,
            const std::string &name) -> void {
           auto nameAttr = mlir::StringAttr::get(opBuilder.getContext(),
                                                 llvm::StringRef(name));
-          auto loc = opBuilder.getUnknownLoc();
-          opBuilder.create<proton::RecordOp>(loc, isStart, nameAttr);
+          opBuilder.create<proton::RecordOp>(isStart, nameAttr);
         });
 
   m.def("add_convert_proton_to_protongpu",
@@ -103,8 +103,6 @@ void init_triton_proton(py::module &&m) {
                      const std::string &);
   ADD_PASS_WRAPPER_0("add_allocate_proton_shared_memory",
                      proton::gpu::createAllocateProtonSharedMemoryPass);
-  ADD_PASS_WRAPPER_0("add_allocate_proton_global_scratch_buffer",
-                     proton::gpu::createAllocateProtonGlobalScratchBufferPass);
   ADD_PASS_WRAPPER_0("add_schedule_buffer_store",
                      proton::gpu::createScheduleBufferStorePass);
   ADD_PASS_WRAPPER_0("add_sched_barriers",

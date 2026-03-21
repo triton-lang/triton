@@ -79,55 +79,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 // CHECK: tt.load
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: tt.load
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: %[[SLICEA2:.+]] = ttg.local_load
 // CHECK: %[[SLICEB2:.+]] = ttg.local_load
 // CHECK: %[[SLICEA3:.+]] = ttg.local_load
 // CHECK: %[[SLICEB3:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT2:.+]] = tt.dot %[[SLICEA2]], %[[SLICEB2]], %[[DOT1]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: tt.dot %[[SLICEA3]], %[[SLICEB3]], %[[DOT2]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -192,12 +192,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
@@ -214,19 +214,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -515,12 +515,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 // CHECK-LABEL: pingpong_medium_dependency
 
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
@@ -537,19 +537,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -617,55 +617,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // -----
 // CHECK-LABEL: pingpong_large_dependency
 
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 // CHECK: tt.load
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: tt.load
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: %[[SLICEA2:.+]] = ttg.local_load
 // CHECK: %[[SLICEB2:.+]] = ttg.local_load
 // CHECK: %[[SLICEA3:.+]] = ttg.local_load
 // CHECK: %[[SLICEB3:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT2:.+]] = tt.dot %[[SLICEA2]], %[[SLICEB2]], %[[DOT1]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: tt.dot %[[SLICEA3]], %[[SLICEB3]], %[[DOT2]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -902,16 +902,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 //CHECK: rocdl.s.setprio 1
 //CHECK: tt.dot
 //CHECK: rocdl.s.setprio 0
-//CHECK: gpu.barrier
+//CHECK: ttg.barrier local
 //CHECK: rocdl.sched.barrier
 //CHECK: ttg.local_store
 //CHECK: ttg.local_store
-//CHECK: gpu.barrier
+//CHECK: ttg.barrier local
 //CHECK: rocdl.sched.barrier
 //CHECK: rocdl.s.setprio 1
 //CHECK: tt.dot
 //CHECK: rocdl.s.setprio 0
-//CHECK: gpu.barrier
+//CHECK: ttg.barrier local
 //CHECK: rocdl.sched.barrier
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -993,12 +993,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // -----
 // CHECK-LABEL: pingpong_medium_epilogue
 
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
@@ -1015,20 +1015,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: scf.if
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -1102,56 +1102,56 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // -----
 
 // CHECK-LABEL: pingpong_large_epilogue
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 // CHECK: tt.load
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: tt.load
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: %[[SLICEA2:.+]] = ttg.local_load
 // CHECK: %[[SLICEB2:.+]] = ttg.local_load
 // CHECK: %[[SLICEA3:.+]] = ttg.local_load
 // CHECK: %[[SLICEB3:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT2:.+]] = tt.dot %[[SLICEA2]], %[[SLICEB2]], %[[DOT1]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: tt.dot %[[SLICEA3]], %[[SLICEB3]], %[[DOT2]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: scf.if
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -1399,12 +1399,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 // CHECK-LABEL: pingpong_medium_persistent_epilogue_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
@@ -1421,19 +1421,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -1521,55 +1521,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 // CHECK-LABEL: pingpong_large_persistent_epilogue_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 // CHECK: tt.load
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: tt.load
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: %[[SLICEA2:.+]] = ttg.local_load
 // CHECK: %[[SLICEB2:.+]] = ttg.local_load
 // CHECK: %[[SLICEA3:.+]] = ttg.local_load
 // CHECK: %[[SLICEB3:.+]] = ttg.local_load
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT2:.+]] = tt.dot %[[SLICEA2]], %[[SLICEB2]], %[[DOT1]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: rocdl.s.setprio 1
 // CHECK: tt.dot %[[SLICEA3]], %[[SLICEB3]], %[[DOT2]]
 // CHECK: rocdl.s.setprio 0
-// CHECK: gpu.barrier
+// CHECK: ttg.barrier local
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -1841,12 +1841,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK-LABEL: async_ns3_gemm
 // CHECK-NOT: rocdl
 // CHECK-NS3-LABEL: async_ns3_gemm
-// CHECK-NS3: amdgpu.cond_barrier
+// CHECK-NS3: amdg.cond_barrier
 // CHECK-NS3: %[[LL0:.+]] = ttg.local_load
 // CHECK-NS3: %[[LL1:.+]] = ttg.local_load
 // CHECK-NS3: ttg.async_wait
 // CHECK-NS3: tt.dot %[[LL0]], %[[LL1]]
-// CHECK-NS3: amdgpu.cond_barrier
+// CHECK-NS3: amdg.cond_barrier
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -1892,7 +1892,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 // CHECK-LABEL: gemm_mxfp4
-// CHECK: amdgpu.cond_barrier
+// CHECK: amdg.cond_barrier
 // CHECK: %[[WAIT:.+]] = ttg.async_wait
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.async_copy_global_to_local
@@ -1910,7 +1910,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: %[[LL3:.+]] = ttg.local_load
 // CHECK-SAME: %[[WAIT]]
 // CHECK: tt.dot_scaled %[[LL2]] scale %[[LL0]], %[[LL3]] scale %[[LL1]]
-// CHECK: amdgpu.cond_barrier
+// CHECK: amdg.cond_barrier
 
 #blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -1970,6 +1970,138 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     ttg.local_dealloc %3 : !ttg.memdesc<2x256x8xi8, #shared, #smem, mutable>
     %6 = arith.truncf %4#0 : tensor<256x256xf32, #mma> to tensor<256x256xbf16, #mma>
     tt.store %arg28, %6, %arg29 : tensor<256x256x!tt.ptr<bf16>, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+// Simple GEMM kernel with a transpose between the local load and the dot
+
+// CHECK-LABEL: pingpong_gemm_with_trans
+// Check that the transpose is placed before the dot
+// CHECK-NS3: scf.for
+// CHECK-NS3: tt.trans
+// CHECK-NS3: tt.dot
+
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 16], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]], warp = [[0, 32], [0, 64], [32, 0]], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]], warp = [[32, 0], [64, 0], [0, 0]], block = []}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 4], instrShape = [32, 32, 16], isTransposed = true}>
+#shared = #ttg.padded_shared<[512:+8] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [64, 0], [32, 0], [16, 0], [1, 0], [2, 0], [4, 0], [8, 0]], block = []}>
+#shared1 = #ttg.swizzled_shared<{vec = 8, perPhase = 2, maxPhase = 8, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @pingpong_gemm_with_trans(%A: tensor<128x64x!tt.ptr<f16>, #linear>, %B: tensor<128x64x!tt.ptr<f16>, #blocked>) -> tensor<128x128xf32, #mma> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32, #mma>
+
+    %smemA = ttg.local_alloc : () -> !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>
+    %smemB = ttg.local_alloc : () -> !ttg.memdesc<3x128x64xf16, #shared1, #smem, mutable>
+    %smemA0 = ttg.memdesc_index %smemA[%c0_i32] : !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+    %smemB0 = ttg.memdesc_index %smemB[%c0_i32] : !ttg.memdesc<3x128x64xf16, #shared1, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared1, #smem, mutable>
+
+    %initA = ttg.async_copy_global_to_local %A, %smemA0 {contiguity = 8 : i32} : tensor<128x64x!tt.ptr<f16>, #linear> -> <128x64xf16, #shared, #smem, mutable>
+    %initB = ttg.async_copy_global_to_local %B, %smemB0 {contiguity = 8 : i32} : tensor<128x64x!tt.ptr<f16>, #blocked> -> <128x64xf16, #shared1, #smem, mutable>
+    %initTokA = ttg.async_commit_group tokens %initA
+    %initTokB = ttg.async_commit_group tokens %initB
+
+    %result:6 = scf.for %i = %c0_i32 to %c1_i32 step %c1_i32 iter_args(%acc = %zero, %aDesc = %smemA0, %bDesc = %smemB0, %tokA = %initTokA, %tokB = %initTokB, %waitTok = %initTokA) -> (tensor<128x128xf32, #mma>, !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<128x64xf16, #shared1, #smem, mutable>, !ttg.async.token, !ttg.async.token, !ttg.async.token) : i32 {
+      %newADesc = ttg.memdesc_index %smemA[%c0_i32] : !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+      %tokANew = ttg.async_copy_global_to_local %A, %newADesc {contiguity = 8 : i32} : tensor<128x64x!tt.ptr<f16>, #linear> -> <128x64xf16, #shared, #smem, mutable>
+      %newBDesc = ttg.memdesc_index %smemB[%c0_i32] : !ttg.memdesc<3x128x64xf16, #shared1, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared1, #smem, mutable>
+      %tokBNew = ttg.async_copy_global_to_local %B, %newBDesc {contiguity = 8 : i32} : tensor<128x64x!tt.ptr<f16>, #blocked> -> <128x64xf16, #shared1, #smem, mutable>
+      %commitA = ttg.async_commit_group tokens %tokANew
+      %commitB = ttg.async_commit_group tokens %tokBNew
+
+      %loadA = ttg.local_load %aDesc token %waitTok : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+      %loadB = ttg.local_load %bDesc token %waitTok : !ttg.memdesc<128x64xf16, #shared1, #smem, mutable> -> tensor<128x64xf16, #linear2>
+
+      %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<128x64xf16, #linear2> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+
+      %dot = tt.dot %loadA, %transB, %acc : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
+
+      %wait = ttg.async_wait %tokA, %tokB {num = 0 : i32}
+      scf.yield %dot, %newADesc, %newBDesc, %commitA, %commitB, %wait : tensor<128x128xf32, #mma>, !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<128x64xf16, #shared1, #smem, mutable>, !ttg.async.token, !ttg.async.token, !ttg.async.token
+    }
+
+    ttg.local_dealloc %smemA : !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>
+    ttg.local_dealloc %smemB : !ttg.memdesc<3x128x64xf16, #shared1, #smem, mutable>
+    tt.return %result#0 : tensor<128x128xf32, #mma>
+  }
+}
+
+// -----
+
+// Test with FMA based dot, pingpong should skip optimization of such kernels.
+// Based on pingpong_small test.
+
+// CHECK-LABEL: fma_dot_neg
+// CHECK-NOT: rocdl.sched.barrier
+// CHECK-NOT: rocdl.s.setprio
+// CHECK-NOT: async
+
+#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#fake_mma = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}>
+#shared1 = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @fma_dot_neg(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #fake_mma>
+    %c1_i32 = arith.constant 1 : i32
+    %cst_0 = arith.constant dense<64> : tensor<64x128xi32, #blocked>
+    %cst_1 = arith.constant dense<64> : tensor<128x64xi32, #blocked1>
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %0 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x1x!tt.ptr<f16>, #blocked1>
+    %1 = tt.get_program_id x : i32
+    %2 = tt.splat %1 : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %3 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %4 = arith.addi %2, %3 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %5 = tt.expand_dims %4 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<128x1xi32, #blocked1>
+    %6 = tt.splat %arg3 : i32 -> tensor<128x1xi32, #blocked1>
+    %7 = arith.muli %5, %6 : tensor<128x1xi32, #blocked1>
+    %8 = tt.addptr %0, %7 : tensor<128x1x!tt.ptr<f16>, #blocked1>, tensor<128x1xi32, #blocked1>
+    %9 = tt.broadcast %8 : tensor<128x1x!tt.ptr<f16>, #blocked1> -> tensor<128x64x!tt.ptr<f16>, #blocked1>
+    %10 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
+    %11 = tt.expand_dims %10 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<1x64xi32, #blocked1>
+    %12 = tt.broadcast %11 : tensor<1x64xi32, #blocked1> -> tensor<128x64xi32, #blocked1>
+    %13 = tt.addptr %9, %12 : tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<128x64xi32, #blocked1>
+    %14 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<64x1x!tt.ptr<f16>, #blocked>
+    %15 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %16 = tt.expand_dims %15 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi32, #blocked>
+    %17 = tt.addptr %14, %16 : tensor<64x1x!tt.ptr<f16>, #blocked>, tensor<64x1xi32, #blocked>
+    %18 = tt.broadcast %17 : tensor<64x1x!tt.ptr<f16>, #blocked> -> tensor<64x128x!tt.ptr<f16>, #blocked>
+    %19 = tt.splat %arg4 : i32 -> tensor<64x128xi32, #blocked>
+    %20 = tt.addptr %18, %19 : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi32, #blocked>
+    %21 = ttg.local_alloc : () -> !ttg.memdesc<1x128x64xf16, #shared, #smem, mutable>
+    %22 = ttg.local_alloc : () -> !ttg.memdesc<1x64x128xf16, #shared1, #smem, mutable>
+    %23 = ttg.memdesc_index %21[%c0_i32] : !ttg.memdesc<1x128x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+    %24 = ttg.memdesc_index %22[%c0_i32] : !ttg.memdesc<1x64x128xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>
+    %25:6 = scf.for %arg5 = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%arg6 = %cst, %arg7 = %13, %arg8 = %20, %arg9 = %c0_i32, %arg10 = %23, %arg11 = %24) -> (tensor<128x128xf32, #fake_mma>, tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<64x128x!tt.ptr<f16>, #blocked>, i32, !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>)  : i32 {
+      %26 = tt.addptr %arg7, %cst_1 : tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<128x64xi32, #blocked1>
+      %27 = tt.load %26 : tensor<128x64x!tt.ptr<f16>, #blocked1>
+      %28 = tt.addptr %arg8, %cst_0 : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi32, #blocked>
+      %29 = tt.load %28 : tensor<64x128x!tt.ptr<f16>, #blocked>
+      %30 = ttg.local_load %arg10 : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #fake_mma}>>
+      %31 = ttg.local_load %arg11 : !ttg.memdesc<64x128xf16, #shared1, #smem, mutable> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #fake_mma}>>
+      %32 = arith.negf %31 : tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #fake_mma}>>
+      %33 = tt.dot %30, %32, %arg6 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #fake_mma}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #fake_mma}>> -> tensor<128x128xf32, #fake_mma>
+      %34 = arith.addi %arg9, %c1_i32 : i32
+      %35 = arith.cmpi slt, %34, %c1_i32 : i32
+      %36 = arith.select %35, %34, %c0_i32 : i32
+      %37 = ttg.memdesc_index %21[%36] : !ttg.memdesc<1x128x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+      ttg.local_store %27, %37 : tensor<128x64xf16, #blocked1> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+      %38 = ttg.memdesc_index %22[%36] : !ttg.memdesc<1x64x128xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>
+      ttg.local_store %29, %38 : tensor<64x128xf16, #blocked> -> !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>
+      scf.yield %33, %26, %28, %36, %37, %38 : tensor<128x128xf32, #fake_mma>, tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<64x128x!tt.ptr<f16>, #blocked>, i32, !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>
+    }
+    ttg.local_dealloc %21 : !ttg.memdesc<1x128x64xf16, #shared, #smem, mutable>
+    ttg.local_dealloc %22 : !ttg.memdesc<1x64x128xf16, #shared1, #smem, mutable>
     tt.return
   }
 }

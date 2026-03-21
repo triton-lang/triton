@@ -45,8 +45,8 @@ public:
         return WalkResult::advance();
 
       OpBuilder builder(dotOp);
-      auto fence = builder.create<FenceAsyncSharedOp>(dotOp.getLoc(),
-                                                      /*bCluster=*/false);
+      auto fence = FenceAsyncSharedOp::create(builder, dotOp.getLoc(),
+                                              /*bCluster=*/false);
       // If there is all the dependencies are outside of the loop try to hoist
       // the fence.
       while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {
@@ -136,8 +136,8 @@ private:
 
     // look through `ttg.warp_specialize`.
     if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(argOwner)) {
-      findCopyRegToSharedOps(wsOp.getParentOp().getExplicitCaptures()[argNum],
-                             visited, result);
+      findCopyRegToSharedOps(wsOp.getExplicitCaptures()[argNum], visited,
+                             result);
       return;
     }
 

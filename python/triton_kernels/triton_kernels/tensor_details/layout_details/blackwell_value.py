@@ -1,33 +1,63 @@
+from dataclasses import dataclass
 import torch
-from .base import Layout
+from .base import Layout, LayoutTransformation
+from .torch_utils import repack
 
 
+# ------------------- Blackwell MX Value Layout -------------------
+@dataclass(frozen=True)
 class BlackwellMXValueLayout(Layout):
-    name: str = "BLACKWELL_VALUE"
 
-    def __init__(self, shape) -> None:
-        super().__init__(shape)
-        self.shape = shape
+    @property
+    def name(self):
+        return "BLACKWELL_MX_VALUE"
 
-    def swizzle_data(self, data):
-        # permutation needed to make `data` row major
-        to_row_major = sorted(range(data.ndim), key=lambda d: (data.stride(d), d))[::-1]
-        # permutation  needed to retrieve original order
-        inv = [0] * data.ndim
-        for i, d in enumerate(to_row_major):
-            inv[d] = i
-        # leading dimension must be padded to be aligned to 128
-        align_dim = lambda x: (x + 128 - 1) // 128 * 128
-        major_dim = data.stride().index(1)
-        pad = align_dim(data.shape[major_dim]) - data.shape[major_dim]
-        data = torch.nn.functional.pad(data.permute(to_row_major), (0, pad)).permute(inv)
-        return data
-
-    def unswizzle_data(self, data: torch.Tensor):
-        # Trim padding along all dims back to the original shape recorded at init.
-        assert data.ndim == len(self.shape), "Rank mismatch between data and recorded shape"
-        sizes = [min(data.size(i), self.shape[i]) for i in range(data.ndim)]
-        return data[tuple(slice(0, s) for s in sizes)]
+    def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
+        return BlackwellMXValueLayoutTransformation(shape, is_fp4)
 
     def swizzle_block_shape(self, block_shape):
         return block_shape
+
+
+def strides_major_dim_m2(shape):
+    n = len(shape)
+    if n <= 1:
+        return [1] * n
+    order = [n - 2, n - 1] + list(range(n - 3, -1, -1))  # fastest -> slowest
+    st = [0] * n
+    st[order[0]] = 1
+    for prev, d in zip(order, order[1:]):
+        st[d] = st[prev] * shape[prev]
+    return st
+
+
+# ------------------- Blackwell MX Value Layout Transformation -------------------
+@dataclass(frozen=True)
+class BlackwellMXValueLayoutTransformation(LayoutTransformation):
+
+    def swizzle_data(self, data):
+        assert data.stride(-1) == 1
+        # re-pack as column-major
+        out_shape = list(data.shape)
+        out_shape[-1] *= 2
+        out_shape[-2] //= 2
+        padded_shape = list(out_shape)
+        padded_shape[-2] += (-out_shape[-2]) % 128
+        ret = torch.empty_strided(padded_shape, strides_major_dim_m2(padded_shape), device=data.device,
+                                  dtype=data.dtype)
+        repack(data, -1, -2, self.is_fp4, out=ret[..., :out_shape[-2], :])
+        return ret
+
+    def unswizzle_data(self, data: torch.Tensor):
+        assert data.stride(-2) == 1
+        # unpad
+        sizes = [self.shape[i] for i in range(data.ndim)]
+        sizes[-2] //= 2
+        data = data[tuple(slice(0, s) for s in sizes)]
+        # repack
+        out_shape = list(self.shape)
+        out_shape[-1] //= 2
+        out = torch.empty(out_shape, device=data.device, dtype=data.dtype)
+        repack(data, -2, -1, self.is_fp4, out=out)
+        assert out.stride(-1) == 1
+        return out

@@ -10,17 +10,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %1 = arith.muli %0, %c128_i32 : i32
     %2 = arith.cmpi slt, %1, %c512_i32 : i32
 
-    // CHECK-TTG2NVGPU: nvgpu.ld_acquire acquire, gpu
+    // CHECK-TTG2NVGPU: nvg.ld_acquire acquire, gpu
     // CHECK-NVGPU2LLVM: ld.global.gpu.acquire.b32
     %3 = tt.atomic_rmw fadd, acquire, gpu, %arg0, %cst, %2 : (!tt.ptr<f32>, f32, i1) -> f32
     tt.store %arg0, %3 : !tt.ptr<f32>
 
-    // CHECK-TTG2NVGPU: nvgpu.ld_acquire acquire, cta
+    // CHECK-TTG2NVGPU: nvg.ld_acquire acquire, cta
     // CHECK-NVGPU2LLVM: ld.global.cta.acquire.b32
     %4 = tt.atomic_rmw fadd, acquire, cta, %arg0, %cst, %true : (!tt.ptr<f32>, f32, i1) -> f32
     tt.store %arg0, %4 : !tt.ptr<f32>
 
-    // CHECK-TTG2NVGPU: nvgpu.ld_acquire acquire, sys
+    // CHECK-TTG2NVGPU: nvg.ld_acquire acquire, sys
     // CHECK-NVGPU2LLVM: ld.global.sys.acquire.b32
     %5 = tt.atomic_rmw fadd, acquire, sys, %arg0, %cst, %2 : (!tt.ptr<f32>, f32, i1) -> f32
     tt.store %arg0, %5 : !tt.ptr<f32>

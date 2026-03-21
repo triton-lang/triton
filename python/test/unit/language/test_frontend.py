@@ -31,10 +31,6 @@ class Pair:
     first: tl.tensor
     second: tl.tensor
 
-    def __init__(self, first, second):
-        self.first = first
-        self.second = second
-
     @triton.jit
     def get_first(self):
         return self.first
@@ -123,9 +119,6 @@ def test_jit_method():
 class TypeWithJitGetItem:
     value: tl.tensor
 
-    def __init__(self, value):
-        self.value = value
-
     @triton.jit
     def __getitem__(self, ind):
         return self.value
@@ -152,9 +145,6 @@ class TypeWithBuiltinInitializer:
     def __init__(self, _semantic=None):
         self.value = tl.arange(0, 4, _semantic=_semantic)
 
-    def modify(self, value, _semantic=None):
-        self.value = value
-
 
 @filecheck_test
 @triton.jit
@@ -164,48 +154,58 @@ def test_aggregate_initializers():
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
     anchor(value)
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-    # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
-    value.modify(tl.arange(4, 8))
-    anchor(value)
 
 
-@filecheck_test
-@triton.jit
-def test_aggregate_modification_in_for_loop():
-    # CHECK-LABEL: test_aggregate_modification_in_for_loop
-    value = TypeWithBuiltinInitializer()
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
-    for i in range(0, 2):
-        # CHECK: [[RET:%.*]] = scf.for
-        # CHECK-SAME: iter_args([[ITER:%.*]] = [[RANGE]])
-        value.modify(tl.arange(4, 8))
-        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-        # CHECK: yield [[RANGE]]
+def test_aggregate_auto_init_assigns_members():
 
-    anchor(value)
-    # CHECK: call @{{.*}}anchor{{.*}}([[RET]])
+    @tl.core._aggregate
+    class State:
+        x: tl.constexpr
+        y: tl.constexpr
+
+    state = State(3, y=7)
+    assert isinstance(state.x, tl.constexpr)
+    assert isinstance(state.y, tl.constexpr)
+    assert state.x.value == 3
+    assert state.y.value == 7
 
 
-@filecheck_test
-@triton.jit
-def test_aggregate_modification_in_while_loop():
-    # CHECK-LABEL: test_aggregate_modification_in_while_loop
-    value = TypeWithBuiltinInitializer()
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
-    i = 0
-    # CHECK: [[C0:%.*]] = arith.constant 0 :
-    while i < 1:
-        # CHECK: [[RET:%.*]]:2 = scf.while ([[ITER:%.*]] = [[RANGE]], [[IV:%.*]] = [[C0]])
-        # CHECK: do
-        i = 1
-        # CHECK: [[C1:%.*]] = arith.constant 1 :
-        value.modify(tl.arange(4, 8))
-        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-        # CHECK: yield [[RANGE]], [[C1]]
+def test_aggregate_auto_init_with_tuples():
 
-    anchor(value)
-    # CHECK: call @{{.*}}anchor{{.*}}([[RET]]#0)
+    class Shape(NamedTuple):
+        x: tl.constexpr
+        y: tl.constexpr
+
+    @tl.core._aggregate
+    class State:
+        shape: tl.tuple
+        strides: tl.tuple
+
+    state = State(Shape(3, tl.constexpr(7)), (7, tl.constexpr(1)))
+    assert isinstance(state.shape, tl.tuple)
+    assert isinstance(state.shape.x, tl.constexpr)
+    assert isinstance(state.shape.y, tl.constexpr)
+    assert state.shape[0].value == 3
+    assert state.shape[1].value == 7
+
+    assert isinstance(state.strides, tl.tuple)
+    assert isinstance(state.strides[0], tl.constexpr)
+    assert isinstance(state.strides[1], tl.constexpr)
+    assert state.strides[0].value == 7
+    assert state.strides[1].value == 1
+
+
+def test_aggregate_auto_init_respects_user_defined_init():
+
+    @tl.core._aggregate
+    class State:
+        x: tl.constexpr
+
+        def __init__(self, x):
+            self.x = tl.constexpr(x + 1)
+
+    state = State(10)
+    assert state.x.value == 11
 
 
 @triton.jit
@@ -276,10 +276,6 @@ class AggregateWithConstexpr:
     a: tl.tensor
     b: tl.constexpr
 
-    def __init__(self, a, b):
-        self.a = a
-        self.b = b
-
     @staticmethod
     def create(a):
         return AggregateWithConstexpr(a, tl.constexpr(42))
@@ -299,11 +295,11 @@ def add_rhs_constexpr(agg):
 @triton.jit
 def test_aggregate_with_constexpr():
     # CHECK-LABEL: test_aggregate_with_constexpr
-    # CHECK: tt.call @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr_type[42]>
+    # CHECK: tt.call @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, c42>
     agg = AggregateWithConstexpr.create(tl.arange(0, 4))
     add_rhs_constexpr(agg)
 
-    # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr_type[42]>
+    # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, c42>
     # CHECK: %cst = arith.constant dense<42> : tensor<4xi32>
     # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
 
@@ -312,13 +308,10 @@ def test_aggregate_with_constexpr():
 class AggregateWithTuple:
     a: tl.tuple
 
-    def __init__(self, a):
-        self.a = tl.tuple((a, ))
-
     @staticmethod
     @triton.jit
     def create(a):
-        return AggregateWithTuple(a)
+        return AggregateWithTuple((a, ))
 
 
 @triton.jit
@@ -330,10 +323,10 @@ def pass_tuple_aggregate(agg):
 @triton.jit
 def test_aggregate_with_tuple():
     # CHECK-LABEL: test_aggregate_with_tuple
-    # CHECK: tt.call @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>__"
+    # CHECK: tt.call @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>"
     agg = AggregateWithTuple.create(tl.arange(0, 4))
     pass_tuple_aggregate(agg)
-    # CHECK: tt.func private @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>__"
+    # CHECK: tt.func private @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>"
 
 
 @triton.constexpr_function
@@ -394,63 +387,6 @@ def test_constexpr_getitem():
 
 
 @triton.constexpr_function
-def make_constexpr_closure(x):
-    x = tl.constexpr(x)
-
-    @triton.jit
-    def inner(shape: tl.constexpr):
-        return tl.full(shape, x, dtype=tl.int32)
-
-    return inner
-
-
-@filecheck_test
-@triton.jit
-def test_constexpr_closure():
-    # CHECK-LABEL: test_constexpr_closure
-    closure: tl.constexpr = make_constexpr_closure(42)
-
-    # CHECK: arith.constant dense<42> : tensor<128x128xi32>
-    closure((128, 128))
-
-
-@triton.constexpr_function
-def make_constexpr_generator(f):
-    f = tl.constexpr(f)
-
-    @triton.jit
-    def inner(lhs):
-        return lhs + f(lhs.shape, lhs.dtype)
-
-    return inner
-
-
-@triton.jit
-def inner_function(shape: tl.constexpr, dtype: tl.constexpr):
-    return tl.full(shape, 42, dtype)
-
-
-@filecheck_test
-@triton.jit
-def test_constexpr_generator():
-    # CHECK: func public @test_constexpr_generator
-    # CHECK:   [[RANGE:%.*]] = tt.make_range {end = 128 : i32, start = 0 : i32}
-    # CHECK:   call @{{.*}}make_constexpr_generator.<locals>.inner{{.*}}([[RANGE]])
-
-    # CHECK: func private @{{.*}}make_constexpr_generator.<locals>.inner
-    # CHECK:   [[RHS:%.*]] = tt.call @{{.*}}inner_function
-    # CHECK:   [[RESULT:%.*]] = arith.addi %arg0, [[RHS]]
-    # CHECK:   return [[RESULT]]
-
-    # CHECK: func private @{{.*}}inner_function
-    # CHECK:   %cst = arith.constant dense<42> : tensor<128xi32>
-    # CHECK:   return %cst
-    generator: tl.constexpr = make_constexpr_generator(inner_function)
-    lhs = tl.arange(0, 128)
-    generator(lhs)
-
-
-@triton.constexpr_function
 def Box(T):
 
     @tl.core._aggregate
@@ -460,9 +396,6 @@ def Box(T):
         @triton.jit
         def create(value):
             return BoxImpl(value)
-
-        def __init__(self, value):
-            self.value = value
 
     return BoxImpl
 
@@ -580,11 +513,140 @@ class AggregateWithConstexprFunction:
 @triton.jit
 def test_aggregate_constexpr_function():
     agg = AggregateWithConstexprFunction(4)
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_4_
+    # CHECK: call @{{.*}}anchor{{.*}}c4
     anchor(agg.val)
 
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
+    # CHECK: call @{{.*}}anchor{{.*}}c16
     anchor(agg.val_squared)
 
-    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
+    # CHECK: call @{{.*}}anchor{{.*}}c16
     anchor(agg.square_val())
+
+
+@tl.core.builtin
+def make_list(*args, _semantic=None):
+    return list(args)
+
+
+@triton.constexpr_function
+def function_taking_list(arg):
+    return arg[1]
+
+
+@filecheck_test
+@triton.jit
+def test_constexpr_function_taking_list():
+    a: tl.constexpr = function_taking_list(make_list(4, 8, 16))
+    # CHECK: call @{{.*}}anchor{{.*}}c8
+    anchor(a)
+
+
+@filecheck_test
+@triton.jit
+def test_constexpr_min_max():
+    a: tl.constexpr = min(1, 2)
+    # CHECK: call @{{.*}}anchor{{.*}}c1
+    anchor(a)
+
+    b: tl.constexpr = min(1, 2, -3)
+    # CHECK: call @{{.*}}anchor{{.*}}c-3
+    anchor(b)
+
+    c: tl.constexpr = max(3, 4)
+    # CHECK: call @{{.*}}anchor{{.*}}c4
+    anchor(c)
+
+    d: tl.constexpr = max(3, 4, 5)
+    # CHECK: call @{{.*}}anchor{{.*}}c5
+    anchor(d)
+
+
+def test_constexpr_min_error():
+
+    @triton.jit
+    def min_kernel(a: tl.constexpr, b: tl.constexpr):
+        min(a, b)
+
+    with pytest.raises(CompilationError):
+        run_parser(min_kernel, args=(1.0, float("nan")))
+
+    with pytest.raises(CompilationError):
+        run_parser(min_kernel, args=(1.0, -0.0))
+
+
+def test_constexpr_max_error():
+
+    @triton.jit
+    def max_kernel(a: tl.constexpr, b: tl.constexpr):
+        max(a, b)
+
+    with pytest.raises(CompilationError):
+        run_parser(max_kernel, args=(1.0, float("nan")))
+
+    with pytest.raises(CompilationError):
+        run_parser(max_kernel, args=(1.0, -0.0))
+
+
+@filecheck_test
+@triton.jit
+def test_for_loop_iv_modification():
+    # CHECK: scf.for %[[I:.*]] = {{.*}} to {{.*}} step {{.*}} : i32 {
+    for i in range(4):
+        # CHECK: anchor{{.*}}%[[I]]
+        anchor(i)
+        # CHECK: %[[I2:.*]] = arith.addi %[[I]], %{{.*}} : i32
+        i += 1
+        # CHECK: anchor{{.*}}%[[I2]]
+        anchor(i)
+
+
+@pytest.mark.interpreter
+def test_constexpr_return():
+
+    @triton.jit
+    def get_constexpr_value():
+        return tl.constexpr(42)
+
+    @triton.jit
+    def test():
+        x: tl.constexpr = get_constexpr_value()
+        tl.static_assert(x == 42)
+
+    run_parser(test)
+
+
+@pytest.mark.interpreter
+def test_return_promotion():
+
+    @triton.jit
+    def signbit(x):
+        if x < 0:
+            return 1
+        else:
+            return 0
+
+    @triton.jit
+    def tuple_return(x):
+        if x < 0:
+            return 1, x
+        else:
+            return 0, x
+
+    @triton.jit
+    def kernel():
+        # constexpr if -> constexpr returned
+        a: tl.constexpr = signbit(-1)
+        tl.static_assert(a == 1)
+
+        # dynamic if -> promote to tensor
+        tmp = -1
+        tl.static_assert(signbit(tmp).type == tl.int32)
+
+        # constexpr if -> single return
+        b: tl.constexpr = tuple_return(-1)
+        tl.static_assert(b[0] == 1 and b[1] == -1)
+
+        c = tuple_return(tmp)
+        tl.static_assert(c.type == tl.tuple_type([tl.int32, tl.int32]))
+
+    run_parser(kernel)

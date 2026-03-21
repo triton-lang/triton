@@ -4,10 +4,7 @@
     sizePerThread=[1, 1],
     threadsPerWarp=[16, 1],
     warpsPerCTA=[4, 1],
-    order=[0, 1],
-    CTAsPerCGA=[2, 1],
-    CTASplitNum=[1, 1],
-    CTAOrder=[0, 1]
+    order=[0, 1], CGALayout = [[0, 0]]
 }>
 module attributes {
     "ttg.num-warps" = 4 : i32,
@@ -27,10 +24,7 @@ module attributes {
     sizePerThread=[1, 1],
     threadsPerWarp=[32, 1],
     warpsPerCTA=[4, 2],
-    order=[0, 1],
-    CTAsPerCGA=[2, 1],
-    CTASplitNum=[1, 1],
-    CTAOrder=[0, 1]
+    order=[0, 1], CGALayout = [[0, 0]]
 }>
 module attributes {
     "ttg.num-warps" = 4 : i32,
@@ -50,10 +44,7 @@ module attributes {
     sizePerThread=[1, 1],
     threadsPerWarp=[32, 1],
     warpsPerCTA=[4, 1],
-    order=[0, 1],
-    CTAsPerCGA=[1, 1],
-    CTASplitNum=[1, 1],
-    CTAOrder=[0, 1]
+    order=[0, 1]
 }>
 module attributes {
     "ttg.num-warps" = 4 : i32,
@@ -73,10 +64,7 @@ module attributes {
     sizePerThread=[1, 1],
     threadsPerWarp=[32, 1],
     warpsPerCTA=[4, 1],
-    order=[0, 1],
-    CTAsPerCGA=[1, 2],
-    CTASplitNum=[1, 1],
-    CTAOrder=[0, 1]
+    order=[0, 1], CGALayout = [[0, 0]]
 }>
 module attributes {
     "ttg.num-warps" = 4 : i32,
@@ -97,10 +85,7 @@ module attributes {
     sizePerThread=[1, 1],
     threadsPerWarp=[32, 1],
     warpsPerCTA=[4, 1],
-    order=[0, 1],
-    CTAsPerCGA=[1, 2],
-    CTASplitNum=[1, 1],
-    CTAOrder=[0, 1]
+    order=[0, 1], CGALayout = [[0, 0]]
 }>
 module attributes {
     "ttg.num-warps" = 4 : i32,
@@ -110,6 +95,22 @@ module attributes {
     tt.func public @fn(%arg0: tensor<8xf32, #blocked>) {
         // expected-error @+1 {{rank}}
         %t = tt.expand_dims %arg0 {axis = 0 : i32} : tensor<8xf32, #blocked> -> tensor<8x1xf32, #blocked>
+        tt.return
+    }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {
+    "ttg.num-warps" = 4 : i32,
+    "ttg.num-ctas" = 2 : i32,
+    "ttg.threads-per-warp" = 32 : i32
+} {
+    tt.func public @fn() {
+        // expected-error @+1 {{CTAs per CGA}}
+        %alloc = ttg.local_alloc : () -> !ttg.memdesc<8x16xf32, #shared, #smem, mutable>
         tt.return
     }
 }

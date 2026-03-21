@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <cstdlib>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -31,6 +32,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "MLIR_DISABLE_MULTITHREADING",
     "TRITON_DEFAULT_FP_FUSION",
     "TRITON_DISABLE_LINE_INFO",
+    "TRITON_DUMP_MIR",
     "TRITON_ENABLE_LLVM_DEBUG",
     "TRITON_HIP_USE_ASYNC_COPY",
     "TRITON_HIP_USE_BLOCK_PINGPONG",
@@ -44,6 +46,10 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_F32_DEFAULT",
     "TRITON_PREFER_TMEM_16x256_LAYOUT",
     "TRITON_ENABLE_EXPERIMENTAL_CONSAN",
+    "TRITON_PASS_PLUGIN_PATH",
+    "TRITON_PARTITION_SCHEDULING_ENABLE_DUMP_DOT",
+    "TRITON_PARTITION_SCHEDULING_DUMP_DATA_ONLY",
+    "TRITON_PARTITION_SCHEDULING_DUMP_LOOP_ONLY",
     // clang-format on
 };
 

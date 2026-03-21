@@ -11,12 +11,121 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/IR/Constants.h"
+#include <dlfcn.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
 namespace py = pybind11;
 namespace ttng = mlir::triton::nvidia_gpu;
+
+namespace {
+
+using CUresult = int;
+using CUdeviceptr = unsigned long long;
+
+constexpr CUresult CUDA_SUCCESS = 0;
+
+class CudaExampleUtils {
+private:
+  using cuMemAlloc_t = CUresult (*)(CUdeviceptr *, size_t);
+  using cuMemFree_t = CUresult (*)(CUdeviceptr);
+  using cuMemcpyHtoD_t = CUresult (*)(CUdeviceptr, const void *, size_t);
+  using cuMemcpyDtoH_t = CUresult (*)(void *, CUdeviceptr, size_t);
+  using cuCtxSynchronize_t = CUresult (*)();
+  using cuGetErrorString_t = CUresult (*)(CUresult, const char **);
+
+  void *dylibHandle = nullptr;
+  cuMemAlloc_t cuMemAlloc = nullptr;
+  cuMemFree_t cuMemFree = nullptr;
+  cuMemcpyHtoD_t cuMemcpyHtoD = nullptr;
+  cuMemcpyDtoH_t cuMemcpyDtoH = nullptr;
+  cuCtxSynchronize_t cuCtxSynchronize = nullptr;
+  cuGetErrorString_t cuGetErrorString = nullptr;
+
+  template <typename T> T loadSymbol(const char *name) {
+    dlerror();
+    auto *symbol = dlsym(dylibHandle, name);
+    if (const char *error = dlerror()) {
+      throw std::runtime_error(
+          "Could not load CUDA driver symbol `" + std::string(name) +
+          "`. Initialize the NVIDIA runtime before using this helper: " +
+          std::string(error));
+    }
+    return reinterpret_cast<T>(symbol);
+  }
+
+  void check(CUresult status, const char *call) {
+    if (status == CUDA_SUCCESS) {
+      return;
+    }
+    const char *error = nullptr;
+    if (cuGetErrorString) {
+      cuGetErrorString(status, &error);
+    }
+    throw std::runtime_error(
+        "Triton Error [CUDA]: " + std::string(call) + " failed: " +
+        (error ? std::string(error) : std::string("Unknown error")));
+  }
+
+public:
+  static CudaExampleUtils &get() {
+    static CudaExampleUtils instance;
+    return instance;
+  }
+
+  CudaExampleUtils() {
+    dylibHandle = dlopen("libcuda.so.1", RTLD_NOLOAD | RTLD_LAZY);
+    if (dylibHandle == nullptr) {
+      throw std::runtime_error(
+          "Could not find an already-loaded `libcuda.so.1`. Initialize "
+          "Triton's NVIDIA runtime before using this helper.");
+    }
+    cuMemAlloc = loadSymbol<cuMemAlloc_t>("cuMemAlloc_v2");
+    cuMemFree = loadSymbol<cuMemFree_t>("cuMemFree_v2");
+    cuMemcpyHtoD = loadSymbol<cuMemcpyHtoD_t>("cuMemcpyHtoD_v2");
+    cuMemcpyDtoH = loadSymbol<cuMemcpyDtoH_t>("cuMemcpyDtoH_v2");
+    cuCtxSynchronize = loadSymbol<cuCtxSynchronize_t>("cuCtxSynchronize");
+    cuGetErrorString = loadSymbol<cuGetErrorString_t>("cuGetErrorString");
+  }
+
+  ~CudaExampleUtils() {
+    if (dylibHandle) {
+      dlclose(dylibHandle);
+    }
+  }
+
+  uint64_t deviceMalloc(size_t size) {
+    CUdeviceptr ptr = 0;
+    check(cuMemAlloc(&ptr, size), "cuMemAlloc");
+    return ptr;
+  }
+
+  void deviceFree(uint64_t ptr) {
+    if (ptr == 0) {
+      return;
+    }
+    check(cuMemFree(static_cast<CUdeviceptr>(ptr)), "cuMemFree");
+  }
+
+  void copyHostToDevice(uint64_t dst, const py::bytes &src) {
+    std::string payload = src;
+    check(cuMemcpyHtoD(static_cast<CUdeviceptr>(dst), payload.data(),
+                       payload.size()),
+          "cuMemcpyHtoD");
+  }
+
+  py::bytes copyDeviceToHost(uint64_t src, size_t size) {
+    std::string payload(size, '\0');
+    check(cuMemcpyDtoH(payload.data(), static_cast<CUdeviceptr>(src), size),
+          "cuMemcpyDtoH");
+    return py::bytes(payload);
+  }
+
+  void synchronize() { check(cuCtxSynchronize(), "cuCtxSynchronize"); }
+};
+
+} // namespace
 
 void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
@@ -49,8 +158,7 @@ createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_1("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass,
-                     mlir::triton::nvidia_gpu::ClusterInfo *);
+  ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass);
   ADD_PASS_WRAPPER_1("add_fence_insertion",
                      createTritonGPUFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_1("add_proxy_fence_insertion",
@@ -61,6 +169,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      ttng::createTritonNvidiaGPUPromoteLHSToTMemPass);
   ADD_PASS_WRAPPER_0("add_remove_tmem_tokens",
                      ttng::createTritonNvidiaGPURemoveTMEMTokensPass);
+  ADD_PASS_WRAPPER_0("add_check_matmul_two_cta",
+                     ttng::createTritonNvidiaGPUCheckMatmulTwoCTAPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVM);
   ADD_PASS_WRAPPER_0("add_warp_specialize_to_llvm",
@@ -75,6 +185,7 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      ttng::createTritonNvidiaGPUOptimizeTMemLayoutsPass);
   ADD_PASS_WRAPPER_0("add_interleave_tmem",
                      ttng::createTritonNvidiaGPUInterleaveTMemPass);
+  ttng::registerConSanNVIDIAHooks();
 }
 
 void init_triton_nvidia_passes_nvws(py::module &&m) {
@@ -148,22 +259,6 @@ void init_triton_nvidia(py::module &&m) {
   init_triton_nvidia_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
   init_triton_hopper_passes(passes.def_submodule("hopper"));
 
-  // cluster info
-  py::class_<mlir::triton::nvidia_gpu::ClusterInfo>(m, "ClusterInfo")
-      .def(py::init<>())
-      .def_readwrite("clusterDimX",
-                     &mlir::triton::nvidia_gpu::ClusterInfo::clusterDimX)
-      .def_readwrite("clusterDimY",
-                     &mlir::triton::nvidia_gpu::ClusterInfo::clusterDimY)
-      .def_readwrite("clusterDimZ",
-                     &mlir::triton::nvidia_gpu::ClusterInfo::clusterDimZ)
-      .def("__repr__", [](mlir::triton::nvidia_gpu::ClusterInfo &self) {
-        std::ostringstream oss;
-        oss << "(" << self.clusterDimX << ", " << self.clusterDimY << ", "
-            << self.clusterDimZ << ")";
-        return oss.str();
-      });
-
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
@@ -200,6 +295,18 @@ void init_triton_nvidia(py::module &&m) {
     auto *reflect = MDNode::get(ctx, {mdFour, mdName, mdOne});
     mod->addModuleFlag(reflect);
   });
+
+  m.def("device_malloc",
+        [](size_t size) { return CudaExampleUtils::get().deviceMalloc(size); });
+  m.def("device_free",
+        [](uint64_t ptr) { CudaExampleUtils::get().deviceFree(ptr); });
+  m.def("copy_host_to_device", [](uint64_t dst, const py::bytes &src) {
+    CudaExampleUtils::get().copyHostToDevice(dst, src);
+  });
+  m.def("copy_device_to_host", [](uint64_t src, size_t size) {
+    return CudaExampleUtils::get().copyDeviceToHost(src, size);
+  });
+  m.def("synchronize", []() { CudaExampleUtils::get().synchronize(); });
 
   // cublas
   auto cublas = m.def_submodule("cublas");
@@ -253,49 +360,141 @@ void init_triton_nvidia(py::module &&m) {
              self.matmul(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr,
                          C_ptr, dtype);
            })
-      .def("gemm", [](CublasLtInstance &self, py::object &A, py::object &B,
-                      py::object &C, py::object &D, float alpha, float beta) {
+      .def("gemm",
+           [](CublasLtInstance &self, py::object &A, py::object &B,
+              py::object &C, py::object &D, float alpha, float beta) {
+             auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
+             auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
+             auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
+             auto D_ptr = D.attr("data_ptr")().cast<uint64_t>();
+
+             auto A_shape = A.attr("shape").cast<std::vector<int>>();
+             auto B_shape = B.attr("shape").cast<std::vector<int>>();
+             auto C_shape = C.attr("shape").cast<std::vector<int>>();
+             auto D_shape = D.attr("shape").cast<std::vector<int>>();
+
+             auto A_dtype =
+                 A.attr("dtype").attr("__str__")().cast<std::string>();
+             auto B_dtype =
+                 B.attr("dtype").attr("__str__")().cast<std::string>();
+             auto C_dtype =
+                 C.attr("dtype").attr("__str__")().cast<std::string>();
+             auto D_dtype =
+                 D.attr("dtype").attr("__str__")().cast<std::string>();
+
+             checkMatmulConstraints(A_dtype, B_dtype, D_dtype, A_shape, B_shape,
+                                    D_shape);
+             if (C_dtype != "torch.float16") {
+               throw std::runtime_error("C dtype must be float16, got " +
+                                        C_dtype);
+             }
+             if (C_shape != D_shape) {
+               throw std::runtime_error("C and D shapes must match");
+             }
+
+             std::string dtype_str =
+                 A_dtype.substr(A_dtype.find_last_of('.') + 1);
+             cudaDataType_t dtype;
+             if (dtype_str == "float8_e4m3fn") {
+               dtype = CUDA_R_8F_E4M3;
+             } else if (dtype_str == "float16") {
+               dtype = CUDA_R_16F;
+             } else if (dtype_str == "float32") {
+               dtype = CUDA_R_32F;
+             } else if (dtype_str == "bfloat16") {
+               dtype = CUDA_R_16BF;
+             } else {
+               throw std::runtime_error(
+                   "Unsupported dtype for cublasLt.gemm: " + dtype_str);
+             }
+
+             self.gemm(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr, C_ptr,
+                       D_ptr, dtype, alpha, beta);
+           })
+      .def("block_scaled_matmul_mxfp8",
+           [](CublasLtInstance &self, py::object &A, py::object &B,
+              py::object &output, py::object &scale_A, py::object &scale_B) {
+             auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
+             auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
+             auto output_ptr = output.attr("data_ptr")().cast<uint64_t>();
+             auto scale_A_ptr = scale_A.attr("data_ptr")().cast<uint64_t>();
+             auto scale_B_ptr = scale_B.attr("data_ptr")().cast<uint64_t>();
+
+             auto A_shape = A.attr("shape").cast<std::vector<int>>();
+             auto B_shape = B.attr("shape").cast<std::vector<int>>();
+
+             auto A_dtype =
+                 A.attr("dtype").attr("__str__")().cast<std::string>();
+             auto B_dtype =
+                 B.attr("dtype").attr("__str__")().cast<std::string>();
+             auto output_dtype =
+                 output.attr("dtype").attr("__str__")().cast<std::string>();
+
+             // Only support MXFP8: FP8 E4M3 inputs, FP16 output
+             if (A_dtype != "torch.float8_e4m3fn" ||
+                 B_dtype != "torch.float8_e4m3fn") {
+               throw std::runtime_error(
+                   "block_scaled_matmul_mxfp8 only supports float8_e4m3fn "
+                   "inputs (MXFP8)");
+             }
+
+             if (output_dtype != "torch.float16") {
+               throw std::runtime_error(
+                   "block_scaled_matmul_mxfp8 output must be float16, got " +
+                   output_dtype);
+             }
+
+             int K = A_shape[1];
+
+             self.block_scaled_matmul_mxfp8(A_shape[0], B_shape[0], K, A_ptr,
+                                            B_ptr, output_ptr, scale_A_ptr,
+                                            scale_B_ptr);
+           })
+      .def("block_scaled_matmul_nvfp4", [](CublasLtInstance &self,
+                                           py::object &A, py::object &B,
+                                           py::object &output,
+                                           py::object &scale_A,
+                                           py::object &scale_B) {
         auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
         auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
-        auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
-        auto D_ptr = D.attr("data_ptr")().cast<uint64_t>();
+        auto output_ptr = output.attr("data_ptr")().cast<uint64_t>();
+        auto scale_A_ptr = scale_A.attr("data_ptr")().cast<uint64_t>();
+        auto scale_B_ptr = scale_B.attr("data_ptr")().cast<uint64_t>();
 
         auto A_shape = A.attr("shape").cast<std::vector<int>>();
         auto B_shape = B.attr("shape").cast<std::vector<int>>();
-        auto C_shape = C.attr("shape").cast<std::vector<int>>();
-        auto D_shape = D.attr("shape").cast<std::vector<int>>();
 
         auto A_dtype = A.attr("dtype").attr("__str__")().cast<std::string>();
         auto B_dtype = B.attr("dtype").attr("__str__")().cast<std::string>();
-        auto C_dtype = C.attr("dtype").attr("__str__")().cast<std::string>();
-        auto D_dtype = D.attr("dtype").attr("__str__")().cast<std::string>();
+        auto output_dtype =
+            output.attr("dtype").attr("__str__")().cast<std::string>();
 
-        checkMatmulConstraints(A_dtype, B_dtype, D_dtype, A_shape, B_shape,
-                               D_shape);
-        if (C_dtype != "torch.float16") {
-          throw std::runtime_error("C dtype must be float16, got " + C_dtype);
-        }
-        if (C_shape != D_shape) {
-          throw std::runtime_error("C and D shapes must match");
-        }
-
-        std::string dtype_str = A_dtype.substr(A_dtype.find_last_of('.') + 1);
-        cudaDataType_t dtype;
-        if (dtype_str == "float8_e4m3fn") {
-          dtype = CUDA_R_8F_E4M3;
-        } else if (dtype_str == "float16") {
-          dtype = CUDA_R_16F;
-        } else if (dtype_str == "float32") {
-          dtype = CUDA_R_32F;
-        } else if (dtype_str == "bfloat16") {
-          dtype = CUDA_R_16BF;
-        } else {
-          throw std::runtime_error("Unsupported dtype for cublasLt.gemm: " +
-                                   dtype_str);
+        // NVFP4: uint8 packed FP4 inputs (2 elements per byte), FP8 E4M3
+        // scales, FP16 output
+        if (A_dtype != "torch.uint8" || B_dtype != "torch.uint8") {
+          throw std::runtime_error("block_scaled_matmul_nvfp4 only supports "
+                                   "uint8 packed FP4 inputs (NVFP4), got A=" +
+                                   A_dtype + ", B=" + B_dtype);
         }
 
-        self.gemm(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr, C_ptr,
-                  D_ptr, dtype, alpha, beta);
+        if (output_dtype != "torch.float16") {
+          throw std::runtime_error(
+              "block_scaled_matmul_nvfp4 output must be float16, got " +
+              output_dtype);
+        }
+
+        // For packed FP4, shape[1] is in bytes, but K dimension should be in
+        // elements So K = A_shape[1] * 2 (2 elements per byte)
+        int K = A_shape[1] * 2;
+        if (B_shape[1] * 2 != K) {
+          throw std::runtime_error("K dimensions must match. A has " +
+                                   std::to_string(K) + " elements, B has " +
+                                   std::to_string(B_shape[1] * 2) +
+                                   " elements");
+        }
+
+        self.block_scaled_matmul_nvfp4(A_shape[0], B_shape[0], K, A_ptr, B_ptr,
+                                       output_ptr, scale_A_ptr, scale_B_ptr);
       });
 
   m.def("has_extern_deps", [](llvm::Module *dstMod) -> bool {

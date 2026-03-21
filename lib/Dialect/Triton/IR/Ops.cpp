@@ -1,3 +1,5 @@
+#include <sstream>
+
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -40,46 +42,15 @@ namespace triton {
 //-- LoadOp --
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    CacheModifier cache, EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{},
-                /*boundaryCheck=*/ArrayRef<int32_t>{}, /*padding=*/std::nullopt,
-                cache, evict, isVolatile);
-}
-
-void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                   ArrayRef<int32_t> boundaryCheck,
-                   std::optional<PaddingOption> padding, CacheModifier cache,
-                   EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{}, boundaryCheck,
-                padding, cache, evict, isVolatile);
+  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{}, cache, evict,
+                isVolatile);
 }
 
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    Value mask, CacheModifier cache, EvictionPolicy evict,
                    bool isVolatile) {
-  LoadOp::build(builder, state, ptr, mask, /*other=*/{},
-                /*boundaryCheck=*/ArrayRef<int32_t>{},
-                /*padding=*/std::nullopt, cache, evict, isVolatile);
-}
-
-void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                   Value mask, Value other, CacheModifier cache,
-                   EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, mask, other,
-                /*boundaryCheck=*/ArrayRef<int32_t>{},
-                /*padding=*/std::nullopt, cache, evict, isVolatile);
-}
-
-void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                   Value mask, Value other, ArrayRef<int32_t> boundaryCheck,
-                   std::optional<PaddingOption> padding, CacheModifier cache,
-                   EvictionPolicy evict, bool isVolatile) {
-  auto paddingAttr =
-      padding.has_value()
-          ? PaddingOptionAttr::get(builder.getContext(), padding.value())
-          : PaddingOptionAttr();
-  LoadOp::build(builder, state, ptr, mask, other,
-                builder.getDenseI32ArrayAttr(boundaryCheck), paddingAttr, cache,
-                evict, isVolatile);
+  LoadOp::build(builder, state, ptr, mask, /*other=*/{}, cache, evict,
+                isVolatile);
 }
 
 // load(ptr, splat(1), ...)        -> load(ptr, ...)
@@ -106,7 +77,6 @@ struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
       // mask = splat(1)
       rewriter.replaceOpWithNewOp<LoadOp>(
           loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
-          loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
           loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
     } else {
       // mask = splat(0)
@@ -130,23 +100,7 @@ void LoadOp::getCanonicalizationPatterns(RewritePatternSet &results,
 //-- StoreOp --
 void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                     Value value, CacheModifier cache, EvictionPolicy evict) {
-  return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
-                        /*boundaryCheck=*/{}, cache, evict);
-}
-
-void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                    Value value, Value mask, CacheModifier cache,
-                    EvictionPolicy evict) {
-  return StoreOp::build(builder, state, ptr, value, mask, /*boundaryCheck=*/{},
-                        cache, evict);
-}
-
-void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                    Value value, ArrayRef<int32_t> boundaryCheck,
-                    CacheModifier cache, EvictionPolicy evict) {
-  return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
-                        builder.getDenseI32ArrayAttr(boundaryCheck), cache,
-                        evict);
+  return StoreOp::build(builder, state, ptr, value, /*mask=*/{}, cache, evict);
 }
 
 // store(ptr, value, splat(1), ...) -> store(ptr, value, ...)
@@ -356,6 +310,115 @@ bool DotScaledOp::verifyOutputDims() {
   return true;
 }
 
+LogicalResult DotScaledOp::verify() {
+  auto aShape = this->getA().getType().getShape();
+  int64_t rank = aShape.size();
+  if (rank < 2)
+    return this->emitError("operands must be at least 2D");
+
+  auto k = aShape[rank - 1];
+  if (this->getAElemType() == ScaleDotElemType::E2M1) {
+    if (this->getLhsKPack())
+      k *= 2;
+  }
+  auto cShape = this->getC().getType().getShape();
+  int64_t mDim = cShape[cShape.size() - 2];
+  int64_t nDim = cShape[cShape.size() - 1];
+  int32_t scaleFactor;
+  std::string scaleErr;
+  if (failed(deduceScaleFactor(
+          getA(), getAScale(), getAElemType(), getLhsKPack(), getB(),
+          getBScale(), getBElemType(), getRhsKPack(), scaleFactor, scaleErr)))
+    return this->emitError(scaleErr);
+
+  if (getAScale()) {
+    auto aScaleShape = getAScale().getType().getShape();
+    if (aScaleShape[rank - 2] != mDim)
+      return this->emitError(
+          "scales M dimension must match the operand M dimension");
+    if (aScaleShape[rank - 1] != k / scaleFactor)
+      return this->emitError("scales K dimension must match the operand K "
+                             "divided by the scale factor");
+  }
+  if (getBScale()) {
+    auto bScaleShape = getBScale().getType().getShape();
+    if (bScaleShape[rank - 2] != nDim)
+      return this->emitError(
+          "scales N dimension must match the operand N dimension");
+    if (bScaleShape[rank - 1] != k / scaleFactor)
+      return this->emitError("scales K dimension must match the operand K "
+                             "divided by the scale factor");
+  }
+  return success();
+}
+
+LogicalResult DotScaledOp::deduceScaleFactor(
+    Value lhs, Value lhsScale, ScaleDotElemType lhsFormat, bool lhsKPack,
+    Value rhs, Value rhsScale, ScaleDotElemType rhsFormat, bool rhsKPack,
+    int32_t &scaleFactor, std::string &errMsg) {
+  auto deduceByShape = [&errMsg](Value operand, Value scale, int opIdx,
+                                 ScaleDotElemType format,
+                                 bool kPack) -> int32_t {
+    if (!scale)
+      return 0;
+    auto scaleTy = cast<RankedTensorType>(scale.getType());
+    if (scaleTy.getNumElements() == 1)
+      return 0;
+
+    auto operandShape = cast<RankedTensorType>(operand.getType()).getShape();
+    auto scaleShape = scaleTy.getShape();
+
+    int64_t unpackFactor = (format == ScaleDotElemType::E2M1 && kPack) ? 2 : 1;
+    int64_t kdim = operandShape[opIdx == 0 ? operandShape.size() - 1
+                                           : operandShape.size() - 2] *
+                   unpackFactor;
+    int32_t scaleFactor = kdim / scaleShape[scaleShape.size() - 1];
+    if (scaleFactor != 16 && scaleFactor != 32) {
+      std::ostringstream oss;
+      oss << "scale factor must be 16 or 32. Got " << scaleFactor;
+      errMsg = oss.str();
+      return 0;
+    }
+    return scaleFactor;
+  };
+
+  errMsg.clear();
+  int32_t scaleFactorA = deduceByShape(lhs, lhsScale, 0, lhsFormat, lhsKPack);
+  if (!errMsg.empty())
+    return failure();
+  int32_t scaleFactorB = deduceByShape(rhs, rhsScale, 1, rhsFormat, rhsKPack);
+  if (!errMsg.empty())
+    return failure();
+
+  if (scaleFactorA == 0 && scaleFactorB == 0) {
+    scaleFactor = 32;
+    return success();
+  }
+  if (scaleFactorA != 0 && scaleFactorB != 0) {
+    if (scaleFactorA != scaleFactorB) {
+      std::ostringstream oss;
+      oss << "Operands must have the same scale factor; (lhs: " << scaleFactorA
+          << " vs rhs: " << scaleFactorB << ")";
+      errMsg = oss.str();
+      return failure();
+    }
+    scaleFactor = scaleFactorA;
+    return success();
+  }
+  scaleFactor = scaleFactorA != 0 ? scaleFactorA : scaleFactorB;
+  return success();
+}
+
+int32_t DotScaledOp::deduceScaleFactor() {
+  int32_t scaleFactor;
+  std::string errMsg;
+  if (failed(deduceScaleFactor(
+          getA(), getAScale(), getAElemType(), getLhsKPack(), getB(),
+          getBScale(), getBElemType(), getRhsKPack(), scaleFactor, errMsg)))
+    llvm::report_fatal_error(errMsg.c_str());
+  return scaleFactor;
+}
+
 //-- MakeRangeOp --
 OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   // make_range(start, start + 1) -> constant(start)
@@ -444,7 +507,19 @@ template <class Op> LogicalResult verifyReduceScan(Op &op) {
   if (op.getNumOperands() != op.getNumResults()) {
     return op.emitOpError() << "must have the same number of inputs as outputs";
   }
-
+  auto axis = op.getAxis();
+  auto firstRank = 0;
+  for (auto tensorTy : op.getInputTypes()) {
+    int64_t rank = tensorTy.getRank();
+    if (axis < 0 || axis >= rank)
+      return op.emitOpError() << "axis out of bounds for operand rank " << rank;
+    if (firstRank == 0)
+      firstRank = rank;
+    else if (rank != firstRank)
+      return op.emitOpError()
+             << "all operands must have the same rank, but got ranks "
+             << firstRank << " and " << rank;
+  }
   for (auto [opElemTy, resTy] :
        llvm::zip(op.getElementTypes(), op.getResultTypes())) {
     if (opElemTy != getElementTypeOrSelf(resTy)) {
@@ -736,10 +811,10 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
 
     auto newExpandTy = RankedTensorType::get(
         newExpandShape, srcTy.getElementType(), newExpandEnc);
-    auto newExpand = rewriter.create<ExpandDimsOp>(op.getLoc(), newExpandTy,
-                                                   src, op.getAxis());
-    auto newBroadcast = rewriter.create<BroadcastOp>(
-        broadcast.getLoc(), op.getType(), newExpand.getResult());
+    auto newExpand = ExpandDimsOp::create(rewriter, op.getLoc(), newExpandTy,
+                                          src, op.getAxis());
+    auto newBroadcast = BroadcastOp::create(
+        rewriter, broadcast.getLoc(), op.getType(), newExpand.getResult());
     rewriter.replaceOp(op, {newBroadcast.getResult()});
     return success();
   }
@@ -975,25 +1050,6 @@ LogicalResult BroadcastOp::verify() {
   return success();
 }
 
-//-- MakeTensorPtrOp --
-void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
-                            Value base, ValueRange shape, ValueRange strides,
-                            ValueRange offsets, ArrayRef<int32_t> tensorShape,
-                            ArrayRef<int32_t> order) {
-  // Get pointer type from `base`
-  auto pointerType = cast<PointerType>(base.getType());
-  assert(pointerType != nullptr);
-
-  // Build type `tt.ptr<tensor<tensorShape, base.pointeeType>>`
-  auto tensorType = RankedTensorType::get(
-      SmallVector<int64_t>(tensorShape.begin(), tensorShape.end()),
-      pointerType.getPointeeType());
-  auto result = PointerType::get(tensorType, pointerType.getAddressSpace());
-
-  return build(builder, state, result, base, shape, strides, offsets,
-               builder.getDenseI32ArrayAttr(order));
-}
-
 //-- AddPtrOp --
 OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
   // addptr(ptr, 0) -> ptr
@@ -1001,19 +1057,6 @@ OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
     return getPtr();
   }
   return {};
-}
-
-//-- AdvanceOp --
-OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
-  // advance(ptr, 0, 0) -> ptr
-  SmallVector<OpFoldResult> rawOffsets = getOffsets();
-  auto offsets = getConstantIntValues(rawOffsets);
-  if (!offsets.has_value())
-    return {};
-  for (int64_t offset : offsets.value())
-    if (offset != 0)
-      return {};
-  return getPtr();
 }
 
 //-- MakeTensorDescOp --
@@ -1314,9 +1357,9 @@ LogicalResult GatherOp::inferReturnTypes(
 }
 
 // -- DescriptorGatherOp
-LogicalResult
-DescriptorGatherOp::verifyResultType(Operation *op, ShapedType resultType,
-                                     RankedTensorType indicesType) {
+static LogicalResult verifyGatherScatterResultType(Operation *op,
+                                                   ShapedType resultType,
+                                                   ShapedType indicesType) {
   if (indicesType.getRank() != 1)
     return op->emitOpError("x offsets must be a 1D tensor, but got ")
            << indicesType;
@@ -1329,8 +1372,7 @@ DescriptorGatherOp::verifyResultType(Operation *op, ShapedType resultType,
   // TODO: We can support smaller gather sizes by padding the `local_alloc` this
   // lowers to to the nearest minimum tile size.
   if (unsigned rows = resultType.getShape()[0]; rows < 8) {
-    return op->emitOpError("gather must have at least 8 rows, but got ")
-           << rows;
+    return op->emitOpError("must have at least 8 rows, but got ") << rows;
   }
 
   Type dtype = resultType.getElementType();
@@ -1339,9 +1381,8 @@ DescriptorGatherOp::verifyResultType(Operation *op, ShapedType resultType,
 
   unsigned minCols = 32 / dtype.getIntOrFloatBitWidth() * 8;
   if (unsigned cols = resultType.getShape()[1]; cols < minCols) {
-    return op->emitOpError("gather of ")
-           << dtype << " must have at least " << minCols << " columns, but got "
-           << cols;
+    return op->emitOpError("must have at least ")
+           << minCols << " columns for " << dtype << ", but got " << cols;
   }
 
   if (resultType.getShape()[0] != indicesType.getShape()[0]) {
@@ -1352,21 +1393,21 @@ DescriptorGatherOp::verifyResultType(Operation *op, ShapedType resultType,
   return success();
 }
 
-static LogicalResult verifyGatherScatterOp(Operation *op,
-                                           RankedTensorType blockType,
-                                           RankedTensorType resultType,
-                                           RankedTensorType indicesType) {
+LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
+                                    ShapedType resultType,
+                                    ShapedType indicesType) {
   // Gather from `!tt.tensordesc<tensor<1xMxdtype>>`.
   if (blockType.getRank() != 2) {
-    return op->emitOpError("block must be a 2D tensor, but got ") << blockType;
+    return op->emitOpError("descriptor block must be a 2D tensor, but got ")
+           << blockType;
   }
   if (blockType.getShape()[0] != 1) {
-    return op->emitOpError("block must have exactly 1 row, but got ")
+    return op->emitOpError("descriptor block must have exactly 1 row, but got ")
            << blockType;
   }
 
   // With x offsets `tensor<Nxinttype>` into `tensor<NxMxdtype>`.
-  if (failed(DescriptorGatherOp::verifyResultType(op, resultType, indicesType)))
+  if (failed(verifyGatherScatterResultType(op, resultType, indicesType)))
     return failure();
 
   if (resultType.getShape()[1] != blockType.getShape()[1]) {
@@ -1395,36 +1436,45 @@ LogicalResult DescriptorScatterOp::verify() {
 }
 
 // -- DescriptorLoadOp --
-static LogicalResult verifyDescriptorLoadStoreType(Operation *op,
-                                                   TensorDescType desc,
-                                                   RankedTensorType tensor) {
+LogicalResult verifyDescriptorLoadStoreOp(Operation *op,
+                                          TensorDescInterface desc,
+                                          ShapedType tensor) {
   RankedTensorType block = desc.getSignlessBlockType();
-  ArrayRef<int64_t> blockShape = block.getShape();
-  ArrayRef<int64_t> tensorShape = tensor.getShape();
-  if (blockShape.size() > tensorShape.size()) {
-    // Allow ranked reduced load if the leading dimensions are all 1s.
-    for (int i = 0; i < blockShape.size() - tensorShape.size(); ++i) {
-      if (blockShape[i] != 1)
-        return op->emitOpError(
-            "ranked reduce load only allowed for unit dimension leading dim.");
-    }
-    blockShape = blockShape.take_back(tensorShape.size());
+  if (block.getElementType() != tensor.getElementType()) {
+    return op->emitOpError("descriptor block and tensor element types must "
+                           "match, but got descriptor element type ")
+           << block.getElementType() << " and tensor element type "
+           << tensor.getElementType();
   }
 
-  if (blockShape == tensorShape &&
-      block.getElementType() == tensor.getElementType())
-    return success();
-  return op->emitOpError("tensor descriptor block and tensor types must match");
+  ArrayRef<int64_t> blockShape = block.getShape();
+  ArrayRef<int64_t> tensorShape = tensor.getShape();
+  unsigned blockNumels = product(blockShape);
+  unsigned tensorNumels = product(tensorShape);
+  if (blockNumels != tensorNumels) {
+    return op->emitOpError("descriptor block and tensor must have the same "
+                           "number of elements, but got descriptor block "
+                           "with ")
+           << blockNumels << " elements tensor with " << tensorNumels
+           << " elements";
+  }
+  return success();
 }
 
 LogicalResult DescriptorLoadOp::verify() {
-  return verifyDescriptorLoadStoreType(*this, getDesc().getType(), getType());
+  return verifyDescriptorLoadStoreOp(*this, getDesc().getType(), getType());
 }
 
 // -- DescriptorStoreOp --
 LogicalResult DescriptorStoreOp::verify() {
-  return verifyDescriptorLoadStoreType(*this, getDesc().getType(),
-                                       getSrc().getType());
+  return verifyDescriptorLoadStoreOp(*this, getDesc().getType(),
+                                     getSrc().getType());
+}
+
+// -- DescriptorReduceOp --
+LogicalResult DescriptorReduceOp::verify() {
+  return verifyDescriptorLoadStoreOp(*this, getDesc().getType(),
+                                     getSrc().getType());
 }
 
 } // namespace triton

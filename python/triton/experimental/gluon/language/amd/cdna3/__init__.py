@@ -141,8 +141,13 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
     """
     _verify_buffer_ops(ptr, offsets, mask)
 
-    if mask is not None:
-        offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
+    offsets_shape = offsets.shape
+    if mask is None:
+        offsets, stored_value = _semantic.broadcast_tensors(offsets, stored_value)
+    else:
+        offsets, stored_value, mask = _semantic.broadcast_tensors(offsets, stored_value, mask)
+    if offsets_shape != offsets.shape:
+        raise ValueError(f"Expected `offsets` argument to have shape {offsets.shape} but got {offsets_shape}")
 
     mask = mask.handle if mask is not None else ir.value()
     cache_modifier = _semantic._str_to_store_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE

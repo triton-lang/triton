@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
@@ -420,14 +421,15 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
 
 SmallVector<SmallVector<Value>>
 unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
-             ConversionPatternRewriter &rewriter,
-             const LLVMTypeConverter &converter) {
-  auto types = op.getInputTypes();
+             ConversionPatternRewriter &rewriter, unsigned nElems,
+             const ColumnAction &removeBroadcastRegs) {
   auto operands = adaptor.getOperands();
-  unsigned srcElems = getTotalElemsPerThread(types[0]);
-  SmallVector<SmallVector<Value>> srcValues(srcElems);
+  SmallVector<SmallVector<Value>> srcValues(nElems);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
     auto values = unpackLLElements(loc, operands[i], rewriter);
+    if (!removeBroadcastRegs.isIdentity()) {
+      values = removeBroadcastRegs.apply(values);
+    }
 
     assert(values.size() == srcValues.size());
     for (unsigned j = 0; j < srcValues.size(); ++j) {
@@ -464,6 +466,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
                                ConversionPatternRewriter &rewriter,
                                const TargetInfoBase &targetInfo) const {
   ScanLoweringHelper helper(op);
+  auto origLayout = triton::gpu::toLinearLayout(
+      cast<RankedTensorType>(op.getOperands()[0].getType()));
+  auto removeBroadcastRegs = actionRemoveBroadcastedRegs(origLayout);
   auto loc = helper.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (!helper.isSupported())
@@ -479,8 +484,10 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto [laneIdAxis, warpIdAxis, flatIdParallel, isRepresentative] =
       getDelinearizedIds(rewriter, helper, laneId, warpId);
   auto axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
+  unsigned nElems =
+      helper.getEncoding().getTotalElemsPerThread(helper.getShape());
   auto srcValues =
-      unpackInputs(loc, op, adaptor, rewriter, *getTypeConverter());
+      unpackInputs(loc, op, adaptor, rewriter, nElems, removeBroadcastRegs);
 
   // For the reverse option we apply flip(scan(flip()) in
   // order to avoid having a separate code path in the reverse direction.
@@ -516,7 +523,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
                          smemBases, smemTypes, flatIdParallel, isRepresentative,
                          targetInfo);
-    b.barrier();
+    b.barrier(triton::gpu::AddrSpace::Local);
     // Read back the partial reduction of each warp and accumulate them based on
     // warpId. Then update each chunk of contiguous elements by adding the
     // accumulated value from the previous lane.
@@ -530,9 +537,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
         std::get<0>(getMultiDimLaneId(rewriter, helper, laneId));
     multiDimLaneId[helper.getAxis()] = b.i32_val(scanDim - 1);
     auto linearEncoding = helper.getEncoding();
-    auto threadsPerWarp = linearEncoding.getThreadsPerWarp();
-    auto laneIdLast = linearize(rewriter, loc, multiDimLaneId, threadsPerWarp,
-                                helper.getOrder());
+    auto kLane = StringAttr::get(rewriter.getContext(), "lane");
+    Value laneIdLast =
+        linearize(rewriter, loc, multiDimLaneId, linearEncoding, kLane);
     AddPartialReduceOneWarp(srcValues, rewriter, targetInfo, helper, warpIdAxis,
                             laneIdAxis, laneIdLast);
   } // else axisNumWarps == 1 and srcValues.size() == 1, nothing to do.
@@ -556,6 +563,11 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   }
 
   auto valuesTransposed = transpose(srcValues);
+  if (!removeBroadcastRegs.isIdentity()) {
+    for (auto &values : valuesTransposed) {
+      values = broadcastAs(values, origLayout);
+    }
+  }
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
     auto resultTy = dyn_cast<RankedTensorType>(op.getResult()[i].getType());
     results[i] = packLLElements(loc, getTypeConverter(), valuesTransposed[i],

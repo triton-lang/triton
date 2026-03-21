@@ -39,8 +39,7 @@ def record(is_start: tl.constexpr, scope_name: tl.constexpr, semantic):
     _check_supported_semantic(semantic)
     is_start = tl._unwrap_if_constexpr(is_start)
     scope_name = tl._unwrap_if_constexpr(scope_name)
-    op_builder = semantic.builder.get_op_builder()
-    return tl.tensor(triton_proton.create_proton_record(op_builder, is_start, scope_name), tl.void)
+    return tl.tensor(triton_proton.create_proton_record(semantic.builder, is_start, scope_name), tl.void)
 
 
 @builtin

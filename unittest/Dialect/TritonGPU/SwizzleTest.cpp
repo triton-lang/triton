@@ -30,16 +30,6 @@ static std::string attrStr(Attribute a) {
   a.print(os);
   return s;
 }
-
-SmallVector<int32_t> flatten(const LinearLayout &ll, StringAttr dim) {
-  assert(ll.hasInDim(dim) && "in dim must exist");
-  SmallVector<int32_t> vec;
-  for (const auto &basis : ll.getBases().lookup(dim)) {
-    assert(basis.size() == 1 && "basis must be a single int32_t");
-    vec.push_back(basis[0]);
-  }
-  return vec;
-}
 class SwizzleTest : public ::testing::Test {
 public:
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
@@ -74,7 +64,7 @@ protected:
     if (cOrder.empty())
       cOrderStorage.assign(order.begin(), order.end());
 
-    auto cta = mlir::triton::gpu::CTALayoutAttr::get(
+    auto cta = mlir::triton::gpu::CGAEncodingAttr::fromSplitParams(
         &ctx, cpgStorage.empty() ? cpg : ArrayRef<unsigned>(cpgStorage),
         splitStorage.empty() ? split : ArrayRef<unsigned>(splitStorage),
         cOrderStorage.empty() ? cOrder : ArrayRef<unsigned>(cOrderStorage));
@@ -85,8 +75,8 @@ protected:
   mlir::triton::gpu::NvidiaMmaEncodingAttr mma(ArrayRef<unsigned> version,
                                                ArrayRef<unsigned> warpsPerCTA,
                                                ArrayRef<unsigned> instrShape) {
-    auto cta =
-        mlir::triton::gpu::CTALayoutAttr::getDefault(&ctx, warpsPerCTA.size());
+    auto cta = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(
+        &ctx, warpsPerCTA.size());
     return mlir::triton::gpu::NvidiaMmaEncodingAttr::get(
         &ctx, version[0], version[1], warpsPerCTA, cta, instrShape);
   }
@@ -96,7 +86,8 @@ protected:
               bool transposed = false) {
     SmallVector<unsigned> cpg(rank, 1), split(rank, 1), order(rank);
     std::iota(order.begin(), order.end(), 0);
-    auto cta = mlir::triton::gpu::CTALayoutAttr::get(&ctx, cpg, split, order);
+    auto cta = mlir::triton::gpu::CGAEncodingAttr::fromSplitParams(
+        &ctx, cpg, split, order);
     return mlir::triton::gpu::NVMMASharedEncodingAttr::get(
         &ctx, swizzle, transposed, bitwidth,
         /*fp4Padded=*/false, cta);
@@ -188,7 +179,8 @@ TEST_F(SwizzleTest, Test128x128Float8Transpose) {
   LinearLayout matrix(
       {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
        {S("lane"), {{0, 16}, {0, 32}, {0, 64}, {4, 0}, {8, 0}}},
-       {S("warp"), {{16, 0}, {32, 0}, {64, 0}}}},
+       {S("warp"), {{16, 0}, {32, 0}, {64, 0}}},
+       {S("block"), {}}},
       {{S("dim0"), 128}, {S("dim1"), 128}}, /*requireSurjective=*/true);
   auto matrix_t = transposeLinearLayout(matrix, {1, 0});
 
@@ -202,12 +194,14 @@ TEST_F(SwizzleTest, Test16x16Bf16BlockedMma) {
   // 16×16 bf16 MMA
   LinearLayout blocked({{S("register"), {{0, 1}, {0, 2}, {0, 4}}},
                         {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}}},
-                        {S("warp"), {}}},
+                        {S("warp"), {}},
+                        {S("block"), {}}},
                        {{S("dim0"), 16}, {S("dim1"), 16}},
                        /*requireSurjective=*/true);
   LinearLayout mma({{S("register"), {{0, 1}, {8, 0}, {0, 8}}},
                     {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
-                    {S("warp"), {}}},
+                    {S("warp"), {}},
+                    {S("block"), {}}},
                    {{S("dim0"), 16}, {S("dim1"), 16}},
                    /*requireSurjective=*/true);
 
@@ -223,13 +217,15 @@ TEST_F(SwizzleTest, Test16x256U4Mma) {
       {{S("register"),
         {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {4, 0}, {8, 0}}},
        {S("lane"), {{0, 32}, {0, 64}, {0, 128}, {1, 0}, {2, 0}}},
-       {S("warp"), {}}},
+       {S("warp"), {}},
+       {S("block"), {}}},
       {{S("dim0"), 16}, {S("dim1"), 256}}, /*requireSurjective=*/true);
   LinearLayout mma(
       {{S("register"),
         {{0, 1}, {0, 2}, {0, 4}, {8, 0}, {0, 32}, {0, 64}, {0, 128}}},
        {S("lane"), {{0, 8}, {0, 16}, {1, 0}, {2, 0}, {4, 0}}},
-       {S("warp"), {}}},
+       {S("warp"), {}},
+       {S("block"), {}}},
       {{S("dim0"), 16}, {S("dim1"), 256}}, /*requireSurjective=*/true);
 
   auto smem = optimalSwizzlingLdSt(blocked, mma, /*bitwidth=*/4);
@@ -242,12 +238,14 @@ TEST_F(SwizzleTest, Test32x16F32Transpose) {
   // 32×16 f32 transpose
   LinearLayout matrix({{S("register"), {{4, 0}, {8, 0}, {16, 0}}},
                        {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}}},
-                       {S("warp"), {{2, 0}}}},
+                       {S("warp"), {{2, 0}}},
+                       {S("block"), {}}},
                       {{S("dim0"), 32}, {S("dim1"), 16}},
                       /*requireSurjective=*/true);
   LinearLayout matrix_t({{S("register"), {{0, 2}, {0, 4}, {0, 8}}},
                          {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
-                         {S("warp"), {{0, 1}}}},
+                         {S("warp"), {{0, 1}}},
+                         {S("block"), {}}},
                         {{S("dim0"), 32}, {S("dim1"), 16}},
                         /*requireSurjective=*/true);
   auto smem = optimalSwizzlingLdSt(matrix, matrix_t, /*bitwidth=*/32);
@@ -260,13 +258,15 @@ TEST_F(SwizzleTest, Test128x128F16Transpose) {
   LinearLayout matrix(
       {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {0, 32}, {0, 64}}},
        {S("lane"), {{8, 0}, {16, 0}, {32, 0}, {64, 0}, {0, 1}}},
-       {S("warp"), {{0, 2}, {0, 4}, {0, 8}, {0, 16}}}},
+       {S("warp"), {{0, 2}, {0, 4}, {0, 8}, {0, 16}}},
+       {S("block"), {}}},
       {{S("dim0"), 128}, {S("dim1"), 128}},
       /*requireSurjective=*/true);
   LinearLayout matrix_t(
       {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {32, 0}, {64, 0}}},
        {S("lane"), {{0, 8}, {0, 16}, {0, 32}, {0, 64}, {1, 0}}},
-       {S("warp"), {{2, 0}, {4, 0}, {8, 0}, {16, 0}}}},
+       {S("warp"), {{2, 0}, {4, 0}, {8, 0}, {16, 0}}},
+       {S("block"), {}}},
       {{S("dim0"), 128}, {S("dim1"), 128}},
       /*requireSurjective=*/true);
   auto smem = optimalSwizzlingLdSt(matrix, matrix_t, /*bitwidth=*/16);
@@ -302,13 +302,13 @@ TEST_F(BankConflictTest, bankConflicts) {
       {blocked({1}, {32}, {4}, {0}),
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 1, 1, 1, {0},
-           mlir::triton::gpu::CTALayoutAttr::getDefault(&ctx, 1)),
+           mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 1)),
        {32},
        32},
       {blocked({1}, {32}, {4}, {0}),
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 1, 1, 1, {0},
-           mlir::triton::gpu::CTALayoutAttr::getDefault(&ctx, 1)),
+           mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 1)),
        {32},
        16},
       {mmaV3,

@@ -21,24 +21,23 @@ void peelLoopEpilogue(
   Value lowerBound = forOp.getLowerBound();
   Value upperBound = forOp.getUpperBound();
   Value step = forOp.getStep();
-  Value newUpperBound = rewriter.create<arith::SubIOp>(loc, upperBound, step);
+  Value newUpperBound = arith::SubIOp::create(rewriter, loc, upperBound, step);
 
   rewriter.setInsertionPointAfter(forOp);
   Value lastIV = getLastInductionValue(rewriter, forOp);
 
-  auto cond = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                             lowerBound, upperBound);
+  auto cond = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt,
+                                    lowerBound, upperBound);
 
   // Create an if op to execute the peeled iteration
   IRMapping map;
   map.map(forOp.getRegionIterArgs(), forOp.getResults());
   map.map(forOp.getInductionVar(), lastIV);
-  auto ifOp = rewriter.create<scf::IfOp>(loc, forOp.getResultTypes(), cond,
-                                         /*hasElse=*/true);
-  ifOp.getThenRegion().front().erase();
+  auto ifOp = scf::IfOp::create(rewriter, loc, forOp.getResultTypes(), cond);
   forOp.getBodyRegion().cloneInto(&ifOp.getThenRegion(), map);
-  rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
-  rewriter.create<scf::YieldOp>(loc, forOp.getResults());
+  auto newElseBlock = rewriter.createBlock(&ifOp.getElseRegion());
+  rewriter.setInsertionPointToStart(newElseBlock);
+  scf::YieldOp::create(rewriter, loc, forOp.getResults());
 
   forOp->replaceUsesWithIf(ifOp, [&](OpOperand &operand) {
     return !ifOp->isAncestor(operand.getOwner());

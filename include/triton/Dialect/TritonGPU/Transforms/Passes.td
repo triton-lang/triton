@@ -121,25 +121,6 @@ def TritonGPUAutomaticWarpSpecialization : Pass<"tritongpu-automatic-warp-specia
   ];
 }
 
-def TritonGPURewritePartitionDependencies : Pass<"tritongpu-rewrite-partition-dependencies", "mlir::ModuleOp"> {
-  let summary = "test pass for rewriting partition dependencies";
-
-  let description = [{
-    The `tritongpu-rewrite-partition-dependencies` pass analyzes the partitions
-    assigned to a loop and their SSA dependencies. It rewrites the dependencies
-    to be passed through shared memory, applying multi-buffering according to
-    the assigned stages of the partitions.
-  }];
-
-  let dependentDialects = [
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::scf::SCFDialect",
-    "mlir::arith::ArithDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-    "mlir::triton::nvws::NVWSDialect"
-  ];
-}
-
 def TritonGPUPartitionLoops : Pass<"tritongpu-partition-loops", "mlir::ModuleOp"> {
   let summary = "split scheduled loops into `ttg.warp_specialize`";
 
@@ -255,8 +236,8 @@ def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
   let summary = "coalesce";
 
   let description = [{
-    The pass analyses loads/stores with type `tensor<tt.ptr<>>` or
-    `tt.ptr<tensor<>>` and replaces the layouts of these operations with
+    The pass analyses loads/stores with type `tensor<tt.ptr<>>` and replaces
+    the layouts of these operations with
     coalesced layouts, i.e. cache friendly access patterns.
     Layout conversions are inserted before and after the load/store op
     to maintain consistency with the rest of the program.

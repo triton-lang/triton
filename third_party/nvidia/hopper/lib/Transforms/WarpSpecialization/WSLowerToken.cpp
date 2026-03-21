@@ -1,4 +1,4 @@
-#include "Utility.h"
+#include "CodePartitionUtility.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
@@ -41,8 +41,8 @@ Value getMBarrierPhaseBit(OpBuilder &builder, Operation *op,
     curPhase = wait.getPhase();
   if (emptyBarrier) {
     // curPhase = curPhase xor True for emptyBarrier.
-    Value _1_1b = builder.create<arith::ConstantIntOp>(loc, 1, 1);
-    curPhase = builder.create<mlir::arith::XOrIOp>(loc, curPhase, _1_1b);
+    Value _1_1b = arith::ConstantIntOp::create(builder, loc, 1, 1);
+    curPhase = mlir::arith::XOrIOp::create(builder, loc, curPhase, _1_1b);
   }
   LLVM_DEBUG(curPhase.dump());
   return curPhase;
@@ -53,8 +53,8 @@ void processProducerAcquireOp(OpBuilder &builder, ttnvws::ProducerAcquireOp op,
   auto loc = op.getLoc();
   Value phase = getMBarrierPhaseBit(builder, op, true);
   auto i32Ty = builder.getIntegerType(32);
-  phase = builder.create<arith::ExtUIOp>(loc, i32Ty, phase);
-  auto waitOp = builder.create<ttng::WaitBarrierOp>(loc, bufferEmpty, phase);
+  phase = arith::ExtUIOp::create(builder, loc, i32Ty, phase);
+  auto waitOp = ttng::WaitBarrierOp::create(builder, loc, bufferEmpty, phase);
   assert(op.getOperation()->hasAttr("async_task_id"));
   setAsyncTaskIds(waitOp, getAsyncTaskIds(op.getOperation()));
 }
@@ -68,9 +68,9 @@ void processProducerCommitOp(OpBuilder &builder, ttnvws::ProducerCommitOp op,
   if (loadType == ttnvws::TokenLoadType::TMALoadOp) {
     // Get the count from the barriers: trace the local_alloc for the barrier
     // then find the count from init_barrier
-    arriveOp = builder.create<ttng::ArriveBarrierOp>(loc, bufferFull, fullCnt);
+    arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferFull, fullCnt);
   } else {
-    assert(false);
+    llvm::report_fatal_error("unsupported load type for producer commit");
   }
 
   assert(op.getOperation()->hasAttr("async_task_id"));
@@ -82,8 +82,8 @@ void processConsumerWaitOp(OpBuilder &builder, ttnvws::ConsumerWaitOp op,
   auto loc = op.getLoc();
   Value phase = getMBarrierPhaseBit(builder, op, false);
   auto i32Ty = builder.getIntegerType(32);
-  phase = builder.create<arith::ExtUIOp>(loc, i32Ty, phase);
-  auto waitOp = builder.create<ttng::WaitBarrierOp>(loc, bufferFull, phase);
+  phase = arith::ExtUIOp::create(builder, loc, i32Ty, phase);
+  auto waitOp = ttng::WaitBarrierOp::create(builder, loc, bufferFull, phase);
   assert(op.getOperation()->hasAttr("async_task_id"));
   setAsyncTaskIds(waitOp, getAsyncTaskIds(op.getOperation()));
 }
@@ -93,7 +93,7 @@ void processConsumerReleaseOp(OpBuilder &builder, ttnvws::ConsumerReleaseOp op,
                               unsigned emptyCnt) {
   auto loc = op.getLoc();
   auto arriveOp =
-      builder.create<ttng::ArriveBarrierOp>(loc, bufferEmpty, emptyCnt);
+      ttng::ArriveBarrierOp::create(builder, loc, bufferEmpty, emptyCnt);
   assert(op.getOperation()->hasAttr("async_task_id"));
   setAsyncTaskIds(arriveOp, getAsyncTaskIds(op.getOperation()));
 }
@@ -113,23 +113,25 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
 
     Attribute sharedMemorySpace =
         triton::gpu::SharedMemorySpaceAttr::get(context);
-    auto barrierCTALayout =
-        ttg::CTALayoutAttr::get(context, /*CTAsPerCGA=*/{1},
-                                /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+    auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(context, numCTAs);
     auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
-        context, 1, 1, 1, {0}, barrierCTALayout);
+        context, 1, 1, 1, {0}, barrierCGALayout);
     Type barrierMemDescType = ttg::MemDescType::get(
-        {createTokenOp.getNumBuffers(), 1}, builder.getI64Type(),
+        {createTokenOp.getNumBuffers(), numCTAs}, builder.getI64Type(),
         barrierEncoding, sharedMemorySpace,
         /*mutableMemory=*/true);
     Type singleBarrierMemDescType =
-        ttg::MemDescType::get({1}, builder.getI64Type(), barrierEncoding,
+        ttg::MemDescType::get({numCTAs}, builder.getI64Type(), barrierEncoding,
                               sharedMemorySpace, /*mutableMemory=*/true);
     // These are created prior to warp_specialize.
-    Value bufferFullArray = builder.create<mlir::triton::gpu::LocalAllocOp>(
-        loc, barrierMemDescType, Value());
-    Value bufferEmptyArray = builder.create<mlir::triton::gpu::LocalAllocOp>(
-        loc, barrierMemDescType, Value());
+    Value bufferFullArray = mlir::triton::gpu::LocalAllocOp::create(
+        builder, loc, barrierMemDescType, Value());
+    Value bufferEmptyArray = mlir::triton::gpu::LocalAllocOp::create(
+        builder, loc, barrierMemDescType, Value());
+    bufferFullArray.getDefiningOp()->setAttr(
+        kWarpSpecializeGeneratedBarrierAttrName, builder.getUnitAttr());
+    bufferEmptyArray.getDefiningOp()->setAttr(
+        kWarpSpecializeGeneratedBarrierAttrName, builder.getUnitAttr());
     tokenToFull[createTokenOp.getOperation()] = bufferFullArray;
     tokenToEmpty[createTokenOp.getOperation()] = bufferEmptyArray;
 
@@ -137,33 +139,34 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
         loadType == ttnvws::TokenLoadType::TMALoadOp ? 1 : THREADS_PER_TASK;
     unsigned bufferEmptyCount = THREADS_PER_TASK;
     for (unsigned i = 0; i < createTokenOp.getNumBuffers(); i++) {
-      Value idx = builder.create<arith::ConstantIntOp>(loc, i, 32);
-      Value barrierFullView = builder.create<ttg::MemDescIndexOp>(
-          loc, singleBarrierMemDescType, bufferFullArray, idx);
+      Value idx = arith::ConstantIntOp::create(builder, loc, i, 32);
+      Value barrierFullView = ttg::MemDescIndexOp::create(
+          builder, loc, singleBarrierMemDescType, bufferFullArray, idx);
       // EmptyView is used for ConsumerRelease and ProducerAcquire.
       // FullView is for ConsumerWait and ProducerCommit.
-      builder.create<ttng::InitBarrierOp>(loc, barrierFullView,
-                                          bufferFullCount);
+      ttng::InitBarrierOp::create(builder, loc, barrierFullView,
+                                  bufferFullCount);
 
-      Value barrierEmptyView = builder.create<ttg::MemDescIndexOp>(
-          loc, singleBarrierMemDescType, bufferEmptyArray, idx);
-      builder.create<ttng::InitBarrierOp>(loc, barrierEmptyView,
-                                          bufferEmptyCount);
+      Value barrierEmptyView = ttg::MemDescIndexOp::create(
+          builder, loc, singleBarrierMemDescType, bufferEmptyArray, idx);
+      ttng::InitBarrierOp::create(builder, loc, barrierEmptyView,
+                                  bufferEmptyCount);
     }
 
     assert(numCTAs == 1 && "remote CTA is not supported yet");
-    builder.create<mlir::gpu::BarrierOp>(loc);
+    mlir::triton::gpu::BarrierOp::create(builder, loc,
+                                         triton::gpu::AddrSpace::Local);
 
     // Helper function for extracting one index from bufferFullArray.
     auto extractBufferFull = [&](Location loc, Value idx) -> Value {
-      return builder.create<ttg::MemDescIndexOp>(loc, singleBarrierMemDescType,
-                                                 bufferFullArray, idx);
+      return ttg::MemDescIndexOp::create(builder, loc, singleBarrierMemDescType,
+                                         bufferFullArray, idx);
     };
 
     // Helper function for extracting one index from bufferEmptyArray.
     auto extractBufferEmpty = [&](Location loc, Value idx) -> Value {
-      return builder.create<ttg::MemDescIndexOp>(loc, singleBarrierMemDescType,
-                                                 bufferEmptyArray, idx);
+      return ttg::MemDescIndexOp::create(builder, loc, singleBarrierMemDescType,
+                                         bufferEmptyArray, idx);
     };
     auto handleOneUser = [&](Operation *user) -> bool {
       // Here builder is at the user, make sure usage of values outside of
@@ -211,13 +214,13 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
       auto loc = user->getLoc();
       builder.setInsertionPoint(user);
       bool handled = handleOneUser(user);
-      if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(user)) {
+      if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(user)) {
         unsigned opndNum = use.getOperandNumber();
         // Handle the regions. Trace uses of the argument corresponding to the
         // captured value.
-        for (Region *region : wsOp.getPartitionRegions()) {
-          LDBG("-- region " << region->getNumArguments());
-          auto tArg = region->getArgument(opndNum);
+        for (Region &region : wsOp.getPartitionRegions()) {
+          LDBG("-- region " << region.getNumArguments());
+          auto tArg = region.getArgument(opndNum);
           for (Operation *tUser : tArg.getUsers()) {
             builder.setInsertionPoint(tUser);
             // Use of TokenOp via capture of warp_specialize.
@@ -255,7 +258,7 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
       // eraseArgument.
       for (OpOperand &use : llvm::make_early_inc_range(tokenOp->getUses())) {
         Operation *user = use.getOwner();
-        if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(user)) {
+        if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(user)) {
           unsigned opndNum = use.getOperandNumber();
           LDBG("wsOp user numOperands: " << wsOp->getNumOperands() << " idx "
                                          << opndNum);
@@ -270,22 +273,22 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
           wsOp->insertOperands(wsOp.getNumOperands(), full);
           wsOp->insertOperands(wsOp.getNumOperands(), empty);
           // Handle the regions.
-          for (Region *region : wsOp.getPartitionRegions()) {
-            LDBG("-- region " << region->getNumArguments());
-            auto tArg = region->getArgument(opndNum);
+          for (Region &region : wsOp.getPartitionRegions()) {
+            LDBG("-- region " << region.getNumArguments());
+            auto tArg = region.getArgument(opndNum);
             for (Operation *tUser : tArg.getUsers()) {
               LLVM_DEBUG({
                 LDBG("user for arg");
                 tUser->dump();
               });
             }
-            region->eraseArgument(opndNum);
+            region.eraseArgument(opndNum);
             BlockArgument arg =
-                region->addArgument(full.getType(), full.getLoc());
-            replaceAllUsesInRegionWith(full, arg, *region);
+                region.addArgument(full.getType(), full.getLoc());
+            replaceAllUsesInRegionWith(full, arg, region);
             BlockArgument arg2 =
-                region->addArgument(empty.getType(), empty.getLoc());
-            replaceAllUsesInRegionWith(empty, arg2, *region);
+                region.addArgument(empty.getType(), empty.getLoc());
+            replaceAllUsesInRegionWith(empty, arg2, region);
           }
         }
       }

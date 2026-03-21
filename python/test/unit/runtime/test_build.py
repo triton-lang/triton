@@ -65,7 +65,7 @@ def test_compile_module(fresh_triton_cache):
     assert mod2.__file__ == mod.__file__
 
 
-def test_compile_module_bad_cache(fresh_knobs_except_libraries):
+def test_compile_module_bad_cache(fresh_knobs):
     with tempfile.TemporaryDirectory() as tmpd:
         tmp = Path(tmpd)
         called_get_file = False
@@ -79,7 +79,7 @@ def test_compile_module_bad_cache(fresh_knobs_except_libraries):
                 return str(tmp / filename)
 
         # First corrupt the cache
-        fresh_knobs_except_libraries.cache.manager_class = InvalidFileCacheManager
+        fresh_knobs.cache.manager_class = InvalidFileCacheManager
 
         mod = compile_module_from_src(TEST_MODULE_C, "test_module")
         assert called_get_file

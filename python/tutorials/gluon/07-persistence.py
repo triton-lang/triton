@@ -48,7 +48,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     tensor_memory_descriptor,
     allocate_tensor_memory,
-    get_tmem_32x32b_reg_layout,
     tcgen05_mma,
     tcgen05_commit,
 )
@@ -97,11 +96,6 @@ class WGMMA:
     acc: Union[warpgroup_mma_accumulator, gl.tensor]
     use_acc: gl.tensor
 
-    @gluon.constexpr_function
-    def __init__(self, acc, use_acc):
-        self.acc = acc
-        self.use_acc = use_acc
-
     @gluon.jit
     def initialize(dtype: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, num_warps: gl.constexpr):
         mma_layout: gl.constexpr = t5.pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps)
@@ -135,15 +129,6 @@ class MMAv5:
     acc_tmem: tensor_memory_descriptor
     bar: gl.shared_memory_descriptor
     counter: gl.tensor
-    reg_layout: gl.constexpr
-
-    @gluon.constexpr_function
-    def __init__(self, use_acc, acc_tmem, bar, counter, reg_layout):
-        self.use_acc = use_acc
-        self.acc_tmem = acc_tmem
-        self.bar = bar
-        self.counter = counter
-        self.reg_layout = gl.constexpr(reg_layout)
 
     @gluon.jit
     def initialize(dtype: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, num_warps: gl.constexpr):
@@ -151,14 +136,13 @@ class MMAv5:
         acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], layout)
         bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
-        reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], num_warps)
-        return MMAv5(gl.to_tensor(False), acc_tmem, bar, gl.to_tensor(0), reg_layout)
+        return MMAv5(gl.to_tensor(False), acc_tmem, bar, gl.to_tensor(0))
 
     @gluon.jit
     def issue_async_mma(self, a, b):
         tcgen05_mma(a, b, self.acc_tmem, use_acc=self.use_acc)
         tcgen05_commit(self.bar)
-        return MMAv5(gl.to_tensor(True), self.acc_tmem, self.bar, self.counter + 1, self.reg_layout)
+        return MMAv5(gl.to_tensor(True), self.acc_tmem, self.bar, self.counter + 1)
 
     @gluon.jit
     def wait_num_outstanding(self, num_outstanding: gl.constexpr):
@@ -167,8 +151,8 @@ class MMAv5:
 
     @gluon.jit
     def take_result(self):
-        next = MMAv5(gl.to_tensor(False), self.acc_tmem, self.bar, self.counter, self.reg_layout)
-        return self.acc_tmem.load(self.reg_layout), next
+        next = MMAv5(gl.to_tensor(False), self.acc_tmem, self.bar, self.counter)
+        return self.acc_tmem.load(), next
 
 
 def select_mma_impl():
@@ -195,7 +179,7 @@ def issue_loads(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs,
     index = producer % num_buffers
     producer += 1
     bar = bars.index(index)
-    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred)
+    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred=pred)
     tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
     tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(index), pred)
     return producer
@@ -343,12 +327,6 @@ class PersistentTileScheduler:
     pid_start: gl.tensor
     pid_end: gl.tensor
     num_pid_m: gl.tensor
-
-    @gluon.constexpr_function
-    def __init__(self, pid_start, pid_end, num_pid_m):
-        self.pid_start = pid_start
-        self.pid_end = pid_end
-        self.num_pid_m = num_pid_m
 
     @gluon.jit
     def initialize(M, N, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr):
@@ -526,13 +504,6 @@ def GroupedPersistentTileScheduler(GROUP_SIZE_M):
         num_pid_in_group: gl.tensor
         num_pid: gl.tensor
 
-        @gluon.constexpr_function
-        def __init__(self, start_pid, num_pid_m, num_pid_in_group, num_pid):
-            self.start_pid = start_pid
-            self.num_pid_m = num_pid_m
-            self.num_pid_in_group = num_pid_in_group
-            self.num_pid = num_pid
-
         @gluon.jit
         def initialize(M, N, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr):
             start_pid = gl.program_id(axis=0)
@@ -625,7 +596,7 @@ def issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, 
     b_index = producer % (num_buffers + stealb)
     producer += 1
     bar = bars.index(index)
-    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred)
+    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred=pred)
     tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
     tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(b_index), pred)
     return producer
@@ -834,7 +805,8 @@ if __name__ == "__main__":
 #   Hopper and Blackwell: we are not double-buffering the accumulator and
 #   leaving 256 columns of TMEM unused.
 # - On Blackwell, we can use `clusterlaunchcontrol` to dynamically schedule
-#   work in conjunction with the GPU, getting the best of both worlds.
+#   work in conjunction with the GPU, getting the best of both worlds. This is
+#   explored further in tutorial 12.
 #
 # Main takeaways:
 #

@@ -121,11 +121,6 @@ def NVGPU_LoadAcquireOp : NVGPU_Op<"ld_acquire", [MemoryEffects<[MemRead]>]> {
   let assemblyFormat = "$sem `,` $scope `,` $addr (`,` $mask^)? attr-dict `:` functional-type($addr, $result)";
 }
 
-def NVGPU_WarpIdOp : NVGPU_Op<"warp_id", [Pure]> {
-  let results = (outs I32:$result);
-  let assemblyFormat = "attr-dict";
-}
-
 def NVGPU_TensorMemoryBaseAddress : NVGPU_Op<"tensor_memory_base", [Pure]> {
   let description = [{
     Op to represent base address of tensor memory in a kernel.

@@ -3,6 +3,7 @@ import tracemalloc
 import pytest
 import pathlib
 import os
+import numpy as np
 
 import torch
 import triton
@@ -204,3 +205,38 @@ def test_launch_with_options(options) -> None:
 
     triton.knobs.runtime.jit_post_compile_hook = None
     triton.knobs.runtime.jit_cache_hook = None
+
+
+@pytest.mark.interpreter
+def test_pre_run_hooks(device):
+
+    @triton.jit
+    def add_kernel(a_ptr, n_elements: tl.constexpr):
+        offsets = tl.arange(0, n_elements)
+        a = tl.load(a_ptr + offsets)
+        a += 2
+        tl.store(a_ptr + offsets, a)
+
+    def my_hook(*args, **kwargs):
+        args[0].zero_()
+
+    add_kernel.add_pre_run_hook(my_hook)
+
+    n_elements = 4
+    a = torch.ones(n_elements, device=device, dtype=torch.int32)
+    add_kernel[(1, )](a, n_elements)
+    assert torch.all(a == 2)
+
+    a = torch.ones(n_elements, device=device, dtype=torch.int32)
+    add_kernel.run(a, n_elements, grid=(1, ), warmup=False)
+    assert torch.all(a == 2)
+
+
+def test_interpreter_implicit_cvt_bool() -> None:
+    from triton.runtime.interpreter import _implicit_cvt
+
+    value = _implicit_cvt(True)
+
+    assert value.dtype == tl.int1
+    assert value.handle.data.dtype == np.bool_
+    assert bool(value.handle.data[0]) is True

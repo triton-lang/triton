@@ -25,20 +25,17 @@ class LinearLayout:
 
 class BlockedLayout:
 
-    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order, ctas_per_cga, cta_split_num, cta_order):
+    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
         self.sz_per_thread = size_per_thread
         self.threads_per_warp = threads_per_warp
         self.warps_per_cta = warps_per_cta
         self.order = order
-        self.ctas_per_cga = ctas_per_cga
-        self.cta_split_num = cta_split_num
-        self.cta_order = cta_order
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
 
-src_layouts = [BlockedLayout([1, 1], [1, 64], [1, 1], [0, 1], [1, 1], [1, 1], [0, 1])]
+src_layouts = [BlockedLayout([1, 1], [1, 64], [1, 1], [0, 1])]
 
 dst_layouts = [
     LinearLayout([[0, 32]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0]], [], []),

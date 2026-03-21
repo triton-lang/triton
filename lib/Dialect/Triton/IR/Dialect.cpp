@@ -40,8 +40,8 @@ void TritonInlinerInterface::handleTerminator(Operation *op,
 
   // Replace the return with a branch to the dest.
   OpBuilder builder(op);
-  builder.create<mlir::cf::BranchOp>(op->getLoc(), newDest,
-                                     returnOp.getOperands());
+  mlir::cf::BranchOp::create(builder, op->getLoc(), newDest,
+                             returnOp.getOperands());
   op->erase();
 }
 

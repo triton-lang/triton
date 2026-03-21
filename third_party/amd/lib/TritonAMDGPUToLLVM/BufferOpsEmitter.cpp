@@ -53,8 +53,22 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
   //              2 = none,
   //              3 = either swizzles or testing against offset field)
   // bits 30-31: Type (must be 0)
+  //
+  // For GFX12+ (RDNA4, GFX1250): LLVM's lowerPointerAsRsrcIntrin()
+  // (SIISelLowering.cpp) rebuilds the descriptor in v2i64 format (57-bit
+  // base, 45-bit num_records) and shifts the flags operand left by 28 bits
+  // into bits [127:124] of the descriptor. Therefore only flags bits [3:0]
+  // survive, mapping to the hardware descriptor fields:
+  //   bit 0 -> bit 124: swizzle_enable (0)
+  //   bit 1 -> bit 125: OOB_select (0=structured, 1=check offset only)
+  //   bits 2-3 -> bits 127:126: type (must be 0)
+  // OOB_select=0 is correct for raw buffer ops with stride=0
+  // (structured and unstructured modes are equivalent in this case).
+  // The RDNA-style flags below have bits [3:0]=0, so they are effectively
+  // ignored on GFX12+ but we include GFX1250 in the check for consistency.
   uint32_t flags = (7 << 12) | (4 << 15);
-  if (llvm::is_contained({ISAFamily::RDNA2, ISAFamily::RDNA3, ISAFamily::RDNA4},
+  if (llvm::is_contained({ISAFamily::RDNA2, ISAFamily::RDNA3, ISAFamily::RDNA4,
+                          ISAFamily::GFX1250},
                          targetInfo.getISAFamily())) {
     flags |= (1 << 24);
     uint32_t oob = 3;
@@ -75,11 +89,11 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
       // stride. Especially better to avoid using the stride which is 2^N when
       // N>13, e.g. by add padding to the buffer.
       Value stride16b =
-          rewriter.create<LLVM::TruncOp>(loc, i16_ty, blockStride);
-      Value strideSat = rewriter.create<LLVM::AndOp>(loc, stride16b, mask14b);
+          LLVM::TruncOp::create(rewriter, loc, i16_ty, blockStride);
+      Value strideSat = LLVM::AndOp::create(rewriter, loc, stride16b, mask14b);
       // stride[13:0] = swizzling stride
       // stride[14] = swizzle enabling bit
-      stride = rewriter.create<LLVM::OrOp>(loc, enableSwizzle, strideSat);
+      stride = LLVM::OrOp::create(rewriter, loc, enableSwizzle, strideSat);
     }
 #endif
   }
@@ -100,8 +114,8 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   SmallVector<Value, 6> args;
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args);
   Type bufferType = getBufferOpType(type, false);
-  Value data = rewriter.create<ROCDL::RawPtrBufferLoadOp>(
-      loc, bufferType, args, ArrayRef<NamedAttribute>());
+  Value data = ROCDL::RawPtrBufferLoadOp::create(
+      rewriter, loc, bufferType, args, ArrayRef<NamedAttribute>());
   data = b.bitcast(data, type);
   if (!isZero(falseVal))
     data = b.select(pred, data, falseVal);
@@ -117,8 +131,8 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
                  commonArgs);
   Type bufferType = getBufferOpType(type, false);
-  return rewriter.create<ROCDL::RawPtrBufferLoadLdsOp>(
-      loc, TypeRange{},
+  return ROCDL::RawPtrBufferLoadLdsOp::create(
+      rewriter, loc, TypeRange{},
       ValueRange{
           commonArgs[0], // Buffer descriptor
           dst,           // LDS base ptr
@@ -145,12 +159,12 @@ Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
   // Note: rocdl.raw.ptr.buffer.atomic.cmpswap expects
   // val to be before cmp in the arg list. This is
   // the opposite of the order in tl.atomic_cmpxchg
-  // and amdgpu.buffer_atomic_cas
+  // and amdg.buffer_atomic_cas
   SmallVector<Value, 6> args{casStoreVal, casCmpVal};
   fillCommonArgsAtomics(type, rsrcDesc, offset, pred, hasUsers, args);
 
-  Value data = rewriter.create<ROCDL::RawPtrBufferAtomicCmpSwap>(
-      loc, bufferType, args, ArrayRef<NamedAttribute>());
+  Value data = ROCDL::RawPtrBufferAtomicCmpSwap::create(
+      rewriter, loc, bufferType, args, ArrayRef<NamedAttribute>());
   data = b.bitcast(data, type);
   return data;
 }
@@ -190,8 +204,8 @@ void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
   SmallVector<Value, 6> args{data};
   fillCommonArgs(vecTy, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/false,
                  args);
-  rewriter.create<ROCDL::RawPtrBufferStoreOp>(loc, TypeRange{}, args,
-                                              ArrayRef<NamedAttribute>());
+  ROCDL::RawPtrBufferStoreOp::create(rewriter, loc, TypeRange{}, args,
+                                     ArrayRef<NamedAttribute>());
 }
 
 Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
@@ -293,15 +307,7 @@ void BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
   Value sgprOffset = b.int_val(32, 0);
 
   // 3. Create the cache modifiers word
-  int32_t aux = 0;
-  if (hasUsers)
-    aux = getCtrlBitsForBufferAtomicsOnGFX_942_950(/*setSC0*/ true,
-                                                   /*setSC1*/ false,
-                                                   /*setNT*/ false);
-  else
-    aux = getCtrlBitsForBufferAtomicsOnGFX_942_950(
-        /*setSC0*/ false, /*setSC1*/ false, /*setNT*/ false);
-
+  int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
   Value cacheModifiers = b.int_val(32, aux);
 
   // 4. Add the arguments

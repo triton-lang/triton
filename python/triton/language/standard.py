@@ -22,6 +22,8 @@ def _is_power_of_two(i):
     return (i & (i - 1)) == 0 and i != 0
 
 
+_get_int_dtype = constexpr_function(core.get_int_dtype)
+
 # -----------------------
 # Standard library
 # -----------------------
@@ -38,7 +40,7 @@ def cdiv(x, div):
     :param div: the divisor
     :type div: Block
     """
-    return (x + div - 1) // div
+    return (x + (div - 1)) // div
 
 
 @core._tensor_member_fn
@@ -374,7 +376,7 @@ def _compare_and_swap(x, flip, i: core.constexpr):
     n_dims: core.constexpr = _log2(x.numel)
 
     # flip along middle dimension (the bitwise XORs will be optimised away):
-    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    idtype = _get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
     ix = x.to(idtype, bitcast=True)
     iy = ix ^ xor_sum(ix, n_dims - 1 - i, True)
     y = iy.to(x.dtype, bitcast=True)
@@ -464,8 +466,31 @@ def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTE
 
 
 @jit
-def topk(x, k: core.constexpr, dim: core.constexpr = None):
-    return sort_impl(x, k=k, dim=dim, descending=True)
+def topk(x, k: core.constexpr, dim: core.constexpr = None, descending: core.constexpr = True):
+    """
+    Returns the k largest (or smallest) elements of the input tensor along the specified dimension.
+
+    The elements are returned in sorted order (largest first).
+
+    :param x: The input tensor.
+    :type x: Tensor
+    :param k: The number of top elements to return. Must be a power of two.
+    :type k: int
+    :param dim: The dimension along which to find the top k elements.
+                If None, uses the last dimension. Currently only the last dimension is supported.
+    :type dim: int, optional
+    :param descending: If set to True, returns k largest elements. If set to False, returns k smallest elements.
+    :type descending: bool, optional
+    :return: A tensor containing the k largest elements along the specified dimension.
+    :rtype: Tensor
+
+    Example::
+
+        # Get top 4 elements from a 1D tensor
+        x = tl.arange(0, 16)
+        top4 = tl.topk(x, 4)  # Returns [15, 14, 13, 12]
+    """
+    return sort_impl(x, k=k, dim=dim, descending=descending)
 
 
 @jit
@@ -503,7 +528,7 @@ def flip(x, dim=None):
     steps: core.constexpr = _log2(x.shape[_dim])
 
     # reshape the swap dimension to (2, 2, ..., 2)
-    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    idtype = _get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
     y = core.reshape(x.to(idtype, bitcast=True), x.shape[:_dim] + [2] * steps + x.shape[_dim + 1:])
     for i in core.static_range(steps):
         y = y ^ xor_sum(y, _dim + i, True)
@@ -532,3 +557,14 @@ def interleave(a, b):
         # understand that if we take the `if` above we definitely don't run this
         # `else`.
         return core.reshape(c, c.shape[:-2] + [2 * c.shape[-2]])
+
+
+@jit
+def squeeze(x, dim: core.constexpr):
+    core.static_assert(x.shape[dim] == 1)
+    return x.reshape(x.shape[:dim] + x.shape[dim + 1:])
+
+
+@jit
+def unsqueeze(x, dim: core.constexpr):
+    return x.reshape(x.shape[:dim] + (1, ) + x.shape[dim:])

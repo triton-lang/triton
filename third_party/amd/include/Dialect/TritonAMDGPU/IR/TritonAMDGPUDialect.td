@@ -27,7 +27,7 @@
 include "mlir/IR/OpBase.td"
 
 def TritonAMDGPU_Dialect : Dialect {
-  let name = "amdgpu";
+  let name = "amdg";
   let cppNamespace = "::mlir::triton::amdgpu";
 
   let description = [{
@@ -37,7 +37,6 @@ def TritonAMDGPU_Dialect : Dialect {
   let dependentDialects = ["triton::TritonDialect"];
 
   let useDefaultAttributePrinterParser = 1;
-  let usePropertiesForAttributes = 1;
 }
 
 #endif

@@ -1,12 +1,25 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [2, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
 #smem = #ttg.shared_memory
-tt.func public @non_trivial_block(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-    %zero = arith.constant 0 : i32
-    // expected-error @+1 {{non-trivial block}}
-    %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x8xf32, #shared, #smem>
-    tt.return
+module attributes {"ttg.num-ctas" = 2 : i32} {
+  tt.func public @subslice_non_broadcast_cga_dim(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+      // expected-error @+1 {{CTA dimensions}}
+      %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x8xf32, #shared, #smem>
+      tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32} {
+  tt.func public @subslice_broadcasted_cga_output(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+      // expected-error @+1 {{broadcasted CTA outputs}}
+      %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<4x16xf32, #shared, #smem>
+      tt.return
+  }
 }
 
 // -----
@@ -73,6 +86,17 @@ tt.func public @result_rank_too_large(%arg0: !ttg.memdesc<3x8x16xf32, #shared, #
     %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<3x8x16xf32, #shared, #smem> -> !ttg.memdesc<3x8x16xf32, #shared, #smem>
     tt.return
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_index_result_alloc_shape_mismatch(%arg0: !ttg.memdesc<3x8x16xf32, #shared, #smem>) {
+    %zero = arith.constant 0 : i32
+    // expected-error @+1 {{alloc shape must match shape for both result and src}}
+    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<3x8x16xf32, #shared, #smem> -> !ttg.memdesc<8x16xf32, #shared, #smem, 3x8x16>
+    tt.return
+}
 // -----
 
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0]}>
@@ -84,17 +108,16 @@ tt.func public @result_1d_to_1d(%arg0: !ttg.memdesc<8xf32, #shared, #smem>) {
     tt.return
 }
 
+
 // -----
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory
-tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-    %zero = arith.constant 0 : i32
+tt.func public @subview_along_swizzling_pattern(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
     // expected-error @+1 {{swizzling pattern}}
     %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x4xf32, #shared, #smem>
     tt.return
 }
-
 
 // -----
 
@@ -109,11 +132,12 @@ tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #
 // -----
 
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
+#shared1d = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0]}>
 #smem = #ttg.shared_memory
-tt.func public @result_dim_too_large(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+tt.func public @result_dim_too_large(%arg0: !ttg.memdesc<8x16xf32, #shared1d, #smem>) {
     %zero = arith.constant 0 : i32
     // expected-error @+1 {{result shape}}
-    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<32xf32, #shared, #smem>
+    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<8x16xf32, #shared1d, #smem> -> !ttg.memdesc<32xf32, #shared1d, #smem>
     tt.return
 }
 
@@ -209,11 +233,11 @@ tt.func @not_power_of_2() {
 // -----
 
 tt.func @bad_argument_count() {
-  // expected-error @below {{'ttg.warp_specialize' op partition region #0 has 1 arguments but expected 0}}
   ttg.warp_specialize()
   default {
     ttg.warp_yield
   }
+  // expected-error @below {{'ttg.warp_specialize.partitions' op partition region #0 has 1 arguments but expected 0}}
   partition0(%arg0: i32) num_warps(4) {
     ttg.warp_return
   } : () -> ()
@@ -223,11 +247,11 @@ tt.func @bad_argument_count() {
 // -----
 
 tt.func @bad_argument_type(%arg0: i32) {
-  // expected-error @below {{'ttg.warp_specialize' op partition region #0 argument #0 has type 'i64' but corresponding capture has type 'i32'}}
   ttg.warp_specialize(%arg0)
   default {
     ttg.warp_yield
   }
+  // expected-error @below {{'ttg.warp_specialize.partitions' op partition region #0 argument #0 has type 'i64' but corresponding capture has type 'i32'}}
   partition0(%arg1: i64) num_warps(4) {
     ttg.warp_return
   } : (i32) -> ()
@@ -440,13 +464,13 @@ tt.func @async_copy_invalid_other_type(%input: tensor<64x64x!tt.ptr<f16>, #block
 // -----
 
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
-// expected-error @below {{padding rank must be equal to or one less than the shape size}}
+// expected-error @below {{rank must be equal to or one less than the shape size. Got 2 and 4}}
 !rank_too_high = !ttg.memdesc<4x4x4x4xf32, #shared, #ttg.shared_memory>
 
 // -----
 
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
-// expected-error @below {{padding rank must be equal to or one less than the shape size}}
+// expected-error @below {{rank must be equal to or one less than the shape size. Got 2 and 1}}
 !rank_too_small = !ttg.memdesc<4xf32, #shared, #ttg.shared_memory>
 
 // -----

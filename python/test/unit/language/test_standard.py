@@ -43,7 +43,7 @@ def test_sort(M, N, k, descending, dtype_str, device):
         if k is None or x.numel < k:
             z = tl.sort(x, descending=descending)
         else:
-            z = tl.topk(x, k)
+            z = tl.topk(x, k, descending=descending)
         offs_z = offs_m[:, None] * stride_zm + offs_z_n[None, :]
         tl.store(Z + offs_z, z)
 
@@ -54,7 +54,7 @@ def test_sort(M, N, k, descending, dtype_str, device):
     if k is None or x.numel() < k:
         y = torch.sort(x, descending=descending)[0]
     else:
-        y = torch.topk(x, k=k).values
+        y = torch.topk(x, k=k, largest=descending).values
     sort_kernel[(1, )](x, x.stride(0), z, z.stride(0), M, N, k, descending, num_warps=8)
     assert (y == z).all(), (y, z)
 
@@ -143,3 +143,43 @@ def test_swizzle2d(size_i, size_j, size_g, device):
     expected_order = torch.tensor([[0, 3, 6, 9, 12, 15, 18], [1, 4, 7, 10, 13, 16, 19], [2, 5, 8, 11, 14, 17, 20],
                                    [21, 23, 25, 27, 29, 31, 33], [22, 24, 26, 28, 30, 32, 34]]).to(device)
     assert (output == expected_order).all(), (output, expected_order)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("shape, dim", [((1, 2, 4), 0), ((2, 1, 4), 1), ((2, 4, 1), 2)])
+def test_squeeze(shape, dim, device):
+
+    @triton.jit
+    def triton_squeeze(out_ptr, dim: tl.constexpr, s0: tl.constexpr, s1: tl.constexpr, s2: tl.constexpr):
+        a = tl.arange(0, 8)
+        a = tl.reshape(a, (s0, s1, s2))
+        a = tl.squeeze(a, dim)
+        a = tl.ravel(a)
+        tl.store(out_ptr + tl.arange(0, 8), a)
+
+    out = torch.empty((8, ), device=device, dtype=torch.int32)
+    triton_squeeze[(1, )](out, dim, shape[0], shape[1], shape[2])
+
+    expected = torch.arange(0, 8, device=device, dtype=torch.int32)
+    expected = expected.reshape(shape).squeeze(dim).reshape(-1)
+    assert (out == expected).all()
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dim", [0, 1, 2])
+def test_unsqueeze(dim, device):
+
+    @triton.jit
+    def triton_unsqueeze(out_ptr, dim: tl.constexpr):
+        a = tl.arange(0, 8)
+        a = tl.reshape(a, (2, 4))
+        a = tl.unsqueeze(a, dim)
+        a = tl.ravel(a)
+        tl.store(out_ptr + tl.arange(0, 8), a)
+
+    out = torch.empty((8, ), device=device, dtype=torch.int32)
+    triton_unsqueeze[(1, )](out, dim)
+
+    expected = torch.arange(0, 8, device=device, dtype=torch.int32)
+    expected = expected.reshape(2, 4).unsqueeze(dim).reshape(-1)
+    assert (out == expected).all()

@@ -113,7 +113,8 @@ def test_env_updated(fresh_knobs, monkeypatch):
 
 @pytest.mark.parametrize("truthy, falsey", [("1", "0"), ("true", "false"), ("True", "False"), ("TRUE", "FALSE"),
                                             ("y", "n"), ("YES", "NO"), ("ON", "OFF")])
-def test_read_env(truthy, falsey, fresh_knobs, monkeypatch):
+def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
+    fresh_knobs = fresh_knobs_including_libraries
     # bool defaulting to False
     assert not fresh_knobs.runtime.debug
     # bool defaulting to True
@@ -170,7 +171,8 @@ def test_triton_home(fresh_knobs, monkeypatch):
     assert fresh_knobs.cache.override_dir == "/tmp/user/triton_home/.triton/override"
 
 
-def test_set_knob_directly(fresh_knobs, monkeypatch):
+def test_set_knob_directly(fresh_knobs_including_libraries, monkeypatch):
+    fresh_knobs = fresh_knobs_including_libraries
     assert fresh_knobs.cache.dir.endswith(".triton/cache")
 
     fresh_knobs.cache.dir = "/tmp/triton_cache"
@@ -279,7 +281,8 @@ def test_nvidia_tool(fresh_knobs, tmp_path, monkeypatch):
     assert fresh_knobs.nvidia.ptxas_options is None
 
 
-def test_opt_bool(fresh_knobs, monkeypatch):
+def test_opt_bool(fresh_knobs_including_libraries, monkeypatch):
+    fresh_knobs = fresh_knobs_including_libraries
     assert fresh_knobs.amd.use_block_pingpong is None
     monkeypatch.setenv("TRITON_HIP_USE_BLOCK_PINGPONG", "0")
     assert not fresh_knobs.amd.use_block_pingpong

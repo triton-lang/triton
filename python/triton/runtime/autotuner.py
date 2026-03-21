@@ -49,7 +49,7 @@ class Autotuner(KernelInterface):
         self._cache_lock = threading.RLock()
         self._cache_futures: Dict[Tuple, CacheFuture] = {}
         self.arg_names = arg_names
-        self.cache_results = cache_results or (knobs.autotuning.cache and not knobs.runtime.interpret)
+        self.cache_results = (cache_results or knobs.autotuning.cache) and not knobs.runtime.interpret
 
         # Reset to zero or restore values
         self.reset_to_zero = []

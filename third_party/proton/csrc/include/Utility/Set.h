@@ -17,7 +17,7 @@ public:
     set.insert(key);
   }
 
-  bool contain(const Key &key) {
+  bool contain(const Key &key) const {
     std::shared_lock<std::shared_mutex> lock(mutex);
     auto it = set.find(key);
     if (it == set.end())
@@ -37,7 +37,7 @@ public:
 
 private:
   Container set;
-  std::shared_mutex mutex;
+  mutable std::shared_mutex mutex;
 };
 
 } // namespace proton

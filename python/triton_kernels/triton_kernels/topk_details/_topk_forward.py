@@ -71,16 +71,14 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
         x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
         acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
 
-    # rotate expert index into upper 16 bits:
-    # 0000vvvvvvvviiii --> iiii0000vvvvvvvv
-    acc = (acc << (y_nbits - 16)) | (acc >> 16)
-    # sort in ascending order of expert (descending order of key)
+    # sort packed (value_key, index_key) descending:
+    # this keeps outputs ordered by gate value and uses smaller expert index for ties
     acc = tl.sort(acc, dim=1, descending=True)
-    # iiii0000vvvvvvvv --> 0000iiii:
-    y_indices_raw = (acc >> (y_nbits - 16)).to(tl.uint32)
+    # 0000vvvvvvvviiii --> 0000iiii:
+    y_indices_raw = (acc & 0xFFFF).to(tl.uint32)
     y_indices = key_to_indx(y_indices_raw, N_EXPTS_PAD)
-    # iiii0000vvvvvvvv --> vvvvvvvv:
-    y_values_raw = acc.to(x_utype)
+    # 0000vvvvvvvviiii --> vvvvvvvv:
+    y_values_raw = (acc >> 16).to(x_utype)
     y_values = key_to_fpval(y_values_raw).to(x_dtype, bitcast=True)
 
     return y_values, y_indices

@@ -14,6 +14,26 @@ def device(request):
 
 @pytest.fixture
 def fresh_knobs():
+    """
+    Default fresh knobs fixture that preserves library path
+    information from the environment as these are typically
+    needed to successfully compile kernels.
+    """
+    from triton._internal_testing import _fresh_knobs_impl
+    fresh_function, reset_function = _fresh_knobs_impl(skipped_attr={"build", "nvidia", "amd"})
+    try:
+        yield fresh_function()
+    finally:
+        reset_function()
+
+
+@pytest.fixture
+def fresh_knobs_including_libraries():
+    """
+    A variant of `fresh_knobs` that resets ALL knobs including
+    library paths. Use this only for tests that need complete
+    environment isolation.
+    """
     from triton._internal_testing import _fresh_knobs_impl
     fresh_function, reset_function = _fresh_knobs_impl()
     try:

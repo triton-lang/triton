@@ -1,3 +1,24 @@
+/*
+ * Copyright (C) Advanced Micro Devices, Inc.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included
+ * in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE COPYRIGHT HOLDER(S) BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+ * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 #pragma once
 
 // This file will add older hip functions used in the versioning system
@@ -23,7 +44,10 @@ typedef struct hipDeviceProp_tR0000 {
   int minor;  ///< Minor compute capability.  On HCC, this is an approximation and features may
               ///< differ from CUDA CC.  See the arch feature flags for portable ways to query
               ///< feature caps.
-  int multiProcessorCount;          ///< Number of multi-processors (compute units).
+  int multiProcessorCount;          ///< Number of multi-processors. When the GPU works in Compute
+                                    ///< Unit (CU) mode, this value equals the number of CUs;
+                                    ///< when in Workgroup Processor (WGP) mode, this value equels
+                                    ///< half of CUs, because a single WGP contains two CUs.
   int l2CacheSize;                  ///< L2 cache size.
   int maxThreadsPerMultiProcessor;  ///< Maximum resident threads per multi-processor.
   int computeMode;                  ///< Compute mode.

@@ -150,6 +150,7 @@ Scan/Sort Ops
     cumsum
     histogram
     sort
+    topk
     gather
 
 Atomic Ops

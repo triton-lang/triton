@@ -13,20 +13,32 @@ class FutureKernel:
         self.kernel = None
         self.future = future
 
-    def result(self):
+    def result(self, ignore_errors: bool = False):
         if self.kernel is not None:
             return self.kernel
 
-        kernel = self.future.result()
+        try:
+            kernel = self.future.result()
+        except Exception:
+            if ignore_errors:
+                return
+            else:
+                raise
         self.finalize_compile(kernel)
         self.kernel = kernel
         return kernel
 
+    def __getattr__(self, name):
+        # Defer to the compiled kernel so users can interact with this object
+        # like a normal CompiledKernel without needing to call result() first.
+        return getattr(self.result(), name)
+
 
 class AsyncCompileMode:
 
-    def __init__(self, executor: Executor):
+    def __init__(self, executor: Executor, *, ignore_errors=False):
         self.executor = executor
+        self.ignore_errors = ignore_errors
         self.raw_futures = []
         self.future_kernels = {}
 
@@ -49,7 +61,7 @@ class AsyncCompileMode:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        active_mode.set(None)
         # Finalize any outstanding compiles
         for future in as_completed(self.raw_futures):
-            self.future_kernels[future._key].result()
-        active_mode.set(None)
+            self.future_kernels[future._key].result(self.ignore_errors)

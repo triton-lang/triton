@@ -433,8 +433,8 @@ public:
   }
 
   // Remove a dimension of size 1 from the layout.
-  [[nodiscard]] LinearLayout unsqueezeIn(StringAttr dim) const;
-  [[nodiscard]] LinearLayout unsqueezeOut(StringAttr dim) const;
+  [[nodiscard]] LinearLayout squeezeIns(StringAttr dim) const;
+  [[nodiscard]] LinearLayout squeezeOuts(StringAttr dim) const;
 
   const BasesT &getBases() const { return bases; }
 
@@ -459,6 +459,15 @@ public:
   auto getOutDimSizes() const { return llvm::make_second_range(outDims); }
 
   // Relevant for reshaping
+
+  SmallVector<std::pair<StringAttr, int32_t>> getInDims() const {
+    SmallVector<std::pair<StringAttr, int32_t>> inDims;
+    inDims.reserve(bases.size());
+    for (auto [inDim, inDimBases] : bases) {
+      inDims.push_back({inDim, getInDimSize(inDim)});
+    }
+    return inDims;
+  }
   SmallVector<std::pair<StringAttr, int32_t>> getOutDims() const {
     return to_vector(outDims);
   }
@@ -558,6 +567,25 @@ public:
     return reshapeOuts({{*getOutDimNames().begin(), getTotalOutDimSize()}});
   }
 
+  // Resizes the dimension to one that is smallre or equal to the given size.
+  // These operations are similar to `sublayout` but at a dimension level.
+  [[nodiscard]] LinearLayout resizeInDim(StringAttr inDim,
+                                         int32_t newSize) const;
+  [[nodiscard]] LinearLayout resizeOutDim(StringAttr outDim,
+                                          int32_t newSize) const;
+
+  [[nodiscard]] LinearLayout renameInDim(StringAttr oldDim,
+                                         StringAttr newDim) const {
+    auto bases = getBases();
+    auto it = bases.find(oldDim);
+    assert(it != bases.end());
+    auto value = std::move(it->second);
+    bases.erase(it);
+    bases.insert({newDim, std::move(value)});
+    return LinearLayout(std::move(bases), getOutDims(),
+                        /*requireSurjective=*/isSurjective());
+  }
+
   // Concatenates two layouts by their in (resp. out) dimensions. The layouts
   // must have the same output (resp. input) dimensions and sizes and different
   // input (resp. output) dimensions. The input dimensions of this layout are
@@ -565,9 +593,6 @@ public:
   // `sublayout`, which slices a layout from a larger one.
   [[nodiscard]] LinearLayout concatIns(const LinearLayout &other) const;
   [[nodiscard]] LinearLayout concatOuts(const LinearLayout &other) const;
-
-  // Remove all the bases that equal to 0 for the given input dimension.
-  [[nodiscard]] LinearLayout unsqueezeIns(StringAttr dim) const;
 
   // Computes the direct sum of two layouts.
   // https://en.wikipedia.org/wiki/Direct_sum#Direct_sum_of_matrices
@@ -599,11 +624,11 @@ public:
   //
   //    - identity1D(4, "i", "o") * zeros1D(2, "i", "o") => L(x) = x % 4
   //      for x in [0,8).
-  //      The output matrix is [[1, 0, 0], [0, 1, 0], [0, 0, 0]]
+  //      The output matrix is [[1, 0, 0], [0, 1, 0]]
   //
   //    - zeros1D(2, "i", "o") * identity1D(4, "i", "o") => L(x) = x / 2
   //      for x in [0,8).
-  //      The output matrix is [[0, 0, 0], [0, 1, 0], [0, 0, 1]]
+  //      The output matrix is [[0, 1, 0], [0, 0, 1]]
 
   //    - identity1D(4, "i", "o1") * identity1D(8, "i", "o2") =>
   //      L(x) = (x % 4, x / 4) for x in [0,32).
@@ -868,6 +893,8 @@ inline std::ostream &operator<<(std::ostream &os, const ColumnAction &action) {
   os << action.toString();
   return os;
 }
+
+std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout);
 
 } // namespace mlir::triton
 

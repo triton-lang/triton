@@ -2,6 +2,7 @@
 #define TRITONGPU_OP_INTERFACES
 
 include "mlir/IR/OpBase.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
 
 def UpcastFpOpInterface : OpInterface<"UpcastFpOpInterface"> {
     let description = [{
@@ -25,5 +26,20 @@ def UpcastFpOpInterface : OpInterface<"UpcastFpOpInterface"> {
         >
     ];
 }
+
+def VerifyMemDescLayoutsTrait : NativeOpTrait<"VerifyMemDescLayoutsTrait">;
+
+// A trait equivalent to InferTypeOpAdaptor, but that checks for structural
+// equivalence of the layouts of the result rather than just layout equality.
+def InferMemDescTypeOpWithLayoutEquivalence : InferTypeOpAdaptorBase<[{
+  static bool isCompatibleReturnTypes(TypeRange lhs, TypeRange rhs) {
+    if (lhs.size() != rhs.size())
+      return false;
+    return llvm::all_of(llvm::zip(lhs, rhs), [](auto tup) {
+      auto [lhs, rhs] = tup;
+      return succeeded(OpTrait::impl::verifyEquivalentMemDescType(lhs, rhs));
+    });
+  }
+}]>;
 
 #endif // TRITONGPU_OP_INTERFACES

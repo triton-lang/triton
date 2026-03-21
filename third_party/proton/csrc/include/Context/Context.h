@@ -43,6 +43,8 @@ public:
 
   void setState(std::optional<Context> state) { ContextSource::state = state; }
 
+  virtual void clear() { ContextSource::state = std::nullopt; }
+
   virtual size_t getDepth() = 0;
 
 protected:
@@ -142,6 +144,7 @@ public:
       const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
       const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
       const std::string &metadataPath) = 0;
+  virtual void destroyFunctionMetadata(uint64_t functionId) = 0;
   virtual void enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
                                    uint8_t *buffer, size_t size) = 0;
   virtual void exitInstrumentedOp(uint64_t streamId, uint64_t functionId,

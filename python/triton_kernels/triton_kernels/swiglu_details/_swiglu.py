@@ -5,9 +5,10 @@ import triton.language as tl
 
 @triton.jit
 def clip(x, limit, clip_lower: tl.constexpr):
-    res = tl.minimum(x, limit)
     if clip_lower:
-        res = tl.maximum(-limit, res)
+        res = tl.clamp(x, -limit, limit)
+    else:
+        res = tl.minimum(x, limit)
     return res
 
 
@@ -35,6 +36,23 @@ def swiglu_launch_metadata(grid, kernel, args):
 
 
 @triton.jit
+def exp_ftz(x):
+    if tl.target_info.is_cuda():
+        log2_e: tl.constexpr = 1.4426950408889634
+        x *= log2_e
+        return tl.inline_asm_elementwise(
+            "ex2.approx.ftz.f32 $0, $1;",
+            "=r, r",
+            [x],
+            dtype=tl.float32,
+            is_pure=True,
+            pack=1,
+        )
+    else:
+        return tl.exp(x)
+
+
+@triton.jit
 def compute_swiglu(gelu, linear, scale, alpha, limit):
     gelu = gelu.to(tl.float32) * scale
     if limit is not None:
@@ -42,7 +60,7 @@ def compute_swiglu(gelu, linear, scale, alpha, limit):
     linear = linear.to(tl.float32) * scale
     if limit is not None:
         linear = clip(linear, limit, clip_lower=True)
-    s = gelu / (1 + tl.exp(-alpha * gelu))
+    s = gelu / (1 + exp_ftz(-alpha * gelu))
     return tl.fma(s, linear, s)  # (s * (linear + 1))
 
 

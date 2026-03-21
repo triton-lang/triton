@@ -83,16 +83,13 @@ struct DotOpMFMAConversionHelper {
     assert(abid >= 0 && abid <= 15);
     assert(blgp >= 0 && blgp <= 7);
 
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value zeroFlag = b.i32_val(0);
-    Value cbszFlag = cbsz != 0 ? b.i32_val(cbsz) : zeroFlag;
-    Value abidFlag = abid != 0 ? b.i32_val(abid) : zeroFlag;
-    Value blgpFlag = blgp != 0 ? b.i32_val(blgp) : zeroFlag;
-
     auto resType = valC.getType();
     OperationState loweredOp(loc, intrinsicName);
     loweredOp.addTypes(resType);
-    loweredOp.addOperands({valA, valB, valC, cbszFlag, abidFlag, blgpFlag});
+    loweredOp.addOperands({valA, valB, valC});
+    loweredOp.addAttribute("cbsz", rewriter.getI32IntegerAttr(cbsz));
+    loweredOp.addAttribute("abid", rewriter.getI32IntegerAttr(abid));
+    loweredOp.addAttribute("blgp", rewriter.getI32IntegerAttr(blgp));
     return rewriter.create(loweredOp)->getResult(0);
   }
 
@@ -211,8 +208,8 @@ struct DotOpMFMAConversionHelper {
         } else {
           auto multiplierAttr =
               rewriter.getFloatAttr(dstElemTy, 1.0 / duplicationRate);
-          auto multiplierVal =
-              rewriter.create<LLVM::ConstantOp>(loc, dstElemTy, multiplierAttr);
+          auto multiplierVal = LLVM::ConstantOp::create(
+              rewriter, loc, dstElemTy, multiplierAttr);
           accElem = tb.fmul(accElem, multiplierVal);
         }
       }
@@ -261,12 +258,26 @@ struct DotOpMFMAConversionHelper {
     bool allowXF32 =
         op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
     StringRef intrinsicName;
+    // When mfmaLayout is transposed, operands will be swapped later (op1, op2
+    // swap). For asymmetric types (e.g., bf8_fp8), we need to select the
+    // intrinsic with swapped types so the hardware interprets the data
+    // correctly after the swap.
+    Type intrinsicElemTyA = elemTyA;
+    Type intrinsicElemTyB = elemTyB;
+    if (mfmaLayout.getIsTransposed() && elemTyA != elemTyB) {
+      std::swap(intrinsicElemTyA, intrinsicElemTyB);
+    }
     FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic = MfmaIntrinsic::get(
-        op.getLoc(), mfmaVersion, mDim, nDim, kDim, elemTyA, elemTyB,
-        /*withScale=*/false, allowXF32);
+        op.getLoc(), mfmaVersion, mDim, nDim, kDim, intrinsicElemTyA,
+        intrinsicElemTyB, /*withScale=*/false, allowXF32);
     if (failed(maybeMfmaIntrinsic))
-      return op.emitError(
-          "no matching matrix core intrinsic due to unsupported element type");
+      return op.emitError("no matching matrix core intrinsic ")
+             << "for mfma version " << mfmaVersion
+             << " with instruction shape [" << mDim << ", " << nDim << ", "
+             << kDim << "] and element types A=" << elemTyA << ", B=" << elemTyB
+             << ". Check whether the mfma version,"
+             << " instruction shape, and data types "
+             << "are supported on the current AMD GPU architecture.";
 
     unsigned kBase = maybeMfmaIntrinsic->kBase;
 
@@ -318,7 +329,7 @@ struct DotOpMFMAConversionHelper {
         aTensorTy.getElementType(), allowXF32, preserveBF16);
     auto operandB = getValuesFromDotOperandLayoutStruct(
         loadedB, numRepB, numRepN, numRepKB, kWidth, kBase,
-        aTensorTy.getElementType(), allowXF32, preserveBF16);
+        bTensorTy.getElementType(), allowXF32, preserveBF16);
 
     int warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
     int elemsPerVec = mDim * nDim / warpSize;
@@ -529,7 +540,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
                              Value valC, Type elemTypeA, Type elemTypeB) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto resType = valC.getType();
-    Value zeroFlag = b.i32_val(0);
     OperationState loweredOp(loc, intrinsicName);
     int32_t cbsz = getMfmaF8F6F4MatrixFormat(elemTypeA);
     int32_t blgp = getMfmaF8F6F4MatrixFormat(elemTypeB);
@@ -537,8 +547,12 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     loweredOp.addTypes(resType);
     // If both scales are constant 0, the LLVM backend will use V_MFMA_*_F8F6F4
     // instructions instead of V_MFMA_SCALE_*_F8F6F4 to reduce memory access.
-    loweredOp.addOperands({valA, valB, valC, b.i32_val(cbsz), b.i32_val(blgp),
-                           zeroFlag, zeroFlag, zeroFlag, zeroFlag});
+    Value zeroScale = b.i32_val(0);
+    loweredOp.addOperands({valA, valB, valC, zeroScale, zeroScale});
+    loweredOp.addAttribute("cbsz", rewriter.getI32IntegerAttr(cbsz));
+    loweredOp.addAttribute("blgp", rewriter.getI32IntegerAttr(blgp));
+    loweredOp.addAttribute("opselA", rewriter.getI32IntegerAttr(0));
+    loweredOp.addAttribute("opselB", rewriter.getI32IntegerAttr(0));
     return rewriter.create(loweredOp)->getResult(0);
   }
 
@@ -548,15 +562,16 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
                              int opSelB) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto resType = valC.getType();
-    Value valOpSelA = b.i32_val(opSelA);
-    Value valOpSelB = b.i32_val(opSelB);
     OperationState loweredOp(loc, intrinsicName);
     int32_t cbsz = getMfmaF8F6F4MatrixFormat(elemTypeA);
     int32_t blgp = getMfmaF8F6F4MatrixFormat(elemTypeB);
     assert((cbsz != -1) && (blgp != -1));
     loweredOp.addTypes(resType);
-    loweredOp.addOperands({valA, valB, valC, b.i32_val(cbsz), b.i32_val(blgp),
-                           valOpSelA, valScaleA, valOpSelB, valScaleB});
+    loweredOp.addOperands({valA, valB, valC, valScaleA, valScaleB});
+    loweredOp.addAttribute("cbsz", rewriter.getI32IntegerAttr(cbsz));
+    loweredOp.addAttribute("blgp", rewriter.getI32IntegerAttr(blgp));
+    loweredOp.addAttribute("opselA", rewriter.getI32IntegerAttr(opSelA));
+    loweredOp.addAttribute("opselB", rewriter.getI32IntegerAttr(opSelB));
     return rewriter.create(loweredOp)->getResult(0);
   }
 
@@ -614,8 +629,13 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
                            scaleDotElemTypeToMLIRType(ctx, bElemType),
                            /*withScale=*/true, allowXF32);
     if (failed(maybeMfmaIntrinsic))
-      return op.emitError(
-          "no matching matrix core intrinsic due to unsupported element type");
+      return op.emitError("no matching matrix core intrinsic ")
+             << "for mfma version " << mfmaVersion
+             << " with instruction shape [" << mDim << ", " << nDim << ", "
+             << kDim << "] and element types A=" << elemTyA << ", B=" << elemTyB
+             << ". Check whether the mfma version,"
+             << " instruction shape, and data types "
+             << "are supported on the current AMD GPU architecture.";
 
     StringRef intrinsicName = maybeMfmaIntrinsic->name;
     unsigned kBase = maybeMfmaIntrinsic->kBase;
@@ -734,9 +754,9 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
           for (int n = 0; n < numRepN; ++n) {
             // Insert pingpong cluster barrier when needed.
             if (is2Step && currIter++ == halfPoint) {
-              rewriter.create<ROCDL::SchedBarrier>(loc, 0);
-              rewriter.create<ROCDL::SBarrierOp>(loc);
-              rewriter.create<ROCDL::SchedBarrier>(loc, 0);
+              ROCDL::SchedBarrier::create(rewriter, loc, 0);
+              ROCDL::SBarrierOp::create(rewriter, loc);
+              ROCDL::SchedBarrier::create(rewriter, loc, 0);
             }
             Value acc = tb.undef(vecTy);
             for (unsigned v = 0; v < elemsPerVec; ++v) {

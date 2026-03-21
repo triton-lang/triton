@@ -33,6 +33,22 @@
 #include "triton/Dialect/Triton/IR/Traits.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+namespace mlir::triton::amd {
+struct L2Cache : public SideEffects::Resource::Base<L2Cache> {
+  StringRef getName() const final { return "<AMDGPU::L2Cache>"; }
+};
+} // namespace mlir::triton::amd
+
+namespace mlir::triton::amdgpu {
+/// Returns the number of dwords for a TDM tensor descriptor based on rank.
+/// 2D tensors: group0 (4) + group1 (8) = 12 dwords
+/// 3D-5D tensors: group0 (4) + group1 (8) + group2 (4) + group3 (4) = 20 dwords
+inline int getTensorDescNumDwords(triton::TensorDescType type) {
+  auto shape = type.getBlockType().getShape();
+  return (shape.size() > 2) ? (4 + 8 + 4 + 4) : (4 + 8);
+}
+} // namespace mlir::triton::amdgpu
+
 // clang-format off
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h.inc"
 #include "amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUEnums.h.inc"
@@ -41,6 +57,7 @@
 #define GET_ATTRDEF_CLASSES
 #include "amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUAttrDefs.h.inc"
 
+#include "amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUOpInterfaces.h.inc"
 #define GET_OP_CLASSES
 #include "amd/include/Dialect/TritonAMDGPU/IR/Ops.h.inc"
 
