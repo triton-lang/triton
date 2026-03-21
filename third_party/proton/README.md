@@ -252,6 +252,26 @@ proton --instrument=[instrumentation pass] script.py
 When profiling in the command line mode, the `proton.start` and `proton.finalize` functions are automatically called before and after the script execution. Any `proton.start` and `proton.finalize` functions in the script are ignored. Also, in the command line mode, only a single *session* is supported.
 Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivate(session_id=0)` is valid.
 
+### CUPTI memory growth reproduction
+
+The tutorial [`tutorials/cupti_memory_growth.py`](tutorials/cupti_memory_growth.py) compares process RSS across CUPTI library variants while running the same Triton + Proton workload. It is useful for isolating host-memory growth that appears only with a specific CUPTI build.
+
+Run the packaged generic and Blackwell CUPTI variants back-to-back:
+
+```bash
+python third_party/proton/tutorials/cupti_memory_growth.py \
+  --output-dir /tmp/proton-cupti-compare \
+  --iterations 200 \
+  --warmup 5 \
+  --phase-every 1 \
+  --sample-every 20 \
+  --lifecycle step \
+  --kernels-per-step 32 \
+  --clear-completed-phases
+```
+
+The script writes one `summary_<label>.json` per CUPTI variant, plus `comparison.json`. Compare `rss_delta_bytes` and `rss_max_bytes` between the `generic` and `blackwell` runs. If the issue is CUPTI-specific, one variant should show higher host RSS growth while `nvidia_smi_gpu_delta_mb` stays near zero in both runs.
+
 ### Visualizing the profile data
 
 By default, proton profiles are in the *json* format and can be read by *Hatchet*. The following command visualizes the profile data on terminal.
