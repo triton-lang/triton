@@ -256,9 +256,13 @@ Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivat
 
 The tutorial [`tutorials/cupti_memory_growth.py`](tutorials/cupti_memory_growth.py) compares process RSS across CUPTI library variants while running the same Triton + Proton workload. It is useful for isolating host-memory growth that appears only with a specific CUPTI build.
 
+Recommended workflow:
+
+1. Prepare the target GPU machine.
 If you are iterating on the script from a laptop, do that there first, then sync either the Triton checkout or just `third_party/proton/tutorials/cupti_memory_growth.py` to the target GPU machine.
 
-On the target GPU machine, if you have a Triton checkout:
+2. Run the compare flow on the target GPU machine.
+If you have a Triton checkout there:
 
 ```bash
 cd "$HOME/code/triton"
@@ -287,7 +291,21 @@ python /tmp/cupti_memory_growth.py \
   --clear-completed-phases
 ```
 
-The script writes one `summary_<label>.json` per CUPTI variant, plus `comparison.json`. Compare `rss_delta_bytes` and `rss_max_bytes` between the `generic` and `blackwell` runs. If the issue is CUPTI-specific, one variant should show higher host RSS growth while `nvidia_smi_gpu_delta_mb` stays near zero in both runs.
+3. Inspect the generated artifacts.
+The script writes one `summary_<label>.json` per CUPTI variant, plus `comparison.json`, under `--output-dir`.
+
+- `comparison.json` highlights the top-level deltas between the `generic` and `blackwell` runs.
+- `summary_generic.json` and `summary_blackwell.json` contain:
+  - `samples.rss_delta_bytes` and `samples.rss_max_bytes`
+  - `samples.nvidia_smi_gpu_delta_mb`
+  - `selected_cupti`
+  - `loaded_cupti_libs_after_start`
+  - `env`
+
+If the issue is CUPTI-specific, one variant should show higher host RSS growth while `nvidia_smi_gpu_delta_mb` stays near zero in both runs.
+
+4. Verify that the machine actually switched CUPTI variants.
+If both runs report the same `loaded_cupti_libs_after_start` value, the target machine did not switch to a different `libcupti.so`, so the comparison is not valid yet. In that case, inspect `selected_cupti`, `loaded_cupti_libs_after_start`, and `env` in both summary files before drawing conclusions from the RSS numbers.
 
 ### Visualizing the profile data
 

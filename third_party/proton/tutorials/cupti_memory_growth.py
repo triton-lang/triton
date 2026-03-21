@@ -221,6 +221,27 @@ def _query_nvidia_smi_process_memory_mb(pid: int) -> int | None:
     return 0
 
 
+def _read_loaded_shared_objects(needle: str) -> list[str]:
+    maps_path = Path("/proc/self/maps")
+    if not maps_path.exists():
+        return []
+
+    loaded: list[str] = []
+    seen: set[str] = set()
+    for line in maps_path.read_text().splitlines():
+        if needle not in line:
+            continue
+        parts = line.split()
+        if len(parts) < 6:
+            continue
+        path = parts[-1]
+        if path in seen:
+            continue
+        seen.add(path)
+        loaded.append(path)
+    return loaded
+
+
 def _load_cupti_info(cupti_dir: Path) -> dict[str, Any]:
     lib_path = cupti_dir / "libcupti.so"
     info: dict[str, Any] = {
@@ -387,17 +408,23 @@ def _run_single(args: argparse.Namespace) -> int:
         "triton_version_file": str(Path(triton.__file__).resolve()),
         "triton_target_backend": triton.runtime.driver.active.get_current_target().backend,
         "triton_target_arch": triton.runtime.driver.active.get_current_target().arch,
+        "triton_knobs": {
+            "cupti_lib_dir": triton.knobs.proton.cupti_lib_dir,
+            "cupti_lib_blackwell_dir": triton.knobs.proton.cupti_lib_blackwell_dir,
+        },
         "selected_cupti": cupti_info,
         "env": {
             "TRITON_CUPTI_LIB_PATH": os.environ.get("TRITON_CUPTI_LIB_PATH"),
             "TRITON_CUPTI_LIB_BLACKWELL_PATH": os.environ.get("TRITON_CUPTI_LIB_BLACKWELL_PATH"),
             "TRITON_PROFILE_BUFFER_SIZE": os.environ.get("TRITON_PROFILE_BUFFER_SIZE"),
         },
+        "loaded_cupti_libs_before_start": _read_loaded_shared_objects("libcupti.so"),
     }
 
     samples.append(_collect_sample(iteration=None, stage="pre_start", phase=current_phase, torch=torch))
     session = proton.start(str(profile_base), backend="cupti", context="shadow", mode=profile_mode)
     samples.append(_collect_sample(iteration=None, stage="post_start", phase=current_phase, torch=torch))
+    run_metadata["loaded_cupti_libs_after_start"] = _read_loaded_shared_objects("libcupti.so")
     if args.lifecycle == "step":
         proton.deactivate(session=session)
         samples.append(
@@ -440,6 +467,7 @@ def _run_single(args: argparse.Namespace) -> int:
 
     proton.finalize(output_format=args.data_format)
     samples.append(_collect_sample(iteration=args.iterations, stage="post_finalize", phase=current_phase, torch=torch))
+    run_metadata["loaded_cupti_libs_after_finalize"] = _read_loaded_shared_objects("libcupti.so")
 
     sample_path = output_dir / f"samples_{args.label}.csv"
     summary_path = output_dir / f"summary_{args.label}.json"
@@ -502,6 +530,20 @@ def _compare_summaries(summaries: list[dict[str, Any]]) -> dict[str, Any]:
         if base_samples["nvidia_smi_gpu_delta_mb"] is None or other_samples["nvidia_smi_gpu_delta_mb"] is None
         else other_samples["nvidia_smi_gpu_delta_mb"] - base_samples["nvidia_smi_gpu_delta_mb"],
     }
+    base_loaded = base.get("loaded_cupti_libs_after_start", [])
+    other_loaded = other.get("loaded_cupti_libs_after_start", [])
+    comparison["loaded_cupti_libs_after_start"] = {
+        "base_label": base["label"],
+        "other_label": other["label"],
+        "base": base_loaded,
+        "other": other_loaded,
+        "same": sorted(base_loaded) == sorted(other_loaded),
+    }
+    if comparison["loaded_cupti_libs_after_start"]["same"]:
+        comparison["warning"] = (
+            "Both runs resolved the same loaded libcupti.so path(s). "
+            "Verify the target machine actually switched CUPTI variants."
+        )
     return comparison
 
 
