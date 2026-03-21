@@ -261,6 +261,15 @@ Recommended workflow:
 1. Prepare the target GPU machine.
 If you are iterating on the script from a laptop, do that there first, then sync either the Triton checkout or just `third_party/proton/tutorials/cupti_memory_growth.py` to the target GPU machine.
 
+If `"$HOME/code/triton"` does not exist on the target GPU machine and you want the
+repo-relative workflow, create a checkout first:
+
+```bash
+mkdir -p "$HOME/code"
+git clone https://github.com/triton-lang/triton.git "$HOME/code/triton"
+cd "$HOME/code/triton"
+```
+
 2. Run the compare flow on the target GPU machine.
 If you have a Triton checkout there:
 
