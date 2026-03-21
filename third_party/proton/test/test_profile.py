@@ -871,6 +871,78 @@ def test_trace(tmp_path: pathlib.Path, device: str):
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
 
 
+@pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Only CUDA/HIP backend supports multi-stream profiling")
+@pytest.mark.parametrize("profile_kind,suffix", [("tree", ".hatchet"), ("trace", ".chrome_trace")], ids=["tree", "trace"])
+def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, device: str):
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    def find_frame_by_name(node, name: str):
+        queue = [node]
+        while queue:
+            cur = queue.pop(0)
+            if cur["frame"]["name"] == name:
+                return cur
+            queue.extend(cur["children"])
+        return None
+
+    def has_positive_kernel_metric(node):
+        queue = [node]
+        while queue:
+            cur = queue.pop(0)
+            metrics = cur["metrics"]
+            if cur["frame"]["name"] == "foo" and (
+                metrics.get("time (ns)", 0) > 0 or int(metrics.get("count", 0)) > 0
+            ):
+                return True
+            queue.extend(cur["children"])
+        return False
+
+    temp_file = tmp_path / f"test_multi_stream{suffix}"
+    device_obj = torch.device(device)
+    x = torch.ones((1024, ), device=device_obj, dtype=torch.float32)
+    outputs = [torch.zeros_like(x) for _ in range(2)]
+    streams = [torch.cuda.Stream(device=device_obj) for _ in range(2)]
+    scope_names = [f"stream_scope_{idx}" for idx in range(len(streams))]
+
+    foo[(1, )](x, outputs[0], x.numel(), num_warps=4)
+    torch.cuda.synchronize(device_obj)
+
+    start_kwargs = {"data": "trace"} if profile_kind == "trace" else {}
+    proton.start(str(temp_file.with_suffix("")), **start_kwargs)
+
+    for scope_name, stream, output in zip(scope_names, streams, outputs):
+        with torch.cuda.stream(stream):
+            with proton.scope(scope_name):
+                foo[(1, )](x, output, x.numel(), num_warps=4)
+
+    for stream in streams:
+        stream.synchronize()
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    if profile_kind == "trace":
+        assert "traceEvents" in data
+        kernel_events = [event for event in data["traceEvents"] if event["name"] == "foo"]
+        assert len(kernel_events) == len(scope_names)
+        assert len({event["tid"] for event in kernel_events}) == len(scope_names)
+        for scope_name in scope_names:
+            matching_events = [event for event in kernel_events if scope_name in event["args"]["call_stack"]]
+            assert len(matching_events) == 1
+    else:
+        root = data[0]
+        for scope_name in scope_names:
+            scope_frame = find_frame_by_name(root, scope_name)
+            assert scope_frame is not None
+            assert len(scope_frame["children"]) > 0
+            assert has_positive_kernel_metric(scope_frame)
+
+
 def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_scope_threads.hatchet"
     proton.start(str(temp_file.with_suffix("")))
