@@ -823,15 +823,6 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
             queue.extend(cur["children"])
         return None
 
-    def get_all_names(node):
-        names = set()
-        queue = [node]
-        while queue:
-            cur = queue.pop(0)
-            names.add(cur["frame"]["name"])
-            queue.extend(cur["children"])
-        return names
-
     def get_nodes_with_metric(node, metric_name: str):
         matches = []
         queue = [node]
