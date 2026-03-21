@@ -497,6 +497,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
             contexts.push_back(name);
             contexts.push_back(std::string(GraphState::metricTag));
           }
+        } else {
+          contexts.push_back(name);
         }
         auto staticEntry =
             data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
