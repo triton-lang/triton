@@ -6,6 +6,7 @@ hip.hip.hipInit(0)
 
 import re
 import math
+import itertools
 import pytest
 import torch
 from itertools import product
@@ -13,11 +14,11 @@ from itertools import product
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import is_hip_gfx1250, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, dtypes_with_bfloat16, uint_dtypes
+from triton._internal_testing import is_hip_gfx1250, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, float_dtypes, int_dtypes, uint_dtypes
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
-from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout
+from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout, PartitionedSharedLayout, _valid_dtype_combinations
 
 
 @gluon.jit
@@ -326,7 +327,7 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
                                 stride_bk, stride_bn,  #
                                 stride_cm, stride_cn,  #
                                 BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
-                                NUM_BUFFERS: ttgl.constexpr, USE_TDM: ttgl.constexpr):
+                                NUM_BUFFERS: ttgl.constexpr, USE_TDM: ttgl.constexpr, IS_B_K_CONTIG: ttgl.constexpr):
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
@@ -334,11 +335,19 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     ttgl.static_assert(NUM_BUFFERS >= 2, "NUM_BUFFERS must be at least 2")
 
     BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+    if IS_B_K_CONTIG:
+        BLOCKED_LAYOUT_B: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+    else:
+        BLOCKED_LAYOUT_B: ttgl.constexpr = ttgl.BlockedLayout([8, 1], [8, 4], [1, 4], [0, 1])
     WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, 32])
     SHARED_LAYOUT_A: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_K, 8]], [BLOCK_M, BLOCK_K],
                                                                                 [1, 0])
-    SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_K, BLOCK_N],
-                                                                                [1, 0])
+    if IS_B_K_CONTIG:
+        SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_K, BLOCK_N],
+                                                                                    [1, 0])
+    else:
+        SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_K, 8]], [BLOCK_K, BLOCK_N],
+                                                                                    [0, 1])
     OPERAND_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(0, WMMA_LAYOUT, 8)
     OPERAND_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(1, WMMA_LAYOUT, 8)
 
@@ -366,8 +375,8 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     offs_am = (pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))) % M
     a_ptrs = a_ptr + offs_am[:, None] * stride_am + offs_ak[None, :] * stride_ak
 
-    offs_bk = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
-    offs_bn = (pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))) % N
+    offs_bk = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT_B))
+    offs_bn = (pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT_B))) % N
     b_ptrs = b_ptr + offs_bk[:, None] * stride_bk + offs_bn[None, :] * stride_bn
 
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape, layout=a_desc.layout)
@@ -448,23 +457,27 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(m, n, k) for (m, n) in [(32, 32), (64, 64)] \
                                                                for k in [32, 64]])
 @pytest.mark.parametrize("NUM_BUFFERS", [2, 4])
+@pytest.mark.parametrize("IS_B_K_CONTIG", [True, False])
 @pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "TDM"])
-def test_compile_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, ASYNC_LOAD_TYPE):
+def test_compile_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, IS_B_K_CONTIG, ASYNC_LOAD_TYPE):
     # Inner strides need to be constexpr (1) to get contiguity. Note the compiler frontend does the same for normal dispatches
     signature = {
         "a_ptr": "*fp16", "b_ptr": "*fp16", "c_ptr": "*fp32",  #
         "M": "i32", "N": "i32", "K": "i32",  #
         "stride_am": "i32", "stride_ak": "constexpr",  #
-        "stride_bk": "i32", "stride_bn": "constexpr",  #
+        "stride_bk": "constexpr", "stride_bn": "constexpr",  #
         "stride_cm": "i32", "stride_cn": "constexpr",  #
         "BLOCK_M": "constexpr", "BLOCK_N": "constexpr", "BLOCK_K": "constexpr",  #
-        "NUM_BUFFERS": "constexpr", "USE_TDM": "constexpr"
+        "NUM_BUFFERS": "constexpr", "USE_TDM": "constexpr", "IS_B_K_CONTIG": "constexpr"
     }
 
     constexprs = {
-        "stride_ak": 1, "stride_bn": 1, "stride_cn": 1, "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "BLOCK_K": BLOCK_K,
-        "NUM_BUFFERS": NUM_BUFFERS, "USE_TDM": ASYNC_LOAD_TYPE == "TDM"
+        "stride_ak": 1, "stride_cn": 1, "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "BLOCK_K": BLOCK_K, "NUM_BUFFERS":
+        NUM_BUFFERS, "USE_TDM": ASYNC_LOAD_TYPE == "TDM", "IS_B_K_CONTIG": IS_B_K_CONTIG
     }
+    constexprs["stride_bn"] = BLOCK_N if not IS_B_K_CONTIG else 1
+    constexprs["stride_bk"] = BLOCK_K if IS_B_K_CONTIG else 1
+
     fn = gemm_async_pipelined_kernel
 
     # AsyncCopy requires >= 32 bits per lane so we have to pass divisibility for arguments used in pointer arithmetic
@@ -484,20 +497,21 @@ def test_compile_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, AS
         assert len(re.findall("tensor_load_to_lds", amdgcn)) == NUM_BUFFERS * 2
     else:
         copy_instr_for_A = BLOCK_M // 4 // 4
-        copy_isntr_for_B = BLOCK_K // 4 // 4
+        copy_isntr_for_B = (BLOCK_K if IS_B_K_CONTIG else BLOCK_N) // 4 // 4
         copy_instr_per_iter = copy_instr_for_A + copy_isntr_for_B
         for cnt in range(NUM_BUFFERS - 1, -1, -1):
             assert re.search(f"s_wait_asynccnt 0x{(cnt * copy_instr_per_iter):x}", amdgcn)
         # Each instruction loads 4 rows per warp and we have 4 warps (see BlockedLayout in test)
-        assert len(re.findall("global_load_async_to_lds", amdgcn)) == NUM_BUFFERS * copy_instr_per_iter
+        assert len(re.findall("global_load_async_to_lds", amdgcn)) >= NUM_BUFFERS * copy_instr_per_iter
 
 
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(m, n, k) for (m, n) in [(32, 32), (64, 64)] \
                                                                for k in [32, 64]])
 @pytest.mark.parametrize("NUM_BUFFERS", [2, 4])
 @pytest.mark.parametrize("M,N,K", [(256, 256, 512), (240, 240, 496), (250, 250, 510)])
+@pytest.mark.parametrize("IS_B_K_CONTIG", [True, False])
 @pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "TDM"])
-def test_runtime_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, M, N, K, ASYNC_LOAD_TYPE):
+def test_runtime_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, M, N, K, IS_B_K_CONTIG, ASYNC_LOAD_TYPE):
     if triton.cdiv(K, BLOCK_K) < NUM_BUFFERS:
         pytest.skip("Skip tests where K/BLOCK_K < NUM_BUFFERS")
 
@@ -509,13 +523,15 @@ def test_runtime_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, M,
     a = torch.randn((M, K), dtype=torch.float16)
     b = torch.randn((K, N), dtype=torch.float16)
     c = torch.zeros((M, N), dtype=torch.float32)
-    stride_am, stride_ak = a.stride(0), a.stride(1)
-    stride_bk, stride_bn = b.stride(0), b.stride(1)
-    stride_cm, stride_cn = c.stride(0), c.stride(1)
 
     a_device = a.cuda()
-    b_device = b.cuda()
+    b_device = b.cuda() if IS_B_K_CONTIG else b.data.T.contiguous().T.cuda()
     c_device = c.cuda()
+
+    stride_am, stride_ak = a_device.stride(0), a_device.stride(1)
+    stride_bk, stride_bn = b_device.stride(0), b_device.stride(1)
+    stride_cm, stride_cn = c_device.stride(0), c_device.stride(1)
+
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
     gemm_async_pipelined_kernel[grid](
         a_device, b_device, c_device,  #
@@ -524,7 +540,7 @@ def test_runtime_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, M,
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
-        NUM_BUFFERS=NUM_BUFFERS, USE_TDM=ASYNC_LOAD_TYPE == "TDM")
+        NUM_BUFFERS=NUM_BUFFERS, USE_TDM=ASYNC_LOAD_TYPE == "TDM", IS_B_K_CONTIG=IS_B_K_CONTIG)
 
     c_triton = c_device.cpu()
     c_torch = a.to(torch.float32) @ b.to(torch.float32)
@@ -722,11 +738,15 @@ def create_mxfp_operand(operand: int, m: int, n: int, dtype: str):
     return v, v_ref
 
 
-def create_mxfp_scale(operand: int, m: int, n: int):
+def create_mxfp_scale(operand: int, m: int, n: int, scale_dtype: str, scale_factor: int):
     pack_dim = 1 if operand == 0 else 0
-    size = (m, n // 32) if pack_dim == 1 else (m // 32, n)
-    scale = MXScaleTensor(size=tuple(size)).random(1 / 32, 32)
-    scale_ref = scale.to(torch.float32).repeat_interleave(32, dim=pack_dim)
+    size = (m, n // scale_factor) if pack_dim == 1 else (m // scale_factor, n)
+    if scale_dtype == "e8m0":
+        scale = MXScaleTensor(size=tuple(size)).random(low=1.0, high=scale_factor)
+    else:
+        assert scale_dtype == "e4m3"
+        scale = torch.randint(20, 40, size, dtype=torch.uint8).view(torch.float8_e4m3fn)
+    scale_ref = scale.to(torch.float32).repeat_interleave(scale_factor, dim=pack_dim)
     return scale.data, scale_ref
 
 
@@ -742,12 +762,16 @@ def get_test_mxfp_variants():
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
-def test_amd_wmma_scaled(M, N, K, a_type, b_type):
+@pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
+@pytest.mark.parametrize("scale_factor", [16, 32])
+@pytest.mark.parametrize("with_a_scale, with_b_scale", itertools.product([True, False], repeat=2))
+def test_amd_wmma_scaled(M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor, with_a_scale, with_b_scale):
 
     @gluon.jit
     def kernel(c_ptr, a_ptr, a_scale_ptr, b_ptr, b_scale_ptr,  #
                a_type: ttgl.constexpr, b_type: ttgl.constexpr,  #
-               BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
+               BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
+               SCALE_FACTOR: ttgl.constexpr):
         DIV_FACTOR_A: ttgl.constexpr = 2 if a_type == "e2m1" else 1
         DIV_FACTOR_B: ttgl.constexpr = 2 if b_type == "e2m1" else 1
 
@@ -759,8 +783,10 @@ def test_amd_wmma_scaled(M, N, K, a_type, b_type):
             0, wmma_layout_packed if a_type == "e2m1" else wmma_layout, k_width=16)
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(  #
             1, wmma_layout_packed if b_type == "e2m1" else wmma_layout, k_width=16)
-        a_scale_layout: ttgl.constexpr = get_wmma_scale_layout(a_layout, [BLOCK_M, BLOCK_K // 32])
-        b_scale_layout: ttgl.constexpr = get_wmma_scale_layout(b_layout, [BLOCK_N, BLOCK_K // 32])
+        a_scale_layout: ttgl.constexpr = get_wmma_scale_layout(a_layout, [BLOCK_M, BLOCK_K // SCALE_FACTOR],
+                                                               SCALE_FACTOR)
+        b_scale_layout: ttgl.constexpr = get_wmma_scale_layout(b_layout, [BLOCK_N, BLOCK_K // SCALE_FACTOR],
+                                                               SCALE_FACTOR)
 
         a_offs = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_layout))[:, None] * (BLOCK_K // DIV_FACTOR_A) + \
                  ttgl.arange(0, BLOCK_K // DIV_FACTOR_A, layout=ttgl.SliceLayout(0, a_layout))[None, :]
@@ -770,15 +796,21 @@ def test_amd_wmma_scaled(M, N, K, a_type, b_type):
                  ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, b_layout))[None, :]
         b = ttgl.load(b_ptr + b_offs)
 
-        a_scale_offs = \
-            ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_scale_layout))[:, None] * (BLOCK_K // 32) + \
-            ttgl.arange(0, BLOCK_K // 32, layout=ttgl.SliceLayout(0, a_scale_layout))[None, :]
-        a_scale = ttgl.load(a_scale_ptr + a_scale_offs)
+        if a_scale_ptr is not None:
+            a_scale_offs = \
+                ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_scale_layout))[:, None] * (BLOCK_K // SCALE_FACTOR) + \
+                ttgl.arange(0, BLOCK_K // SCALE_FACTOR, layout=ttgl.SliceLayout(0, a_scale_layout))[None, :]
+            a_scale = ttgl.load(a_scale_ptr + a_scale_offs)
+        else:
+            a_scale = None
 
-        b_scale_offs = \
-            ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, b_scale_layout))[:, None] * (BLOCK_K // 32) + \
-            ttgl.arange(0, BLOCK_K // 32, layout=ttgl.SliceLayout(0, b_scale_layout))[None, :]
-        b_scale = ttgl.load(b_scale_ptr + b_scale_offs)
+        if b_scale_ptr is not None:
+            b_scale_offs = \
+                ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, b_scale_layout))[:, None] * (BLOCK_K // SCALE_FACTOR) + \
+                ttgl.arange(0, BLOCK_K // SCALE_FACTOR, layout=ttgl.SliceLayout(0, b_scale_layout))[None, :]
+            b_scale = ttgl.load(b_scale_ptr + b_scale_offs)
+        else:
+            b_scale = None
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=wmma_layout)
         c = ttgl.amd.gfx1250.wmma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero)
@@ -788,18 +820,34 @@ def test_amd_wmma_scaled(M, N, K, a_type, b_type):
                  ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, wmma_layout))[None, :]
         ttgl.store(c_ptr + c_offs, c)
 
+    if (a_type, b_type, a_scale_type, b_scale_type) not in _valid_dtype_combinations:
+        pytest.skip(f"Invalid type combination: {a_type}, {a_scale_type}, {b_type}, {b_scale_type}")
+
     torch.manual_seed(42)
     a, a_ref = create_mxfp_operand(0, M, K, a_type)
     b, b_ref = create_mxfp_operand(1, K, N, b_type)
-    a_scale, a_scale_ref = create_mxfp_scale(0, M, K)
-    b_scale, b_scale_ref = create_mxfp_scale(1, K, N)
+    a_scale, a_scale_ref = create_mxfp_scale(0, M, K, a_scale_type, scale_factor)
+    b_scale, b_scale_ref = create_mxfp_scale(1, K, N, b_scale_type, scale_factor)
     b_scale = b_scale.permute(1, 0).contiguous()
 
     a, a_scale = a.cuda(), a_scale.cuda()
     b, b_scale = b.cuda(), b_scale.cuda()
+    if not with_a_scale:
+        a_scale = None
+        a_scale_ref = 1.0
+    if not with_b_scale:
+        b_scale = None
+        b_scale_ref = 1.0
+
     c = torch.zeros((M, N), dtype=torch.float32).cuda()
-    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, num_warps=4)
-    assert "v_wmma_scale_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
+    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, num_warps=4)
+
+    no_scales = not with_a_scale and not with_b_scale
+
+    if scale_factor == 32 or no_scales:
+        assert "v_wmma_scale_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
+    else:
+        assert "v_wmma_scale16_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
 
     c_torch = (a_ref * a_scale_ref) @ (b_ref * b_scale_ref)
     torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)
@@ -808,7 +856,9 @@ def test_amd_wmma_scaled(M, N, K, a_type, b_type):
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
-def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type):
+@pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
+@pytest.mark.parametrize("scale_factor", [16, 32])
+def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor):
 
     @gluon.constexpr_function
     def _get_wmma_layout(cga_layout=[[0, 1], [1, 0]], packed=False):
@@ -825,23 +875,26 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type):
         return ttgl.DotOperandLayout(operand_index, wmma_layout, k_width=16)
 
     @gluon.constexpr_function
-    def _get_wmma_scale_layout(operand_index, dtype, shape):
+    def _get_wmma_scale_layout(operand_index, dtype, shape, scale_factor):
         transposed = True if operand_index == 1 else False
         operand_layout = _get_wmma_operand_layout(operand_index, dtype, transposed)
-        return get_wmma_scale_layout(operand_layout, shape)
+        return get_wmma_scale_layout(operand_layout, shape, scale_factor)
 
     @gluon.jit
     def kernel(c_ptr, a_ptr, a_scale_ptr, b_ptr, b_scale_ptr,  #
                a_type: ttgl.constexpr, b_type: ttgl.constexpr,  #
-               BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
+               BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
+               SCALE_FACTOR: ttgl.constexpr):
         DIV_FACTOR_A: ttgl.constexpr = 2 if a_type == "e2m1" else 1
         DIV_FACTOR_B: ttgl.constexpr = 2 if b_type == "e2m1" else 1
 
         acc_layout: ttgl.constexpr = _get_wmma_layout()
         a_layout: ttgl.constexpr = _get_wmma_operand_layout(0, a_type)
         b_layout: ttgl.constexpr = _get_wmma_operand_layout(1, b_type)
-        a_scale_layout: ttgl.constexpr = _get_wmma_scale_layout(0, a_type, [BLOCK_M, BLOCK_K // 32])
-        b_scale_layout: ttgl.constexpr = _get_wmma_scale_layout(1, b_type, [BLOCK_N, BLOCK_K // 32])
+        a_scale_layout: ttgl.constexpr = _get_wmma_scale_layout(0, a_type, [BLOCK_M, BLOCK_K // SCALE_FACTOR],
+                                                                SCALE_FACTOR)
+        b_scale_layout: ttgl.constexpr = _get_wmma_scale_layout(1, b_type, [BLOCK_N, BLOCK_K // SCALE_FACTOR],
+                                                                SCALE_FACTOR)
 
         a_offs = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_layout))[:, None] * (BLOCK_K // DIV_FACTOR_A) + \
                  ttgl.arange(0, BLOCK_K // DIV_FACTOR_A, layout=ttgl.SliceLayout(0, a_layout))[None, :]
@@ -852,13 +905,13 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type):
         b = ttgl.load(b_ptr + b_offs)
 
         a_scale_offs = \
-            ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_scale_layout))[:, None] * (BLOCK_K // 32) + \
-            ttgl.arange(0, BLOCK_K // 32, layout=ttgl.SliceLayout(0, a_scale_layout))[None, :]
+            ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_scale_layout))[:, None] * (BLOCK_K // SCALE_FACTOR) + \
+            ttgl.arange(0, BLOCK_K // SCALE_FACTOR, layout=ttgl.SliceLayout(0, a_scale_layout))[None, :]
         a_scale = ttgl.load(a_scale_ptr + a_scale_offs)
 
         b_scale_offs = \
-            ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, b_scale_layout))[:, None] * (BLOCK_K // 32) + \
-            ttgl.arange(0, BLOCK_K // 32, layout=ttgl.SliceLayout(0, b_scale_layout))[None, :]
+            ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, b_scale_layout))[:, None] * (BLOCK_K // SCALE_FACTOR) + \
+            ttgl.arange(0, BLOCK_K // SCALE_FACTOR, layout=ttgl.SliceLayout(0, b_scale_layout))[None, :]
         b_scale = ttgl.load(b_scale_ptr + b_scale_offs)
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=acc_layout)
@@ -869,19 +922,25 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type):
                  ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, acc_layout))[None, :]
         ttgl.store(c_ptr + c_offs, c)
 
+    if (a_type, b_type, a_scale_type, b_scale_type) not in _valid_dtype_combinations:
+        pytest.skip(f"Invalid type combination: {a_type}, {a_scale_type}, {b_type}, {b_scale_type}")
+
     torch.manual_seed(42)
     M, N = M * 2, N * 2
     a, a_ref = create_mxfp_operand(0, M, K, a_type)
     b, b_ref = create_mxfp_operand(1, K, N, b_type)
-    a_scale, a_scale_ref = create_mxfp_scale(0, M, K)
-    b_scale, b_scale_ref = create_mxfp_scale(1, K, N)
+    a_scale, a_scale_ref = create_mxfp_scale(0, M, K, a_scale_type, scale_factor)
+    b_scale, b_scale_ref = create_mxfp_scale(1, K, N, b_scale_type, scale_factor)
     b_scale = b_scale.permute(1, 0).contiguous()
 
     a, a_scale = a.cuda(), a_scale.cuda()
     b, b_scale = b.cuda(), b_scale.cuda()
     c = torch.zeros((M, N), dtype=torch.float32).cuda()
-    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, num_warps=4, num_ctas=4)
-    assert "v_wmma_scale_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
+    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, num_warps=4, num_ctas=4)
+    if scale_factor == 32:
+        assert "v_wmma_scale_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
+    else:
+        assert "v_wmma_scale16_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
 
     c_torch = (a_ref * a_scale_ref) @ (b_ref * b_scale_ref)
     torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)
@@ -891,7 +950,9 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type):
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
-def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type):
+@pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
+@pytest.mark.parametrize("scale_factor", [16, 32])
+def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor):
 
     @gluon.constexpr_function
     def _slice_layout(layout, indices):
@@ -901,15 +962,16 @@ def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type):
 
     @gluon.jit
     def _offsets(dim0, dim1, dim2, layout):
-        return ttgl.arange(0, dim0, layout=_slice_layout(layout, [1, 2]))[:, None, None] * (dim1 * dim2) + \
-               ttgl.arange(0, dim1, layout=_slice_layout(layout, [0, 2]))[None, :, None] * dim2 + \
-               ttgl.arange(0, dim2, layout=_slice_layout(layout, [0, 1]))[None, None, :]
+        return ttgl.arange(0, dim0, _slice_layout(layout, [1, 2]))[:, None, None] * (dim1 * dim2) + \
+               ttgl.arange(0, dim1, _slice_layout(layout, [0, 2]))[None, :, None] * dim2 + \
+               ttgl.arange(0, dim2, _slice_layout(layout, [0, 1]))[None, None, :]
 
     @gluon.jit
     def kernel(c_ptr, a_ptr, a_scale_ptr, b_ptr, b_scale_ptr,  #
                a_type: ttgl.constexpr, b_type: ttgl.constexpr,  #
                BLOCK_B: ttgl.constexpr, BLOCK_M: ttgl.constexpr,  #
-               BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
+               BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
+               SCALE_FACTOR: ttgl.constexpr):
         DIV_FACTOR_A: ttgl.constexpr = 2 if a_type == "e2m1" else 1
         DIV_FACTOR_B: ttgl.constexpr = 2 if b_type == "e2m1" else 1
 
@@ -923,32 +985,35 @@ def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type):
         b_layout: ttgl.constexpr = \
             ttgl.DotOperandLayout(1, wmma_layout_packed if b_type == "e2m1" else wmma_layout, 16)
         a_scale_layout: ttgl.constexpr = \
-            get_wmma_scale_layout(a_layout, [BLOCK_B, BLOCK_M, BLOCK_K // 32])
+            get_wmma_scale_layout(a_layout, [BLOCK_B, BLOCK_M, BLOCK_K // SCALE_FACTOR], SCALE_FACTOR)
         b_scale_layout: ttgl.constexpr = \
-            get_wmma_scale_layout(b_layout, [BLOCK_B, BLOCK_N, BLOCK_K // 32])
+            get_wmma_scale_layout(b_layout, [BLOCK_B, BLOCK_N, BLOCK_K // SCALE_FACTOR], SCALE_FACTOR)
 
         a_offs = _offsets(BLOCK_B, BLOCK_M, BLOCK_K // DIV_FACTOR_A, a_layout)
         a = ttgl.load(a_ptr + a_offs)
         b_offs = _offsets(BLOCK_B, BLOCK_K // DIV_FACTOR_B, BLOCK_N, b_layout)
         b = ttgl.load(b_ptr + b_offs)
 
-        a_scale_offs = _offsets(BLOCK_B, BLOCK_M, BLOCK_K // 32, a_scale_layout)
+        a_scale_offs = _offsets(BLOCK_B, BLOCK_M, BLOCK_K // SCALE_FACTOR, a_scale_layout)
         a_scale = ttgl.load(a_scale_ptr + a_scale_offs)
-        b_scale_offs = _offsets(BLOCK_B, BLOCK_N, BLOCK_K // 32, b_scale_layout)
+        b_scale_offs = _offsets(BLOCK_B, BLOCK_N, BLOCK_K // SCALE_FACTOR, b_scale_layout)
         b_scale = ttgl.load(b_scale_ptr + b_scale_offs)
 
-        zero = ttgl.zeros([BLOCK_B, BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=wmma_layout)
+        zero = ttgl.zeros([BLOCK_B, BLOCK_M, BLOCK_N], ttgl.float32, wmma_layout)
         c = ttgl.amd.gfx1250.wmma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero)
         c = c.to(c_ptr.dtype.element_ty)
 
         c_offs = _offsets(BLOCK_B, BLOCK_M, BLOCK_N, wmma_layout)
         ttgl.store(c_ptr + c_offs, c)
 
+    if (a_type, b_type, a_scale_type, b_scale_type) not in _valid_dtype_combinations:
+        pytest.skip(f"Invalid type combination: {a_type}, {a_scale_type}, {b_type}, {b_scale_type}")
+
     torch.manual_seed(42)
     a, a_ref = zip(*[create_mxfp_operand(0, M, K, a_type) for _ in range(B)])
     b, b_ref = zip(*[create_mxfp_operand(1, K, N, b_type) for _ in range(B)])
-    a_scale, a_scale_ref = zip(*[create_mxfp_scale(0, M, K) for _ in range(B)])
-    b_scale, b_scale_ref = zip(*[create_mxfp_scale(1, K, N) for _ in range(B)])
+    a_scale, a_scale_ref = zip(*[create_mxfp_scale(0, M, K, a_scale_type, scale_factor) for _ in range(B)])
+    b_scale, b_scale_ref = zip(*[create_mxfp_scale(1, K, N, b_scale_type, scale_factor) for _ in range(B)])
 
     a = torch.stack(a, dim=0)
     b = torch.stack(b, dim=0)
@@ -964,7 +1029,7 @@ def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type):
     b, b_scale = b.cuda(), b_scale.cuda()
 
     c = torch.zeros((B, M, N), dtype=torch.float32).cuda()
-    kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, B, M, N, K, num_warps=4)
+    kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, B, M, N, K, scale_factor, num_warps=4)
 
     c_torch = (a_ref * a_scale_ref) @ (b_ref * b_scale_ref)
     torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)
@@ -975,12 +1040,13 @@ def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type):
                                      (128, 128, 256)])
 @pytest.mark.parametrize("mxfp_type", ["e2m1"])
 @pytest.mark.parametrize("hasScale", [True, False])
-def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale):
+@pytest.mark.parametrize("scale_dtype, scale_factor", [("e8m0", 32), ("e4m3", 16)])
+def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale, scale_dtype, scale_factor):
 
     @triton.jit
     def scaled_wmma_tdm_triton_kernel(a_base, stride_am, stride_ak, a_scale, b_base, stride_bk, stride_bn, b_scale, out,
                                       BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-                                      type_a: tl.constexpr, type_b: tl.constexpr):
+                                      type_a: tl.constexpr, type_b: tl.constexpr, SCALE_FACTOR: tl.constexpr):
         DIV_FACTOR_A: tl.constexpr = 2 if type_a == "e2m1" else 1
         DIV_FACTOR_B: tl.constexpr = 2 if type_b == "e2m1" else 1
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR_A
@@ -991,7 +1057,7 @@ def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale):
                                            strides=(stride_bk, stride_bn), block_shape=(PACKED_BLOCK_K_B, BLOCK_N))
         a = a_desc.load([0, 0])
         b = b_desc.load([0, 0])
-        SCALE_BLOCK_K: tl.constexpr = BLOCK_K // 32
+        SCALE_BLOCK_K: tl.constexpr = BLOCK_K // SCALE_FACTOR
 
         if a_scale is not None:
             scale_a_ptr = a_scale + tl.arange(0, BLOCK_M)[:, None] * SCALE_BLOCK_K + tl.arange(0,
@@ -1008,22 +1074,17 @@ def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale):
     @gluon.jit
     def scaled_wmma_tdm_gluon_kernel(a_base, stride_am, stride_ak, a_scale, b_base, stride_bk, stride_bn, b_scale, out,
                                      BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
-                                     type_a: ttgl.constexpr, type_b: ttgl.constexpr):
+                                     type_a: ttgl.constexpr, type_b: ttgl.constexpr, SCALE_FACTOR: ttgl.constexpr):
         DIV_FACTOR_A: ttgl.constexpr = 2 if type_a == "e2m1" else 1
         DIV_FACTOR_B: ttgl.constexpr = 2 if type_b == "e2m1" else 1
         PACKED_BLOCK_K_A: ttgl.constexpr = BLOCK_K // DIV_FACTOR_A
         PACKED_BLOCK_K_B: ttgl.constexpr = BLOCK_K // DIV_FACTOR_B
-        SCALE_BLOCK_K: ttgl.constexpr = BLOCK_K // 32
+        SCALE_BLOCK_K: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
 
         scale_blocked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 4], [4, 1], [1, 0])
         a_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 4], [4, 1], [1, 0])
-        a_scale_linear_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[0, 1], [0, 2]], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]],
-            warp_bases=[[0, 0], [16, 0]], block_bases=[], shape=[32, 4])
+
         b_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [16, 2], [4, 1], [1, 0])
-        b_scale_linear_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[0, 1], [0, 2]], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]],
-            warp_bases=[[16, 0], [0, 0]], block_bases=[], shape=[32, 4])
         SHARED_LAYOUT_A: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]],
                                                                                     [BLOCK_M, PACKED_BLOCK_K_A], [1, 0])
         SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]],
@@ -1035,6 +1096,13 @@ def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale):
                                                                                                             [1, 0]],
                                                                     instr_shape=[16, 16, 64])
 
+        a_operand_layout: ttgl.constexpr = ttgl.DotOperandLayout(
+            operand_index=0, parent=wmma_layout_packed if type_a == "e2m1" else wmma_layout, k_width=16)
+        b_operand_layout: ttgl.constexpr = ttgl.DotOperandLayout(
+            operand_index=1, parent=wmma_layout_packed if type_b == "e2m1" else wmma_layout, k_width=16)
+        a_scale_layout: ttgl.constexpr = get_wmma_scale_layout(a_operand_layout, [BLOCK_M, SCALE_BLOCK_K], SCALE_FACTOR)
+        b_scale_layout: ttgl.constexpr = get_wmma_scale_layout(b_operand_layout, [BLOCK_N, SCALE_BLOCK_K], SCALE_FACTOR)
+
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=wmma_layout)
 
         a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_base, shape=(BLOCK_M, PACKED_BLOCK_K_A),
@@ -1045,10 +1113,7 @@ def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale):
         ttgl.amd.gfx1250.tdm.async_load(a_desc, [0, 0], a_buffer)
         ttgl.amd.gfx1250.tdm.async_wait(0)
         a = a_buffer.load(layout=a_layout)
-        a = ttgl.convert_layout(
-            a,
-            ttgl.DotOperandLayout(operand_index=0, parent=wmma_layout_packed if type_a == "e2m1" else wmma_layout,
-                                  k_width=16))
+        a = ttgl.convert_layout(a, a_operand_layout)
 
         b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_base, shape=(PACKED_BLOCK_K_B, BLOCK_N),
                                                              strides=(stride_bk, stride_bn),
@@ -1058,29 +1123,26 @@ def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale):
         ttgl.amd.gfx1250.tdm.async_load(b_desc, [0, 0], b_buffer)
         ttgl.amd.gfx1250.tdm.async_wait(0)
         b = b_buffer.load(layout=b_layout)
-        b = ttgl.convert_layout(
-            b,
-            ttgl.DotOperandLayout(operand_index=1, parent=wmma_layout_packed if type_b == "e2m1" else wmma_layout,
-                                  k_width=16))
+        b = ttgl.convert_layout(b, b_operand_layout)
 
         if a_scale is not None:
             offs_scale_am = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, scale_blocked_layout))
             off_scale_ak = ttgl.arange(0, SCALE_BLOCK_K, layout=ttgl.SliceLayout(0, scale_blocked_layout))
             a_scale_offsets = offs_scale_am[:, None] * SCALE_BLOCK_K + off_scale_ak[None, :]
             scale_a = ttgl.load(a_scale + a_scale_offsets)
+            scale_a = ttgl.convert_layout(scale_a, a_scale_layout)
         else:
-            scale_a = ttgl.full([BLOCK_M, SCALE_BLOCK_K], 127, dtype=ttgl.int8, layout=scale_blocked_layout)
+            scale_a = None
 
         if b_scale is not None:
             offs_scale_bn = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, scale_blocked_layout))
             offs_scale_bk = ttgl.arange(0, SCALE_BLOCK_K, layout=ttgl.SliceLayout(0, scale_blocked_layout))
             b_scale_offsets = offs_scale_bn[:, None] * SCALE_BLOCK_K + offs_scale_bk[None, :]
             scale_b = ttgl.load(b_scale + b_scale_offsets)
+            scale_b = ttgl.convert_layout(scale_b, b_scale_layout)
         else:
-            scale_b = ttgl.full([BLOCK_N, SCALE_BLOCK_K], 127, dtype=ttgl.int8, layout=scale_blocked_layout)
+            scale_b = None
 
-        scale_a = ttgl.convert_layout(scale_a, a_scale_linear_layout)
-        scale_b = ttgl.convert_layout(scale_b, b_scale_linear_layout)
         c = ttgl.amd.gfx1250.wmma_scaled(a, scale_a, type_a, b, scale_b, type_b, zero)
         c = c.to(out.dtype.element_ty)
 
@@ -1103,8 +1165,12 @@ def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale):
 
     if hasScale:
         min_scale, max_scale = (0, 142)
-        scale_x = torch.randint(min_scale, max_scale + 1, (M, K // 32), dtype=torch.uint8).cuda()
-        scale_y = torch.randint(min_scale, max_scale + 1, (N, K // 32), dtype=torch.uint8).cuda()
+        if scale_dtype == "e8m0":
+            scale_x = torch.randint(min_scale, max_scale + 1, (M, K // scale_factor), dtype=torch.uint8).cuda()
+            scale_y = torch.randint(min_scale, max_scale + 1, (N, K // scale_factor), dtype=torch.uint8).cuda()
+        elif scale_dtype == "e4m3":
+            scale_x = torch.randint(20, 40, [M, K // scale_factor], dtype=torch.uint8).view(torch.float8_e4m3fn).cuda()
+            scale_y = torch.randint(20, 40, [N, K // scale_factor], dtype=torch.uint8).view(torch.float8_e4m3fn).cuda()
     else:
         scale_x = None
         scale_y = None
@@ -1123,7 +1189,7 @@ def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale):
 
     z = torch.zeros((M, N), dtype=torch.float32).cuda()
     pgm = scaled_wmma_tdm_gluon_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a,
-                                              type_b)
+                                              type_b, scale_factor)
     amdgcn = pgm.asm["amdgcn"]
 
     patterns = (
@@ -1135,7 +1201,7 @@ def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale):
 
     z_ref = torch.zeros((M, N), dtype=torch.float32).cuda()
     scaled_wmma_tdm_triton_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z_ref, M, N, K, type_a,
-                                         type_b)
+                                         type_b, scale_factor)
 
     torch.testing.assert_close(z.cpu(), z_ref.cpu(), rtol=1e-5, atol=1e-5)
 
@@ -1178,9 +1244,18 @@ def tensor_async_copy_kernel(a_ptr, b_ptr, M, N,  #
 
 @gluon.jit
 def tensor_device_tdm_copy_kernel(a_ptr, b_ptr, M, N,  #
-                                  BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
+                                  BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr,
+                                  USE_PARTITIONED: ttgl.constexpr):
     num_warps: ttgl.constexpr = ttgl.num_warps()
-    smem_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+    if USE_PARTITIONED:
+        NUM_PARTITIONS: ttgl.constexpr = 2
+        NUM_GROUPS: ttgl.constexpr = 1
+        inner_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]],
+                                                                                 [BLOCK_M // NUM_PARTITIONS, BLOCK_N],
+                                                                                 [1, 0])
+        smem_layout: ttgl.constexpr = PartitionedSharedLayout(NUM_PARTITIONS, NUM_GROUPS, 0, inner_layout)
+    else:
+        smem_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
     block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
 
     pid_m = ttgl.program_id(axis=0)
@@ -1269,6 +1344,7 @@ def test_compile_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM
             "BLOCK_M": "constexpr",
             "BLOCK_N": "constexpr",
             "NUM_BUFFERS": "constexpr",
+            "USE_PARTITIONED": "constexpr",
         }
         constexprs = {"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "NUM_BUFFERS": NUM_BUFFERS}
     else:
@@ -1303,11 +1379,15 @@ def test_compile_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64), (1, 512), (256, 2)])
 @pytest.mark.parametrize("NUM_BUFFERS", [2])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
-@pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "DEVICE_TDM", "HOST_TDM"])
+@pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "DEVICE_TDM", "HOST_TDM", "DEVICE_TDM_PARTITIONED"])
 @pytest.mark.parametrize("M,N", [(1024, 1024), (1008, 1008)])
 def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM_WARPS):
     if ASYNC_LOAD_TYPE == "ASYNC_COPY" and any([x % 16 != 0 for x in [M, N]]):
         pytest.skip("AsyncCopy tests need divisibility==16 to get vectorization information")
+
+    # PartitionedSharedLayout requires BLOCK_M divisible by num_partitions * num_groups (2*1=2)
+    if ASYNC_LOAD_TYPE == "DEVICE_TDM_PARTITIONED" and BLOCK_M % 2 != 0:
+        pytest.skip("PartitionedSharedLayout requires BLOCK_M divisible by num_partitions * num_groups")
 
     torch.manual_seed(42)
     a = torch.randint(0x0, 0xFFFF, (M, N), dtype=torch.uint16)
@@ -1320,7 +1400,10 @@ def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYP
         tensor_async_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, num_warps=NUM_WARPS)
     elif ASYNC_LOAD_TYPE == "DEVICE_TDM":
         tensor_device_tdm_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS,
-                                            num_warps=NUM_WARPS)
+                                            USE_PARTITIONED=False, num_warps=NUM_WARPS)
+    elif ASYNC_LOAD_TYPE == "DEVICE_TDM_PARTITIONED":
+        tensor_device_tdm_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS,
+                                            USE_PARTITIONED=True, num_warps=NUM_WARPS)
     else:
         assert ASYNC_LOAD_TYPE == "HOST_TDM"
         smem_layout = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
@@ -1505,7 +1588,9 @@ def tensor_descriptor_load_store_nd_kernel_host_tdm(out_desc, inp_desc):
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
 
-def _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, TDM_TYPE, SHARED_LAYOUT):
+def _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, TDM_TYPE, SHARED_LAYOUT, ROW_MAJOR):
+    if not ROW_MAJOR and TDM_TYPE == "HOST_TDM":
+        pytest.skip("NYI: Host TDM does not support non-row major layouts")
     """Utility function to run TDM load/store tests with a given shared layout."""
     alloc_shape = [1, 1, 3, 7, INNER_BLOCK][-ndim:]
 
@@ -1513,17 +1598,13 @@ def _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, TDM_TYP
     inp = to_triton(numpy_random(alloc_shape, dtype_str), device="cpu", dst_type=dtype_str)
     inp.data = inp.data[..., :INNER_BLOCK - 3]
     out = inp.new_empty(BLOCK_SHAPE)
-    # uint_dtypes require special handling because PyTorch only has full native support
-    # for uint8. While PyTorch 2.1+ added limited support for uint16, uint32, and uint64,
-    # they still lack complete functionality across all PyTorch ops. They are stored as
-    # signed tensors with the same bit width and wrapped in TensorWrapper for reinterpretation
-    # to unsigned. The .base attribute accesses the underlying signed tensor for CUDA transfer.
-    if dtype_str in uint_dtypes:
-        inp.base = inp.base.cuda()
-        out.base = out.base.cuda()
-    else:
-        inp = inp.cuda()
-        out = out.cuda()
+
+    if ndim > 1 and not ROW_MAJOR:
+        out = out.data.transpose(-2, -1).contiguous().transpose(-2, -1)
+        inp = inp.data.transpose(-2, -1).contiguous().transpose(-2, -1)
+
+    inp = inp.cuda()
+    out = out.cuda()
 
     if TDM_TYPE == "DEVICE_TDM":
         constexpr_block_shape = tuple(ttgl.constexpr(v) for v in BLOCK_SHAPE)
@@ -1554,19 +1635,25 @@ def _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, TDM_TYP
 
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [4, 8, 16, 32, 64, 128])
-@pytest.mark.parametrize("dtype_str", sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"}))
+@pytest.mark.parametrize("dtype_str", sorted(set(float_dtypes + int_dtypes)))
 @pytest.mark.parametrize("TDM_TYPE", ["DEVICE_TDM", "HOST_TDM"])
-def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK, TDM_TYPE):
+@pytest.mark.parametrize("ROW_MAJOR", [False, True])
+def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK, TDM_TYPE, ROW_MAJOR):
     """Test TDM load/store with swizzled shared layout."""
-    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
-                                                              order=[ndim - 1 - i for i in range(ndim)])
-    _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, TDM_TYPE, SHARED_LAYOUT)
+
+    order = [ndim - 1 - i for i in range(ndim)]
+    if ndim > 1 and not ROW_MAJOR:
+        order[0], order[1] = order[1], order[0]
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=order)
+
+    _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, TDM_TYPE, SHARED_LAYOUT, ROW_MAJOR)
 
 
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [16, 64])
 @pytest.mark.parametrize("dtype_str", ["float16", "int32"])
-def test_tensor_descriptor_load_store_nd_with_padding(dtype_str, ndim, INNER_BLOCK):
+@pytest.mark.parametrize("ROW_MAJOR", [False, True])
+def test_tensor_descriptor_load_store_nd_with_padding(dtype_str, ndim, INNER_BLOCK, ROW_MAJOR):
     """Test TDM load/store with padded shared memory layout.
     TDM store only supports padding when:
     1. There is a single padding interval
@@ -1574,12 +1661,14 @@ def test_tensor_descriptor_load_store_nd_with_padding(dtype_str, ndim, INNER_BLO
     """
     # Create padded shared layout where padding interval = innermost block dimension
     BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
-    PADDED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[INNER_BLOCK, 8]], BLOCK_SHAPE,
-                                                                              [ndim - 1 - i
-                                                                               for i in range(ndim)]  # standard order
-                                                                              )
+    order = [ndim - 1 - i for i in range(ndim)]
+    padding = [INNER_BLOCK, 8]
+    if ndim > 1 and not ROW_MAJOR:
+        order[0], order[1] = order[1], order[0]
+        padding = [8, INNER_BLOCK]
+    PADDED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([padding], BLOCK_SHAPE, order)
 
-    _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, "DEVICE_TDM", PADDED_LAYOUT)
+    _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, "DEVICE_TDM", PADDED_LAYOUT, ROW_MAJOR)
 
 
 def test_tensor_descriptor_load_store_invalid_blocksize():
@@ -1642,6 +1731,7 @@ def test_compile_tensor_descriptor_prefetch_nd(dtype, ndim, INNER_BLOCK, SPECULA
                                               order=[ndim - 1 - i for i in range(ndim)])
 
     BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
+    STRIDES = (1, 2, 4, 8, 16)[:ndim][::-1]
     shape_str = ", ".join(str(s) for s in BLOCK_SHAPE)
 
     if TDM_TYPE == "DEVICE_TDM":
@@ -1649,13 +1739,15 @@ def test_compile_tensor_descriptor_prefetch_nd(dtype, ndim, INNER_BLOCK, SPECULA
         signature = {
             "a_ptr": f"*{dtype}",
             "shape": tuple("i32" for _ in range(ndim)),
-            "strides": tuple("i32" for _ in range(ndim)),
+            "strides": tuple("constexpr" for _ in range(ndim)),
             "BLOCK_SHAPE": tuple("constexpr" for _ in range(ndim)),
             "SHARED_LAYOUT": "constexpr",
             "PREFETCH_SPECULATIVE": "constexpr",
         }
         constexprs = {
-            # For tuples we need to specifiy the parameter index (BLOCK_SHAPE is the 3rd argument)
+            # For tuples we need to specifiy the parameter index
+            **{(2, i): STRIDES[i]
+               for i in range(ndim)},
             **{(3, i): BLOCK_SHAPE[i]
                for i in range(ndim)},
             "SHARED_LAYOUT": SHARED_LAYOUT,
@@ -1864,10 +1956,8 @@ def mxgemm_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, stride_am, str
         operand_index=0, parent=WMMA_LAYOUT_PACKED if DTYPE_A == "e2m1" else WMMA_LAYOUT, k_width=16)
     DOT_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(
         operand_index=1, parent=WMMA_LAYOUT_PACKED if DTYPE_B == "e2m1" else WMMA_LAYOUT, k_width=16)
-    A_SCALE_LINEAR_LAYOUT: ttgl.constexpr = ttgl.amd.gfx1250.get_wmma_scale_layout(DOT_LAYOUT_A,
-                                                                                   [BLOCK_M, BLOCK_K_SCALE])
-    B_SCALE_LINEAR_LAYOUT: ttgl.constexpr = ttgl.amd.gfx1250.get_wmma_scale_layout(DOT_LAYOUT_B,
-                                                                                   [BLOCK_N, BLOCK_K_SCALE])
+    A_SCALE_LINEAR_LAYOUT: ttgl.constexpr = get_wmma_scale_layout(DOT_LAYOUT_A, [BLOCK_M, BLOCK_K_SCALE])
+    B_SCALE_LINEAR_LAYOUT: ttgl.constexpr = get_wmma_scale_layout(DOT_LAYOUT_B, [BLOCK_N, BLOCK_K_SCALE])
 
     pid = ttgl.program_id(axis=0)
     num_pid_m = ttgl.cdiv(M, BLOCK_M)

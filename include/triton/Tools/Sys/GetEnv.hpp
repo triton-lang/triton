@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <cstdlib>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>

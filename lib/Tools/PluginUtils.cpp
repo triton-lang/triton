@@ -2,8 +2,8 @@
 
 llvm::Error TritonPlugin::checkLibraryValid(const std::string &error) const {
   if (!library.isValid()) {
-    auto msg = llvm::Twine("Failed to load plugin library: " + error + "\n");
-    return llvm::createStringError(msg);
+    return llvm::createStringError(
+        llvm::Twine("Failed to load plugin library: ") + error);
   }
   return llvm::Error::success();
 }
@@ -14,8 +14,8 @@ TritonPlugin::getAddressOfSymbol(const std::string &symbol) const {
     return isValid;
   intptr_t getDetailsFn = (intptr_t)library.getAddressOfSymbol(symbol.c_str());
   if (!getDetailsFn) {
-    auto msg = llvm::Twine("Failed to get symbol: " + symbol + "\n");
-    return llvm::createStringError(msg);
+    return llvm::createStringError(llvm::Twine("Failed to get symbol: ") +
+                                   symbol);
   }
   return getDetailsFn;
 }
@@ -25,11 +25,9 @@ TritonPlugin::checkAPIResult(TritonPluginResult result,
                              const char *handle) const {
   if (result == TP_SUCCESS)
     return TP_SUCCESS;
-  std::string msg;
-  llvm::raw_string_ostream os(msg);
-  os << "Failed to add/register plugin pass (" << handle
-     << ") to pass manager, error code: " << result;
-  return llvm::createStringError(msg);
+  return llvm::createStringError(
+      llvm::Twine("Failed to add/register a plugin pass (") + handle +
+      "), error code: " + std::to_string(result));
 }
 
 std::runtime_error TritonPlugin::err2exp(llvm::Error Err) {
@@ -85,6 +83,22 @@ llvm::Error TritonPlugin::loadPlugin() {
     dialectPluginInfoAPI = *dialectPluginInfoAPIOrErr;
   }
 
+  if ((intptr_t)library.getAddressOfSymbol(ENUMERATE_CUSTOMOPS)) {
+    auto enumerateCustomOpAPIOrErr =
+        getAPI<EnumeratePyBindHandlesType, EnumeratePyBindHandlesCType>(
+            ENUMERATE_CUSTOMOPS);
+    auto addCustomOpAPIOrErr =
+        getAPI<AddCustomOpType, AddCustomOpCType>(ADD_CUSTOMOP);
+
+    if (auto Err = enumerateCustomOpAPIOrErr.takeError())
+      return Err;
+    if (auto Err = addCustomOpAPIOrErr.takeError())
+      return Err;
+
+    enumerateCustomOpAPI = *enumerateCustomOpAPIOrErr;
+    addCustomOpAPI = *addCustomOpAPIOrErr;
+  }
+
   isLoaded = true;
   return llvm::Error::success();
 }
@@ -108,10 +122,9 @@ llvm::Expected<TritonPluginResult> TritonPlugin::enumeratePyBindHandles(
 
   if (result == TP_SUCCESS)
     return TP_SUCCESS;
-  std::string msg;
-  llvm::raw_string_ostream os(msg);
-  os << "Failed to retrive plugin pass handles, error code: " << result;
-  return llvm::createStringError(msg);
+  return llvm::createStringError(
+      llvm::Twine("Failed to retrieve plugin pass handles, error code: ") +
+      std::to_string(result));
 }
 
 llvm::Expected<TritonPluginResult>
@@ -141,10 +154,24 @@ TritonPlugin::getDialectHandles(std::vector<const char *> &dialectNames) {
 }
 
 llvm::Expected<TritonPluginResult>
-TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle) {
+TritonPlugin::getCustomOpHandles(std::vector<const char *> &customOpNames) {
   if (auto Err = loadPlugin())
     return Err;
-  return checkAPIResult(addPassAPI(pm, passHandle), passHandle);
+  // Do a check to see if the enumerate-custom-ops api symbol is present, bail
+  // as if there are 0 custom ops if not
+  intptr_t isCustomOpSymbolPresent =
+      (intptr_t)library.getAddressOfSymbol(ENUMERATE_CUSTOMOPS);
+  if (!isCustomOpSymbolPresent)
+    return TP_SUCCESS;
+  return enumeratePyBindHandles(enumerateCustomOpAPI, customOpNames);
+}
+
+llvm::Expected<TritonPluginResult>
+TritonPlugin::addPass(mlir::PassManager *pm, const char *passHandle,
+                      const std::vector<std::string> &args) {
+  if (auto Err = loadPlugin())
+    return Err;
+  return checkAPIResult(addPassAPI(pm, passHandle, args), passHandle);
 }
 
 llvm::Expected<TritonPluginResult>
@@ -159,4 +186,31 @@ TritonPlugin::getDialectPluginInfo(const char *dialectName) {
   if (auto Err = loadPlugin())
     return Err;
   return dialectPluginInfoAPI(dialectName);
+}
+
+llvm::Expected<TritonPluginResult>
+TritonPlugin::addCustomOp(const char *handle, TritonOpBuilder &self,
+                          std::vector<mlir::Value> &operands) {
+  if (auto Err = loadPlugin())
+    return Err;
+  addCustomOpAPI(handle, self, operands);
+  return TP_SUCCESS;
+}
+
+void loadPluginDialects(const std::string &filename,
+                        mlir::DialectRegistry &registry) {
+  TritonPlugin TP(filename);
+
+  std::vector<const char *> dialectNames;
+  if (auto result = TP.getDialectHandles(dialectNames); !result)
+    llvm::report_fatal_error(result.takeError());
+
+  for (unsigned i = 0; i < dialectNames.size(); ++i) {
+    const char *dialectName = dialectNames.data()[i];
+    auto result = TP.getDialectPluginInfo(dialectName);
+    if (!result)
+      llvm::report_fatal_error(result.takeError());
+    ::mlir::DialectPluginLibraryInfo dialectPluginInfo = *result;
+    dialectPluginInfo.registerDialectRegistryCallbacks(&registry);
+  }
 }

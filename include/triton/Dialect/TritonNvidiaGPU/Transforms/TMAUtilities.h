@@ -16,16 +16,11 @@ inline bool isFp4Padded(Attribute encoding) {
   return mmaEnc && mmaEnc.getFp4Padded();
 }
 
-gpu::CGAEncodingAttr updateCGALayoutForShape(gpu::CGAEncodingAttr cgaLayout,
-                                             ArrayRef<int64_t> shape);
-
-gpu::SharedEncodingTrait
-updateEncodingForShape(Operation *op, gpu::SharedEncodingTrait encoding,
-                       RankedTensorType tensorType);
-
 triton::gpu::SharedEncodingTrait
 getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
                           Value desc);
+
+bool hasCGABroadcast(gpu::MemDescType memDescType);
 
 inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
                                              ArrayRef<int64_t> shapePerCTA,
