@@ -5,7 +5,7 @@ from typing import Optional, Union, Any, Sequence
 
 from .flags import flags
 from .metric import transform_tensor_metrics, set_metric_kernels
-from .state import enter_state, exit_state, COMPUTE_METADATA_SCOPE_NAME
+from .state import enter_state, exit_state, COMPUTE_METADATA_SCOPE_NAME, ATTRIBUTE_METADATA_SCOPE_NAME
 from triton._C.libproton import proton as libproton
 
 thread_local_scopes = threading.local()
@@ -131,7 +131,7 @@ def exit_scope(name: Optional[str] = None, *, metrics: Optional[dict[str, Any]] 
         name = popped_name
     if metrics:
         set_metric_kernels()
-        enter_state(COMPUTE_METADATA_SCOPE_NAME)
+        enter_state(ATTRIBUTE_METADATA_SCOPE_NAME)
         libproton.add_metrics(id, *transform_tensor_metrics(metrics))
         exit_state()
     libproton.exit_scope(id, name)

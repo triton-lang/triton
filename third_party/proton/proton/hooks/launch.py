@@ -1,4 +1,4 @@
-from ..state import enter_state, exit_state, COMPUTE_METADATA_SCOPE_NAME
+from ..state import enter_state, exit_state, COMPUTE_METADATA_SCOPE_NAME, ATTRIBUTE_METADATA_SCOPE_NAME
 from ..metric import transform_tensor_metrics, set_metric_kernels
 from triton.compiler import LazyDict
 from .hook import Hook
@@ -113,7 +113,7 @@ class LaunchHook(Hook):
             set_metric_kernels()
         scalar_metrics, tensor_metrics = transform_tensor_metrics(fn_metrics)
         libproton.enter_op(id.get(), lazy_metadata["name"])
-        enter_state(COMPUTE_METADATA_SCOPE_NAME)
+        enter_state(ATTRIBUTE_METADATA_SCOPE_NAME)
         libproton.add_metrics(id.get(), scalar_metrics, tensor_metrics)
         exit_state()
 
