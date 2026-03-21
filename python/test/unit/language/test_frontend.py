@@ -650,3 +650,17 @@ def test_return_promotion():
         tl.static_assert(c.type == tl.tuple_type([tl.int32, tl.int32]))
 
     run_parser(kernel)
+
+
+@pytest.mark.interpreter
+def test_constexpr_to_tensor_loop_carried():
+    """Regression test for #9547: constexpr reassigned to tensor in a loop."""
+
+    @triton.jit
+    def kernel(a_ptr, a_stride, b_ptr, b_stride, out, o_stride):
+        for i in range(0, 8, 2):
+            tl.store(out + i * o_stride, tl.load(a_ptr + i * a_stride))
+            a_ptr = b_ptr
+            a_stride = b_stride
+
+    run_parser(kernel)
