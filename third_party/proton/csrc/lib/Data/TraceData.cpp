@@ -435,52 +435,52 @@ void dumpKernelMetricTrace(
   // for each streamId in ascending order, emit one JSON line
   for (auto const &[streamId, events] : streamTraceEvents) {
 
-  // Emit all streams into a single Chrome trace document while preserving the
-  // deterministic stream iteration order from the std::map.
-  for (auto const &[streamId, events] : streamTraceEvents) {
-    for (const auto &event : events) {
-      auto *kernelMetric = event.kernelMetric;
-      auto *flexibleMetrics = event.flexibleMetrics;
-      uint64_t startTimeNs =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
-      uint64_t endTimeNs =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime));
-      // Convert nanoseconds to microseconds for Chrome trace format
-      double ts = static_cast<double>(startTimeNs - minTimeStamp) / 1000;
-      double dur = static_cast<double>(endTimeNs - startTimeNs) / 1000;
+    // Emit all streams into a single Chrome trace document while preserving the
+    // deterministic stream iteration order from the std::map.
+    for (auto const &[streamId, events] : streamTraceEvents) {
+      for (const auto &event : events) {
+        auto *kernelMetric = event.kernelMetric;
+        auto *flexibleMetrics = event.flexibleMetrics;
+        uint64_t startTimeNs =
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
+        uint64_t endTimeNs =
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime));
+        // Convert nanoseconds to microseconds for Chrome trace format
+        double ts = static_cast<double>(startTimeNs - minTimeStamp) / 1000;
+        double dur = static_cast<double>(endTimeNs - startTimeNs) / 1000;
 
-      const auto &contexts = event.contexts;
+        const auto &contexts = event.contexts;
 
-      json element;
-      if (flexibleMetrics) {
-        element["name"] = "metadata";
-      } else {
-        element["name"] = contexts.back().name;
-      }
-      element["cat"] = "kernel";
-      element["ph"] = "X";
-      element["ts"] = ts;
-      element["dur"] = dur;
-      element["tid"] = streamId; // thread id = stream
-      json callStack = json::array();
-      for (const auto &ctx : contexts) {
-        callStack.push_back(ctx.name);
-      }
-      element["args"]["call_stack"] = std::move(callStack);
-      if (flexibleMetrics) {
-        json metrics = json::object();
-        for (const auto &[metricName, metricValue] : *flexibleMetrics) {
-          metrics[metricName] =
-              formatFlexibleMetricValue(metricValue.getValues()[0]);
+        json element;
+        if (flexibleMetrics) {
+          element["name"] = "metadata";
+        } else {
+          element["name"] = contexts.back().name;
         }
-        element["args"]["metrics"] = std::move(metrics);
+        element["cat"] = "kernel";
+        element["ph"] = "X";
+        element["ts"] = ts;
+        element["dur"] = dur;
+        element["tid"] = streamId; // thread id = stream
+        json callStack = json::array();
+        for (const auto &ctx : contexts) {
+          callStack.push_back(ctx.name);
+        }
+        element["args"]["call_stack"] = std::move(callStack);
+        if (flexibleMetrics) {
+          json metrics = json::object();
+          for (const auto &[metricName, metricValue] : *flexibleMetrics) {
+            metrics[metricName] =
+                formatFlexibleMetricValue(metricValue.getValues()[0]);
+          }
+          element["args"]["metrics"] = std::move(metrics);
+        }
+        object["traceEvents"].push_back(element);
       }
-      object["traceEvents"].push_back(element);
     }
-  }
 
-  os << object.dump() << "\n";
-}
+    os << object.dump() << "\n";
+  }
 } // namespace
 
 void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
