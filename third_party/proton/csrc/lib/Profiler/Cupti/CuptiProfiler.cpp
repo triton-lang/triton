@@ -490,9 +490,14 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       }
       for (auto *data : profiler.dataSet) {
         auto contexts = data->getContexts();
-        contexts.push_back(name);
-        if (threadState.isMetricKernelLaunching)
-          contexts.push_back(std::string(GraphState::metricTag));
+        if (threadState.isMetricKernelLaunching) {
+          if (threadState.isApiExternOp) { // API extern ops
+            contexts.push_back(std::string(GraphState::metricTag));
+          } else { // Triton ops
+            contexts.push_back(name);
+            contexts.push_back(std::string(GraphState::metricTag));
+          }
+        }
         auto staticEntry =
             data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
         nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);

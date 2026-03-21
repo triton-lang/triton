@@ -3,7 +3,6 @@ from .flags import flags
 from functools import wraps
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
-ATTRIBUTE_METADATA_SCOPE_NAME = "__proton_attribute_metrics"
 
 
 class state:
