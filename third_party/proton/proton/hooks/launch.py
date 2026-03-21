@@ -1,4 +1,4 @@
-from ..state import enter_state, exit_state, COMPUTE_METADATA_SCOPE_NAME, ATTRIBUTE_METADATA_SCOPE_NAME
+from ..state import enter_state, exit_state, COMPUTE_METADATA_SCOPE_NAME
 from ..metric import transform_tensor_metrics, set_metric_kernels
 from triton.compiler import LazyDict
 from .hook import Hook
