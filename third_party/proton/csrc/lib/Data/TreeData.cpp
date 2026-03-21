@@ -2,7 +2,6 @@
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Device.h"
-#include "Profiler/Graph.h"
 #include "Utility/MsgPackWriter.h"
 #include <array>
 #include <cstdint>
@@ -226,7 +225,6 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
   jsonNodes[TreeData::Tree::TreeNode::RootId] = &(output.back());
   MetricSummary metricSummary;
   const std::map<MetricKind, std::unique_ptr<Metric>> emptyMetrics;
-  const std::map<std::string, FlexibleMetric> emptyFlexibleMetrics;
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
   auto appendMetrics =
       [&](json &metricsJson,
@@ -365,25 +363,13 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               outNode["frame"] = {{"name", virtualNode.name},
                                   {"type", "function"}};
               outNode["metrics"] = json::object();
-              if (metricsIt != treeNode.metricSet.linkedMetrics.end() ||
-                  flexibleIt !=
-                      treeNode.metricSet.linkedFlexibleMetrics.end()) {
-                const auto &linkedMetrics =
-                    (metricsIt != treeNode.metricSet.linkedMetrics.end())
-                        ? metricsIt->second
-                        : emptyMetrics;
-                const auto &linkedFlexibleMetrics =
-                    (flexibleIt !=
-                     treeNode.metricSet.linkedFlexibleMetrics.end())
-                        ? flexibleIt->second
-                        : emptyFlexibleMetrics;
-                appendMetrics(outNode["metrics"], linkedMetrics);
-                json &flexibleMetricsJson =
-                    (virtualNode.name == GraphState::metricTag)
-                        ? parentMetricsJson
-                        : outNode["metrics"];
-                appendFlexibleMetrics(flexibleMetricsJson,
-                                      linkedFlexibleMetrics);
+              if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
+                appendMetrics(outNode["metrics"], metricsIt->second);
+              }
+              // Linked flexible metrics are only attached to <metric_node>
+              // children, so they always belong on the parent frame.
+              if (flexibleIt != treeNode.metricSet.linkedFlexibleMetrics.end()) {
+                appendFlexibleMetrics(parentMetricsJson, flexibleIt->second);
               }
               outNode["children"] = json::array();
               auto &linkedChildren = outNode["children"];
@@ -467,7 +453,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
 
   MetricSummary metricSummary;
   const std::map<MetricKind, std::unique_ptr<Metric>> emptyMetrics;
-  const std::map<std::string, FlexibleMetric> emptyFlexibleMetrics;
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
 
   tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
@@ -551,9 +536,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
 
   auto countMetricEntries =
       [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
-          const std::map<std::string, FlexibleMetric> &flexibleMetrics,
           bool isRoot) -> uint32_t {
-    uint32_t metricEntries = static_cast<uint32_t>(flexibleMetrics.size());
+    uint32_t metricEntries = 0;
     for (const auto &[metricKind, _] : metrics) {
       if (metricKind == MetricKind::Kernel) {
         metricEntries += isRoot ? kernelInclusiveCount : kernelTotalCount;
@@ -583,12 +567,13 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     }
     return metricEntries;
   };
+  auto countFlexibleMetricEntries =
+      [&](const std::map<std::string, FlexibleMetric> &flexibleMetrics)
+      -> uint32_t { return static_cast<uint32_t>(flexibleMetrics.size()); };
 
   auto packMetrics =
       [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
-          const std::map<std::string, FlexibleMetric> &flexibleMetrics,
           bool isRoot) {
-        writer.packMap(countMetricEntries(metrics, flexibleMetrics, isRoot));
         for (const auto &[metricKind, metric] : metrics) {
           if (metricKind == MetricKind::Kernel) {
             if (isRoot) {
@@ -662,12 +647,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
             throw std::runtime_error("MetricKind not supported");
           }
         }
-        for (const auto &[_, flexibleMetric] : flexibleMetrics) {
-          const auto &valueName = flexibleMetric.getValueName(0);
-          writer.packStr(valueName);
-          packFlexibleMetricValue(flexibleMetric.getValues()[0]);
-        }
-
         if (isRoot) {
           if (metricSummary.hasKernelMetric &&
               metrics.find(MetricKind::Kernel) == metrics.end()) {
@@ -694,6 +673,37 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
           }
         }
       };
+  auto packFlexibleMetrics =
+      [&](const std::map<std::string, FlexibleMetric> &flexibleMetrics) {
+        for (const auto &[_, flexibleMetric] : flexibleMetrics) {
+          const auto &valueName = flexibleMetric.getValueName(0);
+          writer.packStr(valueName);
+          packFlexibleMetricValue(flexibleMetric.getValues()[0]);
+        }
+      };
+  auto countPromotedFlexibleMetricEntries =
+      [&](const auto &children,
+          const DataEntry::LinkedFlexibleMetricMap &linkedFlexibleMetrics)
+      -> uint32_t {
+    uint32_t metricEntries = 0;
+    for (const auto &child : children) {
+      auto it = linkedFlexibleMetrics.find(child.id);
+      if (it != linkedFlexibleMetrics.end()) {
+        metricEntries += countFlexibleMetricEntries(it->second);
+      }
+    }
+    return metricEntries;
+  };
+  auto packPromotedFlexibleMetrics =
+      [&](const auto &children,
+          const DataEntry::LinkedFlexibleMetricMap &linkedFlexibleMetrics) {
+        for (const auto &child : children) {
+          auto it = linkedFlexibleMetrics.find(child.id);
+          if (it != linkedFlexibleMetrics.end()) {
+            packFlexibleMetrics(it->second);
+          }
+        }
+      };
   std::function<void(TreeData::Tree::TreeNode &)> packNode =
       [&](TreeData::Tree::TreeNode &treeNode) {
         writer.packMap(3);
@@ -706,9 +716,17 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         writer.packStr("function");
 
         writer.packStr("metrics");
-        packMetrics(treeNode.metricSet.metrics,
-                    treeNode.metricSet.flexibleMetrics,
-                    treeNode.id == TreeData::Tree::TreeNode::RootId);
+        const bool isRoot = treeNode.id == TreeData::Tree::TreeNode::RootId;
+        writer.packMap(countMetricEntries(treeNode.metricSet.metrics, isRoot) +
+                       countFlexibleMetricEntries(
+                           treeNode.metricSet.flexibleMetrics) +
+                       countPromotedFlexibleMetricEntries(
+                           virtualRootNode.children,
+                           treeNode.metricSet.linkedFlexibleMetrics));
+        packMetrics(treeNode.metricSet.metrics, isRoot);
+        packFlexibleMetrics(treeNode.metricSet.flexibleMetrics);
+        packPromotedFlexibleMetrics(virtualRootNode.children,
+                                    treeNode.metricSet.linkedFlexibleMetrics);
         const bool hasLinkedTargets =
             !treeNode.metricSet.linkedMetrics.empty() ||
             !treeNode.metricSet.linkedFlexibleMetrics.empty();
@@ -728,25 +746,20 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
               writer.packStr("metrics");
               const auto metricsIt =
                   treeNode.metricSet.linkedMetrics.find(virtualNodeId);
-              const auto flexibleIt =
-                  treeNode.metricSet.linkedFlexibleMetrics.find(virtualNodeId);
-              if (metricsIt != treeNode.metricSet.linkedMetrics.end() ||
-                  flexibleIt !=
-                      treeNode.metricSet.linkedFlexibleMetrics.end()) {
-                const auto &linkedMetrics =
-                    (metricsIt != treeNode.metricSet.linkedMetrics.end())
-                        ? metricsIt->second
-                        : emptyMetrics;
-                const auto &linkedFlexibleMetrics =
-                    (flexibleIt !=
-                     treeNode.metricSet.linkedFlexibleMetrics.end())
-                        ? flexibleIt->second
-                        : emptyFlexibleMetrics;
-                packMetrics(linkedMetrics, linkedFlexibleMetrics,
-                            /*isRoot=*/false);
-              } else {
-                writer.packMap(0);
-              }
+              const auto &linkedMetrics =
+                  (metricsIt != treeNode.metricSet.linkedMetrics.end())
+                      ? metricsIt->second
+                      : emptyMetrics;
+              writer.packMap(countMetricEntries(linkedMetrics, /*isRoot=*/false) +
+                             countPromotedFlexibleMetricEntries(
+                                 virtualNode.children,
+                                 treeNode.metricSet.linkedFlexibleMetrics));
+              packMetrics(linkedMetrics, /*isRoot=*/false);
+              // Linked flexible metrics are only attached to <metric_node>
+              // children, so they are always packed into the parent frame.
+              packPromotedFlexibleMetrics(virtualNode.children,
+                                          treeNode.metricSet
+                                              .linkedFlexibleMetrics);
 
               writer.packStr("children");
               writer.packArray(
