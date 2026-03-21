@@ -54,6 +54,8 @@ def fp4_to_fp_linear_kernel(inp_ptr, out_ptr, packed_m: ttgl.constexpr, n: ttgl.
 
 
 def test_fp4_to_fp_linear_path(device):
+    if is_cuda() and torch.cuda.get_device_capability(0)[0] < 90:
+        pytest.skip("unsupported on cuda < 90")
     m = 16
     n = THREADS_PER_WARP // 2
     packed_m = m // 2
