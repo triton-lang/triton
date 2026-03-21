@@ -277,6 +277,10 @@ python third_party/proton/tutorials/cupti_memory_growth.py \
   --clear-completed-phases
 ```
 
+This repo-relative form only uses checkout code if the Triton Python package on that
+machine was installed from that checkout. If `triton_version_file` in the summary still
+points at `site-packages`, then the run used the installed wheel, not the checkout.
+
 If the target GPU machine only has an installed Triton wheel, copy the script there and run:
 
 ```bash
