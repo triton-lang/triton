@@ -4,6 +4,7 @@ add_triton_library(TritonAnalysis
   BufferRegion.cpp
   Membar.cpp
   Alias.cpp
+  RangeAnalysis.cpp
   Utility.cpp
 
   DEPENDS

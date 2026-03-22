@@ -1,4 +1,4 @@
-#include "third_party/amd/include/Analysis/RangeAnalysis.h"
+#include "triton/Analysis/RangeAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -6,7 +6,6 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Iterators.h"
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
-#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -562,8 +561,10 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
         return lattice->getValue();
       });
 
-  if (auto sliceOp = dyn_cast<triton::amdgpu::ExtractSliceOp>(op)) {
-    joinCallback(sliceOp->getResult(0), argIntValueRanges[0]);
+  // Keep this as a name check so the shared analysis does not need to depend
+  // on the AMD dialect library.
+  if (op->getName().getStringRef() == "amdg.extract_slice") {
+    joinCallback(op->getResult(0), argIntValueRanges[0]);
     return success();
   }
 
