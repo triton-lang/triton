@@ -115,6 +115,17 @@ public:
   }
 
 protected:
+  bool canUsUnsignedBounds(OpTy op) {
+    // The unsigned-style bounds used by signed div/rem visitors require a
+    // nonnegative numerator. Negative numerators can cross zero and invalidate
+    // those inferences.
+    if constexpr (std::is_same_v<OpTy, arith::DivSIOp> ||
+                  std::is_same_v<OpTy, arith::RemSIOp>)
+      return succeeded(
+          dataflow::staticallyNonNegative(this->getRangeSolver(), op.getLhs()));
+    return true;
+  }
+
   virtual int64_t getContiguity(OpTy op, const AxisInfo &lhs,
                                 const AxisInfo &rhs, int dim) {
     return 1;
@@ -447,11 +458,8 @@ private:
       // universally valid when the numerator is known nonnegative.  Without
       // that, a legal run like (-|Y|, -|Y|+1) over constant Y gives (-1, 0),
       // so no nontrivial constancy is guaranteed.
-      if constexpr (std::is_same_v<OpTy, arith::DivSIOp>) {
-        if (failed(dataflow::staticallyNonNegative(this->getRangeSolver(),
-                                                   op.getLhs())))
-          return constancy;
-      }
+      if (!this->canUsUnsignedBounds(op))
+        return constancy;
       constancy = std::max(constancy,
                            gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                                rhs.getDivisibility(dim)));
@@ -495,16 +503,6 @@ public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
-  bool canUseUnsignedStyleBounds(OpTy op) {
-    // For signed remainder, the unsigned-style contiguity/divisibility bounds
-    // below require a nonnegative numerator. Otherwise a legal run like
-    // [-64, -63, ...] % 32 = [0, -31, ...] breaks both properties.
-    if constexpr (std::is_same_v<OpTy, arith::RemSIOp>)
-      return succeeded(
-          dataflow::staticallyNonNegative(this->getRangeSolver(), op.getLhs()));
-    return true;
-  }
-
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
     auto resTy = dyn_cast<RankedTensorType>(op.getType());
@@ -521,7 +519,7 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
-    if (canUseUnsignedStyleBounds(op) &&
+    if (this->canUsUnsignedBounds(op) &&
         AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
       contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
@@ -532,7 +530,7 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    if (rhs.getConstancy(dim) > 1 && canUseUnsignedStyleBounds(op)) {
+    if (rhs.getConstancy(dim) > 1 && this->canUsUnsignedBounds(op)) {
       // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
       // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
       // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
