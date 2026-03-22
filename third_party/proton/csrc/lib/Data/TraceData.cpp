@@ -555,8 +555,16 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
       // Don't process flexible metrics for now
       processMetricMaps(event.metricSet.metrics,
                         &event.metricSet.flexibleMetrics, baseContexts);
-      for (const auto &[targetEntryId, linkedMetrics] :
-           event.metricSet.linkedMetrics) {
+      std::vector<size_t> sortedLinkedTargetEntryIds;
+      sortedLinkedTargetEntryIds.reserve(event.metricSet.linkedMetrics.size());
+      for (const auto &[targetEntryId, _] : event.metricSet.linkedMetrics) {
+        sortedLinkedTargetEntryIds.push_back(targetEntryId);
+      }
+      std::sort(sortedLinkedTargetEntryIds.begin(),
+                sortedLinkedTargetEntryIds.end());
+      for (const auto targetEntryId : sortedLinkedTargetEntryIds) {
+        const auto &linkedMetrics =
+            event.metricSet.linkedMetrics.at(targetEntryId);
         auto contexts = baseContexts;
         auto &virtualContexts = targetIdToVirtualContexts[targetEntryId];
         contexts.insert(contexts.end(), virtualContexts.begin(),
