@@ -5,7 +5,8 @@
 
 namespace mlir::triton::NVIDIA {
 
-class TargetInfo : public mlir::triton::TargetInfoBase {
+class __attribute__((visibility("default"))) TargetInfo
+    : public mlir::triton::TargetInfoBase {
 public:
   TargetInfo(int computeCapability, int ptxVersion)
       : computeCapability(computeCapability), ptxVersion(ptxVersion) {}

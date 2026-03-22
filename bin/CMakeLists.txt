@@ -1,10 +1,12 @@
 get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 
+add_subdirectory(FakeLibTriton)
+
 add_executable(triton-opt triton-opt.cpp)
 
 target_compile_options(triton-opt PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-opt PRIVATE
-  ${triton_libs}
+  ${TRITON_COMPILER_LIBRARIES}
   # tests
   TritonTestAnalysis
   TritonTestDialect
@@ -16,9 +18,11 @@ target_link_libraries(triton-opt PRIVATE
   MLIRRegisterAllDialects
   MLIRRegisterAllPasses
   MLIRTransforms
+  TritonNVIDIAGPUToLLVM
 )
 
 mlir_check_all_link_libraries(triton-opt)
+export_executable_symbols_for_plugins(triton-opt)
 
 add_executable(triton-reduce triton-reduce.cpp)
 mlir_check_all_link_libraries(triton-reduce)
