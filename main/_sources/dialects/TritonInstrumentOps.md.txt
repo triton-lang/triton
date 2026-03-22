@@ -135,6 +135,39 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 
 
 
+### `tti.experimental_gsan_tensordesc_info` (triton::instrument::ExperimentalGSanTensorDescInfoOp)
+
+_Decode GSan descriptor metadata from a native tensor descriptor_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_gsan_tensordesc_info` $desc attr-dict `:` qualified(type($desc)) `->` type($result)
+```
+
+Decodes a native tensor descriptor into the underlying
+base pointer, shape and stride values.
+
+Traits: `AlwaysSpeculatableImplTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc` | tensor descriptor type |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | variadic of any type |
+
+
+
 ### `tti.experimental_lock_acquire` (triton::instrument::ExperimentalLockAcquireOp)
 
 _Acquire a lock._
