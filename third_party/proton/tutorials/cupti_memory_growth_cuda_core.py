@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Compare Proton memory growth across CUPTI library variants without Torch.
+"""Compare Proton memory growth across CUPTI library variants.
 
 Examples:
 
@@ -36,6 +36,23 @@ Examples:
 This variant drives CUDA work through ``cuda.core.experimental`` and controls
 Proton through ``triton._C.libproton`` directly so the process can stay free of
 framework-bundled CUPTI libraries.
+
+  Reproduce the same graph-warning path in a process that preloads Torch before
+  Proton starts:
+
+    python third_party/proton/tutorials/cupti_memory_growth_cuda_core.py \
+      --output-dir /tmp/proton-cuda-core-torch-graph-1000x32 \
+      --iterations 1000 \
+      --warmup 5 \
+      --phase-every 1 \
+      --sample-every 100 \
+      --lifecycle step \
+      --kernels-per-step 32 \
+      --clear-completed-phases \
+      --workload graph \
+      --capture-before-start \
+      --post-finalize-sleep-ms 1000 \
+      --preload-torch
 """
 
 from __future__ import annotations
@@ -189,6 +206,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="When --workload=graph, capture the graph before Proton starts.",
     )
+    parser.add_argument(
+        "--preload-torch",
+        action="store_true",
+        help=(
+            "Import torch before libproton so the process also maps any framework-bundled "
+            "libcupti DSOs (for example, torch/lib/libcupti.so.13)."
+        ),
+    )
     return parser
 
 
@@ -235,7 +260,7 @@ def _query_nvidia_smi_process_memory_mb(pid: int) -> int | None:
     return 0
 
 
-def _read_loaded_shared_objects(needle: str) -> list[str]:
+def _read_loaded_shared_objects(needle: str, *, exact_basename: bool = False) -> list[str]:
     maps_path = Path("/proc/self/maps")
     if not maps_path.exists():
         return []
@@ -249,11 +274,24 @@ def _read_loaded_shared_objects(needle: str) -> list[str]:
         if len(parts) < 6:
             continue
         path = parts[-1]
+        if exact_basename and Path(path).name != needle:
+            continue
         if path in seen:
             continue
         seen.add(path)
         loaded.append(path)
     return loaded
+
+
+def _maybe_preload_torch(enabled: bool) -> dict[str, Any] | None:
+    if not enabled:
+        return None
+
+    torch = importlib.import_module("torch")
+    return {
+        "version": getattr(torch, "__version__", None),
+        "file": str(Path(torch.__file__).resolve()) if getattr(torch, "__file__", None) else None,
+    }
 
 
 def _load_cupti_info(cupti_dir: Path) -> dict[str, Any]:
@@ -431,6 +469,16 @@ def _compare_summaries(summaries: list[dict[str, Any]]) -> dict[str, Any]:
             "Both runs resolved the same loaded libcupti.so path(s). "
             "Verify the target machine actually switched CUPTI variants."
         )
+
+    base_loaded_all = base.get("loaded_libcupti_objects_after_start", [])
+    other_loaded_all = other.get("loaded_libcupti_objects_after_start", [])
+    comparison["loaded_libcupti_objects_after_start"] = {
+        "base_label": base["label"],
+        "other_label": other["label"],
+        "base": base_loaded_all,
+        "other": other_loaded_all,
+        "same": sorted(base_loaded_all) == sorted(other_loaded_all),
+    }
     return comparison
 
 
@@ -439,6 +487,7 @@ def _run_single(args: argparse.Namespace) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     _configure_cupti_env(args.cupti_dir)
+    preloaded_torch = _maybe_preload_torch(args.preload_torch)
 
     triton = importlib.import_module("triton")
     proton_data = importlib.import_module("triton.profiler.data")
@@ -498,6 +547,8 @@ def _run_single(args: argparse.Namespace) -> int:
         "post_finalize_sleep_ms": args.post_finalize_sleep_ms,
         "workload": args.workload,
         "capture_before_start": bool(args.capture_before_start),
+        "preload_torch": bool(args.preload_torch),
+        "preloaded_torch": preloaded_torch,
         "triton_version_file": str(Path(triton.__file__).resolve()),
         "device_id": args.device,
         "device_name": device.name,
@@ -509,14 +560,20 @@ def _run_single(args: argparse.Namespace) -> int:
             "TRITON_PROFILE_BUFFER_SIZE": os.environ.get("TRITON_PROFILE_BUFFER_SIZE"),
             "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH"),
         },
-        "loaded_cupti_libs_before_start": _read_loaded_shared_objects("libcupti.so"),
+        "loaded_cupti_libs_before_start": _read_loaded_shared_objects(
+            "libcupti.so", exact_basename=True
+        ),
+        "loaded_libcupti_objects_before_start": _read_loaded_shared_objects("libcupti"),
     }
 
     samples: list[dict[str, Any]] = []
     samples.append(_collect_sample(iteration=None, stage="pre_start", phase=current_phase, stream=stream))
     session = libproton.start(str(profile_base), "shadow", "tree", "cupti", profile_mode)
     samples.append(_collect_sample(iteration=None, stage="post_start", phase=current_phase, stream=stream))
-    run_metadata["loaded_cupti_libs_after_start"] = _read_loaded_shared_objects("libcupti.so")
+    run_metadata["loaded_cupti_libs_after_start"] = _read_loaded_shared_objects(
+        "libcupti.so", exact_basename=True
+    )
+    run_metadata["loaded_libcupti_objects_after_start"] = _read_loaded_shared_objects("libcupti")
 
     if args.workload == "graph" and not args.capture_before_start:
         graph = _build_graph(stream, kernel, buffer, args.numel, args.block_size, kernels_per_step=1)
@@ -572,7 +629,10 @@ def _run_single(args: argparse.Namespace) -> int:
                 stream=stream,
             )
         )
-    run_metadata["loaded_cupti_libs_after_finalize"] = _read_loaded_shared_objects("libcupti.so")
+    run_metadata["loaded_cupti_libs_after_finalize"] = _read_loaded_shared_objects(
+        "libcupti.so", exact_basename=True
+    )
+    run_metadata["loaded_libcupti_objects_after_finalize"] = _read_loaded_shared_objects("libcupti")
 
     sample_path = output_dir / f"samples_{args.label}.csv"
     summary_path = output_dir / f"summary_{args.label}.json"
@@ -650,6 +710,8 @@ def _run_compare(args: argparse.Namespace) -> int:
             cmd.append("--clear-completed-phases")
         if args.capture_before_start:
             cmd.append("--capture-before-start")
+        if args.preload_torch:
+            cmd.append("--preload-torch")
 
         subprocess.run(cmd, check=True)
         summary_path = output_dir / f"summary_{label}.json"

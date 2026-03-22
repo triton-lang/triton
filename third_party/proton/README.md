@@ -259,8 +259,17 @@ The tutorial [`tutorials/cupti_memory_growth.py`](tutorials/cupti_memory_growth.
 If that process also loads framework-bundled CUPTI libraries, use the cleaner
 [`tutorials/cupti_memory_growth_cuda_core.py`](tutorials/cupti_memory_growth_cuda_core.py)
 variant instead. It drives CUDA work through `cuda.core.experimental` and
-controls Proton through `triton._C.libproton` directly, so the process only
-loads the selected `libcupti.so`.
+controls Proton through `triton._C.libproton` directly.
+
+By default, the CUDA-core tutorial keeps the process in a clean single-CUPTI
+configuration and only loads Triton's selected `libcupti.so`.
+
+If you want to mimic a framework process that already mapped another CUPTI DSO
+before Proton starts, add `--preload-torch`. In that mode the summary JSON
+records both:
+
+- `loaded_cupti_libs_*`: exact `libcupti.so` selections from Triton's packaged directories
+- `loaded_libcupti_objects_*`: every mapped `libcupti*` object, including entries such as `torch/lib/libcupti.so.13`
 
 Recommended workflow:
 
@@ -312,6 +321,26 @@ python third_party/proton/tutorials/cupti_memory_growth_cuda_core.py \
   --workload direct
 ```
 
+To reproduce the CUDA-graph warning path in a process that preloads Torch's
+bundled `libcupti.so.13` before Proton starts:
+
+```bash
+cd "$HOME/code/triton"
+python third_party/proton/tutorials/cupti_memory_growth_cuda_core.py \
+  --output-dir /tmp/proton-cuda-core-torch-graph-1000x32 \
+  --iterations 1000 \
+  --warmup 5 \
+  --phase-every 1 \
+  --sample-every 100 \
+  --lifecycle step \
+  --kernels-per-step 32 \
+  --clear-completed-phases \
+  --workload graph \
+  --capture-before-start \
+  --post-finalize-sleep-ms 1000 \
+  --preload-torch
+```
+
 If the target GPU machine only has an installed Triton wheel, copy the script there and run:
 
 ```bash
@@ -341,6 +370,24 @@ python /tmp/cupti_memory_growth_cuda_core.py \
   --workload direct
 ```
 
+And for the Torch-preloaded graph-warning probe:
+
+```bash
+python /tmp/cupti_memory_growth_cuda_core.py \
+  --output-dir /tmp/proton-cuda-core-torch-graph-1000x32 \
+  --iterations 1000 \
+  --warmup 5 \
+  --phase-every 1 \
+  --sample-every 100 \
+  --lifecycle step \
+  --kernels-per-step 32 \
+  --clear-completed-phases \
+  --workload graph \
+  --capture-before-start \
+  --post-finalize-sleep-ms 1000 \
+  --preload-torch
+```
+
 3. Inspect the generated artifacts.
 The script writes one `summary_<label>.json` per CUPTI variant, plus `comparison.json`, under `--output-dir`.
 
@@ -350,6 +397,7 @@ The script writes one `summary_<label>.json` per CUPTI variant, plus `comparison
   - `samples.nvidia_smi_gpu_delta_mb`
   - `selected_cupti`
   - `loaded_cupti_libs_after_start`
+  - `loaded_libcupti_objects_after_start`
   - `env`
 
 If the issue is CUPTI-specific, one variant should show higher host RSS growth while `nvidia_smi_gpu_delta_mb` stays near zero in both runs.
@@ -358,14 +406,19 @@ For the CUDA-core-based comparison, `loaded_cupti_libs_after_start` should conta
 exactly one path. If it contains more than one `libcupti.so`, you are no longer
 running in the clean single-CUPTI configuration.
 
+For `--preload-torch`, expect `loaded_libcupti_objects_after_start` to contain at
+least two entries: Triton's selected `libcupti.so` and Torch's
+`libcupti.so.13`. That dual-CUPTI loader topology is intentional in that mode.
+
 4. Verify that the machine actually switched CUPTI variants.
-If both runs report the same `loaded_cupti_libs_after_start` value, the target machine did not switch to a different `libcupti.so`, so the comparison is not valid yet. In that case, inspect `selected_cupti`, `loaded_cupti_libs_after_start`, and `env` in both summary files before drawing conclusions from the RSS numbers.
+If both runs report the same `loaded_cupti_libs_after_start` value, the target machine did not switch to a different `libcupti.so`, so the comparison is not valid yet. In that case, inspect `selected_cupti`, `loaded_cupti_libs_after_start`, `loaded_libcupti_objects_after_start`, and `env` in both summary files before drawing conclusions from the RSS numbers.
 
 Current interpretation guidance for the CUDA-core-based tutorial:
 
 - `--workload direct` keeps retained RSS near zero in a clean process for both CUPTI variants.
 - `--workload graph --capture-before-start` reproduces Proton's `Cannot find graph for graphExecId` warning and shows stable retained RSS growth that is similar for both variants.
 - `--workload graph` captured after profiling starts can show transient differences if you sample immediately after `finalize()`. Use `--post-finalize-sleep-ms 1000` before treating a retained RSS gap as a stable CUPTI-version effect.
+- `--preload-torch` is useful when the real workload already imports Torch before Proton starts. In our GB200 validation, that mode reliably showed both Torch's `libcupti.so.13` and Triton's selected `libcupti.so`, but still produced the same retained RSS for generic and Blackwell CUPTI in the single-process graph-warning probe.
 
 ### Visualizing the profile data
 
