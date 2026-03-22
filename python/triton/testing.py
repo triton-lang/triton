@@ -124,7 +124,8 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         return _summarize_statistics(ret, quantiles, return_mode)
 
 
-def do_bench(fn, warmup=25, rep=100, n_warmup = None, n_repeat = None, grad_to_none=None, quantiles=None, return_mode="mean"):
+def do_bench(fn, warmup=25, rep=100, n_warmup=None, n_repeat=None, grad_to_none=None, quantiles=None,
+             return_mode="mean"):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -174,7 +175,7 @@ def do_bench(fn, warmup=25, rep=100, n_warmup = None, n_repeat = None, grad_to_n
             n_warmup = max(1, int(warmup / estimate_ms))
         if n_repeat is None:
             n_repeat = max(1, int(rep / estimate_ms))
-    
+
     start_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
     # Warm-up
