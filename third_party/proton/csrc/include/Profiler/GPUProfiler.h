@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <iostream>
 #include <map>
 #include <stdexcept>
 #include <thread>
@@ -205,6 +206,19 @@ protected:
       });
     }
 
+    size_t purgeCompleted(uint64_t completedId) {
+      auto liveCorrelations = corrIdToExternId.snapshot();
+      size_t purged = 0;
+      for (const auto &[correlationId, externId] : liveCorrelations) {
+        if (correlationId > completedId)
+          continue;
+        corrIdToExternId.erase(correlationId);
+        externIdToState.erase(externId);
+        ++purged;
+      }
+      return purged;
+    }
+
     template <typename FlushFnT>
     void flush(uint64_t maxRetries, uint64_t sleepUs, FlushFnT &&flushFn) {
       flushFn();
@@ -216,6 +230,17 @@ protected:
         flushFn();
         completedId = maxCompletedCorrelationId.load();
         --retries;
+      }
+      if (completedId >= submittedId) {
+        auto liveBefore = corrIdToExternId.size();
+        auto purged = purgeCompleted(completedId);
+        if (purged > 0 && getBoolEnv("PROTON_CORRELATION_DEBUG", false)) {
+          std::cerr << "[PROTON] Purged " << purged
+                    << " completed correlation entries at flush"
+                    << " (live_before=" << liveBefore
+                    << ", live_after=" << corrIdToExternId.size()
+                    << ", completed_id=" << completedId << ")" << std::endl;
+        }
       }
     }
   };

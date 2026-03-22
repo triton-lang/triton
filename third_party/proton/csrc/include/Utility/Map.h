@@ -88,6 +88,11 @@ public:
     return map.size();
   }
 
+  Container snapshot() const {
+    std::shared_lock<std::shared_mutex> lock(mutex);
+    return map;
+  }
+
   std::optional<std::reference_wrapper<Value>> find(const Key &key) {
     std::shared_lock<std::shared_mutex> lock(mutex);
     auto it = map.find(key);
