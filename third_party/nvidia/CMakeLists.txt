@@ -18,41 +18,15 @@ if(TRITON_BUILD_PYTHON_MODULE)
     message(FATAL_ERROR "clang++ is required to build gsan.ll")
   endif()
 
-  function(_triton_resolve_cuda_root out_var candidate_path)
-    if(NOT candidate_path)
-      return()
-    endif()
-    if(EXISTS "${candidate_path}/include/cuda_runtime.h")
-      set(${out_var} "${candidate_path}" PARENT_SCOPE)
-      return()
-    endif()
-    if(EXISTS "${candidate_path}/cuda_runtime.h")
-      get_filename_component(_cuda_root "${candidate_path}" DIRECTORY)
-      set(${out_var} "${_cuda_root}" PARENT_SCOPE)
-    endif()
-  endfunction()
-
   set(GSAN_RUNTIME_CUDA_PATH "${CMAKE_CURRENT_SOURCE_DIR}/backend")
-  foreach(candidate
-          "${TRITON_CUDART_PATH}"
-          "${TRITON_CUDACRT_PATH}"
-          "$ENV{CUDA_PATH}"
-          "$ENV{CUDA_HOME}")
-    _triton_resolve_cuda_root(_resolved_cuda_root "${candidate}")
-    if(_resolved_cuda_root)
-      set(GSAN_RUNTIME_CUDA_PATH "${_resolved_cuda_root}")
+  foreach(candidate "${TRITON_CUDART_PATH}" "${TRITON_CUDACRT_PATH}")
+    if(EXISTS "${candidate}/include/cuda_runtime.h")
+      set(GSAN_RUNTIME_CUDA_PATH "${candidate}")
       break()
     endif()
-  endforeach()
-
-  set(GSAN_RUNTIME_INCLUDE_FLAGS
-      -isystem "${CMAKE_CURRENT_SOURCE_DIR}/backend/include")
-  foreach(candidate
-          "${TRITON_CUDART_PATH}"
-          "${TRITON_CUDACRT_PATH}"
-          "${TRITON_CUDA_STDLIB_PATH}")
-    if(candidate AND EXISTS "${candidate}")
-      list(APPEND GSAN_RUNTIME_INCLUDE_FLAGS -isystem "${candidate}")
+    if(EXISTS "${candidate}/cuda_runtime.h")
+      get_filename_component(GSAN_RUNTIME_CUDA_PATH "${candidate}" DIRECTORY)
+      break()
     endif()
   endforeach()
 
@@ -78,7 +52,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
               -Wno-unknown-cuda-version
               ${GSAN_RUNTIME_PLATFORM_FLAGS}
               -isystem "${CMAKE_CURRENT_SOURCE_DIR}/clang_cuda_shims"
-              ${GSAN_RUNTIME_INCLUDE_FLAGS}
+              -isystem "${CMAKE_CURRENT_SOURCE_DIR}/backend/include"
               "${GSAN_RUNTIME_SRC}" -o "${GSAN_RUNTIME_IR}"
       DEPENDS "${GSAN_RUNTIME_SRC}" ${GSAN_RUNTIME_HDRS}
       COMMENT "Building GSan runtime"
