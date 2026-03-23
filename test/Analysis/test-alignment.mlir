@@ -1204,16 +1204,11 @@ tt.func @dead_op_pessimistic() {
 
 // -----
 
-// Negative i32 constants should be sign-extended to int64_t, not zero-extended.
-// getSExtValue(-8 as i32) = -8, not 4294967288.
 tt.func @negative_constants() {
   // expected-remark @below {{contiguity = [1], divisibility = [8], constancy = [1], constant_value = -8}}
   %neg8_scalar = arith.constant -8 : i32
-
   // expected-remark @below {{contiguity = [1], divisibility = [8], constancy = [128], constant_value = -8}}
   %neg8_dense = arith.constant dense<-8> : tensor<128xi32>
-
-  // -8 + 16 = 8, not 4294967288 + 16 = 4294967304.
   // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [128], constant_value = 16}}
   %sixteen = arith.constant dense<16> : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [8], constancy = [128], constant_value = 8}}
