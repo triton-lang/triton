@@ -146,7 +146,6 @@ def _p_matmul(
         MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
         if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
             tl.static_assert(is_w_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
-            tl.static_assert(not is_x_microscaled)
             # We have pack 2 fp4 values in a byte but we divide the dimension by 2
             # when swizzling
             W_K_DIVISOR: tl.constexpr = 1
@@ -328,7 +327,7 @@ def _p_matmul(
                 tl.static_assert(X_TMA_MODE is None)
                 XPtrs = XBase + offs_x_m + offs_x_k
                 XBase += (BLOCK_K // block_div) * SPLIT_K * stride_x_k
-                mask_k = (off_k_x // block_div + tl.arange(0, BLOCK_K // block_div)) * block_div < K - off_k_x
+                mask_k = tl.arange(0, BLOCK_K // block_div) * block_div < K - off_k_x
                 if EVEN_K:
                     if SPLIT_K > 1:
                         x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
@@ -365,7 +364,9 @@ def _p_matmul(
             elif x_format == "fp16" or x_format == "bf16":
                 x_scales: tl.constexpr = None
             else:
-                if get_dtype(WMxScale) == tl.uint8:
+                if not is_w_microscaled:
+                    x_scales: tl.constexpr = None
+                elif get_dtype(WMxScale) == tl.uint8:
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
                 else:
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 1.0, dtype=tl.float8e4nv)

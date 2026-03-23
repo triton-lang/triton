@@ -289,6 +289,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if torch.cuda.get_device_capability()[0] < 10:
             if "mxfloat4" not in weight_dtype_str:
                 pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
+            if act_dtype_str in {"mxfloat4_e2m1", "mxfloat8_e4m3fn", "nvfp4_e2m1"}:
+                pytest.skip("Hopper mxfp4 swizzled weights do not support microscaled lhs.")
 
     if a_hbm_swizzling:
         # current x scale swizzling requires B200, batched input, microscaled act and persistent case
