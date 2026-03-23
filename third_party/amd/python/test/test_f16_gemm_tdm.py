@@ -3,7 +3,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip_gfx1250, is_hip_cdna4
+from triton._internal_testing import is_hip_gfx1250
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 
@@ -16,8 +16,10 @@ HAS_TENSOR_DESC = supports_tensor_descriptor()
 # Todo: Enable this kernel when host tensor descriptor lowering is fully implemented
 HAS_HOST_TENSOR_DESC = supports_tensor_descriptor() and False
 
+
 @triton.jit
-def gemm_device_tdm_kernel(a_ptr, b_ptr, c_ptr, M, N, K, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+def gemm_device_tdm_kernel(a_ptr, b_ptr, c_ptr, M, N, K, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+                           BLOCK_K: tl.constexpr):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
@@ -53,7 +55,7 @@ def gemm_device_tdm_kernel(a_ptr, b_ptr, c_ptr, M, N, K, BLOCK_M: tl.constexpr, 
 
 @triton.jit
 def gemm_host_tdm_kernel(a_desc, b_desc, c_desc, M, N, K, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
-                    BLOCK_K: tl.constexpr):
+                         BLOCK_K: tl.constexpr):
     # GEMM with tensor descriptors as arguments
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
@@ -124,8 +126,8 @@ if __name__ == "__main__":
 
     # Check if the requested mode is supported
     if use_tdm == 'device' and not HAS_TENSOR_DESC:
-        print(f"Warning: Device tensor descriptor not supported, skipping test")
+        print("Warning: Device tensor descriptor not supported, skipping test")
     elif use_tdm == 'host' and not HAS_HOST_TENSOR_DESC:
-        print(f"Warning: Host tensor descriptor not supported, skipping test")
+        print("Warning: Host tensor descriptor not supported, skipping test")
     else:
         test_gemm_fp16(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, use_tdm)

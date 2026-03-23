@@ -44,6 +44,7 @@ dtype_to_triton_type = {
 # Helper Functions
 # ============================================================================
 
+
 def pack_scale(x: torch.Tensor, preshuffle_factor: int = 128) -> torch.Tensor:
     """
     Pre-shuffle scales for optimized memory access.
@@ -140,20 +141,23 @@ def torch_gemm_mxfp(a, b, a_scale, b_scale, scale_block: int, M: int, N: int, K:
 # Triton Kernel
 # ============================================================================
 
+
 @triton.jit
-def mxgemm_kernel(
-        # Data pointers
-        a_ptr, b_ptr, output_ptr, a_scale, b_scale,
-        # Dimensions
-        M, N, K,
-        # Strides
-        stride_scale, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
-        # Data format types
-        DTYPE_A: tl.constexpr, DTYPE_B: tl.constexpr,
-        # Block dimensions
-        SCALE_BLOCK: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-        GROUP_SIZE_M: tl.constexpr,
-):
+def mxgemm_kernel(a_ptr, b_ptr, output_ptr,  #
+                  a_scale, b_scale,  #
+                  M, N, K,  #
+                  stride_scale,  #
+                  stride_am, stride_ak,  #
+                  stride_bk, stride_bn,  #
+                  stride_cm, stride_cn,  #
+                  DTYPE_A: tl.constexpr,  #
+                  DTYPE_B: tl.constexpr,  #
+                  SCALE_BLOCK: tl.constexpr,  #
+                  BLOCK_M: tl.constexpr,  #
+                  BLOCK_N: tl.constexpr,  #
+                  BLOCK_K: tl.constexpr,  #
+                  GROUP_SIZE_M: tl.constexpr,  #
+                  ):
     """
     MXFP GEMM kernel: C = A @ B with microscaling.
 
@@ -238,14 +242,12 @@ def mxgemm_kernel(
         # Unshuffle in registers: [preshuffled_dim, K_scale_preshuffled] -> [dim, K_scale]
         SCALE_KWIDTH: tl.constexpr = 4 if BLOCK_K_SCALE >= 4 else BLOCK_K_SCALE
         scale_a = tl.reshape(
-            scale_a_raw,
-            (BLOCK_M_PRESHUFFLED, BLOCK_K_SCALE // SCALE_KWIDTH, PRESHUFFLE_FACTOR // 4, 4, SCALE_KWIDTH))
+            scale_a_raw, (BLOCK_M_PRESHUFFLED, BLOCK_K_SCALE // SCALE_KWIDTH, PRESHUFFLE_FACTOR // 4, 4, SCALE_KWIDTH))
         scale_a = tl.permute(scale_a, (0, 3, 2, 1, 4))
         scale_a = tl.reshape(scale_a, (BLOCK_M, BLOCK_K_SCALE))
 
         scale_b = tl.reshape(
-            scale_b_raw,
-            (BLOCK_N_PRESHUFFLED, BLOCK_K_SCALE // SCALE_KWIDTH, PRESHUFFLE_FACTOR // 4, 4, SCALE_KWIDTH))
+            scale_b_raw, (BLOCK_N_PRESHUFFLED, BLOCK_K_SCALE // SCALE_KWIDTH, PRESHUFFLE_FACTOR // 4, 4, SCALE_KWIDTH))
         scale_b = tl.permute(scale_b, (0, 3, 2, 1, 4))
         scale_b = tl.reshape(scale_b, (BLOCK_N, BLOCK_K_SCALE))
 
@@ -350,22 +352,19 @@ def run_mxfp_gemm(
     grid = (num_blocks, )
 
     mxgemm_kernel[grid](
-        a_d, b_d, c_d,
-        a_scale_d, b_scale_d,
-        M, N, K,
-        a_scale_d.stride(0),
-        a_d.stride(0),
-        a_d.stride(1),
-        b_d.stride(0),
-        b_d.stride(1),
-        c_d.stride(0),
-        c_d.stride(1),
-        dtype_to_triton_type[dtype_a],
-        dtype_to_triton_type[dtype_b],
-        SCALE_BLOCK,
-        BLOCK_M, BLOCK_N, BLOCK_K,
-        group_size_m,
-        num_warps=num_warps,
+        a_d, b_d, c_d,  #
+        a_scale_d, b_scale_d,  #
+        M, N, K,  #
+        a_scale_d.stride(0),  #
+        a_d.stride(0), a_d.stride(1),  #
+        b_d.stride(0), b_d.stride(1),  #
+        c_d.stride(0), c_d.stride(1),  #
+        dtype_to_triton_type[dtype_a],  #
+        dtype_to_triton_type[dtype_b],  #
+        SCALE_BLOCK,  #
+        BLOCK_M, BLOCK_N, BLOCK_K,  #
+        group_size_m,  #
+        num_warps=num_warps,  #
     )
 
     torch.cuda.synchronize()
@@ -381,23 +380,22 @@ def run_mxfp_gemm(
 # Pytest Test Functions
 # ============================================================================
 
+
 @pytest.mark.parametrize("M, N, K", [(256, 256, 512)])
 @pytest.mark.parametrize("BM, BN, BK", [(128, 128, 128)])
 @pytest.mark.parametrize("dtype_a", ['float8_e5m2', 'float8_e4m3', 'float4'])
 @pytest.mark.parametrize("dtype_b", ['float8_e5m2', 'float8_e4m3', 'float4'])
-@pytest.mark.skipif(not is_hip_gfx1250(),
-                    reason="Scaled dot with TDM is only tested on gfx1250.")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Scaled dot with TDM is only tested on gfx1250.")
 def test_mxgemm(M, N, K, BM, BN, BK, dtype_a, dtype_b):
     """Test MXFP GEMM with descriptor loads and pre-shuffled scales."""
 
-    output, ref, max_diff = run_mxfp_gemm(
-        M, N, K,
-        BM, BN, BK,
-        dtype_a, dtype_b,
-        group_size_m=1,
-    )
+    output, ref, max_diff = run_mxfp_gemm(M, N, K,  #
+                                          BM, BN, BK,  #
+                                          dtype_a, dtype_b,  #
+                                          group_size_m=1)
 
     torch.testing.assert_close(output, ref, rtol=1e-5, atol=0.02)
+
 
 def main():
     parser = argparse.ArgumentParser(description='MXFP GEMM Kernel')
@@ -417,19 +415,13 @@ def main():
     print(f"Running MXFP GEMM: {args.dtype_a} x {args.dtype_b}")
     print(f"  Dimensions: M={args.M}, N={args.N}, K={args.K}")
     print(f"  Block sizes: BM={args.BM}, BN={args.BN}, BK={args.BK}")
-    print(f"  Mode: Descriptor loads with pre-shuffled scales")
+    print("  Mode: Descriptor loads with pre-shuffled scales")
 
-    output, ref, max_diff = run_mxfp_gemm(
-        args.M,
-        args.N,
-        args.K,
-        args.BM,
-        args.BN,
-        args.BK,
-        args.dtype_a,
-        args.dtype_b,
-        num_warps=args.num_warps,
-    )
+    output, ref, max_diff = run_mxfp_gemm(args.M, args.N, args.K,  #
+                                          args.BM, args.BN, args.BK,  #
+                                          args.dtype_a, args.dtype_b,  #
+                                          num_warps=args.num_warps,  #
+                                          )
 
     print("\nResults:")
     print(f"  Output range: [{output.min():.2f}, {output.max():.2f}]")
