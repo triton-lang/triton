@@ -151,7 +151,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
   if (std::string filename =
           mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-      fileExists(filename)) {
+      !filename.empty()) {
     TritonPlugin TP(filename);
     registerPluginPasses(TP);
     loadPluginDialects(TP, registry);

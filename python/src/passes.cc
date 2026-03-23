@@ -106,7 +106,7 @@ void init_triton_passes_ttgpuir(py::module &&m) {
 void init_plugin_passes(py::module &&m) {
   std::string filename =
       mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-  if (!fileExists(filename))
+  if (filename.empty())
     return;
 
   TritonPlugin TP(filename);
