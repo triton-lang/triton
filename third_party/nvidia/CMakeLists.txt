@@ -25,11 +25,20 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
 
   set(GSAN_RUNTIME_TOOLCHAIN_FLAGS)
-  if(CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES)
-    list(APPEND GSAN_RUNTIME_TOOLCHAIN_FLAGS -nostdinc++)
-    foreach(include_dir IN LISTS CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES)
-      list(APPEND GSAN_RUNTIME_TOOLCHAIN_FLAGS -isystem "${include_dir}")
-    endforeach()
+  set(GSAN_HOST_GNU_CXX "${CMAKE_CXX_COMPILER}")
+  if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    find_program(GSAN_HOST_GNU_CXX NAMES g++ c++)
+  endif()
+  if(GSAN_HOST_GNU_CXX)
+    execute_process(
+      COMMAND "${GSAN_HOST_GNU_CXX}" -print-file-name=libstdc++.so
+      OUTPUT_VARIABLE LIBSTDCXX_PATH
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(IS_ABSOLUTE "${LIBSTDCXX_PATH}")
+      get_filename_component(GCC_INSTALL_DIR "${LIBSTDCXX_PATH}" DIRECTORY)
+      list(APPEND GSAN_RUNTIME_TOOLCHAIN_FLAGS "--gcc-install-dir=${GCC_INSTALL_DIR}")
+    endif()
   endif()
 
   add_custom_command(
