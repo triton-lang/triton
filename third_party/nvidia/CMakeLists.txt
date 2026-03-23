@@ -25,22 +25,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
 
   set(GSAN_RUNTIME_TOOLCHAIN_FLAGS)
-  if(CMAKE_LIBRARY_ARCHITECTURE)
-    file(GLOB GSAN_RUNTIME_GCC_INSTALL_DIRS LIST_DIRECTORIES true
-         "/usr/lib/gcc/${CMAKE_LIBRARY_ARCHITECTURE}/*")
+  if(CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES)
+    list(APPEND GSAN_RUNTIME_TOOLCHAIN_FLAGS -nostdinc++)
+    foreach(include_dir IN LISTS CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES)
+      list(APPEND GSAN_RUNTIME_TOOLCHAIN_FLAGS -isystem "${include_dir}")
+    endforeach()
   endif()
-  if(NOT GSAN_RUNTIME_GCC_INSTALL_DIRS)
-    file(GLOB GSAN_RUNTIME_GCC_INSTALL_DIRS LIST_DIRECTORIES true
-         "/usr/lib/gcc/*/*")
-  endif()
-  list(SORT GSAN_RUNTIME_GCC_INSTALL_DIRS COMPARE NATURAL ORDER DESCENDING)
-  foreach(candidate ${GSAN_RUNTIME_GCC_INSTALL_DIRS})
-    get_filename_component(version "${candidate}" NAME)
-    if(EXISTS "/usr/include/c++/${version}/climits")
-      list(APPEND GSAN_RUNTIME_TOOLCHAIN_FLAGS "--gcc-install-dir=${candidate}")
-      break()
-    endif()
-  endforeach()
 
   add_custom_command(
       OUTPUT "${GSAN_RUNTIME_IR}"
