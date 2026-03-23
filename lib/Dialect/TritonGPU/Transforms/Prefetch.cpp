@@ -35,6 +35,7 @@
 // }
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -207,7 +208,8 @@ bool Prefetcher::isPromotableValue(Value v) {
   if (!v)
     return true;
   if (auto arg = dyn_cast<BlockArgument>(v))
-    return arg.getOwner() != forOp.getBody() || isLoopCarriedValue(arg);
+    return arg.getOwner() != forOp.getBody() || isLoopCarriedValue(arg) ||
+           arg == forOp.getInductionVar();
   // Loop-carried block arguments can be remapped to either the init value or
   // the yielded next-iteration value during rewrite.
   if (isLoopCarriedValue(v))
@@ -268,8 +270,8 @@ Value Prefetcher::materializeInitValue(Value v, OpBuilder &builder,
       [this](BlockArgument arg) -> Value {
         if (arg.getOwner() != forOp.getBody())
           return arg;
-        assert(isLoopCarriedValue(arg) &&
-               "cannot materialize induction variables before the loop");
+        if (arg == forOp.getInductionVar())
+          return forOp.getLowerBound();
         return forOp.getTiedLoopInit(arg)->get();
       },
       cache);
@@ -591,11 +593,13 @@ Prefetcher::createYieldValues(OpBuilder &builder, IRMapping &mapping,
     DenseMap<Value, Value> yieldCache;
     return cloneLoopValue(
         source, builder,
-        [this, &mapping](BlockArgument arg) -> Value {
+        [this, &builder, &mapping](BlockArgument arg) -> Value {
           if (arg.getOwner() != forOp.getBody())
             return arg;
-          assert(isLoopCarriedValue(arg) &&
-                 "cannot materialize induction variables after the loop");
+          if (arg == forOp.getInductionVar())
+            return arith::AddIOp::create(builder, forOp.getLoc(),
+                                         mapping.lookupOrDefault(arg),
+                                         forOp.getStep());
           return mapping.lookupOrDefault(getYieldValue(arg));
         },
         yieldCache);

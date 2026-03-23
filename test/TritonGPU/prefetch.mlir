@@ -389,18 +389,28 @@ tt.func @prefetch_pipelined_loop_args(%lb : index, %ub : index, %step : index, %
 }
 }  // end module
 
-// CHECK-LABEL: tt.func @no_prefetch_induction_var_source
-// CHECK: %[[LOOP:.+]] = scf.for %[[IV:.+]] = %arg0 to %arg1 step %arg2 iter_args(%[[ACC:.+]] = %[[CST:.+]]) -> (tensor<128x128xf32, {{.+}}>) {
-// CHECK:   %[[IV_I32:.+]] = arith.index_cast %[[IV]] : index to i32
-// CHECK:   %[[WAIT:.+]] = ttg.async_wait %arg3, %arg4 {num = 4 : i32}
-// CHECK:   %[[A_VIEW:.+]] = ttg.memdesc_index %{{.+}}[%[[IV_I32]]]
-// CHECK:   %[[A_VAL:.+]] = ttg.local_load %[[A_VIEW]] token %[[WAIT]]
-// CHECK:   %[[B_VIEW:.+]] = ttg.memdesc_index %{{.+}}[%[[IV_I32]]]
-// CHECK:   %[[B_VAL:.+]] = ttg.local_load %[[B_VIEW]] token %[[WAIT]]
-// CHECK:   %[[ACC_NEXT:.+]] = tt.dot %[[A_VAL]], %[[B_VAL]], %[[ACC]]
-// CHECK:   scf.yield %[[ACC_NEXT]]
+// CHECK-LABEL: tt.func @prefetch_induction_var_source
+// CHECK-DAG: %[[LB_I32:.+]] = arith.index_cast %arg0 : index to i32
+// CHECK-DAG: %[[INIT_WAIT:.+]] = ttg.async_wait %arg3, %arg4 {num = 4 : i32}
+// CHECK-DAG: %[[A0_VIEW:.+]] = ttg.memdesc_index %{{.+}}[%[[LB_I32]]]
+// CHECK-DAG: %[[A0_HEAD_SMEM:.+]] = ttg.memdesc_subslice %[[A0_VIEW]][0, 0]
+// CHECK-DAG: %[[A0_HEAD:.+]] = ttg.local_load %[[A0_HEAD_SMEM]] token %[[INIT_WAIT]]
+// CHECK-DAG: %[[B0_VIEW:.+]] = ttg.memdesc_index %{{.+}}[%[[LB_I32]]]
+// CHECK-DAG: %[[B0_HEAD_SMEM:.+]] = ttg.memdesc_subslice %[[B0_VIEW]][0, 0]
+// CHECK-DAG: %[[B0_HEAD:.+]] = ttg.local_load %[[B0_HEAD_SMEM]] token %[[INIT_WAIT]]
+// CHECK: %[[LOOP:.+]]:{{[0-9]+}} = scf.for %[[IV:.+]] = %arg0 to %arg1 step %arg2 iter_args({{.*}}%[[A_PREFETCH_ARG:.+]] = %[[A0_HEAD]], %[[B_PREFETCH_ARG:.+]] = %[[B0_HEAD]])
+// CHECK: %[[WAIT:.+]] = ttg.async_wait %arg3, %arg4 {num = 4 : i32}
+// CHECK-DAG: %[[IV_NEXT:.+]] = arith.addi %[[IV]], %arg2 : index
+// CHECK-DAG: %[[IV_NEXT_I32:.+]] = arith.index_cast %[[IV_NEXT]] : index to i32
+// CHECK-DAG: %[[A1_VIEW:.+]] = ttg.memdesc_index %{{.+}}[%[[IV_NEXT_I32]]]
+// CHECK-DAG: %[[A1_HEAD_SMEM:.+]] = ttg.memdesc_subslice %[[A1_VIEW]][0, 0]
+// CHECK-DAG: %[[A1_HEAD:.+]] = ttg.local_load %[[A1_HEAD_SMEM]] token %[[WAIT]]
+// CHECK-DAG: %[[B1_VIEW:.+]] = ttg.memdesc_index %{{.+}}[%[[IV_NEXT_I32]]]
+// CHECK-DAG: %[[B1_HEAD_SMEM:.+]] = ttg.memdesc_subslice %[[B1_VIEW]][0, 0]
+// CHECK-DAG: %[[B1_HEAD:.+]] = ttg.local_load %[[B1_HEAD_SMEM]] token %[[WAIT]]
+// CHECK: %{{.+}} = tt.dot %[[A_PREFETCH_ARG]], %[[B_PREFETCH_ARG]], %{{.+}}
 module attributes { "ttg.num-warps" = 4 : i32 } {
-tt.func @no_prefetch_induction_var_source(%lb : index, %ub : index, %step : index, %tok0 : !ttg.async.token, %tok1 : !ttg.async.token) -> tensor<128x128xf32, #C_RING> {
+tt.func @prefetch_induction_var_source(%lb : index, %ub : index, %step : index, %tok0 : !ttg.async.token, %tok1 : !ttg.async.token) -> tensor<128x128xf32, #C_RING> {
   %cst = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C_RING>
   %a = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #A_RING, #smem, mutable>
   %b = ttg.local_alloc : () -> !ttg.memdesc<3x32x128xf16, #B_RING, #smem, mutable>
