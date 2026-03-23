@@ -101,9 +101,8 @@ class Prefetcher {
                                     CarriedArgs &carriedArgs);
   void cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
                      IRMapping &mapping, const CarriedArgs &carriedArgs);
-  SmallVector<Value>
-  createYieldValues(OpBuilder &builder, IRMapping &mapping,
-                    const CarriedArgs &carriedArgs);
+  SmallVector<Value> createYieldValues(OpBuilder &builder, IRMapping &mapping,
+                                       const CarriedArgs &carriedArgs);
 
   void cloneElementwiseOps(Value &bRem, const SmallVector<Value> &vals,
                            OpBuilder &builder);
@@ -428,9 +427,8 @@ void Prefetcher::emitPrologue() {
   }
 }
 
-SmallVector<Value>
-Prefetcher::createLoopArgs(OpBuilder &builder,
-                           CarriedArgs &carriedArgs) {
+SmallVector<Value> Prefetcher::createLoopArgs(OpBuilder &builder,
+                                              CarriedArgs &carriedArgs) {
   SmallVector<Value> loopArgs;
   for (auto v : forOp.getInitArgs())
     loopArgs.push_back(v);
@@ -469,8 +467,7 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
                                IRMapping &mapping,
                                const CarriedArgs &carriedArgs) {
   auto getCurrentSource = [this, &mapping, &newForOp,
-                           &carriedArgs](triton::DotOp dot,
-                                         bool isA) -> Value {
+                           &carriedArgs](triton::DotOp dot, bool isA) -> Value {
     Value source = isA ? dot2aSource.lookup(dot) : dot2bSource.lookup(dot);
     if (!source)
       return Value();
@@ -482,8 +479,8 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
       return mapping.lookupOrDefault(source);
     return newForOp.getRegionIterArgs()[it->second];
   };
-  auto getCurrentToken = [this, &mapping, &newForOp, &carriedArgs](
-                             triton::DotOp dot, bool isA) -> Value {
+  auto getCurrentToken = [this, &mapping, &newForOp,
+                          &carriedArgs](triton::DotOp dot, bool isA) -> Value {
     Value token = isA ? dot2aToken.lookup(dot) : dot2bToken.lookup(dot);
     if (!token)
       return Value();
@@ -656,7 +653,8 @@ scf::ForOp Prefetcher::createNewForOp() {
 
   cloneLoopBody(newForOp, builder, mapping, carriedArgs);
 
-  SmallVector<Value> yieldValues = createYieldValues(builder, mapping, carriedArgs);
+  SmallVector<Value> yieldValues =
+      createYieldValues(builder, mapping, carriedArgs);
   // Replace the loop terminator with the rebuilt yield.
   builder.setInsertionPointToEnd(newForOp.getBody());
   if (!yieldValues.empty())
