@@ -220,20 +220,15 @@ Value Prefetcher::cloneLoopValue(
     Value v, OpBuilder &builder,
     llvm::function_ref<Value(BlockArgument)> mapBlockArg,
     DenseMap<Value, Value> &cache) {
-  if (!v)
+  if (!v) // empty if token is null
     return Value();
   if (auto it = cache.find(v); it != cache.end())
     return it->second;
-  if (auto arg = dyn_cast<BlockArgument>(v)) {
-    Value mapped = mapBlockArg(arg);
-    cache[v] = mapped;
-    return mapped;
-  }
+  if (auto arg = dyn_cast<BlockArgument>(v))
+    return cache[v] = mapBlockArg(arg);
   Operation *op = v.getDefiningOp();
-  if (!op || op->getBlock() != forOp.getBody()) {
-    cache[v] = v;
-    return v;
-  }
+  if (op->getBlock() != forOp.getBody())
+    return cache[v] = v;
 
   IRMapping operandMapping;
   for (Value operand : op->getOperands())
