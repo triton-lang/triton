@@ -16,10 +16,10 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %cst = arith.constant dense<256> : tensor<1024xi32, #blocked>
     %c1024_i32 = arith.constant 1024 : i32
     %0 = tt.get_program_id x : i32
-    %1 = arith.muli %0, %c1024_i32 : i32
+    %1 = arith.muli %0, %c1024_i32 overflow<nsw, nuw> : i32
     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
     %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
-    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+    %4 = arith.addi %3, %2 overflow<nsw, nuw> : tensor<1024xi32, #blocked>
     %5 = tt.splat %arg2 : i32 -> tensor<1024xi32, #blocked>
     %6 = arith.cmpi slt, %4, %5 : tensor<1024xi32, #blocked>
     %7 = arith.divsi %4, %cst : tensor<1024xi32, #blocked>
@@ -54,10 +54,10 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %cst = arith.constant dense<4> : tensor<1024xi32, #blocked>
     %c1024_i32 = arith.constant 1024 : i32
     %0 = tt.get_program_id x : i32
-    %1 = arith.muli %0, %c1024_i32 : i32
+    %1 = arith.muli %0, %c1024_i32 overflow<nsw, nuw> : i32
     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
     %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
-    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+    %4 = arith.addi %3, %2 overflow<nsw, nuw> : tensor<1024xi32, #blocked>
     %5 = tt.splat %arg2 : i32 -> tensor<1024xi32, #blocked>
     %6 = arith.cmpi slt, %4, %5 : tensor<1024xi32, #blocked>
     %7 = arith.divsi %4, %cst : tensor<1024xi32, #blocked>
