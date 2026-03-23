@@ -120,9 +120,13 @@ protected:
     // nonnegative numerator. Negative numerators can cross zero and invalidate
     // those inferences.
     if constexpr (std::is_same_v<OpTy, arith::DivSIOp> ||
-                  std::is_same_v<OpTy, arith::RemSIOp>)
-      return succeeded(
-          dataflow::staticallyNonNegative(this->getRangeSolver(), op.getLhs()));
+                  std::is_same_v<OpTy, arith::RemSIOp>) {
+      auto [it, inserted] = nonNegativeCache.try_emplace(op.getLhs(), false);
+      if (inserted)
+        it->second = succeeded(dataflow::staticallyNonNegative(
+            this->getRangeSolver(), op.getLhs()));
+      return it->second;
+    }
     return true;
   }
 
@@ -144,6 +148,9 @@ protected:
                                                   const AxisInfo &rhs) {
     return {};
   }
+
+private:
+  DenseMap<Value, bool> nonNegativeCache;
 };
 
 template <typename OpTy>
@@ -1481,14 +1488,30 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
 
 void ModuleAxisInfoAnalysis::initialize(
     FunctionOpInterface funcOp, AxisInfoAnalysis::LoadCallback loadAnalysis) {
-  auto assumptions =
-      AMD::TritonIntegerRangeAnalysis::collectAssumptions(funcOp);
-  DominanceInfo domInfo(funcOp);
-  std::unique_ptr<DataFlowSolver> rangeSolver = createDataFlowSolver();
-  AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
-      rangeSolver->load<AMD::TritonIntegerRangeAnalysis>(assumptions, &domInfo);
-  AMD::initializeFuncOps(funcOp, rangeAnalysis);
-  (void)rangeSolver->initializeAndRun(funcOp);
+  // Range analysis is only needed for the signed div/rem unsigned-bound
+  // inference. Skip the expensive dataflow run for functions that cannot use
+  // it.
+  bool needsRangeAnalysis = false;
+  funcOp.walk([&](Operation *op) {
+    if (isa<arith::DivSIOp, arith::RemSIOp>(op))
+      needsRangeAnalysis = true;
+  });
+
+  DataFlowSolver emptyRangeSolver;
+  DataFlowSolver *rangeSolver = &emptyRangeSolver;
+  std::unique_ptr<DataFlowSolver> ownedRangeSolver;
+  if (needsRangeAnalysis) {
+    auto assumptions =
+        AMD::TritonIntegerRangeAnalysis::collectAssumptions(funcOp);
+    DominanceInfo domInfo(funcOp);
+    ownedRangeSolver = createDataFlowSolver();
+    AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
+        ownedRangeSolver->load<AMD::TritonIntegerRangeAnalysis>(assumptions,
+                                                                &domInfo);
+    AMD::initializeFuncOps(funcOp, rangeAnalysis);
+    (void)ownedRangeSolver->initializeAndRun(funcOp);
+    rangeSolver = ownedRangeSolver.get();
+  }
 
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   AxisInfoAnalysis *analysis = loadAnalysis(solver.get(), *rangeSolver);
