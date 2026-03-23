@@ -423,3 +423,26 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
         assert(torch.all(torch.isnan(dst)))
     else:
         torch.testing.assert_close(dst, torch.full_like(dst, expected_result))
+
+
+@pytest.mark.interpreter
+def test_rtne_tie_to_even(device):
+    """Regression test for #8322: interpreter RTNE rounds ties up instead of to even."""
+    # Values chosen to hit the tie-to-even case in f16 → f8e5m2 downcast.
+    # f8e5m2 has 2 mantissa bits, so 8 bits are truncated from f16's 10.
+    # 9.0 (f16 0x4880): truncated=0.5 exactly, result LSB=0 (even) → stay at 8.0
+    # 11.0 (f16 0x4980): truncated=0.5 exactly, result LSB=1 (odd) → round up to 12.0
+    # 10.0 (f16 0x4900): truncated=0, no rounding → 10.0
+    src_f16 = torch.tensor([9.0, 10.0, 11.0], dtype=torch.float16, device=device)
+    expected = torch.tensor([8.0, 10.0, 12.0], dtype=torch.float16, device=device)
+
+    BLOCK_SIZE = 4096
+    src = torch.zeros(BLOCK_SIZE, dtype=torch.float16, device=device)
+    src[:3] = src_f16
+
+    dst = launch_type_convert_triton(src, tl.float16, tl.float8e5, device=device, rounding='rtne')
+    # Cast back to f16 to compare
+    dst_f16 = launch_type_convert_triton(dst, tl.float8e5, tl.float16, device=device)
+    dst_values = dst_f16[:3].to(torch.float16)
+
+    torch.testing.assert_close(dst_values, expected)
