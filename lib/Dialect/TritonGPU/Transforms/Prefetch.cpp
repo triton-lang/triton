@@ -90,10 +90,12 @@ class Prefetcher {
                              DenseMap<Value, Value> &cache);
   SmallVector<Value> createLoopArgs(OpBuilder &builder,
                                     CarriedTokenArgs &carriedTokenArgs);
-  void cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder, IRMapping &mapping,
+  void cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
+                     IRMapping &mapping,
                      const CarriedTokenArgs &carriedTokenArgs);
-  SmallVector<Value> createYieldValues(OpBuilder &builder, IRMapping &mapping,
-                                       const CarriedTokenArgs &carriedTokenArgs);
+  SmallVector<Value>
+  createYieldValues(OpBuilder &builder, IRMapping &mapping,
+                    const CarriedTokenArgs &carriedTokenArgs);
 
   void cloneElementwiseOps(Value &bRem, const SmallVector<Value> &vals,
                            OpBuilder &builder);
@@ -135,8 +137,7 @@ void Prefetcher::cloneElementwiseOps(Value &ret, const SmallVector<Value> &vals,
 
 Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                                    Attribute dotEncoding, OpBuilder &builder,
-                                   Value token,
-                                   std::optional<int64_t> offsetK,
+                                   Value token, std::optional<int64_t> offsetK,
                                    std::optional<int64_t> shapeK) {
   // opIdx: 0 => a, 1 => b
   auto type = cast<triton::gpu::MemDescType>(v.getType());
@@ -220,8 +221,9 @@ bool Prefetcher::isPromotableValue(Value v) {
     return false;
   // Every operand must also be promotable, otherwise the whole expression is
   // rejected.
-  return llvm::all_of(op->getOperands(),
-                      [this](Value operand) { return isPromotableValue(operand); });
+  return llvm::all_of(op->getOperands(), [this](Value operand) {
+    return isPromotableValue(operand);
+  });
 }
 
 Value Prefetcher::cloneLoopValue(
@@ -395,19 +397,17 @@ void Prefetcher::emitPrologue() {
 
   for (triton::DotOp dot : dots) {
     Attribute dotEncoding = dot.getType().getEncoding();
-    Value aPrefetched =
-        generatePrefetch(materializeInitValue(dot2aSource[dot], builder,
-                                             initMaterializations),
-                         0, true, dotEncoding, builder,
-                         materializeInitValue(dot2aToken.lookup(dot), builder,
-                                              initMaterializations));
+    Value aPrefetched = generatePrefetch(
+        materializeInitValue(dot2aSource[dot], builder, initMaterializations),
+        0, true, dotEncoding, builder,
+        materializeInitValue(dot2aToken.lookup(dot), builder,
+                             initMaterializations));
     cloneElementwiseOps(aPrefetched, dot2aVals[dot], builder);
-    Value bPrefetched =
-        generatePrefetch(materializeInitValue(dot2bSource[dot], builder,
-                                             initMaterializations),
-                         1, true, dotEncoding, builder,
-                         materializeInitValue(dot2bToken.lookup(dot), builder,
-                                              initMaterializations));
+    Value bPrefetched = generatePrefetch(
+        materializeInitValue(dot2bSource[dot], builder, initMaterializations),
+        1, true, dotEncoding, builder,
+        materializeInitValue(dot2bToken.lookup(dot), builder,
+                             initMaterializations));
     cloneElementwiseOps(bPrefetched, dot2bVals[dot], builder);
 
     operand2headPrefetch[dot.getA()] = aPrefetched;
@@ -443,13 +443,13 @@ Prefetcher::createLoopArgs(OpBuilder &builder,
 void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
                                IRMapping &mapping,
                                const CarriedTokenArgs &carriedTokenArgs) {
-  auto getCurrentSource = [this, &mapping](triton::DotOp dot, bool isA) -> Value {
+  auto getCurrentSource = [this, &mapping](triton::DotOp dot,
+                                           bool isA) -> Value {
     Value source = isA ? dot2aSource.lookup(dot) : dot2bSource.lookup(dot);
     return source ? mapping.lookupOrDefault(source) : Value();
   };
-  auto getCurrentToken = [this, &mapping, &newForOp,
-                          &carriedTokenArgs](triton::DotOp dot,
-                                             bool isA) -> Value {
+  auto getCurrentToken = [this, &mapping, &newForOp, &carriedTokenArgs](
+                             triton::DotOp dot, bool isA) -> Value {
     Value token = isA ? dot2aToken.lookup(dot) : dot2bToken.lookup(dot);
     if (!token)
       return Value();
@@ -517,13 +517,13 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
         int64_t kShape = prefetchWidth;
         auto insertionPoint = builder.saveInsertionPoint();
         builder.setInsertionPoint(prevDot);
-        Value aRem = generatePrefetch(getCurrentSource(dot, true), 0, false,
-                                      dotEncoding, builder,
-                                      getCurrentToken(dot, true), kOff, kShape);
+        Value aRem =
+            generatePrefetch(getCurrentSource(dot, true), 0, false, dotEncoding,
+                             builder, getCurrentToken(dot, true), kOff, kShape);
         cloneElementwiseOps(aRem, dot2aVals[dot], builder);
-        Value bRem = generatePrefetch(getCurrentSource(dot, false), 1, false,
-                                      dotEncoding, builder,
-                                      getCurrentToken(dot, false), kOff, kShape);
+        Value bRem = generatePrefetch(
+            getCurrentSource(dot, false), 1, false, dotEncoding, builder,
+            getCurrentToken(dot, false), kOff, kShape);
         cloneElementwiseOps(bRem, dot2bVals[dot], builder);
         builder.restoreInsertionPoint(insertionPoint);
         newOp = builder.clone(*dot, mapping);
@@ -586,15 +586,15 @@ Prefetcher::createYieldValues(OpBuilder &builder, IRMapping &mapping,
     if (carriedTokenArgs.b.contains(dot))
       yieldValues.push_back(getNextToken(dot, false));
     Attribute dotEncoding = dot.getType().getEncoding();
-    Value aToYield = generatePrefetch(getNextSource(dot, true), 0, true,
-                                      dotEncoding, builder,
-                                      getNextToken(dot, true));
+    Value aToYield =
+        generatePrefetch(getNextSource(dot, true), 0, true, dotEncoding,
+                         builder, getNextToken(dot, true));
     cloneElementwiseOps(aToYield, dot2aVals[dot], builder);
     yieldValues.push_back(aToYield);
     // bToYield
-    Value bToYield = generatePrefetch(getNextSource(dot, false), 1, true,
-                                      dotEncoding, builder,
-                                      getNextToken(dot, false));
+    Value bToYield =
+        generatePrefetch(getNextSource(dot, false), 1, true, dotEncoding,
+                         builder, getNextToken(dot, false));
     cloneElementwiseOps(bToYield, dot2bVals[dot], builder);
     yieldValues.push_back(bToYield);
   }
