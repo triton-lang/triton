@@ -334,6 +334,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#shared_clc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @clc_try_cancel_completion_barrier_cga_layout(
+      %result: !ttg.memdesc<2xi64, #shared_clc, #smem>,
+      %mbar: !ttg.memdesc<1xi64, #barrier, #smem>) {
+    // expected-error @below {{completion barrier cga_layout must be}}
+    ttng.clc_try_cancel %result, %mbar {multicast = false} :
+      !ttg.memdesc<2xi64, #shared_clc, #smem>, !ttg.memdesc<1xi64, #barrier, #smem>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
   tt.func @fence_mbarrier_init_release_cluster_invalid() {
     // expected-error @below {{requires ttg.num-ctas > 1}}

@@ -539,8 +539,8 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
   return success();
 }
 
-static LogicalResult verifyTCGen5CompletionBarrierLayout(Operation *op,
-                                                         Value barrier) {
+static LogicalResult verifyCompletionBarrierLayout(Operation *op,
+                                                   Value barrier) {
   auto formatCGALayout = [](CGAEncodingAttr cgaLayout) {
     std::string str;
     llvm::raw_string_ostream os(str);
@@ -575,7 +575,7 @@ LogicalResult TCGen5MMAOp::verify() {
     auto barrierTy = cast<MemDescType>(barrier.getType());
     if (failed(verifyBarrierType(*this, barrierTy)))
       return failure();
-    if (failed(verifyTCGen5CompletionBarrierLayout(getOperation(), barrier)))
+    if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
       return failure();
   }
   Type atype = getA().getType().getElementType();
@@ -791,7 +791,7 @@ LogicalResult TCGen5CommitOp::verify() {
   auto barrierTy = getBarrier().getType();
   if (failed(verifyBarrierType(*this, barrierTy)))
     return failure();
-  if (failed(verifyTCGen5CompletionBarrierLayout(getOperation(), getBarrier())))
+  if (failed(verifyCompletionBarrierLayout(getOperation(), getBarrier())))
     return failure();
   return success();
 }
@@ -830,7 +830,7 @@ LogicalResult TCGen5MMAScaledOp::verify() {
     auto barrierTy = cast<MemDescType>(barrier.getType());
     if (failed(verifyBarrierType(*this, barrierTy)))
       return failure();
-    if (failed(verifyTCGen5CompletionBarrierLayout(getOperation(), barrier)))
+    if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
       return failure();
   }
   Type atype =
@@ -1313,7 +1313,11 @@ static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
 }
 
 LogicalResult CLCTryCancelOp::verify() {
-  return verifyCLCResultMemdesc(getLoc(), getResult().getType());
+  if (failed(verifyCLCResultMemdesc(getLoc(), getResult().getType())))
+    return failure();
+  if (failed(verifyBarrierType(*this, getMbarrier().getType())))
+    return failure();
+  return verifyCompletionBarrierLayout(getOperation(), getMbarrier());
 }
 
 LogicalResult CLCLoadResultOp::verify() {
