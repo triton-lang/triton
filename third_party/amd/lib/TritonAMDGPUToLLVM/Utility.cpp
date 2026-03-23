@@ -83,9 +83,10 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
 
   switch (mode) {
   case ShflKind::bfly:
-    if (strideInt > 16) {
-      Value stride = b.i32_val(32);
-      Value lineId = b.xor_(threadId, stride);
+    if (strideInt > 16 || (strideInt & (strideInt - 1)) != 0) {
+      // Non-power-of-2 masks or strides > 16 cannot use DPP or ds_swizzle.
+      // Fall back to ds_bpermute with an XOR lane index.
+      Value lineId = b.xor_(laneId, b.i32_val(strideInt));
       return bpermute(lineId);
     } else if (strideInt == 16) {
       if (isRDNA(isaFamily)) {
@@ -420,7 +421,7 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
 }
 
 // Create the auxiliary/cachepolicy value of ROCDL::RawPtrBufferLoad/StoreOp
-//   gfx942 and gfx950: bit 0 = sc0, bit 1 = nt, bit 3 = swz, bit 4 = sc1
+//   CDNA3 and CDNA4: bit 0 = sc0, bit 1 = nt, bit 3 = swz, bit 4 = sc1
 // Vector Memory instructions (Flat, Global, Scratch, and Buffer) have 3
 // bits to control scope and cacheability:
 // - SC[1:0] System Cache level: 0=wave, 1=group, 2=device, 3=system
@@ -443,8 +444,8 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
 //        | N/A |  1  |  0  | x  | Setting sc1 performs a system-scope atomic
 // -------+-----+-----+-----+----+--
 static int32_t
-getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
-                                         bool isLoad) {
+getCtrlBitsForCacheModifierOn_CDNA3_CDNA4(triton::CacheModifier cm,
+                                          bool isLoad) {
   const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b10000;
   int32_t aux = 0;
   switch (cm) {
@@ -476,16 +477,78 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
   return aux;
 }
 
-int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
-                                                 bool setNT) {
-  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b10000;
+// Create the auxiliary/cachepolicy value for RDNA3 (and 3.5) buffer ops
+//
+// LLVM CPol bit layout (from SIDefines.h):
+//   bit 0 = GLC  (Graphics L1 cache, GL1)
+//   bit 1 = SLC  (Graphics L2 cache, GL2)
+//   bit 2 = DLC  (Memory-Attached Last-Level cache, MALL)
+//
+// Hardware semantics on RDNA3:
+//   GLC=1  forces MISS_EVICT at GL1 (bypass / invalidate L1 line).
+//   SLC=1  sets GL2 to STREAM (evict-first) policy, limiting L2 pollution.
+//   DLC=1  non-temporal hint for MALL: data is not expected to be reused,
+//          so skip MALL allocation. Ignored if MALL is not present.
+//   DLC=0  temporal (default): allow normal MALL caching.
+//
+// Cache modifier definitions (PTX/Triton semantics):
+//   .ca  Cache at All levels (L1+L2+MALL). Default load policy, LRU eviction.
+//   .cg  Cache at Global level only (L2 and below, bypass L1).
+//   .cs  Cache Streaming, likely accessed once. Evict-first to limit pollution.
+//   .cv  Cache Volatile. Invalidates matching L2 line and re-fetches.
+//   .wb  Write-Back at all cache levels (default store policy).
+//   .wt  Write-Through, writes data directly to system memory.
+//
+// -------+-----+-----+-----+-----+-----------
+// Op     | cm  | DLC | SLC | GLC | aux value
+// -------+-----+-----+-----+-----+-----------
+// Load   | .ca |  0  |  0  |  0  |  0
+//        | .cg |  0  |  0  |  1  |  1
+//        | .cs |  1  |  1  |  1  |  7
+//        | .cv |  1  |  1  |  1  |  7
+// -------+-----+-----+-----+-----+-----------
+// Store  | .wb |  0  |  0  |  0  |  0
+//        | .cg |  0  |  0  |  0  |  0
+//        | .cs |  1  |  1  |  1  |  7
+//        | .wt |  1  |  1  |  1  |  7
+// -------+-----+-----+-----+-----+-----------
+//
+// Condensed hardware behavior:
+//   DLC=0, SLC=0, GLC=0  -> temporal at all levels (MALL+GL2+GL1) (.ca/.wb)
+//   DLC=0, SLC=0, GLC=1  -> bypass GL1, cache in GL2              (.cg load)
+//   DLC=0, SLC=0, GLC=0  -> default (no special flags)            (.cg store)
+//   DLC=1, SLC=1, GLC=1  -> non-temporal: bypass GL1, stream GL2,
+//                           skip MALL                             (.cs/.cv/.wt)
+static int32_t getCtrlBitsForCacheModifierOnRDNA3(triton::CacheModifier cm,
+                                                  bool isLoad) {
+  const int glcBit = 0b1, slcBit = 0b10, dlcBit = 0b100;
   int32_t aux = 0;
-  if (setSC0)
-    aux |= sc0Bit;
-  if (setSC1)
-    aux |= sc1Bit;
-  if (setNT)
-    aux |= ntBit;
+  switch (cm) {
+  case triton::CacheModifier::CA:
+    aux = 0;
+    break;
+  case triton::CacheModifier::CG:
+    if (isLoad)
+      aux |= glcBit;
+    break;
+  case triton::CacheModifier::CS:
+    aux |= glcBit | slcBit | dlcBit;
+    break;
+  case triton::CacheModifier::CV:
+    assert(isLoad);
+    aux |= glcBit | slcBit | dlcBit;
+    break;
+  case triton::CacheModifier::WB:
+    assert(!isLoad);
+    aux = 0;
+    break;
+  case triton::CacheModifier::WT:
+    assert(!isLoad);
+    aux |= glcBit | slcBit | dlcBit;
+    break;
+  default:
+    aux = 0;
+  }
   return aux;
 }
 
@@ -503,10 +566,12 @@ static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) {
 int32_t getCtrlBitsForCacheModifierOnTarget(
     triton::CacheModifier cm, bool isLoad,
     const mlir::triton::AMD::TargetInfo &targetInfo) {
-  switch (targetInfo.getGPUKind()) {
-  case llvm::AMDGPU::GK_GFX942:
-  case llvm::AMDGPU::GK_GFX950:
-    return getCtrlBitsForCacheModifierOnGFX_942_950(cm, isLoad);
+  switch (targetInfo.getISAFamily()) {
+  case triton::AMD::ISAFamily::CDNA3:
+  case triton::AMD::ISAFamily::CDNA4:
+    return getCtrlBitsForCacheModifierOn_CDNA3_CDNA4(cm, isLoad);
+  case triton::AMD::ISAFamily::RDNA3:
+    return getCtrlBitsForCacheModifierOnRDNA3(cm, isLoad);
   default:
     return getDefaultCtrlBitsForCacheModifier(cm);
   }

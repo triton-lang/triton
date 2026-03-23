@@ -31,12 +31,14 @@ enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
                           StringRef message);
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
-                                    Value tensor, RankedTensorType tensorType);
+                                    Value tensor, RankedTensorType tensorType,
+                                    bool currentCTAOnly = false);
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                               RankedTensorType tensorType);
 gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
-                             int64_t sizeInBytes, int64_t alignment);
+                             int64_t sizeInBytes, int64_t alignment,
+                             bool sharedClusterState = false);
 Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor);
 RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,
                                   unsigned bitWidth);

@@ -1173,6 +1173,16 @@ class TritonSemantic(Generic[TensorTy]):
         self.builder.create_descriptor_scatter(desc.handle, value.handle, x_offsets.handle, y_offset)
         return self.tensor(None, tl.void)
 
+    def _broadcast_ptr_val_mask(self, ptr, val, mask):
+        ptr_shape = ptr.shape
+        if mask is None:
+            ptr, val = self.broadcast_tensors(ptr, val)
+        else:
+            ptr, val, mask = self.broadcast_tensors(ptr, val, mask)
+        if ptr_shape != ptr.shape:
+            raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
+        return ptr, val, mask
+
     def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], boundary_check, cache_modifier: str,
               eviction_policy: str) -> TensorTy:
         cache = self._str_to_store_cache_modifier(cache_modifier)
@@ -1199,13 +1209,7 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Make `mask` and `val` into the same shape as `ptr`
         if ptr.type.is_block():
-            ptr_shape = ptr.shape
-            if mask is None:
-                ptr, val = self.broadcast_tensors(ptr, val)
-            else:
-                ptr, val, mask = self.broadcast_tensors(ptr, val, mask)
-            if ptr_shape != ptr.shape:
-                raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
+            ptr, val, mask = self._broadcast_ptr_val_mask(ptr, val, mask)
 
         ptr_ty = ptr.type.scalar
         elt_ty = ptr_ty.element_ty
@@ -1253,10 +1257,7 @@ class TritonSemantic(Generic[TensorTy]):
         if element_ty in [tl.int16, tl.uint16] or element_ty.primitive_bitwidth < 16:
             raise ValueError("atomic_" + op + " does not support " + str(element_ty))
         if ptr.type.is_block():
-            if mask is not None:
-                mask = self.broadcast_impl_shape(mask, ptr.type.get_block_shapes())
-            if val is not None:
-                val = self.broadcast_impl_shape(val, ptr.type.get_block_shapes())
+            ptr, val, mask = self._broadcast_ptr_val_mask(ptr, val, mask)
         val = self.cast(val, ptr.type.scalar.element_ty)
         if mask is None:
             mask_ir = self.builder.get_int1(True)
@@ -1525,6 +1526,8 @@ class TritonSemantic(Generic[TensorTy]):
 
         def _to_scale_handle(scale):
             if scale is None or isinstance(scale, tl.constexpr):
+                return None
+            elif isinstance(scale, tl.tensor) and scale.numel.value == 1:
                 return None
 
             return scale.handle
