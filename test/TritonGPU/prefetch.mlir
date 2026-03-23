@@ -300,19 +300,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 // CHECK-LABEL: tt.func @split_pipelined_mmav2_loads
-// CHECK: %[[LOOP:.+]]:2 = scf.for
-// CHECK: %[[WAIT:.+]] = ttg.async_wait
-// CHECK: %[[A_VIEW:.+]] = ttg.memdesc_index %[[A_BUF:.+]][
-// CHECK: %[[B_VIEW:.+]] = ttg.memdesc_index %[[B_BUF:.+]][
+// CHECK-DAG: %[[A_VIEW:.+]] = ttg.memdesc_index %[[A_BUF:.+]][
+// CHECK-DAG: %[[WAIT:.+]] = ttg.async_wait
+// CHECK-DAG: %[[B_VIEW:.+]] = ttg.memdesc_index %[[B_BUF:.+]][
 // CHECK-DAG: %[[A0_SMEM:.+]] = ttg.memdesc_subslice %[[A_VIEW]][0, 0]
 // CHECK-DAG: %[[A0:.+]] = ttg.local_load %[[A0_SMEM]] token %[[WAIT]]
 // CHECK-DAG: %[[B0_SMEM:.+]] = ttg.memdesc_subslice %[[B_VIEW]][0, 0]
 // CHECK-DAG: %[[B0:.+]] = ttg.local_load %[[B0_SMEM]] token %[[WAIT]]
-// CHECK-DAG: %[[A1_SMEM:.+]] = ttg.memdesc_subslice %[[A_VIEW]][0, 16]
-// CHECK-DAG: %[[A1:.+]] = ttg.local_load %[[A1_SMEM]] token %[[WAIT]]
-// CHECK-DAG: %[[B1_SMEM:.+]] = ttg.memdesc_subslice %[[B_VIEW]][16, 0]
-// CHECK-DAG: %[[B1:.+]] = ttg.local_load %[[B1_SMEM]] token %[[WAIT]]
-// CHECK: %[[DOT0:.+]] = tt.dot %[[A0]], %[[B0]], %{{.+}}
+// CHECK: %[[LOOP:.+]]:5 = scf.for {{.+}} iter_args(%{{.+}} = %{{.+}}, %{{.+}} = %{{.+}}, %[[WAIT_ARG:.+]] = %[[WAIT]], %[[A0_ARG:.+]] = %[[A0]], %[[B0_ARG:.+]] = %[[B0]])
+// CHECK: %[[WAIT_NEXT:.+]] = ttg.async_wait %arg3, %arg4 {num = 4 : i32}
+// CHECK-DAG: %[[A1_SMEM:.+]] = ttg.memdesc_subslice %{{.+}}[0, 16]
+// CHECK-DAG: %[[A1:.+]] = ttg.local_load %[[A1_SMEM]] token %[[WAIT_ARG]]
+// CHECK-DAG: %[[B1_SMEM:.+]] = ttg.memdesc_subslice %{{.+}}[16, 0]
+// CHECK-DAG: %[[B1:.+]] = ttg.local_load %[[B1_SMEM]] token %[[WAIT_ARG]]
+// CHECK: %[[DOT0:.+]] = tt.dot %[[A0_ARG]], %[[B0_ARG]], %{{.+}}
+// CHECK-DAG: %[[NEXT_A_SMEM:.+]] = ttg.memdesc_subslice %{{.+}}[0, 0]
+// CHECK-DAG: %[[NEXT_A:.+]] = ttg.local_load %[[NEXT_A_SMEM]] token %[[WAIT_NEXT]]
+// CHECK-DAG: %[[NEXT_B_SMEM:.+]] = ttg.memdesc_subslice %{{.+}}[0, 0]
+// CHECK-DAG: %[[NEXT_B:.+]] = ttg.local_load %[[NEXT_B_SMEM]] token %[[WAIT_NEXT]]
 // CHECK: tt.dot %[[A1]], %[[B1]], %[[DOT0]]
 module attributes { "ttg.num-warps" = 4 : i32 } {
 tt.func @split_pipelined_mmav2_loads(%lb : index, %ub : index, %step : index, %tok0 : !ttg.async.token, %tok1 : !ttg.async.token) -> tensor<128x128xf32, #C_RING> {

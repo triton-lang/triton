@@ -26,6 +26,7 @@
 // }
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -78,12 +79,26 @@ class Prefetcher {
   DenseMap<Value, SmallVector<Value>> dot2bVals;
   /// operand => defining
   DenseMap<Value, Value> operand2headPrefetch;
+  DenseMap<Value, Value> initMaterializations;
 
   Value generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                          Attribute dotEncoding, OpBuilder &builder,
                          Value token = Value(),
                          std::optional<int64_t> offsetK = std::nullopt,
                          std::optional<int64_t> shapeK = std::nullopt);
+
+  bool isLoopCarriedValue(Value v);
+  Value getIncomingValue(Value v);
+  Value getYieldValue(Value v);
+  bool isPromotableValue(Value v);
+  Value cloneLoopValue(Value v, OpBuilder &builder,
+                       llvm::function_ref<Value(BlockArgument)> mapBlockArg,
+                       DenseMap<Value, Value> &cache);
+  Value materializeInitValue(Value v, OpBuilder &builder,
+                             DenseMap<Value, Value> &cache);
+  Value materializeYieldValue(Value v, OpBuilder &builder,
+                              const IRMapping &mapping,
+                              DenseMap<Value, Value> &cache);
 
   void cloneElementwiseOps(Value &bRem, const SmallVector<Value> &vals,
                            OpBuilder &builder);
@@ -165,6 +180,100 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   return prefetchSlice;
 }
 
+bool Prefetcher::isLoopCarriedValue(Value v) {
+  auto arg = dyn_cast_if_present<BlockArgument>(v);
+  return arg && arg.getOwner()->getParentOp() == forOp.getOperation();
+}
+
+Value Prefetcher::getIncomingValue(Value v) {
+  if (!isLoopCarriedValue(v))
+    return Value();
+  auto arg = cast<BlockArgument>(v);
+  return forOp.getTiedLoopInit(arg)->get();
+}
+
+Value Prefetcher::getYieldValue(Value v) {
+  if (!isLoopCarriedValue(v))
+    return Value();
+  auto arg = cast<BlockArgument>(v);
+  unsigned yieldIdx = arg.getArgNumber() - forOp.getNumInductionVars();
+  return yieldOp.getOperand(yieldIdx);
+}
+
+bool Prefetcher::isPromotableValue(Value v) {
+  if (!v)
+    return true;
+  if (isLoopCarriedValue(v))
+    return true;
+  Operation *op = v.getDefiningOp();
+  if (!op)
+    return true;
+  if (op->getBlock() != forOp.getBody())
+    return true;
+  if (op->getNumRegions() != 0)
+    return false;
+  if (!isa<arith::AddIOp, arith::CmpIOp, arith::ConstantOp, arith::SelectOp,
+           triton::gpu::AsyncWaitOp, triton::gpu::MemDescIndexOp>(op))
+    return false;
+  return llvm::all_of(op->getOperands(),
+                      [this](Value operand) { return isPromotableValue(operand); });
+}
+
+Value Prefetcher::cloneLoopValue(
+    Value v, OpBuilder &builder,
+    llvm::function_ref<Value(BlockArgument)> mapBlockArg,
+    DenseMap<Value, Value> &cache) {
+  if (!v)
+    return Value();
+  if (auto it = cache.find(v); it != cache.end())
+    return it->second;
+  if (auto arg = dyn_cast<BlockArgument>(v)) {
+    Value mapped = mapBlockArg(arg);
+    cache[v] = mapped;
+    return mapped;
+  }
+  Operation *op = v.getDefiningOp();
+  if (!op || op->getBlock() != forOp.getBody()) {
+    cache[v] = v;
+    return v;
+  }
+
+  IRMapping operandMapping;
+  for (Value operand : op->getOperands())
+    operandMapping.map(operand,
+                       cloneLoopValue(operand, builder, mapBlockArg, cache));
+  Operation *clonedOp = builder.clone(*op, operandMapping);
+  for (auto [result, clonedResult] :
+       llvm::zip(op->getResults(), clonedOp->getResults()))
+    cache[result] = clonedResult;
+  return cache[v];
+}
+
+Value Prefetcher::materializeInitValue(Value v, OpBuilder &builder,
+                                       DenseMap<Value, Value> &cache) {
+  return cloneLoopValue(
+      v, builder,
+      [this](BlockArgument arg) -> Value {
+        if (arg.getOwner()->getParentOp() != forOp.getOperation())
+          return arg;
+        return forOp.getTiedLoopInit(arg)->get();
+      },
+      cache);
+}
+
+Value Prefetcher::materializeYieldValue(Value v, OpBuilder &builder,
+                                        const IRMapping &mapping,
+                                        DenseMap<Value, Value> &cache) {
+  return cloneLoopValue(
+      v, builder,
+      [this, &mapping](BlockArgument arg) -> Value {
+        if (arg.getOwner()->getParentOp() != forOp.getOperation())
+          return arg;
+        return mapping.lookupOrDefault(getYieldValue(arg));
+      },
+      cache);
+}
+
 LogicalResult Prefetcher::initialize() {
   Block *loop = forOp.getBody();
 
@@ -229,15 +338,6 @@ LogicalResult Prefetcher::initialize() {
     return {};
   };
 
-  auto getIncomingOp = [this](Value v) -> Value {
-    if (!v)
-      return Value();
-    if (auto arg = mlir::dyn_cast<BlockArgument>(v))
-      if (arg.getOwner()->getParentOp() == forOp.getOperation())
-        return forOp.getTiedLoopInit(arg)->get();
-    return Value();
-  };
-
   auto getLoadToken = [](Value v) -> Value {
     Operation *op = v.getDefiningOp();
     while (op) {
@@ -248,14 +348,6 @@ LogicalResult Prefetcher::initialize() {
       op = op->getOperand(0).getDefiningOp();
     }
     return Value();
-  };
-
-  auto getYieldOperand = [this](Value v) -> Value {
-    if (!v)
-      return Value();
-    auto arg = mlir::cast<BlockArgument>(v);
-    unsigned yieldIdx = arg.getArgNumber() - forOp.getNumInductionVars();
-    return yieldOp.getOperand(yieldIdx);
   };
 
   for (triton::DotOp dot : dotsInFor) {
@@ -293,28 +385,31 @@ LogicalResult Prefetcher::initialize() {
       dot2bSource[dot] = bSmem;
       dot2aToken[dot] = getLoadToken(dot.getA());
       dot2bToken[dot] = getLoadToken(dot.getB());
-      Value aHeaderDef = getIncomingOp(aSmem);
-      Value bHeaderDef = getIncomingOp(bSmem);
-      if (aHeaderDef && bHeaderDef) {
+      Value aHeaderDef = getIncomingValue(aSmem);
+      Value bHeaderDef = getIncomingValue(bSmem);
+      bool hasLoopCarriedSrc = aHeaderDef && bHeaderDef;
+      bool canPromoteSplitDot =
+          (dot2aToken[dot] || dot2bToken[dot]) && isPromotableValue(aSmem) &&
+          isPromotableValue(bSmem) && isPromotableValue(dot2aToken[dot]) &&
+          isPromotableValue(dot2bToken[dot]);
+      if (hasLoopCarriedSrc || canPromoteSplitDot) {
         Value aToken = dot2aToken[dot];
         Value bToken = dot2bToken[dot];
-        Value aTokenInit = getIncomingOp(aToken);
-        Value bTokenInit = getIncomingOp(bToken);
-        if ((aToken && !aTokenInit) || (bToken && !bTokenInit))
-          continue;
         dots.insert(dot);
-        dot2aHeaderDef[dot] = aHeaderDef;
-        dot2bHeaderDef[dot] = bHeaderDef;
-        dot2aLoopArg[dot] = aSmem;
-        dot2bLoopArg[dot] = bSmem;
-        dot2aYield[dot] = getYieldOperand(aSmem);
-        dot2bYield[dot] = getYieldOperand(bSmem);
-        dot2aTokenInit[dot] = aTokenInit;
-        dot2bTokenInit[dot] = bTokenInit;
-        if (aToken)
-          dot2aTokenYield[dot] = getYieldOperand(aToken);
-        if (bToken)
-          dot2bTokenYield[dot] = getYieldOperand(bToken);
+        if (hasLoopCarriedSrc) {
+          dot2aHeaderDef[dot] = aHeaderDef;
+          dot2bHeaderDef[dot] = bHeaderDef;
+          dot2aLoopArg[dot] = aSmem;
+          dot2bLoopArg[dot] = bSmem;
+          dot2aYield[dot] = getYieldValue(aSmem);
+          dot2bYield[dot] = getYieldValue(bSmem);
+          dot2aTokenInit[dot] = getIncomingValue(aToken);
+          dot2bTokenInit[dot] = getIncomingValue(bToken);
+          if (aToken)
+            dot2aTokenYield[dot] = getYieldValue(aToken);
+          if (bToken)
+            dot2bTokenYield[dot] = getYieldValue(bToken);
+        }
       } else {
         splitDots.insert(dot);
       }
@@ -331,13 +426,19 @@ void Prefetcher::emitPrologue() {
 
   for (triton::DotOp dot : dots) {
     Attribute dotEncoding = dot.getType().getEncoding();
-    Value aPrefetched = generatePrefetch(dot2aHeaderDef[dot], 0, true,
-                                         dotEncoding, builder,
-                                         dot2aTokenInit.lookup(dot));
+    Value aPrefetched =
+        generatePrefetch(materializeInitValue(dot2aSource[dot], builder,
+                                             initMaterializations),
+                         0, true, dotEncoding, builder,
+                         materializeInitValue(dot2aToken.lookup(dot), builder,
+                                              initMaterializations));
     cloneElementwiseOps(aPrefetched, dot2aVals[dot], builder);
-    Value bPrefetched = generatePrefetch(dot2bHeaderDef[dot], 1, true,
-                                         dotEncoding, builder,
-                                         dot2bTokenInit.lookup(dot));
+    Value bPrefetched =
+        generatePrefetch(materializeInitValue(dot2bSource[dot], builder,
+                                             initMaterializations),
+                         1, true, dotEncoding, builder,
+                         materializeInitValue(dot2bToken.lookup(dot), builder,
+                                              initMaterializations));
     cloneElementwiseOps(bPrefetched, dot2bVals[dot], builder);
 
     operand2headPrefetch[dot.getA()] = aPrefetched;
@@ -414,7 +515,19 @@ scf::ForOp Prefetcher::createNewForOp() {
   SmallVector<Value> loopArgs;
   for (auto v : forOp.getInitArgs())
     loopArgs.push_back(v);
+  DenseMap<Operation *, unsigned> dot2aCarriedTokenArg;
+  DenseMap<Operation *, unsigned> dot2bCarriedTokenArg;
   for (triton::DotOp dot : dots) {
+    if (Value aToken = dot2aToken.lookup(dot); aToken && !isLoopCarriedValue(aToken)) {
+      dot2aCarriedTokenArg[dot] = loopArgs.size();
+      loopArgs.push_back(
+          materializeInitValue(aToken, builder, initMaterializations));
+    }
+    if (Value bToken = dot2bToken.lookup(dot); bToken && !isLoopCarriedValue(bToken)) {
+      dot2bCarriedTokenArg[dot] = loopArgs.size();
+      loopArgs.push_back(
+          materializeInitValue(bToken, builder, initMaterializations));
+    }
     loopArgs.push_back(operand2headPrefetch[dot.getA()]);
     loopArgs.push_back(operand2headPrefetch[dot.getB()]);
   }
@@ -431,6 +544,43 @@ scf::ForOp Prefetcher::createNewForOp() {
 
   auto getMappedValue = [&mapping](Value v) -> Value {
     return v ? mapping.lookupOrDefault(v) : Value();
+  };
+  auto getCurrentSource = [this, &getMappedValue](triton::DotOp dot,
+                                           bool isA) -> Value {
+    Value source = isA ? dot2aSource.lookup(dot) : dot2bSource.lookup(dot);
+    return getMappedValue(source);
+  };
+  auto getCurrentToken = [this, &mapping, &newForOp, &dot2aCarriedTokenArg,
+                          &dot2bCarriedTokenArg](triton::DotOp dot,
+                                                 bool isA) -> Value {
+    Value token = isA ? dot2aToken.lookup(dot) : dot2bToken.lookup(dot);
+    if (!token)
+      return Value();
+    if (isLoopCarriedValue(token))
+      return mapping.lookupOrDefault(token);
+    auto &argMap = isA ? dot2aCarriedTokenArg : dot2bCarriedTokenArg;
+    auto it = argMap.find(dot);
+    if (it == argMap.end())
+      return Value();
+    return newForOp.getRegionIterArgs()[it->second];
+  };
+  auto getNextSource = [this, &builder, &mapping](triton::DotOp dot,
+                                                  bool isA) -> Value {
+    Value source = isA ? dot2aSource.lookup(dot) : dot2bSource.lookup(dot);
+    if (!source)
+      return Value();
+    if (isLoopCarriedValue(source))
+      return mapping.lookupOrDefault(getYieldValue(source));
+    DenseMap<Value, Value> yieldCache;
+    return materializeYieldValue(source, builder, mapping, yieldCache);
+  };
+  auto getNextToken = [this, &mapping](triton::DotOp dot, bool isA) -> Value {
+    Value token = isA ? dot2aToken.lookup(dot) : dot2bToken.lookup(dot);
+    if (!token)
+      return Value();
+    if (isLoopCarriedValue(token))
+      return mapping.lookupOrDefault(getYieldValue(token));
+    return mapping.lookupOrDefault(token);
   };
 
   // The insertion point should be placed before the yield op
@@ -488,17 +638,13 @@ scf::ForOp Prefetcher::createNewForOp() {
         int64_t kShape = prefetchWidth;
         auto insertionPoint = builder.saveInsertionPoint();
         builder.setInsertionPoint(prevDot);
-        Value aRem =
-            generatePrefetch(mapping.lookup(dot2aLoopArg[dot]), 0, false,
-                             dotEncoding, builder,
-                             getMappedValue(dot2aToken.lookup(dot)), kOff,
-                             kShape);
+        Value aRem = generatePrefetch(getCurrentSource(dot, true), 0, false,
+                                      dotEncoding, builder,
+                                      getCurrentToken(dot, true), kOff, kShape);
         cloneElementwiseOps(aRem, dot2aVals[dot], builder);
-        Value bRem =
-            generatePrefetch(mapping.lookup(dot2bLoopArg[dot]), 1, false,
-                             dotEncoding, builder,
-                             getMappedValue(dot2bToken.lookup(dot)), kOff,
-                             kShape);
+        Value bRem = generatePrefetch(getCurrentSource(dot, false), 1, false,
+                                      dotEncoding, builder,
+                                      getCurrentToken(dot, false), kOff, kShape);
         cloneElementwiseOps(bRem, dot2bVals[dot], builder);
         builder.restoreInsertionPoint(insertionPoint);
         newOp = builder.clone(*dot, mapping);
@@ -527,16 +673,20 @@ scf::ForOp Prefetcher::createNewForOp() {
   for (Value v : forOp.getBody()->getTerminator()->getOperands())
     yieldValues.push_back(mapping.lookupOrDefault(v));
   for (triton::DotOp dot : dots) {
+    if (dot2aCarriedTokenArg.contains(dot))
+      yieldValues.push_back(getNextToken(dot, true));
+    if (dot2bCarriedTokenArg.contains(dot))
+      yieldValues.push_back(getNextToken(dot, false));
     Attribute dotEncoding = dot.getType().getEncoding();
-    Value aToYield = generatePrefetch(
-        mapping.lookup(dot2aYield[dot]), 0, true, dotEncoding, builder,
-        getMappedValue(dot2aTokenYield.lookup(dot)));
+    Value aToYield = generatePrefetch(getNextSource(dot, true), 0, true,
+                                      dotEncoding, builder,
+                                      getNextToken(dot, true));
     cloneElementwiseOps(aToYield, dot2aVals[dot], builder);
     yieldValues.push_back(aToYield);
     // bToYield
-    Value bToYield = generatePrefetch(
-        mapping.lookup(dot2bYield[dot]), 1, true, dotEncoding, builder,
-        getMappedValue(dot2bTokenYield.lookup(dot)));
+    Value bToYield = generatePrefetch(getNextSource(dot, false), 1, true,
+                                      dotEncoding, builder,
+                                      getNextToken(dot, false));
     cloneElementwiseOps(bToYield, dot2bVals[dot], builder);
     yieldValues.push_back(bToYield);
   }
