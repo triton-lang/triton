@@ -76,8 +76,8 @@ void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   }
 }
 
-tt::FuncOp getEnclosingFunction(Value v) {
-  tt::FuncOp funcOp = nullptr;
+FunctionOpInterface getEnclosingFunction(Value v) {
+  FunctionOpInterface funcOp;
 
   auto definingOp = v.getDefiningOp();
   if (!definingOp)
@@ -85,17 +85,20 @@ tt::FuncOp getEnclosingFunction(Value v) {
       definingOp = blk->getParentOp();
 
   if (definingOp) {
-    if (auto selfIsFunc = dyn_cast<tt::FuncOp>(definingOp))
+    if (auto selfIsFunc = dyn_cast<FunctionOpInterface>(definingOp))
       funcOp = selfIsFunc;
     else
-      funcOp = definingOp->getParentOfType<tt::FuncOp>();
+      funcOp = definingOp->getParentOfType<FunctionOpInterface>();
   }
 
-  assert(funcOp && "No enclosing tt::FuncOp");
   return funcOp;
 }
 
-Block *getFuncEntryBlock(tt::FuncOp func) { return &func.getRegion().front(); }
+Block *getFuncEntryBlock(FunctionOpInterface func) {
+  if (!func || func.isExternal())
+    return nullptr;
+  return &func.getFunctionBody().front();
+}
 
 void inferResultRangesPID(Operation *op, uint64_t max,
                           SetIntRangeFn setResultRange) {
@@ -387,10 +390,10 @@ void TritonIntegerRangeAnalysis::setToEntryState(
       !llvm::isa<IntegerType>(getElementTypeOrSelf(anchor)))
     return;
 
-  Block *entryBlock = getFuncEntryBlock(getEnclosingFunction(anchor));
   IntegerValueRange range = IntegerValueRange::getMaxRange(anchor);
-  if (auto maybeRange = maybeGetAssumedRange(anchor, entryBlock))
-    range = *maybeRange;
+  if (Block *entryBlock = getFuncEntryBlock(getEnclosingFunction(anchor)))
+    if (auto maybeRange = maybeGetAssumedRange(anchor, entryBlock))
+      range = *maybeRange;
   auto changed = lattice->join(range);
   LLVM_DEBUG({
     if (changed == ChangeResult::Change) {
