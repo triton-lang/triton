@@ -266,6 +266,11 @@ if(NOT MSVC)
 
   if(NOT TRITON_EXT_ENABLED)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
+  else()
+    # Inform plugin loader if that libtriton is compiled with visibility
+    # so that they will not proceed with loading plugins if that will
+    # crash a Triton not compiled with visibility due to missing symbols.
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRITON_EXT_ENABLED=1")
   endif()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default ")
 
@@ -452,10 +457,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     "${TRITON_WHEEL_DIR}/FileCheck"
     COPYONLY)
 
-  if(TRITON_EXT_ENABLED)
-    # Only build plugins when building libtriton since they depend on libtriton.
-    add_subdirectory(examples/plugins)
-  endif()
+  # Build plugins when building libtriton since they depend on libtriton.
+  add_subdirectory(examples/plugins)
 endif()
 
 if (UNIX AND NOT APPLE AND NOT TRITON_EXT_ENABLED)

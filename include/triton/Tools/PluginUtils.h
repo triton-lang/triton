@@ -8,6 +8,10 @@
 #include "llvm/Support/Error.h"
 #include <cstdint>
 
+#ifndef TRITON_EXT_ENABLED
+#define TRITON_EXT_ENABLED 0
+#endif
+
 extern "C" {
 enum TritonPluginResult {
   TP_SUCCESS = 0,
