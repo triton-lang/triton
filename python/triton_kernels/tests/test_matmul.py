@@ -17,7 +17,7 @@ from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
-from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
+from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4, is_hip_gfx1250
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
@@ -55,11 +55,18 @@ def make_constraints(block_m, split_k, is_persistent, epilogue_subtile, hbm_swiz
     }
     if is_hip() and hbm_swizzling and "float4" in weight_dtype_str:
         # Minimum block size to satisfy scale preshuffling
-        constraints.update({
-            "block_m": 32,
-            "block_n": 32,
-            "block_k": 256
-        })
+        if is_hip_gfx1250():
+            constraints.update({
+                "block_m": 128,
+                "block_n": 128,
+                "block_k": 128
+            })
+        else:
+            constraints.update({
+                "block_m": 32,
+                "block_n": 32,
+                "block_k": 256
+            })
     return constraints
 
 # ---------------
@@ -244,8 +251,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("NYI: swiglu and gamma not supported together")
 
     elif is_hip():
-        if "float8" in act_dtype_str and "mx" in weight_dtype_str and not is_hip_cdna4():
-            pytest.skip("float8 x mx only supported on CDNA4")
+        if "float8" in act_dtype_str and "mx" in weight_dtype_str and not (is_hip_cdna4() or is_hip_gfx1250()):
+            pytest.skip("float8 x mx only supported on CDNA4 and gfx1250")
         if "float8" in act_dtype_str and "mxfloat8" in weight_dtype_str:
             pytest.skip("NYI: float8 x mxfloat8 not tested on AMD GPU")
         if act_dtype_str.startswith("mx") and weight_dtype_str.startswith("mx"):
@@ -263,8 +270,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     if b_hbm_swizzling:
         if is_hip():
-            if not is_hip_cdna4():
-                pytest.skip("Scale preshuffling on AMD GPU has not been emulated on non-CDNA4 arch yet.")
+            if not (is_hip_cdna4() or is_hip_gfx1250()):
+                pytest.skip("Scale preshuffling on AMD GPU has not been emulated on archs other than CDNA4 and gfx1250 yet.")
             if "mx" not in weight_dtype_str:
                 pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
         if torch.cuda.get_device_capability()[0] < 9:
