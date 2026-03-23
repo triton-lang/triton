@@ -178,9 +178,45 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// Tensor-typed cmpi that is NOT statically true should NOT be folded.
+// Tensor-typed cmpi that is statically false should be folded to dense<false>.
+// make_range(0, 128) elements are [0..127], make_range(129, 257) elements
+// are [129..256]. Since max(t0)=127 < min(t1)=129, sgt is always false.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @foldtensorcmpifalse() -> tensor<128xi1> {
+    %t0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+    %t1 = tt.make_range {end = 257 : i32, start = 129 : i32} : tensor<128xi32>
+    %cmp = arith.cmpi sgt, %t0, %t1 : tensor<128xi32>
+    tt.return %cmp: tensor<128xi1>
+  }
+}
+
+// CHECK-LABEL:   tt.func @foldtensorcmpifalse
+// CHECK:           %[[FALSE:.*]] = arith.constant dense<false> : tensor<128xi1>
+// CHECK:           tt.return %[[FALSE]] : tensor<128xi1>
+// CHECK:         }
+
+// -----
+
+// Scalar cmpi that is statically false should be folded.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @cmpsle_false(%arg0: !tt.ptr<f32>) -> i1 {
+    %c1024 = arith.constant 1024 : i32
+    %c0 = arith.constant 0 : i32
+    %cmpsle = arith.cmpi sle, %c1024, %c0 : i32
+    tt.return %cmpsle: i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @cmpsle_false(
+// CHECK:           %[[FALSE:.*]] = arith.constant false
+// CHECK:           tt.return %[[FALSE]] : i1
+// CHECK:         }
+
+// -----
+
+// Tensor-typed cmpi that is NOT statically determinable should NOT be folded.
 // make_range(0, 128) elements [0..127] vs make_range(64, 192) elements
-// [64..191]. Ranges overlap, so slt is not always true.
+// [64..191]. Ranges overlap, so slt is not always true or always false.
 module attributes {"ttg.num-warps" = 4 : i32} {
   tt.func @dontfoldtensorcmpi() -> tensor<128xi1> {
     %t0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
@@ -192,6 +228,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @dontfoldtensorcmpi
 // CHECK-NOT:       arith.constant dense<true>
+// CHECK-NOT:       arith.constant dense<false>
 // CHECK:           arith.cmpi slt
 // CHECK:         }
 

@@ -342,17 +342,17 @@ collectRanges(const DataFlowSolver &solver, ValueRange values) {
   return ranges;
 }
 
-bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp) {
+std::optional<bool> evaluateCmpI(const DataFlowSolver &solver,
+                                 arith::CmpIOp cmpOp) {
   if (auto inputRanges =
           collectRanges(solver, ValueRange{cmpOp.getOperands()})) {
     intrange::CmpPredicate pred =
         static_cast<intrange::CmpPredicate>(cmpOp.getPredicate());
     if (!(*inputRanges)[0] || !(*inputRanges)[1])
-      return false;
-    return intrange::evaluatePred(pred, *(*inputRanges)[0], *(*inputRanges)[1])
-        .value_or(false);
+      return std::nullopt;
+    return intrange::evaluatePred(pred, *(*inputRanges)[0], *(*inputRanges)[1]);
   }
-  return false;
+  return std::nullopt;
 }
 
 LogicalResult TritonIntegerRangeAnalysis::initialize(Operation *top) {
@@ -813,27 +813,14 @@ struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
 
   LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
                                 PatternRewriter &rewriter) const override {
-    if (!cmpIIsStaticallyTrue(*solver, cmpOp))
+    auto result = evaluateCmpI(*solver, cmpOp);
+    if (!result)
       return failure();
 
-    // Scalar integer/index types: use maybeReplaceWithConstant.
-    if (llvm::isa<IntegerType, IndexType>(cmpOp.getType())) {
-      if (failed(mlir::dataflow::maybeReplaceWithConstant(*solver, rewriter,
-                                                          cmpOp.getResult()))) {
-        LDBG("failed to replace with constant op: " << cmpOp);
-        return failure();
-      }
-      return success();
-    }
-
-    // Tensor-typed cmpi: replace with dense<true>.
-    if (auto tensorType = dyn_cast<RankedTensorType>(cmpOp.getType())) {
-      rewriter.replaceOpWithNewOp<arith::ConstantOp>(
-          cmpOp, DenseIntElementsAttr::get(tensorType, true));
-      return success();
-    }
-
-    return failure();
+    TypedAttr constAttr = *result ? rewriter.getOneAttr(cmpOp.getType())
+                                  : rewriter.getZeroAttr(cmpOp.getType());
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(cmpOp, constAttr);
+    return success();
   }
 
   DataFlowSolver *solver;
