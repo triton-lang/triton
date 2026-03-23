@@ -186,20 +186,33 @@ Value Prefetcher::getYieldValue(Value v) {
 }
 
 bool Prefetcher::isPromotableValue(Value v) {
+  // Null operands are treated as trivially promotable.
+  // e.g., local_load no tokens
   if (!v)
     return true;
+  // Loop-carried block arguments can be remapped to either the init or yield
+  // value when materializing the prologue/epilogue.
   if (isLoopCarriedValue(v))
     return true;
   Operation *op = v.getDefiningOp();
+  // Other block arguments / values without a defining op are assumed safe.
   if (!op)
     return true;
+  // Values defined outside this loop body are already available in the
+  // preheader, so we do not need to clone loop-local IR for them.
   if (op->getBlock() != forOp.getBody())
     return true;
+  // Nested control flow is not handled by the cloning logic below.
   if (op->getNumRegions() != 0)
     return false;
-  if (!isa<arith::AddIOp, arith::CmpIOp, arith::ConstantOp, arith::SelectOp,
-           triton::gpu::AsyncWaitOp, triton::gpu::MemDescIndexOp>(op))
+  // Only clone simple elementwise/constant ops plus the specific loop-local
+  // ops needed to rebuild the async-wait + memdesc-index chain.
+  if (!op->hasTrait<OpTrait::Elementwise>() &&
+      !op->hasTrait<OpTrait::ConstantLike>() &&
+      !isa<triton::gpu::AsyncWaitOp, triton::gpu::MemDescIndexOp>(op))
     return false;
+  // Every operand must also be promotable, otherwise the whole expression is
+  // rejected.
   return llvm::all_of(op->getOperands(),
                       [this](Value operand) { return isPromotableValue(operand); });
 }
