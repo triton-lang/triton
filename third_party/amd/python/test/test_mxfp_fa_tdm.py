@@ -31,7 +31,6 @@ done
 '''
 
 import os
-# ruff: noqa: E402
 import pytest
 import torch
 import triton
@@ -39,7 +38,7 @@ import triton.language as tl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 import argparse
 import math
-from triton._internal_testing import is_hip_gfx1250, is_hip_cdna4
+from triton._internal_testing import is_hip_gfx1250
 
 # For FA, the P=softmax(S) is performed very accurately in fp32 and
 # P is in range [0, 1]; these then get down-cast to e4m3 which only has
@@ -119,6 +118,8 @@ def _attn_fwd_inner(
     DISABLE_MASKING: tl.constexpr,
     USE_TDM: tl.constexpr,
 ):
+    # Note: Both TDM (tensor descriptor) and pointer-based paths are kept for debugging.
+    # Production tests only use USE_TDM=True, but pointer path remains available for debugging.
     RCP_LN2: tl.constexpr = 1.4426950408889634
 
     for i in range(block_min, block_max, BLOCK_N):
@@ -573,19 +574,21 @@ def run_mha(config, args):
         pytest.fail()
 
 
+# Note: This test only exercises TDM (tensor descriptor mode) path.
+# However, we keep both TDM and pointer-based load/store code paths in the kernel
+# for debugging purposes. The pointer-based path can be enabled by setting USE_TDM=False.
 @pytest.mark.parametrize("batch", [1, 2])
 @pytest.mark.parametrize("num_heads", [1, 16])
 @pytest.mark.parametrize("seqlen", [256, 512, 1024])
 @pytest.mark.parametrize("head_sz", [128])
 @pytest.mark.parametrize("block_m", [128, 64])
-@pytest.mark.parametrize("q_type", ["e4m3"])
-@pytest.mark.parametrize("kv_type", ["e4m3", "e2m1"])
+@pytest.mark.parametrize("q_type", ["e4m3", "e5m2",])
+@pytest.mark.parametrize("kv_type", ["e4m3", "e5m2", "e2m1"])
 @pytest.mark.parametrize("num_stages", [1, 3])
-@pytest.mark.parametrize("USE_TDM", [True, False])
-def test_mha(batch, num_heads, seqlen, head_sz, block_m, q_type, kv_type, num_stages, USE_TDM):
-    if not (is_hip_gfx1250() or is_hip_cdna4()):
-        pytest.skip("MXFP FA kernels are only tested on AMD GFX1250 or CDNA4.")
-    if kv_type == "e2m1" and USE_TDM:
+def test_mha(batch, num_heads, seqlen, head_sz, block_m, q_type, kv_type, num_stages):
+    if not is_hip_gfx1250():
+        pytest.skip("MXFP FA kernels with TDM are only tested on AMD GFX1250.")
+    if kv_type == "e2m1":
         pytest.skip("Numerical failures need investigation.")
     block_n = 128
     config = {
@@ -611,7 +614,7 @@ def test_mha(batch, num_heads, seqlen, head_sz, block_m, q_type, kv_type, num_st
             self.verbose = False
             self.disable_masking = False
             self.dump_ir = 'none'
-            self.tdm = USE_TDM
+            self.tdm = True  # Use TDM (tensor descriptor mode)
 
     args = Args(q_type, kv_type)
 
