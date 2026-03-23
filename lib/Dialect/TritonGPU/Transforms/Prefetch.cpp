@@ -1,32 +1,40 @@
 //===----------------------------------------------------------------------===//
 //
-// This pass tries to prefetch operands (a and b) of tt.dot.
-// Those ConvertLayoutOps will be lowered to shared memory loads.
+// This pass rewrites selected tt.dot loops to pull the prefetched head out of
+// the loop and to prefetch the next iteration's operands at the end of the
+// loop. The concrete shape is covered by split_pipelined_mmav2_loads in
+// test/TritonGPU/prefetch.mlir.
 //
-// For example:
-// %a: tensor<128x32xf16, #enc>
-// scf.for %iv = ... iter_args(%a_arg = %a, ...) {
-//   %d = tt.dot %a_arg, %b, %c
-//   ...
-//   scf.yield %a_next, ...
+// Example:
+// %loop = scf.for ... {
+//   %wait = ttg.async_wait %tok0, %tok1 {num = 4 : i32}
+//   %a_view = ttg.memdesc_index %a[%idx_next]
+//   %a_val = ttg.local_load %a_view token %wait
+//   %b_view = ttg.memdesc_index %b[%idx_next]
+//   %b_val = ttg.local_load %b_view token %wait
+//   %acc_next = tt.dot %a_val, %b_val, %acc
+//   scf.yield %idx_next, %acc_next
 // }
 //
-// will be translated to
-//
-// %a: tensor<128x32xf16, #enc>
-// %a_tmp = tensor.subview %a[0, 0] [128, 16]
-// %a_prefetch = ttg.local_load %a_tmp
-// scf.for %iv = ... iter_args(%a_buf = %a, ..., %a_prefetch_arg = %a_prefetch)
-// {
-//   %x = tt.dot %a_prefetch_arg, %b, %c
-//   %a_tmp_rem = tensor.subview %a_buf[0, 16] [128, 16]
-//   %a_prefetch_next = ttg.local_load %a_tmp_rem
-//   ...
-//   scf.yield %next_a, ..., %a_prefetch_next
+// becomes:
+// %a_view0 = ttg.memdesc_index %a[%idx_next0]
+// %b_view0 = ttg.memdesc_index %b[%idx_next0]
+// %wait0 = ttg.async_wait %tok0, %tok1 {num = 4 : i32}
+// %a0 = ttg.local_load %a_view0 token %wait0
+// %b0 = ttg.local_load %b_view0 token %wait0
+// %loop = scf.for ... iter_args(..., %wait = %wait0, %a_prefetch = %a0,
+//                               %b_prefetch = %b0) {
+//   %wait_next = ttg.async_wait %tok0, %tok1 {num = 4 : i32}
+//   %a_rem = ttg.local_load %a_tail token %wait
+//   %b_rem = ttg.local_load %b_tail token %wait
+//   %dot0 = tt.dot %a_prefetch, %b_prefetch, %acc
+//   %a_next = ttg.local_load %next_a_head token %wait_next
+//   %b_next = ttg.local_load %next_b_head token %wait_next
+//   %acc_next = tt.dot %a_rem, %b_rem, %dot0
+//   scf.yield ..., %wait_next, %a_next, %b_next
 // }
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -53,15 +61,14 @@ class Prefetcher {
     DenseMap<Operation *, unsigned> b;
   };
 
-  /// cache the ForOp we are working on
+  /// Loop being rewritten.
   scf::ForOp forOp;
-  /// cache the YieldOp of this ForOp
+  /// Original loop terminator, used to recover yielded values.
   scf::YieldOp yieldOp;
-  ///
   // TODO: add a hook to infer prefetchWidth
   unsigned prefetchWidth = 32;
 
-  /// dots to be prefetched
+  /// Dots that will be rewritten to use prologue/next-iteration prefetches.
   SetVector<triton::DotOp> dots;
   DenseMap<Value, Value> dot2aSource;
   DenseMap<Value, Value> dot2bSource;
@@ -69,7 +76,7 @@ class Prefetcher {
   DenseMap<Value, Value> dot2bToken;
   DenseMap<Value, SmallVector<Value>> dot2aVals;
   DenseMap<Value, SmallVector<Value>> dot2bVals;
-  /// operand => defining
+  /// Original dot operand -> prologue-prefetched value.
   DenseMap<Value, Value> operand2headPrefetch;
   DenseMap<Value, Value> initMaterializations;
 
@@ -198,16 +205,16 @@ bool Prefetcher::isPromotableValue(Value v) {
   // e.g., local_load no tokens
   if (!v)
     return true;
-  // Loop-carried block arguments can be remapped to either the init or yield
-  // value when materializing the prologue/epilogue.
+  // Loop-carried block arguments can be remapped to either the init value or
+  // the yielded next-iteration value during rewrite.
   if (isLoopCarriedValue(v))
     return true;
   Operation *op = v.getDefiningOp();
   // Other block arguments / values without a defining op are assumed safe.
   if (!op)
     return true;
-  // Values defined outside this loop body are already available in the
-  // preheader, so we do not need to clone loop-local IR for them.
+  // Values defined outside this loop body are already available where we
+  // materialize the prologue/yield expressions, so they do not need cloning.
   if (op->getBlock() != forOp.getBody())
     return true;
   // Nested control flow is not handled by the cloning logic below.
@@ -292,9 +299,10 @@ LogicalResult Prefetcher::initialize() {
   if (dotsInFor.size() > 1)
     return failure();
 
-  // returns source of cvt
+  // Walk back from the dot operand to the shared-memory value consumed by the
+  // local_load chain.
   auto getPrefetchSrc = [](Value v) -> SmallVector<Value> {
-    // walk back to conversion
+    // Walk backwards through the single-use chain until we find local_load.
     Operation *op = v.getDefiningOp();
     if (!op)
       return {};
@@ -307,8 +315,7 @@ LogicalResult Prefetcher::initialize() {
         break;
       if (auto load = dyn_cast<triton::gpu::LocalLoadOp>(op)) {
         rets.push_back(load.getSrc());
-        // NYI for other encodings, for example if we have transpose
-        // in the chain
+        // Only handle the direct dot-operand load chain for now.
         if (isa<DotOperandEncodingAttr>(load.getType().getEncoding()))
           foundConvertFromShared = true;
         break;
@@ -352,7 +359,7 @@ LogicalResult Prefetcher::initialize() {
 
     auto kSize = aType.getShape().back();
 
-    // works better with nvidia tensor cores
+    // Match the chunk width expected by the dot operand encoding.
     unsigned elementWidth = aType.getElementTypeBitWidth();
     if (aKWidth == 0)
       prefetchWidth = 256 / elementWidth;
@@ -462,7 +469,7 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
     return newForOp.getRegionIterArgs()[it->second];
   };
 
-  // The insertion point should be placed before the yield op
+  // Keep late-sunk ops before the loop terminator.
   auto setInsertionPointBeforeYield = [](OpBuilder &builder,
                                          scf::ForOp newForOp) {
     if (newForOp.getBody()->mightHaveTerminator()) {
@@ -491,7 +498,7 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
     auto dot = dyn_cast<triton::DotOp>(&op);
     if (dot && dots.contains(dot)) {
       Attribute dotEncoding = dot.getType().getEncoding();
-      // prefetched dot
+      // First dot uses the values prefetched before entering the loop.
       Operation *firstDot = builder.clone(*dot, mapping);
       if (Value a = operand2headPrefetch.lookup(dot.getA()))
         firstDot->setOperand(
@@ -500,7 +507,7 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
         firstDot->setOperand(
             1, newForOp.getTiedLoopRegionIterArg(&*b.use_begin()));
 
-      // remaining part
+      // Emit additional dots for the remainder of K after the prefetched head.
       int64_t kOff = prefetchWidth;
       int64_t kRem = dot.getA().getType().getShape().back() - prefetchWidth;
       Operation *prevDot = firstDot;
@@ -513,7 +520,6 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
       }
 
       while (kRem != 0) {
-        // int64_t kShape = largestPow2(kRem);
         int64_t kShape = prefetchWidth;
         auto insertionPoint = builder.saveInsertionPoint();
         builder.setInsertionPoint(prevDot);
@@ -542,7 +548,7 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
         }
       }
     }
-    // update mapping of results
+    // Forward all uses in the cloned body to the rewritten operations.
     for (unsigned dstIdx : llvm::seq(unsigned(0), op.getNumResults()))
       mapping.map(op.getResult(dstIdx), newOp->getResult(dstIdx));
   }
@@ -591,7 +597,6 @@ Prefetcher::createYieldValues(OpBuilder &builder, IRMapping &mapping,
                          builder, getNextToken(dot, true));
     cloneElementwiseOps(aToYield, dot2aVals[dot], builder);
     yieldValues.push_back(aToYield);
-    // bToYield
     Value bToYield =
         generatePrefetch(getNextSource(dot, false), 1, true, dotEncoding,
                          builder, getNextToken(dot, false));
@@ -620,7 +625,7 @@ scf::ForOp Prefetcher::createNewForOp() {
 
   SmallVector<Value> yieldValues =
       createYieldValues(builder, mapping, carriedTokenArgs);
-  // Update ops of yield
+  // Replace the loop terminator with the rebuilt yield.
   builder.setInsertionPointToEnd(newForOp.getBody());
   if (!yieldValues.empty())
     scf::YieldOp::create(builder, yieldOp.getLoc(), yieldValues);
