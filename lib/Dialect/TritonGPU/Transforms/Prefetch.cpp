@@ -604,13 +604,27 @@ Prefetcher::createYieldValues(OpBuilder &builder, IRMapping &mapping,
         },
         yieldCache);
   };
-  auto getNextToken = [this, &mapping](triton::DotOp dot, bool isA) -> Value {
+  auto getNextToken = [this, &builder, &mapping](triton::DotOp dot,
+                                                 bool isA) -> Value {
     Value token = isA ? dot2aToken.lookup(dot) : dot2bToken.lookup(dot);
     if (!token)
       return Value();
     if (isLoopCarriedValue(token))
       return mapping.lookupOrDefault(getYieldValue(token));
-    return mapping.lookupOrDefault(token);
+    OpBuilder::InsertionGuard guard(builder);
+    DenseMap<Value, Value> yieldCache;
+    return cloneLoopValue(
+        token, builder,
+        [this, &builder, &mapping](BlockArgument arg) -> Value {
+          if (arg.getOwner() != forOp.getBody())
+            return arg;
+          if (arg == forOp.getInductionVar())
+            return arith::AddIOp::create(builder, forOp.getLoc(),
+                                         mapping.lookupOrDefault(arg),
+                                         forOp.getStep());
+          return mapping.lookupOrDefault(getYieldValue(arg));
+        },
+        yieldCache);
   };
 
   SmallVector<Value> yieldValues;
