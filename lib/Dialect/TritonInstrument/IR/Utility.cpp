@@ -25,10 +25,12 @@ namespace {
 
 constexpr unsigned kMaxVectorLengthBits = 128;
 
-DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx, unsigned size,
+DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
+                                              ArrayRef<int64_t> shape,
                                               unsigned warps, unsigned numCTAs,
                                               unsigned bitwidth) {
-  auto d0 = standardOutDimNames(ctx, 1).front();
+  assert(!shape.empty() && "Expected non-empty shape");
+  auto dims = standardOutDimNames(ctx, shape.size());
   auto kBlock = StringAttr::get(ctx, "block");
   auto kWarp = StringAttr::get(ctx, "warp");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -43,46 +45,28 @@ DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx, unsigned size,
   // unsigned vecLen = kMaxVectorLengthBits / bitwidth;
   unsigned vecLen = 1;
 
-  // Zero layout along the blocks and warps to broadcast.
-  LinearLayout llBlock = LinearLayout::zeros1D(numCTAs, kBlock, d0);
-  LinearLayout llWarp = LinearLayout::zeros1D(warps, kWarp, d0);
-  LinearLayout llLane = LinearLayout::identity1D(/*size=*/32, kLane, d0);
-  LinearLayout llReg = LinearLayout::identity1D(vecLen, kRegister, d0);
-  // Order of multiplication matters: linearly map along registers first.
-  LinearLayout ll = llReg * llLane * llWarp * llBlock;
-  ll = ensureLayoutNotLargerThan(ll, {{d0, size}});
-  ll = ensureLayoutNotSmallerThan(ll, {{d0, size}});
+  // Broadcast along blocks and warps. Use the innermost dimension for the
+  // lane/register mapping and keep the outer dimensions replicated.
+  auto lastDim = dims.back();
+  auto repOrder = llvm::to_vector(llvm::seq<unsigned>(0, shape.size()));
+  auto trivialShape = SmallVector<unsigned>(shape.size(), 1);
+  auto llReg = LinearLayout::identity1D(1, kRegister, lastDim);
+  auto llLane = LinearLayout::identity1D(32, kLane, lastDim);
+  auto llWarp = LinearLayout::zeros1D(warps, kWarp, lastDim);
+  // ConSan's multi-CTA state is replicated in every CTA. The leading logical
+  // CTA dimension is therefore broadcast across blocks instead of split.
+  auto llBlock = LinearLayout::zeros1D(numCTAs, kBlock, dims.front());
+  LinearLayout ll = identityStandardND(kRegister, trivialShape, repOrder) *
+                    llReg * llLane * llWarp * llBlock;
+  SmallVector<int64_t> layoutShape(shape.size(), 1);
+  layoutShape.back() = ll.getTotalOutDimSize();
+  ll = ll.reshapeOuts(standardOutDimPairs(ctx, layoutShape));
 
-  return LinearEncodingAttr::get(ctx, ll);
-}
-
-DistributedEncodingTrait
-getWarpLocalEncoding(MLIRContext *ctx, unsigned buffers, unsigned barriers,
-                     unsigned warps, unsigned numCTAs, unsigned bitwidth) {
-  auto dims = standardOutDimNames(ctx, 2);
-  auto d0 = dims[0];
-  auto d1 = dims[1];
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto kWarp = StringAttr::get(ctx, "warp");
-  auto kLane = StringAttr::get(ctx, "lane");
-  auto kRegister = StringAttr::get(ctx, "register");
-  // unsigned vecLen = kMaxVectorLengthBits / bitwidth;
-  unsigned vecLen = 1;
-
-  // See above: broadcast along blocks and warps.
-  LinearLayout llBlock = LinearLayout::zeros1D(numCTAs, kBlock, d0) *
-                         LinearLayout::zeros1D(/*size=*/1, kBlock, d1);
-  LinearLayout llWarp = LinearLayout::zeros1D(warps, kWarp, d0) *
-                        LinearLayout::zeros1D(/*size=*/1, kWarp, d1);
-  // `d1` is the inner dimension.
-  LinearLayout llLane = LinearLayout::identity1D(1, kLane, d0) *
-                        LinearLayout::identity1D(32, kLane, d1);
-  LinearLayout llReg = LinearLayout::identity1D(1, kRegister, d0) *
-                       LinearLayout::identity1D(vecLen, kRegister, d1);
-
-  LinearLayout ll = llReg * llLane * llWarp * llBlock;
-  ll = ensureLayoutNotLargerThan(ll, {{d0, buffers}, {d1, barriers}});
-  ll = ensureLayoutNotSmallerThan(ll, {{d0, buffers}, {d1, barriers}});
+  llvm::SmallDenseMap<StringAttr, int64_t> bounds;
+  for (auto [dim, size] : llvm::zip_equal(dims, shape))
+    bounds.try_emplace(dim, size);
+  ll = ensureLayoutNotLargerThan(ll, bounds);
+  ll = ensureLayoutNotSmallerThan(ll, bounds);
 
   return LinearEncodingAttr::get(ctx, ll);
 }
@@ -90,10 +74,11 @@ getWarpLocalEncoding(MLIRContext *ctx, unsigned buffers, unsigned barriers,
 std::pair<Value, RankedTensorType>
 createBufferDescriptorsTensor(ImplicitLocOpBuilder &builder, MemType memType,
                               ArrayRef<BufferRegion> regions) {
+  Region *region = builder.getInsertionBlock()->getParent();
   int64_t size = regions.size();
+  int64_t numCTAs = lookupNumCTAs(region->getParentOp());
   assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-  auto tensorType =
-      getIntTensorType(builder.getInsertionBlock()->getParent(), {size}, 64);
+  auto tensorType = getIntTensorType(region, {numCTAs, size}, 64);
   SmallVector<int32_t> offsets;
   SmallVector<int32_t> lengths;
   offsets.reserve(size);
@@ -156,24 +141,9 @@ bool hasCrossBufferAliasing(ArrayRef<BufferRegion> regions) {
   return false;
 }
 
-Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
-                                     TypedValue<RankedTensorType> tensor) {
-  Type elType = tensor.getType().getElementType();
-  int elSize = elType.getIntOrFloatBitWidth() / 8;
-  int numEls = product(tensor.getType().getShape());
-  int64_t sizeInBytes = numEls * elSize;
-  Type ptrType = triton::getPointerType(elType);
-  auto alloc =
-      createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, sizeInBytes, elSize);
-  createStoreScratchMemory(b, b.getLoc(), alloc, tensor, tensor.getType());
-  return alloc;
-}
-Value createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
-                                int bitWidth, FunctionBuilder &funcBuilder) {
-  SmallVector<int64_t> shape = {m};
-  if (n > 0) {
-    shape.push_back(n);
-  }
+Value createZeroInitStateTensor(ImplicitLocOpBuilder &b,
+                                ArrayRef<int64_t> shape, int bitWidth,
+                                FunctionBuilder &funcBuilder) {
   auto type =
       getIntTensorType(b.getInsertionBlock()->getParent(), shape, bitWidth);
   Type elType = type.getElementType();
@@ -184,7 +154,8 @@ Value createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
   // Allocate scratch buffers with 16-byte alignment so global loads and stores
   // can be vectorized if possible.
   auto alloc = createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, sizeInBytes,
-                                            /*alignment=*/16);
+                                            /*alignment=*/16,
+                                            /*sharedClusterState=*/true);
   Value cstZero = arith::ConstantIntOp::create(b, 0, bitWidth);
   funcBuilder.createFillGlobalTensorCall(b, alloc, type, cstZero);
   return alloc;
@@ -200,17 +171,26 @@ createAliasMatrixTensor(ImplicitLocOpBuilder &b,
   for (const auto &row : matrix)
     assert(row.size() == cols && "Expected square alias matrix");
 
+  int64_t numCTAs = lookupNumCTAs(region->getParentOp());
   auto type = getIntTensorType(
-      region, {static_cast<int64_t>(rows), static_cast<int64_t>(cols)},
+      region, {numCTAs, static_cast<int64_t>(rows), static_cast<int64_t>(cols)},
       /*bitWidth=*/1);
+  auto sliceType = RankedTensorType::get(
+      {static_cast<int64_t>(rows), static_cast<int64_t>(cols)}, b.getI1Type(),
+      SliceEncodingAttr::get(
+          b.getContext(), /*dim=*/0,
+          cast<DistributedEncodingTrait>(type.getEncoding())));
   SmallVector<APInt> values;
   values.reserve(rows * cols);
   for (const auto &row : matrix)
     for (uint8_t v : row)
       values.emplace_back(/*numBits=*/1, v);
 
-  auto denseAttr = DenseElementsAttr::get(type, values);
-  Value constValue = arith::ConstantOp::create(b, b.getLoc(), type, denseAttr);
+  auto denseAttr = DenseElementsAttr::get(sliceType, values);
+  Value constValue =
+      arith::ConstantOp::create(b, b.getLoc(), sliceType, denseAttr);
+  constValue = expandOuterSlicedDim(b, b.getLoc(), constValue);
+  constValue = BroadcastOp::create(b, b.getLoc(), type, constValue);
   return cast<TypedValue<RankedTensorType>>(constValue);
 }
 
@@ -226,12 +206,8 @@ bool hasCpAsync(ModuleOp module) {
 
 Value createLockVariable(ImplicitLocOpBuilder &b) {
   Type ptrType = triton::getPointerType(b.getI32Type());
-  auto alloc = createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, 4, 4);
-  Value zero = arith::ConstantOp::create(b, b.getLoc(), b.getI32Type(),
-                                         b.getI32IntegerAttr(0));
-  triton::AtomicRMWOp::create(b, b.getI32Type(), RMWOp::XCHG, alloc, zero,
-                              nullptr, MemSemantic::ACQUIRE_RELEASE,
-                              MemSyncScope::GPU);
+  auto alloc = createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, 4, 4,
+                                            /*sharedClusterState=*/true);
   return alloc;
 }
 
@@ -239,11 +215,14 @@ Value createLockVariable(ImplicitLocOpBuilder &b) {
 
 namespace mlir::triton::instrument {
 
+static Value createCurrentCTAMask(OpBuilder &b, Location loc,
+                                  RankedTensorType tensorType);
+
 uint32_t getMemDescLength(Value buf) {
   auto memDescType = cast<MemDescType>(buf.getType());
   if (isa<SharedEncodingTrait>(memDescType.getEncoding())) {
     unsigned elSize = memDescType.getElementType().getIntOrFloatBitWidth() / 8;
-    return static_cast<uint32_t>(product(memDescType.getShape()) * elSize);
+    return static_cast<uint32_t>(product(getShapePerCTA(memDescType)) * elSize);
   }
   if (isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace())) {
     return getTmemAllocSizes(memDescType).numCols;
@@ -253,28 +232,25 @@ uint32_t getMemDescLength(Value buf) {
 
 gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
-                             int64_t sizeInBytes, int64_t alignment) {
-  return gpu::GlobalScratchAllocOp::create(b, loc, ptrType, sizeInBytes,
-                                           alignment, b.getUnitAttr());
+                             int64_t sizeInBytes, int64_t alignment,
+                             bool sharedClusterState) {
+  return gpu::GlobalScratchAllocOp::create(
+      b, loc, ptrType, sizeInBytes, alignment, b.getUnitAttr(),
+      sharedClusterState ? b.getUnitAttr() : UnitAttr());
 }
 
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
                           StringRef message) {
-  if (auto tensorTy = dyn_cast<RankedTensorType>(condition.getType())) {
-    if (tensorTy.getRank() != 1) {
-      condition = triton::ReshapeOp::create(b, {tensorTy.getNumElements()},
-                                            condition, /*allowReorder=*/true);
+  if (isa<RankedTensorType>(condition.getType())) {
+    auto conditionTy = cast<RankedTensorType>(condition.getType());
+    if (conditionTy.getRank() > 0 && conditionTy.getShape()[0] > 1) {
+      Value currentCTAMask = createCurrentCTAMask(b, b.getLoc(), conditionTy);
+      Value trueTensor = createConstIntTensor(b, b.getLoc(), 1, conditionTy);
+      condition = arith::SelectOp::create(b, b.getLoc(), currentCTAMask,
+                                          condition, trueTensor);
     }
-    auto reduceOp = triton::ReduceOp::create(b, condition, /*axis=*/0);
-    Block *block = &reduceOp.getRegion().emplaceBlock();
-    b.setInsertionPointToStart(block);
-    Value lhs = block->addArgument(b.getI1Type(), b.getLoc());
-    Value rhs = block->addArgument(b.getI1Type(), b.getLoc());
-    Value result = arith::AndIOp::create(b, lhs, rhs);
-    triton::ReduceReturnOp::create(b, result);
-
-    b.setInsertionPointAfter(reduceOp);
-    condition = reduceOp.getResult().front();
+    triton::AssertOp::create(b, condition, message);
+    return;
   }
   ExperimentalAssertUniformOp::create(b, condition, message);
 }
@@ -284,14 +260,8 @@ RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,
   MLIRContext *ctx = region->getContext();
   unsigned int warps = lookupNumWarps(region);
   unsigned int numCTAs = lookupNumCTAs(region->getParentOp());
-  DistributedEncodingTrait encoding;
-  if (shape.size() == 1) {
-    encoding = getWarpLocalEncoding(ctx, shape[0], warps, numCTAs, bitWidth);
-  } else {
-    assert(shape.size() == 2 && "Only 1D and 2D shapes are supported");
-    encoding =
-        getWarpLocalEncoding(ctx, shape[0], shape[1], warps, numCTAs, bitWidth);
-  }
+  DistributedEncodingTrait encoding =
+      getWarpLocalEncoding(ctx, shape, warps, numCTAs, bitWidth);
   Type elType = IntegerType::get(ctx, bitWidth);
   return RankedTensorType::get(shape, elType, encoding);
 }
@@ -314,7 +284,7 @@ getSingleDimSliceEncoding(DistributedEncodingTrait encoding, int dim) {
   MLIRContext *ctx = encoding.getContext();
   assert(dim < rank && "Expected dim to be less than rank");
   DistributedEncodingTrait sliceEncoding = encoding;
-  for (int i = 0; i < rank; ++i) {
+  for (int i = rank - 1; i >= 0; --i) {
     if (i != dim) {
       sliceEncoding = SliceEncodingAttr::get(ctx, i, sliceEncoding);
     }
@@ -382,11 +352,48 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
   return ptrTensor;
 }
 
+static Value createCurrentCTAMask(OpBuilder &b, Location loc,
+                                  RankedTensorType tensorType) {
+  assert(tensorType.getRank() > 0 && "expected ranked tensor");
+  auto encoding = cast<DistributedEncodingTrait>(tensorType.getEncoding());
+  auto sliceEncoding = getSingleDimSliceEncoding(encoding, /*dim=*/0);
+  auto indexType = RankedTensorType::get({tensorType.getShape()[0]},
+                                         b.getI32Type(), sliceEncoding);
+  Value range = MakeRangeOp::create(b, loc, indexType, /*start=*/0,
+                                    tensorType.getShape()[0]);
+  Value ctaId = ExperimentalClusterCTAIdOp::create(b, loc);
+  Value ctaIdTensor = SplatOp::create(b, loc, indexType, ctaId);
+  Value mask1D = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, range,
+                                       ctaIdTensor);
+  auto maskType =
+      RankedTensorType::get(tensorType.getShape(), b.getI1Type(), encoding);
+  Value mask = expandAllSlicedDims(b, loc, mask1D);
+  if (cast<RankedTensorType>(mask.getType()).getShape() !=
+      tensorType.getShape())
+    mask = BroadcastOp::create(b, loc, maskType, mask);
+  return mask;
+}
+
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
-                                    Value tensor, RankedTensorType tensorType) {
+                                    Value tensor, RankedTensorType tensorType,
+                                    bool currentCTAOnly) {
+  if (currentCTAOnly) {
+    assert(tensorType.getRank() >= 2 &&
+           "expected currentCTAOnly tensor to have a leading CTA dimension");
+    int64_t numCTAs = lookupNumCTAs(b);
+    assert(tensorType.getShape()[0] == numCTAs &&
+           "expected leading dimension to match numCTAs");
+    if (numCTAs > 1) {
+      Value oldTensor = createLoadScratchMemory(b, loc, alloc, tensorType);
+      Value currentCTAMask = createCurrentCTAMask(b, loc, tensorType);
+      tensor =
+          arith::SelectOp::create(b, loc, currentCTAMask, tensor, oldTensor);
+    }
+  }
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  return StoreOp::create(b, loc, ptrTensor, tensor, CacheModifier::NONE,
-                         EvictionPolicy::NORMAL);
+  return StoreOp::create(b, loc, ptrTensor, tensor, Value(),
+                         CacheModifier::NONE, EvictionPolicy::NORMAL,
+                         /*ignore_cta=*/true);
 }
 
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
@@ -435,6 +442,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
   SmallVector<SmallVector<BufferRegion>, numMemTypes> bufRegions(numMemTypes);
   SmallVector<BufferRegion> barrierRegions;
   getBuffersAndBarriers(module, bufRegions, barrierRegions);
+  int numCTAs = lookupNumCTAs(module);
 
   FuncOp entryPoint = getEntryPoint(module);
   assert(entryPoint);
@@ -482,14 +490,16 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
     }
 
     writeVisibility[iMemType].insert(
-        entryRegion, {createZeroInitStateTensor(b, numBufs, 0, 64, fb),
-                      getIntTensorType(entryRegion, {numBufs}, 64)});
+        entryRegion, {createZeroInitStateTensor(b, {numCTAs, numBufs}, 64, fb),
+                      getIntTensorType(entryRegion, {numCTAs, numBufs}, 64)});
     passToWarpSpecialize(entryPoint, writeVisibility[iMemType].at(entryRegion),
                          writeVisibility[iMemType]);
     readVisibility[iMemType].insert(
         entryRegion,
-        {createZeroInitStateTensor(b, numBufs, THREADS_BITMASK_SIZE, 64, fb),
-         getIntTensorType(entryRegion, {numBufs, THREADS_BITMASK_SIZE}, 64)});
+        {createZeroInitStateTensor(b, {numCTAs, numBufs, THREADS_BITMASK_SIZE},
+                                   64, fb),
+         getIntTensorType(entryRegion, {numCTAs, numBufs, THREADS_BITMASK_SIZE},
+                          64)});
     passToWarpSpecialize(entryPoint, readVisibility[iMemType].at(entryRegion),
                          readVisibility[iMemType]);
   }
@@ -506,36 +516,41 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
     });
 
     int numBarriers = barrierRegions.size();
-    barrierStates.insert(entryRegion,
-                         {createZeroInitStateTensor(b, numBarriers, 0, 32, fb),
-                          getIntTensorType(entryRegion, {numBarriers}, 32)});
+    barrierStates.insert(
+        entryRegion,
+        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 32, fb),
+         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
     passToWarpSpecialize(entryPoint, barrierStates.at(entryRegion),
                          barrierStates);
 
-    // Deadlock detection aux data: waiting (i32[K]) storing waiting flag and
-    // phase bits per thread (two bits per thread).
-    waiting.insert(entryRegion,
-                   {createZeroInitStateTensor(b, numBarriers, 0, 32, fb),
-                    getIntTensorType(entryRegion, {numBarriers}, 32)});
+    // Deadlock detection aux data over [cta, barrier]: waiting
+    // stores waiting flag and phase bits per thread (two bits per thread).
+    waiting.insert(
+        entryRegion,
+        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 32, fb),
+         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
     passToWarpSpecialize(entryPoint, waiting.at(entryRegion), waiting);
 
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       int iMemType = (int)memType;
       // Create state tensors:
       int numBufs = bufRegions[iMemType].size();
-      int numBarriers = barrierRegions.size();
       if (numBufs > 0) {
         writeTracking[iMemType].insert(
             entryRegion,
-            {createZeroInitStateTensor(b, numBufs, numBarriers, 8, fb),
-             getIntTensorType(entryRegion, {numBufs, numBarriers}, 8)});
+            {createZeroInitStateTensor(b, {numCTAs, numBufs, numBarriers}, 8,
+                                       fb),
+             getIntTensorType(entryRegion, {numCTAs, numBufs, numBarriers},
+                              8)});
         passToWarpSpecialize(entryPoint,
                              writeTracking[iMemType].at(entryRegion),
                              writeTracking[iMemType]);
         readTracking[iMemType].insert(
             entryRegion,
-            {createZeroInitStateTensor(b, numBufs, numBarriers, 64, fb),
-             getIntTensorType(entryRegion, {numBufs, numBarriers}, 64)});
+            {createZeroInitStateTensor(b, {numCTAs, numBufs, numBarriers}, 64,
+                                       fb),
+             getIntTensorType(entryRegion, {numCTAs, numBufs, numBarriers},
+                              64)});
         passToWarpSpecialize(entryPoint, readTracking[iMemType].at(entryRegion),
                              readTracking[iMemType]);
       }
@@ -544,6 +559,19 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
 
   // Create lock variable allocation
   Value lockVal = createLockVariable(b);
+  // Initialize the shared-cluster lock once, then synchronize before any CTA
+  // can enter the first instrumented critical section.
+  Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value zero = arith::ConstantIntOp::create(b, 0, 32);
+  Value isCTA0 =
+      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
+  ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
+  if (numCTAs > 1) {
+    ClusterBarrierOp::create(b, b.getLoc());
+  } else {
+    BarrierOp::create(b, b.getLoc(),
+                      AddrSpace::GlobalRead | AddrSpace::GlobalWrite);
+  }
   lock.insert(entryRegion, {lockVal, lockVal.getType()});
   passToWarpSpecialize(entryPoint, lock.at(entryRegion), lock);
 
@@ -555,8 +583,8 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
     // operates on base threads.
     commits[commitKind].insert(
         entryRegion,
-        {createZeroInitStateTensor(b, numBufs, NUM_THREADS, 8, fb),
-         getIntTensorType(entryRegion, {numBufs, NUM_THREADS}, 8)});
+        {createZeroInitStateTensor(b, {numCTAs, numBufs, NUM_THREADS}, 8, fb),
+         getIntTensorType(entryRegion, {numCTAs, numBufs, NUM_THREADS}, 8)});
     passToWarpSpecialize(entryPoint, commits[commitKind].at(entryRegion),
                          commits[commitKind]);
   };
