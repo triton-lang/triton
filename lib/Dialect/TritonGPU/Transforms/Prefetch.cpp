@@ -98,7 +98,6 @@ public:
   }
 
   LogicalResult initialize();
-  bool hasDots() const { return !dots.empty(); }
 
   void emitPrologue();
 
@@ -631,9 +630,6 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
       Prefetcher prefetcher(forOp);
 
       if (prefetcher.initialize().failed())
-        return;
-
-      if (!prefetcher.hasDots())
         return;
 
       prefetcher.emitPrologue();
