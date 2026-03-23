@@ -539,23 +539,23 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
   return success();
 }
 
+static std::string formatCGALayout(CGAEncodingAttr cgaLayout) {
+  std::string str;
+  llvm::raw_string_ostream os(str);
+  auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
+  os << "[";
+  llvm::interleaveComma(cgaLayout.getLinearLayout().getBases().lookup(kBlock),
+                        os, [&](const auto &basis) {
+                          os << "[";
+                          llvm::interleaveComma(basis, os);
+                          os << "]";
+                        });
+  os << "]";
+  return os.str();
+}
+
 static LogicalResult verifyCompletionBarrierLayout(Operation *op,
                                                    Value barrier) {
-  auto formatCGALayout = [](CGAEncodingAttr cgaLayout) {
-    std::string str;
-    llvm::raw_string_ostream os(str);
-    auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
-    os << "[";
-    llvm::interleaveComma(cgaLayout.getLinearLayout().getBases().lookup(kBlock),
-                          os, [&](const auto &basis) {
-                            os << "[";
-                            llvm::interleaveComma(basis, os);
-                            os << "]";
-                          });
-    os << "]";
-    return os.str();
-  };
-
   auto barrierTy = cast<MemDescType>(barrier.getType());
   auto expectedCGALayout =
       CGAEncodingAttr::get1DLayout(op->getContext(), gpu::lookupNumCTAs(op));
@@ -1309,6 +1309,16 @@ static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
                              "single dimension equal to 2, but got "
                           << desc.getShape() << ".";
   }
+  auto cgaLayout = getCGALayout(layout);
+  auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
+  if (!llvm::all_of(cgaLayout.getLinearLayout().getBases().lookup(kBlock),
+                    [](const auto &basis) {
+                      return llvm::all_of(basis,
+                                          [](auto base) { return base == 0; });
+                    }))
+    return emitError(loc) << "Expected CLC result buffer cga_layout bases to "
+                             "be all zeros. Got "
+                          << formatCGALayout(cgaLayout);
   return success();
 }
 
