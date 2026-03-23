@@ -867,7 +867,9 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
   } else if (auto tmemLdOp = dyn_cast<nvidia_gpu::TMEMLoadOp>(op)) {
     for (Value operand : op->getOperands())
       sliceOp(operand, offset, mappings, reverseMappings, partitionScheme);
-    auto srcTy = mappings.lookupOrNull(tmemLdOp.getSrc()).getType();
+    auto mappedSrc = mappings.lookupOrNull(tmemLdOp.getSrc());
+    assert(mappedSrc && "expected mapped source for TMEMLoadOp");
+    auto srcTy = mappedSrc.getType();
     auto type = cast<MemDescType>(srcTy);
     auto tmem = cast<nvidia_gpu::TensorMemoryEncodingAttr>(type.getEncoding());
 
@@ -890,7 +892,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     auto newAccType = RankedTensorType::get(shape, oldRetType.getElementType(),
                                             newDistributedEncoding);
     auto ld = builder.createWithAsyncTaskIds<triton::nvidia_gpu::TMEMLoadOp>(
-        op->getLoc(), newAccType, mappings.lookupOrNull(tmemLdOp.getSrc()));
+        op->getLoc(), newAccType, mappedSrc);
 
     auto newType = RankedTensorType::get(shape, oldRetType.getElementType(),
                                          oldRetType.getEncoding());
@@ -907,8 +909,9 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     // Check for src.
     if (tmemAllocOp.getSrc()) {
       // src is blocked layout. apply convert layout on src
-      auto srcTy = cast<RankedTensorType>(
-          mappings.lookupOrNull(tmemAllocOp.getSrc()).getType());
+      auto mappedSrc = mappings.lookupOrNull(tmemAllocOp.getSrc());
+      assert(mappedSrc && "expected mapped source for TMEMAllocOp");
+      auto srcTy = cast<RankedTensorType>(mappedSrc.getType());
 
       // convert from srcTy to a compatible blocked layout.
       auto retShapePerCTA = getShapePerCTA(srcTy);
@@ -938,8 +941,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
       auto newAccType = RankedTensorType::get(
           srcTy.getShape(), srcTy.getElementType(), newDistributedEncoding);
       auto cvtOp = builder.createWithAsyncTaskIds<ConvertLayoutOp>(
-          op->getLoc(), newAccType,
-          mappings.lookupOrNull(tmemAllocOp.getSrc()));
+          op->getLoc(), newAccType, mappedSrc);
 
       // replace tmemAllocOp with alloc, where the src is cvtOp.
       auto alloc =
