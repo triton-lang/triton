@@ -813,17 +813,27 @@ struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
 
   LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
                                 PatternRewriter &rewriter) const override {
-    if (llvm::isa<IntegerType, IndexType>(cmpOp.getType()) &&
-        cmpIIsStaticallyTrue(*solver, cmpOp)) {
+    if (!cmpIIsStaticallyTrue(*solver, cmpOp))
+      return failure();
+
+    // Scalar integer/index types: use maybeReplaceWithConstant.
+    if (llvm::isa<IntegerType, IndexType>(cmpOp.getType())) {
       if (failed(mlir::dataflow::maybeReplaceWithConstant(*solver, rewriter,
                                                           cmpOp.getResult()))) {
         LDBG("failed to replace with constant op: " << cmpOp);
         return failure();
       }
-    } else {
-      return failure();
+      return success();
     }
-    return success();
+
+    // Tensor-typed cmpi: replace with dense<true>.
+    if (auto tensorType = dyn_cast<RankedTensorType>(cmpOp.getType())) {
+      rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+          cmpOp, DenseIntElementsAttr::get(tensorType, true));
+      return success();
+    }
+
+    return failure();
   }
 
   DataFlowSolver *solver;

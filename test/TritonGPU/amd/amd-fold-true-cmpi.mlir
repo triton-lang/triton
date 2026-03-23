@@ -159,8 +159,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// Tensor-typed cmpi that is statically true should be folded to dense<true>.
+// make_range(129, 257) elements are [129..256], make_range(0, 128) elements
+// are [0..127]. Since min(t1)=129 > max(t0)=127, sgt is always true.
 module attributes {"ttg.num-warps" = 4 : i32} {
-  tt.func @dontfoldtensor() -> tensor<128xi1> {
+  tt.func @foldtensorcmpi() -> tensor<128xi1> {
     %t0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
     %t1 = tt.make_range {end = 257 : i32, start = 129 : i32} : tensor<128xi32>
     %cmp = arith.cmpi sgt, %t1, %t0 : tensor<128xi32>
@@ -168,10 +171,43 @@ module attributes {"ttg.num-warps" = 4 : i32} {
   }
 }
 
-// CHECK-LABEL:   tt.func @dontfoldtensor
+// CHECK-LABEL:   tt.func @foldtensorcmpi
+// CHECK:           %[[TRUE:.*]] = arith.constant dense<true> : tensor<128xi1>
+// CHECK:           tt.return %[[TRUE]] : tensor<128xi1>
+// CHECK:         }
+
+// -----
+
+// Tensor-typed cmpi that is NOT statically true should NOT be folded.
+// make_range(0, 128) elements [0..127] vs make_range(64, 192) elements
+// [64..191]. Ranges overlap, so slt is not always true.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @dontfoldtensorcmpi() -> tensor<128xi1> {
+    %t0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+    %t1 = tt.make_range {end = 192 : i32, start = 64 : i32} : tensor<128xi32>
+    %cmp = arith.cmpi slt, %t0, %t1 : tensor<128xi32>
+    tt.return %cmp: tensor<128xi1>
+  }
+}
+
+// CHECK-LABEL:   tt.func @dontfoldtensorcmpi
 // CHECK-NOT:       arith.constant dense<true>
-// CHECK:           %[[VAL_0:.*]] = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-// CHECK:           %[[VAL_1:.*]] = tt.make_range {end = 257 : i32, start = 129 : i32} : tensor<128xi32>
-// CHECK:           %[[VAL_2:.*]] = arith.cmpi sgt, %[[VAL_1]], %[[VAL_0]] : tensor<128xi32>
-// CHECK:           tt.return %[[VAL_2]] : tensor<128xi1>
+// CHECK:           arith.cmpi slt
+// CHECK:         }
+
+// -----
+
+// Tensor-typed cmpi with splat constant: [0..31] < 1024 is always true.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @foldtensorsplatcmpi() -> tensor<32xi1> {
+    %t0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+    %c1024 = arith.constant dense<1024> : tensor<32xi32>
+    %cmp = arith.cmpi slt, %t0, %c1024 : tensor<32xi32>
+    tt.return %cmp: tensor<32xi1>
+  }
+}
+
+// CHECK-LABEL:   tt.func @foldtensorsplatcmpi
+// CHECK:           %[[TRUE:.*]] = arith.constant dense<true> : tensor<32xi1>
+// CHECK:           tt.return %[[TRUE]] : tensor<32xi1>
 // CHECK:         }
