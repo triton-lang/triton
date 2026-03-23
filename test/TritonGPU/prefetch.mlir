@@ -387,6 +387,35 @@ tt.func @prefetch_pipelined_loop_args(%lb : index, %ub : index, %step : index, %
 }
 }  // end module
 
+// CHECK-LABEL: tt.func @no_prefetch_induction_var_source
+// CHECK: %[[LOOP:.+]] = scf.for %[[IV:.+]] = %arg0 to %arg1 step %arg2 iter_args(%[[ACC:.+]] = %[[CST:.+]]) -> (tensor<128x128xf32, {{.+}}>) {
+// CHECK:   %[[IV_I32:.+]] = arith.index_cast %[[IV]] : index to i32
+// CHECK:   %[[WAIT:.+]] = ttg.async_wait %arg3, %arg4 {num = 4 : i32}
+// CHECK:   %[[A_VIEW:.+]] = ttg.memdesc_index %{{.+}}[%[[IV_I32]]]
+// CHECK:   %[[A_VAL:.+]] = ttg.local_load %[[A_VIEW]] token %[[WAIT]]
+// CHECK:   %[[B_VIEW:.+]] = ttg.memdesc_index %{{.+}}[%[[IV_I32]]]
+// CHECK:   %[[B_VAL:.+]] = ttg.local_load %[[B_VIEW]] token %[[WAIT]]
+// CHECK:   %[[ACC_NEXT:.+]] = tt.dot %[[A_VAL]], %[[B_VAL]], %[[ACC]]
+// CHECK:   scf.yield %[[ACC_NEXT]]
+module attributes { "ttg.num-warps" = 4 : i32 } {
+tt.func @no_prefetch_induction_var_source(%lb : index, %ub : index, %step : index, %tok0 : !ttg.async.token, %tok1 : !ttg.async.token) -> tensor<128x128xf32, #C_RING> {
+  %cst = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C_RING>
+  %a = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #A_RING, #smem, mutable>
+  %b = ttg.local_alloc : () -> !ttg.memdesc<3x32x128xf16, #B_RING, #smem, mutable>
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst) -> (tensor<128x128xf32, #C_RING>) {
+    %iv_i32 = arith.index_cast %iv : index to i32
+    %wait = ttg.async_wait %tok0, %tok1 {num = 4 : i32}
+    %a_view = ttg.memdesc_index %a[%iv_i32] : !ttg.memdesc<3x128x32xf16, #A_RING, #smem, mutable> -> !ttg.memdesc<128x32xf16, #A_RING, #smem, mutable>
+    %a_val = ttg.local_load %a_view token %wait : !ttg.memdesc<128x32xf16, #A_RING, #smem, mutable> -> tensor<128x32xf16, #A_RING_OP>
+    %b_view = ttg.memdesc_index %b[%iv_i32] : !ttg.memdesc<3x32x128xf16, #B_RING, #smem, mutable> -> !ttg.memdesc<32x128xf16, #B_RING, #smem, mutable>
+    %b_val = ttg.local_load %b_view token %wait : !ttg.memdesc<32x128xf16, #B_RING, #smem, mutable> -> tensor<32x128xf16, #B_RING_OP>
+    %acc_next = tt.dot %a_val, %b_val, %acc : tensor<128x32xf16, #A_RING_OP> * tensor<32x128xf16, #B_RING_OP> -> tensor<128x128xf32, #C_RING>
+    scf.yield %acc_next : tensor<128x128xf32, #C_RING>
+  }
+  tt.return %loop : tensor<128x128xf32, #C_RING>
+}
+}  // end module
+
 // -----
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>

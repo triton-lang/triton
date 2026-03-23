@@ -182,7 +182,8 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
 
 bool Prefetcher::isLoopCarriedValue(Value v) {
   auto arg = dyn_cast_if_present<BlockArgument>(v);
-  return arg && arg.getOwner()->getParentOp() == forOp.getOperation();
+  return arg && arg.getOwner() == forOp.getBody() &&
+         arg.getArgNumber() >= forOp.getNumInductionVars();
 }
 
 Value Prefetcher::getIncomingValue(Value v) {
@@ -205,6 +206,8 @@ bool Prefetcher::isPromotableValue(Value v) {
   // e.g., local_load no tokens
   if (!v)
     return true;
+  if (auto arg = dyn_cast<BlockArgument>(v))
+    return arg.getOwner() != forOp.getBody() || isLoopCarriedValue(arg);
   // Loop-carried block arguments can be remapped to either the init value or
   // the yielded next-iteration value during rewrite.
   if (isLoopCarriedValue(v))
@@ -263,8 +266,10 @@ Value Prefetcher::materializeInitValue(Value v, OpBuilder &builder,
   return cloneLoopValue(
       v, builder,
       [this](BlockArgument arg) -> Value {
-        if (arg.getOwner()->getParentOp() != forOp.getOperation())
+        if (arg.getOwner() != forOp.getBody())
           return arg;
+        assert(isLoopCarriedValue(arg) &&
+               "cannot materialize induction variables before the loop");
         return forOp.getTiedLoopInit(arg)->get();
       },
       cache);
@@ -568,8 +573,10 @@ Prefetcher::createYieldValues(OpBuilder &builder, IRMapping &mapping,
     return cloneLoopValue(
         source, builder,
         [this, &mapping](BlockArgument arg) -> Value {
-          if (arg.getOwner()->getParentOp() != forOp.getOperation())
+          if (arg.getOwner() != forOp.getBody())
             return arg;
+          assert(isLoopCarriedValue(arg) &&
+                 "cannot materialize induction variables after the loop");
           return mapping.lookupOrDefault(getYieldValue(arg));
         },
         yieldCache);
