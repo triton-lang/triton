@@ -39,6 +39,26 @@ struct DescriptorInfo {
   SmallVector<Value> strides;
 };
 
+static void setTMAPtrAxisHints(OpBuilder &builder, Value ptr) {
+  auto ptrTy = cast<RankedTensorType>(ptr.getType());
+  auto elemTy = cast<tt::PointerType>(ptrTy.getElementType()).getPointeeType();
+
+  Operation *def = ptr.getDefiningOp();
+  if (!def)
+    return;
+
+  auto rank = ptrTy.getRank();
+  SmallVector<int32_t> contiguity(rank, 1);
+  contiguity.back() = ptrTy.getShape().back();
+  SmallVector<int32_t> divisibility(rank, 1);
+  divisibility.back() = 16;
+  auto attrTy = RankedTensorType::get({rank}, builder.getI32Type());
+  def->setDiscardableAttr("tt.contiguity",
+                          DenseIntElementsAttr::get(attrTy, contiguity));
+  def->setDiscardableAttr("tt.divisibility",
+                          DenseIntElementsAttr::get(attrTy, divisibility));
+}
+
 static Value castToI64(OpBuilder &builder, Location loc, Value value) {
   if (value.getType().isInteger(64))
     return value;
@@ -63,17 +83,25 @@ getInstrumentationEncoding(OpBuilder &builder, ArrayRef<int64_t> shape,
   auto base = ttg::getDefaultBlockedEncoding(builder.getContext(), shape,
                                              numWarps, threadsPerWarp, numCTAs);
   SmallVector<unsigned> order = llvm::to_vector(base.getOrder());
+  SmallVector<unsigned> warpsPerCTA = llvm::to_vector(base.getWarpsPerCTA());
   SmallVector<unsigned> sizePerThread(shape.size(), 1);
   unsigned elemBits = elemType.getIntOrFloatBitWidth();
   unsigned maxElems = std::max(128u / elemBits, 1u);
   if (!order.empty()) {
     unsigned dim = order.front();
-    sizePerThread[dim] =
-        static_cast<unsigned>(std::min<int64_t>(shape[dim], maxElems));
+    // Distribute last dim to maximize contiguity within a thread
+    if (order.size() > 1 && warpsPerCTA[dim] > 1) {
+      warpsPerCTA[order[1]] *= warpsPerCTA[dim];
+      warpsPerCTA[dim] = 1;
+    }
+
+    auto threadsOnDim = base.getThreadsPerWarp()[dim] * warpsPerCTA[dim];
+    auto numUniqueElems = ceil(static_cast<unsigned>(shape[dim]), threadsOnDim);
+    sizePerThread[dim] = std::min(maxElems, numUniqueElems);
   }
-  return ttg::BlockedEncodingAttr::get(
-      builder.getContext(), sizePerThread, base.getThreadsPerWarp(),
-      base.getWarpsPerCTA(), order, base.getCGALayout());
+  return ttg::BlockedEncodingAttr::get(builder.getContext(), sizePerThread,
+                                       base.getThreadsPerWarp(), warpsPerCTA,
+                                       order, base.getCGALayout());
 }
 
 static Value expandAllSlicedDims(OpBuilder &builder, Location loc,
@@ -229,6 +257,7 @@ createTiledAccess(OpBuilder &builder, Location loc, const DescriptorInfo &desc,
     Value predTensor = tt::SplatOp::create(builder, loc, maskType, *pred);
     mask = arith::AndIOp::create(builder, loc, mask, predTensor);
   }
+  setTMAPtrAxisHints(builder, ptr);
   return std::make_pair(ptr, mask);
 }
 
@@ -251,9 +280,12 @@ static std::pair<Value, Value> createGatherScatterAccess(
   Value yRange =
       createExpandedOffsetRange(builder, loc, fullI64Type, yOffset, /*dim=*/1);
   SmallVector<Value> offsetRanges = {xRange, yRange};
-  return std::make_pair(
-      createPtrFromRanges(builder, loc, desc, offsetRanges, fullI64Type),
-      createMaskFromRanges(builder, loc, desc, offsetRanges, fullI64Type));
+  auto ptrs =
+      createPtrFromRanges(builder, loc, desc, offsetRanges, fullI64Type);
+  auto mask =
+      createMaskFromRanges(builder, loc, desc, offsetRanges, fullI64Type);
+  setTMAPtrAxisHints(builder, ptrs);
+  return std::make_pair(ptrs, mask);
 }
 
 static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
