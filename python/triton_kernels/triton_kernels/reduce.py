@@ -525,8 +525,7 @@ class _ReduceAutograd(torch.autograd.Function):
                 x_mxscale: Optional[torch.Tensor], x_flex: Optional[InFlexData], x_global_scale: Optional[torch.Tensor],
                 y_dtype: Optional[torch.dtype], y_flex: Optional[OutFlexData], y_flex_saturate_inf: bool,
                 y_has_mx: Optional[bool], y_mx_scale_dtype: Optional[torch.dtype], y_microblock_size: int,
-                y_value_pack_factor: int,
-                y: Optional[torch.Tensor], postprocess_fn1: Optional[PostprocessFn],
+                y_value_pack_factor: int, y: Optional[torch.Tensor], postprocess_fn1: Optional[PostprocessFn],
                 postprocess_fn2: Optional[PostprocessFn], unpadded_batch_size: Optional[torch.Tensor]):
         # Run your existing Triton forward
         y, y_mx = reduce_forward(
@@ -618,8 +617,8 @@ def reduce(
     unpadded_batch_size: Optional[torch.Tensor] = None,
 ):
     return _ReduceAutograd.apply(x, dim, mask, scale, x_mxscale, x_flex, x_global_scale, y_dtype, y_flex,  #
-                                 y_flex_saturate_inf, y_has_mx, y_mx_scale_dtype, y_microblock_size, y_value_pack_factor, y,
-                                 postprocess_fn1, postprocess_fn2, unpadded_batch_size)
+                                 y_flex_saturate_inf, y_has_mx, y_mx_scale_dtype, y_microblock_size,
+                                 y_value_pack_factor, y, postprocess_fn1, postprocess_fn2, unpadded_batch_size)
 
 
 # ------------------------------------------------------------

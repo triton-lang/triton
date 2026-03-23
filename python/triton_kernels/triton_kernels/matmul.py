@@ -655,7 +655,6 @@ def matmul(a, b, bias,
 # -----------------------------------------------------------------------------
 
 def apply_precision(x_tri, w_tri, precision_config):
-    from .tensor import convert_layout
     from .tensor_details import layout
     from .numerics_details.mxfp import upcast_from_mxfp
 

@@ -167,7 +167,8 @@ def test_mxfp_casting(
     microblock_size: int,
     device,
 ):
-    if ("float8" in quant_dtype or scale_dtype == torch.float8_e4m3fn) and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
+    if ("float8" in quant_dtype
+            or scale_dtype == torch.float8_e4m3fn) and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
         pytest.skip("Float8 not tested on A100")
     torch.manual_seed(0)
     quant_torch_type = dtype_str_to_torch(quant_dtype)
