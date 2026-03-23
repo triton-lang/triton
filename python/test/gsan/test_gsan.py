@@ -15,9 +15,6 @@ from triton._C.libtriton.gsan_testing import AtomicScope, SHADOW_GRANULARITY_BYT
 from triton.experimental.gsan._testing_utils import (load_one_i32, shadow_cell_from_address, store_one_i32,
                                                      thread_state_from_smid)
 
-from triton.experimental import gluon
-import triton.experimental.gluon.language as gl
-
 
 @pytest.fixture()
 def with_gsan(fresh_knobs):
