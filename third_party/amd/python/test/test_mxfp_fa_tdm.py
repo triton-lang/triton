@@ -580,7 +580,7 @@ def run_mha(config, args):
 @pytest.mark.parametrize("batch", [1, 2])
 @pytest.mark.parametrize("num_heads", [1, 16])
 @pytest.mark.parametrize("seqlen", [256, 512, 1024])
-@pytest.mark.parametrize("head_sz", [128])
+@pytest.mark.parametrize("head_sz", [128, 64])
 @pytest.mark.parametrize("block_m", [128, 64])
 @pytest.mark.parametrize("q_type", ["e4m3", "e5m2"])
 @pytest.mark.parametrize("kv_type", ["e4m3", "e5m2", "e2m1"])
