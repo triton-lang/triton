@@ -89,6 +89,10 @@ class Prefetcher {
                          Value token = Value(),
                          std::optional<int64_t> offsetK = std::nullopt,
                          std::optional<int64_t> shapeK = std::nullopt);
+  unsigned getKWidthScale(Attribute dotEncoding, Type elementType) const;
+  unsigned getDotOperandKWidth(Attribute dotEncoding, Type elementType) const;
+  unsigned getPrefetchWidth(Attribute dotEncoding, Type elementType,
+                            unsigned kWidth) const;
 
   bool isLoopCarriedValue(Value v);
   Value getIncomingValue(Value v);
@@ -186,12 +190,37 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
       v, offset);
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
-      builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
+      builder.getContext(), opIdx, dotEncoding,
+      getDotOperandKWidth(dotEncoding, elementType));
   Value prefetchSlice = triton::gpu::LocalLoadOp::create(
       builder, v.getLoc(),
       RankedTensorType::get(shape, elementType, dotOperandEnc), newSmem, token);
 
   return prefetchSlice;
+}
+
+unsigned Prefetcher::getKWidthScale(Attribute dotEncoding, Type elementType) const {
+  if (computeCapability >= 90 && isa<NvidiaMmaEncodingAttr>(dotEncoding) &&
+      elementType.isF64()) {
+    // Hopper's FP64 MMA uses k=16 so cannot support prefetchWidth of 8.
+    return 16;
+  }
+  return 8;
+}
+
+unsigned Prefetcher::getDotOperandKWidth(Attribute dotEncoding,
+                                         Type elementType) const {
+  unsigned kWidthScale = getKWidthScale(dotEncoding, elementType);
+  assert(prefetchWidth % kWidthScale == 0 &&
+         "prefetch width must align with dot operand kWidth");
+  return prefetchWidth / kWidthScale;
+}
+
+unsigned Prefetcher::getPrefetchWidth(Attribute dotEncoding, Type elementType,
+                                      unsigned kWidth) const {
+  if (kWidth == 0)
+    return 256 / elementType.getIntOrFloatBitWidth();
+  return getKWidthScale(dotEncoding, elementType) * kWidth;
 }
 
 bool Prefetcher::isLoopCarriedValue(Value v) {
@@ -443,6 +472,7 @@ LogicalResult Prefetcher::initialize() {
   for (triton::DotOp dot : dotsInFor) {
     auto aType = dot.getA().getType();
     auto bType = dot.getB().getType();
+    auto dotEncoding = dot.getType().getEncoding();
     auto aEnc =
         mlir::cast<triton::gpu::DotOperandEncodingAttr>(aType.getEncoding());
     auto bEnc =
@@ -454,18 +484,7 @@ LogicalResult Prefetcher::initialize() {
     auto kSize = aType.getShape().back();
 
     // Match the chunk width expected by the dot operand encoding.
-    unsigned elementWidth = aType.getElementTypeBitWidth();
-    if (aKWidth == 0)
-      prefetchWidth = 256 / elementWidth;
-    else {
-      if (isa<NvidiaMmaEncodingAttr>(dot.getType().getEncoding()) &&
-          elementWidth == 64 && computeCapability >= 90) {
-        // Hopper's FP64 MMA uses k=16 so cannot support prefetchWidth of 8
-        prefetchWidth = 16 * aKWidth;
-      } else {
-        prefetchWidth = 8 * aKWidth;
-      }
-    }
+    prefetchWidth = getPrefetchWidth(dotEncoding, aType.getElementType(), aKWidth);
 
     // Skip prefetching if kSize is less than prefetchWidth
     if (kSize < prefetchWidth)
@@ -585,8 +604,9 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
             1, newForOp.getTiedLoopRegionIterArg(&*b.use_begin()));
 
       // Emit additional dots for the remainder of K after the prefetched head.
-      int64_t kOff = prefetchWidth;
-      int64_t kRem = dot.getA().getType().getShape().back() - prefetchWidth;
+      const int64_t kChunk = prefetchWidth;
+      int64_t kOff = kChunk;
+      int64_t kRem = dot.getA().getType().getShape().back() - kChunk;
       Operation *prevDot = firstDot;
       if (kRem == 0) {
         // There is only one dot while prefetchWidth == kSize so delay issuing
@@ -597,7 +617,7 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
       }
 
       while (kRem != 0) {
-        int64_t kShape = prefetchWidth;
+        int64_t kShape = kChunk;
         auto insertionPoint = builder.saveInsertionPoint();
         builder.setInsertionPoint(prevDot);
         Value aRem = generatePrefetch(
