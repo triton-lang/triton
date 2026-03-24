@@ -777,6 +777,7 @@ def tl_obj_scatter(obj, value, x_offsets, y_offset):
 
 @ttgl._core.builtin
 def tl_obj_gather_amd(desc, x_offsets, y_offset, _semantic=None, _generator=None):
+    # Builtin required: reads desc._tdm_* attributes stashed by tl_make_tensor_descriptor.
     # TDM gather: recreate descriptor with block_shape=[num_idx, block_n], then async gather.
     # Triton's API creates descriptors with block_shape=[1, block_n], but TDM hardware requires
     # block_shape to match the shared memory allocation [num_idx, block_n] for gather/scatter.
@@ -801,6 +802,7 @@ def tl_obj_gather_amd(desc, x_offsets, y_offset, _semantic=None, _generator=None
 
 @ttgl._core.builtin
 def tl_obj_scatter_amd(desc, value, x_offsets, y_offset, _semantic=None, _generator=None):
+    # Builtin required: reads desc._tdm_* attributes stashed by tl_make_tensor_descriptor.
     # TDM scatter: recreate descriptor with block_shape=[num_idx, block_n], then async scatter.
     # Triton's API creates descriptors with block_shape=[1, block_n], but TDM hardware requires
     # block_shape to match the shared memory allocation [num_idx, block_n] for gather/scatter.
@@ -822,6 +824,7 @@ def tl_obj_scatter_amd(desc, value, x_offsets, y_offset, _semantic=None, _genera
 
 @ttgl._core.builtin
 def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option="zero", _semantic=None):
+    # Builtin required: attribute assignment (desc._tdm_*) is not supported in @gluon.jit.
     if _is_gfx1250(current_target()):
         element_bitwidth = base.dtype.element_ty.primitive_bitwidth
         layout = get_default_tdm_layout(block_shape, element_bitwidth)

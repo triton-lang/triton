@@ -27,7 +27,7 @@ _dot_targets = {
 
 def _skip_unless_target(target, targets=_all_targets):
     """Skip test if the required hardware for the given target is not available.
-    Specify targets for tests that require specific targets e.g. Blackwell on NVIDIA or gfx1250 on AMD."""
+    Use _dot_targets for dot tests (Blackwell on NVIDIA), _descriptor_targets for descriptor tests."""
     if not targets[target]():
         pytest.skip(f"Requires {target}")
 
@@ -256,9 +256,13 @@ def make_tensor_descriptor_copy_kernel(x_ptr, y_ptr, M, N, BLOCK_M: tl.constexpr
     out_desc.store([0, 0], tile)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
-def test_triton_to_gluon_make_tensor_descriptor(tmp_path, with_allocator):
-    kernel = convert_kernel(make_tensor_descriptor_copy_kernel, "make_tensor_descriptor_copy_kernel", tmp_path)
+# Parametrized over _descriptor_targets: tests tl.make_tensor_descriptor translation
+# for both NVIDIA TMA (Hopper+) and AMD TDM (gfx1250).
+@pytest.mark.parametrize("target", _descriptor_targets.keys())
+def test_triton_to_gluon_make_tensor_descriptor(tmp_path, target, with_allocator):
+    _skip_unless_target(target, _descriptor_targets)
+    kernel = convert_kernel(make_tensor_descriptor_copy_kernel, "make_tensor_descriptor_copy_kernel", tmp_path,
+                            target=target)
 
     M = N = 64
     x = torch.randn((M, N), device="cuda", dtype=torch.float16)
@@ -455,31 +459,6 @@ def test_cat(tmp_path, target):
 
 
 @triton.jit
-def make_desc_copy_kernel(in_ptr, out_ptr, M, N, stride_m, stride_n, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
-    in_desc = tl.make_tensor_descriptor(in_ptr, shape=[M, N], strides=[stride_m, stride_n],
-                                        block_shape=[BLOCK_M, BLOCK_N])
-    out_desc = tl.make_tensor_descriptor(out_ptr, shape=[M, N], strides=[stride_m, stride_n],
-                                         block_shape=[BLOCK_M, BLOCK_N])
-    tile = in_desc.load([0, 0])
-    out_desc.store([0, 0], tile)
-
-
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
-def test_make_tensor_descriptor_gfx1250(tmp_path):
-    kernel = convert_kernel(make_desc_copy_kernel, "make_desc_copy_kernel", tmp_path, target="gfx1250")
-
-    M, N = 64, 64
-    x = torch.randn((M, N), device="cuda", dtype=torch.float16)
-    y = torch.zeros((M, N), device="cuda", dtype=torch.float16)
-    grid = (1, )
-    kernel[grid](x, y, M, N, x.stride(0), x.stride(1), M, N)
-
-    y_ref = torch.zeros_like(y)
-    make_desc_copy_kernel[grid](x, y_ref, M, N, x.stride(0), x.stride(1), M, N)
-    torch.testing.assert_close(y, y_ref, atol=0, rtol=0)
-
-
-@triton.jit
 def gather_scatter_roundtrip_kernel(out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y: tl.constexpr, BLOCK_X: tl.constexpr,
                                     BLOCK_Y: tl.constexpr):
     idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
@@ -489,6 +468,8 @@ def gather_scatter_roundtrip_kernel(out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y
     out_desc.scatter(data, idx, 0)
 
 
+# TODO: parametrize over _descriptor_targets once NVIDIA gather/scatter translation is supported.
+# The translator currently routes gather/scatter to AMD-specific helpers for AMD targets only.
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
 def test_gather_scatter_roundtrip(tmp_path):
     kernel = convert_kernel(gather_scatter_roundtrip_kernel, "gather_scatter_roundtrip_kernel", tmp_path,
