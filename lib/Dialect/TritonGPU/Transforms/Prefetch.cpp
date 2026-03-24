@@ -98,10 +98,9 @@ class Prefetcher {
                        DenseMap<Value, Value> &cache);
   Value materializeInitValue(Value v, OpBuilder &builder,
                              DenseMap<Value, Value> &cache);
-  void appendMaterializedLoopArgIfNeeded(triton::DotOp dot, Value value,
-                                         DenseMap<Operation *, unsigned> &argMap,
-                                         SmallVector<Value> &loopArgs,
-                                         OpBuilder &builder);
+  void appendMaterializedLoopArgIfNeeded(
+      triton::DotOp dot, Value value, DenseMap<Operation *, unsigned> &argMap,
+      SmallVector<Value> &loopArgs, OpBuilder &builder);
   Value getTrackedValue(triton::DotOp dot, bool isA, bool isToken);
   const DenseMap<Operation *, unsigned> &
   getCarriedArgMap(const CarriedArgs &carriedArgs, bool isA, bool isToken);
@@ -334,9 +333,8 @@ Value Prefetcher::getCurrentTrackedValue(triton::DotOp dot, bool isA,
   return newForOp.getRegionIterArgs()[it->second];
 }
 
-Value Prefetcher::getNextTrackedValue(triton::DotOp dot, bool isA,
-                                      bool isToken, OpBuilder &builder,
-                                      IRMapping &mapping) {
+Value Prefetcher::getNextTrackedValue(triton::DotOp dot, bool isA, bool isToken,
+                                      OpBuilder &builder, IRMapping &mapping) {
   Value value = getTrackedValue(dot, isA, isToken);
   if (!value)
     return Value();
@@ -633,18 +631,14 @@ Prefetcher::createYieldValues(OpBuilder &builder, IRMapping &mapping,
   for (Value v : forOp.getBody()->getTerminator()->getOperands())
     yieldValues.push_back(mapping.lookupOrDefault(v));
   for (triton::DotOp dot : dots) {
-    Value nextASource =
-        getNextTrackedValue(dot, /*isA=*/true, /*isToken=*/false, builder,
-                            mapping);
-    Value nextBSource =
-        getNextTrackedValue(dot, /*isA=*/false, /*isToken=*/false, builder,
-                            mapping);
-    Value nextAToken =
-        getNextTrackedValue(dot, /*isA=*/true, /*isToken=*/true, builder,
-                            mapping);
-    Value nextBToken =
-        getNextTrackedValue(dot, /*isA=*/false, /*isToken=*/true, builder,
-                            mapping);
+    Value nextASource = getNextTrackedValue(
+        dot, /*isA=*/true, /*isToken=*/false, builder, mapping);
+    Value nextBSource = getNextTrackedValue(
+        dot, /*isA=*/false, /*isToken=*/false, builder, mapping);
+    Value nextAToken = getNextTrackedValue(dot, /*isA=*/true, /*isToken=*/true,
+                                           builder, mapping);
+    Value nextBToken = getNextTrackedValue(dot, /*isA=*/false, /*isToken=*/true,
+                                           builder, mapping);
 
     if (carriedArgs.aSource.contains(dot))
       yieldValues.push_back(nextASource);
@@ -655,14 +649,12 @@ Prefetcher::createYieldValues(OpBuilder &builder, IRMapping &mapping,
     if (carriedArgs.b.contains(dot))
       yieldValues.push_back(nextBToken);
     Attribute dotEncoding = dot.getType().getEncoding();
-    Value aToYield =
-        generatePrefetch(nextASource, 0, true, dotEncoding, builder,
-                         nextAToken);
+    Value aToYield = generatePrefetch(nextASource, 0, true, dotEncoding,
+                                      builder, nextAToken);
     cloneElementwiseOps(aToYield, dot2aVals[dot], builder);
     yieldValues.push_back(aToYield);
-    Value bToYield =
-        generatePrefetch(nextBSource, 1, true, dotEncoding, builder,
-                         nextBToken);
+    Value bToYield = generatePrefetch(nextBSource, 1, true, dotEncoding,
+                                      builder, nextBToken);
     cloneElementwiseOps(bToYield, dot2bVals[dot], builder);
     yieldValues.push_back(bToYield);
   }
