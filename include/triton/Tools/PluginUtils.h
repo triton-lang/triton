@@ -85,7 +85,7 @@ private:
 public:
   std::runtime_error err2exp(llvm::Error Err);
 
-  llvm::Error loadPlugin();
+  llvm::Error loadPlugin(bool bypassTritonExtEnabledCheck = false);
 
   llvm::Expected<TritonPluginResult>
   getPassHandles(std::vector<const char *> &handles);
@@ -122,7 +122,6 @@ private:
   bool isLoaded = false;
 };
 
-void registerPluginPasses(TritonPlugin &TP);
 void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry);
 
 void loadPluginDialects(const std::string &filename,

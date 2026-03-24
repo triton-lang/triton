@@ -38,24 +38,25 @@ std::runtime_error TritonPlugin::err2exp(llvm::Error Err) {
   return std::runtime_error(msg);
 }
 
-llvm::Error TritonPlugin::loadPlugin() {
-#if TRITON_EXT_ENABLED == 0
-  // Right now we only support one extension, bump this up if that changes
-  static llvm::SmallVector<std::string, 1> printedWarning;
-  if (llvm::find(printedWarning, filename) == printedWarning.end()) {
-    llvm::errs() << "\n"
-                 << "\n=================== WARNING =====================\n"
-                 << "Triton will not load the following extension\n"
-                 << "because it is not built with TRITON_EXT_ENABLED:\n"
-                 << filename
-                 << "\n=================================================\n"
-                 << "\n";
-    printedWarning.push_back(filename);
-  }
-  return llvm::Error::success();
-#endif
+llvm::Error TritonPlugin::loadPlugin(bool bypassTritonExtEnabledCheck) {
   if (isLoaded)
     return llvm::Error::success();
+
+  if (TRITON_EXT_ENABLED == 0 && !bypassTritonExtEnabledCheck) {
+    // Right now we only support one extension, bump this up if that changes
+    static llvm::SmallVector<std::string, 1> printedWarning;
+    if (llvm::find(printedWarning, filename) == printedWarning.end()) {
+      llvm::errs() << "\n"
+                   << "\n=================== WARNING =====================\n"
+                   << "Triton will not load the following extension\n"
+                   << "because it is not built with TRITON_EXT_ENABLED:\n"
+                   << filename
+                   << "\n=================================================\n"
+                   << "\n";
+      printedWarning.push_back(filename);
+    }
+    return llvm::Error::success();
+  }
 
   std::string error;
   library =
@@ -213,14 +214,10 @@ TritonPlugin::addCustomOp(const char *handle, TritonOpBuilder &self,
   return TP_SUCCESS;
 }
 
-void registerPluginPasses(TritonPlugin &TP) {
-  std::vector<const char *> passNames;
-  if (auto result = TP.getPassHandles(passNames); !result)
-    llvm::report_fatal_error(result.takeError());
-
-  for (const char *passName : passNames)
-    if (auto result = TP.registerPass(passName); !result)
-      llvm::report_fatal_error(result.takeError());
+void loadPluginDialects(const std::string &filename,
+                        mlir::DialectRegistry &registry) {
+  TritonPlugin TP(filename);
+  loadPluginDialects(TP, registry);
 }
 
 void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry) {
@@ -236,10 +233,4 @@ void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry) {
     ::mlir::DialectPluginLibraryInfo dialectPluginInfo = *result;
     dialectPluginInfo.registerDialectRegistryCallbacks(&registry);
   }
-}
-
-void loadPluginDialects(const std::string &filename,
-                        mlir::DialectRegistry &registry) {
-  TritonPlugin TP(filename);
-  loadPluginDialects(TP, registry);
 }

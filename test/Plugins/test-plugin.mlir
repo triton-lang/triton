@@ -1,10 +1,12 @@
 // RUN: LD_PRELOAD=%shlibdir/../plugins/libtriton.so \
 // RUN: TRITON_PASS_PLUGIN_PATH=%shlibdir/../plugins/libTritonPluginsTestLib.so \
-// RUN: triton-opt -split-input-file -tritongpu-plugin %s | FileCheck %s --check-prefix=CHECK-PLUGIN
+// RUN: %shlibdir/../plugins/triton-ext-cli \
+// RUN: -split-input-file -tritongpu-plugin %s | FileCheck %s --check-prefix=CHECK-PLUGIN
 
 // RUN: LD_PRELOAD=%shlibdir/../plugins/libtriton.so \
 // RUN: TRITON_PASS_PLUGIN_PATH=%shlibdir/../plugins/libTritonPluginsTestLib.so \
-// RUN: triton-opt -split-input-file %s | FileCheck %s -allow-unused-prefixes --check-prefix=CHECK-NOFLAG
+// RUN: %shlibdir/../plugins/triton-ext-cli \
+// RUN: -split-input-file %s | FileCheck %s -allow-unused-prefixes --check-prefix=CHECK-NOFLAG
 
 // RUN: triton-opt -split-input-file %s | FileCheck %s -allow-unused-prefixes --check-prefix=CHECK-BASE
 

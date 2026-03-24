@@ -19,9 +19,6 @@ target_link_libraries(triton-opt PRIVATE
 )
 
 mlir_check_all_link_libraries(triton-opt)
-if(TRITON_EXT_ENABLED)
-  set_target_properties(triton-opt PROPERTIES ENABLE_EXPORTS 1)
-endif()
 
 add_executable(triton-reduce triton-reduce.cpp)
 mlir_check_all_link_libraries(triton-reduce)
