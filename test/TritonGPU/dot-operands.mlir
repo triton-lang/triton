@@ -58,11 +58,12 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #blockedB3_h = #ttg.blocked<{sizePerThread = [1, 1, 16], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 1, 0]}>
 #mma_h = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
 #shared_h = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
-#shared0_h = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 16, rank = 2}>
+#shared0_h = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 16, rank = 3}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @warp_group_dot_swizzle0_like_operand_views
-  // CHECK-DAG: %[[B_BASE:.*]] = ttg.local_alloc %arg1 : (tensor<1x64x64xf16, #{{.*}}>) -> !ttg.memdesc<1x64x64xf16, #{{.*}}, #smem>
+  // CHECK-DAG: %[[B_SRC:.*]] = ttg.local_load %{{.*}} : !ttg.memdesc<1x64x64xf16, #{{.*}}, #smem{{.*}}> -> tensor<1x64x64xf16, #{{.*}}>
+  // CHECK-DAG: %[[B_BASE:.*]] = ttg.local_alloc %[[B_SRC]] : (tensor<1x64x64xf16, #{{.*}}>) -> !ttg.memdesc<1x64x64xf16, #{{.*}}, #smem{{.*}}>
   // CHECK-DAG: %[[B_RS:.*]] = ttg.memdesc_reshape %[[B_BASE]] : !ttg.memdesc<1x64x64xf16, #{{.*}}, #smem> -> !ttg.memdesc<64x64xf16, #{{.*}}, #smem>
   // CHECK-NOT: tt.reshape
   // CHECK: ttng.warp_group_dot %arg0, %[[B_RS]], %arg2
@@ -70,9 +71,11 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
       %a: !ttg.memdesc<128x64xf16, #shared_h, #smem>,
       %b3: tensor<1x64x64xf16, #blockedB3_h>,
       %c: tensor<128x64xf32, #mma_h>) -> tensor<128x64xf32, #mma_h> {
-    %b2d = tt.reshape %b3 : tensor<1x64x64xf16, #blockedB3_h> -> tensor<64x64xf16, #blockedB_h>
-    %b_s = ttg.local_alloc %b2d : (tensor<64x64xf16, #blockedB_h>) -> !ttg.memdesc<64x64xf16, #shared0_h, #smem>
-    %r = ttng.warp_group_dot %a, %b_s, %c : !ttg.memdesc<128x64xf16, #shared_h, #smem> * !ttg.memdesc<64x64xf16, #shared0_h, #smem> -> tensor<128x64xf32, #mma_h>
+    %b3_s = ttg.local_alloc %b3 : (tensor<1x64x64xf16, #blockedB3_h>) -> !ttg.memdesc<1x64x64xf16, #shared0_h, #smem, mutable>
+    %b3_l = ttg.local_load %b3_s : !ttg.memdesc<1x64x64xf16, #shared0_h, #smem, mutable> -> tensor<1x64x64xf16, #blockedB3_h>
+    %b2d = tt.reshape %b3_l : tensor<1x64x64xf16, #blockedB3_h> -> tensor<64x64xf16, #blockedB_h>
+    %b_s = ttg.local_alloc %b2d : (tensor<64x64xf16, #blockedB_h>) -> !ttg.memdesc<64x64xf16, #shared_h, #smem>
+    %r = ttng.warp_group_dot %a, %b_s, %c : !ttg.memdesc<128x64xf16, #shared_h, #smem> * !ttg.memdesc<64x64xf16, #shared_h, #smem> -> tensor<128x64xf32, #mma_h>
     tt.return %r : tensor<128x64xf32, #mma_h>
   }
 }

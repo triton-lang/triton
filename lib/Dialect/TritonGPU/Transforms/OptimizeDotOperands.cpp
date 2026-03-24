@@ -371,10 +371,8 @@ private:
       return failure();
 
     auto allocTy = cast<MemDescType>(localAlloc.getType());
-    auto allocSharedEnc =
-        dyn_cast<SharedEncodingTrait>(allocTy.getEncoding());
-    if (!allocSharedEnc ||
-        !isZeroSwizzleCompatibleEncoding(allocTy.getEncoding()))
+    auto allocSharedEnc = dyn_cast<SharedEncodingTrait>(allocTy.getEncoding());
+    if (!allocSharedEnc)
       return failure();
 
     SmallVector<ViewStep> reverseSteps;
@@ -404,6 +402,16 @@ private:
     }
 
     if (reverseSteps.empty())
+      return failure();
+
+    bool sourceIsZeroSwizzleLike = false;
+    if (auto localLoad = baseTensor.getDefiningOp<LocalLoadOp>()) {
+      auto srcTy = dyn_cast<MemDescType>(localLoad.getSrc().getType());
+      sourceIsZeroSwizzleLike =
+          srcTy && isZeroSwizzleCompatibleEncoding(srcTy.getEncoding());
+    }
+    if (!isZeroSwizzleCompatibleEncoding(allocTy.getEncoding()) &&
+        !sourceIsZeroSwizzleLike)
       return failure();
 
     auto baseTensorTy = dyn_cast<RankedTensorType>(baseTensor.getType());
