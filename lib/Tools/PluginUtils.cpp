@@ -219,12 +219,6 @@ TritonPlugin::addCustomOp(const char *handle, TritonOpBuilder &self,
   return TP_SUCCESS;
 }
 
-void loadPluginDialects(const std::string &filename,
-                        mlir::DialectRegistry &registry) {
-  TritonPlugin TP(filename);
-  loadPluginDialects(TP, registry);
-}
-
 void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry) {
   std::vector<const char *> dialectNames;
   if (auto result = TP.getDialectHandles(dialectNames); !result)

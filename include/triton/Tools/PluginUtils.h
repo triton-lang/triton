@@ -124,7 +124,4 @@ private:
 
 void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry);
 
-void loadPluginDialects(const std::string &filename,
-                        mlir::DialectRegistry &registry);
-
 #endif // TRITON_PLUGIN_UTILS_H
