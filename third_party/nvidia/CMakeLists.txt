@@ -18,13 +18,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
     message(FATAL_ERROR "clang++ is required to build gsan.ll")
   endif()
 
-  set(GSAN_RUNTIME_CUDA_PATH "${CMAKE_CURRENT_SOURCE_DIR}/backend")
-  if(NOT "${TRITON_CUDART_PATH}" STREQUAL "")
-    if(EXISTS "${TRITON_CUDART_PATH}/include/cuda_runtime.h")
-      set(GSAN_RUNTIME_CUDA_PATH "${TRITON_CUDART_PATH}")
-    elseif(EXISTS "${TRITON_CUDART_PATH}/cuda_runtime.h")
-      get_filename_component(GSAN_RUNTIME_CUDA_PATH "${TRITON_CUDART_PATH}" DIRECTORY)
-    endif()
+  if(NOT "${TRITON_CUDA_PATH}" STREQUAL "")
+    set(GSAN_RUNTIME_CUDA_PATH "${TRITON_CUDA_PATH}")
+  else()
+    set(GSAN_RUNTIME_CUDA_PATH "${CMAKE_CURRENT_SOURCE_DIR}/backend")
   endif()
 
   set(GSAN_RUNTIME_INCLUDE_FLAGS
