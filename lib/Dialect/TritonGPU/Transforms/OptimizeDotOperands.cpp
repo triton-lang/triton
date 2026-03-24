@@ -405,10 +405,14 @@ private:
       return failure();
 
     bool sourceIsZeroSwizzleLike = false;
+    SharedEncodingTrait sourceSharedEnc;
     if (auto localLoad = baseTensor.getDefiningOp<LocalLoadOp>()) {
       auto srcTy = dyn_cast<MemDescType>(localLoad.getSrc().getType());
-      sourceIsZeroSwizzleLike =
-          srcTy && isZeroSwizzleCompatibleEncoding(srcTy.getEncoding());
+      if (srcTy) {
+        sourceIsZeroSwizzleLike =
+            isZeroSwizzleCompatibleEncoding(srcTy.getEncoding());
+        sourceSharedEnc = dyn_cast<SharedEncodingTrait>(srcTy.getEncoding());
+      }
     }
     if (!isZeroSwizzleCompatibleEncoding(allocTy.getEncoding()) &&
         !sourceIsZeroSwizzleLike)
@@ -418,7 +422,15 @@ private:
     if (!baseTensorTy)
       return failure();
 
-    auto baseEnc = updateEncodingForShape(localAlloc, allocSharedEnc, baseTensorTy);
+    // If swizzle=0 comes from the source memdesc (common for descriptor+TMA
+    // staging on Hopper), use that encoding as the reference. Using the final
+    // alloc encoding can be rank-incompatible with the source tensor view
+    // chain and make this rewrite fail to materialize.
+    SharedEncodingTrait refSharedEnc = allocSharedEnc;
+    if (sourceIsZeroSwizzleLike && sourceSharedEnc)
+      refSharedEnc = sourceSharedEnc;
+
+    auto baseEnc = updateEncodingForShape(localAlloc, refSharedEnc, baseTensorTy);
     auto baseMemTy = MemDescType::get(
         baseTensorTy.getShape(), baseTensorTy.getElementType(),
         cast<Attribute>(baseEnc),
