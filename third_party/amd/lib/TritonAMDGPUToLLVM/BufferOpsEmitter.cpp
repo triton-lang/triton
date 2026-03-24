@@ -33,8 +33,8 @@ namespace mlir::LLVM::AMD {
 BufferEmitter::BufferEmitter(RewriterBase &rw, Location loc, TargetInfo ti)
     : rewriter(rw), loc(loc), targetInfo(ti) {}
 
-Value BufferEmitter::createResourceDescriptor(Value basePtr,
-                                              Value blockStride) {
+Value BufferEmitter::createResourceDescriptor(Value basePtr, Value blockStride,
+                                              bool isAtomic) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // 1. Create the resource descriptor
   // bits 0-11: dst sel, ignored by these intrinsics
@@ -100,7 +100,31 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
 
   Value flagsConst = b.int_val(32, flags);
   Type rsrcType = LLVM::LLVMPointerType::get(rewriter.getContext(), 8);
-  Value numRecordsByte = b.int_val(64, std::numeric_limits<int>::max() - 1);
+  // For loads/stores: num_records = UINT32_MAX-1 (0xFFFFFFFE) so buffer ops
+  // can address up to 4 GB - 4 bytes from the base pointer.  OOB loads
+  // return zero.  The sentinel offset (0xFFFFFFFF in fillCommonArgs) is
+  // >= num_records, so masked-off lanes always read zero.
+  //
+  // IMPORTANT: buffer_load_dwordx{2,3,4} performs per-dword range checking
+  // (CDNA4 ISA 9.1.5.1 note 4), meaning each 4-byte component is
+  // independently checked against num_records.  Sub-dword elements (bf16,
+  // fp8, etc.) that are packed into the same dword share the same check.
+  // If any byte of a dword crosses num_records, the entire dword returns
+  // zero — silently killing in-range sub-dword elements in that dword.
+  //
+  // With num_records = 0xFFFFFFFE, users must ensure buffer data fits
+  // within 4 GB - 4 bytes (last byte offset <= 0xFFFFFFFB), so no valid
+  // dword straddles num_records.  The sentinel (0xFFFFFFFF) is safe:
+  // empirical testing on gfx950 confirms that dwordx4 with offset
+  // 0xFFFFFFFF returns all zeros for every component (no wrap-around).
+  //
+  // For atomics: use the smaller signed range (INT_MAX-1 = 0x7FFFFFFE)
+  // because OOB buffer atomics cause a memory aperture violation instead
+  // of being silently dropped (confirmed on gfx950).
+  int64_t numRecords =
+      isAtomic ? static_cast<int64_t>(std::numeric_limits<int>::max()) - 1
+               : static_cast<int64_t>(std::numeric_limits<uint32_t>::max()) - 1;
+  Value numRecordsByte = b.int_val(64, numRecords);
 
   Value resource = rewriter.createOrFold<ROCDL::MakeBufferRsrcOp>(
       loc, rsrcType, basePtr, stride, numRecordsByte, flagsConst);
@@ -266,10 +290,13 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   // Please note: the index passed is not in bytes, but in number of elements
   // In order to pass the index to the buffer operation, we need to convert in
   // bytes (i.e., we need to multiply by `elementByteWidth`)
-  Value vOffsetOutOfBunds = b.int_val(
-      32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
+  // Out-of-bounds sentinel: when pred is false we use this offset so the
+  // hardware returns zero via the num_records OOB check.  Must be
+  // >= num_records (currently UINT_MAX - 1), so we use UINT_MAX.
+  Value vOffsetOutOfBounds =
+      b.int_val(32, static_cast<int64_t>(std::numeric_limits<uint32_t>::max()));
   Value vOffsetBytes = b.mul(b.int_val(32, elementByteWidth), vOffsetElems);
-  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBunds);
+  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBounds);
 
   // 2. Set the sgprOffset to 0
   Value sgprOffset = b.int_val(32, 0);
@@ -298,10 +325,14 @@ void BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
   // Please note: the index passed is not in bytes, but in number of elements
   // In order to pass the index to the buffer operation, we need to convert in
   // bytes (i.e., we need to multiply by `elementByteWidth`)
-  Value vOffsetOutOfBunds = b.int_val(
-      32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
+  // Out-of-bounds sentinel for atomics: use INT_MAX+1 which is above the
+  // atomic num_records (INT_MAX-1).  We cannot use UINT_MAX here because
+  // OOB buffer atomics cause a memory aperture violation instead of being
+  // silently dropped like loads.
+  Value vOffsetOutOfBounds =
+      b.int_val(32, static_cast<int64_t>(std::numeric_limits<int>::max()) + 1);
   Value vOffsetBytes = b.mul(b.int_val(32, elementByteWidth), vOffsetElems);
-  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBunds);
+  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBounds);
 
   // 2. Set the sgprOffset to 0
   Value sgprOffset = b.int_val(32, 0);

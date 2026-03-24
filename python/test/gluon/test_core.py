@@ -1681,6 +1681,84 @@ def test_inline_with_amdgpu_dialect():
     assert compiled_kernel.asm["ttgir"].count("tt.func private") == 0
 
 
+@pytest.mark.skipif(not is_hip_cdna3() and not is_hip_cdna4(), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("dtype", [torch.int32, torch.float16, torch.bfloat16])
+def test_buffer_load_oob_masking(dtype):
+    """Verify that buffer_load with mask returns `other` for masked-off elements."""
+    N = 256
+    num_warps = N // THREADS_PER_WARP
+    warp_size_cst = ttgl.constexpr(THREADS_PER_WARP)
+    num_warps_cst = ttgl.constexpr(num_warps)
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr, BLOCK: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [warp_size_cst], [num_warps_cst], [0])
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        mask = offsets < (BLOCK // 2)
+        data = ttgl.amd.cdna3.buffer_load(ptr=in_ptr, offsets=offsets, mask=mask, other=0)
+        ttgl.amd.cdna3.buffer_store(stored_value=data, ptr=out_ptr, offsets=offsets)
+
+    if dtype == torch.int32:
+        inp = torch.arange(1, N + 1, device="cuda", dtype=dtype)
+    else:
+        inp = torch.arange(1, N + 1, device="cuda", dtype=torch.float32).to(dtype)
+    out = torch.zeros(N, device="cuda", dtype=dtype)
+
+    kernel[(1, )](inp, out, BLOCK=N, num_warps=num_warps)
+
+    # First half: real data
+    assert torch.equal(out[:N // 2], inp[:N // 2])
+    # Second half: zeros (from other=0 via mask)
+    assert torch.equal(out[N // 2:], torch.zeros(N // 2, device="cuda", dtype=dtype))
+
+
+@pytest.mark.skipif(not is_hip_cdna3() and not is_hip_cdna4(), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("dtype", [torch.int32, torch.bfloat16])
+def test_buffer_load_4gb_boundary(dtype):
+    """Verify buffer_load works at the 4GB-4 byte boundary.
+
+    Allocates a buffer of exactly 4GB-4 bytes (the maximum safe size with
+    num_records=0xFFFFFFFE), writes a known pattern at the very end, and loads
+    the last 256 elements via buffer_load.  This confirms that byte offsets up
+    to 0xFFFFFFF8 (int32) / 0xFFFFFFFA (bf16) are correctly served by the
+    hardware and not rejected by the num_records OOB check.
+    """
+    elem_size = torch.tensor([], dtype=dtype).element_size()
+    # Maximum elements that fit in 4GB - 4 bytes
+    N_TOTAL = 0xFFFFFFFC // elem_size
+    BLOCK = 256
+    num_warps = BLOCK // THREADS_PER_WARP
+    warp_size_cst = ttgl.constexpr(THREADS_PER_WARP)
+    num_warps_cst = ttgl.constexpr(num_warps)
+
+    try:
+        buf = torch.empty(N_TOTAL, device="cuda", dtype=dtype)
+    except torch.cuda.OutOfMemoryError:
+        pytest.skip("Not enough GPU memory for 4GB boundary test")
+
+    # Write known non-zero pattern at the last BLOCK elements
+    pattern = torch.arange(1, BLOCK + 1, dtype=torch.float32).to(dtype)
+    buf[N_TOTAL - BLOCK:] = pattern.to(device="cuda")
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr, start, BLOCK: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [warp_size_cst], [num_warps_cst], [0])
+        offsets = ttgl.arange(0, BLOCK, layout=layout) + start
+        data = ttgl.amd.cdna3.buffer_load(ptr=in_ptr, offsets=offsets)
+        store_offs = ttgl.arange(0, BLOCK, layout=layout)
+        ttgl.amd.cdna3.buffer_store(stored_value=data, ptr=out_ptr, offsets=store_offs)
+
+    out = torch.full((BLOCK, ), -1, device="cuda", dtype=dtype)
+    start_offset = N_TOTAL - BLOCK
+    kernel[(1, )](buf, out, start_offset, BLOCK=BLOCK, num_warps=num_warps)
+
+    expected = pattern.to(device="cuda")
+    torch.testing.assert_close(out, expected)
+
+    del buf
+    torch.cuda.empty_cache()
+
+
 @pytest.mark.parametrize("interval_pairs", [[[32, 4]], [[16, 4]], [[16, 4], [64, 8]]])
 @pytest.mark.parametrize(
     "shared_layout",

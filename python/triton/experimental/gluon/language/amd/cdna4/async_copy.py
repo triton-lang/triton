@@ -93,6 +93,11 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     - Writes to `dest` must be coalesced.
     - If `dest` is swizzled, it only can be swizzled within warp boundary.
 
+    Note:
+        Buffer data must fit within 4 GB - 4 bytes from the base pointer
+        (max byte offset of last element <= 0xFFFFFFFB). See
+        ``cdna3.buffer_load`` for details on per-dword range checking.
+
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
         ptr (pointer to scalar): Global memory scalar base pointer to load from.

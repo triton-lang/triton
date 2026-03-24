@@ -104,6 +104,13 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
+
+    Note:
+        Buffer data must fit within 4 GB - 4 bytes from the base pointer
+        (max byte offset of last element <= 0xFFFFFFFB). The hardware performs
+        per-dword range checking for multi-dword loads, so sub-dword elements
+        (bf16, fp8) near the 4 GB boundary may be silently zeroed if their
+        containing dword crosses the internal num_records limit.
     """
     _verify_buffer_ops(ptr, offsets, mask, other)
 
@@ -138,6 +145,10 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
         offsets (tensor): Offsets tensor for the store operation.
         mask (tensor, optional): Mask tensor for predicated store. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
+
+    Note:
+        Buffer data must fit within 4 GB - 4 bytes from the base pointer
+        (max byte offset <= 0xFFFFFFFB). See buffer_load for details.
     """
     _verify_buffer_ops(ptr, offsets, mask)
 
