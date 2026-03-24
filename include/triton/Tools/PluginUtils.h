@@ -8,10 +8,6 @@
 #include "llvm/Support/Error.h"
 #include <cstdint>
 
-#ifndef TRITON_EXT_ENABLED
-#define TRITON_EXT_ENABLED 0
-#endif
-
 extern "C" {
 enum TritonPluginResult {
   TP_SUCCESS = 0,
@@ -122,7 +118,7 @@ private:
   bool isLoaded = false;
 };
 
-void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry,
-                        bool loadPluginPasses = false);
+void loadPluginDialects(const std::string &filename,
+                        mlir::DialectRegistry &registry);
 
 #endif // TRITON_PLUGIN_UTILS_H

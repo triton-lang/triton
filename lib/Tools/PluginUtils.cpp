@@ -1,5 +1,4 @@
 #include "triton/Tools/PluginUtils.h"
-#include "llvm/Support/raw_ostream.h"
 
 llvm::Error TritonPlugin::checkLibraryValid(const std::string &error) const {
   if (!library.isValid()) {
@@ -39,7 +38,6 @@ std::runtime_error TritonPlugin::err2exp(llvm::Error Err) {
 }
 
 llvm::Error TritonPlugin::loadPlugin() {
-
   // Bailing when libtriton symbols are not visible is done to prevent
   // crashes caused the loading of plugins (from a set TRITON_PASS_PLUGIN_PATH
   // env var path) who will never find their dependent symbols (which are hidden
@@ -219,17 +217,9 @@ TritonPlugin::addCustomOp(const char *handle, TritonOpBuilder &self,
   return TP_SUCCESS;
 }
 
-void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry,
-                        bool loadPluginPasses) {
-  if (loadPluginPasses) {
-    std::vector<const char *> passNames;
-    if (auto result = TP.getPassHandles(passNames); !result)
-      llvm::report_fatal_error(result.takeError());
-
-    for (const char *passName : passNames)
-      if (auto result = TP.registerPass(passName); !result)
-        llvm::report_fatal_error(result.takeError());
-  }
+void loadPluginDialects(const std::string &filename,
+                        mlir::DialectRegistry &registry) {
+  TritonPlugin TP(filename);
 
   std::vector<const char *> dialectNames;
   if (auto result = TP.getDialectHandles(dialectNames); !result)
