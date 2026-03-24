@@ -963,5 +963,5 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
                         typeConverter, rewriter, mmaType, numRegisters,
-                        mmaInstrPtxScaled, emit);
+                        mmaInstrPtxScaled, emit, /*isHopperF64=*/false);
 }
