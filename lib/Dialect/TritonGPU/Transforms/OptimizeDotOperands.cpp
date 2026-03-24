@@ -317,6 +317,133 @@ private:
   }
 };
 
+class RewriteSwizzle0OperandViewsToMemDescForTCGen5MMA
+    : public OpRewritePattern<triton::nvidia_gpu::TCGen5MMAOp> {
+public:
+  using OpRewritePattern<triton::nvidia_gpu::TCGen5MMAOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::nvidia_gpu::TCGen5MMAOp mmaOp,
+                                PatternRewriter &rewriter) const override {
+    bool changed = false;
+    if (succeeded(rewriteOperand(mmaOp.getAMutable(), rewriter)))
+      changed = true;
+    if (succeeded(rewriteOperand(mmaOp.getBMutable(), rewriter)))
+      changed = true;
+    return changed ? success() : failure();
+  }
+
+private:
+  struct ViewStep {
+    enum Kind { Reshape, Transpose } kind;
+    SmallVector<int64_t> shape;
+    SmallVector<int32_t> order;
+    Location loc;
+  };
+
+  LogicalResult rewriteOperand(OpOperand &operand,
+                               PatternRewriter &rewriter) const {
+    Value orig = operand.get();
+    auto origTy = dyn_cast<MemDescType>(orig.getType());
+    if (!origTy)
+      return failure();
+
+    SmallVector<int32_t> trailingMemDescTransOrder;
+    Value beforeTrailing = orig;
+    if (auto trailing = beforeTrailing.getDefiningOp<MemDescTransOp>()) {
+      trailingMemDescTransOrder.assign(trailing.getOrder().begin(),
+                                       trailing.getOrder().end());
+      beforeTrailing = trailing.getSrc();
+    }
+
+    auto localAlloc = beforeTrailing.getDefiningOp<LocalAllocOp>();
+    if (!localAlloc || !localAlloc.getSrc())
+      return failure();
+
+    auto allocTy = cast<MemDescType>(localAlloc.getType());
+    auto allocEnc = dyn_cast<NVMMASharedEncodingAttr>(allocTy.getEncoding());
+    if (!allocEnc || allocEnc.getSwizzlingByteWidth() != 0)
+      return failure();
+
+    SmallVector<ViewStep> reverseSteps;
+    Value baseTensor = localAlloc.getSrc();
+    while (true) {
+      if (auto cvt = baseTensor.getDefiningOp<ConvertLayoutOp>()) {
+        baseTensor = cvt.getSrc();
+        continue;
+      }
+      if (auto reshape = baseTensor.getDefiningOp<triton::ReshapeOp>()) {
+        SmallVector<int64_t> shape(reshape.getType().getShape().begin(),
+                                   reshape.getType().getShape().end());
+        reverseSteps.push_back(ViewStep{
+            ViewStep::Reshape, std::move(shape), {}, reshape.getLoc()});
+        baseTensor = reshape.getSrc();
+        continue;
+      }
+      if (auto trans = baseTensor.getDefiningOp<triton::TransOp>()) {
+        SmallVector<int32_t> order(trans.getOrder().begin(),
+                                   trans.getOrder().end());
+        reverseSteps.push_back(ViewStep{
+            ViewStep::Transpose, {}, std::move(order), trans.getLoc()});
+        baseTensor = trans.getSrc();
+        continue;
+      }
+      break;
+    }
+
+    if (reverseSteps.empty())
+      return failure();
+
+    auto baseTensorTy = dyn_cast<RankedTensorType>(baseTensor.getType());
+    if (!baseTensorTy)
+      return failure();
+
+    auto cgaLayout = CGAEncodingAttr::get1CTALayout(rewriter.getContext(),
+                                                    baseTensorTy.getRank());
+    auto baseEnc = NVMMASharedEncodingAttr::get(
+        rewriter.getContext(), /*swizzlingByteWidth=*/0,
+        /*transposed=*/false, allocEnc.getElementBitWidth(),
+        allocEnc.getFp4Padded(), cgaLayout);
+    auto baseMemTy = MemDescType::get(
+        baseTensorTy.getShape(), baseTensorTy.getElementType(), baseEnc,
+        allocTy.getMemorySpace(), allocTy.getMutableMemory());
+
+    PatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(localAlloc);
+
+    Value rewritten = LocalAllocOp::create(rewriter, localAlloc.getLoc(),
+                                           baseMemTy, baseTensor);
+
+    for (ViewStep &step : llvm::reverse(reverseSteps)) {
+      if (step.kind == ViewStep::Reshape) {
+        MemDescType reshapedTy;
+        if (failed(MemDescReshapeOp::inferReturnTypes(
+                rewriter.getContext(), step.loc,
+                cast<MemDescType>(rewritten.getType()), step.shape,
+                reshapedTy)))
+          return failure();
+        rewritten =
+            MemDescReshapeOp::create(rewriter, step.loc, reshapedTy, rewritten);
+      } else {
+        rewritten =
+            MemDescTransOp::create(rewriter, step.loc, rewritten, step.order);
+      }
+    }
+
+    if (!trailingMemDescTransOrder.empty()) {
+      rewritten = MemDescTransOp::create(rewriter, localAlloc.getLoc(),
+                                         rewritten, trailingMemDescTransOrder);
+    }
+
+    auto rewrittenTy = cast<MemDescType>(rewritten.getType());
+    if (rewrittenTy.getShape() != origTy.getShape() ||
+        rewrittenTy.getElementType() != origTy.getElementType())
+      return failure();
+
+    operand.assign(rewritten);
+    return success();
+  }
+};
+
 } // namespace
 
 #define GEN_PASS_DEF_TRITONGPUOPTIMIZEDOTOPERANDS
@@ -341,7 +468,8 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);
     patterns.add<FuseTransMMAV3Plus, ReshapeMemDesc>(context);
-    patterns.add<UseShmemForScales>(context);
+    patterns.add<UseShmemForScales,
+                 RewriteSwizzle0OperandViewsToMemDescForTCGen5MMA>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();

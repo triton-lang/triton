@@ -279,6 +279,45 @@ module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
+#blockedA2 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blockedB2 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
+#blockedA3 = #ttg.blocked<{sizePerThread = [1, 1, 16], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 1, 0]}>
+#blockedB3 = #ttg.blocked<{sizePerThread = [1, 1, 16], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 1, 0]}>
+#shared0 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+#smem = #ttg.shared_memory
+#tmem0 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @swizzle0_operand_views
+  // CHECK-DAG: %[[A_LOAD:.*]] = tt.descriptor_load {{.*}} : !tt.tensordesc<tensor<1x64x256xf8E4M3FN>> -> tensor<1x64x256xf8E4M3FN, #{{.*}}>
+  // CHECK-DAG: %[[A_BASE:.*]] = ttg.local_alloc %[[A_LOAD]] : (tensor<1x64x256xf8E4M3FN, #{{.*}}>) -> !ttg.memdesc<1x64x256xf8E4M3FN, #{{.*}}, #smem>
+  // CHECK-DAG: %[[A_RS:.*]] = ttg.memdesc_reshape %[[A_BASE]] : !ttg.memdesc<1x64x256xf8E4M3FN, #{{.*}}, #smem> -> !ttg.memdesc<64x256xf8E4M3FN, #{{.*}}, #smem>
+  // CHECK-DAG: %[[A_TR:.*]] = ttg.memdesc_trans %[[A_RS]] {order = array<i32: 1, 0>} : !ttg.memdesc<64x256xf8E4M3FN, #{{.*}}, #smem> -> !ttg.memdesc<256x64xf8E4M3FN, #{{.*}}, #smem>
+  // CHECK-DAG: %[[B_LOAD:.*]] = tt.descriptor_load {{.*}} : !tt.tensordesc<tensor<1x64x128xf8E4M3FN>> -> tensor<1x64x128xf8E4M3FN, #{{.*}}>
+  // CHECK-DAG: %[[B_BASE:.*]] = ttg.local_alloc %[[B_LOAD]] : (tensor<1x64x128xf8E4M3FN, #{{.*}}>) -> !ttg.memdesc<1x64x128xf8E4M3FN, #{{.*}}, #smem>
+  // CHECK-DAG: %[[B_RS:.*]] = ttg.memdesc_reshape %[[B_BASE]] : !ttg.memdesc<1x64x128xf8E4M3FN, #{{.*}}, #smem> -> !ttg.memdesc<64x128xf8E4M3FN, #{{.*}}, #smem>
+  // CHECK-NOT: tt.reshape
+  // CHECK-NOT: tt.trans
+  // CHECK: ttng.tc_gen5_mma %[[A_TR]], %[[B_RS]], %arg2, %true, %true
+  tt.func @swizzle0_operand_views(
+      %a_desc: !tt.tensordesc<tensor<1x64x256xf8E4M3FN>>,
+      %b_desc: !tt.tensordesc<tensor<1x64x128xf8E4M3FN>>,
+      %acc: !ttg.memdesc<256x128xf32, #tmem0, #ttng.tensor_memory>) {
+    %true = arith.constant true
+    %c0_i32 = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<tensor<1x64x256xf8E4M3FN>> -> tensor<1x64x256xf8E4M3FN, #blockedA3>
+    %b = tt.descriptor_load %b_desc[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<tensor<1x64x128xf8E4M3FN>> -> tensor<1x64x128xf8E4M3FN, #blockedB3>
+    %a2d = tt.reshape %a : tensor<1x64x256xf8E4M3FN, #blockedA3> -> tensor<64x256xf8E4M3FN, #blockedB2>
+    %aT = tt.trans %a2d {order = array<i32: 1, 0>} : tensor<64x256xf8E4M3FN, #blockedB2> -> tensor<256x64xf8E4M3FN, #blockedA2>
+    %b2d = tt.reshape %b : tensor<1x64x128xf8E4M3FN, #blockedB3> -> tensor<64x128xf8E4M3FN, #blockedB2>
+    %a_s = ttg.local_alloc %aT : (tensor<256x64xf8E4M3FN, #blockedA2>) -> !ttg.memdesc<256x64xf8E4M3FN, #shared0, #smem>
+    %b_s = ttg.local_alloc %b2d : (tensor<64x128xf8E4M3FN, #blockedB2>) -> !ttg.memdesc<64x128xf8E4M3FN, #shared0, #smem>
+    ttng.tc_gen5_mma %a_s, %b_s, %acc, %true, %true : !ttg.memdesc<256x64xf8E4M3FN, #shared0, #smem>, !ttg.memdesc<64x128xf8E4M3FN, #shared0, #smem>, !ttg.memdesc<256x128xf32, #tmem0, #ttng.tensor_memory>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1, 1, 1], threadsPerWarp = [1, 1, 1, 32], warpsPerCTA = [1, 2, 2, 1], order = [3, 2, 1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 32}>
