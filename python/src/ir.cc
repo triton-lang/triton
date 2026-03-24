@@ -210,8 +210,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
           std::vector<int>(blockShape.begin(), blockShape.end());
       metadata["elem_bits"] = blockType.getElementTypeBitWidth();
 
-      if (auto paddedEnc =
-              dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
+      if (auto paddedEnc = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
         py::list intervalPaddingPairs;
         for (auto [interval, padding] : llvm::zip_equal(
                  paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
