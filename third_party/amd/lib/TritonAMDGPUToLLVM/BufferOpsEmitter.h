@@ -64,7 +64,8 @@ struct BufferEmitter {
 
   // Create a resource descriptor that points to the area of memory we want to
   // load from
-  Value createResourceDescriptor(Value basePtr, Value inferredStride = nullptr);
+  Value createResourceDescriptor(Value basePtr, Value inferredStride = nullptr,
+                                 bool isAtomic = false);
 
   // Emit a predicated rocdl.raw.ptr.buffer.load
   Value emitLoad(Type type, Value rsrcDesc, Value offset, Value pred,

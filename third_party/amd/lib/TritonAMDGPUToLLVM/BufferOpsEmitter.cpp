@@ -33,8 +33,8 @@ namespace mlir::LLVM::AMD {
 BufferEmitter::BufferEmitter(RewriterBase &rw, Location loc, TargetInfo ti)
     : rewriter(rw), loc(loc), targetInfo(ti) {}
 
-Value BufferEmitter::createResourceDescriptor(Value basePtr,
-                                              Value blockStride) {
+Value BufferEmitter::createResourceDescriptor(Value basePtr, Value blockStride,
+                                              bool isAtomic) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // 1. Create the resource descriptor
   // bits 0-11: dst sel, ignored by these intrinsics
@@ -100,7 +100,14 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
 
   Value flagsConst = b.int_val(32, flags);
   Type rsrcType = LLVM::LLVMPointerType::get(rewriter.getContext(), 8);
-  Value numRecordsByte = b.int_val(64, std::numeric_limits<int>::max() - 1);
+  // For loads/stores: use the full unsigned 32-bit range so buffer ops can
+  // address up to 4 GB from the base pointer.  OOB loads return zero.
+  // For atomics: use the smaller signed range because OOB buffer atomics
+  // cause a memory aperture violation instead of being silently dropped.
+  int64_t numRecords =
+      isAtomic ? static_cast<int64_t>(std::numeric_limits<int>::max()) - 1
+               : static_cast<int64_t>(std::numeric_limits<uint32_t>::max()) - 1;
+  Value numRecordsByte = b.int_val(64, numRecords);
 
   Value resource = rewriter.createOrFold<ROCDL::MakeBufferRsrcOp>(
       loc, rsrcType, basePtr, stride, numRecordsByte, flagsConst);
@@ -266,8 +273,11 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   // Please note: the index passed is not in bytes, but in number of elements
   // In order to pass the index to the buffer operation, we need to convert in
   // bytes (i.e., we need to multiply by `elementByteWidth`)
-  Value vOffsetOutOfBunds = b.int_val(
-      32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
+  // Out-of-bounds sentinel: when pred is false we use this offset so the
+  // hardware returns zero via the num_records OOB check.  Must be
+  // >= num_records (currently UINT_MAX - 1), so we use UINT_MAX.
+  Value vOffsetOutOfBunds =
+      b.int_val(32, static_cast<int64_t>(std::numeric_limits<uint32_t>::max()));
   Value vOffsetBytes = b.mul(b.int_val(32, elementByteWidth), vOffsetElems);
   Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBunds);
 
@@ -298,8 +308,12 @@ void BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
   // Please note: the index passed is not in bytes, but in number of elements
   // In order to pass the index to the buffer operation, we need to convert in
   // bytes (i.e., we need to multiply by `elementByteWidth`)
-  Value vOffsetOutOfBunds = b.int_val(
-      32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
+  // Out-of-bounds sentinel for atomics: use INT_MAX+1 which is above the
+  // atomic num_records (INT_MAX-1).  We cannot use UINT_MAX here because
+  // OOB buffer atomics cause a memory aperture violation instead of being
+  // silently dropped like loads.
+  Value vOffsetOutOfBunds =
+      b.int_val(32, static_cast<int64_t>(std::numeric_limits<int>::max()) + 1);
   Value vOffsetBytes = b.mul(b.int_val(32, elementByteWidth), vOffsetElems);
   Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBunds);
 
