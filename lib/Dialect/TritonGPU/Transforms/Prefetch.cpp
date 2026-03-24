@@ -402,8 +402,10 @@ LogicalResult Prefetcher::initialize() {
     return cast<TensorOrMemDesc>(v.getType()).getEncoding();
   };
   auto hasTrivialBlockCGALayout = [kBlock, &getEncoding](Value v) {
-    return getCGALayout(getEncoding(v)).getLinearLayout().isTrivialOver(
-        {kBlock});
+    auto cgaLayout = getCGALayout(getEncoding(v)).getLinearLayout();
+    if (!cgaLayout.hasInDim(kBlock) || !cgaLayout.hasOutDim(kBlock))
+      return false;
+    return cgaLayout.isTrivialOver({kBlock});
   };
 
   SmallVector<triton::DotOp> dotsInFor;
