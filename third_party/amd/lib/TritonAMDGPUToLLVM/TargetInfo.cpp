@@ -72,6 +72,7 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
 
 int TargetInfo::getWarpSize() const {
   switch (getISAFamily()) {
+  case ISAFamily::GCN5_1:
   case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
@@ -395,10 +396,10 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     return true;
   if (reduceLaneIdMask != (getWarpSize() - 1))
     return false;
-  if (isCDNA(getISAFamily()) && getISAFamily() == ISAFamily::CDNA1)
-    return false;
-  if (isRDNA(getISAFamily()) &&
-      llvm::is_contained({ISAFamily::RDNA1, ISAFamily::RDNA2}, getISAFamily()))
+  // DPP warp reduce requires gfx90a+ (CDNA2+) or gfx11+ (RDNA3+).
+  // Pre-CDNA2 GFX9 (gfx906/gfx908) and GFX10 (RDNA1/2) are excluded.
+  auto v = getIsaVersion();
+  if (!((v.Major == 9 && (v.Minor > 0 || v.Stepping >= 0xa)) || v.Major >= 11))
     return false;
 
   Operation *reduxOp = op.getSingleCombiner();
@@ -676,7 +677,15 @@ bool TargetInfo::supportVectorizedAtomics() const {
 bool TargetInfo::supportBitwidth16Elementwise() const { return true; }
 
 bool TargetInfo::supportBitwidth32Elementwise() const {
-  return getISAFamily() == ISAFamily::GFX1250;
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+  case ISAFamily::GFX1250:
+    return true;
+  default:
+    return false;
+  }
 }
 
 bool TargetInfo::supportsDirectToLDSScattering() const {
@@ -744,6 +753,32 @@ bool TargetInfo::supportsBufferLoadToLocal() const {
                             getISAFamily());
 }
 
+bool TargetInfo::supportsBufferAtomicRMW() const {
+  return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4,
+                             ISAFamily::RDNA4, ISAFamily::GFX1250},
+                            getISAFamily());
+}
+
+bool TargetInfo::supportsBufferAtomicFadd(mlir::Type elementType) const {
+  auto isaFamily = getISAFamily();
+  if (isaFamily == ISAFamily::CDNA3 && elementType.isBF16())
+    return false;
+  if (isaFamily == ISAFamily::RDNA4 && elementType.isF64())
+    return false;
+  return true;
+}
+
+int32_t TargetInfo::getBufferAtomicCachePolicy(bool hasUsers) const {
+  const int sc0Bit = 0b1;          // TH_ATOMIC_RETURN (cpol bit 0)
+  const int scopeDevBit = 0b10000; // SCOPE_DEV = 2 << 3 (cpol bits [4:3])
+  int32_t aux = 0;
+  if (hasUsers)
+    aux |= sc0Bit;
+  if (getISAFamily() == ISAFamily::GFX1250)
+    aux |= scopeDevBit;
+  return aux;
+}
+
 bool TargetInfo::supportsWaveId() const {
   return getISAFamily() == ISAFamily::RDNA4 ||
          getISAFamily() == ISAFamily::GFX1250;
@@ -758,6 +793,11 @@ bool TargetInfo::supportsCvtPkScalePk8() const {
   return getISAFamily() == ISAFamily::GFX1250;
 }
 
+bool TargetInfo::supportsHwScaledUpcast() const {
+  return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::GFX1250;
+}
+
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                        Operation *llLoadOp) const {
   if (requiresAliasInfoForAsyncOps())
@@ -766,6 +806,7 @@ void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
 
 bool TargetInfo::supportDppBroadcast() const {
   switch (getISAFamily()) {
+  case ISAFamily::GCN5_1:
   case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:

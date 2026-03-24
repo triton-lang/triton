@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu='target=cuda:80 num-warps=2' | FileCheck %s
+// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu='target=cuda:80 num-warps=2 num-ctas=2' | FileCheck %s --check-prefixes=CHECK-TWO-CTAS
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 tt.func @ops() {
@@ -166,5 +167,18 @@ tt.func @cf_br(%ptr: !tt.ptr<i32>) {
 ^bb1(%arg0: tensor<128xi32>):
   %ptrs = tt.splat %ptr : !tt.ptr<i32> -> tensor<128x!tt.ptr<i32>>
   tt.store %ptrs, %arg0 : tensor<128x!tt.ptr<i32>>
+  tt.return
+}
+
+// -----
+
+tt.func @split_op(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>) {
+  // CHECK-TWO-CTAS-LABEL: split_op
+  // CHECK-TWO-CTAS: tt.split
+  %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<64x2x!tt.ptr<f32>>
+  %1 = tt.load %0 : tensor<64x2x!tt.ptr<f32>>
+  %res1, %res2 = tt.split %1 : tensor<64x2xf32> -> tensor<64xf32>
+  %2 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
+  tt.store %2, %res1 : tensor<64x!tt.ptr<f32>>
   tt.return
 }

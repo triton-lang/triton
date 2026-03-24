@@ -17,10 +17,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: init_barrier_cluster_broadcast
-  tt.func @init_barrier_cluster_broadcast(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
+  tt.func @init_barrier_cluster_broadcast() {
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     // CHECK: nvg.cluster_id
     // CHECK: @$0 mbarrier.init.shared::cta.b64 [$1], 2;
-    ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0, #smem>
+    ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
+    ttng.inval_barrier %alloc : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
   }
 }

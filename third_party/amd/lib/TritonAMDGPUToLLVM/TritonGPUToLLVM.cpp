@@ -17,6 +17,7 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "third_party/amd/include/Analysis/AMDGPUAllocation.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
@@ -103,8 +104,7 @@ struct ConvertTritonAMDGPUToLLVM
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Allocate shared memory and set barrier
-    ModuleAllocation allocation(mod,
-                                triton::defaultAllocationAnalysisScratchSizeFn,
+    ModuleAllocation allocation(mod, AMD::AMDAllocationAnalysisScratchSizeFn,
                                 targetInfo.getSharedMemoryPartitionSize());
 
     if (targetInfo.requiresAliasInfoForAsyncOps())
@@ -218,8 +218,6 @@ struct ConvertTritonAMDGPUToLLVM
 
     mlir::triton::AMD::populateTritonAMDGPUToLLVMPatterns(
         typeConverter, patterns, targetInfo, AMDBenefit);
-    mlir::triton::AMD::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
-                                                        targetInfo, AMDBenefit);
     mlir::triton::AMD::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
                                                      targetInfo, AMDBenefit);
     // TODO(thomas): this should probably be done in a separate step to not

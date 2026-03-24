@@ -282,7 +282,7 @@ constexpr std::array<CUpti_CallbackId, 5> kGraphResourceCallbacks = {
     CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED,
     CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED,
     CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING,
-    CUPTI_CBID_RESOURCE_GRAPHEXEC_CREATED,
+    CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING,
     CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING,
 };
 
@@ -458,7 +458,6 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
 void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     CUpti_GraphData *graphData) {
-
   uint32_t graphId = 0;
   uint32_t graphExecId = 0;
   if (graphData->graph)
@@ -467,6 +466,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
     cupti::getGraphExecId<true>(graphData->graphExec, &graphExecId);
   if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED ||
       cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED) {
+    if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL) {
+      // We only care about kernel nodes
+      return;
+    }
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
     if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED) {
@@ -504,6 +507,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
             &nodeState);
       }
     } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
+      // When a graph is cloned under the stream capture mode, graphId is the
+      // same as the graphExecId to be created
       uint32_t originalGraphId = 0;
       uint64_t originalNodeId = 0;
       cupti::getGraphId<true>(graphData->originalGraph, &originalGraphId);
@@ -528,6 +533,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       }
     }
   } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
+    if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL) {
+      // We only care about kernel nodes
+      return;
+    }
     auto &graphState = graphStates[graphId];
     uint64_t nodeId = 0;
     cupti::getGraphNodeId<true>(graphData->node, &nodeId);
@@ -570,8 +579,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleResourceCallbacks(
   } else {
     auto *graphData =
         static_cast<CUpti_GraphData *>(resourceData->resourceDescriptor);
-    if (graphData->nodeType == CU_GRAPH_NODE_TYPE_KERNEL)
-      handleGraphResourceCallbacks(profiler, cbId, graphData);
+    handleGraphResourceCallbacks(profiler, cbId, graphData);
   }
 }
 
@@ -607,11 +615,6 @@ bool CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureCallbacks(
 void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
-  if (handleStreamCaptureCallbacks(cbId))
-    return;
-  if (!isLaunch(cbId))
-    return;
-
   size_t numNodes = 1;
   if (isGraphLaunch(cbId)) {
     threadState.enterOp(Scope(""));
@@ -623,8 +626,13 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     threadState.enterOp(Scope(symbolName));
   }
 
-  const auto &scope = threadState.scopeStack.back();
   auto &dataToEntry = threadState.dataToEntry;
+  if (threadState.isStreamCapturing) // Do not correlate stream captured kernels
+    return;
+  if (dataToEntry.empty()) // Profiler is deactivated
+    return;
+
+  const auto &scope = threadState.scopeStack.back();
   if (isGraphLaunch(cbId)) {
     auto graphExec =
         static_cast<const cuGraphLaunch_params *>(callbackData->functionParams)
@@ -641,7 +649,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     if (!findGraph && !graphStates[graphExecId].captureStatusChecked) {
       graphStates[graphExecId].captureStatusChecked = true;
       std::cerr << "[PROTON] Cannot find graph for graphExecId: " << graphExecId
-                << ", and t may cause memory leak. To avoid this problem, "
+                << ", and it may cause memory leak. To avoid this problem, "
                    "please start profiling before the graph is created."
                 << std::endl;
     } else if (findGraph && !graphStates[graphExecId].captureStatusChecked) {
@@ -700,16 +708,21 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
 void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
-  if (!isLaunch(cbId))
-    return;
+  auto &dataToEntry = threadState.dataToEntry;
+  bool deactivated = dataToEntry.empty();
 
   if (profiler.pcSamplingEnabled) {
-    auto &dataToEntry = threadState.dataToEntry;
     // XXX: Conservatively stop every GPU kernel for now.
     pcSampling.stop(callbackData->context, dataToEntry);
   }
 
   threadState.exitOp();
+
+  if (threadState
+          .isStreamCapturing) // Do not correlate for stream captured kernels
+    return;
+  if (deactivated) // Profiler is deactivated
+    return;
   profiler.correlation.submit(callbackData->correlationId);
 }
 
@@ -717,17 +730,21 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId, const void *cbData) {
   // Do not track metric kernel launches for triton ops.
   // In this case, metric kernels are launched after a triton op is entered.
-  // We should track metric kernel launches for scopes. In this case, the metric
-  // kernel's stack has the same name as the scope's stack.
+  // We should track metric kernel launches for scopes.
+  // In this case, the metric kernel's stack has the same name as the scope's
+  // stack.
   if (threadState.isMetricKernelLaunching && profiler.isOpInProgress())
     return;
 
   const CUpti_CallbackData *callbackData =
       static_cast<const CUpti_CallbackData *>(cbData);
-  if (callbackData->callbackSite == CUPTI_API_ENTER) {
-    handleApiEnterLaunchCallbacks(profiler, cbId, callbackData);
-  } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
-    handleApiExitLaunchCallbacks(profiler, cbId, callbackData);
+  handleStreamCaptureCallbacks(cbId);
+  if (isLaunch(cbId)) {
+    if (callbackData->callbackSite == CUPTI_API_ENTER) {
+      handleApiEnterLaunchCallbacks(profiler, cbId, callbackData);
+    } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
+      handleApiExitLaunchCallbacks(profiler, cbId, callbackData);
+    }
   }
 }
 
@@ -810,6 +827,9 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   }
   profiler.periodicFlushingEnabled = false;
   profiler.periodicFlushingFormat.clear();
+  // We have to clear the correlation maps before unsubscribing because CUPTI
+  // will reset correlation ID after unsubscribing
+  profiler.correlation.clear();
   setGraphCallbacks(subscriber, /*enable=*/false);
   setLaunchCallbacks(subscriber, /*enable=*/false);
   nvtx::disable();
