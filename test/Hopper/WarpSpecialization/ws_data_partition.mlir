@@ -168,17 +168,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %0 = tt.splat %arg0 {async_task_id = array<i32: 0>} : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
     %1 = tt.splat %arg1 {async_task_id = array<i32: 0>} : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
     // Two loads that feed into the if branches
+    // CHECK: tt.load {{.*}} : tensor<128x64x!tt.ptr<f16>
     %a = tt.load %0 {async_task_id = array<i32: 0>} : tensor<128x64x!tt.ptr<f16>, #blocked>
+    // CHECK: tt.load {{.*}} : tensor<128x64x!tt.ptr<f16>
     %b = tt.load %1 {async_task_id = array<i32: 0>} : tensor<128x64x!tt.ptr<f16>, #blocked>
     // Pick one based on condition
+    // CHECK: scf.if
+    // CHECK:   scf.yield
+    // CHECK: } else {
+    // CHECK:   scf.yield
     %sel = scf.if %cond -> (tensor<128x64xf16, #blocked>) {
       scf.yield {async_task_id = array<i32: 0>} %a : tensor<128x64xf16, #blocked>
     } else {
       scf.yield {async_task_id = array<i32: 0>} %b : tensor<128x64xf16, #blocked>
     } {async_task_id = array<i32: 0>}
+    // CHECK: ttg.local_alloc
     %lhs = ttg.local_alloc %sel {async_task_id = array<i32: 1, 2>} : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    // CHECK: tt.load {{.*}} : tensor<64x256x!tt.ptr<f16>
     %2 = tt.splat %arg2 {async_task_id = array<i32: 0>} : !tt.ptr<f16> -> tensor<64x256x!tt.ptr<f16>, #blocked1>
     %rhs_val = tt.load %2 {async_task_id = array<i32: 0>} : tensor<64x256x!tt.ptr<f16>, #blocked1>
+    // CHECK: ttg.local_alloc
     %rhs = ttg.local_alloc %rhs_val {async_task_id = array<i32: 1, 2>} : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
     // CHECK: ttng.warp_group_dot
     %dot = ttng.warp_group_dot %lhs, %rhs, %cst {async_task_id = array<i32: 1, 2>, inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
