@@ -724,7 +724,7 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
                ConversionPatternRewriter &rewriter, TensorCoreType mmaType,
                const NumRegisters &numRegisters,
                const std::map<TensorCoreType, std::string> &mmaInstructions,
-               const EmitMmaCallback &emitMma) {
+               const EmitMmaCallback &emitMma, bool isHopperF64) {
   auto loc = op.getLoc();
   auto aType = cast<RankedTensorType>(op.getA().getType());
   auto bType = cast<RankedTensorType>(op.getB().getType());
@@ -751,11 +751,11 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
   int kWidth = dotOpA.getKWidth();
   auto repA =
       cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
-          .getRepForOperand(aShapePerCTA, bitwidth, kWidth, dotOpA.getOpIdx());
+          .getRepForOperand(aShapePerCTA, bitwidth, kWidth, dotOpA.getOpIdx(), isHopperF64);
   auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
   auto repB =
       cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
-          .getRepForOperand(bShapePerCTA, bitwidth, kWidth, dotOpB.getOpIdx());
+          .getRepForOperand(bShapePerCTA, bitwidth, kWidth, dotOpB.getOpIdx(), isHopperF64);
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
@@ -898,7 +898,7 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
                         typeConverter, rewriter, mmaType, numRegisters,
-                        instrMap, emit);
+                        instrMap, emit, isHopperF64);
 }
 
 LogicalResult convertMMADotScaled(triton::DotScaledOp op,

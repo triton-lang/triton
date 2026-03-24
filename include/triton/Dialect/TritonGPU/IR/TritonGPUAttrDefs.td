@@ -1331,7 +1331,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
 
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
                                           int bitwidth, int kWidth,
-                                          int opIdx) const;
+                                          int opIdx, bool isHopperF64) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
   }];
 
