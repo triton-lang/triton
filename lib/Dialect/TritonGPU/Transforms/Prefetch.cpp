@@ -253,16 +253,22 @@ Value Prefetcher::cloneLoopValue(
     Value v, OpBuilder &builder,
     llvm::function_ref<Value(BlockArgument)> mapBlockArg,
     DenseMap<Value, Value> &cache) {
-  if (!v) // empty if token is null
+  // Null values are allowed for optional operands such as local_load tokens.
+  if (!v)
     return Value();
+  // Reuse previously cloned values when reconstructing a shared expression DAG.
   if (auto it = cache.find(v); it != cache.end())
     return it->second;
+  // Block arguments are remapped by the caller depending on whether we are
+  // materializing the loop init or the yielded next-iteration value.
   if (auto arg = dyn_cast<BlockArgument>(v))
     return cache[v] = mapBlockArg(arg);
   Operation *op = v.getDefiningOp();
+  // Values defined outside this loop body can be reused directly.
   if (op->getBlock() != forOp.getBody())
     return cache[v] = v;
 
+  // Recursively rebuild the loop-local expression with remapped operands.
   IRMapping operandMapping;
   for (Value operand : op->getOperands())
     operandMapping.map(operand,
