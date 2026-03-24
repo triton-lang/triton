@@ -2599,7 +2599,12 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
     tileSize.push_back(1);
   }
   // warpSizeK * (warpRepK * VecBitWidth)
-  auto tileBitWidthK = bitwidth == 64 ? (2 * 256) : (4 * 64);
+  auto tileBitWidthK = 4 * 64;
+  if (isAmpere() && bitwidth == 64) {
+    tileBitWidthK = 2 * 256;
+  } else if (isHopper() && bitwidth == 64) {
+    tileBitWidthK = 4 * 256;
+  }
   if (opIdx == 0) {
     // m x k
     tileSize.push_back(16);
