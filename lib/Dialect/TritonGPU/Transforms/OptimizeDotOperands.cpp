@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -334,6 +335,15 @@ public:
   }
 
 private:
+  static bool isZeroSwizzleCompatibleEncoding(Attribute encoding) {
+    if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(encoding))
+      return nvmma.getSwizzlingByteWidth() == 0;
+    if (auto swizzled = dyn_cast<SwizzledSharedEncodingAttr>(encoding))
+      return swizzled.getVec() == 1 && swizzled.getPerPhase() == 1 &&
+             swizzled.getMaxPhase() == 1;
+    return false;
+  }
+
   struct ViewStep {
     enum Kind { Reshape, Transpose } kind;
     SmallVector<int64_t> shape;
@@ -361,8 +371,10 @@ private:
       return failure();
 
     auto allocTy = cast<MemDescType>(localAlloc.getType());
-    auto allocEnc = dyn_cast<NVMMASharedEncodingAttr>(allocTy.getEncoding());
-    if (!allocEnc || allocEnc.getSwizzlingByteWidth() != 0)
+    auto allocSharedEnc =
+        dyn_cast<SharedEncodingTrait>(allocTy.getEncoding());
+    if (!allocSharedEnc ||
+        !isZeroSwizzleCompatibleEncoding(allocTy.getEncoding()))
       return failure();
 
     SmallVector<ViewStep> reverseSteps;
@@ -398,14 +410,10 @@ private:
     if (!baseTensorTy)
       return failure();
 
-    auto cgaLayout = CGAEncodingAttr::get1CTALayout(rewriter.getContext(),
-                                                    baseTensorTy.getRank());
-    auto baseEnc = NVMMASharedEncodingAttr::get(
-        rewriter.getContext(), /*swizzlingByteWidth=*/0,
-        /*transposed=*/false, allocEnc.getElementBitWidth(),
-        allocEnc.getFp4Padded(), cgaLayout);
+    auto baseEnc = updateEncodingForShape(localAlloc, allocSharedEnc, baseTensorTy);
     auto baseMemTy = MemDescType::get(
-        baseTensorTy.getShape(), baseTensorTy.getElementType(), baseEnc,
+        baseTensorTy.getShape(), baseTensorTy.getElementType(),
+        cast<Attribute>(baseEnc),
         allocTy.getMemorySpace(), allocTy.getMutableMemory());
 
     PatternRewriter::InsertionGuard guard(rewriter);
