@@ -122,6 +122,7 @@ private:
   bool isLoaded = false;
 };
 
-void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry);
+void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry,
+                        bool loadPluginPasses = false);
 
 #endif // TRITON_PLUGIN_UTILS_H

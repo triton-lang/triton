@@ -219,7 +219,18 @@ TritonPlugin::addCustomOp(const char *handle, TritonOpBuilder &self,
   return TP_SUCCESS;
 }
 
-void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry) {
+void loadPluginDialects(TritonPlugin &TP, mlir::DialectRegistry &registry,
+                        bool loadPluginPasses) {
+  if (loadPluginPasses) {
+    std::vector<const char *> passNames;
+    if (auto result = TP.getPassHandles(passNames); !result)
+      llvm::report_fatal_error(result.takeError());
+
+    for (const char *passName : passNames)
+      if (auto result = TP.registerPass(passName); !result)
+        llvm::report_fatal_error(result.takeError());
+  }
+
   std::vector<const char *> dialectNames;
   if (auto result = TP.getDialectHandles(dialectNames); !result)
     llvm::report_fatal_error(result.takeError());
