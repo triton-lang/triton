@@ -16,7 +16,6 @@ set(TritonPluginsTestLib_SOURCES
 
 # Dialect Plugins
 add_subdirectory(DialectPlugins)
-add_subdirectory(FakeLibTriton)
 
 foreach( plugin ${TRITON_PLUGIN_PASSES} )
     add_library(${plugin} SHARED ${${plugin}_SOURCES})
