@@ -317,17 +317,18 @@ private:
   }
 };
 
-class RewriteSwizzle0OperandViewsToMemDescForTCGen5MMA
-    : public OpRewritePattern<triton::nvidia_gpu::TCGen5MMAOp> {
+template <typename DotOpTy>
+class RewriteSwizzle0OperandViewsToMemDescForDotOp
+    : public OpRewritePattern<DotOpTy> {
 public:
-  using OpRewritePattern<triton::nvidia_gpu::TCGen5MMAOp>::OpRewritePattern;
+  using OpRewritePattern<DotOpTy>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(triton::nvidia_gpu::TCGen5MMAOp mmaOp,
+  LogicalResult matchAndRewrite(DotOpTy dotOp,
                                 PatternRewriter &rewriter) const override {
     bool changed = false;
-    if (succeeded(rewriteOperand(mmaOp.getAMutable(), rewriter)))
+    if (succeeded(rewriteOperand(dotOp.getAMutable(), rewriter)))
       changed = true;
-    if (succeeded(rewriteOperand(mmaOp.getBMutable(), rewriter)))
+    if (succeeded(rewriteOperand(dotOp.getBMutable(), rewriter)))
       changed = true;
     return changed ? success() : failure();
   }
@@ -468,8 +469,12 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);
     patterns.add<FuseTransMMAV3Plus, ReshapeMemDesc>(context);
-    patterns.add<UseShmemForScales,
-                 RewriteSwizzle0OperandViewsToMemDescForTCGen5MMA>(context);
+    patterns.add<
+        UseShmemForScales,
+        RewriteSwizzle0OperandViewsToMemDescForDotOp<triton::nvidia_gpu::TCGen5MMAOp>,
+        RewriteSwizzle0OperandViewsToMemDescForDotOp<triton::nvidia_gpu::TCGen5MMAScaledOp>,
+        RewriteSwizzle0OperandViewsToMemDescForDotOp<triton::nvidia_gpu::WarpGroupDotOp>>(
+        context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
