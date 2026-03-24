@@ -119,13 +119,14 @@ class PrecisionConfig:
     flexpoint_saturate_inf: bool = False
     report_quantization_err_fn: Callable | None = None
     a_mx_scale: torch.Tensor | Tensor | None = None
+    a_microblock_size: int | None = None
     b_mx_scale: torch.Tensor | Tensor | None = None
+    b_microblock_size: int | None = None
     c_mx_scale: torch.Tensor | Tensor | None = None
     c_microblock_size: int | None = None
     c_value_pack_factor: int = 1
     out_dtype: torch.dtype | None = None
     enforce_bitwise_invariance: bool = False
-
 
 # TODO: merge in opt_flags
 def get_swap_xw(precision_config, opt_flags):
@@ -303,23 +304,29 @@ def matmul(a, b, bias,
     b_scale_dtype = None if b_scale is None else b_scale.storage.data.dtype
     # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8_e4m3fn.
     if a_scale_dtype is not None:
-        assert (
-            a_scale_dtype == torch.uint8
-            or a_scale_dtype == torch.float8_e4m3fn
-        ), f"Unsupported microscale dtype {a_scale_dtype}"
-    if b_scale_dtype is not None:
-        assert (
-            b_scale_dtype == torch.uint8
-            or b_scale_dtype == torch.float8_e4m3fn
-        ), f"Unsupported microscale dtype {b_scale_dtype}"
-    a_microblock_size = None if a_scale is None else a.shape[-1] // a_scale.shape[-1]
-    b_microblock_size = None if b_scale is None else b.shape[-2] // b_scale.shape[-2]
+        assert a_scale_dtype == torch.uint8 or a_scale_dtype == torch.float8_e4m3fn, (
+            f"Unsupported microscale dtype {a_scale_dtype}"
+        )
+    a_microblock_size = precision_config.a_microblock_size
     if a_microblock_size is not None:
-        assert a_microblock_size in (int(MXFP_BLOCK_SIZE), int(NVFP_BLOCK_SIZE)), \
+        assert a_microblock_size == int(MXFP_BLOCK_SIZE) or a_microblock_size == int(NVFP_BLOCK_SIZE), (
             f"Unsupported microscale block size {a_microblock_size}"
+        )
+    assert a_scale is None or a_microblock_size is not None, (
+        "precision_config.a_microblock_size is required when precision_config.a_mx_scale is set"
+    )
+    if b_scale_dtype is not None:
+        assert b_scale_dtype == torch.uint8 or b_scale_dtype == torch.float8_e4m3fn, (
+            f"Unsupported microscale dtype {b_scale_dtype}"
+        )
+    b_microblock_size = precision_config.b_microblock_size
     if b_microblock_size is not None:
-        assert b_microblock_size in (int(MXFP_BLOCK_SIZE), int(NVFP_BLOCK_SIZE)), \
+        assert b_microblock_size == int(MXFP_BLOCK_SIZE) or b_microblock_size == int(NVFP_BLOCK_SIZE), (
             f"Unsupported microscale block size {b_microblock_size}"
+        )
+    assert b_scale is None or b_microblock_size is not None, (
+        "precision_config.b_microblock_size is required when precision_config.b_mx_scale is set"
+    )
     if a_microblock_size is not None and b_microblock_size is not None:
         assert a_microblock_size == b_microblock_size, (
             f"Microscaled operands must share a block size. Got {a_microblock_size} and {b_microblock_size}"
