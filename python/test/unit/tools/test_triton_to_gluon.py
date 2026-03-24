@@ -17,9 +17,18 @@ _all_targets = {
     "gfx950": is_hip_cdna4,
 }
 
+_dot_targets = {
+    "nvidia": is_blackwell,
+    "gfx1250": is_hip_gfx1250,
+    "gfx942": is_hip_cdna3,
+    "gfx950": is_hip_cdna4,
+}
 
-def _skip_unless_target(target):
-    if not _all_targets[target]():
+
+def _skip_unless_target(target, targets=_all_targets):
+    """Skip test if the required hardware for the given target is not available.
+    Specify targets for tests that require specific targets e.g. Blackwell on NVIDIA or gfx1250 on AMD."""
+    if not targets[target]():
         pytest.skip(f"Requires {target}")
 
 
@@ -83,9 +92,9 @@ def matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.c
     impl_matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M, BLOCK_N, BLOCK_K)
 
 
-@pytest.mark.parametrize("target", _all_targets.keys())
+@pytest.mark.parametrize("target", _dot_targets.keys())
 def test_triton_to_gluon_dot_minimal(tmp_path, target):
-    _skip_unless_target(target)
+    _skip_unless_target(target, _dot_targets)
     kernel = convert_kernel(matmul_tile_kernel, "matmul_tile_kernel", tmp_path, target=target)
     M, N, K = 128, 128, 128
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
