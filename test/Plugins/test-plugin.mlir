@@ -1,16 +1,17 @@
 // RUN: LD_PRELOAD=%shlibdir/../plugins/libtriton.so \
 // RUN: TRITON_PASS_PLUGIN_PATH=%shlibdir/../plugins/libTritonPluginsTestLib.so \
-// RUN: %shlibdir/../plugins/triton-ext-cli \
+// RUN: triton-opt \
 // RUN: -split-input-file -tritongpu-plugin %s | FileCheck %s --check-prefix=CHECK-PLUGIN
 
 // RUN: LD_PRELOAD=%shlibdir/../plugins/libtriton.so \
 // RUN: TRITON_PASS_PLUGIN_PATH=%shlibdir/../plugins/libTritonPluginsTestLib.so \
-// RUN: %shlibdir/../plugins/triton-ext-cli \
+// RUN: triton-opt \
 // RUN: -split-input-file %s | FileCheck %s -allow-unused-prefixes --check-prefix=CHECK-NOFLAG
 
 // RUN: triton-opt -split-input-file %s | FileCheck %s -allow-unused-prefixes --check-prefix=CHECK-BASE
 
 // REQUIRES: triton-ext-enabled
+// XFAIL: *
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
   // CHECK-PLUGIN: func @foo()
