@@ -879,14 +879,14 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           numCPackedElem, ha, hb, fc, isAccF16);
     } else {
       if (isFp64MMA) {
-        if (!isHopperF64) {
-          callMmaAmpereFp64(builder, b, base, mma, numMmaRets, colsPerThread,
-                            numCPackedElem, batchOffset, ha, hb, fc,
-                            /*kRegs*/ 2);
-        } else {
+        if (isHopperF64) {
           callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
                     numCPackedElem, batchOffset, ha, hb, fc, "=d", "d",
                     /*kRegs*/ 4);
+        } else {
+          callMmaAmpereFp64(builder, b, base, mma, numMmaRets, colsPerThread,
+                            numCPackedElem, batchOffset, ha, hb, fc,
+                            /*kRegs*/ 2);
         }
       } else {
         callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
