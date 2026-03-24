@@ -396,9 +396,14 @@ Value Prefetcher::getNextTrackedValue(triton::DotOp dot, bool isA, bool isToken,
 
 LogicalResult Prefetcher::initialize() {
   Block *loop = forOp.getBody();
+  auto kBlock = StringAttr::get(forOp.getContext(), "block");
 
   auto getEncoding = [](Value v) {
     return cast<TensorOrMemDesc>(v.getType()).getEncoding();
+  };
+  auto hasTrivialBlockCGALayout = [kBlock, &getEncoding](Value v) {
+    return getCGALayout(getEncoding(v)).getLinearLayout().isTrivialOver(
+        {kBlock});
   };
 
   SmallVector<triton::DotOp> dotsInFor;
@@ -497,6 +502,8 @@ LogicalResult Prefetcher::initialize() {
     if (aVals.size() && bVals.size()) {
       Value aSmem = aVals.front();
       Value bSmem = bVals.front();
+      if (!hasTrivialBlockCGALayout(aSmem) || !hasTrivialBlockCGALayout(bSmem))
+        continue;
       dot2aVals[dot] = aVals;
       dot2bVals[dot] = bVals;
       dot2aSource[dot] = aSmem;
