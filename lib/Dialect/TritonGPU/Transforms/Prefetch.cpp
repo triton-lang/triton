@@ -199,7 +199,8 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   return prefetchSlice;
 }
 
-unsigned Prefetcher::getKWidthScale(Attribute dotEncoding, Type elementType) const {
+unsigned Prefetcher::getKWidthScale(Attribute dotEncoding,
+                                    Type elementType) const {
   if (computeCapability >= 90 && isa<NvidiaMmaEncodingAttr>(dotEncoding) &&
       elementType.isF64()) {
     // Hopper's FP64 MMA uses k=16 so cannot support prefetchWidth of 8.
@@ -484,7 +485,8 @@ LogicalResult Prefetcher::initialize() {
     auto kSize = aType.getShape().back();
 
     // Match the chunk width expected by the dot operand encoding.
-    prefetchWidth = getPrefetchWidth(dotEncoding, aType.getElementType(), aKWidth);
+    prefetchWidth =
+        getPrefetchWidth(dotEncoding, aType.getElementType(), aKWidth);
 
     // Skip prefetching if kSize is less than prefetchWidth
     if (kSize < prefetchWidth)
