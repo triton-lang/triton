@@ -41,6 +41,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "tritongpu-prefetch"
@@ -68,8 +69,8 @@ class Prefetcher {
   scf::ForOp forOp;
   /// Original loop terminator, used to recover yielded values.
   scf::YieldOp yieldOp;
-  // TODO: add a hook to infer prefetchWidth
   unsigned prefetchWidth = 32;
+  int computeCapability;
 
   /// Dots that will be rewritten to use prologue/next-iteration prefetches.
   SetVector<triton::DotOp> dots;
@@ -122,7 +123,8 @@ class Prefetcher {
 public:
   Prefetcher() = delete;
 
-  Prefetcher(scf::ForOp forOp) : forOp(forOp) {
+  Prefetcher(scf::ForOp forOp, int computeCapability)
+      : forOp(forOp), computeCapability(computeCapability) {
     yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   }
 
@@ -455,8 +457,15 @@ LogicalResult Prefetcher::initialize() {
     unsigned elementWidth = aType.getElementTypeBitWidth();
     if (aKWidth == 0)
       prefetchWidth = 256 / elementWidth;
-    else
-      prefetchWidth = 8 * aKWidth;
+    else {
+      if (isa<NvidiaMmaEncodingAttr>(dot.getType().getEncoding()) &&
+          elementWidth == 64 && computeCapability >= 90) {
+        // Hopper's FP64 MMA uses k=16 so cannot support prefetchWidth of 8
+        prefetchWidth = 16 * aKWidth;
+      } else {
+        prefetchWidth = 8 * aKWidth;
+      }
+    }
 
     // Skip prefetching if kSize is less than prefetchWidth
     if (kSize < prefetchWidth)
@@ -700,14 +709,16 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
 
     // Canonicalize convert ops to make the pattern matching easier.
     RewritePatternSet cleanUpPatterns(&getContext());
+    ModuleOp m = getOperation();
+    auto computeCapability = getNVIDIAComputeCapability(m);
     triton::gpu::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns,
                                                               &getContext());
     if (mlir::applyPatternsGreedily(getOperation(), std::move(cleanUpPatterns))
             .failed()) {
       signalPassFailure();
     }
-    getOperation()->walk([&](scf::ForOp forOp) {
-      Prefetcher prefetcher(forOp);
+    m->walk([&](scf::ForOp forOp) {
+      Prefetcher prefetcher(forOp, computeCapability);
 
       if (prefetcher.initialize().failed())
         return;
