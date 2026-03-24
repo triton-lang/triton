@@ -853,7 +853,7 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
 
   bool isFp64Path = (mmaType == TensorCoreType::FP64_FP64_FP64_FP64);
-  NumRegisters numRegisters = {2, 1, isFp64Path ? 4 : 2};
+  NumRegisters numRegisters = {2, 1, isFp64Path && isHopperF64 ? 4 : 2};
 
   const auto &instrMap =
       isTuring ? mmaInstrPtxTuring
@@ -882,7 +882,7 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
         if (!isHopperF64) {
           callMmaAmpereFp64(builder, b, base, mma, numMmaRets, colsPerThread,
                             numCPackedElem, batchOffset, ha, hb, fc,
-                            /*kRegs*/ 4);
+                            /*kRegs*/ 2);
         } else {
           callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
                     numCPackedElem, batchOffset, ha, hb, fc, "=d", "d",
