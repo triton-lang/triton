@@ -38,25 +38,26 @@ std::runtime_error TritonPlugin::err2exp(llvm::Error Err) {
   return std::runtime_error(msg);
 }
 
-llvm::Error TritonPlugin::loadPlugin(bool bypassTritonExtEnabledCheck) {
+llvm::Error TritonPlugin::loadPlugin() {
+
+#if !defined(TRITON_EXT_ENABLED) || TRITON_EXT_ENABLED == 0
+  // Right now we only support one extension, bump this up if that changes
+  static llvm::SmallVector<std::string, 1> printedWarning;
+  if (llvm::find(printedWarning, filename) == printedWarning.end()) {
+    llvm::errs() << "\n"
+                 << "\n=================== WARNING =====================\n"
+                 << "Triton will not load the following extension\n"
+                 << "because it is not built with TRITON_EXT_ENABLED:\n"
+                 << filename
+                 << "\n=================================================\n"
+                 << "\n";
+    printedWarning.push_back(filename);
+  }
+  return llvm::Error::success();
+#endif
+
   if (isLoaded)
     return llvm::Error::success();
-
-  if (TRITON_EXT_ENABLED == 0 && !bypassTritonExtEnabledCheck) {
-    // Right now we only support one extension, bump this up if that changes
-    static llvm::SmallVector<std::string, 1> printedWarning;
-    if (llvm::find(printedWarning, filename) == printedWarning.end()) {
-      llvm::errs() << "\n"
-                   << "\n=================== WARNING =====================\n"
-                   << "Triton will not load the following extension\n"
-                   << "because it is not built with TRITON_EXT_ENABLED:\n"
-                   << filename
-                   << "\n=================================================\n"
-                   << "\n";
-      printedWarning.push_back(filename);
-    }
-    return llvm::Error::success();
-  }
 
   std::string error;
   library =

@@ -85,7 +85,7 @@ private:
 public:
   std::runtime_error err2exp(llvm::Error Err);
 
-  llvm::Error loadPlugin(bool bypassTritonExtEnabledCheck = false);
+  llvm::Error loadPlugin();
 
   llvm::Expected<TritonPluginResult>
   getPassHandles(std::vector<const char *> &handles);

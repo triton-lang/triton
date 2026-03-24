@@ -13,9 +13,6 @@ int main(int argc, char **argv) {
           mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
       !filename.empty()) {
     TritonPlugin TP(filename);
-    if (auto err = TP.loadPlugin(true /*bypassTritonExtEnabledCheck=*/)) {
-      llvm::report_fatal_error(std::move(err));
-    }
 
     std::vector<const char *> passNames;
     if (auto result = TP.getPassHandles(passNames); !result)
