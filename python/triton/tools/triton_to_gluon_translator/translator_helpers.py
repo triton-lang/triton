@@ -19,7 +19,6 @@ from triton.experimental.gluon.language.nvidia.hopper import mbarrier, tma
 from triton.experimental.gluon.language.amd.gfx1250 import wmma as amd_wmma
 from triton.experimental.gluon.language.amd.gfx1250 import tdm as amd_tdm
 from triton.experimental.gluon.language.amd.cdna3 import mfma as amd_mfma
-from triton.language.core import _unwrap_if_constexpr
 
 
 @gluon.constexpr_function
@@ -973,14 +972,14 @@ def convert_host_descriptor(desc):
     assert isinstance(desc, TensorDescriptor)
     block_shape = desc.block_shape
     dtype = desc.base.dtype
+    tensor = desc.base
 
     target = current_target()
     if target is not None and target.backend == "hip" and target.arch == "gfx1250":
         element_bitwidth = torch_dtype_to_triton(dtype).primitive_bitwidth
         layout = get_default_tdm_layout(block_shape, element_bitwidth)
-        return gluon.amd.gfx1250.TensorDescriptor(desc.base, list(desc.shape), list(desc.strides), block_shape, layout)
+        return gluon.amd.gfx1250.TensorDescriptor(tensor, list(desc.shape), list(desc.strides), block_shape, layout)
 
-    tensor = desc.base
     layout = ttgl.NVMMASharedLayout.get_default_for(block_shape, torch_dtype_to_triton(dtype))
     return gluon.nvidia.hopper.TensorDescriptor(tensor, desc.shape, desc.strides, block_shape, layout)
 
@@ -999,29 +998,10 @@ def build_expand_dims_layout(shape, expand_dims, num_warps):
     return layout
 
 
-@ttgl._core.builtin
-def convert_to_expand_dims_layout(value, expand_dims: list[int], _semantic=None, _generator=None) -> Any:
-    parent_shape = _unwrap_if_constexpr(value.type.shape)
-    if isinstance(parent_shape, ttgl.tuple):
-        parent_shape = parent_shape.values
-    assert isinstance(parent_shape,
-                      list), (f"expected parent shape to be a list, got {parent_shape} which is {type(parent_shape)}")
-
-    num_warps = ttgl.num_warps(_semantic=_semantic, _generator=_generator)
-    layout = build_expand_dims_layout(parent_shape, expand_dims, num_warps)
-    return ttgl.convert_layout(value, layout, _semantic=_semantic)
-
-
-@ttgl._core.builtin
-def tl_atomic_add(ptr, val, mask=None, sem=None, scope=None, _semantic=None):
-    if ptr.type.is_block():
-        if isinstance(val, ttgl.constexpr) or not val.type.is_block():
-            val = ttgl.to_tensor(val, _semantic=_semantic)
-            val = ttgl.full(ptr.shape, val, val.dtype, ptr.type.layout, _semantic=_semantic)
-        if mask is not None and isinstance(mask, ttgl.constexpr) or not mask.type.is_block():
-            mask = ttgl.to_tensor(mask, _semantic=_semantic)
-            mask = ttgl.full(ptr.shape, mask, mask.dtype, ptr.type.layout, _semantic=_semantic)
-    return ttgl.atomic_add(ptr, val=val, mask=mask, sem=sem, scope=scope, _semantic=_semantic)
+@gluon.jit
+def convert_to_expand_dims_layout(value, expand_dims: list[int]) -> Any:
+    layout: ttgl.constexpr = build_expand_dims_layout(value.shape, expand_dims, ttgl.num_warps())
+    return ttgl.convert_layout(value, layout)
 
 
 # Module-level target, set by the translator via _make_target().

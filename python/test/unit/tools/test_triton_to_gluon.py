@@ -412,9 +412,10 @@ def atomic_add_kernel(out_ptr, BLOCK: tl.constexpr):
     tl.atomic_add(out_ptr + idx, idx, mask=scalar_mask, sem="release", scope="cta")
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
-def test_atomic_add(tmp_path):
-    kernel = convert_kernel(atomic_add_kernel, "atomic_add_kernel", tmp_path)
+@pytest.mark.parametrize("target", _all_targets.keys())
+def test_atomic_add(tmp_path, target):
+    _skip_unless_target(target)
+    kernel = convert_kernel(atomic_add_kernel, "atomic_add_kernel", tmp_path, target=target)
 
     block = 32 * 4
     ref = torch.zeros((block, ), device="cuda")
