@@ -188,7 +188,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
     auto encoding = blockType.getEncoding();
 
     py::dict metadata;
-    if (isa_and_nonnull<ttg::NVMMASharedEncodingAttr>(encoding)) {
+    if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
       auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
       auto swizzle = ttng::getTMASwizzleMode(arg.getLoc(), descTy);
       auto elemType = ttng::getTMAElementType(arg.getLoc(), descTy);
@@ -211,7 +211,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       metadata["elem_bits"] = blockType.getElementTypeBitWidth();
 
       if (auto paddedEnc =
-              dyn_cast_or_null<ttg::PaddedSharedEncodingAttr>(encoding)) {
+              dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
         py::list intervalPaddingPairs;
         for (auto [interval, padding] : llvm::zip_equal(
                  paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
