@@ -19,14 +19,19 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
 
   set(GSAN_RUNTIME_CUDA_PATH "${CMAKE_CURRENT_SOURCE_DIR}/backend")
-  foreach(candidate "${TRITON_CUDART_PATH}" "${TRITON_CUDACRT_PATH}")
-    if(EXISTS "${candidate}/include/cuda_runtime.h")
-      set(GSAN_RUNTIME_CUDA_PATH "${candidate}")
-      break()
+  if(NOT "${TRITON_CUDART_PATH}" STREQUAL "")
+    if(EXISTS "${TRITON_CUDART_PATH}/include/cuda_runtime.h")
+      set(GSAN_RUNTIME_CUDA_PATH "${TRITON_CUDART_PATH}")
+    elseif(EXISTS "${TRITON_CUDART_PATH}/cuda_runtime.h")
+      get_filename_component(GSAN_RUNTIME_CUDA_PATH "${TRITON_CUDART_PATH}" DIRECTORY)
     endif()
-    if(EXISTS "${candidate}/cuda_runtime.h")
-      get_filename_component(GSAN_RUNTIME_CUDA_PATH "${candidate}" DIRECTORY)
-      break()
+  endif()
+
+  set(GSAN_RUNTIME_INCLUDE_FLAGS
+      -isystem "${CMAKE_CURRENT_SOURCE_DIR}/backend/include")
+  foreach(candidate "${TRITON_CUDART_PATH}" "${TRITON_CUDACRT_PATH}" "${TRITON_CUDA_STDLIB_PATH}")
+    if(NOT "${candidate}" STREQUAL "")
+      list(APPEND GSAN_RUNTIME_INCLUDE_FLAGS -isystem "${candidate}")
     endif()
   endforeach()
 
@@ -52,7 +57,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
               -Wno-unknown-cuda-version
               ${GSAN_RUNTIME_PLATFORM_FLAGS}
               -isystem "${CMAKE_CURRENT_SOURCE_DIR}/clang_cuda_shims"
-              -isystem "${CMAKE_CURRENT_SOURCE_DIR}/backend/include"
+              ${GSAN_RUNTIME_INCLUDE_FLAGS}
               "${GSAN_RUNTIME_SRC}" -o "${GSAN_RUNTIME_IR}"
       DEPENDS "${GSAN_RUNTIME_SRC}" ${GSAN_RUNTIME_HDRS}
       COMMENT "Building GSan runtime"
