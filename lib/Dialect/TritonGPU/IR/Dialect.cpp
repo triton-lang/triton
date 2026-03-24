@@ -2584,7 +2584,8 @@ NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
-                                        int kWidth, int opIdx, bool isHopperF64) const {
+                                        int kWidth, int opIdx,
+                                        bool isHopperF64) const {
   assert(kWidth >= std::max(32 / bitwidth, 1) &&
          "kWidth must be >= max(32 / bitwidth, 1) for this function to be "
          "well-defined");

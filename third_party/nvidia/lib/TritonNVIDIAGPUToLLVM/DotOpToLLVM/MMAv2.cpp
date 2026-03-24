@@ -749,13 +749,13 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
   int kWidth = dotOpA.getKWidth();
-  auto repA =
-      cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
-          .getRepForOperand(aShapePerCTA, bitwidth, kWidth, dotOpA.getOpIdx(), isHopperF64);
+  auto repA = cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
+                  .getRepForOperand(aShapePerCTA, bitwidth, kWidth,
+                                    dotOpA.getOpIdx(), isHopperF64);
   auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-  auto repB =
-      cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
-          .getRepForOperand(bShapePerCTA, bitwidth, kWidth, dotOpB.getOpIdx(), isHopperF64);
+  auto repB = cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
+                  .getRepForOperand(bShapePerCTA, bitwidth, kWidth,
+                                    dotOpB.getOpIdx(), isHopperF64);
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
