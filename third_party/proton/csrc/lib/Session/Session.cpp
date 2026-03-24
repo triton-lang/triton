@@ -330,23 +330,13 @@ std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId,
                                                     size_t phase) {
   std::lock_guard<std::mutex> lock(mutex);
   auto *session = getSessionOrThrow(sessionId);
-  auto *treeData = dynamic_cast<TreeData *>(session->data.get());
-  if (!treeData) {
-    throw std::runtime_error(
-        "Only TreeData is supported for getData() for now");
-  }
-  return treeData->toMsgPack(phase);
+  return session->data->toMsgPack(phase);
 }
 
 std::string SessionManager::getData(size_t sessionId, size_t phase) {
   std::lock_guard<std::mutex> lock(mutex);
   auto *session = getSessionOrThrow(sessionId);
-  auto *treeData = dynamic_cast<TreeData *>(session->data.get());
-  if (!treeData) {
-    throw std::runtime_error(
-        "Only TreeData is supported for getData() for now");
-  }
-  return treeData->toJsonString(phase);
+  return session->data->toJsonString(phase);
 }
 
 void SessionManager::clearData(size_t sessionId, size_t phase,
