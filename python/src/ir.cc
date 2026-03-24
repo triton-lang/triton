@@ -1,5 +1,3 @@
-#include "ir.h"
-
 #include <optional>
 #include <pybind11/cast.h>
 #include <pybind11/functional.h>
@@ -36,6 +34,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/OpBuilder.h"
 #include "triton/Tools/PluginUtils.h"
 #include "triton/Tools/Sys/Dump.hpp"
 #include "triton/Tools/Sys/GetEnv.hpp"

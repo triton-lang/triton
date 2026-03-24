@@ -3,7 +3,7 @@
 
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Tools/Plugins/DialectPlugin.h"
-#include "python/src/ir.h"
+#include "triton/Tools/OpBuilder.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
 #include <cstdint>

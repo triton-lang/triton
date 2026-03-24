@@ -1,4 +1,3 @@
-#include "ir.h"
 #include "pybind11/pybind11.h"
 #include <pybind11/stl.h>
 
@@ -22,6 +21,7 @@
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include "triton/Tools/OpBuilder.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/MathExtras.h"
 
