@@ -13,6 +13,11 @@ namespace ttg = mlir::triton::gpu;
 
 namespace {
 
+static constexpr unsigned kTensorMapStrideWordBase = 3;
+static constexpr unsigned kTensorMapShapeWordBase = 8;
+static constexpr unsigned kTensorMapScalarWordBase = 2;
+static constexpr unsigned kTensorMapNumQwords = 16;
+
 struct GSanSourceLocation {
   Value file;
   Value line;
@@ -148,6 +153,61 @@ Value getGSanGlobalStateArg(FunctionOpInterface funcOp) {
   return {};
 }
 
+static LLVM::LLVMStructType
+getTensorDescStructType(ConversionPatternRewriter &rewriter, Type basePtrTy) {
+  SmallVector<Type> fieldTypes;
+  fieldTypes.reserve(1 + 2 * (kTensorMapNumQwords - 1));
+  fieldTypes.push_back(basePtrTy);
+  fieldTypes.append(2 * (kTensorMapNumQwords - 1), i32_ty);
+  return LLVM::LLVMStructType::getLiteral(rewriter.getContext(), fieldTypes);
+}
+
+static Value extractTensorDescWord(ConversionPatternRewriter &rewriter,
+                                   Location loc, Value descStruct,
+                                   unsigned word) {
+  assert(word >= kTensorMapScalarWordBase && word < 2 * kTensorMapNumQwords &&
+         "tensor descriptor word index out of range");
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value wordValue =
+      b.extract_val(i32_ty, descStruct, word - kTensorMapScalarWordBase + 1);
+  return b.zext(i64_ty, wordValue);
+}
+
+static SmallVector<Value>
+decodeTensorDescShape(ConversionPatternRewriter &rewriter, Location loc,
+                      Value descStruct, unsigned rank) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  SmallVector<Value> shape;
+  shape.reserve(rank);
+  for (unsigned dim = 0; dim < rank; ++dim) {
+    unsigned packedIdx = rank - 1 - dim;
+    Value dimMinusOne = extractTensorDescWord(
+        rewriter, loc, descStruct, kTensorMapShapeWordBase + packedIdx);
+    shape.push_back(b.add(dimMinusOne, b.i64_val(1)));
+  }
+  return shape;
+}
+
+static SmallVector<Value>
+decodeTensorDescStrides(ConversionPatternRewriter &rewriter, Location loc,
+                        Value descStruct, unsigned rank, unsigned elemBytes) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  SmallVector<Value> strides;
+  strides.reserve(rank);
+  for (unsigned dim = 0; dim < rank; ++dim) {
+    if (dim + 1 == rank) {
+      strides.push_back(b.i64_val(1));
+      continue;
+    }
+    unsigned packedIdx = rank - 2 - dim;
+    Value strideUnits = extractTensorDescWord(
+        rewriter, loc, descStruct, kTensorMapStrideWordBase + packedIdx);
+    Value strideBytes = b.mul(strideUnits, b.i64_val(16));
+    strides.push_back(b.udiv(strideBytes, b.i64_val(elemBytes)));
+  }
+  return strides;
+}
+
 ////////////////////////////////////////////
 // Patterns
 ////////////////////////////////////////////
@@ -203,6 +263,50 @@ public:
   }
 };
 
+struct GSanTensorDescInfoOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanTensorDescInfoOp> {
+public:
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalGSanTensorDescInfoOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanTensorDescInfoOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto descTy = dyn_cast<tt::TensorDescInterface>(op.getDesc().getType());
+    if (!descTy)
+      return rewriter.notifyMatchFailure(op, "expected tensor descriptor type");
+
+    auto elemTy = descTy.getSignlessBlockType().getElementType();
+    if (!elemTy.isIntOrFloat() || (elemTy.getIntOrFloatBitWidth() % 8) != 0) {
+      return rewriter.notifyMatchFailure(op,
+                                         "expected byte-addressable element");
+    }
+
+    unsigned rank = descTy.getBlockType().getRank();
+    unsigned elemBytes = elemTy.getIntOrFloatBitWidth() / 8;
+    if (op->getNumResults() != 1 + 2 * rank) {
+      return rewriter.notifyMatchFailure(
+          op, "descriptor info result count does not match descriptor rank");
+    }
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Type ptrTy = getTypeConverter()->convertType(op->getResult(0).getType());
+    auto structTy = getTensorDescStructType(rewriter, ptrTy);
+    Value descStruct = b.load(structTy, adaptor.getDesc());
+    SmallVector<Value> decoded;
+    decoded.reserve(op->getNumResults());
+    decoded.push_back(b.extract_val(ptrTy, descStruct, 0));
+    auto shape = decodeTensorDescShape(rewriter, loc, descStruct, rank);
+    decoded.append(shape.begin(), shape.end());
+    auto strides =
+        decodeTensorDescStrides(rewriter, loc, descStruct, rank, elemBytes);
+    decoded.append(strides.begin(), strides.end());
+    rewriter.replaceOp(op, decoded);
+    return success();
+  }
+};
+
 struct GSanInitOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalGSanInitOp> {
 public:
@@ -241,5 +345,6 @@ void mlir::triton::populateGSanToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo) {
   patterns.add<GSanInitOpConversion>(typeConverter);
+  patterns.add<GSanTensorDescInfoOpConversion>(typeConverter);
   patterns.add<GSanTensorAccessOpConversion>(typeConverter, targetInfo);
 }
