@@ -108,6 +108,7 @@ class AttentionProgram:
 
     sm_scale: gl.constexpr
     rcp_ln2: gl.constexpr
+    sm_scale_dot_rcp_ln2: gl.constexpr
 
     @gluon.constexpr_function
     def __init__(self, cfg,  #
@@ -131,6 +132,7 @@ class AttentionProgram:
 
         self.sm_scale = gl.constexpr(sm_scale)
         self.rcp_ln2 = gl.constexpr(1.4426950408889634)
+        self.sm_scale_dot_rcp_ln2: gl.constexpr = self.sm_scale * self.rcp_ln2
 
     @gluon.jit
     def initialize_decode(cfg, q_ptr, k_ptr, v_ptr, o_ptr, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz,
@@ -268,17 +270,17 @@ class AttentionProgram:
     def softmax_part0(self, qk, m_i):
         # get max scores so far
         m_ij = gl.maximum(m_i, gl.max(qk, 1))
-        m_ij_scaled = m_ij * self.sm_scale * self.rcp_ln2
+        m_ij_scaled = m_ij * self.sm_scale_dot_rcp_ln2
 
         # scale and subtract max
-        q_shifted = qk * self.sm_scale * self.rcp_ln2 - m_ij_scaled[:, None]
+        q_shifted = self.sm_scale_dot_rcp_ln2 * qk - m_ij_scaled[:, None]
 
         # Compute scaled QK and softmax probabilities
         p = gl.exp2(q_shifted)
 
         # alpha is an adjustment factor for acc and li as we loop and find new maxes
         # store the diff in maxes to adjust acc and li as we discover new maxes
-        m_diff_scaled = m_i * self.sm_scale * self.rcp_ln2 - m_ij_scaled
+        m_diff_scaled = self.sm_scale_dot_rcp_ln2 * m_i - m_ij_scaled
         alpha = gl.exp2(m_diff_scaled)
 
         return p, alpha, m_ij
