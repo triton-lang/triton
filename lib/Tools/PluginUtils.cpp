@@ -40,6 +40,10 @@ std::runtime_error TritonPlugin::err2exp(llvm::Error Err) {
 
 llvm::Error TritonPlugin::loadPlugin() {
 
+  // Bailing when libtriton symbols are not visible is done to prevent
+  // crashes caused the loading of plugins (from a set TRITON_PASS_PLUGIN_PATH
+  // env var path) who will never find their dependent symbols (which are hidden
+  // by libtriton).
 #if !defined(TRITON_EXT_ENABLED) || TRITON_EXT_ENABLED == 0
   // Right now we only support one extension, bump this up if that changes
   static llvm::SmallVector<std::string, 1> printedWarning;
