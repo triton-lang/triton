@@ -444,14 +444,8 @@ private:
 
     for (ViewStep &step : llvm::reverse(reverseSteps)) {
       if (step.kind == ViewStep::Reshape) {
-        MemDescType reshapedTy;
-        if (failed(MemDescReshapeOp::inferReturnTypes(
-                rewriter.getContext(), step.loc,
-                cast<MemDescType>(rewritten.getType()), step.shape,
-                reshapedTy)))
-          return failure();
         rewritten =
-            MemDescReshapeOp::create(rewriter, step.loc, reshapedTy, rewritten);
+            MemDescReshapeOp::create(rewriter, step.loc, rewritten, step.shape);
       } else {
         rewritten =
             MemDescTransOp::create(rewriter, step.loc, rewritten, step.order);
