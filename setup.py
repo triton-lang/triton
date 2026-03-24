@@ -36,7 +36,6 @@ except ImportError:
 
 
 sys.path.insert(0, os.path.dirname(__file__))
-
 from python.build_helpers import get_base_dir, get_cmake_dir
 
 
@@ -403,6 +402,10 @@ def get_package_dirs():
 def get_packages():
     yield from find_packages(where="python")
 
+    # `triton._C` is a namespace package that contains native extension modules.
+    # It has no __init__.py, so find_packages(where="python") does not return it.
+    yield "triton._C"
+
     for backend in backends:
         yield f"triton.backends.{backend.name}"
 
@@ -420,6 +423,41 @@ def get_packages():
 
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         yield "triton.profiler"
+        yield "triton.profiler.hooks"
+
+
+def _iter_backend_package_data(backend_dir: str):
+    for root, dirs, files in os.walk(backend_dir):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        rel_root = os.path.relpath(root, backend_dir)
+        for filename in files:
+            if filename.endswith((".pyc", ".pyo")):
+                continue
+            rel_path = filename if rel_root == "." else os.path.join(rel_root, filename)
+            yield rel_path
+
+
+def get_package_data():
+    package_data = {
+        "triton._C": [
+            "*.so",
+            "*.pyd",
+            "*.dll",
+            "*.dylib",
+            "libtriton/*.pyi",
+            "libtriton/*.so",
+            "libtriton/*.pyd",
+            "libtriton/*.dll",
+            "libtriton/*.dylib",
+        ]
+    }
+
+    for backend in backends:
+        if backend.is_external:
+            continue
+        package_data[f"triton.backends.{backend.name}"] = sorted(_iter_backend_package_data(backend.backend_dir))
+
+    return package_data
 
 
 def add_link_to_backends(external_only):
@@ -582,8 +620,9 @@ setup(
     ],
     packages=list(get_packages()),
     package_dir=dict(get_package_dirs()),
+    package_data=get_package_data(),
     entry_points=get_entry_points(),
-    include_package_data=True,
+    include_package_data=False,
     exclude_package_data={"": [
         "__pycache__",
         "__pycache__/*",
