@@ -515,15 +515,13 @@ def attn_fwd_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
 
     ITERS_IN_PROLOGUE_EPILOGUE: gl.constexpr = 3
     n_blocks_n = max((SEQLEN_K + BLOCK_N - 1) // BLOCK_N - ITERS_IN_PROLOGUE_EPILOGUE, 1)
-    iter_id = n_blocks_n + 1
 
     # Since QK from the final iteration is already peeled into the epilogue,
     # we only need to handle case where SEQLEN_K < ITERS_IN_PROLOGUE_EPILOGUE * BLOCK_N.
-    has_remainder: gl.constexpr = SEQLEN_K < (ITERS_IN_PROLOGUE_EPILOGUE + 1) * BLOCK_N
+    has_remainder: gl.constexpr = SEQLEN_K < (ITERS_IN_PROLOGUE_EPILOGUE) * BLOCK_N
     REMAINDER_PEELED_ITERS = 1
     if has_remainder:
         n_blocks_n = n_blocks_n - REMAINDER_PEELED_ITERS
-        iter_id = n_blocks_n
 
     m_i = gl.full([BLOCK_M], float("-inf"), dtype=gl.float32, layout=gl.SliceLayout(1, cfg.pv_layout))
     l_i = gl.full([BLOCK_M], 1.0, dtype=gl.float32, layout=gl.SliceLayout(1, cfg.pv_layout))
@@ -559,17 +557,12 @@ def attn_fwd_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
     # LR_K_t1
     k = pgm.tdm_shared_load_k(1, wait_count=3)
 
-    for block_id in range(block_min, block_max, 2 * BLOCK_N):
+    iter_id = 0
+    for block_id in range(block_min, block_max, BLOCK_N):
         """
         Steady State (Hot Loop - No Masking):
         t = i              t = i+1         t = i+2         t = i+3
         [SM1, LR_V, PV],   [QK, SM0],    [LR_K, GLDS_V]     [GLDS_K]
-
-        unroll_factor=2 to save computation wrt iter_id and arithmetic computation
-        for rotating registers.
-        """
-        """
-        1/2 of unrolled loop
         """
         t_1 = block_id + BLOCK_N
         t_2 = block_id + 2 * BLOCK_N
@@ -580,46 +573,21 @@ def attn_fwd_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
 
         p, l_i, acc = pgm.softmax_part1(p, l_i, acc, alpha)
 
-        v = pgm.tdm_shared_load_v(0, wait_count=2)
+        v = pgm.tdm_shared_load_v(iter_id % NUM_BUFFERS, wait_count=2)
 
         # GLDS_K
-        pgm.tdm_load_global_to_shared_k([t_3, 0], 1)
+        pgm.tdm_load_global_to_shared_k([t_3, 0], (iter_id + 1) % NUM_BUFFERS)
 
         # PV, SM0, LR_K
         acc = pgm.compute_pv(p, v, acc)
 
         p, alpha, m_i = pgm.softmax_part0(qk, m_i)
 
-        k = pgm.tdm_shared_load_k(0, wait_count=2)
+        k = pgm.tdm_shared_load_k(iter_id % NUM_BUFFERS, wait_count=2)
 
         # GLDS_V
-        pgm.tdm_load_global_to_shared_v([t_2, 0], 0)
-        """
-        2/2 of unrolled loop
-        """
-        t_1 = block_id + 2 * BLOCK_N
-        t_2 = block_id + 3 * BLOCK_N
-        t_3 = block_id + 4 * BLOCK_N
-
-        # QK, SM1, LR_V (no mask needed - all blocks in hot loop are full)
-        qk = pgm.compute_qk_no_mask(k)
-
-        p, l_i, acc = pgm.softmax_part1(p, l_i, acc, alpha)
-
-        v = pgm.tdm_shared_load_v(1, wait_count=2)
-
-        # GLDS_K
-        pgm.tdm_load_global_to_shared_k([t_3, 0], 0)
-
-        # PV, SM0, LR_K
-        acc = pgm.compute_pv(p, v, acc)
-
-        p, alpha, m_i = pgm.softmax_part0(qk, m_i)
-
-        k = pgm.tdm_shared_load_k(1, wait_count=2)
-
-        # GLDS_V
-        pgm.tdm_load_global_to_shared_v([t_2, 0], 1)
+        pgm.tdm_load_global_to_shared_v([t_2, 0], iter_id % NUM_BUFFERS)
+        iter_id += 1
     """
     Final iteration of steady state that requires masking.(if masking is required)
     """
