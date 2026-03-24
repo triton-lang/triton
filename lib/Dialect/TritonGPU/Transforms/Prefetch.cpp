@@ -98,6 +98,18 @@ class Prefetcher {
                        DenseMap<Value, Value> &cache);
   Value materializeInitValue(Value v, OpBuilder &builder,
                              DenseMap<Value, Value> &cache);
+  void appendMaterializedLoopArgIfNeeded(triton::DotOp dot, Value value,
+                                         DenseMap<Operation *, unsigned> &argMap,
+                                         SmallVector<Value> &loopArgs,
+                                         OpBuilder &builder);
+  Value getTrackedValue(triton::DotOp dot, bool isA, bool isToken);
+  const DenseMap<Operation *, unsigned> &
+  getCarriedArgMap(const CarriedArgs &carriedArgs, bool isA, bool isToken);
+  Value getCurrentTrackedValue(triton::DotOp dot, bool isA, bool isToken,
+                               scf::ForOp newForOp, IRMapping &mapping,
+                               const CarriedArgs &carriedArgs);
+  Value getNextTrackedValue(triton::DotOp dot, bool isA, bool isToken,
+                            OpBuilder &builder, IRMapping &mapping);
   SmallVector<Value> createLoopArgs(OpBuilder &builder,
                                     CarriedArgs &carriedArgs);
   void cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
@@ -277,6 +289,75 @@ Value Prefetcher::materializeInitValue(Value v, OpBuilder &builder,
       cache);
 }
 
+void Prefetcher::appendMaterializedLoopArgIfNeeded(
+    triton::DotOp dot, Value value, DenseMap<Operation *, unsigned> &argMap,
+    SmallVector<Value> &loopArgs, OpBuilder &builder) {
+  if (!value || isLoopCarriedValue(value))
+    return;
+  argMap[dot] = loopArgs.size();
+  loopArgs.push_back(
+      materializeInitValue(value, builder, initMaterializations));
+}
+
+Value Prefetcher::getTrackedValue(triton::DotOp dot, bool isA, bool isToken) {
+  if (isToken)
+    return isA ? dot2aToken.lookup(dot) : dot2bToken.lookup(dot);
+  return isA ? dot2aSource.lookup(dot) : dot2bSource.lookup(dot);
+}
+
+const DenseMap<Operation *, unsigned> &
+Prefetcher::getCarriedArgMap(const CarriedArgs &carriedArgs, bool isA,
+                             bool isToken) {
+  if (isToken)
+    return isA ? carriedArgs.a : carriedArgs.b;
+  return isA ? carriedArgs.aSource : carriedArgs.bSource;
+}
+
+Value Prefetcher::getCurrentTrackedValue(triton::DotOp dot, bool isA,
+                                         bool isToken, scf::ForOp newForOp,
+                                         IRMapping &mapping,
+                                         const CarriedArgs &carriedArgs) {
+  Value value = getTrackedValue(dot, isA, isToken);
+  if (!value)
+    return Value();
+  // If token or source value is initially loop carried. It means local_load is
+  // done outside of the loop and we can directly use the tracked value
+  if (isLoopCarriedValue(value))
+    return mapping.lookupOrDefault(value);
+  const auto &argMap = getCarriedArgMap(carriedArgs, isA, isToken);
+  auto it = argMap.find(dot);
+  if (it == argMap.end())
+    // The arg is invalid for prefetching
+    return isToken ? Value() : mapping.lookupOrDefault(value);
+  // The arg is initalized outside of the loop and passed into the new loop as
+  // an argument
+  return newForOp.getRegionIterArgs()[it->second];
+}
+
+Value Prefetcher::getNextTrackedValue(triton::DotOp dot, bool isA,
+                                      bool isToken, OpBuilder &builder,
+                                      IRMapping &mapping) {
+  Value value = getTrackedValue(dot, isA, isToken);
+  if (!value)
+    return Value();
+  if (isLoopCarriedValue(value))
+    return mapping.lookupOrDefault(getYieldValue(value));
+
+  DenseMap<Value, Value> yieldCache;
+  return cloneLoopValue(
+      value, builder,
+      [this, &builder, &mapping](BlockArgument arg) -> Value {
+        if (arg.getOwner() != forOp.getBody())
+          return arg;
+        if (arg == forOp.getInductionVar())
+          return arith::AddIOp::create(builder, forOp.getLoc(),
+                                       mapping.lookupOrDefault(arg),
+                                       forOp.getStep());
+        return mapping.lookupOrDefault(getYieldValue(arg));
+      },
+      yieldCache);
+}
+
 LogicalResult Prefetcher::initialize() {
   Block *loop = forOp.getBody();
 
@@ -435,30 +516,14 @@ SmallVector<Value> Prefetcher::createLoopArgs(OpBuilder &builder,
   for (auto v : forOp.getInitArgs())
     loopArgs.push_back(v);
   for (triton::DotOp dot : dots) {
-    if (Value aSource = dot2aSource.lookup(dot);
-        aSource && !isLoopCarriedValue(aSource)) {
-      carriedArgs.aSource[dot] = loopArgs.size();
-      loopArgs.push_back(
-          materializeInitValue(aSource, builder, initMaterializations));
-    }
-    if (Value bSource = dot2bSource.lookup(dot);
-        bSource && !isLoopCarriedValue(bSource)) {
-      carriedArgs.bSource[dot] = loopArgs.size();
-      loopArgs.push_back(
-          materializeInitValue(bSource, builder, initMaterializations));
-    }
-    if (Value aToken = dot2aToken.lookup(dot);
-        aToken && !isLoopCarriedValue(aToken)) {
-      carriedArgs.a[dot] = loopArgs.size();
-      loopArgs.push_back(
-          materializeInitValue(aToken, builder, initMaterializations));
-    }
-    if (Value bToken = dot2bToken.lookup(dot);
-        bToken && !isLoopCarriedValue(bToken)) {
-      carriedArgs.b[dot] = loopArgs.size();
-      loopArgs.push_back(
-          materializeInitValue(bToken, builder, initMaterializations));
-    }
+    appendMaterializedLoopArgIfNeeded(dot, dot2aSource.lookup(dot),
+                                      carriedArgs.aSource, loopArgs, builder);
+    appendMaterializedLoopArgIfNeeded(dot, dot2bSource.lookup(dot),
+                                      carriedArgs.bSource, loopArgs, builder);
+    appendMaterializedLoopArgIfNeeded(dot, dot2aToken.lookup(dot),
+                                      carriedArgs.a, loopArgs, builder);
+    appendMaterializedLoopArgIfNeeded(dot, dot2bToken.lookup(dot),
+                                      carriedArgs.b, loopArgs, builder);
     loopArgs.push_back(operand2headPrefetch[dot.getA()]);
     loopArgs.push_back(operand2headPrefetch[dot.getB()]);
   }
@@ -468,33 +533,6 @@ SmallVector<Value> Prefetcher::createLoopArgs(OpBuilder &builder,
 void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
                                IRMapping &mapping,
                                const CarriedArgs &carriedArgs) {
-  auto getCurrentSource = [this, &mapping, &newForOp,
-                           &carriedArgs](triton::DotOp dot, bool isA) -> Value {
-    Value source = isA ? dot2aSource.lookup(dot) : dot2bSource.lookup(dot);
-    if (!source)
-      return Value();
-    if (isLoopCarriedValue(source))
-      return mapping.lookupOrDefault(source);
-    auto &argMap = isA ? carriedArgs.aSource : carriedArgs.bSource;
-    auto it = argMap.find(dot);
-    if (it == argMap.end())
-      return mapping.lookupOrDefault(source);
-    return newForOp.getRegionIterArgs()[it->second];
-  };
-  auto getCurrentToken = [this, &mapping, &newForOp,
-                          &carriedArgs](triton::DotOp dot, bool isA) -> Value {
-    Value token = isA ? dot2aToken.lookup(dot) : dot2bToken.lookup(dot);
-    if (!token)
-      return Value();
-    if (isLoopCarriedValue(token))
-      return mapping.lookupOrDefault(token);
-    auto &argMap = isA ? carriedArgs.a : carriedArgs.b;
-    auto it = argMap.find(dot);
-    if (it == argMap.end())
-      return Value();
-    return newForOp.getRegionIterArgs()[it->second];
-  };
-
   // Keep late-sunk ops before the loop terminator.
   auto setInsertionPointBeforeYield = [](OpBuilder &builder,
                                          scf::ForOp newForOp) {
@@ -549,13 +587,21 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
         int64_t kShape = prefetchWidth;
         auto insertionPoint = builder.saveInsertionPoint();
         builder.setInsertionPoint(prevDot);
-        Value aRem =
-            generatePrefetch(getCurrentSource(dot, true), 0, false, dotEncoding,
-                             builder, getCurrentToken(dot, true), kOff, kShape);
+        Value aRem = generatePrefetch(
+            getCurrentTrackedValue(dot, /*isA=*/true, /*isToken=*/false,
+                                   newForOp, mapping, carriedArgs),
+            0, false, dotEncoding, builder,
+            getCurrentTrackedValue(dot, /*isA=*/true, /*isToken=*/true,
+                                   newForOp, mapping, carriedArgs),
+            kOff, kShape);
         cloneElementwiseOps(aRem, dot2aVals[dot], builder);
         Value bRem = generatePrefetch(
-            getCurrentSource(dot, false), 1, false, dotEncoding, builder,
-            getCurrentToken(dot, false), kOff, kShape);
+            getCurrentTrackedValue(dot, /*isA=*/false, /*isToken=*/false,
+                                   newForOp, mapping, carriedArgs),
+            1, false, dotEncoding, builder,
+            getCurrentTrackedValue(dot, /*isA=*/false, /*isToken=*/true,
+                                   newForOp, mapping, carriedArgs),
+            kOff, kShape);
         cloneElementwiseOps(bRem, dot2bVals[dot], builder);
         builder.restoreInsertionPoint(insertionPoint);
         newOp = builder.clone(*dot, mapping);
@@ -583,71 +629,40 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
 SmallVector<Value>
 Prefetcher::createYieldValues(OpBuilder &builder, IRMapping &mapping,
                               const CarriedArgs &carriedArgs) {
-  auto getNextSource = [this, &builder, &mapping](triton::DotOp dot,
-                                                  bool isA) -> Value {
-    Value source = isA ? dot2aSource.lookup(dot) : dot2bSource.lookup(dot);
-    if (!source)
-      return Value();
-    if (isLoopCarriedValue(source))
-      return mapping.lookupOrDefault(getYieldValue(source));
-    DenseMap<Value, Value> yieldCache;
-    return cloneLoopValue(
-        source, builder,
-        [this, &builder, &mapping](BlockArgument arg) -> Value {
-          if (arg.getOwner() != forOp.getBody())
-            return arg;
-          if (arg == forOp.getInductionVar())
-            return arith::AddIOp::create(builder, forOp.getLoc(),
-                                         mapping.lookupOrDefault(arg),
-                                         forOp.getStep());
-          return mapping.lookupOrDefault(getYieldValue(arg));
-        },
-        yieldCache);
-  };
-  auto getNextToken = [this, &builder, &mapping](triton::DotOp dot,
-                                                 bool isA) -> Value {
-    Value token = isA ? dot2aToken.lookup(dot) : dot2bToken.lookup(dot);
-    if (!token)
-      return Value();
-    if (isLoopCarriedValue(token))
-      return mapping.lookupOrDefault(getYieldValue(token));
-    OpBuilder::InsertionGuard guard(builder);
-    DenseMap<Value, Value> yieldCache;
-    return cloneLoopValue(
-        token, builder,
-        [this, &builder, &mapping](BlockArgument arg) -> Value {
-          if (arg.getOwner() != forOp.getBody())
-            return arg;
-          if (arg == forOp.getInductionVar())
-            return arith::AddIOp::create(builder, forOp.getLoc(),
-                                         mapping.lookupOrDefault(arg),
-                                         forOp.getStep());
-          return mapping.lookupOrDefault(getYieldValue(arg));
-        },
-        yieldCache);
-  };
-
   SmallVector<Value> yieldValues;
   for (Value v : forOp.getBody()->getTerminator()->getOperands())
     yieldValues.push_back(mapping.lookupOrDefault(v));
   for (triton::DotOp dot : dots) {
+    Value nextASource =
+        getNextTrackedValue(dot, /*isA=*/true, /*isToken=*/false, builder,
+                            mapping);
+    Value nextBSource =
+        getNextTrackedValue(dot, /*isA=*/false, /*isToken=*/false, builder,
+                            mapping);
+    Value nextAToken =
+        getNextTrackedValue(dot, /*isA=*/true, /*isToken=*/true, builder,
+                            mapping);
+    Value nextBToken =
+        getNextTrackedValue(dot, /*isA=*/false, /*isToken=*/true, builder,
+                            mapping);
+
     if (carriedArgs.aSource.contains(dot))
-      yieldValues.push_back(getNextSource(dot, true));
+      yieldValues.push_back(nextASource);
     if (carriedArgs.bSource.contains(dot))
-      yieldValues.push_back(getNextSource(dot, false));
+      yieldValues.push_back(nextBSource);
     if (carriedArgs.a.contains(dot))
-      yieldValues.push_back(getNextToken(dot, true));
+      yieldValues.push_back(nextAToken);
     if (carriedArgs.b.contains(dot))
-      yieldValues.push_back(getNextToken(dot, false));
+      yieldValues.push_back(nextBToken);
     Attribute dotEncoding = dot.getType().getEncoding();
     Value aToYield =
-        generatePrefetch(getNextSource(dot, true), 0, true, dotEncoding,
-                         builder, getNextToken(dot, true));
+        generatePrefetch(nextASource, 0, true, dotEncoding, builder,
+                         nextAToken);
     cloneElementwiseOps(aToYield, dot2aVals[dot], builder);
     yieldValues.push_back(aToYield);
     Value bToYield =
-        generatePrefetch(getNextSource(dot, false), 1, true, dotEncoding,
-                         builder, getNextToken(dot, false));
+        generatePrefetch(nextBSource, 1, true, dotEncoding, builder,
+                         nextBToken);
     cloneElementwiseOps(bToYield, dot2bVals[dot], builder);
     yieldValues.push_back(bToYield);
   }
