@@ -1734,6 +1734,64 @@ def matmul_kernel_host_tensor_descriptor(a_desc, b_desc, c_desc):
     c_desc.store([offs_am, offs_bn], accumulator)
 
 
+@triton.jit
+def matmul_kernel_host_tensor_descriptor_swizzle0_b(a_desc, b_desc, c_desc):
+    K = a_desc.shape[1]
+    BLOCK_M: tl.constexpr = a_desc.block_shape[0]
+    BLOCK_K: tl.constexpr = a_desc.block_shape[1]
+    BLOCK_N: tl.constexpr = c_desc.block_shape[1]
+
+    pid_m = tl.program_id(axis=0)
+    pid_n = tl.program_id(axis=1)
+    offs_am = pid_m * BLOCK_M
+    offs_bn = pid_n * BLOCK_N
+    offs_k = 0
+
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k_tile in range(0, tl.cdiv(K, BLOCK_K)):
+        a = a_desc.load([offs_am, offs_k])
+        # Inverse core-matrices reorder:
+        # [num_cm_k * num_cm_n, 8, 16] -> [num_cm_k, num_cm_n, 8, 16]
+        # -> [num_cm_n, 8, num_cm_k, 16] -> [BLOCK_N, BLOCK_K].
+        b_cm = b_desc.load([pid_n, k_tile, 0, 0, 0])
+        num_cm_k: tl.constexpr = BLOCK_K // 16
+        num_cm_n: tl.constexpr = BLOCK_N // 8
+        b = b_cm.reshape((num_cm_k, num_cm_n, 8, 16))
+        b = tl.permute(b, (1, 2, 0, 3))
+        b = b.reshape((BLOCK_N, BLOCK_K))
+        accumulator = tl.dot(a, b.T, acc=accumulator)
+        offs_k += BLOCK_K
+    c_desc.store([offs_am, offs_bn], accumulator)
+
+
+def transform_b_to_core_matrices_layout(B, BLOCK_N, BLOCK_K):
+    CM_ROWS = 8
+    CM_COLS = 16
+
+    N, K = B.shape
+    assert N % BLOCK_N == 0
+    assert K % BLOCK_K == 0
+    assert BLOCK_N % CM_ROWS == 0
+    assert BLOCK_K % CM_COLS == 0
+
+    num_blocks_n = N // BLOCK_N
+    num_blocks_k = K // BLOCK_K
+    num_cm_n = BLOCK_N // CM_ROWS
+    num_cm_k = BLOCK_K // CM_COLS
+
+    # [N, K] -> [num_blocks_n, num_cm_n, CM_ROWS, num_blocks_k, num_cm_k, CM_COLS]
+    b_reshaped = B.reshape(num_blocks_n, num_cm_n, CM_ROWS, num_blocks_k, num_cm_k, CM_COLS)
+    # [num_blocks_n, num_cm_n, num_cm_k, num_blocks_k, CM_ROWS, CM_COLS]
+    b_perm = b_reshaped.permute(0, 1, 4, 3, 2, 5)
+    # N-major core-matrices:
+    # [num_blocks_n, num_blocks_k, num_cm_k, num_cm_n, CM_ROWS, CM_COLS]
+    b_perm = b_perm.permute(0, 3, 2, 1, 4, 5)
+    # Collapse cm-count dims to keep descriptor rank <= 5 while retaining
+    # explicit core-matrix rows/cols in the innermost axes.
+    b_transformed = b_perm.reshape(num_blocks_n, num_blocks_k, num_cm_k * num_cm_n, CM_ROWS, CM_COLS)
+    return b_transformed.contiguous()
+
+
 @pytest.mark.interpreter()
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages", [
@@ -1782,6 +1840,53 @@ def test_host_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
         # Only a subset of TMEM and stmatrix layout pairs are compatible, for example 16x256bx2 and m8n8x4.
         assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm[
             "ptx"] or "stmatrix.sync.aligned.x4.m8n8.shared.b16" in kernel.asm["ptx"]
+
+
+# TODO: require blackwell
+def test_host_tensor_descriptor_matmul_fp8_swizzle0_b(device):
+    M = N = K = 512
+    BLOCK_M = 128
+    BLOCK_N = 256
+    BLOCK_K = 128
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N), 1)
+
+    torch.manual_seed(0)
+    a_fp32 = torch.randn((M, K), dtype=torch.float32, device=device)
+    b_fp32 = torch.randn((N, K), dtype=torch.float32, device=device)
+    a = a_fp32.to(torch.float8_e4m3fn)
+    b = b_fp32.to(torch.float8_e4m3fn)
+    b_transformed = transform_b_to_core_matrices_layout(b, BLOCK_N, BLOCK_K)
+    c = torch.empty((M, N), dtype=torch.float32, device=device)
+
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [BLOCK_M, BLOCK_K])
+    num_cm_n = BLOCK_N // 8
+    num_cm_k = BLOCK_K // 16
+    b_desc = TensorDescriptor(
+        b_transformed,
+        b_transformed.shape,
+        b_transformed.stride(),
+        [1, 1, num_cm_k * num_cm_n, 8, 16],
+    )
+    c_desc = TensorDescriptor(c, c.shape, c.stride(), [BLOCK_M, BLOCK_N])
+
+    kernel = matmul_kernel_host_tensor_descriptor_swizzle0_b[grid](
+        a_desc,
+        b_desc,
+        c_desc,
+        num_warps=4,
+        num_stages=1,
+    )
+
+    # Compare against quantized operands actually consumed by the kernel.
+    ref_out = torch.matmul(a.to(torch.float32), b.to(torch.float32).T)
+    torch.testing.assert_close(ref_out, c, rtol=1.5e-1, atol=2.5e-1)
+
+    ttgir = kernel.asm["ttgir"]
+    # assert "ttng.tc_gen5_mma" in ttgir
+    assert "swizzlingByteWidth = 0" in ttgir and "#ttg.shared_linear" in ttgir
+    # assert any(f"swizzlingByteWidth = {w}" in ttgir for w in [32, 64, 128])
+
+test_host_tensor_descriptor_matmul_fp8_swizzle0_b("cuda")
 
 
 @pytest.mark.interpreter
