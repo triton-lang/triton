@@ -384,8 +384,7 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   if (failed(scheduleLoads(loadToInfo, maxDist, stages, clusters, schedule)))
     return {};
 
-  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
-                                 "Coarse schedule loads only:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule loads only:");
 
   return schedule;
 }
@@ -507,14 +506,13 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 
   if (failed(scheduleLoads(dotOps, loadToInfo, clusters, schedule)))
     return {};
-  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
-                                 "Coarse schedule load and dots only:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule load and dots only:");
 
   if (failed(scheduleOpsBetweenDots(forOp, dotOps, schedule, clusters))) {
     return {};
   }
-  triton::AMD::dumpScheduleDebug(
-      schedule, DEBUG_TYPE, "Coarse schedule after schedule ops between dots:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE,
+                    "Coarse schedule after schedule ops between dots:");
 
   return schedule;
 }

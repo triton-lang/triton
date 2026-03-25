@@ -11,8 +11,6 @@
 
 using namespace mlir;
 
-namespace mlir::triton::AMD {
-
 inline void dumpScheduleDebug(triton::CoarseSchedule &schedule,
                               const char *debugType, llvm::StringRef msg) {
   DEBUG_WITH_TYPE(debugType, {
@@ -20,8 +18,6 @@ inline void dumpScheduleDebug(triton::CoarseSchedule &schedule,
     schedule.dump();
   });
 }
-
-} // namespace mlir::triton::AMD
 
 // DFS the def chain of 'defValue' starting from 'consumer' and will return the
 // minimum found when accumulating countFunc(op) for all non control flow ops
