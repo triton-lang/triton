@@ -4,6 +4,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -412,6 +413,16 @@ private:
         sourceIsZeroSwizzleLike =
             isZeroSwizzleCompatibleEncoding(srcTy.getEncoding());
         sourceSharedEnc = dyn_cast<SharedEncodingTrait>(srcTy.getEncoding());
+      }
+    } else if (auto descLoad = baseTensor.getDefiningOp<DescriptorLoadOp>()) {
+      auto descTy = dyn_cast<triton::TensorDescType>(descLoad.getDesc().getType());
+      if (descTy) {
+        auto blockTy = descTy.getBlockType();
+        sourceSharedEnc =
+            dyn_cast_or_null<SharedEncodingTrait>(blockTy.getEncoding());
+        sourceIsZeroSwizzleLike = sourceSharedEnc &&
+                                  isZeroSwizzleCompatibleEncoding(
+                                      cast<Attribute>(sourceSharedEnc));
       }
     }
     if (!isZeroSwizzleCompatibleEncoding(allocTy.getEncoding()) &&
