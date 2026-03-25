@@ -371,37 +371,8 @@ public:
       callOp.erase();
     }
 
-    SmallVector<tt::AtomicRMWOp> atomicRMWOps;
-    SmallVector<tt::AtomicCASOp> atomicCASOps;
-    module.walk([&](tt::AtomicRMWOp op) { atomicRMWOps.push_back(op); });
-    module.walk([&](tt::AtomicCASOp op) { atomicCASOps.push_back(op); });
-
-    for (tt::AtomicRMWOp op : atomicRMWOps) {
-      OpBuilder b(op);
-      auto newOp = ExperimentalGSanAtomicRMWOp::create(
-          b, op.getLoc(), op.getType(),
-          b.getI32IntegerAttr(static_cast<int32_t>(op.getAtomicRmwOp())),
-          op.getPtr(), op.getVal(), op.getMask(),
-          b.getI32IntegerAttr(static_cast<int32_t>(op.getSem())),
-          b.getI32IntegerAttr(static_cast<int32_t>(op.getScope())));
-      newOp->setAttrs(op->getAttrs());
-      op.replaceAllUsesWith(newOp.getResult());
-      op.erase();
-    }
-
-    for (tt::AtomicCASOp op : atomicCASOps) {
-      OpBuilder b(op);
-      auto newOp = ExperimentalGSanAtomicCASOp::create(
-          b, op.getLoc(), op.getType(), op.getPtr(), op.getCmp(), op.getVal(),
-          b.getI32IntegerAttr(static_cast<int32_t>(op.getSem())),
-          b.getI32IntegerAttr(static_cast<int32_t>(op.getScope())));
-      newOp->setAttrs(op->getAttrs());
-      op.replaceAllUsesWith(newOp.getResult());
-      op.erase();
-    }
-
     module.walk([&](Operation *op) {
-      OpBuilder b(op);
+      IRRewriter b(op);
       mlir::TypeSwitch<Operation *>(op)
           .Case([&](tt::LoadOp op) {
             ExperimentalGSanTensorAccessOp::create(
@@ -433,11 +404,24 @@ public:
           })
           .Case([&](ttng::AsyncTMAScatterOp op) {
             instrumentAsyncTMAScatter(op);
+          })
+          .Case([&](tt::AtomicRMWOp op) {
+            auto newOp = ExperimentalGSanAtomicRMWOp::create(
+                b, op.getLoc(), op.getType(), op.getAtomicRmwOp(), op.getPtr(),
+                op.getVal(), op.getMask(), op.getSem(), op.getScope());
+            newOp->setAttrs(op->getAttrs());
+            b.replaceOp(op, newOp);
+          })
+          .Case([&](tt::AtomicCASOp op) {
+            auto newOp = ExperimentalGSanAtomicCASOp::create(
+                b, op.getLoc(), op.getType(), op.getPtr(), op.getCmp(),
+                op.getVal(), op.getSem(), op.getScope());
+            newOp->setAttrs(op->getAttrs());
+            b.replaceOp(op, newOp);
+          })
+          .Case([&](ttg::WarpSpecializeOp op) {
+            op->setAttr(kDisableSetMaxRegisterAttr, builder.getUnitAttr());
           });
-    });
-
-    module.walk([&](ttg::WarpSpecializeOp op) {
-      op->setAttr(kDisableSetMaxRegisterAttr, builder.getUnitAttr());
     });
   }
 };

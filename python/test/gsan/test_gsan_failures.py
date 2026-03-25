@@ -11,16 +11,31 @@ import triton.language as tl
 
 from triton._internal_testing import is_blackwell, is_cuda, run_in_process
 from triton.experimental.gsan import create_mem_pool
-from triton.experimental.gsan._testing_utils import nanosleep
+from triton.experimental.gsan._testing_utils import atomic_poll
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 pytestmark = pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 
+RELEASE_ACQUIRE_SYNC_CASES = (
+    pytest.param("release", "acquire", id="release-acquire"),
+    pytest.param("release", "acq_rel", id="release-acq-rel"),
+    pytest.param("acq_rel", "acquire", id="acq-rel-acquire"),
+    pytest.param("acq_rel", "acq_rel", id="acq-rel-acq-rel"),
+)
 
-@triton.jit
-def atomic_poll(counter_ptr, expected):
-    while tl.atomic_add(counter_ptr, 0, sem="relaxed") < expected:
-        nanosleep(100)
+CROSS_SM_SEMANTIC_MISMATCH_CASES = (
+    pytest.param("relaxed", "acquire", "gpu", id="producer-relaxed-consumer-acquire-scope-gpu"),
+    pytest.param("relaxed", "acquire", "sys", id="producer-relaxed-consumer-acquire-scope-sys"),
+    pytest.param("release", "relaxed", "gpu", id="producer-release-consumer-relaxed-scope-gpu"),
+    pytest.param("release", "relaxed", "sys", id="producer-release-consumer-relaxed-scope-sys"),
+)
+
+TRANSITIVE_RELAY_MISMATCH_CASES = (
+    pytest.param("release", "relaxed", "gpu", id="relay-relaxed-scope-gpu"),
+    pytest.param("release", "relaxed", "sys", id="relay-relaxed-scope-sys"),
+    pytest.param("acq_rel", "release", "gpu", id="relay-release-scope-gpu"),
+    pytest.param("acq_rel", "release", "sys", id="relay-release-scope-sys"),
+)
 
 
 @triton.jit
@@ -59,52 +74,42 @@ def _waw_kernel(ptr, scratch_ptr, counter_ptr):
 
 
 @triton.jit
-def _cross_sm_relaxed_flag_kernel(payload_ptr, flag_ptr, scratch_ptr):
+def _cross_sm_atomic_sync_kernel(payload_ptr, flag_ptr, counter_ptr, scratch_ptr, producer_sem: tl.constexpr,
+                                 consumer_sem: tl.constexpr, scope: tl.constexpr):
     pid = tl.program_id(0)
     if pid == 0:
         tl.store(payload_ptr, 1000)
-        tl.atomic_xchg(flag_ptr, 1, sem="relaxed", scope="gpu")
+        tl.atomic_xchg(flag_ptr, 1, sem=producer_sem, scope=scope)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
     elif pid == 1:
+        atomic_poll(counter_ptr, 1)
         ready = 0
         while ready != 1:
-            nanosleep(500_000)
-            ready = tl.atomic_add(flag_ptr, 0, sem="acquire", scope="gpu")
+            ready = tl.atomic_add(flag_ptr, 0, sem=consumer_sem, scope=scope)
         result = tl.load(payload_ptr)
         tl.store(scratch_ptr, result)
 
 
 @triton.jit
-def _cross_sm_cta_scope_kernel(payload_ptr, flag_ptr, scratch_ptr):
+def _transitive_atomic_sync_kernel(payload_ptr, flag0_ptr, flag1_ptr, counter_ptr, scratch_ptr,
+                                   release_sem: tl.constexpr, relay_sem: tl.constexpr, scope: tl.constexpr):
     pid = tl.program_id(0)
     if pid == 0:
         tl.store(payload_ptr, 1000)
-        tl.atomic_xchg(flag_ptr, 1, sem="release", scope="cta")
+        tl.atomic_xchg(flag0_ptr, 1, sem=release_sem, scope=scope)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
     elif pid == 1:
+        atomic_poll(counter_ptr, 1)
         ready = 0
         while ready != 1:
-            nanosleep(500_000)
-            ready = tl.atomic_add(flag_ptr, 0, sem="acquire", scope="cta")
-        result = tl.load(payload_ptr)
-        tl.store(scratch_ptr, result)
-
-
-@triton.jit
-def _transitive_relaxed_relay_kernel(payload_ptr, flag0_ptr, flag1_ptr, scratch_ptr):
-    pid = tl.program_id(0)
-    if pid == 0:
-        tl.store(payload_ptr, 1000)
-        tl.atomic_xchg(flag0_ptr, 1, sem="release", scope="gpu")
-    elif pid == 1:
-        ready = 0
-        while ready != 1:
-            nanosleep(500_000)
-            ready = tl.atomic_add(flag0_ptr, 0, sem="relaxed", scope="gpu")
-        tl.atomic_xchg(flag1_ptr, 1, sem="release", scope="gpu")
+            ready = tl.atomic_add(flag0_ptr, 0, sem=relay_sem, scope=scope)
+        tl.atomic_xchg(flag1_ptr, 1, sem=release_sem, scope=scope)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
     elif pid == 2:
+        atomic_poll(counter_ptr, 2)
         ready = 0
         while ready != 1:
-            nanosleep(500_000)
-            ready = tl.atomic_add(flag1_ptr, 0, sem="acquire", scope="gpu")
+            ready = tl.atomic_add(flag1_ptr, 0, sem="acquire", scope=scope)
         result = tl.load(payload_ptr)
         tl.store(scratch_ptr, result)
 
@@ -177,11 +182,11 @@ def _cuda_byte_allocator(size: int, _align: int, _stream):
 def run_with_gsan(fn):
 
     @functools.wraps(fn)
-    def wrapped() -> None:
+    def wrapped(*args, **kwargs) -> None:
         triton.knobs.compilation.instrumentation_mode = "gsan"
         pool = create_mem_pool()
         with torch.cuda.use_mem_pool(pool):
-            fn()
+            fn(*args, **kwargs)
 
     return wrapped
 
@@ -224,8 +229,7 @@ def _run_tma_raw_case() -> None:
     target = target_storage[:, :n_size]
     scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
     triton.set_allocator(_cuda_byte_allocator)
-    _tma_raw_kernel[(2, )](target, scratch, counter, m_size, n_size, row_idx, col_idx, target.stride(0), BLOCK=block,
-                           num_warps=4)
+    _tma_raw_kernel[(2, )](target, scratch, counter, m_size, n_size, row_idx, col_idx, target.stride(0), BLOCK=block)
 
 
 @run_with_gsan
@@ -244,7 +248,7 @@ def _run_host_tma_war_case() -> None:
     target_desc = TensorDescriptor.from_tensor(target, [block, block])
     scratch_desc = TensorDescriptor.from_tensor(scratch, [block, block])
     counter = torch.zeros(1, dtype=torch.int32, device="cuda")
-    _host_tma_war_kernel[(2, )](target, target_desc, scratch_desc, counter, row_idx, col_idx, target.stride(0), num_warps=4)
+    _host_tma_war_kernel[(2, )](target, target_desc, scratch_desc, counter, row_idx, col_idx, target.stride(0))
 
 
 @run_with_gsan
@@ -265,8 +269,8 @@ def _run_host_tma_gather_war_case() -> None:
     target_desc = TensorDescriptor.from_tensor(target, [1, block_y])
     scratch = torch.zeros((block_x, block_y), dtype=torch.int32, device="cuda")
     counter = torch.zeros(1, dtype=torch.int32, device="cuda")
-    _host_tma_gather_war_kernel[(2, )](target, target_desc, x_offsets, scratch, counter, row_idx, y_offset, target.stride(0),
-                                       scratch.stride(0), scratch.stride(1), BLOCK_X=block_x, num_warps=4)
+    _host_tma_gather_war_kernel[(2, )](target, target_desc, x_offsets, scratch, counter, row_idx, y_offset,
+                                       target.stride(0), scratch.stride(0), scratch.stride(1), BLOCK_X=block_x)
 
 
 @run_with_gsan
@@ -288,33 +292,46 @@ def _run_host_tma_scatter_war_case() -> None:
     src = torch.arange(1, block_x * block_y + 1, dtype=torch.int32, device="cuda").reshape(block_x, block_y)
     scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
     counter = torch.zeros(1, dtype=torch.int32, device="cuda")
-    _host_tma_scatter_war_kernel[(2, )](target, target_desc, x_offsets, src, src.stride(0), src.stride(1), scratch, counter,
-                                        row_idx, y_offset, target.stride(0), BLOCK_X=block_x, num_warps=4)
+    _host_tma_scatter_war_kernel[(2, )](target, target_desc, x_offsets, src, src.stride(0), src.stride(1), scratch,
+                                        counter, row_idx, y_offset, target.stride(0), BLOCK_X=block_x)
 
 
 @run_with_gsan
-def _run_cross_sm_relaxed_flag_case() -> None:
+def _run_cross_sm_atomic_sync_case(producer_sem: str, consumer_sem: str, scope: str) -> None:
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
     flags = torch.zeros(1, dtype=torch.int32, device="cuda")
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
     scratch = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
-    _cross_sm_relaxed_flag_kernel[(2, )](payload, flags, scratch, num_warps=1)
+    _cross_sm_atomic_sync_kernel[(2, )](
+        payload,
+        flags,
+        counter,
+        scratch,
+        producer_sem=producer_sem,
+        consumer_sem=consumer_sem,
+        scope=scope,
+        num_warps=1,
+    )
 
 
 @run_with_gsan
-def _run_cross_sm_cta_scope_case() -> None:
-    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
-    flags = torch.zeros(1, dtype=torch.int32, device="cuda")
-    scratch = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
-    _cross_sm_cta_scope_kernel[(2, )](payload, flags, scratch, num_warps=1)
-
-
-@run_with_gsan
-def _run_transitive_relaxed_relay_case() -> None:
+def _run_transitive_atomic_sync_case(release_sem: str, relay_sem: str, scope: str) -> None:
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
     flag0 = torch.zeros(1, dtype=torch.int32, device="cuda")
     flag1 = torch.zeros(1, dtype=torch.int32, device="cuda")
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
     scratch = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
-    _transitive_relaxed_relay_kernel[(3, )](payload, flag0, flag1, scratch, num_warps=1)
+    _transitive_atomic_sync_kernel[(3, )](
+        payload,
+        flag0,
+        flag1,
+        counter,
+        scratch,
+        release_sem=release_sem,
+        relay_sem=relay_sem,
+        scope=scope,
+        num_warps=1,
+    )
 
 
 def _expected_file_line(source_function, marker: str) -> str:
@@ -325,11 +342,15 @@ def _expected_file_line(source_function, marker: str) -> str:
     raise AssertionError(f"Could not find marker {marker!r} for function {source_function!r}")
 
 
-def _run_failure_case(case: str, *, runner, source_function, marker: str, error: str) -> None:
+def _run_failure_case(case: str, *, runner, source_function, marker: str, error: str, runner_args=(),
+                      runner_kwargs=None) -> None:
     if torch.cuda.device_count() < 1:
         pytest.skip("requires at least 1 CUDA device")
 
-    result = run_in_process(runner, ())
+    if runner_kwargs is None:
+        runner_kwargs = {}
+
+    result = run_in_process(runner, runner_args, runner_kwargs)
     print(result.driver_stderr_output)
     assert isinstance(result.exc, RuntimeError), (f"case={case} completed without the expected GSan failure\n"
                                                   f"exc={result.exc!r}\n"
@@ -382,20 +403,32 @@ def test_host_tma_scatter_write_after_read():
                       marker="target_desc.scatter(values, x_offsets, y_offset)", error="Write after read race detected")
 
 
-def test_cross_sm_relaxed_flag_read_after_write():
-    _run_failure_case("cross_sm_relaxed_flag", runner=_run_cross_sm_relaxed_flag_case,
-                      source_function=_cross_sm_relaxed_flag_kernel.fn, marker="result = tl.load(payload_ptr)",
+@pytest.mark.parametrize("producer_sem, consumer_sem, scope", CROSS_SM_SEMANTIC_MISMATCH_CASES)
+def test_cross_sm_semantic_mismatch_read_after_write(producer_sem, consumer_sem, scope):
+    _run_failure_case(f"cross_sm_semantic_mismatch_{producer_sem}_{consumer_sem}_{scope}",
+                      runner=_run_cross_sm_atomic_sync_case, runner_args=(producer_sem, consumer_sem, scope),
+                      source_function=_cross_sm_atomic_sync_kernel.fn, marker="result = tl.load(payload_ptr)",
                       error="Read after write race detected")
 
 
-def test_cross_sm_cta_scope_read_after_write():
-    _run_failure_case("cross_sm_cta_scope", runner=_run_cross_sm_cta_scope_case,
-                      source_function=_cross_sm_cta_scope_kernel.fn,
-                      marker='ready = tl.atomic_add(flag_ptr, 0, sem="acquire", scope="cta"',
+@pytest.mark.parametrize("producer_sem, consumer_sem", RELEASE_ACQUIRE_SYNC_CASES)
+def test_cross_sm_cta_scope_read_after_write(producer_sem, consumer_sem):
+    _run_failure_case(f"cross_sm_cta_scope_{producer_sem}_{consumer_sem}", runner=_run_cross_sm_atomic_sync_case,
+                      runner_args=(producer_sem, consumer_sem, "cta"), source_function=_cross_sm_atomic_sync_kernel.fn,
+                      marker="ready = tl.atomic_add(flag_ptr, 0, sem=consumer_sem, scope=scope)",
                       error="Read after write race detected")
 
 
-def test_transitive_release_acquire_requires_middle_acquire():
-    _run_failure_case("transitive_relaxed_relay", runner=_run_transitive_relaxed_relay_case,
-                      source_function=_transitive_relaxed_relay_kernel.fn, marker="result = tl.load(payload_ptr)",
+@pytest.mark.parametrize("release_sem, relay_sem, scope", TRANSITIVE_RELAY_MISMATCH_CASES)
+def test_transitive_release_acquire_requires_middle_acquire(release_sem, relay_sem, scope):
+    _run_failure_case(f"transitive_sync_{release_sem}_{relay_sem}_{scope}", runner=_run_transitive_atomic_sync_case,
+                      runner_args=(release_sem, relay_sem, scope), source_function=_transitive_atomic_sync_kernel.fn,
+                      marker="result = tl.load(payload_ptr)", error="Read after write race detected")
+
+
+@pytest.mark.parametrize("release_sem, relay_sem", RELEASE_ACQUIRE_SYNC_CASES)
+def test_transitive_cta_scope_read_after_write(release_sem, relay_sem):
+    _run_failure_case(f"transitive_cta_scope_{release_sem}_{relay_sem}", runner=_run_transitive_atomic_sync_case,
+                      runner_args=(release_sem, relay_sem, "cta"), source_function=_transitive_atomic_sync_kernel.fn,
+                      marker="ready = tl.atomic_add(flag0_ptr, 0, sem=relay_sem, scope=scope)",
                       error="Read after write race detected")

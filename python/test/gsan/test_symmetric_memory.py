@@ -13,7 +13,7 @@ import triton.language as tl
 from triton._internal_testing import is_cuda, run_in_process
 from triton.experimental.gsan import symmetric_memory
 from triton.experimental.gsan._allocator import get_runtime_state_layout
-from triton.experimental.gsan._testing_utils import nanosleep, shadow_tensor_for
+from triton.experimental.gsan._testing_utils import atomic_poll, shadow_tensor_for
 from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
 
 
@@ -36,26 +36,22 @@ def _local_vector_clocks(device_index: int) -> tuple[torch.Tensor, dict[str, int
 
 
 @triton.jit
-def _single_cta_atomic_sync_kernel(counter_ptr, payload_ptr, peer_payload_ptr, num_ready_ptr, ready_ptr, seen_peer_ptr,
+def _single_cta_atomic_sync_kernel(counter_ptr, payload_ptr, peer_payload_ptr, num_ready_ptr, seen_peer_ptr,
                                    payload_value, num_gpus):
     tl.store(payload_ptr, payload_value)
 
     num_ready = tl.atomic_add(counter_ptr, 1, sem="acq_rel", scope="sys")
-    ready = num_ready + 1
-    while ready != num_gpus:
-        nanosleep(100)
-        ready = tl.atomic_add(counter_ptr, 0, sem="acquire", scope="sys")
+    if num_ready != num_gpus - 1:
+        atomic_poll(counter_ptr, num_gpus, sem="acquire", scope="sys")
 
     seen_peer = tl.load(peer_payload_ptr)
     tl.store(num_ready_ptr, num_ready)
-    tl.store(ready_ptr, ready)
     tl.store(seen_peer_ptr, seen_peer)
 
 
 @triton.jit
 def _single_cta_no_atomic_sync_kernel(payload_ptr, peer_payload_ptr, seen_peer_ptr, payload_value):
     tl.store(payload_ptr, payload_value)
-    nanosleep(100)
     seen_peer = tl.load(peer_payload_ptr)
     tl.store(seen_peer_ptr, seen_peer)
 
@@ -206,7 +202,6 @@ def _run_single_cta_atomic_sync_check(rank: int, world_size: int) -> None:
     peer_payload = hdl.get_buffer(peer, (1, ), state.dtype, storage_offset=1)
     local_payload = state[1:]
     num_ready = torch.full((1, ), -1, dtype=torch.int32, device=dev)
-    ready = torch.full((1, ), -1, dtype=torch.int32, device=dev)
     seen_peer = torch.full((1, ), -1, dtype=torch.int32, device=dev)
 
     hdl.barrier(channel=0)
@@ -215,7 +210,6 @@ def _run_single_cta_atomic_sync_check(rank: int, world_size: int) -> None:
         local_payload,
         peer_payload,
         num_ready,
-        ready,
         seen_peer,
         rank + 1,
         world_size,
@@ -224,7 +218,6 @@ def _run_single_cta_atomic_sync_check(rank: int, world_size: int) -> None:
     torch.cuda.synchronize()
 
     assert 0 <= int(num_ready.item()) < world_size
-    assert int(ready.item()) == world_size
     assert int(seen_peer.item()) == peer + 1
 
     all_num_ready = [None] * world_size

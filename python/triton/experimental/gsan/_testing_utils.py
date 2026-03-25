@@ -16,6 +16,12 @@ def nanosleep(duration):
     tl.inline_asm_elementwise("nanosleep.u32 $1; mov.b32 $0, 0;", "=r, r", [duration], tl.int32, is_pure=False, pack=1)
 
 
+@triton.jit
+def atomic_poll(ptr, expect, sem: tl.constexpr = "relaxed", scope: tl.constexpr = "gpu"):
+    while tl.atomic_add(ptr, 0, sem=sem, scope=scope) != expect:
+        nanosleep(100)
+
+
 def shadow_cell_tensor_from_address(real_address: int, *, device_index: int | None = None) -> torch.Tensor:
     if device_index is None:
         device_index = torch.cuda.current_device()

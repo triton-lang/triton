@@ -12,8 +12,8 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer
 from triton.experimental.gsan import create_mem_pool
 from triton._C.libtriton.gsan_testing import AtomicScope, SHADOW_GRANULARITY_BYTES, ScalarClock
-from triton.experimental.gsan._testing_utils import (load_one_i32, shadow_cell_from_address, store_one_i32,
-                                                     thread_state_from_smid, nanosleep)
+from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
+                                                     thread_state_from_smid)
 
 
 @pytest.fixture()
@@ -26,6 +26,81 @@ def with_gsan(fresh_knobs):
 
 def _clock_buffer_snapshot_idx(token: int, state, tid: int) -> int:
     return (token % state.clock_buffer_size) * state.num_threads + tid
+
+
+ATOMIC_SCOPE_CASES = (
+    pytest.param("cta", AtomicScope.CTA, id="scope-cta"),
+    pytest.param("gpu", AtomicScope.GPU, id="scope-gpu"),
+    pytest.param("sys", AtomicScope.SYSTEM, id="scope-sys"),
+)
+
+ATOMIC_SEMANTIC_CASES = (
+    pytest.param("relaxed", False, id="sem-relaxed"),
+    pytest.param("acquire", False, id="sem-acquire"),
+    pytest.param("release", True, id="sem-release"),
+    pytest.param("acq_rel", True, id="sem-acq-rel"),
+)
+
+RELEASE_SEMANTIC_CASES = (
+    pytest.param("release", id="sem-release"),
+    pytest.param("acq_rel", id="sem-acq-rel"),
+)
+
+ACQUIRE_SEMANTIC_CASES = (
+    pytest.param("acquire", id="sem-acquire"),
+    pytest.param("acq_rel", id="sem-acq-rel"),
+)
+
+
+def _assert_atomic_rmw_shadow(real_address: int, expected_scope: AtomicScope, *, is_release: bool) -> None:
+    cell = shadow_cell_from_address(real_address)
+    tid = cell.write_clock.thread_id
+    state = thread_state_from_smid(tid)
+
+    if is_release:
+        token = cell.write_clock.epoch
+        snapshot_idx = _clock_buffer_snapshot_idx(token, state, tid)
+        published_epoch = state.clock_buffer[snapshot_idx]
+
+        assert cell.write_clock == ScalarClock(token, tid, expected_scope, is_release=True)
+        assert token == state.clock_buffer_head
+        assert state.clock_buffer_dirty
+        assert cell.read_clocks[0] == ScalarClock(published_epoch, tid, expected_scope)
+        assert state.vector_clock[tid] == published_epoch + 1
+    else:
+        epoch = state.vector_clock[tid]
+        assert cell.write_clock == ScalarClock(epoch, tid, expected_scope)
+        assert cell.read_clocks[0] == ScalarClock(epoch, tid, expected_scope)
+
+    assert cell.num_reads == 1
+
+
+def _assert_atomic_read_only_shadow(real_address: int, expected_scope: AtomicScope) -> None:
+    cell = shadow_cell_from_address(real_address)
+    tid = cell.read_clocks[0].thread_id
+    epoch = thread_state_from_smid(tid).vector_clock[tid]
+
+    assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
+    assert cell.read_clocks[0] == ScalarClock(epoch, tid, expected_scope)
+    assert cell.num_reads == 1
+
+
+def _assert_cross_sm_sync(payload_ptr: torch.Tensor, flag_ptr: torch.Tensor, expected_scope: AtomicScope) -> None:
+    payload_cell = shadow_cell_from_address(payload_ptr.data_ptr())
+    flag_cell = shadow_cell_from_address(flag_ptr.data_ptr())
+    producer_tid = payload_cell.write_clock.thread_id
+    producer_epoch = payload_cell.write_clock.epoch
+    consumer_tid = payload_cell.read_clocks[0].thread_id
+    consumer_state = thread_state_from_smid(consumer_tid)
+
+    assert flag_cell.write_clock.scope == expected_scope
+    assert flag_cell.write_clock.is_release
+    assert consumer_state.vector_clock[producer_tid] >= producer_epoch
+
+
+def _assert_no_gsan_runtime_output(capfd) -> None:
+    captured = capfd.readouterr()
+    assert "GSanLibrary.cu" not in captured.out + captured.err
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
@@ -88,170 +163,131 @@ def test_gluon_warp_specialize_completes(with_gsan):
 
 
 @triton.jit
-def _atomic_add_relaxed_i32(ptr):
-    tl.atomic_add(ptr, 1, sem="relaxed", scope="gpu")
+def atomic_add_kernel(ptr, sem: tl.constexpr, scope: tl.constexpr = "gpu"):
+    tl.atomic_add(ptr, 1, sem=sem, scope=scope)
 
 
 @triton.jit
-def _atomic_add_release_i32(ptr):
-    tl.atomic_add(ptr, 1, sem="release", scope="gpu")
-
-
-@triton.jit
-def _atomic_cas_fail_i32(ptr, out_ptr):
-    old = tl.atomic_cas(ptr, 1, 2, sem="acquire", scope="gpu")
+def atomic_cas_kernel(ptr, out_ptr, expect, sem: tl.constexpr, scope: tl.constexpr = "gpu"):
+    old = tl.atomic_cas(ptr, expect, 2, sem=sem, scope=scope)
     tl.store(out_ptr, old)
 
 
 @triton.jit
-def _atomic_cas_release_i32(ptr, out_ptr):
-    old = tl.atomic_cas(ptr, 0, 2, sem="release", scope="gpu")
-    tl.store(out_ptr, old)
-
-
-@triton.jit
-def _cross_sm_release_acquire_kernel(payload_ptr, flag_ptr, out_ptr):
+def _cross_sm_atomic_sync_kernel(payload_ptr, flag_ptr, out_ptr, producer_sem: tl.constexpr, consumer_sem: tl.constexpr,
+                                 scope: tl.constexpr):
     pid = tl.program_id(0)
     if pid == 0:
         tl.store(payload_ptr, 1000)
-        tl.atomic_xchg(flag_ptr, 1, sem="release", scope="gpu")
+        tl.atomic_xchg(flag_ptr, 1, sem=producer_sem, scope=scope)
     elif pid == 1:
-        ready = 0
-        while ready != 1:
-            nanosleep(500_000)
-            ready = tl.atomic_add(flag_ptr, 0, sem="acquire", scope="gpu")
+        atomic_poll(flag_ptr, 1, sem=consumer_sem, scope=scope)
         result = tl.load(payload_ptr)
         tl.store(out_ptr, result)
 
 
 @triton.jit
-def _transitive_release_acquire_kernel(payload_ptr, flag0_ptr, flag1_ptr, out_ptr):
+def _transitive_atomic_sync_kernel(payload_ptr, flag0_ptr, flag1_ptr, out_ptr, release_sem: tl.constexpr,
+                                   acquire_sem: tl.constexpr, scope: tl.constexpr):
     pid = tl.program_id(0)
     if pid == 0:
         tl.store(payload_ptr, 1000)
-        tl.atomic_xchg(flag0_ptr, 1, sem="release", scope="gpu")
+        tl.atomic_xchg(flag0_ptr, 1, sem=release_sem, scope=scope)
     elif pid == 1:
-        ready = 0
-        while ready != 1:
-            nanosleep(500_000)
-            ready = tl.atomic_add(flag0_ptr, 0, sem="acquire", scope="gpu")
-        tl.atomic_xchg(flag1_ptr, 1, sem="release", scope="gpu")
+        atomic_poll(flag0_ptr, 1, sem=acquire_sem, scope=scope)
+        tl.atomic_xchg(flag1_ptr, 1, sem=release_sem, scope=scope)
     elif pid == 2:
-        ready = 0
-        while ready != 1:
-            nanosleep(500_000)
-            ready = tl.atomic_add(flag1_ptr, 0, sem="acquire", scope="gpu")
+        atomic_poll(flag1_ptr, 1, sem=acquire_sem, scope=scope)
         result = tl.load(payload_ptr)
         tl.store(out_ptr, result)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-def test_atomic_add_relaxed_updates_atomic_shadow(with_gsan):
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
+@pytest.mark.parametrize("sem, is_release", ATOMIC_SEMANTIC_CASES)
+def test_atomic_add_updates_atomic_shadow(with_gsan, sem, is_release, scope, expected_scope):
     target = torch.zeros(1, dtype=torch.int32, device="cuda")
 
-    _atomic_add_relaxed_i32[(1, )](target, num_warps=1)
+    atomic_add_kernel[(1, )](target, sem=sem, scope=scope, num_warps=1)
     assert target.item() == 1
 
-    cell = shadow_cell_from_address(target.data_ptr())
-    tid = cell.write_clock.thread_id
-    epoch = thread_state_from_smid(tid).vector_clock[tid]
-
-    assert cell.write_clock == ScalarClock(epoch, tid, AtomicScope.GPU)
-    assert cell.read_clocks[0] == ScalarClock(epoch, tid, AtomicScope.GPU)
-    assert cell.num_reads == 1
+    _assert_atomic_rmw_shadow(target.data_ptr(), expected_scope, is_release=is_release)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-def test_atomic_add_release_publishes_token_then_increments(with_gsan):
-    target = torch.zeros(1, dtype=torch.int32, device="cuda")
-
-    _atomic_add_release_i32[(1, )](target, num_warps=1)
-    assert target.item() == 1
-
-    cell = shadow_cell_from_address(target.data_ptr())
-    tid = cell.write_clock.thread_id
-    state = thread_state_from_smid(tid)
-    token = cell.write_clock.epoch
-    snapshot_idx = _clock_buffer_snapshot_idx(token, state, tid)
-    published_epoch = state.clock_buffer[snapshot_idx]
-
-    assert cell.write_clock == ScalarClock(token, tid, AtomicScope.GPU, is_release=True)
-    assert token == state.clock_buffer_head
-    assert state.clock_buffer_dirty
-    assert cell.read_clocks[0] == ScalarClock(published_epoch, tid, AtomicScope.GPU)
-    assert state.vector_clock[tid] == published_epoch + 1
-
-
-@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-def test_atomic_cas_failed_only_records_read(with_gsan):
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
+@pytest.mark.parametrize("sem, _", ATOMIC_SEMANTIC_CASES)
+def test_atomic_cas_failed_only_records_read(with_gsan, sem, _, scope, expected_scope):
     target = torch.zeros(1, dtype=torch.int32, device="cuda")
     out = torch.zeros(1, dtype=torch.int32, device="cuda")
 
-    _atomic_cas_fail_i32[(1, )](target, out, num_warps=1)
+    atomic_cas_kernel[(1, )](target, out, expect=1, sem=sem, scope=scope, num_warps=1)
 
     assert target.item() == 0
     assert out.item() == 0
 
-    cell = shadow_cell_from_address(target.data_ptr())
-    tid = cell.read_clocks[0].thread_id
-    epoch = thread_state_from_smid(tid).vector_clock[tid]
-
-    assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
-    assert cell.read_clocks[0] == ScalarClock(epoch, tid, AtomicScope.GPU)
-    assert cell.num_reads == 1
+    _assert_atomic_read_only_shadow(target.data_ptr(), expected_scope)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-def test_atomic_cas_release_success_publishes_token(with_gsan):
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
+@pytest.mark.parametrize("sem, is_release", ATOMIC_SEMANTIC_CASES)
+def test_atomic_cas_success_updates_atomic_shadow(with_gsan, sem, is_release, scope, expected_scope):
     target = torch.zeros(1, dtype=torch.int32, device="cuda")
     out = torch.zeros(1, dtype=torch.int32, device="cuda")
 
-    _atomic_cas_release_i32[(1, )](target, out, num_warps=1)
+    atomic_cas_kernel[(1, )](target, out, expect=0, sem=sem, scope=scope, num_warps=1)
 
     assert target.item() == 2
     assert out.item() == 0
 
-    cell = shadow_cell_from_address(target.data_ptr())
-    tid = cell.write_clock.thread_id
-    state = thread_state_from_smid(tid)
-    token = cell.write_clock.epoch
-    snapshot_idx = _clock_buffer_snapshot_idx(token, state, tid)
-    published_epoch = state.clock_buffer[snapshot_idx]
-
-    assert cell.write_clock == ScalarClock(token, tid, AtomicScope.GPU, is_release=True)
-    assert token == state.clock_buffer_head
-    assert cell.read_clocks[0] == ScalarClock(published_epoch, tid, AtomicScope.GPU)
-    assert state.vector_clock[tid] == published_epoch + 1
+    _assert_atomic_rmw_shadow(target.data_ptr(), expected_scope, is_release=is_release)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-def test_atomic_release_acquire_synchronizes_cross_sm(with_gsan, capfd):
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
+@pytest.mark.parametrize("producer_sem", RELEASE_SEMANTIC_CASES)
+@pytest.mark.parametrize("consumer_sem", ACQUIRE_SEMANTIC_CASES)
+def test_atomic_release_acquire_synchronizes_cross_sm(with_gsan, capfd, producer_sem, consumer_sem, scope,
+                                                      expected_scope):
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
     flags = torch.zeros(1, dtype=torch.int32, device="cuda")
     out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
-    _cross_sm_release_acquire_kernel[(2, )](
+    _cross_sm_atomic_sync_kernel[(2, )](
         payload,
         flags,
         out,
+        producer_sem=producer_sem,
+        consumer_sem=consumer_sem,
+        scope=scope,
         num_warps=1,
     )
     torch.cuda.synchronize()
 
-    captured = capfd.readouterr()
-    assert "GSanLibrary.cu" not in captured.out + captured.err
+    assert out.item() == 1000
+
+    _assert_cross_sm_sync(payload, flags, expected_scope)
+    _assert_no_gsan_runtime_output(capfd)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-def test_atomic_release_acquire_transitively_synchronizes_cross_sm(with_gsan, capfd):
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
+@pytest.mark.parametrize("release_sem", RELEASE_SEMANTIC_CASES)
+@pytest.mark.parametrize("acquire_sem", ACQUIRE_SEMANTIC_CASES)
+def test_atomic_release_acquire_transitively_synchronizes_cross_sm(with_gsan, capfd, release_sem, acquire_sem, scope,
+                                                                   expected_scope):
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
     flag0 = torch.zeros(1, dtype=torch.int32, device="cuda")
     flag1 = torch.zeros(1, dtype=torch.int32, device="cuda")
     out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
-    _transitive_release_acquire_kernel[(3, )](
+    _transitive_atomic_sync_kernel[(3, )](
         payload,
         flag0,
         flag1,
         out,
+        release_sem=release_sem,
+        acquire_sem=acquire_sem,
+        scope=scope,
         num_warps=1,
     )
     torch.cuda.synchronize()
@@ -266,7 +302,7 @@ def test_atomic_release_acquire_transitively_synchronizes_cross_sm(with_gsan, ca
     relay_state = thread_state_from_smid(flag1_cell.write_clock.thread_id)
     snapshot_idx = _clock_buffer_snapshot_idx(flag1_cell.write_clock.epoch, relay_state, producer_tid)
 
-    assert flag1_cell.write_clock.scope == AtomicScope.GPU
+    assert flag1_cell.write_clock.scope == expected_scope
     assert flag1_cell.write_clock.is_release
     assert relay_state.clock_buffer[snapshot_idx] >= producer_epoch
 
@@ -275,8 +311,7 @@ def test_atomic_release_acquire_transitively_synchronizes_cross_sm(with_gsan, ca
 
     assert consumer_state.vector_clock[producer_tid] >= producer_epoch
 
-    captured = capfd.readouterr()
-    assert "GSanLibrary.cu" not in captured.out + captured.err
+    _assert_no_gsan_runtime_output(capfd)
 
 
 @triton.jit

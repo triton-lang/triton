@@ -5,6 +5,7 @@ include "triton/Dialect/TritonInstrument/IR/TritonInstrumentDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
@@ -125,12 +126,12 @@ def TTI_ExperimentalGSanAtomicRMWOp : TTI_Op<"experimental_gsan_atomic_rmw", [
 ]> {
   let summary = "Lower a GSan-instrumented atomic rmw";
   let arguments = (ins
-    I32Attr:$atomic_rmw_op,
+    TT_AtomicRMWAttr:$atomic_rmw_op,
     Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
     TT_Type:$val,
     Optional<TT_BoolLike>:$mask,
-    I32Attr:$sem,
-    I32Attr:$scope
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
   );
   let results = (outs TT_Type:$result);
   let assemblyFormat = [{
@@ -152,8 +153,8 @@ def TTI_ExperimentalGSanAtomicCASOp : TTI_Op<"experimental_gsan_atomic_cas", [
     Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
     TT_Type:$cmp,
     TT_Type:$val,
-    I32Attr:$sem,
-    I32Attr:$scope
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
   );
   let results = (outs TT_Type:$result);
   let assemblyFormat = [{

@@ -1,5 +1,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/IR/TypeUtilities.h"
+#include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/AtomicPTXBuilder.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -185,23 +187,6 @@ Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
   b.barrier(ttg::AddrSpace::Local);
   return targetInfo.loadShared(rewriter, loc, smemBase, valueElemTy,
                                b.true_val());
-}
-
-std::string getRegisterSizeCode(int size, bool isFloat) {
-  switch (size) {
-  case 1:
-    return isFloat ? "h" : "c";
-  case 8:
-    return isFloat ? "h" : "h";
-  case 16:
-    return isFloat ? "h" : "h";
-  case 32:
-    return isFloat ? "f" : "r";
-  case 64:
-    return isFloat ? "d" : "l";
-  default:
-    llvm::report_fatal_error("Unsupported register size");
-  }
 }
 
 Value materializeI32Bool(ConversionPatternRewriter &rewriter,
@@ -399,12 +384,9 @@ public:
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for atomic op");
-    auto rmwOp = static_cast<tt::RMWOp>(
-        cast<IntegerAttr>(op->getAttr("atomic_rmw_op")).getInt());
-    auto sem = static_cast<tt::MemSemantic>(
-        cast<IntegerAttr>(op->getAttr("sem")).getInt());
-    auto scope = static_cast<tt::MemSyncScope>(
-        cast<IntegerAttr>(op->getAttr("scope")).getInt());
+    auto rmwOp = op.getAtomicRmwOp();
+    auto sem = op.getSem();
+    auto scope = op.getScope();
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();
@@ -419,9 +401,7 @@ public:
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
-    Type valueElemTy =
-        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
-                 : getTypeConverter()->convertType(valueTy);
+    Type valueElemTy = valElements[0].getType();
     unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     int32_t bytesPerElem = std::max<int32_t>(1, valueElemNBits / 8);
     auto elemsPerThread = ttg::getTotalElemsPerThread(op.getVal().getType());
@@ -438,9 +418,9 @@ public:
     SmallVector<Value> resultVals(elemsPerThread);
 
     for (size_t i = 0; i < elemsPerThread; ++i) {
-      if (auto canonicalStart = getCanonicalIndex(i, regMask);
-          canonicalStart != i) {
-        resultVals[i] = resultVals[canonicalStart];
+      if (auto canonicalIdx = getCanonicalIndex(i, regMask);
+          i != canonicalIdx) {
+        resultVals[i] = resultVals[canonicalIdx];
         continue;
       }
 
@@ -455,57 +435,16 @@ public:
                               static_cast<int32_t>(sem),
                               static_cast<int32_t>(scope), sourceLoc);
 
-      PTXBuilder ptxBuilderAtomicRMW;
-      std::string tyId = getRegisterSizeCode(valueElemNBits, false);
-      auto *dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true);
-      auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(rmwPtr, "l");
-      auto *valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
-      auto scopeStr = stringifyMemSyncScope(scope).str();
-      auto &atom = ptxBuilderAtomicRMW.create("atom")->global().o(scopeStr);
-      auto rmwOpName = stringifyRMWOp(rmwOp).str();
-      auto sBits = std::to_string(valueElemNBits);
-      std::string sTy;
-      switch (rmwOp) {
-      case tt::RMWOp::AND:
-      case tt::RMWOp::OR:
-      case tt::RMWOp::XOR:
-      case tt::RMWOp::XCHG:
-        sTy = "b" + sBits;
-        break;
-      case tt::RMWOp::ADD:
-        sTy = "u" + sBits;
-        break;
-      case tt::RMWOp::FADD:
-        rmwOpName = "add";
-        rmwOpName += (valueElemNBits == 16 ? ".noftz" : "");
-        sTy = (valueElemTy.isBF16() ? "bf" : "f") + sBits;
-        break;
-      case tt::RMWOp::MAX:
-      case tt::RMWOp::MIN:
-        sTy = "s" + sBits;
-        break;
-      case tt::RMWOp::UMAX:
-        rmwOpName = "max";
-        sTy = "u" + sBits;
-        break;
-      case tt::RMWOp::UMIN:
-        rmwOpName = "min";
-        sTy = "u" + sBits;
-        break;
-      default:
+      SmallVector<Value> rmwVals{rmwVal};
+      auto old = NVIDIA::emitPtxAtomicRMW(rewriter, loc, valueElemTy, rmwPtr,
+                                          rmwVals, rmwOp, sem, scope, pred);
+      if (failed(old))
         return failure();
-      }
-      std::string semStr;
-      llvm::raw_string_ostream os(semStr);
-      os << sem;
-      atom.o(semStr).o(rmwOpName).o(sTy);
-      atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
-      Value old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
 
       emitGSanAtomicEndCall(rewriter, loc, eventState, pred, pred,
                             static_cast<int32_t>(sem),
                             static_cast<int32_t>(scope), sourceLoc);
-      resultVals[i] = old;
+      resultVals[i] = *old;
     }
 
     if (op.getResult().use_empty()) {
@@ -551,10 +490,8 @@ public:
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for atomic op");
-    auto sem = static_cast<tt::MemSemantic>(
-        cast<IntegerAttr>(op->getAttr("sem")).getInt());
-    auto scope = static_cast<tt::MemSyncScope>(
-        cast<IntegerAttr>(op->getAttr("scope")).getInt());
+    auto sem = op.getSem();
+    auto scope = op.getScope();
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();
@@ -567,11 +504,9 @@ public:
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
-    Type valueElemTy =
-        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
-                 : getTypeConverter()->convertType(valueTy);
+    Type valueElemTy = valElements[0].getType();
     unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
-    int32_t bytesPerElem = std::max<int32_t>(1, valueElemNBits / 8);
+    int32_t bytesPerElem = valueElemNBits / 8;
     auto elemsPerThread = ttg::getTotalElemsPerThread(op.getVal().getType());
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
@@ -586,9 +521,9 @@ public:
     SmallVector<Value> resultVals(elemsPerThread);
 
     for (size_t i = 0; i < elemsPerThread; ++i) {
-      if (auto canonicalStart = getCanonicalIndex(i, regMask);
-          canonicalStart != i) {
-        resultVals[i] = resultVals[canonicalStart];
+      if (auto canonicalIdx = getCanonicalIndex(i, regMask);
+          canonicalIdx != i) {
+        resultVals[i] = resultVals[canonicalIdx];
         continue;
       }
 
@@ -602,22 +537,8 @@ public:
                               static_cast<int32_t>(sem),
                               static_cast<int32_t>(scope), sourceLoc);
 
-      PTXBuilder ptxBuilderAtomicCAS;
-      std::string tyId =
-          valueElemNBits == 64 ? "l" : (valueElemNBits == 32 ? "r" : "h");
-      auto *dstOpr = ptxBuilderAtomicCAS.newOperand("=" + tyId, /*init=*/true);
-      auto *ptrOpr = ptxBuilderAtomicCAS.newAddrOperand(casPtr, "l");
-      auto *cmpOpr = ptxBuilderAtomicCAS.newOperand(casCmp, tyId);
-      auto *valOpr = ptxBuilderAtomicCAS.newOperand(casVal, tyId);
-      auto &atom = *ptxBuilderAtomicCAS.create("atom");
-      auto sTy = "b" + std::to_string(valueElemNBits);
-      std::string semStr;
-      llvm::raw_string_ostream os(semStr);
-      os << sem;
-      auto scopeStr = stringifyMemSyncScope(scope).str();
-      atom.global().o(semStr).o(scopeStr).o("cas").o(sTy);
-      atom(dstOpr, ptrOpr, cmpOpr, valOpr).maybePredicate(pred);
-      Value old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
+      Value old = NVIDIA::emitPtxAtomicCAS(rewriter, loc, valueElemTy, casPtr,
+                                           casCmp, casVal, sem, scope, pred);
 
       auto oldInt = bitcastToScalarInt(rewriter, loc, old);
       auto cmpInt = bitcastToScalarInt(rewriter, loc, casCmp);

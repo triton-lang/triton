@@ -1,6 +1,7 @@
 #include "GSan.h"
 #include "Hash.cuh"
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <device_launch_parameters.h>
@@ -169,7 +170,7 @@ __device__ AtomicSem decodeAtomicSem(uint32_t sem) {
   case 4:
     return AtomicSem::AcquireRelease;
   default:
-    return AtomicSem::Relaxed;
+    assert(false || !"Unexpected atomic semantic type");
   }
 }
 
@@ -182,7 +183,7 @@ __device__ AtomicScope decodeAtomicScope(uint32_t scope) {
   case 3:
     return AtomicScope::System;
   default:
-    return AtomicScope::NonAtomic;
+    assert(false || !"Unexpected atomic scope");
   }
 }
 
@@ -403,10 +404,10 @@ __device__ void recordRead(ThreadState *state, ShadowCell *cell,
       &state->numReads, 1, __ATOMIC_RELAXED, __MEMORY_SCOPE_WRKGRP);
   auto seed = getGlobalState(state)->rngSeed;
   uint32_t rand = hash2x32(threadNumReads, state->threadId, seed);
-  if ((rand >> 8) % numReads != 0)
-    return;
-  auto clockIdx = rand % ShadowCell::kReadClockSize;
-  cell->readClocks[clockIdx] = scalarClock;
+  rand = rand % numReads;
+  if (rand < ShadowCell::kReadClockSize) {
+    cell->readClocks[rand] = scalarClock;
+  }
 }
 
 __device__ void doWrite(ThreadState *state, ShadowCell *cell, Location loc) {
@@ -519,7 +520,7 @@ __device__ void acquireAtomicShadowRange(ThreadState *state,
   if (numCells == 0)
     return;
 
-  // FIXME: Deadlock risk, if two concurrent accesses have different types, they
+  // FIXME: Deadlock risk. If two concurrent accesses have different types, they
   // may partially acquire the shadow cells and block other threads from making
   // progress.
   rwLockAcquireWrite(state->lock);
@@ -562,9 +563,13 @@ __device__ void beginAtomicAccess(GlobalState *globals, AtomicEventState *event,
     auto write = cell->writeClock;
     assertOrderedOrCompatible(state, scope, write, loc,
                               "Read after write race detected");
-    if (hasAcquire(sem))
-      maybeMergeAcquire(state, scope, write, loc);
     recordRead(state, cell, scope);
+  }
+  if (hasAcquire(sem)) {
+    for (uint8_t i = 0; i < event->numCells; ++i) {
+      auto write = event->cells[i]->writeClock;
+      maybeMergeAcquire(state, scope, write, loc);
+    }
   }
 }
 
@@ -644,8 +649,8 @@ __triton_gsan_store_tensor(void *globalState, const char *stackPtr,
 extern "C" __device__ void
 __triton_gsan_atomic_begin_scalar(void *globalState, void *eventState, int pred,
                                   uintptr_t address, int bytesPerElem, int sem,
-                                  int scope, const char *file, int line) {
-  auto loc = gsan::Location{file, static_cast<unsigned>(line)};
+                                  int scope, const char *file, unsigned line) {
+  auto loc = gsan::Location{file, line};
   gsan::beginAtomicAccess(
       reinterpret_cast<gsan::GlobalState *>(globalState),
       reinterpret_cast<gsan::AtomicEventState *>(eventState), pred != 0,
@@ -655,8 +660,8 @@ __triton_gsan_atomic_begin_scalar(void *globalState, void *eventState, int pred,
 extern "C" __device__ void
 __triton_gsan_atomic_end_scalar(void *eventState, int pred, int didWrite,
                                 int sem, int scope, const char *file,
-                                int line) {
-  auto loc = gsan::Location{file, static_cast<unsigned>(line)};
+                                unsigned line) {
+  auto loc = gsan::Location{file, line};
   gsan::endAtomicAccess(reinterpret_cast<gsan::AtomicEventState *>(eventState),
                         pred != 0, didWrite != 0, sem, scope, loc);
 }
