@@ -81,7 +81,9 @@ jobs:
     - name: Install System Prerequisites (AlmaLinux)
       if: matrix.config.target-os == 'almalinux'
       run: |
-        dnf install --assumeyes llvm-toolset python38-pip python38-devel git tar gzip
+        rpm --import https://packages.microsoft.com/keys/microsoft.asc
+        dnf install --assumeyes https://packages.microsoft.com/config/rhel/8/packages-microsoft-prod.rpm
+        dnf install --assumeyes azure-cli llvm-toolset python38-pip python38-devel git tar gzip
         alternatives --set python3 /usr/bin/python3.8
         echo "extra_cmake_flags=-DCMAKE_ASM_COMPILER=clang -DCMAKE_CXX_FLAGS=-Wno-everything -DPython3_EXECUTABLE=/usr/bin/python3.8 -DPython_EXECUTABLE=/usr/bin/python3.8" >> "$GITHUB_ENV"
 
