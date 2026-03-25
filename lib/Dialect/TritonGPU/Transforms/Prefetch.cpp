@@ -741,7 +741,12 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
     // Canonicalize convert ops to make the pattern matching easier.
     RewritePatternSet cleanUpPatterns(&getContext());
     ModuleOp m = getOperation();
-    auto computeCapability = getNVIDIAComputeCapability(m);
+    int computeCapability = 0;
+    if (auto targetAttr =
+            m->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+        targetAttr && targetAttr.getValue().starts_with("cuda:")) {
+      computeCapability = getNVIDIAComputeCapability(m);
+    }
     triton::gpu::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns,
                                                               &getContext());
     if (mlir::applyPatternsGreedily(getOperation(), std::move(cleanUpPatterns))
