@@ -224,13 +224,14 @@ decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc,
   return {srcPtr, tensorShape, tensorStride, blockShape};
 }
 
-TDMDescriptor createTDMDescriptor(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> blockShape, int numWarps, unsigned padInterval,
-    unsigned padAmount, SmallVector<Value> tensorShape,
-    SmallVector<Value> tensorStride, Value srcPtr, bool isRowMajor,
-    std::optional<PartitionedSharedEncodingAttr> partitionedEnc) {
+TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
+                                  const LLVMTypeConverter *typeConverter,
+                                  Type elementType,
+                                  SmallVector<int64_t> blockShape, int numWarps,
+                                  unsigned padInterval, unsigned padAmount,
+                                  SmallVector<Value> tensorShape,
+                                  SmallVector<Value> tensorStride, Value srcPtr,
+                                  bool isRowMajor, Attribute encoding) {
   size_t numDims = tensorShape.size();
   assert(numDims >= 1 && numDims <= 5 && tensorStride.size() == numDims &&
          "TDM only supported for 1D-5D tensors.");
@@ -266,17 +267,16 @@ TDMDescriptor createTDMDescriptor(
   // the effective extent along partitionDim is the slice extent
   // (warps * pieceSize), not the full block extent.
   {
-    Attribute enc = partitionedEnc ? Attribute(*partitionedEnc) : Attribute();
     auto [warpsPerCTA, numInstr] =
-        getPartitionAlignedWarpDistribution(blockShape, numWarps, enc);
-    if (partitionedEnc && numInstr > 1)
-      blockShape[partitionedEnc->getPartitionDim()] /= numInstr;
+        getPartitionAlignedWarpDistribution(blockShape, numWarps, encoding);
+    if (auto partitionedEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding);
+        partitionedEnc && numInstr > 1)
+      blockShape[partitionedEnc.getPartitionDim()] /= numInstr;
 
     for (size_t i = 0; i < numDims; ++i) {
       blockShape[i] = llvm::divideCeil(blockShape[i], warpsPerCTA[i]);
     }
   }
-  // Distribute block among warps
 
   // group0 (128 bits / 4 dwords) effective bit encoding:
   // [1:0]:     pred (to be filled later)

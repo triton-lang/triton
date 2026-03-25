@@ -28,15 +28,16 @@ struct TDMDescriptor {
 // expected to fill these fields later.
 // For 1D-2D tensors: returns TDMDescriptor with only group0 and group1
 // For 3D-5D tensors: returns TDMDescriptor with all groups populated
-// When partitionedEnc is set, the warp distribution is adjusted so each wave's
-// chunk fits in one LDS partition.
-TDMDescriptor createTDMDescriptor(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> blockShape, int numWarps, unsigned padInterval,
-    unsigned padAmount, SmallVector<Value> tensorShape,
-    SmallVector<Value> tensorStride, Value srcPtr, bool isRowMajor,
-    std::optional<PartitionedSharedEncodingAttr> partitionedEnc = {});
+// When encoding is a PartitionedSharedEncodingAttr, the warp distribution is
+// adjusted so each wave's chunk fits in one LDS partition.
+TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
+                                  const LLVMTypeConverter *typeConverter,
+                                  Type elementType,
+                                  SmallVector<int64_t> blockShape, int numWarps,
+                                  unsigned padInterval, unsigned padAmount,
+                                  SmallVector<Value> tensorShape,
+                                  SmallVector<Value> tensorStride, Value srcPtr,
+                                  bool isRowMajor, Attribute encoding);
 
 // Update the global memory address with offset, and fill the shared memory
 // address and pred in a given TDM descriptor for regular load/store (1D-5D).
