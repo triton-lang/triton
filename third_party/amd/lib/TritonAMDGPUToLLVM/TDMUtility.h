@@ -95,6 +95,14 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const triton::LinearLayout &sharedLayout,
                       Attribute encoding, Value ctaId, bool isRowMajor);
 
+// Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.
+// For PartitionedSharedEncodingAttr, computes a partition-aligned warp
+// distribution.  For all other encodings, falls back to the default TDM warp
+// distribution with numTDMInstructions = 1.
+std::pair<SmallVector<unsigned>, unsigned>
+getPartitionAlignedWarpDistribution(ArrayRef<int64_t> blockShape, int numWarps,
+                                    Attribute encoding);
+
 // Calculate the number of TDM gather/scatter instructions needed.
 // - numIndices: number of row indices
 // - use32BitIndices: true for 32-bit indices (max 8 rows/instr), false for

@@ -103,6 +103,15 @@ std::pair<SmallVector<unsigned>, unsigned> getPartitionAlignedWarpDistribution(
 
 } // namespace
 
+std::pair<SmallVector<unsigned>, unsigned>
+getPartitionAlignedWarpDistribution(ArrayRef<int64_t> blockShape, int numWarps,
+                                    Attribute encoding) {
+  if (auto partitionedEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding))
+    return getPartitionAlignedWarpDistribution(blockShape, numWarps,
+                                               partitionedEnc);
+  return {getWarpDistribution(blockShape, numWarps), 1};
+}
+
 SmallVector<Value> TDMDescriptor::getAllGroups() const {
   SmallVector<Value> result;
   llvm::append_range(result, group0);
@@ -257,15 +266,11 @@ TDMDescriptor createTDMDescriptor(
   // the effective extent along partitionDim is the slice extent
   // (warps * pieceSize), not the full block extent.
   {
-    SmallVector<unsigned> warpsPerCTA;
-    unsigned numInstr = 1;
-    if (partitionedEnc.has_value()) {
-      std::tie(warpsPerCTA, numInstr) = getPartitionAlignedWarpDistribution(
-          blockShape, numWarps, *partitionedEnc);
+    Attribute enc = partitionedEnc ? Attribute(*partitionedEnc) : Attribute();
+    auto [warpsPerCTA, numInstr] =
+        getPartitionAlignedWarpDistribution(blockShape, numWarps, enc);
+    if (partitionedEnc && numInstr > 1)
       blockShape[partitionedEnc->getPartitionDim()] /= numInstr;
-    } else {
-      warpsPerCTA = getWarpDistribution(blockShape, numWarps);
-    }
 
     for (size_t i = 0; i < numDims; ++i) {
       blockShape[i] = llvm::divideCeil(blockShape[i], warpsPerCTA[i]);
@@ -897,9 +902,7 @@ static int64_t computePerPartitionSliceStride(
     int64_t stride = paddedEnc.getPaddedSize(perPartitionShape);
     // getPaddedSize subtracts trailing padding, but that padding still occupies
     // space between slices, so add it back.
-    int64_t unpaddedSize = 1;
-    for (int64_t d : perPartitionShape)
-      unpaddedSize *= d;
+    int64_t unpaddedSize = product(perPartitionShape);
     for (auto [interval, padding] :
          llvm::zip_equal(paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
       if (unpaddedSize % interval == 0)
@@ -918,15 +921,16 @@ static int64_t computePerPartitionSliceStride(
 
 // Emit a single TDM intrinsic (load or store) for the given block shape.
 // This handles both the 2D (d2 intrinsic) and >2D (full intrinsic) cases.
-static void emitSingleTDMIntrinsic(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, ArrayRef<Value> desc,
-    size_t numDims, Type elementType, SmallVector<int64_t> effectiveBlockShape,
-    int numWarps, unsigned padInterval, unsigned padAmount,
-    SmallVector<Value> instrOffset, ArrayRef<Value> instrDstPtrs, Value pred,
-    Value multicastMask, Value barrier,
-    const triton::LinearLayout &instrSharedLayout, Value ctaId, bool isLoad,
-    bool isRowMajor, ArrayRef<unsigned> warpsPerCTA) {
+static void
+emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
+                 const LLVMTypeConverter *typeConverter, ArrayRef<Value> desc,
+                 size_t numDims, Type elementType,
+                 SmallVector<int64_t> effectiveBlockShape, int numWarps,
+                 unsigned padInterval, unsigned padAmount,
+                 SmallVector<Value> instrOffset, ArrayRef<Value> instrDstPtrs,
+                 Value pred, Value multicastMask, Value barrier,
+                 const triton::LinearLayout &instrSharedLayout, Value ctaId,
+                 bool isLoad, bool isRowMajor, ArrayRef<unsigned> warpsPerCTA) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
   Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
@@ -1002,23 +1006,16 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
   auto partitionedEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding);
 
   // Compute warp distribution -- partition-aligned when needed.
-  SmallVector<unsigned> warpsPerCTA;
-  unsigned numTDMInstructions = 1;
-  if (partitionedEnc) {
-    std::tie(warpsPerCTA, numTDMInstructions) =
-        getPartitionAlignedWarpDistribution(blockShape, numWarps,
-                                            partitionedEnc);
-  } else {
-    warpsPerCTA = getWarpDistribution(blockShape, numWarps);
-  }
+  auto [warpsPerCTA, numTDMInstructions] =
+      getPartitionAlignedWarpDistribution(blockShape, numWarps, encoding);
 
   // Fast path: single instruction covers the entire block.
   if (numTDMInstructions == 1) {
-    emitSingleTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims,
-                           elementType, to_vector(blockShape), numWarps,
-                           padInterval, padAmount, to_vector(offset), dstPtrs,
-                           pred, multicastMask, barrierPtr, sharedLayout, ctaId,
-                           isLoad, isRowMajor, warpsPerCTA);
+    emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
+                     to_vector(blockShape), numWarps, padInterval, padAmount,
+                     to_vector(offset), dstPtrs, pred, multicastMask,
+                     barrierPtr, sharedLayout, ctaId, isLoad, isRowMajor,
+                     warpsPerCTA);
     return;
   }
 
@@ -1079,11 +1076,10 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                                    elementType, dstPtrs[i], elemOffset));
     }
 
-    emitSingleTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims,
-                           elementType, effectiveBlockShape, numWarps,
-                           padInterval, padAmount, instrOffset, instrDstPtrs,
-                           pred, multicastMask, barrier, sliceLayout, ctaId,
-                           isLoad, isRowMajor, warpsPerCTA);
+    emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
+                     effectiveBlockShape, numWarps, padInterval, padAmount,
+                     instrOffset, instrDstPtrs, pred, multicastMask, barrier,
+                     sliceLayout, ctaId, isLoad, isRowMajor, warpsPerCTA);
   }
 }
 
