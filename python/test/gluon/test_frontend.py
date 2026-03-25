@@ -702,37 +702,29 @@ def test_tcgen05_commit():
 
 @gluon.jit
 def tcgen05_commit_multicast_two_ctas_kernel():
-    cga_layout: ttgl.constexpr = [[1, 0]]
-    nvmma_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
-                                                          cga_layout=cga_layout)
-    a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
-    b = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
     barrier = mbarrier.allocate_mbarrier(two_ctas=True)
-    blackwell.tcgen05_commit(barrier, descs=[a, b])
+    mbarrier.expect(barrier, 4)
 
 
 def test_tcgen05_commit_multicast_two_ctas():
     mod = run_parser(tcgen05_commit_multicast_two_ctas_kernel, *make_args(num_ctas=2), target=BLACKWELL_TARGET)
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
-#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @tcgen05_commit_multicast_two_ctas_kernel() attributes {noinline = false} {
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-    %1 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-    %2 = tt.call @triton.experimental.gluon.language.nvidia.ampere.mbarrier.allocate_mbarrier__cNone_cTrue() : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %0 = tt.call @triton.experimental.gluon.language.nvidia.ampere.mbarrier.allocate_mbarrier__cNone_cTrue() : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
     %true = arith.constant true
-    ttng.tc_gen5_commit %2, %true descs %0, %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    ttng.barrier_expect %0, 4, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     tt.return
   }
-  tt.func private @triton.experimental.gluon.language.nvidia.ampere.mbarrier.allocate_mbarrier__cNone_cTrue() -> !ttg.memdesc<1xi64, #shared1, #smem, mutable> attributes {noinline = false} {
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    tt.return %0 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+  tt.func private @triton.experimental.gluon.language.nvidia.ampere.mbarrier.allocate_mbarrier__cNone_cTrue() -> !ttg.memdesc<1xi64, #shared, #smem, mutable> attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return %0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
   ^bb1:  // no predecessors
-    %1 = ub.poison : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    tt.return %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %1 = ub.poison : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return %1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
   }
 }
 """)
@@ -2931,7 +2923,15 @@ def test_amd_wmma_scaled_scalar(target):
         b = ttgl.full([64, 16], 0x22, ttgl.uint8, b_layout)
         acc = ttgl.full([16, 16], 0, ttgl.float32, wmma_layout)
 
+        # test constexpr
         ttgl.amd.gfx1250.wmma_scaled(a, 0x02, 'e2m1', b, 0x01, 'e2m1', acc)
+
+        # test scalar value
+        a_scale = 0x03
+        a_scale = a_scale.to(ttgl.uint8)
+        b_scale = 0x04
+        b_scale = b_scale.to(ttgl.uint8)
+        ttgl.amd.gfx1250.wmma_scaled(a, a_scale, 'e2m1', b, b_scale, 'e2m1', acc)
 
     module = run_parser(kernel, *make_args(num_warps=1), target=target)
     expecttest.assert_expected_inline(
@@ -2953,6 +2953,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     %cst_4 = arith.constant dense<1> : tensor<16x4xi8, #linear>
     %cst_5 = arith.constant 0.000000e+00 : f32
     %0 = tt.dot_scaled %cst scale %cst_3, %cst_0 scale %cst_4, %cst_2 lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> * tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> -> tensor<16x16xf32, #mma1>
+    %c3_i32 = arith.constant 3 : i32
+    %1 = arith.trunci %c3_i32 : i32 to i8
+    %c4_i32 = arith.constant 4 : i32
+    %2 = arith.trunci %c4_i32 : i32 to i8
+    %3 = tt.splat %1 : i8 -> tensor<16x4xi8, #linear>
+    %4 = tt.splat %2 : i8 -> tensor<16x4xi8, #linear>
+    %cst_6 = arith.constant 0.000000e+00 : f32
+    %5 = tt.dot_scaled %cst scale %3, %cst_0 scale %4, %cst_2 lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> * tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> -> tensor<16x16xf32, #mma1>
     tt.return
   }
 }

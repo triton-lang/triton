@@ -442,10 +442,19 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
       padAmount = std::min(vecWidth, padAmount);
   }
 
-  if (padAmount == 0)
+  if (padAmount == 0 || padAmount >= static_cast<unsigned>(innerDimLength))
     return {};
 
-  unsigned padInterval = innerDimLength;
+  // When innerDimLength doesn't span all LDS banks, widen the padding
+  // interval to the bank-wrap boundary so padding is inserted every N
+  // rows instead of every row, at the point where the bank pattern
+  // would repeat.
+  constexpr unsigned ldsNumBanks = 64;
+  constexpr unsigned ldsBankWidthInBytes = 4;
+  unsigned elemBytes = typeWidthInBit / 8;
+  unsigned bankWrapInterval = ldsNumBanks * ldsBankWidthInBytes / elemBytes;
+  unsigned padInterval =
+      std::max(static_cast<unsigned>(innerDimLength), bankWrapInterval);
   auto *context = srcTy.getContext();
   return triton::gpu::PaddedSharedEncodingAttr::get(
       context, {{padInterval, padAmount}}, order, shape, CGALayout);

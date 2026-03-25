@@ -120,10 +120,30 @@ const std::vector<TritonPlugin> &mlir::triton::plugin::loadPlugins() {
   if (pluginsLoaded)
     return plugins;
 
+  // Bailing when libtriton symbols are not visible is done to prevent
+  // crashes caused by loading plugins that will never find their dependent
+  // symbols (which are hidden by libtriton).
+#if !defined(TRITON_EXT_ENABLED) || TRITON_EXT_ENABLED == 0
+  bool skipLoading = true;
+#else
+  bool skipLoading = false;
+#endif
+
   if (const char *env = std::getenv("TRITON_PLUGIN_PATHS")) {
     llvm::SmallVector<llvm::StringRef, 4> paths;
     llvm::StringRef(env).split(paths, ':');
     for (const auto &path : paths) {
+      if (skipLoading) {
+        llvm::errs() << "\n"
+                     << "\n=================== WARNING =====================\n"
+                     << "Triton will not load the following extension\n"
+                     << "because it is not built with TRITON_EXT_ENABLED:\n"
+                     << path
+                     << "\n=================================================\n"
+                     << "\n";
+        continue;
+      }
+
       LLVM_DEBUG(llvm::dbgs() << "Loading plugin from path: " << path << "\n");
       auto pluginOrErr = TritonPlugin::load(path.str());
       if (auto err = pluginOrErr.takeError()) {
