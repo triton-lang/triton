@@ -98,6 +98,7 @@ def compute_num_stages(
     x_transpose,
     epilogue_effective_itemsize,
     has_y_acc_in,
+    mx_block_size=None,
     *,
     epilogue_subtile,
     occupancy_target,
@@ -127,7 +128,8 @@ def compute_num_stages(
 
     if precision_config.b_mx_scale is not None:
         # mx scales
-        stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
+        scale_block_size = mx_block_size or int(MXFP_BLOCK_SIZE)
+        stage_size += block_n * (block_k // scale_block_size)
 
     if is_persistent:
         # Per-stage wait barrier

@@ -327,7 +327,7 @@ static std::optional<std::string> lldInvoke(const char *inPath,
   std::array args{"ld.lld", "--threads=1", "-shared", inPath, "-o", outPath};
   std::string errString;
   llvm::raw_string_ostream errStream(errString);
-  auto lldRes = lld::lldMain(args, llvm::outs(), llvm::errs(),
+  auto lldRes = lld::lldMain(args, llvm::outs(), errStream,
                              {{lld::Gnu, &lld::elf::link}});
   bool noErrors = (!lldRes.retCode && lldRes.canRunAgain);
   if (!noErrors) {
