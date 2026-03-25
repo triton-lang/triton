@@ -81,6 +81,11 @@ llvm::DenseSet<Value> getBarrierOperands(Operation *op) {
   if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
     return {gatherOp.getBarrier()};
   }
+  if (auto copyOp = dyn_cast<ttng::TMEMCopyOp>(op)) {
+    if (copyOp.getBarrier())
+      return {copyOp.getBarrier()};
+    return llvm::DenseSet<Value>{};
+  }
   if (auto mmaV5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     return llvm::DenseSet<Value>(mmaV5Op.getCompletionBarriers().begin(),
                                  mmaV5Op.getCompletionBarriers().end());
@@ -90,7 +95,9 @@ llvm::DenseSet<Value> getBarrierOperands(Operation *op) {
       return {desc};
     return {};
   }
-
+  if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
+    return {commitOp.getBarrier()};
+  }
   return llvm::DenseSet<Value>{};
 }
 
@@ -337,11 +344,11 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
 
 bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttng::TMEMLoadOp,
-          ttng::TMEMStoreOp, ttg::AsyncCopyGlobalToLocalOp,
+          ttng::TMEMStoreOp, ttng::TMEMCopyOp, ttg::AsyncCopyGlobalToLocalOp,
           ttng::AsyncTMACopyGlobalToLocalOp, ttng::AsyncTMACopyLocalToGlobalOp,
           ttng::AsyncTMAGatherOp, ttng::AsyncTMAScatterOp, ttng::InitBarrierOp,
           ttng::BarrierExpectOp, ttng::InvalBarrierOp, ttng::WaitBarrierOp,
-          ttng::ArriveBarrierOp>(op)) {
+          ttng::ArriveBarrierOp, ttng::TCGen5CommitOp>(op)) {
     return true;
   }
   if (isa<ttg::MBarrierOpInterface>(op)) {
