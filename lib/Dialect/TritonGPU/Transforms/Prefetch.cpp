@@ -431,7 +431,6 @@ LogicalResult Prefetcher::initialize() {
     }
   }
 
-
   if (dotsInFor.empty())
     return failure();
 
