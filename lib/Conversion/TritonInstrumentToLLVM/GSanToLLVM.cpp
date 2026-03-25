@@ -334,6 +334,7 @@ public:
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
     b.call(runtimeFunc,
            ValueRange{gsanGlobalStatePtr, sourceLoc.file, sourceLoc.line});
+    b.barrier(ttg::AddrSpace::Local);
     rewriter.eraseOp(op);
     return success();
   }

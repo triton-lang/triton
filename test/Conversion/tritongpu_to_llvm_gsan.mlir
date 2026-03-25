@@ -4,6 +4,7 @@
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @load_store
   // CHECK: llvm.call @__triton_gsan_init(%{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32) -> ()
+  // CHECK: nvvm.barrier0
   // CHECK: llvm.store %{{.*}} : i64, !llvm.ptr
   // CHECK: llvm.store %{{.*}} : i8, !llvm.ptr
   // CHECK: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, !llvm.ptr, i32) -> ()

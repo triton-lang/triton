@@ -96,8 +96,9 @@ struct TestAMDRangeAnalysisPass
         }
 
         if (auto cmpOp = llvm::dyn_cast<arith::CmpIOp>(op)) {
-          if (AMD::cmpIIsStaticallyTrue(*solver, cmpOp))
-            emitRemark(op->getLoc(), "result is true");
+          if (auto result = AMD::evaluateCmpI(*solver, cmpOp))
+            emitRemark(op->getLoc(),
+                       *result ? "result is true" : "result is false");
         }
       }
 
