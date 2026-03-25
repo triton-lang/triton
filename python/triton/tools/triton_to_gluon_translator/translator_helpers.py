@@ -3,6 +3,7 @@
 import math
 from typing import Any
 
+import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import mma_v2
@@ -684,17 +685,44 @@ def tl_dot_mfma(a, b, acc, out_dtype):
 # ---- AMD TDM tensor descriptors (gfx1250 only) ----
 
 
+# Builtin because list literals in @gluon.jit convert constexpr values to tensors,
+# but block_shape requires constexpr ints. Varargs also aren't supported in JIT.
+@ttgl._core.builtin
+def _create_tdm_descriptor(base, shape, strides, *block_shape_and_layout, _semantic=None):
+    layout = block_shape_and_layout[-1]
+    block_shape = list(block_shape_and_layout[:-1])
+    return amd_tdm.make_tensor_descriptor(base, shape, strides, block_shape, layout, _semantic=_semantic)
+
+
 @gluon.constexpr_function
-def get_default_tdm_layout(block_shape, element_bitwidth):
+def get_default_tdm_layout(*block_shape):
+    block_shape = list(block_shape)
     return ttgl.PaddedSharedLayout.with_identity_for(
         [[block_shape[-1], 4]],
-        list(block_shape),
-        [1, 0],
+        block_shape,
+        list(range(len(block_shape) - 1, -1, -1)),
     )
 
 
+@tl.core._aggregate
+class AMDTensorDescriptorArgs:
+    """Wraps a real TDM descriptor alongside the original base pointer.
+
+    The base_ptr is needed by gather/scatter to recreate the descriptor with a different
+    block_shape -- Triton uses block_shape=[1, N] but TDM hardware requires [num_indices, N].
+    Shape, strides, and block_shape are read from desc (type metadata gives plain Python ints
+    for block_shape, tuples for shape/strides)."""
+    desc: amd_tdm.tensor_descriptor
+    base_ptr: tl.core.tensor
+
+
 @gluon.jit
-def tl_load_tensor_descriptor_amd(desc, offsets):
+def tl_load_tensor_descriptor_amd(obj, offsets):
+    if isinstance(obj, AMDTensorDescriptorArgs):
+        desc = obj.desc
+    else:
+        # Real TDM descriptor from convert_host_descriptor (passed as kernel arg).
+        desc = obj
     smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
     amd_tdm.async_load(desc, offsets, smem)
     amd_tdm.async_wait(0)
@@ -704,7 +732,12 @@ def tl_load_tensor_descriptor_amd(desc, offsets):
 
 
 @gluon.jit
-def tl_store_tensor_descriptor_amd(desc, offsets, value):
+def tl_store_tensor_descriptor_amd(obj, offsets, value):
+    if isinstance(obj, AMDTensorDescriptorArgs):
+        desc = obj.desc
+    else:
+        # Real TDM descriptor from convert_host_descriptor (passed as kernel arg).
+        desc = obj
     smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
     amd_tdm.async_store(desc, offsets, smem)
     amd_tdm.async_wait(0)
@@ -775,69 +808,61 @@ def tl_obj_scatter(obj, value, x_offsets, y_offset):
         obj.scatter(value, x_offsets, y_offset)
 
 
-@ttgl._core.builtin
-def tl_obj_gather_amd(desc, x_offsets, y_offset, _semantic=None, _generator=None):
-    # Builtin required: reads desc._tdm_* attributes stashed by tl_make_tensor_descriptor.
-    # TDM gather: recreate descriptor with block_shape=[num_idx, block_n], then async gather.
-    # Triton's API creates descriptors with block_shape=[1, block_n], but TDM hardware requires
-    # block_shape to match the shared memory allocation [num_idx, block_n] for gather/scatter.
-    num_idx = x_offsets.shape[0]
-    block_n = desc.block_shape[1]
-    gather_shape = [num_idx, block_n]
-    smem_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
-    gather_desc = amd_tdm.make_tensor_descriptor(desc._tdm_base, list(desc._tdm_shape), list(desc._tdm_strides),
-                                                 gather_shape, smem_layout, _semantic=_semantic)
-    num_warps = ttgl.num_warps(_semantic=_semantic, _generator=_generator)
-    idx_base = ttgl.BlockedLayout([num_idx, 1], [1, get_num_threads_per_warp(current_target())], [1, num_warps], [1, 0])
-    idx_layout = ttgl.SliceLayout(1, idx_base)
-    x_offsets = ttgl.convert_layout(x_offsets, idx_layout, _semantic=_semantic)
-    alloc = ttgl.allocate_shared_memory(desc.dtype, gather_shape, smem_layout, _semantic=_semantic)
-    y_off = ttgl.to_tensor(y_offset, _semantic=_semantic)
-    amd_tdm.async_gather(gather_desc, x_offsets, y_off, alloc, _semantic=_semantic)
-    amd_tdm.async_wait(0, _semantic=_semantic)
-    ret_layout = default_blocked_layout(gather_shape, num_warps, current_target())
-    out = alloc.load(ret_layout, _semantic=_semantic)
+@gluon.jit
+def tl_obj_gather_amd(desc_args, x_offsets, y_offset, NUM_IDX: ttgl.constexpr):
+    # Triton creates gather descriptors with block_shape=[1, block_n], but TDM hardware
+    # operates on the full batch, requiring block_shape=[num_indices, block_n].
+    BLOCK_N: ttgl.constexpr = desc_args.desc.block_shape[1]
+    smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+    gather_desc = _create_tdm_descriptor(desc_args.base_ptr, desc_args.desc.shape, desc_args.desc.strides, NUM_IDX,
+                                         BLOCK_N, smem_layout)
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    gather_shape: ttgl.constexpr = gather_desc.block_shape
+    idx_base: ttgl.constexpr = ttgl.BlockedLayout([gather_shape[0], 1],
+                                                  [1, get_num_threads_per_warp(current_target())], [1, num_warps],
+                                                  [1, 0])
+    idx_layout: ttgl.constexpr = ttgl.SliceLayout(1, idx_base)
+    x_offsets = ttgl.convert_layout(x_offsets, idx_layout)
+    alloc = ttgl.allocate_shared_memory(desc_args.desc.dtype, list(gather_shape), smem_layout)
+    y_off = ttgl.to_tensor(y_offset)
+    amd_tdm.async_gather(gather_desc, x_offsets, y_off, alloc)
+    amd_tdm.async_wait(0)
+    ret_layout: ttgl.constexpr = default_blocked_layout(list(gather_shape), num_warps, current_target())
+    out = alloc.load(ret_layout)
     return out
 
 
-@ttgl._core.builtin
-def tl_obj_scatter_amd(desc, value, x_offsets, y_offset, _semantic=None, _generator=None):
-    # Builtin required: reads desc._tdm_* attributes stashed by tl_make_tensor_descriptor.
-    # TDM scatter: recreate descriptor with block_shape=[num_idx, block_n], then async scatter.
-    # Triton's API creates descriptors with block_shape=[1, block_n], but TDM hardware requires
-    # block_shape to match the shared memory allocation [num_idx, block_n] for gather/scatter.
-    num_idx = x_offsets.shape[0]
-    block_n = desc.block_shape[1]
-    scatter_shape = [num_idx, block_n]
-    smem_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
-    scatter_desc = amd_tdm.make_tensor_descriptor(desc._tdm_base, list(desc._tdm_shape), list(desc._tdm_strides),
-                                                  scatter_shape, smem_layout, _semantic=_semantic)
-    num_warps = ttgl.num_warps(_semantic=_semantic, _generator=_generator)
-    idx_base = ttgl.BlockedLayout([num_idx, 1], [1, get_num_threads_per_warp(current_target())], [1, num_warps], [1, 0])
-    idx_layout = ttgl.SliceLayout(1, idx_base)
-    x_offsets = ttgl.convert_layout(x_offsets, idx_layout, _semantic=_semantic)
-    alloc = ttgl.allocate_shared_memory(desc.dtype, scatter_shape, smem_layout, value, _semantic=_semantic)
-    y_off = ttgl.to_tensor(y_offset, _semantic=_semantic)
-    amd_tdm.async_scatter(scatter_desc, x_offsets, y_off, alloc, _semantic=_semantic)
-    amd_tdm.async_wait(0, _semantic=_semantic)
+@gluon.jit
+def tl_obj_scatter_amd(desc_args, value, x_offsets, y_offset, NUM_IDX: ttgl.constexpr):
+    # See tl_obj_gather_amd for why the descriptor is recreated with a different block_shape.
+    BLOCK_N: ttgl.constexpr = desc_args.desc.block_shape[1]
+    smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+    scatter_desc = _create_tdm_descriptor(desc_args.base_ptr, desc_args.desc.shape, desc_args.desc.strides, NUM_IDX,
+                                          BLOCK_N, smem_layout)
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    scatter_shape: ttgl.constexpr = scatter_desc.block_shape
+    idx_base: ttgl.constexpr = ttgl.BlockedLayout([scatter_shape[0], 1],
+                                                  [1, get_num_threads_per_warp(current_target())], [1, num_warps],
+                                                  [1, 0])
+    idx_layout: ttgl.constexpr = ttgl.SliceLayout(1, idx_base)
+    x_offsets = ttgl.convert_layout(x_offsets, idx_layout)
+    alloc = ttgl.allocate_shared_memory(desc_args.desc.dtype, list(scatter_shape), smem_layout, value)
+    y_off = ttgl.to_tensor(y_offset)
+    amd_tdm.async_scatter(scatter_desc, x_offsets, y_off, alloc)
+    amd_tdm.async_wait(0)
 
 
-@ttgl._core.builtin
-def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option="zero", _semantic=None):
-    # Builtin required: attribute assignment (desc._tdm_*) is not supported in @gluon.jit.
-    if _is_gfx1250(current_target()):
-        element_bitwidth = base.dtype.element_ty.primitive_bitwidth
-        layout = get_default_tdm_layout(block_shape, element_bitwidth)
-        desc = amd_tdm.make_tensor_descriptor(base, shape, strides, block_shape, layout, _semantic=_semantic)
-        # Stash construction args so tl_obj_gather_amd/tl_obj_scatter_amd can recreate the
-        # descriptor with a different block_shape. TDM gather/scatter require block_shape to
-        # match [num_idx, block_n], but Triton creates descriptors with block_shape=[1, block_n].
-        desc._tdm_base = base
-        desc._tdm_shape = shape
-        desc._tdm_strides = strides
-        return desc
-    layout = ttgl.NVMMASharedLayout.get_default_for(block_shape, base.dtype.element_ty)
-    return tma.make_tensor_descriptor(base, shape, strides, block_shape, layout, padding_option, _semantic=_semantic)
+@gluon.jit
+def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option: ttgl.constexpr = "zero"):
+    layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for(block_shape, base.dtype.element_ty)
+    return tma.make_tensor_descriptor(base, shape, strides, block_shape, layout, padding_option)
+
+
+@gluon.jit
+def tl_make_tensor_descriptor_amd(base, shape, strides, block_shape):
+    layout: ttgl.constexpr = get_default_tdm_layout(*block_shape)
+    desc = _create_tdm_descriptor(base, shape, strides, *block_shape, layout)
+    return AMDTensorDescriptorArgs(desc, base)
 
 
 @gluon.jit
@@ -979,8 +1004,7 @@ def convert_host_descriptor(desc):
 
     target = current_target()
     if target is not None and target.backend == "hip" and target.arch == "gfx1250":
-        element_bitwidth = torch_dtype_to_triton(dtype).primitive_bitwidth
-        layout = get_default_tdm_layout(block_shape, element_bitwidth)
+        layout = get_default_tdm_layout(*block_shape)
         return gluon.amd.gfx1250.TensorDescriptor(tensor, list(desc.shape), list(desc.strides), block_shape, layout)
 
     layout = ttgl.NVMMASharedLayout.get_default_for(block_shape, torch_dtype_to_triton(dtype))
