@@ -597,17 +597,15 @@ void init_gluon_ir(py::module &&m) {
               Attribute layout) -> Type {
              auto ctx = self.getContext();
              auto blockTy = cast<RankedTensorType>(blockType);
-             auto blockTyLayout = blockTy.cloneWithEncoding(layout);
-             return triton::TensorDescType::get(ctx, blockTyLayout, isSigned);
+             return triton::TensorDescType::get(ctx, blockTy, layout, isSigned);
            })
       .def("get_tensor_descriptor_im2col_layout_type",
            [](GluonOpBuilder &self, Type blockType, bool isSigned,
               Attribute layout) -> Type {
              auto ctx = self.getContext();
              auto blockTy = cast<RankedTensorType>(blockType);
-             auto blockTyLayout = blockTy.cloneWithEncoding(layout);
-             return triton::nvidia_gpu::TensorDescIm2ColType::get(
-                 ctx, blockTyLayout);
+             return triton::nvidia_gpu::TensorDescIm2ColType::get(ctx, blockTy,
+                                                                  layout);
            })
       .def("is_convert_layout_trivial",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> bool {

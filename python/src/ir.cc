@@ -185,18 +185,19 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 
     bool isIm2Col = isa<ttng::TensorDescIm2ColType>(arg.getType());
     auto blockType = descTy.getBlockType();
-    auto encoding = blockType.getEncoding();
+    auto encoding = descTy.getSharedLayout();
 
     py::dict metadata;
-    if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
+    if (isa_and_present<ttg::NVMMASharedEncodingAttr>(encoding)) {
       auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
       auto swizzle = ttng::getTMASwizzleMode(arg.getLoc(), descTy);
       auto elemType = ttng::getTMAElementType(arg.getLoc(), descTy);
       if (failed(swizzle) || failed(elemType))
         throw py::type_error("invalid TMA descriptor type");
       auto tmaMode = isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
-      auto blockSize =
-          ttng::getTMABlockShape(blockType, /*packedSize=*/false, tmaMode);
+      auto shapePerCTA = ttg::getShapePerCTA(encoding, blockType.getShape());
+      auto blockSize = ttng::getTMABlockShape(encoding, shapePerCTA,
+                                              /*packedSize=*/false, tmaMode);
       metadata["swizzle"] = *swizzle;
       metadata["elem_size"] = blockType.getElementTypeBitWidth() / 8;
       metadata["elem_type"] = *elemType;
@@ -210,7 +211,8 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
           std::vector<int>(blockShape.begin(), blockShape.end());
       metadata["elem_bits"] = blockType.getElementTypeBitWidth();
 
-      if (auto paddedEnc = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
+      if (auto paddedEnc =
+              dyn_cast_if_present<ttg::PaddedSharedEncodingAttr>(encoding)) {
         py::list intervalPaddingPairs;
         for (auto [interval, padding] : llvm::zip_equal(
                  paddedEnc.getIntervals(), paddedEnc.getPaddings())) {

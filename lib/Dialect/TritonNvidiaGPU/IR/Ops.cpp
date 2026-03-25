@@ -255,8 +255,8 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
   auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(enc);
   if (!nvmma)
     return op->emitOpError("TMA descriptor must have NVMMA shared layout");
-  auto descEnc = dyn_cast_if_present<NVMMASharedEncodingAttr>(
-      desc.getBlockType().getEncoding());
+  auto descEnc =
+      dyn_cast_if_present<NVMMASharedEncodingAttr>(desc.getSharedLayout());
   // NOTE: Cannot do descEnc != enc as the encodings may differ in rank for
   // rank-reducing loads
   if (!descEnc || descEnc.getTransposed() != nvmma.getTransposed() ||

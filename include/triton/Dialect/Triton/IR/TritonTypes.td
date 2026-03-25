@@ -106,25 +106,41 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", [TT_TensorDesc
       A portable abstraction for TMA descriptors.
       This is the base tensor descriptor type for tiled tensor memory access.
 
+      The blockType describes shape and element type. The optional sharedLayout
+      attribute carries the shared memory encoding that is planned during lowering.
+
       For specialized access patterns like im2col, see TensorDescIm2ColType
       in the TritonNvidiaGPU dialect.
   }];
 
-  let parameters = (ins
-    "RankedTensorType":$blockType
-  );
+  let parameters = (ins "RankedTensorType":$blockType,
+      OptionalParameter<"Attribute">:$sharedLayout);
 
-  let assemblyFormat = "`<` $blockType `>`";
+  let assemblyFormat = "`<` $blockType (`,` $sharedLayout^)? `>`";
 
-  let builders = [
-    // Builder with signedness
-    TypeBuilder<(ins "RankedTensorType":$blockType, "bool":$isSigned), [{
+  let builders = [TypeBuilder<(ins "RankedTensorType":$blockType), [{
+      return Base::get($_ctxt, blockType, Attribute{});
+    }]>,
+                  // Builder with signedness
+                  TypeBuilder<
+                      (ins "RankedTensorType":$blockType, "bool":$isSigned), [{
       if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
         auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
         blockType = blockType.clone(elemTy);
       }
-      return Base::get($_ctxt, blockType);
+      return Base::get($_ctxt, blockType, Attribute{});
+    }]>,
+                  // Builder with signedness and shared layout
+                  TypeBuilder<(ins "RankedTensorType":$blockType,
+                                  "Attribute":$sharedLayout, "bool":$isSigned),
+                              [{
+      if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
+        auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
+        auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
+        blockType = blockType.clone(elemTy);
+      }
+      return Base::get($_ctxt, blockType, sharedLayout);
     }]>,
   ];
 }

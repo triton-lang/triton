@@ -139,7 +139,7 @@ struct MakeTensorDescOpConversion
 
     auto tensorDescTy = result.getType();
     auto blockTy = tensorDescTy.getBlockType();
-    auto sharedEnc = blockTy.getEncoding();
+    auto sharedEnc = tensorDescTy.getSharedLayout();
     if (!sharedEnc) {
       // TODO: add an extra pass to assign layout to descriptors
       sharedEnc = findEncodingFromUsers(op);

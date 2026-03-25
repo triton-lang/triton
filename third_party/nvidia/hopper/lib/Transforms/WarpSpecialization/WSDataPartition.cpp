@@ -842,10 +842,10 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
                                      blockType.getShape().end()};
           int sliceSize = shape[dim] / numOfPartitions;
           shape[dim] = sliceSize;
-          auto newBlockType = RankedTensorType::get(
-              shape, blockType.getElementType(), blockType.getEncoding());
-          auto newType =
-              TensorDescType::get(builder.getContext(), newBlockType);
+          auto newBlockType =
+              RankedTensorType::get(shape, blockType.getElementType());
+          auto newType = TensorDescType::get(builder.getContext(), newBlockType,
+                                             type.getSharedLayout());
           newV.setType(newType);
         }
       }

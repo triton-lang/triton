@@ -108,8 +108,9 @@ TensorDescType getTensorDescTypeWithEncoding(Operation *op,
                                              Attribute encoding) {
   auto sharedEnc = cast<SharedEncodingTrait>(encoding);
   encoding = updateEncodingForShape(op, sharedEnc, existingTy);
-  auto blockTy = existingTy.cloneWithEncoding(encoding);
-  return TensorDescType::get(existingTy.getContext(), blockTy);
+  auto blockTy =
+      RankedTensorType::get(existingTy.getShape(), existingTy.getElementType());
+  return TensorDescType::get(existingTy.getContext(), blockTy, encoding);
 }
 
 struct UseInfo {
