@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -157,7 +158,22 @@ Value createZeroInitStateTensor(ImplicitLocOpBuilder &b,
                                             /*alignment=*/16,
                                             /*sharedClusterState=*/true);
   Value cstZero = arith::ConstantIntOp::create(b, 0, bitWidth);
+  Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value zero = arith::ConstantIntOp::create(b, 0, 32);
+  Value isCTA0 =
+      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
+  Block *prevBlock = b.getInsertionBlock();
+  Block::iterator insertPoint = b.getInsertionPoint();
+  Block *ifBlock = prevBlock->splitBlock(insertPoint);
+  Block *thenBlock = ifBlock->splitBlock(ifBlock->begin());
+  b.setInsertionPointToEnd(ifBlock);
+  cf::BranchOp::create(b, thenBlock);
+  b.setInsertionPointToEnd(prevBlock);
+  cf::CondBranchOp::create(b, isCTA0, ifBlock, ValueRange{}, thenBlock,
+                           ValueRange{});
+  b.setInsertionPointToStart(ifBlock);
   funcBuilder.createFillGlobalTensorCall(b, alloc, type, cstZero);
+  b.setInsertionPointToStart(thenBlock);
   return alloc;
 }
 
