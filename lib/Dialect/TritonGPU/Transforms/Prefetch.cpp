@@ -401,11 +401,11 @@ LogicalResult Prefetcher::initialize() {
   auto getEncoding = [](Value v) {
     return cast<TensorOrMemDesc>(v.getType()).getEncoding();
   };
-  auto hasBroadcasting = [kBlock, &getEncoding](Value v) {
+  auto isBroadcasted = [kBlock, &getEncoding](Value v) {
     auto cgaLayout = getCGALayout(getEncoding(v)).getLinearLayout();
     if (!cgaLayout.hasInDim(kBlock) || !cgaLayout.hasOutDim(kBlock))
-      return true;
-    return cgaLayout.getFreeVariableMasks()[kBlock] == 0;
+      return false;
+    return cgaLayout.getFreeVariableMasks()[kBlock] != 0;
   };
 
   SmallVector<triton::DotOp> dotsInFor;
@@ -504,7 +504,7 @@ LogicalResult Prefetcher::initialize() {
     if (aVals.size() && bVals.size()) {
       Value aSmem = aVals.front();
       Value bSmem = bVals.front();
-      if (!hasBroadcasting(aSmem) || !hasBroadcasting(bSmem))
+      if (isBroadcasted(aSmem) || isBroadcasted(bSmem))
         continue;
       dot2aVals[dot] = aVals;
       dot2bVals[dot] = bVals;
