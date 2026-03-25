@@ -339,7 +339,6 @@ class CMakeBuild(build_ext):
             "TRITON_LLVM_SYSTEM_SUFFIX",
             "LLVM_SYSPATH",
             "JSON_SYSPATH",
-            "TRITON_CUDA_PATH",
             "TRITON_CUDACRT_PATH",
             "TRITON_CUDART_PATH",
             "TRITON_CUOBJDUMP_PATH",
