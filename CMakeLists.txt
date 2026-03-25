@@ -452,8 +452,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
     "${TRITON_WHEEL_DIR}/FileCheck"
     COPYONLY)
 
-  # Build plugins when building libtriton since they depend on libtriton.
-  add_subdirectory(examples/plugins)
+  if (TRITON_EXT_ENABLED)
+    # Build plugins when building libtriton since they depend on libtriton.
+    add_subdirectory(examples/plugins)
+  endif()
 endif()
 
 if (UNIX AND NOT APPLE AND NOT TRITON_EXT_ENABLED)
