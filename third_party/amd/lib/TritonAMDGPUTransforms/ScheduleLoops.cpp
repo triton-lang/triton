@@ -310,12 +310,12 @@ namespace SingleDotSchedule {
 using namespace mlir::SingleDotSchedule;
 
 LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
-                            int numStages, const Stages &stages,
-                            const Clusters &clusters,
+                            const Stages &stages, const Clusters &clusters,
                             tt::CoarseSchedule &schedule) {
   // The stage gap between chained loads--this allows us to "spread" loads
   // with a non-one step in case the number of stages given by the user is
   // large.
+  int const numStages = schedule.getNumStages();
   assert(numStages >= 2 && "requires num_stages=2 at least");
   unsigned stagesBetweenLoads = llvm::divideCeil(numStages - 2, maxDist + 1);
   LDBG("stagesBetweenLoads = " << stagesBetweenLoads);
@@ -343,9 +343,9 @@ LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
   return success();
 }
 
-void initSymbolicSchedule(int maxDist, Stages &stages, int numStages,
-                          Clusters &clusters, tt::CoarseSchedule &schedule) {
-  int lastStage = numStages - 1;
+void initSymbolicSchedule(int maxDist, Stages &stages, Clusters &clusters,
+                          tt::CoarseSchedule &schedule) {
+  const int lastStage = schedule.getNumStages() - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
   stages[SCHED_LOCAL_STORE] = maxDist;
   stages[SCHED_LOCAL_LOAD] = lastStage;
@@ -358,8 +358,8 @@ void initSymbolicSchedule(int maxDist, Stages &stages, int numStages,
 
   // This is a symbolic cluster assignment. In this stage, we only focus on
   // global load and compute ops.
-  int globalLoadCluster = 0;
-  int computeCluster = 1;
+  constexpr int globalLoadCluster = 0;
+  constexpr int computeCluster = 1;
 
   clusters[SCHED_GLOBAL_LOAD] = clusterVec[globalLoadCluster];
   clusters[SCHED_COMPUTE] = clusterVec[computeCluster];
@@ -369,30 +369,22 @@ tt::CoarseSchedule
 buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   LDBG("Build SingleDotSchedule");
-  tt::CoarseSchedule schedule(numStages);
-  Stages stages;
-  Clusters clusters;
-
-  auto dumpSchedule = [&](llvm::StringRef msg) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "\n";
-      LDBG(msg);
-      schedule.dump();
-    });
-  };
 
   int maxDist = 0;
-  for (auto &[l, info] : loadToInfo) {
+  for (auto &[_, info] : loadToInfo) {
     maxDist = std::max(maxDist, info.distToUse);
   }
 
-  int numBuffers = 1;
-  initSymbolicSchedule(maxDist, stages, numStages, clusters, schedule);
+  tt::CoarseSchedule schedule(numStages);
+  Stages stages;
+  Clusters clusters;
+  initSymbolicSchedule(maxDist, stages, clusters, schedule);
 
-  if (failed(scheduleLoads(loadToInfo, maxDist, numStages, stages, clusters,
-                           schedule)))
+  if (failed(scheduleLoads(loadToInfo, maxDist, stages, clusters, schedule)))
     return {};
-  dumpSchedule("Coarse schedule loads only:");
+
+  LDBG("\nCoarse schedule loads only:");
+  schedule.dump();
 
   return schedule;
 }
