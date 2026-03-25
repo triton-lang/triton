@@ -6,6 +6,7 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizz
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_mx_scale_cdna4
+from triton_kernels.tensor_details.layout_details.gfx1250_scale import unswizzle_mx_scale_gfx1250
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
@@ -304,6 +305,13 @@ def _matmul(
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * NON_K_PRESHUFFLE_BLOCK_SIZE
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N // NON_K_PRESHUFFLE_BLOCK_SIZE
             stride_scale_k = stride_w_mx_k
+        elif SWIZZLE_MX_SCALE == "GFX1250_SCALE":
+            tl.static_assert(stride_w_mx_k is not None)
+            tl.static_assert(stride_w_mx_n is not None)
+            NON_K_PRESHUFFLE_BLOCK_SIZE: tl.constexpr = 128
+            PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * NON_K_PRESHUFFLE_BLOCK_SIZE
+            SCALE_BLOCK_N: tl.constexpr = BLOCK_N // NON_K_PRESHUFFLE_BLOCK_SIZE
+            stride_scale_k = stride_w_mx_k
         else:
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N
@@ -398,6 +406,8 @@ def _matmul(
                 w_scales = unswizzle_mxfp4_scale_hopper(tl.load(WMxScalePtrs), mx_axis=1, num_warps=num_warps)
             elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
                 w_scales = unswizzle_mx_scale_cdna4(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
+            elif SWIZZLE_MX_SCALE == "GFX1250_SCALE":
+                w_scales = unswizzle_mx_scale_gfx1250(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
             else:
                 w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :])
 
