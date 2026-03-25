@@ -62,26 +62,32 @@ def TTNG_TensorDescIm2ColType : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2
     https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
   }];
 
-  let parameters = (ins "RankedTensorType":$blockType,
-      OptionalParameter<"Attribute">:$sharedLayout);
+  let parameters = (ins
+    "RankedTensorType":$blockType,
+    OptionalParameter<"Attribute">:$sharedLayout
+  );
 
   let assemblyFormat = [{
     `<` $blockType (`,` $sharedLayout^)? `>`
   }];
 
-  let builders = [TypeBuilder<(ins "RankedTensorType":$blockType), [{
+  let builders = [
+    TypeBuilder<(ins "RankedTensorType":$blockType), [{
       return Base::get($_ctxt, blockType, Attribute{});
     }]>,
-                  // Builder with signedness for integer types
-                  TypeBuilder<
-                      (ins "RankedTensorType":$blockType, "bool":$isSigned), [{
+    // Builder with signedness for integer types
+    TypeBuilder<(ins
+      "RankedTensorType":$blockType,
+      "bool":$isSigned
+    ), [{
       if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
         auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
         blockType = blockType.clone(elemTy);
       }
       return Base::get($_ctxt, blockType, Attribute{});
-    }]>];
+    }]>
+  ];
 
   let genVerifyDecl = 1;
 }

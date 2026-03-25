@@ -113,17 +113,19 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", [TT_TensorDesc
       in the TritonNvidiaGPU dialect.
   }];
 
-  let parameters = (ins "RankedTensorType":$blockType,
-      OptionalParameter<"Attribute">:$sharedLayout);
+  let parameters = (ins
+    "RankedTensorType":$blockType,
+    OptionalParameter<"Attribute">:$sharedLayout
+  );
 
   let assemblyFormat = "`<` $blockType (`,` $sharedLayout^)? `>`";
 
-  let builders = [TypeBuilder<(ins "RankedTensorType":$blockType), [{
+  let builders = [
+    TypeBuilder<(ins "RankedTensorType":$blockType), [{
       return Base::get($_ctxt, blockType, Attribute{});
     }]>,
-                  // Builder with signedness
-                  TypeBuilder<
-                      (ins "RankedTensorType":$blockType, "bool":$isSigned), [{
+    // Builder with signedness
+    TypeBuilder<(ins "RankedTensorType":$blockType, "bool":$isSigned), [{
       if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
         auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
@@ -131,10 +133,9 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", [TT_TensorDesc
       }
       return Base::get($_ctxt, blockType, Attribute{});
     }]>,
-                  // Builder with signedness and shared layout
-                  TypeBuilder<(ins "RankedTensorType":$blockType,
-                                  "Attribute":$sharedLayout, "bool":$isSigned),
-                              [{
+    // Builder with signedness and shared layout
+    TypeBuilder<(ins "RankedTensorType":$blockType, "Attribute":$sharedLayout,
+                     "bool":$isSigned), [{
       if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
         auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);

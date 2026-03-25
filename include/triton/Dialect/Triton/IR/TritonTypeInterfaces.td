@@ -24,24 +24,26 @@ def TT_TensorDescInterface : TypeInterface<"TensorDescInterface"> {
       with additional convolution parameters
   }];
 
-  let methods =
-      [InterfaceMethod<
-           /*desc=*/"Returns the block type of the tensor descriptor",
-           /*retType=*/"mlir::RankedTensorType",
-           /*methodName=*/"getBlockType",
-           /*args=*/(ins)>,
-       InterfaceMethod<
-           /*desc=*/"Returns the optional shared memory layout encoding",
-           /*retType=*/"mlir::Attribute",
-           /*methodName=*/"getSharedLayout",
-           /*args=*/(ins)>,
-       InterfaceMethod<
-           /*desc=*/"Returns the block type with signless integer element type",
-           /*retType=*/"mlir::RankedTensorType",
-           /*methodName=*/"getSignlessBlockType",
-           /*args=*/(ins),
-           /*methodBody=*/"",
-           /*defaultImpl=*/[{
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Returns the block type of the tensor descriptor",
+      /*retType=*/"mlir::RankedTensorType",
+      /*methodName=*/"getBlockType",
+      /*args=*/(ins)
+    >,
+    InterfaceMethod<
+      /*desc=*/"Returns the optional shared memory layout encoding",
+      /*retType=*/"mlir::Attribute",
+      /*methodName=*/"getSharedLayout",
+      /*args=*/(ins)
+    >,
+    InterfaceMethod<
+      /*desc=*/"Returns the block type with signless integer element type",
+      /*retType=*/"mlir::RankedTensorType",
+      /*methodName=*/"getSignlessBlockType",
+      /*args=*/(ins),
+      /*methodBody=*/"",
+      /*defaultImpl=*/[{
         auto resTy = $_type.getBlockType();
         if (auto intTy = llvm::dyn_cast<mlir::IntegerType>(resTy.getElementType())) {
           auto width = resTy.getElementTypeBitWidth();
@@ -49,7 +51,8 @@ def TT_TensorDescInterface : TypeInterface<"TensorDescInterface"> {
           resTy = resTy.clone(signlessTy);
         }
         return resTy;
-      }]>,
+      }]
+    >,
   ];
 }
 
