@@ -371,10 +371,9 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   LDBG("Build SingleDotSchedule");
 
   int maxDist = 0;
-  llvm::for_each(loadToInfo, [&maxDist](auto &item) {
-    const auto &[_, info] = item;
+  for (auto &[_, info] : loadToInfo) {
     maxDist = std::max(maxDist, info.distToUse);
-  });
+  }
 
   tt::CoarseSchedule schedule(numStages);
   Stages stages;
