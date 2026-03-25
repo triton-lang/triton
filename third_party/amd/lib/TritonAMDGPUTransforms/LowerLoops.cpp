@@ -939,8 +939,7 @@ void lowerLoop(scf::ForOp forOp,
     return;
   }
 
-  dumpScheduleDebug(schedule, DEBUG_TYPE,
-                    "[lowerLoops]deserialized schedule:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE, "[lowerLoops]deserialized schedule:");
 
   int numStages = schedule.getNumStages();
 

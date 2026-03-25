@@ -506,7 +506,8 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 
   if (failed(scheduleLoads(dotOps, loadToInfo, clusters, schedule)))
     return {};
-  dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule load and dots only:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE,
+                    "Coarse schedule load and dots only:");
 
   if (failed(scheduleOpsBetweenDots(forOp, dotOps, schedule, clusters))) {
     return {};
