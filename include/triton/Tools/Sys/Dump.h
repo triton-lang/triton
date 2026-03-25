@@ -1,7 +1,7 @@
 #ifndef TRITON_TOOLS_SYS_DUMP_HPP
 #define TRITON_TOOLS_SYS_DUMP_HPP
 
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 

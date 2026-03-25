@@ -68,7 +68,7 @@ inline void assertIsRecognized(const std::string &env) {
   bool is_neutral =
       CACHE_NEUTRAL_ENV_VARS.find(env.c_str()) != CACHE_NEUTRAL_ENV_VARS.end();
   std::string errmsg = env + "is not recognized. "
-                             "Please add it to triton/tools/sys/getenv.hpp";
+                             "Please add it to triton/Tools/Sys/GetEnv.h";
   assert((is_invalidating || is_neutral) && errmsg.c_str());
 }
 
