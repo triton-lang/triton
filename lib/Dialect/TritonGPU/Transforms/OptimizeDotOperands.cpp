@@ -339,9 +339,6 @@ private:
   static bool isZeroSwizzleCompatibleEncoding(Attribute encoding) {
     if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(encoding))
       return nvmma.getSwizzlingByteWidth() == 0;
-    if (auto swizzled = dyn_cast<SwizzledSharedEncodingAttr>(encoding))
-      return swizzled.getVec() == 1 && swizzled.getPerPhase() == 1 &&
-             swizzled.getMaxPhase() == 1;
     return false;
   }
 
@@ -353,11 +350,6 @@ private:
   };
 
   static SharedEncodingTrait getSourceSharedEncoding(Value baseTensor) {
-    if (auto localLoad = baseTensor.getDefiningOp<LocalLoadOp>()) {
-      if (auto srcTy = dyn_cast<MemDescType>(localLoad.getSrc().getType()))
-        return dyn_cast<SharedEncodingTrait>(srcTy.getEncoding());
-      return nullptr;
-    }
     if (auto descLoad = baseTensor.getDefiningOp<DescriptorLoadOp>()) {
       auto descTy = dyn_cast<triton::TensorDescType>(descLoad.getDesc().getType());
       if (!descTy)
