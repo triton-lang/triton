@@ -476,9 +476,8 @@ tt.func @test_combine_dot_add_fold_when_precise_required() -> (tensor<128x128xf3
 
 // CHECK-LABEL: @test_combine_broadcast_mul_reduce
 tt.func @test_combine_broadcast_mul_reduce(%arg0: tensor<32x16xf32>, %arg1: tensor<16x32xf32>) -> tensor<32x32xf32> {
-    // CHECK: %[[CST:.*]] = arith.constant 0.000000e+00 : f32
-    // CHECK: %[[ACC:.*]] = tt.splat %[[CST]] : f32 -> tensor<32x32xf32>
-    // CHECK: %[[RES:.*]] = tt.dot %{{.*}}, %{{.*}}, %[[ACC]] : tensor<32x16xf32> * tensor<16x32xf32> -> tensor<32x32xf32>
+    // CHECK: %[[CST:.*]] = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
+    // CHECK: %[[RES:.*]] = tt.dot %{{.*}}, %{{.*}}, %[[CST]] : tensor<32x16xf32> * tensor<16x32xf32> -> tensor<32x32xf32>
     // CHECK: tt.return %[[RES]] : tensor<32x32xf32>
     %0 = tt.expand_dims %arg0 {axis = 2 : i32} : tensor<32x16xf32> -> tensor<32x16x1xf32>
     %1 = tt.broadcast %0 : tensor<32x16x1xf32> -> tensor<32x16x32xf32>
