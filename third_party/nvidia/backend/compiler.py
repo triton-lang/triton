@@ -369,6 +369,12 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
+        # Needs to run before consan so that the barrier init sync is inserted before
+        # the concurrency sanitizer instrumentation
+        # TODO: Consider moving all the fence / membar passes before consan to keep
+        # the relative ordering
+        nvidia.passes.ttnvgpuir.add_cluster_barrier_insertion(pm, capability)
+        nvidia.passes.ttnvgpuir.add_cross_cta_mbarrier_init_sync_insertion(pm, capability)
         if "consan" in options.instrumentation_mode:
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
             passes.ttgpuir.add_concurrency_sanitizer(pm)

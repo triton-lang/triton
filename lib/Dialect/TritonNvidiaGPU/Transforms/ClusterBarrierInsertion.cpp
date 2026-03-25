@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
@@ -18,6 +19,10 @@
 namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
+
+#define GEN_PASS_DEF_TRITONGPUCLUSTERBARRIERINSERTION
+#define GEN_PASS_DEF_TRITONGPUCROSSCTAMBARRIERINITSYNCINSERTION
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
 
@@ -428,6 +433,35 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
 }
 
 } // namespace
+
+struct ClusterBarrierInsertionPass
+    : public impl::TritonGPUClusterBarrierInsertionBase<
+          ClusterBarrierInsertionPass> {
+  using impl::TritonGPUClusterBarrierInsertionBase<
+      ClusterBarrierInsertionPass>::TritonGPUClusterBarrierInsertionBase;
+
+  void runOnOperation() override {
+    ModuleOp mod = getOperation();
+    ModuleAllocation allocation(mod);
+    runClusterBarrierInsertion(allocation, computeCapability);
+  }
+};
+
+struct CrossCTAMBarrierInitSyncInsertionPass
+    : public impl::TritonGPUCrossCTAMBarrierInitSyncInsertionBase<
+          CrossCTAMBarrierInitSyncInsertionPass> {
+  using impl::TritonGPUCrossCTAMBarrierInitSyncInsertionBase<
+      CrossCTAMBarrierInitSyncInsertionPass>::
+      TritonGPUCrossCTAMBarrierInitSyncInsertionBase;
+
+  void runOnOperation() override {
+    ModuleOp mod = getOperation();
+    ModuleAllocation allocation(mod);
+    if (failed(runCrossCTAMBarrierInitSyncInsertion(allocation,
+                                                    computeCapability)))
+      signalPassFailure();
+  }
+};
 
 void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
                                 int computeCapability) {

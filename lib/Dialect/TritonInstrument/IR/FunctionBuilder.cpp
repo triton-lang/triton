@@ -733,6 +733,24 @@ void FunctionBuilder::createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b,
         canInit = arith::SelectOp::create(fb, ctaMask, canInit, vTrue);
         Value predTensor = triton::SplatOp::create(fb, condType, pred);
         canInit = arith::SelectOp::create(fb, predTensor, canInit, vTrue);
+        Value allCanInit = reduceAll<arith::AndIOp>(fb, canInit);
+        Value vFalse = arith::ConstantOp::create(
+            fb, allCanInit.getType(), fb.getIntegerAttr(fb.getI1Type(), 0));
+        Value failed = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                             allCanInit, vFalse);
+        Value shouldPrint = arith::AndIOp::create(fb, failed, pred);
+        auto ifBlocks = createIfBlock(fb, shouldPrint);
+        Block *ifBlock = std::get<1>(ifBlocks);
+        Block *thenBlock = std::get<2>(ifBlocks);
+        fb.setInsertionPointToStart(ifBlock);
+        Value ctaId = tti::ExperimentalClusterCTAIdOp::create(fb, fb.getLoc());
+        triton::PrintOp::create(
+            fb,
+            " verify_barrier_can_init cta/recipient/mbar/states/mask/canInit: ",
+            false,
+            ValueRange{ctaId, recipientCTAs, mbarOffset, states, mask, canInit},
+            ArrayRef<int32_t>{1, 0, 0, 0, 0, 0});
+        fb.setInsertionPointToStart(thenBlock);
         triton::ReturnOp::create(fb, canInit);
       });
 }

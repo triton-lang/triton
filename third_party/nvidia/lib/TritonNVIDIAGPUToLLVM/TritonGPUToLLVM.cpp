@@ -18,7 +18,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
 
 #include "Allocation.h"
 #include "PatternTritonGPUOpToLLVM.h"
@@ -93,11 +92,6 @@ struct ConvertTritonGPUToLLVM
     ModuleAllocation allocation(
         mod, mlir::triton::nvidia_gpu::getNvidiaAllocationAnalysisScratchSizeFn(
                  targetInfo));
-    mlir::triton::nvidia_gpu::runClusterBarrierInsertion(allocation,
-                                                         computeCapability);
-    if (failed(mlir::triton::nvidia_gpu::runCrossCTAMBarrierInitSyncInsertion(
-            allocation, computeCapability)))
-      return signalPassFailure();
     ModuleMembarAnalysis membarPass(&allocation, canSkipBarSync);
     membarPass.run();
 

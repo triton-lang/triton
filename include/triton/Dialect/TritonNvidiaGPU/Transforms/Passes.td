@@ -82,6 +82,36 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
   ];
 }
 
+def TritonGPUClusterBarrierInsertion : Pass<"triton-nvidia-gpu-cluster-barrier-insertion", "mlir::ModuleOp"> {
+  let summary = "Insert cluster barriers for distributed shared-memory dependencies";
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"90",
+           "device compute capability">
+  ];
+}
+
+def TritonGPUCrossCTAMBarrierInitSyncInsertion : Pass<"triton-nvidia-gpu-cross-cta-mbarrier-init-sync-insertion", "mlir::ModuleOp"> {
+  let summary = "Insert cross-CTA mbarrier init synchronization";
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"90",
+           "device compute capability">
+  ];
+}
+
 def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::ModuleOp"> {
   let summary = "lower to TMA load/store operations";
 
