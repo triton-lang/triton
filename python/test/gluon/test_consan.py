@@ -1480,6 +1480,7 @@ def test_ws_async_copy_commits(FAILURE, device, run_wrapper, monkeypatch, num_ct
             assert_expected_cuda_failure(result.exc)
             assert any(msg in result.driver_stderr_output for msg in [
                 "Buffer being accessed has outstanding writes",
+                "Buffer being accessed has outstanding reads",
                 "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared",
             ])
         else:
