@@ -290,10 +290,8 @@ private:
         }
       }
       if (auto info = hooks->getBarrierWaitInfo(op)) {
-        instrumentBarrierWait(
-            b, listener, op, info->alloc, info->phase,
-            tti::maybeAnd(b, info->pred, hooks->getIssuerCTAPred(b, op)),
-            thread, baseThread, funcBuilder);
+        instrumentBarrierWait(b, listener, op, info->alloc, info->phase,
+                              info->pred, thread, baseThread, funcBuilder);
       }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
         if (!auxData.commits[CommitKind::AsyncCp].empty())
@@ -340,8 +338,9 @@ private:
     // Pre-wait: mark waiting threads and check for deadlock.
     {
       CriticalSectionListener preListener;
-      b.setListener(&preListener);
       b.setInsertionPoint(op);
+      pred = tti::maybeAnd(b, pred, hooks->getIssuerCTAPred(b, op));
+      b.setListener(&preListener);
       funcBuilder.createVerifyBarrierInitializedCall(b, alloc, pred, op,
                                                      currentCTAMask(b));
       funcBuilder.createSetWaitingCall(b, alloc, baseThread, phase, pred, op);
