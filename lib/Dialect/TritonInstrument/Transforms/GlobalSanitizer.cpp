@@ -30,6 +30,8 @@ namespace ttng = mlir::triton::nvidia_gpu;
 namespace {
 
 static constexpr const char kGSanGlobalStateArgAttr[] = "tti.gsan_global_state";
+static constexpr const char kDisableSetMaxRegisterAttr[] =
+    "tti.disable_setmaxregister";
 
 struct DescriptorInfo {
   Value base;
@@ -403,6 +405,10 @@ public:
           .Case([&](ttng::AsyncTMAScatterOp op) {
             instrumentAsyncTMAScatter(op);
           });
+    });
+
+    module.walk([&](ttg::WarpSpecializeOp op) {
+      op->setAttr(kDisableSetMaxRegisterAttr, builder.getUnitAttr());
     });
   }
 };
