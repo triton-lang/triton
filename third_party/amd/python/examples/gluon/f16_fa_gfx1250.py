@@ -560,6 +560,7 @@ def attn_fwd_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
     k = pgm.tdm_shared_load_k(1, wait_count=3)
 
     iter_id = 0
+    # TODO: Re-unroll to factor of 2 to optimize rotating register, once LLVM codegen can handle it better.
     for block_id in range(block_min, block_max, BLOCK_N):
         """
         Steady State (Hot Loop - No Masking):
