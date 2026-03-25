@@ -1,6 +1,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "triton/Analysis/RangeAnalysis.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -114,6 +115,21 @@ public:
   }
 
 protected:
+  bool canUsUnsignedBounds(OpTy op) {
+    // The unsigned-style bounds used by signed div/rem visitors require a
+    // nonnegative numerator. Negative numerators can cross zero and invalidate
+    // those inferences.
+    if constexpr (std::is_same_v<OpTy, arith::DivSIOp> ||
+                  std::is_same_v<OpTy, arith::RemSIOp>) {
+      auto [it, inserted] = nonNegativeCache.try_emplace(op.getLhs(), false);
+      if (inserted)
+        it->second = succeeded(dataflow::staticallyNonNegative(
+            this->getRangeSolver(), op.getLhs()));
+      return it->second;
+    }
+    return true;
+  }
+
   virtual int64_t getContiguity(OpTy op, const AxisInfo &lhs,
                                 const AxisInfo &rhs, int dim) {
     return 1;
@@ -132,6 +148,9 @@ protected:
                                                   const AxisInfo &rhs) {
     return {};
   }
+
+private:
+  DenseMap<Value, bool> nonNegativeCache;
 };
 
 template <typename OpTy>
@@ -442,6 +461,12 @@ private:
     // we need to use another gcd to get the actual constancy.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+      // For signed division this unsigned-style plateau argument is only
+      // universally valid when the numerator is known nonnegative.  Without
+      // that, a legal run like (-|Y|, -|Y|+1) over constant Y gives (-1, 0),
+      // so no nontrivial constancy is guaranteed.
+      if (!this->canUsUnsignedBounds(op))
+        return constancy;
       constancy = std::max(constancy,
                            gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                                rhs.getDivisibility(dim)));
@@ -501,7 +526,8 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
-    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+    if (this->canUsUnsignedBounds(op) &&
+        AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
       contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                        rhs.getDivisibility(dim));
@@ -511,8 +537,7 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    auto resTy = dyn_cast<RankedTensorType>(op.getType());
-    if (rhs.getConstancy(dim) > 1) {
+    if (rhs.getConstancy(dim) > 1 && this->canUsUnsignedBounds(op)) {
       // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
       // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
       // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
@@ -1161,9 +1186,11 @@ public:
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
 
-AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
+AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
+                                   DataFlowSolver &rangeSolver)
     : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
-          solver) {
+          solver),
+      visitors(rangeSolver) {
   // UnrealizedConversionCast:
   // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
   // in the process of a PartialConversion, where UnrealizedConversionCast
@@ -1357,8 +1384,9 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
 }
 
 AxisInfoAnalysis *
-AxisInfoAnalysis::loadDefaultAnalysis(DataFlowSolver *solver) {
-  return solver->load<AxisInfoAnalysis>();
+AxisInfoAnalysis::loadDefaultAnalysis(DataFlowSolver *solver,
+                                      DataFlowSolver &rangeSolver) {
+  return solver->load<AxisInfoAnalysis>(rangeSolver);
 }
 
 unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
@@ -1460,8 +1488,33 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
 
 void ModuleAxisInfoAnalysis::initialize(
     FunctionOpInterface funcOp, AxisInfoAnalysis::LoadCallback loadAnalysis) {
+  // Range analysis is only needed for the signed div/rem unsigned-bound
+  // inference. Skip the expensive dataflow run for functions that cannot use
+  // it.
+  bool needsRangeAnalysis = false;
+  funcOp.walk([&](Operation *op) {
+    if (isa<arith::DivSIOp, arith::RemSIOp>(op))
+      needsRangeAnalysis = true;
+  });
+
+  DataFlowSolver emptyRangeSolver;
+  DataFlowSolver *rangeSolver = &emptyRangeSolver;
+  std::unique_ptr<DataFlowSolver> ownedRangeSolver;
+  if (needsRangeAnalysis) {
+    auto assumptions =
+        AMD::TritonIntegerRangeAnalysis::collectAssumptions(funcOp);
+    DominanceInfo domInfo(funcOp);
+    ownedRangeSolver = createDataFlowSolver();
+    AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
+        ownedRangeSolver->load<AMD::TritonIntegerRangeAnalysis>(assumptions,
+                                                                &domInfo);
+    AMD::initializeFuncOps(funcOp, rangeAnalysis);
+    (void)ownedRangeSolver->initializeAndRun(funcOp);
+    rangeSolver = ownedRangeSolver.get();
+  }
+
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *analysis = loadAnalysis(solver.get());
+  AxisInfoAnalysis *analysis = loadAnalysis(solver.get(), *rangeSolver);
   if (failed(solver->initializeAndRun(funcOp)))
     return;
 

@@ -232,6 +232,42 @@ tt.func @div(%arg0: i32 {tt.divisibility = 16 : i32}) {
   tt.return
 }
 
+// -----
+
+tt.func @divsi_positivity_guard(
+    %num: tensor<8xi32> {tt.contiguity = 8 : i32, tt.divisibility = 8 : i32, tt.constancy = 1 : i32},
+    %den: tensor<8xi32> {tt.contiguity = 1 : i32, tt.divisibility = 8 : i32, tt.constancy = 8 : i32}) {
+  // Without a nonnegativity proof for %num, signed division by a constant
+  // denominator has no nontrivial universal constancy.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %0 = arith.divsi %num, %den : tensor<8xi32>
+  // expected-remark @below {{contiguity = [8], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %pos = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+  // With a nonnegative numerator, the existing unsigned-style bound is valid.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [8], constant_value = <none>}}
+  %1 = arith.divsi %pos, %den : tensor<8xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @remsi_positivity_guard(
+    %num: tensor<8xi32> {tt.contiguity = 8 : i32, tt.divisibility = 64 : i32, tt.constancy = 1 : i32},
+    %den: tensor<8xi32> {tt.contiguity = 1 : i32, tt.divisibility = 32 : i32, tt.constancy = 8 : i32}) {
+  // Repro for:
+  //   [-64, -63, -62, -61, -60, -59, -58, -57]
+  //   remsi [32, 32, 32, 32, 32, 32, 32, 32]
+  //   = [0, -31, -30, -29, -28, -27, -26, -25]
+  // This result has neither nontrivial contiguity nor divisibility.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %0 = arith.remsi %num, %den : tensor<8xi32>
+  // expected-remark @below {{contiguity = [8], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %pos = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+  // With a nonnegative numerator, the existing unsigned-style bounds are valid.
+  // expected-remark @below {{contiguity = [8], divisibility = [32], constancy = [1], constant_value = <none>}}
+  %1 = arith.remsi %pos, %den : tensor<8xi32>
+  tt.return
+}
 
 // -----
 

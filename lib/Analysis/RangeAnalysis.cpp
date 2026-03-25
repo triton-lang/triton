@@ -1,4 +1,4 @@
-#include "third_party/amd/include/Analysis/RangeAnalysis.h"
+#include "triton/Analysis/RangeAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -6,7 +6,6 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Iterators.h"
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
-#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -77,8 +76,8 @@ void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   }
 }
 
-tt::FuncOp getEnclosingFunction(Value v) {
-  tt::FuncOp funcOp = nullptr;
+FunctionOpInterface getEnclosingFunction(Value v) {
+  FunctionOpInterface funcOp;
 
   auto definingOp = v.getDefiningOp();
   if (!definingOp)
@@ -86,17 +85,20 @@ tt::FuncOp getEnclosingFunction(Value v) {
       definingOp = blk->getParentOp();
 
   if (definingOp) {
-    if (auto selfIsFunc = dyn_cast<tt::FuncOp>(definingOp))
+    if (auto selfIsFunc = dyn_cast<FunctionOpInterface>(definingOp))
       funcOp = selfIsFunc;
     else
-      funcOp = definingOp->getParentOfType<tt::FuncOp>();
+      funcOp = definingOp->getParentOfType<FunctionOpInterface>();
   }
 
-  assert(funcOp && "No enclosing tt::FuncOp");
   return funcOp;
 }
 
-Block *getFuncEntryBlock(tt::FuncOp func) { return &func.getRegion().front(); }
+Block *getFuncEntryBlock(FunctionOpInterface func) {
+  if (!func || func.isExternal())
+    return nullptr;
+  return &func.getFunctionBody().front();
+}
 
 void inferResultRangesPID(Operation *op, uint64_t max,
                           SetIntRangeFn setResultRange) {
@@ -388,10 +390,10 @@ void TritonIntegerRangeAnalysis::setToEntryState(
       !llvm::isa<IntegerType>(getElementTypeOrSelf(anchor)))
     return;
 
-  Block *entryBlock = getFuncEntryBlock(getEnclosingFunction(anchor));
   IntegerValueRange range = IntegerValueRange::getMaxRange(anchor);
-  if (auto maybeRange = maybeGetAssumedRange(anchor, entryBlock))
-    range = *maybeRange;
+  if (Block *entryBlock = getFuncEntryBlock(getEnclosingFunction(anchor)))
+    if (auto maybeRange = maybeGetAssumedRange(anchor, entryBlock))
+      range = *maybeRange;
   auto changed = lattice->join(range);
   LLVM_DEBUG({
     if (changed == ChangeResult::Change) {
@@ -562,8 +564,10 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
         return lattice->getValue();
       });
 
-  if (auto sliceOp = dyn_cast<triton::amdgpu::ExtractSliceOp>(op)) {
-    joinCallback(sliceOp->getResult(0), argIntValueRanges[0]);
+  // Keep this as a name check so the shared analysis does not need to depend
+  // on the AMD dialect library.
+  if (op->getName().getStringRef() == "amdg.extract_slice") {
+    joinCallback(op->getResult(0), argIntValueRanges[0]);
     return success();
   }
 

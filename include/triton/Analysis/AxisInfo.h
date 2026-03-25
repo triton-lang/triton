@@ -154,7 +154,8 @@ private:
 
 class AxisInfoVisitor {
 public:
-  AxisInfoVisitor() = default;
+  explicit AxisInfoVisitor(DataFlowSolver &rangeSolver)
+      : rangeSolver(rangeSolver) {}
   virtual ~AxisInfoVisitor() = default;
 
   bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape, int dim) {
@@ -170,13 +171,22 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) = 0;
 
   virtual bool match(Operation *op) = 0;
+
+protected:
+  DataFlowSolver &getRangeSolver() const { return rangeSolver; }
+
+private:
+  DataFlowSolver &rangeSolver;
 };
 
 class AxisInfoVisitorList {
 public:
+  explicit AxisInfoVisitorList(DataFlowSolver &rangeSolver)
+      : rangeSolver(rangeSolver) {}
+
   template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
   void append() {
-    (visitors.emplace_back(std::make_unique<Ts>()), ...);
+    (visitors.emplace_back(std::make_unique<Ts>(rangeSolver)), ...);
   }
 
   AxisInfo apply(Operation *op,
@@ -189,6 +199,7 @@ public:
 
 private:
   std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
+  DataFlowSolver &rangeSolver;
 };
 
 class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
@@ -208,7 +219,7 @@ protected:
                          ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
 
 public:
-  AxisInfoAnalysis(DataFlowSolver &solver);
+  AxisInfoAnalysis(DataFlowSolver &solver, DataFlowSolver &rangeSolver);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
 
@@ -217,8 +228,10 @@ public:
                  ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
                  ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
 
-  static AxisInfoAnalysis *loadDefaultAnalysis(DataFlowSolver *solver);
-  using LoadCallback = decltype(&AxisInfoAnalysis::loadDefaultAnalysis);
+  static AxisInfoAnalysis *loadDefaultAnalysis(DataFlowSolver *solver,
+                                               DataFlowSolver &rangeSolver);
+  using LoadCallback =
+      std::function<AxisInfoAnalysis *(DataFlowSolver *, DataFlowSolver &)>;
 };
 
 // Module level axis info analysis based on the call graph, assuming that we do

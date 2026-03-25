@@ -4,6 +4,7 @@ add_triton_library(TritonAnalysis
   BufferRegion.cpp
   Membar.cpp
   Alias.cpp
+  RangeAnalysis.cpp
   Utility.cpp
 
   DEPENDS
@@ -15,6 +16,7 @@ add_triton_library(TritonAnalysis
 
   LINK_LIBS PUBLIC
   MLIRAnalysis
+  MLIRArithTransforms
   MLIRLLVMDialect
   TritonIR
   TritonGPUIR
