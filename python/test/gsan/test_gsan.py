@@ -24,6 +24,10 @@ def with_gsan(fresh_knobs):
         yield
 
 
+def _clock_buffer_snapshot_idx(token: int, state, tid: int) -> int:
+    return (token % state.clock_buffer_size) * state.num_threads + tid
+
+
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 def test_load_store_updates_shadow(with_gsan):
     target = torch.zeros(1, dtype=torch.int32, device="cuda")
@@ -168,7 +172,7 @@ def test_atomic_add_release_publishes_token_then_increments(with_gsan):
     tid = cell.write_clock.thread_id
     state = thread_state_from_smid(tid)
     token = cell.write_clock.epoch
-    snapshot_idx = (token - 1) * state.num_threads + tid
+    snapshot_idx = _clock_buffer_snapshot_idx(token, state, tid)
     published_epoch = state.clock_buffer[snapshot_idx]
 
     assert cell.write_clock == ScalarClock(token, tid, AtomicScope.GPU, is_release=True)
@@ -211,7 +215,7 @@ def test_atomic_cas_release_success_publishes_token(with_gsan):
     tid = cell.write_clock.thread_id
     state = thread_state_from_smid(tid)
     token = cell.write_clock.epoch
-    snapshot_idx = (token - 1) * state.num_threads + tid
+    snapshot_idx = _clock_buffer_snapshot_idx(token, state, tid)
     published_epoch = state.clock_buffer[snapshot_idx]
 
     assert cell.write_clock == ScalarClock(token, tid, AtomicScope.GPU, is_release=True)
@@ -260,7 +264,7 @@ def test_atomic_release_acquire_transitively_synchronizes_cross_sm(with_gsan, ca
     producer_epoch = payload_cell.write_clock.epoch
 
     relay_state = thread_state_from_smid(flag1_cell.write_clock.thread_id)
-    snapshot_idx = (flag1_cell.write_clock.epoch - 1) * relay_state.num_threads + producer_tid
+    snapshot_idx = _clock_buffer_snapshot_idx(flag1_cell.write_clock.epoch, relay_state, producer_tid)
 
     assert flag1_cell.write_clock.scope == AtomicScope.GPU
     assert flag1_cell.write_clock.is_release

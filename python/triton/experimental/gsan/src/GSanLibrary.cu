@@ -139,7 +139,7 @@ __device__ epoch_t *getClockBufferSlot(ThreadState *state, epoch_t token,
   auto *globals = getGlobalState(state);
   assert_msg(loc, state->clockBufferHead - token < globals->clockBufferSize,
              "GSan clock buffer token overwritten");
-  uint32_t slot = (token - 1) % globals->clockBufferSize;
+  uint32_t slot = token % globals->clockBufferSize;
   return getClockBufferBase(state) + slot * globals->numThreads;
 }
 
@@ -277,19 +277,20 @@ __device__ epoch_t appendClockBufferSnapshot(ThreadState *state,
   assert_msg(loc, nextHead <= std::numeric_limits<epoch_t>::max(),
              "GSan clock buffer token overflowed");
   epoch_t *slot = getClockBufferBase(state) +
-                  (curHead % globals->clockBufferSize) * globals->numThreads;
+                  (nextHead % globals->clockBufferSize) * globals->numThreads;
   for (int i = 0; i < globals->numThreads; ++i)
     slot[i] = snapshot[i];
   state->clockBufferHead = nextHead;
-  state->clockBufferDirty = 0;
   return static_cast<epoch_t>(nextHead);
 }
 
 __device__ epoch_t publishCurrentVectorClock(ThreadState *state, Location loc) {
   if (state->clockBufferDirty) {
-    return appendClockBufferSnapshot(state, state->vectorClock, loc);
+    auto token = appendClockBufferSnapshot(state, state->vectorClock, loc);
+    state->clockBufferDirty = 0;
+    return token;
   }
-  return state->clockBufferHead - 1;
+  return state->clockBufferHead;
 }
 
 __device__ const epoch_t *getSnapshotForWrite(ThreadState *state,
@@ -306,7 +307,9 @@ __device__ epoch_t propagateClockBufferSnapshot(ThreadState *state,
                                                 Location loc) {
   auto *snapshot = getSnapshotForWrite(state, write, loc);
   assert_msg(loc, snapshot != nullptr, "Invalid GSan propagated clock token");
-  return appendClockBufferSnapshot(state, snapshot, loc);
+  auto token = appendClockBufferSnapshot(state, snapshot, loc);
+  state->clockBufferDirty = 1;
+  return token;
 }
 
 __device__ void incrementThreadEpoch(ThreadState *state, Location loc) {
