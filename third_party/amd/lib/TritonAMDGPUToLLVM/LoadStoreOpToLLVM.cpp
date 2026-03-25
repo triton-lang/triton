@@ -1197,9 +1197,13 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto encoding = descBlockTy.getEncoding();
     Type elementType =
         getTypeConverter()->convertType(descBlockTy.getElementType());
-    triton::LinearLayout sharedLayout = isPaddedEncoding(encoding)
-                                            ? paddedLinearLayout(descBlockTy)
-                                            : toLinearLayout(descBlockTy);
+    // Use descBlockTy to query shared layout because TDM lowering logic expects
+    // the descriptor's dimensionality. For rank-reducing loads, destination
+    // shared memory may have fewer dimensions than the descriptor block type.
+    triton::LinearLayout sharedLayout =
+        isPaddedEncoding(encoding)
+            ? paddedLinearLayout(descBlockTy.getShape(), encoding)
+            : toLinearLayout(descBlockTy);
     // Extract padding information if present
     unsigned padInterval = 0;
     unsigned padAmount = 0;

@@ -1264,15 +1264,13 @@ LinearLayout paddedLinearLayout(MemDescType type) {
   return partitionedSharedToLinearLayout(shape, partitioned);
 }
 
-LinearLayout paddedLinearLayout(RankedTensorType type) {
-  auto encoding = type.getEncoding();
+LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
   assert(isPaddedEncoding(encoding) &&
          "expected padded encoding or partitioned wrapping padded");
   if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
     return padded.getLinearComponent();
   }
   auto partitioned = cast<PartitionedSharedEncodingAttr>(encoding);
-  auto shape = type.getShape();
   return partitionedSharedToLinearLayout(shape, partitioned);
 }
 
