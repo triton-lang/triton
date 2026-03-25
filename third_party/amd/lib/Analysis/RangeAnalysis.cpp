@@ -542,7 +542,11 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
           op)) {
     llvm::TypeSwitch<Operation *>(op)
         .Case<GetProgramIdOp>([&](auto getPIDOp) {
-          inferResultRangesPID(getPIDOp, kDefaultMaxPrograms - 1, joinCallback);
+          int axis = getPIDOp.getAxisAsInt();
+          auto it = pidBounds.find(axis);
+          uint64_t maxPID =
+              it != pidBounds.end() ? it->second : kDefaultMaxPrograms - 1;
+          inferResultRangesPID(getPIDOp, maxPID, joinCallback);
         })
         .Case<GetNumProgramsOp>([&](auto getPIDOp) {
           inferResultRangesPID(getPIDOp, kDefaultMaxPrograms, joinCallback);
