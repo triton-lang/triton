@@ -2,20 +2,19 @@
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTRANSFORMS_UTILITY_H_
 
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/Support/Debug.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Debug.h"
 
 using namespace mlir;
 
 namespace mlir::triton::AMD {
 
 inline void dumpScheduleDebug(triton::CoarseSchedule &schedule,
-                              const char *debugType,
-                              llvm::StringRef msg) {
+                              const char *debugType, llvm::StringRef msg) {
   DEBUG_WITH_TYPE(debugType, {
     llvm::dbgs() << "\n[" << debugType << "]: " << msg << "\n";
     schedule.dump();
