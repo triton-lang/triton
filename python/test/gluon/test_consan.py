@@ -546,6 +546,63 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
                   num_warps=4, num_ctas=num_ctas)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.parametrize("FAILURE", [True, False])
+@pytest.mark.parametrize("MEM_ACCESS_KIND", ["local_store", "tmem_load"])
+def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch, num_ctas):
+    if run_wrapper:
+        result = run_in_process(test_tcgen5_copy, (FAILURE, MEM_ACCESS_KIND, device, False, monkeypatch, num_ctas))
+        if FAILURE:
+            assert_expected_cuda_failure(result.exc)
+            if MEM_ACCESS_KIND == "local_store":
+                assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+            else:
+                assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(input, output, FAILURE: ttgl.constexpr, MEM_ACCESS_KIND: ttgl.constexpr):
+        block_m: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
+        cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 2)
+        tmem_layout: ttgl.constexpr = blackwell.TensorMemoryLayout((128, XBLOCK), col_stride=1, cga_layout=cga_layout)
+        tmem = blackwell.allocate_tensor_memory(ttgl.int32, [block_m, XBLOCK], tmem_layout)
+        reg_layout: ttgl.constexpr = tmem.get_reg_layout()
+        offs_m = ttgl.arange(0, block_m, ttgl.SliceLayout(1, reg_layout))[:, None]
+        offs_n = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, reg_layout))[None, :]
+        offs = offs_m * XBLOCK + offs_n
+        val = ttgl.load(input + offs)
+        smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2,
+                                                             cga_layout=cga_layout)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [block_m, XBLOCK], smem_layout)
+        smem.store(val)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        blackwell.tcgen05_copy(smem, tmem)
+        blackwell.tcgen05_commit(bar)
+        if not FAILURE:
+            mbarrier.wait(bar, 0)
+        if MEM_ACCESS_KIND == "local_store":
+            smem.store(ttgl.zeros([block_m, XBLOCK], ttgl.int32, reg_layout))
+        else:
+            val = tmem.load(reg_layout)
+            ttgl.store(output + offs, val)
+        if FAILURE:
+            mbarrier.wait(bar, 0)
+        mbarrier.invalidate(bar)
+
+    input = torch.arange(XBLOCK.value * XBLOCK.value * num_ctas, device=device,
+                         dtype=torch.int32).reshape(XBLOCK.value * num_ctas, XBLOCK.value)
+    output = torch.empty_like(input)
+    kernel[(1, )](input, output, FAILURE=FAILURE, MEM_ACCESS_KIND=MEM_ACCESS_KIND, num_warps=4, num_ctas=num_ctas)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
