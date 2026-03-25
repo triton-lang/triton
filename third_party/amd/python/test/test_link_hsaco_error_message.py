@@ -28,8 +28,6 @@ def test_nonexistent_input_reports_lld_error_details():
             error_msg = str(exc_info.value)
             assert "LLD failed to link" in error_msg
             lld_detail = error_msg.split("because ")[-1]
-            assert len(lld_detail.strip()) > 0, (
-                "LLD error details are empty — lld stderr is not being captured"
-            )
+            assert len(lld_detail.strip()) > 0, ("LLD error details are empty — lld stderr is not being captured")
         finally:
             os.unlink(tmp_out.name)
