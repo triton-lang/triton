@@ -534,14 +534,6 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
   return loadToStreamOp;
 }
 
-static void dumpSchedule(tt::CoarseSchedule &schedule, llvm::StringRef msg) {
-  LLVM_DEBUG({
-    llvm::dbgs() << "\n";
-    LDBG(msg);
-    schedule.dump();
-  });
-};
-
 namespace SingleDotSchedule {
 using namespace mlir::SingleDotSchedule;
 using ClusterMap = DenseMap<tt::CoarseSchedule::ClusterHash, int>;
@@ -801,7 +793,8 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
                                          useAsyncCopy, axisInfoAnalysis);
 
   scheduleStreamOps(loadToStreamOps, schedule, stages, clusters);
-  dumpSchedule(schedule, "Coarse schedule stream ops:");
+  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
+                                 "Coarse schedule stream ops:");
 
   for (auto [l, _] : loadToInfo) {
     if (isa<tt::DescriptorLoadOp>(l)) {
@@ -811,12 +804,15 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   }
 
   scheduleDependencies(forOp, schedule);
-  dumpSchedule(schedule, "Coarse schedule with dependencies:");
+  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
+                                 "Coarse schedule with dependencies:");
   ttg::scheduleDistanceOneDependencies(forOp, schedule);
-  dumpSchedule(schedule, "Coarse schedule with dist 1:");
+  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
+                                 "Coarse schedule with dist 1:");
   tt::CoarseSchedule::Cluster computeCluster = clusters[SCHED_COMPUTE];
   ttg::scheduleRemainingToLastStage(forOp, schedule, computeCluster);
-  dumpSchedule(schedule, "Final coarse schedule:");
+  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
+                                 "Final coarse schedule:");
 }
 } // namespace SingleDotSchedule
 
@@ -928,14 +924,17 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   }
 
   scheduleDependencies(forOp, schedule);
-  dumpSchedule(schedule, "Coarse schedule with dependencies:");
+  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
+                                 "Coarse schedule with dependencies:");
 
   triton::gpu::scheduleDistanceOneDependencies(forOp, schedule);
-  dumpSchedule(schedule, "Coarse schedule with dist 1:");
+  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
+                                 "Coarse schedule with dist 1:");
 
   tt::CoarseSchedule::Cluster lastCluster = clusters.back();
   triton::gpu::scheduleRemainingToLastStage(forOp, schedule, lastCluster);
-  dumpSchedule(schedule, "Final coarse schedule:");
+  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
+                                 "Final coarse schedule:");
 }
 } // namespace ChainedDotSchedule
 
@@ -947,7 +946,8 @@ void lowerLoop(scf::ForOp forOp,
     return;
   }
 
-  dumpSchedule(schedule, "[lowerLoops]deserialized schedule:");
+  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
+                                 "[lowerLoops]deserialized schedule:");
 
   int numStages = schedule.getNumStages();
 
@@ -1002,7 +1002,8 @@ void lowerLoop(scf::ForOp forOp,
                                       hasTDMLoad, waitAtTail);
   }
 
-  dumpSchedule(schedule, "[lowerLoops]updated schedule:");
+  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
+                                 "[lowerLoops]updated schedule:");
 
   schedule.serialize(forOp);
 }

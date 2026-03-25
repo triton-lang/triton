@@ -1,4 +1,5 @@
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
@@ -383,8 +384,8 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   if (failed(scheduleLoads(loadToInfo, maxDist, stages, clusters, schedule)))
     return {};
 
-  LDBG("\nCoarse schedule loads only:");
-  schedule.dump();
+  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
+                                 "Coarse schedule loads only:");
 
   return schedule;
 }
@@ -495,13 +496,6 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   ChainedDotClusters clusters;
   std::generate(clusters.begin(), clusters.end(),
                 [&]() { return schedule.clusters.newAtBack(); });
-  auto dumpSchedule = [&](llvm::StringRef msg) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "\n";
-      LDBG(msg);
-      schedule.dump();
-    });
-  };
 
   // Schedule dots
   auto dotOpsVec = llvm::to_vector(forOp.getBody()->getOps<tt::DotOp>());
@@ -513,12 +507,14 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 
   if (failed(scheduleLoads(dotOps, loadToInfo, clusters, schedule)))
     return {};
-  dumpSchedule("Coarse schedule load and dots only:");
+  triton::AMD::dumpScheduleDebug(schedule, DEBUG_TYPE,
+                                 "Coarse schedule load and dots only:");
 
   if (failed(scheduleOpsBetweenDots(forOp, dotOps, schedule, clusters))) {
     return {};
   }
-  dumpSchedule("Coarse schedule after schedule ops between dots:");
+  triton::AMD::dumpScheduleDebug(
+      schedule, DEBUG_TYPE, "Coarse schedule after schedule ops between dots:");
 
   return schedule;
 }
