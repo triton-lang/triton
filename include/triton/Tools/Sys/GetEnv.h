@@ -1,5 +1,5 @@
-#ifndef TRITON_TOOLS_SYS_GETENV_HPP
-#define TRITON_TOOLS_SYS_GETENV_HPP
+#ifndef TRITON_TOOLS_SYS_GETENV_H
+#define TRITON_TOOLS_SYS_GETENV_H
 
 #include <algorithm>
 #include <assert.h>
