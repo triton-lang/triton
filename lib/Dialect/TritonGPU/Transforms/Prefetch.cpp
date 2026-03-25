@@ -202,7 +202,7 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
 
 unsigned Prefetcher::getKWidthScale(Attribute dotEncoding,
                                     Type elementType) const {
-  if (computeCapability >= 90 && isa<NvidiaMmaEncodingAttr>(dotEncoding) &&
+  if (computeCapability == 90 && isa<NvidiaMmaEncodingAttr>(dotEncoding) &&
       elementType.isF64()) {
     // Hopper's FP64 MMA uses k=16 so cannot support prefetchWidth of 8.
     return 16;
