@@ -410,7 +410,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         acc_scale=2.0 if c_dtype.has_global_scale or b_dtype.has_global_scale else 1.0,
         out_dtype=c_dtype.torch_dtype,
         a_mx_scale=a_scales,
+        a_microblock_size=a_dtype.microblock_size,
         b_mx_scale=b_scale_tri,
+        b_microblock_size=b_dtype.microblock_size,
     )
 
     # --- create epilogue ---
