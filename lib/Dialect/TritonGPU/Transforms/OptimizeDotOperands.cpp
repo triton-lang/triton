@@ -336,29 +336,12 @@ public:
   }
 
 private:
-  static bool isZeroSwizzleCompatibleEncoding(Attribute encoding) {
-    if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(encoding))
-      return nvmma.getSwizzlingByteWidth() == 0;
-    return false;
-  }
-
   struct ViewStep {
     enum Kind { Reshape, Transpose } kind;
     SmallVector<int64_t> shape;
     SmallVector<int32_t> order;
     Location loc;
   };
-
-  static SharedEncodingTrait getSourceSharedEncoding(Value baseTensor) {
-    if (auto descLoad = baseTensor.getDefiningOp<DescriptorLoadOp>()) {
-      auto descTy = dyn_cast<triton::TensorDescType>(descLoad.getDesc().getType());
-      if (!descTy)
-        return nullptr;
-      return dyn_cast_or_null<SharedEncodingTrait>(
-          descTy.getBlockType().getEncoding());
-    }
-    return nullptr;
-  }
 
   LogicalResult rewriteOperand(OpOperand &operand,
                                PatternRewriter &rewriter) const {
@@ -380,8 +363,8 @@ private:
       return failure();
 
     auto allocTy = cast<MemDescType>(localAlloc.getType());
-    auto allocSharedEnc = dyn_cast<SharedEncodingTrait>(allocTy.getEncoding());
-    if (!allocSharedEnc)
+    auto allocEnc = dyn_cast<NVMMASharedEncodingAttr>(allocTy.getEncoding());
+    if (!allocEnc || allocEnc.getSwizzlingByteWidth() != 0)
       return failure();
 
     SmallVector<ViewStep> reverseSteps;
@@ -413,32 +396,15 @@ private:
     if (reverseSteps.empty())
       return failure();
 
-    auto sourceSharedEnc = getSourceSharedEncoding(baseTensor);
-    bool sourceIsZeroSwizzleLike =
-        sourceSharedEnc &&
-        isZeroSwizzleCompatibleEncoding(cast<Attribute>(sourceSharedEnc));
-    if (!isZeroSwizzleCompatibleEncoding(allocTy.getEncoding()) &&
-        !sourceIsZeroSwizzleLike)
-      return failure();
-
     auto baseTensorTy = dyn_cast<RankedTensorType>(baseTensor.getType());
     if (!baseTensorTy)
       return failure();
 
-    // If swizzle=0 comes from the source memdesc (common for descriptor+TMA
-    // staging on Hopper), use that encoding as the reference. Using the final
-    // alloc encoding can be rank-incompatible with the source tensor view
-    // chain and make this rewrite fail to materialize.
-    SharedEncodingTrait refSharedEnc = allocSharedEnc;
-    if (sourceIsZeroSwizzleLike && sourceSharedEnc)
-      refSharedEnc = sourceSharedEnc;
-
-    auto baseEnc =
-        updateEncodingForShape(localAlloc, refSharedEnc, baseTensorTy);
-    auto baseMemTy = MemDescType::get(
-        baseTensorTy.getShape(), baseTensorTy.getElementType(),
-        cast<Attribute>(baseEnc),
-        allocTy.getMemorySpace(), allocTy.getMutableMemory());
+    auto baseEnc = updateEncodingForShape(localAlloc, allocEnc, baseTensorTy);
+    auto baseMemTy =
+        MemDescType::get(baseTensorTy.getShape(), baseTensorTy.getElementType(),
+                         cast<Attribute>(baseEnc), allocTy.getMemorySpace(),
+                         allocTy.getMutableMemory());
 
     PatternRewriter::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(localAlloc);
@@ -495,12 +461,13 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);
     patterns.add<FuseTransMMAV3Plus, ReshapeMemDesc>(context);
-    patterns.add<
-        UseShmemForScales,
-        RewriteSwizzle0OperandViewsToMemDescForDotOp<triton::nvidia_gpu::TCGen5MMAOp>,
-        RewriteSwizzle0OperandViewsToMemDescForDotOp<triton::nvidia_gpu::TCGen5MMAScaledOp>,
-        RewriteSwizzle0OperandViewsToMemDescForDotOp<triton::nvidia_gpu::WarpGroupDotOp>>(
-        context);
+    patterns.add<UseShmemForScales,
+                 RewriteSwizzle0OperandViewsToMemDescForDotOp<
+                     triton::nvidia_gpu::TCGen5MMAOp>,
+                 RewriteSwizzle0OperandViewsToMemDescForDotOp<
+                     triton::nvidia_gpu::TCGen5MMAScaledOp>,
+                 RewriteSwizzle0OperandViewsToMemDescForDotOp<
+                     triton::nvidia_gpu::WarpGroupDotOp>>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
