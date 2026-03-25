@@ -109,6 +109,7 @@ def add_expr_rewrites(rewrites: list[RewriteFn]) -> None:
 class Translator(ReferenceRewriter):
     tensor_member_match_fns: list[str] = field(default_factory=list)
     target: str = "nvidia"
+    _desc_block_shapes: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         import triton
@@ -150,6 +151,23 @@ class Translator(ReferenceRewriter):
         new_callable = ast.Attribute(value, fn_name, ctx=ast.Load())
         return ast.Call(func=new_callable, args=node.args[1:], keywords=node.keywords)
 
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        if self.target.startswith("gfx") and isinstance(node.value, ast.Call):
+            ref = self.get_reference(node.value.func) if isinstance(node.value.func,
+                                                                    (ast.Attribute, ast.Name)) else None
+            if ref is not None and ref[0] is tl.make_tensor_descriptor:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        block_shape_arg = None
+                        for kw in node.value.keywords:
+                            if kw.arg == "block_shape":
+                                block_shape_arg = kw.value
+                        if block_shape_arg is None and len(node.value.args) >= 4:
+                            block_shape_arg = node.value.args[3]
+                        if block_shape_arg is not None:
+                            self._desc_block_shapes[target.id] = ast.unparse(block_shape_arg)
+        return self.generic_visit(node)
+
     def visit_Call(self, node: ast.Call) -> ast.AST:
         node, canonicalized = self.canonicalize_call(node)
         ref = self.get_reference(node.func)
@@ -162,7 +180,27 @@ class Translator(ReferenceRewriter):
                     "scatter",
             ]:
                 attr = node.func.attr
-                # Use AMD-specific helpers for gather/scatter on AMD targets
+                desc_var = node.func.value
+                # Route AMD descriptor ops to TDM-specific helpers.
+                if self.target.startswith("gfx") and isinstance(desc_var, ast.Name):
+                    if desc_var.id in self._desc_block_shapes:
+                        if attr in ["load", "store"]:
+                            # Load/store use the descriptor directly (via AMDTensorDescriptorArgs aggregate).
+                            helper_name = f"tl_{attr}_tensor_descriptor_amd"
+                            new_callee = parse_expr(f"helpers.{helper_name}")
+                            node = ast.Call(func=new_callee, args=[node.func.value] + node.args, keywords=node.keywords)
+                            return self.generic_visit(node)
+                        elif attr in ["gather", "scatter"]:
+                            # Gather/scatter reconstruct the descriptor with [num_idx, block_n]
+                            # block_shape since TDM requires it to match the actual operation dims.
+                            helper_name = f"tl_obj_{attr}_amd"
+                            new_callee = parse_expr(f"helpers.{helper_name}")
+                            idx_arg = node.args[0]
+                            num_idx_node = parse_expr(f"{ast.unparse(idx_arg)}.shape[0]")
+                            node = ast.Call(func=new_callee, args=[node.func.value] + node.args + [num_idx_node],
+                                            keywords=node.keywords)
+                            return self.generic_visit(node)
+                # Use AMD-specific helpers for gather/scatter on AMD targets (host descriptor path).
                 if attr in ["gather", "scatter"] and self.target.startswith("gfx"):
                     helper_name = f"tl_obj_{attr}_amd"
                 else:
@@ -171,6 +209,9 @@ class Translator(ReferenceRewriter):
                 node = ast.Call(func=new_callee, args=[node.func.value] + node.args, keywords=node.keywords)
             return self.generic_visit(node)
         value, _, _ = ref
+        if value is tl.make_tensor_descriptor and self.target.startswith("gfx"):
+            node.func = parse_expr("helpers.tl_make_tensor_descriptor_amd")
+            node.keywords = [kw for kw in node.keywords if kw.arg != "padding_option"]
         if value in [tl.reshape, tl.ravel]:
             node.keywords = [kw for kw in node.keywords if kw.arg != "can_reorder"]
         elif value is tl.split:
