@@ -42,6 +42,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "tritongpu-prefetch"
@@ -409,7 +410,7 @@ LogicalResult Prefetcher::initialize() {
   };
 
   SmallVector<triton::DotOp> dotsInFor;
-  for (Operation &op : *loop)
+  for (Operation &op : *loop) {
     if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
       // Only accepts dotOps encoded as Nvidia MMA v2 or AMD MFMA
       auto dstMmaEnc =
@@ -421,6 +422,15 @@ LogicalResult Prefetcher::initialize() {
         return failure();
       dotsInFor.push_back(dotOp);
     }
+    if (isa<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
+            triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(op)) {
+      // Don't rewrite if syncTMACopy or asyncTMACopy is found since they may
+      // have dependencies with the dot op that are not handled by the current
+      // implementation.
+      return failure();
+    }
+  }
+
 
   if (dotsInFor.empty())
     return failure();
