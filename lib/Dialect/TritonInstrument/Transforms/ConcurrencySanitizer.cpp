@@ -240,15 +240,22 @@ private:
       int baseThread = getBaseThread(thread);
       b.setLoc(op->getLoc());
       b.setInsertionPoint(op);
-      if (isa<ttg::LocalAllocOp, ttng::TMEMAllocOp>(op) ||
-          hooks->isPostInstrumentedOp(op)) {
+      if (isa<ttg::LocalAllocOp, ttng::TMEMAllocOp>(op)) {
         // Place insert point after specific ops:
         // allocs - we want to
         //   check if it is not overwriting any earlier allocation, but the
         //   memref value can be referenced only after it is created.
-        // wait barriers - we can update aux data only after the wait is
-        //   completed
         b.setInsertionPointAfter(op);
+      }
+
+      if (auto info = hooks->getBarrierWaitInfo(op)) {
+        // For waits we want to instrument it before and after, so we do it
+        // manually inside instrumentBarrierWait (disable the critical section
+        // listener and return early)
+        b.setListener(nullptr);
+        instrumentBarrierWait(op, info->alloc, info->phase, info->pred, thread,
+                              baseThread, funcBuilder);
+        return;
       }
 
       instrumentMemEffects(b, op, thread, funcBuilder);
@@ -289,12 +296,6 @@ private:
                                                          memType, op);
         }
       }
-      if (auto info = hooks->getBarrierWaitInfo(op)) {
-        instrumentBarrierWait(
-            b, listener, op, info->alloc, info->phase,
-            tti::maybeAnd(b, info->pred, hooks->getIssuerCTAPred(b, op)),
-            thread, baseThread, funcBuilder);
-      }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
         if (!auxData.commits[CommitKind::AsyncCp].empty())
           funcBuilder.createCommitAccessesCall(b, thread, nullptr,
@@ -332,36 +333,34 @@ private:
     });
   }
 
-  void instrumentBarrierWait(ImplicitLocOpBuilder &b,
-                             CriticalSectionListener &listener, Operation *op,
-                             Value alloc, Value phase, Value pred, int thread,
-                             int baseThread,
+  void instrumentBarrierWait(Operation *op, Value alloc, Value phase,
+                             Value pred, int thread, int baseThread,
                              tti::FunctionBuilder &funcBuilder) {
+    ImplicitLocOpBuilder wb(op->getLoc(), op);
+    pred = tti::maybeAnd(wb, pred, hooks->getIssuerCTAPred(wb, op));
+    Value lock = auxData.lock.at(op).value;
     // Pre-wait: mark waiting threads and check for deadlock.
-    {
-      CriticalSectionListener preListener;
-      b.setListener(&preListener);
-      b.setInsertionPoint(op);
-      funcBuilder.createVerifyBarrierInitializedCall(b, alloc, pred, op,
-                                                     currentCTAMask(b));
-      funcBuilder.createSetWaitingCall(b, alloc, baseThread, phase, pred, op);
-      funcBuilder.createCheckAllActiveWaitingCall(b, getActiveMask(op), pred,
-                                                  op);
-      preListener.maybeWrapWithCriticalSection(b, auxData, pred);
-      b.setListener(&listener);
-      b.setInsertionPointAfter(op);
-    }
+    tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
+    funcBuilder.createVerifyBarrierInitializedCall(wb, alloc, pred, op,
+                                                   currentCTAMask(wb));
+    funcBuilder.createSetWaitingCall(wb, alloc, baseThread, phase, pred, op);
+    funcBuilder.createCheckAllActiveWaitingCall(wb, getActiveMask(op), pred,
+                                                op);
+    tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
     // Post-wait: transfer visible writes and reads to all peer threads,
-    // and clear waiting for this barrier
+    // and clear waiting for this barrier.
     assert(!auxData.barriers.empty() &&
            "barrier descriptors must exist when instrumenting wait");
+    wb.setInsertionPointAfter(op);
+    tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       funcBuilder.createTransferVisibleWritesCall(
           b, alloc, getThreadPeersMask(thread), pred, memType, op);
       funcBuilder.createTransferVisibleReadsCall(
           b, alloc, getThreadPeersMask(thread), pred, memType, op);
     }
-    funcBuilder.createClearWaitingCall(b, alloc, baseThread, pred, op);
+    funcBuilder.createClearWaitingCall(wb, alloc, baseThread, pred, op);
+    tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
   }
 
   void instrumentMemEffects(ImplicitLocOpBuilder &b, Operation *op, int thread,

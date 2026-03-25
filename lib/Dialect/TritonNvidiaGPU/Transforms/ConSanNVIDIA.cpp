@@ -38,10 +38,6 @@ public:
                ttng::AsyncTMAScatterOp>(op);
   }
 
-  bool isPostInstrumentedOp(Operation *op) const override {
-    return isa<ttng::WaitBarrierOp>(op);
-  }
-
   std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const override {
     if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op)) {

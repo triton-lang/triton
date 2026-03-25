@@ -83,7 +83,6 @@ public:
   virtual ~ConSanTargetHooks() = default;
 
   virtual bool isTMAOp(Operation *op) const = 0;
-  virtual bool isPostInstrumentedOp(Operation *op) const = 0;
 
   virtual std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const = 0;
