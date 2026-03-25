@@ -403,7 +403,7 @@ LogicalResult Prefetcher::initialize() {
   };
   auto isBroadcasted = [kBlock, &getEncoding](Value v) {
     auto cgaLayout = getCGALayout(getEncoding(v)).getLinearLayout();
-    if (!cgaLayout.hasInDim(kBlock) || !cgaLayout.hasOutDim(kBlock))
+    if (!cgaLayout.hasInDim(kBlock))
       return false;
     return cgaLayout.getFreeVariableMasks()[kBlock] != 0;
   };
