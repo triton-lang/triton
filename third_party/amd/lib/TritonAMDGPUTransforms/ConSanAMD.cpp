@@ -30,10 +30,6 @@ public:
     return kind == tti::CommitKind::TmaStore;
   }
 
-  bool isPostInstrumentedOp(Operation *op) const override {
-    return isa<ttag::WaitBarrierOp>(op);
-  }
-
   std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const override {
     if (auto initOp = dyn_cast<ttag::InitBarrierOp>(op))
