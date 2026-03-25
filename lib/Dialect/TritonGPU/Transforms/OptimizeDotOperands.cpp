@@ -352,6 +352,22 @@ private:
     Location loc;
   };
 
+  static SharedEncodingTrait getSourceSharedEncoding(Value baseTensor) {
+    if (auto localLoad = baseTensor.getDefiningOp<LocalLoadOp>()) {
+      if (auto srcTy = dyn_cast<MemDescType>(localLoad.getSrc().getType()))
+        return dyn_cast<SharedEncodingTrait>(srcTy.getEncoding());
+      return nullptr;
+    }
+    if (auto descLoad = baseTensor.getDefiningOp<DescriptorLoadOp>()) {
+      auto descTy = dyn_cast<triton::TensorDescType>(descLoad.getDesc().getType());
+      if (!descTy)
+        return nullptr;
+      return dyn_cast_or_null<SharedEncodingTrait>(
+          descTy.getBlockType().getEncoding());
+    }
+    return nullptr;
+  }
+
   LogicalResult rewriteOperand(OpOperand &operand,
                                PatternRewriter &rewriter) const {
     Value orig = operand.get();
@@ -405,26 +421,10 @@ private:
     if (reverseSteps.empty())
       return failure();
 
-    bool sourceIsZeroSwizzleLike = false;
-    SharedEncodingTrait sourceSharedEnc;
-    if (auto localLoad = baseTensor.getDefiningOp<LocalLoadOp>()) {
-      auto srcTy = dyn_cast<MemDescType>(localLoad.getSrc().getType());
-      if (srcTy) {
-        sourceIsZeroSwizzleLike =
-            isZeroSwizzleCompatibleEncoding(srcTy.getEncoding());
-        sourceSharedEnc = dyn_cast<SharedEncodingTrait>(srcTy.getEncoding());
-      }
-    } else if (auto descLoad = baseTensor.getDefiningOp<DescriptorLoadOp>()) {
-      auto descTy = dyn_cast<triton::TensorDescType>(descLoad.getDesc().getType());
-      if (descTy) {
-        auto blockTy = descTy.getBlockType();
-        sourceSharedEnc =
-            dyn_cast_or_null<SharedEncodingTrait>(blockTy.getEncoding());
-        sourceIsZeroSwizzleLike = sourceSharedEnc &&
-                                  isZeroSwizzleCompatibleEncoding(
-                                      cast<Attribute>(sourceSharedEnc));
-      }
-    }
+    auto sourceSharedEnc = getSourceSharedEncoding(baseTensor);
+    bool sourceIsZeroSwizzleLike =
+        sourceSharedEnc &&
+        isZeroSwizzleCompatibleEncoding(cast<Attribute>(sourceSharedEnc));
     if (!isZeroSwizzleCompatibleEncoding(allocTy.getEncoding()) &&
         !sourceIsZeroSwizzleLike)
       return failure();
@@ -441,7 +441,8 @@ private:
     if (sourceIsZeroSwizzleLike && sourceSharedEnc)
       refSharedEnc = sourceSharedEnc;
 
-    auto baseEnc = updateEncodingForShape(localAlloc, refSharedEnc, baseTensorTy);
+    auto baseEnc =
+        updateEncodingForShape(localAlloc, refSharedEnc, baseTensorTy);
     auto baseMemTy = MemDescType::get(
         baseTensorTy.getShape(), baseTensorTy.getElementType(),
         cast<Attribute>(baseEnc),
