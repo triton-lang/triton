@@ -91,8 +91,8 @@ private:
 };
 
 bool isTensorCoreOp(Operation *op) {
-  return isa<ttng::TCGen5MMAOp, ttng::TCGen5MMAScaledOp, ttng::TCGen5CommitOp>(
-      op);
+  return isa<ttng::TCGen5MMAOp, ttng::TCGen5MMAScaledOp, ttng::TCGen5CommitOp,
+             ttng::TMEMCopyOp>(op);
 }
 
 std::optional<int> maybeGetPartitionIdx(Operation *op) {
@@ -177,6 +177,8 @@ Value getRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
     broadcastMasks = ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op),
                                                 commitOp.getDescs());
+  } else if (isa<ttng::TMEMCopyOp>(op)) {
+    broadcastMasks = ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), {});
   } else if (auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(op)) {
     SmallVector<Value> commitDescs;
     if (mmaOp.getMulticast()) {

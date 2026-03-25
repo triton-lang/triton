@@ -144,6 +144,16 @@ public:
                                           allocOp.getResult());
       }
     }
+    if (auto copyOp = dyn_cast<ttng::TMEMCopyOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
+                                        copyOp.getSrc(), "Src");
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                        copyOp.getDst(), "Dst");
+      if (copyOp.getBarrier())
+        info->barriers.push_back({copyOp.getBarrier(), nullptr, 1});
+    }
     if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
