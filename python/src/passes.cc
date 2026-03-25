@@ -13,7 +13,7 @@
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
 #include "triton/Tools/PluginUtils.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <string>
