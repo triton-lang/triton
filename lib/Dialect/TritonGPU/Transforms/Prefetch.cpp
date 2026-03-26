@@ -200,29 +200,12 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   return prefetchSlice;
 }
 
-unsigned Prefetcher::getKWidthScale(Attribute dotEncoding,
-                                    Type elementType) const {
-  if (computeCapability == 90 && isa<NvidiaMmaEncodingAttr>(dotEncoding) &&
-      elementType.isF64()) {
-    // Hopper's FP64 MMA uses k=16 so cannot support prefetchWidth of 8.
-    return 16;
-  }
-  return 8;
-}
-
-unsigned Prefetcher::getDotOperandKWidth(Attribute dotEncoding,
-                                         Type elementType) const {
-  unsigned kWidthScale = getKWidthScale(dotEncoding, elementType);
-  assert(prefetchWidth % kWidthScale == 0 &&
-         "prefetch width must align with dot operand kWidth");
-  return prefetchWidth / kWidthScale;
-}
 
 unsigned Prefetcher::getPrefetchWidth(Attribute dotEncoding, Type elementType,
                                       unsigned kWidth) const {
   if (kWidth == 0)
     return 256 / elementType.getIntOrFloatBitWidth();
-  return getKWidthScale(dotEncoding, elementType) * kWidth;
+  return 8 * kWidth;
 }
 
 bool Prefetcher::isLoopCarriedValue(Value v) {
@@ -489,6 +472,10 @@ LogicalResult Prefetcher::initialize() {
   for (triton::DotOp dot : dotsInFor) {
     auto aType = dot.getA().getType();
     auto bType = dot.getB().getType();
+    // TODO(Keren): reenable f64 prefetch
+    if (aType.getElementType().isF64() || bType.getElementType().isF64() ||
+        dot.getType().getElementType().isF64())
+      continue;
     auto dotEncoding = dot.getType().getEncoding();
     auto aEnc =
         mlir::cast<triton::gpu::DotOperandEncodingAttr>(aType.getEncoding());
