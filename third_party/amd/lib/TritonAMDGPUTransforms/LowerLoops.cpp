@@ -208,14 +208,14 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         // ensure that each warp writes a contiguous memory chunk. This requires
         // the shared memory order to follow the thread order, while preserving
         // the fastest dimension from the register order to keep vectorization.
-        auto llEnc =
-            triton::gpu::toLinearEncoding(cast<RankedTensorType>(srcTy));
-        auto regOrder = llEnc.getOrder();
-        auto threadOrder = llEnc.getThreadOrder();
+        auto srcTensorTy = cast<RankedTensorType>(srcTy);
+        auto regOrder = triton::gpu::getOrder(srcTensorTy);
+        auto threadOrder = triton::gpu::getThreadOrder(srcTensorTy);
 
         SetVector<unsigned> orderSet;
 
-        auto regContig = llEnc.getContigPerThread()[regOrder[0]];
+        auto regContig =
+            triton::gpu::getContigPerThread(srcTensorTy)[regOrder[0]];
         unsigned elemBitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
         unsigned finalRegContig =
             fitToValidDirectToLdsVecSize(regContig, elemBitWidth, targetInfo);

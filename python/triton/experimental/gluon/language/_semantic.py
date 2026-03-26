@@ -2,7 +2,7 @@ from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
-from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout, CoalescedLayout, SharedLinearLayout
+from ._layouts import AutoLayout, DistributedLayout, GenericLinearLayout, SliceLayout, SharedLayout, CoalescedLayout, SharedLinearLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder, compute_tmem_reg_layout
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -344,7 +344,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             f"Expected a DistributedLayout, SharedLayout, or TensorMemoryLayout or TensorMemoryScalesLayout, got {type(layout)}"
         )
 
-        if isinstance(layout, (AutoLayout, DistributedLinearLayout, SharedLinearLayout)):
+        if isinstance(layout, (AutoLayout, GenericLinearLayout, SharedLinearLayout)):
             return ttgl.constexpr(layout)
 
         return ttgl.constexpr(self.builder.to_linear_layout(layout._to_ir(self.builder), shape))

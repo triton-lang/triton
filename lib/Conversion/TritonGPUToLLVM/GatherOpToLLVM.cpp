@@ -1,5 +1,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
 using namespace mlir;
@@ -34,6 +36,13 @@ private:
 LogicalResult
 GatherOpConversion::matchAndRewrite(GatherOp op, OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const {
+  auto srcLayout = toLinearLayout(op.getSrc().getType());
+  auto dstLayout = toLinearLayout(op.getType());
+  if (!isLinearEncodingCompatible(srcLayout) ||
+      !isLinearEncodingCompatible(dstLayout))
+    return op.emitError(
+        "GatherOp requires layouts compatible with LinearEncodingAttr");
+
   GatherLoweringHelper helper(op);
   // Specialize the lowering based on the source layout. Given that the cost of
   // a warp shuffle is approximately half the cost of a roundtrip to shared

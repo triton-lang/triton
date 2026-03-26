@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/GenericSwizzling.h"
@@ -37,11 +38,11 @@ struct ConvertLayoutOpConversion
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    MLIRContext *ctx = op.getContext();
-
-    const auto &shape = op.getType().getShape();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
+
+    MLIRContext *ctx = op.getContext();
+    const auto &shape = op.getType().getShape();
 
     LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
     LinearLayout srcLayout = toLinearLayout(srcTy);
@@ -58,6 +59,11 @@ struct ConvertLayoutOpConversion
            to_vector(conversion.getOutDimNames()));
     if (llvm::is_contained(dims, kBlock) || llvm::is_contained(dims, kWarp)) {
       assert(!alwaysUseWarpShuffle);
+      if (!isLinearEncodingCompatible(srcLayout) ||
+          !isLinearEncodingCompatible(dstLayout))
+        return op.emitError(
+            "ConvertLayoutOp through shared memory requires layouts "
+            "compatible with LinearEncodingAttr");
       // Transfer between values in the same CTA, or across CTAs. We move values
       // through (distributed) shared memory.
       transferSwizzlingLocalMem(op, adaptor.getSrc(), rewriter);
@@ -69,6 +75,11 @@ struct ConvertLayoutOpConversion
       if (cvtNeedsWarpShuffle(srcTy, dstTy) || alwaysUseWarpShuffle)
         return transferWithinWarp(op, adaptor, rewriter);
 
+      if (!isLinearEncodingCompatible(srcLayout) ||
+          !isLinearEncodingCompatible(dstLayout))
+        return op.emitError(
+            "ConvertLayoutOp through shared memory requires layouts "
+            "compatible with LinearEncodingAttr");
       transferSwizzlingLocalMem(op, adaptor.getSrc(), rewriter);
       return success();
     } else if (llvm::is_contained(dims, kRegister)) {

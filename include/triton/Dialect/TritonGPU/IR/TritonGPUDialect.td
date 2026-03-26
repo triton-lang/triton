@@ -24,6 +24,9 @@ def TritonGPU_Dialect : Dialect {
 
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
     LinearEncodingAttr toLinearEncoding(ArrayRef<int64_t> shape, Attribute layout);
+    // Returns LinearEncodingAttr if the layout satisfies its constraints,
+    // otherwise returns GenericLinearEncodingAttr.
+    Attribute toLinearOrGenericEncoding(ArrayRef<int64_t> shape, Attribute layout);
 
     static int getNumCTAs(ModuleOp mod);
     static int getThreadsPerWarp(ModuleOp mod);
@@ -31,6 +34,7 @@ def TritonGPU_Dialect : Dialect {
     private:
       LinearLayoutCache llCache;
       LinearEncodingCache leCache;
+      DistributedEncodingCache deCache;
   }];
 
   let useDefaultTypePrinterParser = 1;

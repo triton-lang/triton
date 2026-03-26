@@ -127,6 +127,7 @@ struct GluonLayouts {
   py::handle BlockedLayout;
   py::handle SliceLayout;
   py::handle DistributedLinearLayout;
+  py::handle GenericLinearLayout;
   py::handle DotOperandLayout;
   py::handle NVMMADistributedLayout;
   py::handle TensorMemoryScalesLayout;
@@ -152,6 +153,8 @@ struct GluonLayouts {
     SliceLayout = py::object(layouts.attr("SliceLayout")).release();
     DistributedLinearLayout =
         py::object(layouts.attr("DistributedLinearLayout")).release();
+    GenericLinearLayout =
+        py::object(layouts.attr("GenericLinearLayout")).release();
     DotOperandLayout = py::object(layouts.attr("DotOperandLayout")).release();
     NVMMADistributedLayout =
         py::object(layouts.attr("NVMMADistributedLayout")).release();
@@ -217,6 +220,18 @@ py::object layoutToGluon(Attribute layout) {
     auto kWarp = mlir::StringAttr::get(ctx, "warp");
     auto kBlock = mlir::StringAttr::get(ctx, "block");
     return layouts.DistributedLinearLayout(
+        ll.getBases().lookup(kReg), ll.getBases().lookup(kLane),
+        ll.getBases().lookup(kWarp), ll.getBases().lookup(kBlock),
+        toStdVector(ll.getOutDimSizes()));
+  } else if (auto genericLinear =
+                 dyn_cast<ttg::GenericLinearEncodingAttr>(layout)) {
+    const auto &ll = genericLinear.getLinearLayout();
+    auto ctx = layout.getContext();
+    auto kReg = mlir::StringAttr::get(ctx, "register");
+    auto kLane = mlir::StringAttr::get(ctx, "lane");
+    auto kWarp = mlir::StringAttr::get(ctx, "warp");
+    auto kBlock = mlir::StringAttr::get(ctx, "block");
+    return layouts.GenericLinearLayout(
         ll.getBases().lookup(kReg), ll.getBases().lookup(kLane),
         ll.getBases().lookup(kWarp), ll.getBases().lookup(kBlock),
         toStdVector(ll.getOutDimSizes()));
@@ -391,6 +406,26 @@ void init_gluon_ir(py::module &&m) {
                                         outDims,
                                         /*requiresSurjective=*/true);
              return ttg::LinearEncodingAttr::get(ctx, std::move(ll));
+           })
+      .def("get_generic_linear_layout",
+           [](GluonOpBuilder &self, std::vector<std::vector<int>> regBases,
+              std::vector<std::vector<int>> laneBases,
+              std::vector<std::vector<int>> warpBases,
+              std::vector<std::vector<int>> blockBases,
+              std::vector<int64_t> shape) -> Attribute {
+             auto ctx = self.getContext();
+             auto kReg = mlir::StringAttr::get(ctx, "register");
+             auto kLane = mlir::StringAttr::get(ctx, "lane");
+             auto kWarp = mlir::StringAttr::get(ctx, "warp");
+             auto kBlock = mlir::StringAttr::get(ctx, "block");
+             auto outDims = tt::standardOutDimPairs(ctx, shape);
+             auto ll = tt::LinearLayout({{kReg, regBases},
+                                         {kLane, laneBases},
+                                         {kWarp, warpBases},
+                                         {kBlock, blockBases}},
+                                        outDims,
+                                        /*requiresSurjective=*/false);
+             return ttg::GenericLinearEncodingAttr::get(ctx, std::move(ll));
            })
       .def("to_linear_layout",
            [](GluonOpBuilder &self, Attribute layout,
