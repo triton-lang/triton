@@ -424,6 +424,16 @@ void init_triton_ir(py::module &&m) {
                }
              }
            })
+      .def("get_shape",
+           [](Value &self) -> py::object {
+             auto type = self.getType();
+             if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+               auto shape = tensorType.getShape();
+               return py::cast(
+                   std::vector<int64_t>(shape.begin(), shape.end()));
+             }
+             return py::none();
+           })
       .def("get_context", &Value::getContext)
       .def("get_loc", &Value::getLoc)
       .def("set_loc", &Value::setLoc)
