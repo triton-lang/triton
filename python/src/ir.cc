@@ -424,6 +424,16 @@ void init_triton_ir(py::module &&m) {
                }
              }
            })
+      .def("get_shape",
+           [](Value &self) -> py::object {
+             auto type = self.getType();
+             if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+               auto shape = tensorType.getShape();
+               return py::cast(
+                   std::vector<int64_t>(shape.begin(), shape.end()));
+             }
+             return py::none();
+           })
       .def("get_context", &Value::getContext)
       .def("get_loc", &Value::getLoc)
       .def("set_loc", &Value::setLoc)
@@ -629,6 +639,26 @@ void init_triton_ir(py::module &&m) {
              if (!ret)
                return py::none();
              return py::int_(ret.getInt());
+           })
+      .def("get_constant_value",
+           [](Operation &self) -> py::object {
+             auto constOp = dyn_cast<arith::ConstantOp>(self);
+             if (!constOp)
+               return py::none();
+
+             auto attr = constOp.getValue();
+
+             if (auto intAttr = dyn_cast<IntegerAttr>(attr))
+               return py::int_(intAttr.getValue().getSExtValue());
+
+             if (auto denseAttr = dyn_cast<DenseIntElementsAttr>(attr)) {
+               if (denseAttr.isSplat())
+                 return py::int_(
+                     denseAttr.getSplatValue<APInt>().getSExtValue());
+               return py::none();
+             }
+
+             return py::none();
            })
       .def("get_bool_attr",
            [](Operation &self, const std::string &name) -> py::object {
