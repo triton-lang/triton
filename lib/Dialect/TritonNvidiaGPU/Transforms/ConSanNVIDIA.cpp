@@ -32,14 +32,14 @@ public:
   std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const override {
     if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op))
-      return BarrierInitInfo{initOp.getAlloc(), initOp.getCount()};
+      return BarrierInitInfo{initOp.getBarrierMemDesc(), initOp.getCount()};
     return std::nullopt;
   }
 
   std::optional<BarrierWaitInfo>
   getBarrierWaitInfo(Operation *op) const override {
     if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op))
-      return BarrierWaitInfo{waitOp.getAlloc(), waitOp.getPhase(),
+      return BarrierWaitInfo{waitOp.getBarrierMemDesc(), waitOp.getPhase(),
                              waitOp.getPred()};
     return std::nullopt;
   }
@@ -68,7 +68,8 @@ public:
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = expectOp.getPred();
-      info->barriers.push_back({expectOp.getAlloc(), nullptr, /*count=*/1,
+      info->barriers.push_back({expectOp.getBarrierMemDesc(), nullptr,
+                                /*count=*/1,
                                 MemEffectsOpInfo::BarrierTrackingMode::None});
     }
     if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
@@ -111,7 +112,7 @@ public:
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = commitOp.getPred();
-      info->barriers.push_back({commitOp.getBarrier(), nullptr, 1});
+      info->barriers.push_back({commitOp.getBarrierMemDesc(), nullptr, 1});
     }
     if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
       if (wgmmaOp.getIsAsync() == true) {
@@ -137,7 +138,7 @@ public:
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = copyOp.getPred();
       info->barriers.push_back(
-          {copyOp.getBarrier(), nullptr, /*count=*/0,
+          {copyOp.getBarrierMemDesc(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites});
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         copyOp.getResult());
@@ -155,7 +156,7 @@ public:
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = gatherOp.getPred();
       info->barriers.push_back(
-          {gatherOp.getBarrier(), nullptr, /*count=*/0,
+          {gatherOp.getBarrierMemDesc(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites});
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         gatherOp.getResult());
@@ -171,7 +172,7 @@ public:
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = arriveOp.getPred();
       info->barriers.push_back(
-          {arriveOp.getAlloc(), nullptr, (int)arriveOp.getCount()});
+          {arriveOp.getBarrierMemDesc(), nullptr, (int)arriveOp.getCount()});
     }
     return info;
   }

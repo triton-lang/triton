@@ -91,8 +91,7 @@ private:
 };
 
 bool isTensorCoreOp(Operation *op) {
-  return isa<ttng::TCGen5MMAOp, ttng::TCGen5MMAScaledOp, ttng::TCGen5CommitOp>(
-      op);
+  return isa<ttng::MMAv5OpInterface, ttng::TCGen5CommitOp>(op);
 }
 
 std::optional<int> maybeGetPartitionIdx(Operation *op) {
@@ -210,7 +209,7 @@ private:
         funcBuilder.createInitBarrierStateCall(b, info->alloc, info->count, op);
       }
       if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op)) {
-        Value barrier = invalOp.getAlloc();
+        Value barrier = invalOp.getBarrierMemDesc();
         funcBuilder.createVerifyBarrierInitializedCall(b, barrier, nullptr,
                                                        invalOp);
         funcBuilder.createInvalidateBarrierStateCall(b, barrier, invalOp);

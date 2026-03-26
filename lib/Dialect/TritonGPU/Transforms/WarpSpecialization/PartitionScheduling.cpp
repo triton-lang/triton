@@ -228,7 +228,7 @@ SmallVector<OutputPort> initialDataValues(Graph *graph) {
         node->setDataValue(1);
         values.push_back({node, 1});
       }
-      if (isa<nvidia_gpu::TCGen5MMAOp>(op)) {
+      if (isa<nvidia_gpu::MMAv5OpInterface>(op)) {
         node->setDataValue(0);
         values.push_back({node, 0});
       }

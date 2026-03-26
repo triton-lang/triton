@@ -1338,7 +1338,7 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     if (!createStoreScratchMemory(rewriter, loc, info->ptr, srcReg, srcRegTy))
       return failure();
 
-    if (Value barrier = op.getBarrier()) {
+    if (Value barrier = op.getBarrierMemDesc()) {
       ttng::ArriveBarrierOp::create(rewriter, loc, barrier, 1, Value());
     }
     rewriter.eraseOp(op);
@@ -1353,8 +1353,8 @@ struct TCGen5CommitPattern : public OpRewritePattern<ttng::TCGen5CommitOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(ttng::TCGen5CommitOp op,
                                 PatternRewriter &rewriter) const override {
-    ttng::ArriveBarrierOp::create(rewriter, op.getLoc(), op.getBarrier(), 1,
-                                  op.getPred());
+    ttng::ArriveBarrierOp::create(rewriter, op.getLoc(), op.getBarrierMemDesc(),
+                                  1, op.getPred());
     rewriter.eraseOp(op);
     return success();
   }
