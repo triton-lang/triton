@@ -2584,8 +2584,7 @@ NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
-                                        int kWidth, int opIdx,
-                                        bool isHopperF64) const {
+                                        int kWidth, int opIdx) const {
   assert(kWidth >= std::max(32 / bitwidth, 1) &&
          "kWidth must be >= max(32 / bitwidth, 1) for this function to be "
          "well-defined");
@@ -2600,10 +2599,7 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
     tileSize.push_back(1);
   }
   // warpSizeK * (warpRepK * VecBitWidth)
-  auto tileBitWidthK = 4 * 64;
-  if (bitwidth == 64)
-    tileBitWidthK = isHopperF64 ? 4 * 256 : 2 * 256;
-
+  auto tileBitWidthK = (isAmpere() && bitwidth == 64) ? (4 * 256) : (4 * 64);
   if (opIdx == 0) {
     // m x k
     tileSize.push_back(16);

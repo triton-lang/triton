@@ -724,7 +724,7 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
                ConversionPatternRewriter &rewriter, TensorCoreType mmaType,
                const NumRegisters &numRegisters,
                const std::map<TensorCoreType, std::string> &mmaInstructions,
-               const EmitMmaCallback &emitMma, bool isHopperF64) {
+               const EmitMmaCallback &emitMma) {
   auto loc = op.getLoc();
   auto aType = cast<RankedTensorType>(op.getA().getType());
   auto bType = cast<RankedTensorType>(op.getB().getType());
@@ -749,13 +749,13 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
   int kWidth = dotOpA.getKWidth();
-  auto repA = cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
-                  .getRepForOperand(aShapePerCTA, bitwidth, kWidth,
-                                    dotOpA.getOpIdx(), isHopperF64);
+  auto repA =
+      cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
+          .getRepForOperand(aShapePerCTA, bitwidth, kWidth, dotOpA.getOpIdx());
   auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-  auto repB = cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
-                  .getRepForOperand(bShapePerCTA, bitwidth, kWidth,
-                                    dotOpB.getOpIdx(), isHopperF64);
+  auto repB =
+      cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
+          .getRepForOperand(bShapePerCTA, bitwidth, kWidth, dotOpB.getOpIdx());
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
@@ -853,7 +853,7 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
 
   bool isFp64Path = (mmaType == TensorCoreType::FP64_FP64_FP64_FP64);
-  NumRegisters numRegisters = {2, 1, isHopperF64 ? 4 : 2};
+  NumRegisters numRegisters = {2, 1, isFp64Path ? 4 : 2};
 
   const auto &instrMap =
       isTuring ? mmaInstrPtxTuring
@@ -879,14 +879,14 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           numCPackedElem, ha, hb, fc, isAccF16);
     } else {
       if (isFp64MMA) {
-        if (isHopperF64) {
+        if (!isHopperF64) {
+          callMmaAmpereFp64(builder, b, base, mma, numMmaRets, colsPerThread,
+                            numCPackedElem, batchOffset, ha, hb, fc,
+                            /*kRegs*/ 4);
+        } else {
           callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
                     numCPackedElem, batchOffset, ha, hb, fc, "=d", "d",
                     /*kRegs*/ 4);
-        } else {
-          callMmaAmpereFp64(builder, b, base, mma, numMmaRets, colsPerThread,
-                            numCPackedElem, batchOffset, ha, hb, fc,
-                            /*kRegs*/ 2);
         }
       } else {
         callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
@@ -898,7 +898,7 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
                         typeConverter, rewriter, mmaType, numRegisters,
-                        instrMap, emit, isHopperF64);
+                        instrMap, emit);
 }
 
 LogicalResult convertMMADotScaled(triton::DotScaledOp op,
@@ -963,5 +963,5 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
                         typeConverter, rewriter, mmaType, numRegisters,
-                        mmaInstrPtxScaled, emit, /*isHopperF64=*/false);
+                        mmaInstrPtxScaled, emit);
 }
