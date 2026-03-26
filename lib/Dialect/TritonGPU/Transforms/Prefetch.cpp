@@ -200,7 +200,6 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   return prefetchSlice;
 }
 
-
 unsigned Prefetcher::getPrefetchWidth(Attribute dotEncoding, Type elementType,
                                       unsigned kWidth) const {
   if (kWidth == 0)
