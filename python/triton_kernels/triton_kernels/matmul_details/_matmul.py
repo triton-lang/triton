@@ -524,6 +524,9 @@ def _matmul(
         tl.static_assert(EPILOGUE_FN is not None)
         if PER_BATCH_OUT_SCALE:
             YExpectedScale = YExpectedScale + start_z_out
+        # OCP MX outputs leave YExpectedScale unset, so this is an identity there.
+        # NVFP4 uses YExpectedScale to precondition the dense output before the
+        # microscaling epilogue writes direct e4m3 block scales.
         out = float_to_flex(out, YExpectedScale, None, None, mask, Y, False)
         out, out_scale = EPILOGUE_FN(out, mask, *epilogue_fn_args)
         tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")

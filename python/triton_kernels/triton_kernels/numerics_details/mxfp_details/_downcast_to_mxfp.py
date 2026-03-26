@@ -64,8 +64,29 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
         scale_tensor = (scale_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE]) >> 23).to(tl.uint8)
     else:
         tl.static_assert(mx_scale_dtype == tl.float8e4nv, f"Unsupported {mx_scale_dtype=}")
-        tl.static_assert(DEQUANT_SCALE_ROUNDING_MODE == 0, "Direct float8 scales only support ROUND_UP")
-        scale_tensor = (max_val / _get_max_quant_val(mx_tensor_dtype)).to(tl.float8e4nv)
+        dequant_scale = tl.minimum(max_val / _get_max_quant_val(mx_tensor_dtype), _get_max_quant_val(mx_scale_dtype))
+        scale_tensor = dequant_scale.to(tl.float8e4nv)
+        scale_tensor_bits = scale_tensor.to(tl.uint8, bitcast=True)
+        dequant_scale_rounded = scale_tensor.to(tl.float32)
+        if DEQUANT_SCALE_ROUNDING_MODE == 0:
+            # The cast above does RTNE. ROUND_UP overrides that by bumping the
+            # stored fp8 scale by one ULP whenever RTNE rounded below the exact
+            # positive dequant scale.
+            scale_tensor_bits = tl.where(
+                dequant_scale_rounded < dequant_scale,
+                scale_tensor_bits + 1,
+                scale_tensor_bits,
+            )
+        else:
+            # The cast above does RTNE. ROUND_DOWN overrides that by dropping the
+            # stored fp8 scale by one ULP whenever RTNE rounded above the exact
+            # positive dequant scale.
+            scale_tensor_bits = tl.where(
+                dequant_scale_rounded > dequant_scale,
+                scale_tensor_bits - 1,
+                scale_tensor_bits,
+            )
+        scale_tensor = scale_tensor_bits.to(tl.float8e4nv, bitcast=True)
         dequant_scale_rounded = scale_tensor.to(tl.float32)
         scale_tensor = scale_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE])
     quant_scale = tl.where(dequant_scale_rounded == 0, 0, 1.0 / dequant_scale_rounded)
