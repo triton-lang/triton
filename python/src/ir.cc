@@ -1836,7 +1836,9 @@ void init_triton_ir(py::module &&m) {
     for (const auto &op : plugin.listOps()) {
       TritonOpBuilderBinding.def(
           op.name, [op](TritonOpBuilder &self, std::vector<Value> args) {
+            args.insert(args.begin(), Value());
             op.addOp(self, args);
+            return args[0];
           });
     }
   }
