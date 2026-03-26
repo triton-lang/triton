@@ -423,7 +423,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         precision_opt.c_mx_scale = c_scale
         precision_opt.c_microblock_size = c_dtype.microblock_size
         precision_opt.c_value_pack_factor = 2 if c_dtype.is_mxfloat4 else 1
-        epilogue_spec = FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
+        epilogue_spec = (
+            FnSpecs(FnName.QUANTIZE_NVFP4.name, quantize_nvfp4_fn, (), ())
+            if c_dtype.is_nvfp4
+            else FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
+        )
         epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=6.0)
 
 

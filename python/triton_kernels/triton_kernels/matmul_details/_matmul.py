@@ -522,6 +522,9 @@ def _matmul(
         MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
         N_MX_BLOCK = tl.cdiv(N, MX_BLOCK_SIZE)
         tl.static_assert(EPILOGUE_FN is not None)
+        if PER_BATCH_OUT_SCALE:
+            YExpectedScale = YExpectedScale + start_z_out
+        out = float_to_flex(out, YExpectedScale, None, None, mask, Y, False)
         out, out_scale = EPILOGUE_FN(out, mask, *epilogue_fn_args)
         tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
         offs_y_n_scale = MX_SCALE_BLOCK_N * pid_n + tl.arange(0, MX_SCALE_BLOCK_N)
