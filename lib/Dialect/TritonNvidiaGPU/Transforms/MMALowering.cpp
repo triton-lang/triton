@@ -189,7 +189,7 @@ public:
       if (!pred) {
         pred = arith::ConstantIntOp::create(rewriter, op.getLoc(), true, 1);
       }
-      Value barrier = commit.getBarrierMemDesc();
+      Value barrier = commit.getBarrier();
       if (!moveDefiningOpsBefore(barrier, op) ||
           !moveDefiningOpsBefore(pred, op)) {
         // Give up merging a commit if its defining ops cannot be moved above

@@ -106,7 +106,7 @@ def TTNG_ClusterBarrierOp : TTNG_Op<"cluster_barrier", []> {
 // Cluster Launch Control (CLC) Ops - Blackwell SM100+
 //
 def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "Issue CLC try_cancel to cancel a pending cluster";
 
   let description = [{
@@ -253,7 +253,7 @@ def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterface
 }
 
 def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "Initialize a barrier in the given shared memory allocation.";
 
   let description = [{
@@ -273,7 +273,7 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [
 }
 
 def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "Invalidate a barrier allocation.";
 
   let description = [{
@@ -289,7 +289,7 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [
 }
 
 def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "Signal a barrier of an expected number of bytes to be copied.";
 
   let description = [{
@@ -310,7 +310,7 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
 }
 
 def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
-    DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "wait until the mbarrier phase completes.";
 
   let description = [{
@@ -357,7 +357,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
 }
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "perform the arrive operation on an mbarrier";
   let description = [{
     The `ttng.arrive_barrier` operation performs the "arrive" operation on an
@@ -620,10 +620,6 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
-  let extraClassDeclaration = [{
-    ::llvm::SmallVector<::mlir::Value> getBarrierMemDescs();
-  }];
-
   let builders = [
     OpBuilder<(ins "Type":$token,
       "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$useD,
@@ -689,7 +685,6 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     int64_t getBlockM();
     int64_t getBlockN();
     int64_t getBlockK();
-    ::llvm::SmallVector<::mlir::Value> getBarrierMemDescs();
   }];
 
   let builders = [

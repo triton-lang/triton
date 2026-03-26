@@ -61,7 +61,7 @@ unsigned getNumBuffers(ttg::MemDescIndexOp memdescIndexOp) {
 
 llvm::DenseSet<Value> getBarrierOperands(Operation *op) {
   if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op)) {
-    auto barriers = barrierOp.getBarrierMemDescs();
+    auto barriers = barrierOp.getBarriers();
     return llvm::DenseSet<Value>(barriers.begin(), barriers.end());
   }
 

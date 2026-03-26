@@ -74,8 +74,7 @@ static bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
 }
 
 static bool isCrossCTAMBarrier(ttng::InitBarrierOp initBarrierOp, int numCTAs) {
-  auto barrierTy =
-      cast<ttg::MemDescType>(initBarrierOp.getBarrierMemDesc().getType());
+  auto barrierTy = cast<ttg::MemDescType>(initBarrierOp.getBarrier().getType());
   return barrierTy.getShape()[0] != numCTAs;
 }
 
@@ -100,14 +99,13 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
     return mma.getTwoCtas() &&
-           llvm::any_of(barrierOp.getBarrierMemDescs(), aliasesTracked);
+           llvm::any_of(barrierOp.getBarriers(), aliasesTracked);
   }
   if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    return ttng::getModuleTwoCTAs(op) &&
-           aliasesTracked(commit.getBarrierMemDesc());
+    return ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier());
   }
   if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-    return tma.getMulticast() && aliasesTracked(tma.getBarrierMemDesc());
+    return tma.getMulticast() && aliasesTracked(tma.getBarrier());
   }
   return false;
 }
@@ -123,8 +121,8 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
     return true;
 
   Allocation::BufferIdSetT initBarrierBuffers;
-  for (auto bufferId : allocation->getAllBufferIdsWithAliases(
-           initBarrierOp.getBarrierMemDesc())) {
+  for (auto bufferId :
+       allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
     assert(bufferId != Allocation::InvalidBufferId);
     initBarrierBuffers.insert(bufferId);
   }
@@ -195,8 +193,8 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
         topLevelRegion.findAncestorOpInRegion(*initBarrierOp.getOperation());
     assert(topLevelAnchor && "init op must be inside the function region");
     crossCTAInitAnchors.insert(topLevelAnchor);
-    for (auto bufferId : allocation->getAllBufferIdsWithAliases(
-             initBarrierOp.getBarrierMemDesc())) {
+    for (auto bufferId :
+         allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
       assert(bufferId != Allocation::InvalidBufferId);
       trackedBarrierBuffers.insert(bufferId);
     }

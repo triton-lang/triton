@@ -651,8 +651,6 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   return success();
 }
 
-Value AsyncTDMCopyGlobalToLocalOp::getBarrierMemDesc() { return getBarrier(); }
-
 // -- AsyncCopyLocalToGlobalOp --
 LogicalResult AsyncCopyLocalToGlobalOp::verify() {
   // Verify the source is local memory (shared memory)
@@ -700,8 +698,6 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
 
   return success();
 }
-
-Value AsyncTDMCopyLocalToGlobalOp::getBarrierMemDesc() { return getBarrier(); }
 
 LogicalResult AsyncTDMScatterOp::verify() {
   auto tensorDescTy = getDesc().getType();
@@ -752,8 +748,6 @@ LogicalResult AsyncTDMScatterOp::verify() {
 
   return success();
 }
-
-Value AsyncTDMScatterOp::getBarrierMemDesc() { return getBarrier(); }
 
 LogicalResult AsyncTDMGatherOp::verify() {
   auto tensorDescTy = getDesc().getType();
@@ -807,8 +801,6 @@ LogicalResult AsyncTDMGatherOp::verify() {
   return success();
 }
 
-Value AsyncTDMGatherOp::getBarrierMemDesc() { return getBarrier(); }
-
 // -- InitBarrierOp --
 LogicalResult InitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
@@ -818,7 +810,7 @@ LogicalResult InitBarrierOp::verify() {
   return success();
 }
 
-Value InitBarrierOp::getBarrierMemDesc() { return getAlloc(); }
+TypedValue<gpu::MemDescType> InitBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- WaitBarrierOp --
 LogicalResult WaitBarrierOp::verify() {
@@ -827,7 +819,7 @@ LogicalResult WaitBarrierOp::verify() {
   return success();
 }
 
-Value WaitBarrierOp::getBarrierMemDesc() { return getAlloc(); }
+TypedValue<gpu::MemDescType> WaitBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- ArriveBarrierOp --
 LogicalResult ArriveBarrierOp::verify() {
@@ -838,7 +830,9 @@ LogicalResult ArriveBarrierOp::verify() {
   return success();
 }
 
-Value ArriveBarrierOp::getBarrierMemDesc() { return getAlloc(); }
+TypedValue<gpu::MemDescType> ArriveBarrierOp::getBarrier() {
+  return getAlloc();
+}
 
 // -- AsyncCopyMbarrierArriveOp --
 LogicalResult AsyncCopyMbarrierArriveOp::verify() {
@@ -846,8 +840,6 @@ LogicalResult AsyncCopyMbarrierArriveOp::verify() {
     return failure();
   return success();
 }
-
-Value AsyncCopyMbarrierArriveOp::getBarrierMemDesc() { return getBarrier(); }
 
 // -- TDMPrefetchOp --
 // This op optionally returns the prefetch offsets (testing-only). When

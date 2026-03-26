@@ -209,7 +209,7 @@ private:
         funcBuilder.createInitBarrierStateCall(b, info->alloc, info->count, op);
       }
       if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op)) {
-        Value barrier = invalOp.getBarrierMemDesc();
+        Value barrier = invalOp.getBarrier();
         funcBuilder.createVerifyBarrierInitializedCall(b, barrier, nullptr,
                                                        invalOp);
         funcBuilder.createInvalidateBarrierStateCall(b, barrier, invalOp);

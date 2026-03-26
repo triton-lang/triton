@@ -1017,7 +1017,8 @@ def MemoryCounterWaitOp : TT_AMDGPU_Op<"memory_counter_wait"> {
 // InitBarrierOp
 //===----------------------------------------------------------------------===//
 
-def InitBarrierOp : TT_AMDGPU_Op<"init_barrier", [DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
+def InitBarrierOp : TT_AMDGPU_Op<"init_barrier", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "Initialize a barrier in the given shared memory allocation.";
 
   let description = [{
@@ -1038,7 +1039,8 @@ def InitBarrierOp : TT_AMDGPU_Op<"init_barrier", [DeclareOpInterfaceMethods<MBar
 // WaitBarrierOp
 //===----------------------------------------------------------------------===//
 
-def WaitBarrierOp : TT_AMDGPU_Op<"wait_barrier", [DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
+def WaitBarrierOp : TT_AMDGPU_Op<"wait_barrier", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "wait until the mbarrier phase completes.";
 
   let description = [{
@@ -1060,7 +1062,8 @@ def WaitBarrierOp : TT_AMDGPU_Op<"wait_barrier", [DeclareOpInterfaceMethods<MBar
 //===----------------------------------------------------------------------===//
 // ArriveBarrierOp
 //===----------------------------------------------------------------------===//
-def ArriveBarrierOp : TT_AMDGPU_Op<"arrive_barrier", [DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
+def ArriveBarrierOp : TT_AMDGPU_Op<"arrive_barrier", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "perform the arrive operation on an mbarrier";
   let description = [{
     Performs the "arrive" operation on an mbarrier object in shared memory. The operation requires a `count` attribute
