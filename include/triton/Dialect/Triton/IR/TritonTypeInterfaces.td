@@ -44,7 +44,7 @@ def TT_TensorDescInterface : TypeInterface<"TensorDescInterface"> {
       /*args=*/(ins)
     >,
     InterfaceMethod<
-      /*desc=*/"Returns a RankedTensorType constructed from shape and element type",
+      /*desc=*/"Returns a block tensor type constructed from shape and element type",
       /*retType=*/"mlir::RankedTensorType",
       /*methodName=*/"getBlockType",
       /*args=*/(ins),
@@ -55,7 +55,7 @@ def TT_TensorDescInterface : TypeInterface<"TensorDescInterface"> {
       }]
     >,
     InterfaceMethod<
-      /*desc=*/"Returns the block type with signless integer element type",
+      /*desc=*/"Returns a block tensor type constructed with signless integer element type",
       /*retType=*/"mlir::RankedTensorType",
       /*methodName=*/"getSignlessBlockType",
       /*args=*/(ins),

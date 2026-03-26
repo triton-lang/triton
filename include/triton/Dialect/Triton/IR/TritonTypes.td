@@ -121,13 +121,6 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", [TT_TensorDesc
   );
 
   let builders = [
-    // Builder from shape + elementType
-    TypeBuilderWithInferredContext<(ins
-      "llvm::ArrayRef<int64_t>":$shape,
-      "Type":$elementType
-    ), [{
-      return $_get(elementType.getContext(), shape, elementType, Attribute{});
-    }]>,
     // Builder from shape + elementType + sharedLayout
     TypeBuilderWithInferredContext<(ins
       "llvm::ArrayRef<int64_t>":$shape,

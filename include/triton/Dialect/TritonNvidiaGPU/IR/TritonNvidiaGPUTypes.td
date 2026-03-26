@@ -63,30 +63,21 @@ def TTNG_TensorDescIm2ColType : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2
     https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
   }];
 
-  let parameters = (ins ArrayRefParameter<"int64_t">:$shape,
-      "Type":$elementType, OptionalParameter<"Attribute">:$sharedLayout);
+  let parameters = (ins
+    ArrayRefParameter<"int64_t">:$shape,
+    "Type":$elementType,
+    OptionalParameter<"Attribute">:$sharedLayout
+  );
 
-  let builders =
-      [TypeBuilderWithInferredContext<
-           (ins "llvm::ArrayRef<int64_t>":$shape, "Type":$elementType), [{
-      return $_get(elementType.getContext(), shape, elementType, Attribute{});
-    }]>,
-       TypeBuilderWithInferredContext<(ins "llvm::ArrayRef<int64_t>":$shape,
-                                          "Type":$elementType,
-                                          "Attribute":$sharedLayout),
-                                      [{
+  let builders = [
+    TypeBuilderWithInferredContext<(ins
+      "llvm::ArrayRef<int64_t>":$shape,
+      "Type":$elementType,
+      "Attribute":$sharedLayout
+    ), [{
       return $_get(elementType.getContext(), shape, elementType, sharedLayout);
-    }]>,
-       TypeBuilderWithInferredContext<(ins "llvm::ArrayRef<int64_t>":$shape,
-                                          "Type":$elementType,
-                                          "bool":$isSigned),
-                                      [{
-      if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
-        auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
-        elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
-      }
-      return $_get(elementType.getContext(), shape, elementType, Attribute{});
-    }]>];
+    }]>
+  ];
 
   let hasCustomAssemblyFormat = 1;
   let skipDefaultBuilders = 1;
