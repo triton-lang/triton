@@ -60,6 +60,11 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op) {
       else
         captureSize += mlir::triton::gpu::getSharedMemorySize(type);
     }
+    // ConSan adds captures after allocation; reserve space pre-computed by
+    // the PrepareConSanCaptures pass.
+    if (auto extra =
+            ws->getAttrOfType<IntegerAttr>("consan.extra_capture_bytes"))
+      captureSize += extra.getInt();
     return captureSize;
   }
 

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import torch
 import triton
 import triton.language as tl
-from triton_kernels.numerics_details.mxfp import quantize_mxfp8_fn
+from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, quantize_mxfp4_fn, quantize_mxfp8_fn, quantize_nvfp4_fn
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics import InFlexData, OutFlexData, MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from typing import Optional
@@ -63,6 +63,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
                     K: tl.constexpr, S0, X_S1, Y_S1,  #
                     POSTPROCESS_FN1: tl.constexpr, postprocess_fn1_args,  #
                     POSTPROCESS_FN2: tl.constexpr, postprocess_fn2_args,  #
+                    POSTPROCESS_MX_FN: tl.constexpr, postprocess_mx_fn_args,  #
                     XFlex,  # TODO: remove this
                     XGlobalScale,  # x global scale
                     YFlexExpected, YFlexActual, YFlexChecksum,
@@ -78,13 +79,15 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
                     BLOCK_S0: tl.constexpr,  #
                     BLOCK_X_S1: tl.constexpr,  #
                     BLOCK_Y_S1: tl.constexpr,  #
+                    Y_MX_BLOCK_SIZE: tl.constexpr,  #
+                    Y_VALUE_PACK_FACTOR: tl.constexpr,  #
                     DIM,  # only used for launch_metadata
                     ):
     pid_s0 = tl.program_id(0)
     pid_s1 = tl.program_id(1)
     tl.static_assert(BLOCK_X_S1 % 32 == 0)
     BLOCK_X_SMX1: tl.constexpr = BLOCK_X_S1 // 32
-    BLOCK_Y_SMX1: tl.constexpr = BLOCK_Y_S1 // 32
+    BLOCK_Y_SMX1: tl.constexpr = BLOCK_Y_S1 // (1 if Y_MX_BLOCK_SIZE is None else Y_MX_BLOCK_SIZE)
     offs_s0 = pid_s0 * BLOCK_S0 + tl.arange(0, BLOCK_S0)
     offs_x_s1 = pid_s1 * BLOCK_X_S1 + tl.arange(0, BLOCK_X_S1)
     offs_x_smx1 = pid_s1 * BLOCK_X_SMX1 + tl.arange(0, BLOCK_X_SMX1)
@@ -132,16 +135,20 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
     offs_y_s1 = pid_s1 * BLOCK_Y_S1 + tl.arange(0, BLOCK_Y_S1)
     offs_y_smx1 = pid_s1 * BLOCK_Y_SMX1 + tl.arange(0, BLOCK_Y_SMX1)
     valid_y_s1 = offs_y_s1 < Y_S1
-    valid_y_smx1 = offs_y_smx1 < tl.cdiv(Y_S1, 32)
+    valid_y_smx1 = offs_y_smx1 < tl.cdiv(Y_S1, 1 if Y_MX_BLOCK_SIZE is None else Y_MX_BLOCK_SIZE)
+    is_out_fp4: tl.constexpr = YMx is not None and Y_VALUE_PACK_FACTOR == 2
     y = float_to_flex(y, YFlexExpected, YFlexActual, YFlexChecksum, None, Y, Y_FLEX_SATURATE_INF)
     # TODO (phil): keeping for backward compatibility, but will remove !
     if YMx is None and POSTPROCESS_FN2 is not None:
         y = POSTPROCESS_FN2(y, *postprocess_fn2_args, target_dtype=Y.dtype.element_ty)
-    y_ptrs = Y + offs_s0[:, None] * stride_y0 + offs_y_s1[None, :] * stride_y1
     if YMx is not None:
-        y, y_scale = quantize_mxfp8_fn(y, valid_y_s1[None, :])
+        y, y_scale = POSTPROCESS_MX_FN(y, valid_y_s1[None, :], *postprocess_mx_fn_args)
         y_mx_ptrs = YMx + offs_s0[:, None] * stride_ymx0 + offs_y_smx1[None, :] * stride_ymx1
         tl.store(y_mx_ptrs, y_scale, mask=valid_s0[:, None] & valid_y_smx1[None, :])
+    if is_out_fp4:
+        offs_y_s1 = pid_s1 * (BLOCK_Y_S1 // 2) + tl.arange(0, BLOCK_Y_S1 // 2)
+        valid_y_s1 = offs_y_s1 < tl.cdiv(Y_S1, 2)
+    y_ptrs = Y + offs_s0[:, None] * stride_y0 + offs_y_s1[None, :] * stride_y1
     tl.store(y_ptrs, y, mask=valid_s0[:, None] & valid_y_s1[None, :])
 
 
@@ -151,6 +158,7 @@ forward_specializations = SpecializationModule(
     closure_args={
         "postprocess_fn1": ClosureArg("POSTPROCESS_FN1", "postprocess_fn1_args"),
         "postprocess_fn2": ClosureArg("POSTPROCESS_FN2", "postprocess_fn2_args"),
+        "postprocess_mx_fn": ClosureArg("POSTPROCESS_MX_FN", "postprocess_mx_fn_args"),
     },
 )
 
@@ -167,6 +175,9 @@ def reduce_forward(
     y_flex: Optional[OutFlexData] = OutFlexData(),
     y_flex_saturate_inf: bool = False,
     y_has_mx: Optional[bool] = None,
+    y_mx_scale_dtype: Optional[torch.dtype] = None,
+    y_microblock_size: int = MXFP_BLOCK_SIZE.value,
+    y_value_pack_factor: int = 1,
     y: Optional[torch.Tensor] = None,
     postprocess_fn1: Optional[PostprocessFn] = None,
     # TODO: keeping for backward compatibility, but will remove !
@@ -223,17 +234,19 @@ def reduce_forward(
         x_flex = InFlexData()
     if y_has_mx is None:
         y_has_mx = x_mxscale is not None
+    if y_mx_scale_dtype is None:
+        y_mx_scale_dtype = torch.uint8
     # input shapes
     dims = (0, 1, 2)
     nonred = tuple(d for d in dims if d != dim)
     S0, X_S1 = x.shape[nonred[0]], x.shape[nonred[1]]
     Y_S1 = X_S1 // postprocess_fn1.specs.reduction_n
     if y is None:
-        y = torch.empty((S0, Y_S1), device=x.device, dtype=y_dtype)
-    assert y.shape == (S0, Y_S1), f"y.shape: {y.shape} != ({S0}, {Y_S1})"
+        y = torch.empty((S0, Y_S1 // y_value_pack_factor), device=x.device, dtype=y_dtype)
+    assert y.shape == (S0, Y_S1 // y_value_pack_factor), f"y.shape: {y.shape} != {(S0, Y_S1 // y_value_pack_factor)}"
     y_mxscale = None
     if y_has_mx:
-        y_mxscale = torch.empty((S0, triton.cdiv(Y_S1, 32)), device=x.device, dtype=torch.uint8)
+        y_mxscale = torch.empty((S0, triton.cdiv(Y_S1, y_microblock_size)), device=x.device, dtype=y_mx_scale_dtype)
     # Strides for X along reduced and non-reduced dims
     stride_xr = x.stride(dim)
     stride_x0 = x.stride(nonred[0])
@@ -255,8 +268,18 @@ def reduce_forward(
     BLOCK_X_S1 = 128
     BLOCK_Y_S1 = 128 // postprocess_fn1.specs.reduction_n
     grid = (triton.cdiv(S0, BLOCK_S0), triton.cdiv(Y_S1, BLOCK_Y_S1))
+    if y_has_mx:
+        if y_dtype == torch.float8_e4m3fn:
+            postprocess_mx_fn = FnSpecs("quantize_mxfp8", quantize_mxfp8_fn, tuple(), tuple())
+        elif y_mx_scale_dtype == torch.float8_e4m3fn:
+            postprocess_mx_fn = FnSpecs("quantize_nvfp4", quantize_nvfp4_fn, tuple(), tuple())
+        else:
+            postprocess_mx_fn = FnSpecs("quantize_mxfp4", quantize_mxfp4_fn, tuple(), tuple())
+    else:
+        postprocess_mx_fn = FnSpecs.default()
     reduce_kernel = forward_specializations.get(postprocess_fn1=postprocess_fn1.specs,
-                                                postprocess_fn2=postprocess_fn2.specs)._reduce_forward
+                                                postprocess_fn2=postprocess_fn2.specs,
+                                                postprocess_mx_fn=postprocess_mx_fn)._reduce_forward
     reduce_kernel[grid](
         x_flex.reinterpret(x), stride_xr, stride_x0, stride_x1,  #
         x_mxscale, stride_xmxr, stride_xmx0, stride_xmx1,  #
@@ -280,6 +303,8 @@ def reduce_forward(
         BLOCK_S0=BLOCK_S0,  #
         BLOCK_X_S1=BLOCK_X_S1,  #
         BLOCK_Y_S1=BLOCK_Y_S1,  #
+        Y_MX_BLOCK_SIZE=y_microblock_size,  #
+        Y_VALUE_PACK_FACTOR=y_value_pack_factor,  #
         DIM=dim,  #
         num_warps=4  #
     )
@@ -488,6 +513,7 @@ backward_specializations = SpecializationModule(
     closure_args={
         "postprocess_fn1": ClosureArg("POSTPROCESS_FN1", "postprocess_fn1_args"),
         "postprocess_fn2": ClosureArg("POSTPROCESS_FN2", "postprocess_fn2_args"),
+        "postprocess_mx_fn": ClosureArg("POSTPROCESS_MX_FN", "postprocess_mx_fn_args"),
     },
 )
 
@@ -498,7 +524,8 @@ class _ReduceAutograd(torch.autograd.Function):
     def forward(ctx, x: torch.Tensor, dim: int, mask: Optional[torch.Tensor], scale: Optional[torch.Tensor],
                 x_mxscale: Optional[torch.Tensor], x_flex: Optional[InFlexData], x_global_scale: Optional[torch.Tensor],
                 y_dtype: Optional[torch.dtype], y_flex: Optional[OutFlexData], y_flex_saturate_inf: bool,
-                y_has_mx: Optional[bool], y: Optional[torch.Tensor], postprocess_fn1: Optional[PostprocessFn],
+                y_has_mx: Optional[bool], y_mx_scale_dtype: Optional[torch.dtype], y_microblock_size: int,
+                y_value_pack_factor: int, y: Optional[torch.Tensor], postprocess_fn1: Optional[PostprocessFn],
                 postprocess_fn2: Optional[PostprocessFn], unpadded_batch_size: Optional[torch.Tensor]):
         # Run your existing Triton forward
         y, y_mx = reduce_forward(
@@ -513,6 +540,9 @@ class _ReduceAutograd(torch.autograd.Function):
             y_flex=y_flex,
             y_flex_saturate_inf=y_flex_saturate_inf,
             y_has_mx=y_has_mx,
+            y_mx_scale_dtype=y_mx_scale_dtype,
+            y_microblock_size=y_microblock_size,
+            y_value_pack_factor=y_value_pack_factor,
             y=y,
             postprocess_fn1=postprocess_fn1,
             postprocess_fn2=postprocess_fn2,
@@ -563,7 +593,7 @@ class _ReduceAutograd(torch.autograd.Function):
             dx=dx,
             unpadded_batch_size=ctx.unpadded_batch_size,
         )
-        return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None
+        return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
 
 def reduce(
@@ -579,13 +609,16 @@ def reduce(
     y_flex: Optional[OutFlexData] = OutFlexData(),
     y_flex_saturate_inf: bool = False,
     y_has_mx: Optional[bool] = None,
+    y_mx_scale_dtype: Optional[torch.dtype] = None,
+    y_microblock_size: int = MXFP_BLOCK_SIZE.value,
+    y_value_pack_factor: int = 1,
     postprocess_fn1: Optional[PostprocessFn] = None,
     postprocess_fn2: Optional[PostprocessFn] = None,
     unpadded_batch_size: Optional[torch.Tensor] = None,
 ):
     return _ReduceAutograd.apply(x, dim, mask, scale, x_mxscale, x_flex, x_global_scale, y_dtype, y_flex,  #
-                                 y_flex_saturate_inf, y_has_mx, y, postprocess_fn1, postprocess_fn2,
-                                 unpadded_batch_size)
+                                 y_flex_saturate_inf, y_has_mx, y_mx_scale_dtype, y_microblock_size,
+                                 y_value_pack_factor, y, postprocess_fn1, postprocess_fn2, unpadded_batch_size)
 
 
 # ------------------------------------------------------------

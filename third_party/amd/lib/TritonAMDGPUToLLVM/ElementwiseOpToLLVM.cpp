@@ -275,7 +275,7 @@ cvtScalePkUpcastFromFp8(Location loc, ConversionPatternRewriter &rewriter,
   return ret;
 }
 
-// Convert Ocp Fp8/Bf8 to Fp16/Bf16/Fp32 on CDNA4
+// Convert Ocp Fp8/Bf8 to Fp16/Bf16/Fp32 on gfx1250+
 template <typename ConvertOp>
 static SmallVector<Value>
 cvtScalePk8UpcastFromFp8(Location loc, ConversionPatternRewriter &rewriter,
@@ -319,8 +319,10 @@ cvtScalePk8UpcastFromFp8(Location loc, ConversionPatternRewriter &rewriter,
   }
   auto vIn = b.bitcast(vI8In, vInTy);
 
+  // Create fp8(1.0) as scale
   Value scale = b.i32_val(127);
-  IntegerAttr opscale = rewriter.getI32IntegerAttr(0b1000);
+  // OpScale 0 = use bits [0:7] from scale
+  IntegerAttr opscale = rewriter.getI32IntegerAttr(0);
 
   auto result = ConvertOp::create(rewriter, loc, vResTy, vIn, scale, opscale);
   SmallVector<Value> ret(inSize);

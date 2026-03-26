@@ -5,8 +5,19 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Debug.h"
 
 using namespace mlir;
+
+inline void dumpScheduleDebug(triton::CoarseSchedule &schedule,
+                              const char *debugType, llvm::StringRef msg) {
+  DEBUG_WITH_TYPE(debugType, {
+    llvm::dbgs() << "\n[" << debugType << "]: " << msg << "\n";
+    schedule.dump();
+  });
+}
 
 // DFS the def chain of 'defValue' starting from 'consumer' and will return the
 // minimum found when accumulating countFunc(op) for all non control flow ops
@@ -18,18 +29,14 @@ using namespace mlir;
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
                              llvm::function_ref<int(Operation *)> countFunc);
 
-// Returns a padded shared encoding minimizing bank conflicts for the given
-// tensor and dot encoding.
+// Returns a padded shared encoding minimizing bank conflicts for a dot
+// operand. Note the CDNA4 path requires both dotOpEnc (parent MFMA encoding's
+// instruction shape) and useAsyncCopy.
 triton::gpu::PaddedSharedEncodingAttr
-composePaddedLayout(const triton::AMD::TargetInfo &targetInfo,
-                    triton::gpu::DotOperandEncodingAttr dotOpEnc,
-                    triton::gpu::TensorOrMemDesc srcTy,
-                    ArrayRef<unsigned> sharedOrder, bool useAsyncCopy);
-
-triton::gpu::PaddedSharedEncodingAttr
-getPaddedEncodingForDotOp(mlir::MLIRContext *context, int opIdx,
-                          ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
-                          triton::gpu::CGAEncodingAttr CGALayout,
-                          unsigned typeWidthInBit);
+composePaddedLayout(const triton::AMD::TargetInfo &targetInfo, int opIdx,
+                    unsigned vecWidth, triton::gpu::TensorOrMemDesc srcTy,
+                    ArrayRef<unsigned> sharedOrder,
+                    triton::gpu::DotOperandEncodingAttr dotOpEnc = {},
+                    bool useAsyncCopy = false);
 
 #endif

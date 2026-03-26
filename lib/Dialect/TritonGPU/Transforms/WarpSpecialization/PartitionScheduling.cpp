@@ -228,6 +228,7 @@ SmallVector<OutputPort> initialDataValues(Graph *graph) {
         node->setDataValue(1);
         values.push_back({node, 1});
       }
+      // TODO: Support TCGen5MMAScaledOp
       if (isa<nvidia_gpu::TCGen5MMAOp>(op)) {
         node->setDataValue(0);
         values.push_back({node, 0});
@@ -375,6 +376,19 @@ bool isTMEM(Node *node) {
   auto partition = node->getPartition();
   auto flags = partition->getFlags();
   return flags & Flags::TMEM;
+}
+
+bool hasEligibleMemoryOps(Graph *graph) {
+  bool found = false;
+  graph->walk([&](Node *node) {
+    if (!node->isOp() || found)
+      return;
+    auto flags = getNodeFlags(node);
+    // We cannot handle none descriptor memory operations
+    if (flags & (Flags::LOAD | Flags::STORE))
+      found = true;
+  });
+  return found;
 }
 
 bool isSFU(Node *node) {
@@ -1444,7 +1458,8 @@ struct PartitionScheduling
     size_t idx = 0;
     for (auto op : ops) {
       analyze(idx, op);
-      cloneMultiPartitionDataOps(op);
+      if (hasPartition(op))
+        cloneMultiPartitionDataOps(op);
       idx++;
     }
   }
@@ -1496,6 +1511,9 @@ private:
       for (auto &partition : graph->getPartitions())
         partition->dump();
     });
+
+    if (!hasEligibleMemoryOps(graph.get()))
+      return;
 
     serialize(idx, op, graph.get());
   }
