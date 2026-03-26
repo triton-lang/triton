@@ -191,8 +191,7 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
       v, offset);
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
-      builder.getContext(), opIdx, dotEncoding,
-      getDotOperandKWidth(dotEncoding, elementType));
+      builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
   Value prefetchSlice = triton::gpu::LocalLoadOp::create(
       builder, v.getLoc(),
       RankedTensorType::get(shape, elementType, dotOperandEnc), newSmem, token);
