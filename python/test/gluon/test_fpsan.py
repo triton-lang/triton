@@ -126,6 +126,23 @@ def _expected_div_payload_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarra
     return _u32_to_i32(out_u32)
 
 
+def _expected_exp2_i32(x_i32: np.ndarray) -> np.ndarray:
+    c = np.uint64(0xa343836d)
+    mask = np.uint64(0xFFFFFFFF)
+    x = _as_u32(x_i32).astype(np.uint64)
+    y = np.ones_like(x, dtype=np.uint64)
+    for i in range(32):
+        y = (y * y) & mask
+        factor = np.where((x & np.uint64(1 << (31 - i))) == 0, np.uint64(1), c)
+        y = (y * factor) & mask
+    return _u32_to_i32(y.astype(np.uint32))
+
+
+def _expected_exp_i32(x_i32: np.ndarray) -> np.ndarray:
+    rcp_log2 = np.full_like(x_i32, np.int32(0x3fb8aa3b), dtype=np.int32)
+    return _expected_exp2_i32(_expected_mul_i32(x_i32, rcp_log2))
+
+
 def _expected_unary_tag_i32(x_i32: np.ndarray, op: str) -> np.ndarray:
     # Keep this mapping in sync with UnaryOpId in FpSanitizer.cpp.
     tag = OP_TO_TAG_U32[op]
@@ -409,7 +426,12 @@ def test_unary_math_identity(device, op, fresh_knobs):
         THREADS_PER_WARP=THREADS_PER_WARP,
     )
 
-    exp_bits = _expected_unary_tag_i32(x_bits, op)
+    if op == "exp":
+        exp_bits = _expected_exp_i32(x_bits)
+    elif op == "exp2":
+        exp_bits = _expected_exp2_i32(x_bits)
+    else:
+        exp_bits = _expected_unary_tag_i32(x_bits, op)
     _assert_payload_equal(out, exp_bits)
 
 
