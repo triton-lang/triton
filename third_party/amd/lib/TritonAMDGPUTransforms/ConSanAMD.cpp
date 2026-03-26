@@ -8,6 +8,7 @@ namespace ttag = mlir::triton::amdgpu;
 namespace tti = mlir::triton::instrument;
 
 using tti::BarrierInitInfo;
+using tti::BarrierInvalidateInfo;
 using tti::BarrierWaitInfo;
 using tti::CommitKindDesc;
 using tti::MemEffectsOpInfo;
@@ -42,6 +43,11 @@ public:
     if (auto waitOp = dyn_cast<ttag::WaitBarrierOp>(op))
       return BarrierWaitInfo{waitOp.getBarrier(), waitOp.getPhase(),
                              /*pred=*/Value()};
+    return std::nullopt;
+  }
+
+  std::optional<BarrierInvalidateInfo>
+  getBarrierInvalidateInfo(Operation *op) const override {
     return std::nullopt;
   }
 
