@@ -384,6 +384,43 @@ def _unary_math_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.c
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@gluon.jit
+def _exp_binary_identity_kernel(x_ptr, y_ptr, out_ptr, n_elements, MODE: gl.constexpr, BLOCK: gl.constexpr,
+                                THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offs, mask=mask, other=0.0)
+    if MODE == "exp_add":
+        z = gl.exp(x + y)
+    elif MODE == "exp_mul":
+        z = gl.exp(x) * gl.exp(y)
+    else:
+        gl.static_assert(False, "unsupported MODE")
+    gl.store(out_ptr + offs, z, mask=mask)
+
+
+@gluon.jit
+def _exp_scaled_identity_kernel(x_ptr, out_ptr, n_elements, MODE: gl.constexpr, BLOCK: gl.constexpr,
+                                THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    if MODE == "exp":
+        z = gl.exp(x)
+    elif MODE == "exp2_scaled":
+        z = gl.exp2(x * 1.44269504)
+    else:
+        gl.static_assert(False, "unsupported MODE")
+    gl.store(out_ptr + offs, z, mask=mask)
+
+
 @pytest.mark.parametrize(
     "op",
     [
@@ -433,6 +470,62 @@ def test_unary_math_identity(device, op, fresh_knobs):
     else:
         exp_bits = _expected_unary_tag_i32(x_bits, op)
     _assert_payload_equal(out, exp_bits)
+
+
+def test_exp_add_mul_identity(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device="cuda")
+    g.manual_seed(0)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out_add = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    out_mul = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    yw = triton.TensorWrapper(y, dtype=torch.float32)
+    out_add_w = triton.TensorWrapper(out_add, dtype=torch.float32)
+    out_mul_w = triton.TensorWrapper(out_mul, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _exp_binary_identity_kernel[grid](xw, yw, out_add_w, n_elements, MODE="exp_add", BLOCK=BLOCK,
+                                      THREADS_PER_WARP=THREADS_PER_WARP)
+    _exp_binary_identity_kernel[grid](xw, yw, out_mul_w, n_elements, MODE="exp_mul", BLOCK=BLOCK,
+                                      THREADS_PER_WARP=THREADS_PER_WARP)
+
+    _assert_payload_equal(out_add, out_mul)
+
+
+def test_exp_exp2_scaled_identity(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device="cuda")
+    g.manual_seed(1)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out_exp = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    out_exp2 = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    out_exp_w = triton.TensorWrapper(out_exp, dtype=torch.float32)
+    out_exp2_w = triton.TensorWrapper(out_exp2, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _exp_scaled_identity_kernel[grid](xw, out_exp_w, n_elements, MODE="exp", BLOCK=BLOCK,
+                                      THREADS_PER_WARP=THREADS_PER_WARP)
+    _exp_scaled_identity_kernel[grid](xw, out_exp2_w, n_elements, MODE="exp2_scaled", BLOCK=BLOCK,
+                                      THREADS_PER_WARP=THREADS_PER_WARP)
+
+    _assert_payload_equal(out_exp, out_exp2)
 
 
 @gluon.jit
