@@ -543,10 +543,26 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
     llvm::TypeSwitch<Operation *>(op)
         .Case<GetProgramIdOp>([&](auto getPIDOp) {
           int axis = getPIDOp.getAxisAsInt();
-          auto it = pidBounds.find(axis);
-          uint64_t maxPID =
-              it != pidBounds.end() ? it->second : kDefaultMaxPrograms - 1;
-          inferResultRangesPID(getPIDOp, maxPID, joinCallback);
+          // Lookup order: per-function bound > global bound > default.
+          std::optional<uint64_t> maxPID;
+          if (auto parentFunc =
+                  getPIDOp->template getParentOfType<FuncOp>()) {
+            auto funcIt = funcPidBounds.find(parentFunc.getOperation());
+            if (funcIt != funcPidBounds.end()) {
+              auto axisIt = funcIt->second.find(axis);
+              if (axisIt != funcIt->second.end()) {
+                maxPID = axisIt->second;
+              }
+            }
+          }
+          if (!maxPID) {
+            auto it = pidBounds.find(axis);
+            if (it != pidBounds.end()) {
+              maxPID = it->second;
+            }
+          }
+          inferResultRangesPID(
+              getPIDOp, maxPID.value_or(kDefaultMaxPrograms - 1), joinCallback);
         })
         .Case<GetNumProgramsOp>([&](auto getPIDOp) {
           inferResultRangesPID(getPIDOp, kDefaultMaxPrograms, joinCallback);
