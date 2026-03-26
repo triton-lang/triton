@@ -1454,6 +1454,18 @@ def test_split_join():
 
 @filecheck_test
 @gluon.jit
+def test_split_auto_layout():
+    # CHECK-LABEL: test_split_auto_layout
+    # CHECK: %[[X:.+]] = arith.constant dense<1> : tensor<128x2xi32, #gluon.auto_encoding>
+    # CHECK: %[[LHS:.+]], %[[RHS:.+]] = tt.split %[[X]] : tensor<128x2xi32, #gluon.auto_encoding> -> tensor<128xi32, #gluon.auto_encoding>
+    x = ttgl.full([128, 2], 1, ttgl.int32, layout=ttgl.AutoLayout())
+    lhs, rhs = ttgl.split(x)
+    ttgl.static_assert(lhs.type.layout == ttgl.AutoLayout())
+    ttgl.static_assert(rhs.type.layout == ttgl.AutoLayout())
+
+
+@filecheck_test
+@gluon.jit
 def test_reshape_linear_layout():
     # CHECK: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
     # CHECK: [[LINEAR:#.*]] = #ttg.linear

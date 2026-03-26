@@ -1938,6 +1938,29 @@ def test_auto_layout_constant():
     kernel_auto_layout_constant.warmup(THREADS_PER_WARP, grid=(1, ))
 
 
+def test_split_auto_layout_execution():
+    threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr, XBLOCK: ttgl.constexpr):
+        in_offsets = ttgl.arange(0, 2 * XBLOCK, ttgl.AutoLayout())
+        x = ttgl.load(in_ptr + in_offsets).reshape((XBLOCK, 2))
+        lhs, rhs = x.split()
+
+        out_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [threads_per_warp], [4], [0])
+        diff = ttgl.set_auto_layout(rhs - lhs, out_layout)
+        out_offsets = ttgl.arange(0, XBLOCK, ttgl.AutoLayout())
+        ttgl.store(out_ptr + out_offsets, diff)
+
+    XBLOCK = 128
+    input = torch.randint(-100, 100, (2 * XBLOCK, ), device="cuda", dtype=torch.int32)
+    output = torch.empty(XBLOCK, device="cuda", dtype=torch.int32)
+    ref = input.view(XBLOCK, 2)[:, 1] - input.view(XBLOCK, 2)[:, 0]
+
+    kernel[(1, )](input, output, XBLOCK, num_warps=4)
+    torch.testing.assert_close(output, ref)
+
+
 def fp8e8m0_to_float32(scale):
     scale = scale.view(torch.uint8)
     scale = scale.to(torch.int32)
