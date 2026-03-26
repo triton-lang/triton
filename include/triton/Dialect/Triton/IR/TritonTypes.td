@@ -114,37 +114,47 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", [TT_TensorDesc
       in the TritonNvidiaGPU dialect.
   }];
 
-  let parameters = (ins ArrayRefParameter<"int64_t">:$shape,
-      "Type":$elementType, OptionalParameter<"Attribute">:$sharedLayout);
+  let parameters = (ins
+    ArrayRefParameter<"int64_t">:$shape,
+    "Type":$elementType,
+    OptionalParameter<"Attribute">:$sharedLayout
+  );
 
   let builders = [
-      // Builder from shape + elementType
-      TypeBuilderWithInferredContext<
-          (ins "llvm::ArrayRef<int64_t>":$shape, "Type":$elementType), [{
+    // Builder from shape + elementType
+    TypeBuilderWithInferredContext<(ins
+      "llvm::ArrayRef<int64_t>":$shape,
+      "Type":$elementType
+    ), [{
       return $_get(elementType.getContext(), shape, elementType, Attribute{});
     }]>,
-      // Builder from shape + elementType + sharedLayout
-      TypeBuilderWithInferredContext<(ins "llvm::ArrayRef<int64_t>":$shape,
-                                         "Type":$elementType,
-                                         "Attribute":$sharedLayout),
-                                     [{
+    // Builder from shape + elementType + sharedLayout
+    TypeBuilderWithInferredContext<(ins
+      "llvm::ArrayRef<int64_t>":$shape,
+      "Type":$elementType,
+      "Attribute":$sharedLayout
+    ), [{
       return $_get(elementType.getContext(), shape, elementType, sharedLayout);
     }]>,
-      // Builder with signedness
-      TypeBuilderWithInferredContext<(ins "llvm::ArrayRef<int64_t>":$shape,
-                                         "Type":$elementType, "bool":$isSigned),
-                                     [{
+    // Builder with signedness
+    TypeBuilderWithInferredContext<(ins
+      "llvm::ArrayRef<int64_t>":$shape,
+      "Type":$elementType,
+      "bool":$isSigned
+    ), [{
       if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
         elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
       }
       return $_get(elementType.getContext(), shape, elementType, Attribute{});
     }]>,
-      // Builder with signedness and shared layout
-      TypeBuilderWithInferredContext<
-          (ins "llvm::ArrayRef<int64_t>":$shape, "Type":$elementType,
-              "Attribute":$sharedLayout, "bool":$isSigned),
-          [{
+    // Builder with signedness and shared layout
+    TypeBuilderWithInferredContext<(ins
+      "llvm::ArrayRef<int64_t>":$shape,
+      "Type":$elementType,
+      "Attribute":$sharedLayout,
+      "bool":$isSigned
+    ), [{
       if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
         elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
