@@ -810,12 +810,16 @@ LogicalResult InitBarrierOp::verify() {
   return success();
 }
 
+TypedValue<gpu::MemDescType> InitBarrierOp::getBarrier() { return getAlloc(); }
+
 // -- WaitBarrierOp --
 LogicalResult WaitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
 }
+
+TypedValue<gpu::MemDescType> WaitBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- ArriveBarrierOp --
 LogicalResult ArriveBarrierOp::verify() {
@@ -824,6 +828,10 @@ LogicalResult ArriveBarrierOp::verify() {
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
   return success();
+}
+
+TypedValue<gpu::MemDescType> ArriveBarrierOp::getBarrier() {
+  return getAlloc();
 }
 
 // -- AsyncCopyMbarrierArriveOp --

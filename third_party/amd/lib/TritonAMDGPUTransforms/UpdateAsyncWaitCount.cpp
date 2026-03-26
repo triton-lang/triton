@@ -70,14 +70,27 @@ int getNumberOfAsyncCopyInstructions(RankedTensorType globalType,
   }
   LinearLayout globalToSharedLayout =
       globalLayout.invertAndCompose(sharedLayout);
+
+  // If the warp dimension has free variables, not all warps execute this async
+  // copy — the lowering will predicate execution to canonical warps only (via
+  // emitRedundantThreadPredicate + emitBranch). Non-canonical warps branch over
+  // the buffer_load instructions entirely, so their vmcnt is not incremented.
+  auto kWarp = StringAttr::get(globalType.getContext(), "warp");
+  if (globalToSharedLayout.getFreeVariableMasks().lookup(kWarp) != 0) {
+    return 0;
+  }
   contig = std::min(contig, globalToSharedLayout.getNumConsecutiveInOut());
 
   if (mask)
     contig = std::min<int>(contig, axisInfo.getMaskAlignment(mask));
 
-  // Divide number of registers by contig to get the number of async intrinsics
-  int numberOfRegisters = globalToSharedLayout.getInDimSize(
-      StringAttr::get(globalType.getContext(), "register"));
+  // Divide number of registers by contig to get the number of async intrinsics.
+  // Strip zero bases from the register dimension first — a zero basis means
+  // multiple register indices map to the same offset, so no additional load
+  // instruction is generated.
+  auto kReg = StringAttr::get(globalType.getContext(), "register");
+  int numberOfRegisters =
+      globalToSharedLayout.removeZeroBasesAlongDim(kReg).getInDimSize(kReg);
   return std::max(1, numberOfRegisters / contig);
 }
 
@@ -345,15 +358,26 @@ void updateWaitCount(WaitType waitOp,
     // Replace ttg.async_wait which counts outstanding commit groups with
     // amdg.async_wait which counts the number of outstanding intrinsics
     auto tokens = waitOp.getAsyncToken();
+    auto origNum = waitOp.getNum();
     rewriter.setInsertionPointAfter(waitOp);
-    rewriter.replaceOpWithNewOp<amdgpu::AsyncWaitOp>(waitOp, tokens, waitCnt);
+    auto newOp = rewriter.replaceOpWithNewOp<amdgpu::AsyncWaitOp>(
+        waitOp, tokens, waitCnt);
+    // Preserve the original commit-group count so downstream passes
+    // (e.g. ConcurrencySanitizer) that reason about commit groups can
+    // still access it after this lowering.
+    newOp->setAttr("ttg.num_commit_groups",
+                   rewriter.getI32IntegerAttr(origNum));
   } else if (std::is_same_v<WaitType, triton::amdgpu::AsyncTDMWait>) {
     // Replace amdg.async_tdm_wait (counts TDM operations) with
     // amdg.async_tdm_intrinsic_wait (counts TDM intrinsics)
     auto tokens = waitOp.getAsyncToken();
+    auto origNum = waitOp.getNum();
     rewriter.setInsertionPointAfter(waitOp);
-    rewriter.replaceOpWithNewOp<amdgpu::AsyncTDMIntrinsicWait>(waitOp, tokens,
-                                                               waitCnt);
+    auto newOp = rewriter.replaceOpWithNewOp<amdgpu::AsyncTDMIntrinsicWait>(
+        waitOp, tokens, waitCnt);
+    // Preserve the original TDM operation count so downstream passes
+    // (e.g. ConcurrencySanitizer) can still access it after this lowering.
+    newOp->setAttr("ttg.num_tdm_ops", rewriter.getI32IntegerAttr(origNum));
   } else {
     assert(false && "Unsupported wait type");
   }

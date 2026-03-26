@@ -586,3 +586,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Test bug fix: With warp = [[0], [0]] the warp dimension has free variables,
+// so the load should contribute 0 instructions — non-canonical warps skip the
+// load entirely.
+
+#linear_warp_free = #ttg.linear<{register = [[0]], lane = [[1], [2], [4], [8], [16], [32]], warp = [[0], [0]], block = []}>
+#shared_simple = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: warp_free_variable_returns_zero
+  tt.func public @warp_free_variable_returns_zero(
+      %ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+      %offsets: tensor<64xi32, #linear_warp_free>,
+      %dest: !ttg.memdesc<64xi32, #shared_simple, #smem, mutable>) {
+    %0 = amdg.buffer_load_to_local %ptr[%offsets] into %dest : <i32>[tensor<64xi32, #linear_warp_free>]  -> <64xi32, #shared_simple, #smem, mutable>
+    %1 = ttg.async_commit_group
+
+    // The load above contributes 0 instructions, so waitcnt should be 0
+    // CHECK: amdg.async_wait {num_inst = 0
+    %2 = ttg.async_wait {num = 1 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// Test bug fix: register zero bases should not inflate instruction count.
+
+#linear_reg_zero = #ttg.linear<{register = [[0]], lane = [[1], [2], [4], [8], [16], [32]], warp = [[64], [128]], block = []}>
+#shared_simple2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: register_zero_bases_not_inflated
+  tt.func public @register_zero_bases_not_inflated(
+      %ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+      %offsets: tensor<256xi32, #linear_reg_zero>,
+      %dest: !ttg.memdesc<256xi32, #shared_simple2, #smem, mutable>) {
+    %0 = amdg.buffer_load_to_local %ptr[%offsets] into %dest : <i32>[tensor<256xi32, #linear_reg_zero>]  -> <256xi32, #shared_simple2, #smem, mutable>
+    %1 = ttg.async_commit_group
+    // Without zero-base removal, register dim size is 2 which would give
+    // num_inst = 2. With zero-base removal, it correctly gives num_inst = 1.
+    // CHECK: amdg.async_wait {num_inst = 1
+    %2 = ttg.async_wait {num = 1 : i32}
+    tt.return
+  }
+}

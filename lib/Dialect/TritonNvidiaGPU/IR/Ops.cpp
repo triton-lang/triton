@@ -187,12 +187,16 @@ LogicalResult InitBarrierOp::verify() {
   return success();
 }
 
+TypedValue<MemDescType> InitBarrierOp::getBarrier() { return getAlloc(); }
+
 // -- InvalBarrierOp --
 LogicalResult InvalBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
 }
+
+TypedValue<MemDescType> InvalBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- BarrierExpectOp --
 LogicalResult BarrierExpectOp::verify() {
@@ -201,12 +205,16 @@ LogicalResult BarrierExpectOp::verify() {
   return success();
 }
 
+TypedValue<MemDescType> BarrierExpectOp::getBarrier() { return getAlloc(); }
+
 // -- WaitBarrierOp --
 LogicalResult WaitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
 }
+
+TypedValue<MemDescType> WaitBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- ArriveBarrierOp --
 LogicalResult ArriveBarrierOp::verify() {
@@ -216,6 +224,8 @@ LogicalResult ArriveBarrierOp::verify() {
     return emitOpError("count must be greater than or equal to 1");
   return success();
 }
+
+TypedValue<MemDescType> ArriveBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- FenceMBarrierInitReleaseClusterOp --
 LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
@@ -1329,6 +1339,8 @@ LogicalResult CLCTryCancelOp::verify() {
     return failure();
   return verifyCompletionBarrierLayout(getOperation(), getMbarrier());
 }
+
+TypedValue<MemDescType> CLCTryCancelOp::getBarrier() { return getMbarrier(); }
 
 LogicalResult CLCLoadResultOp::verify() {
   return verifyCLCResultMemdesc(getLoc(), getSrc().getType());

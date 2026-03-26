@@ -72,6 +72,6 @@ def unswizzle_mx_scale_gfx1250(x, BLOCK_N: tl.constexpr, MX_SCALE_BLOCK_K: tl.co
     SCALE_KWIDTH: tl.constexpr = 4 if MX_SCALE_BLOCK_K >= 4 else MX_SCALE_BLOCK_K
     x = x.reshape(BLOCK_N // N_PRESHUFFLE_FACTOR, MX_SCALE_BLOCK_K // SCALE_KWIDTH, N_PRESHUFFLE_FACTOR // 4, 4,
                   SCALE_KWIDTH)
-    x = x.permute(0, 1, 4, 3, 2, 5)
+    x = x.permute(0, 3, 2, 1, 4)
     x = x.reshape(BLOCK_N, MX_SCALE_BLOCK_K)
     return x
