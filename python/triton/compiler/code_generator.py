@@ -1430,11 +1430,11 @@ class CodeGenerator(ast.NodeVisitor):
                 arg = self.visit(arg.value)
                 if isinstance(arg, constexpr):
                     arg = _unwrap_if_constexpr(arg)
-                if not isinstance(arg, language.core.tuple):
-                    assert isinstance(arg, tuple)
+                if isinstance(arg, tuple):
                     arg = language.core.tuple(
                         value if _is_triton_value(value) or isinstance(value, constexpr) else constexpr(value)
                         for value in arg)
+                assert isinstance(arg, language.core.tuple)
                 args.extend(arg.values)
             else:
                 args.append(self.visit(arg))
