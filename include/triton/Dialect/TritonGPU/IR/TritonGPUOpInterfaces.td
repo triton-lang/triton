@@ -56,6 +56,18 @@ def MBarrierOpInterface : OpInterface<"MBarrierOpInterface"> {
       /*desc=*/"Return the barrier memdesc operand, or null if absent.",
       /*retType=*/"::mlir::Value",
       /*methodName=*/"getBarrierMemDesc"
+    >,
+    InterfaceMethod<
+      /*desc=*/"Return all barrier memdesc operands.",
+      /*retType=*/"::llvm::SmallVector<::mlir::Value>",
+      /*methodName=*/"getBarrierMemDescs",
+      /*args=*/(ins),
+      /*methodBody=*/[{}],
+      /*defaultImplementation=*/[{
+        if (::mlir::Value barrier = $_op.getBarrierMemDesc())
+          return {barrier};
+        return {};
+      }]
     >
   ];
 }

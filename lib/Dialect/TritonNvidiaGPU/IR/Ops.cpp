@@ -187,12 +187,16 @@ LogicalResult InitBarrierOp::verify() {
   return success();
 }
 
+Value InitBarrierOp::getBarrierMemDesc() { return getAlloc(); }
+
 // -- InvalBarrierOp --
 LogicalResult InvalBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
 }
+
+Value InvalBarrierOp::getBarrierMemDesc() { return getAlloc(); }
 
 // -- BarrierExpectOp --
 LogicalResult BarrierExpectOp::verify() {
@@ -201,12 +205,16 @@ LogicalResult BarrierExpectOp::verify() {
   return success();
 }
 
+Value BarrierExpectOp::getBarrierMemDesc() { return getAlloc(); }
+
 // -- WaitBarrierOp --
 LogicalResult WaitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
 }
+
+Value WaitBarrierOp::getBarrierMemDesc() { return getAlloc(); }
 
 // -- ArriveBarrierOp --
 LogicalResult ArriveBarrierOp::verify() {
@@ -216,6 +224,11 @@ LogicalResult ArriveBarrierOp::verify() {
     return emitOpError("count must be greater than or equal to 1");
   return success();
 }
+
+Value ArriveBarrierOp::getBarrierMemDesc() { return getAlloc(); }
+
+// -- AsyncCopyMbarrierArriveOp --
+Value AsyncCopyMbarrierArriveOp::getBarrierMemDesc() { return getBarrier(); }
 
 // -- FenceMBarrierInitReleaseClusterOp --
 LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
@@ -374,6 +387,8 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   return success();
 }
 
+Value AsyncTMACopyGlobalToLocalOp::getBarrierMemDesc() { return getBarrier(); }
+
 // -- AsyncTMACopyLocalToGlobalOp --
 LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
   // Store ops only support TILED mode
@@ -411,6 +426,8 @@ LogicalResult AsyncTMAGatherOp::verify() {
                                getDesc().getType().getSignlessBlockType(),
                                resultType, getXOffsets().getType());
 }
+
+Value AsyncTMAGatherOp::getBarrierMemDesc() { return getBarrier(); }
 
 // -- AsyncTMAScatter --
 LogicalResult AsyncTMAScatterOp::verify() {
@@ -753,6 +770,12 @@ ValueRange TCGen5MMAOp::getCompletionBarrierPreds() {
   return getBarrierPreds();
 }
 
+Value TCGen5MMAOp::getBarrierMemDesc() { return {}; }
+
+SmallVector<Value> TCGen5MMAOp::getBarrierMemDescs() {
+  return SmallVector<Value>(getBarriers().begin(), getBarriers().end());
+}
+
 void TCGen5MMAOp::addCompletionBarrier(Value barrier, Value pred) {
   getBarrierPredsMutable().append(pred);
   getBarriersMutable().append(barrier);
@@ -795,6 +818,8 @@ LogicalResult TCGen5CommitOp::verify() {
     return failure();
   return success();
 }
+
+Value TCGen5CommitOp::getBarrierMemDesc() { return getBarrier(); }
 
 // -- TCGen5MMAScaledOp --
 
@@ -943,6 +968,12 @@ void TCGen5MMAScaledOp::setUseAccumulator(Value flag) {
 ValueRange TCGen5MMAScaledOp::getCompletionBarriers() { return getBarriers(); }
 ValueRange TCGen5MMAScaledOp::getCompletionBarrierPreds() {
   return getBarrierPreds();
+}
+
+Value TCGen5MMAScaledOp::getBarrierMemDesc() { return {}; }
+
+SmallVector<Value> TCGen5MMAScaledOp::getBarrierMemDescs() {
+  return SmallVector<Value>(getBarriers().begin(), getBarriers().end());
 }
 
 void TCGen5MMAScaledOp::addCompletionBarrier(Value barrier, Value pred) {
@@ -1225,6 +1256,8 @@ LogicalResult TMEMCopyOp::verify() {
   return success();
 }
 
+Value TMEMCopyOp::getBarrierMemDesc() { return getBarrier(); }
+
 // -- TMEMSubSliceOp --
 LogicalResult TMEMSubSliceOp::verify() {
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
@@ -1329,6 +1362,8 @@ LogicalResult CLCTryCancelOp::verify() {
     return failure();
   return verifyCompletionBarrierLayout(getOperation(), getMbarrier());
 }
+
+Value CLCTryCancelOp::getBarrierMemDesc() { return getMbarrier(); }
 
 LogicalResult CLCLoadResultOp::verify() {
   return verifyCLCResultMemdesc(getLoc(), getSrc().getType());
