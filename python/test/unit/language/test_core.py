@@ -38,6 +38,7 @@ from triton._internal_testing import (
     is_hip_gfx1250,
     is_xpu,
     get_arch,
+    is_blackwell,
     torch_float8_dtypes,
     torch_dtypes,
     numpy_random,
@@ -4389,6 +4390,52 @@ def test_vectorization_hints(has_hints, device):
         assert "ld.global.v4.b32" in ptx
     else:
         assert "ld.global.v4.b32" not in ptx
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test_vectorization_256bit_add_kernel(dtype, device):
+    """256-bit vectorized add: correctness and PTX verification on Blackwell."""
+    if not is_blackwell():
+        pytest.skip("v8.b32 requires Blackwell (sm_100+)")
+
+    # v8.b32 requires PTX 8.8+ (CUDA 12.9+). Skip on older toolchains.
+    from triton.backends.nvidia.compiler import ptx_get_version, get_ptxas
+    capability = torch.cuda.get_device_capability()
+    arch = capability[0] * 10 + capability[1]
+    ptx_ver = ptx_get_version(get_ptxas(arch).version)
+    if ptx_ver < 88:
+        pytest.skip(f"v8.b32 requires PTX 8.8+, got {ptx_ver}")
+
+    # Block size must be large enough for 256-bit per thread:
+    # fp32: 8 elems/thread * 128 threads = 1024
+    # fp16: 16 elems/thread * 128 threads = 2048
+    num_warps = 4
+    elem_bits = torch.finfo(dtype).bits
+    block_size = (num_warps * 32) * (256 // elem_bits)
+    N = block_size * 128
+
+    @triton.jit
+    def _add_kernel(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < n
+        x = tl.load(x_ptr + offs, mask=mask)
+        y = tl.load(y_ptr + offs, mask=mask)
+        tl.store(out_ptr + offs, x + y, mask=mask)
+
+    x = torch.randn(N, device=device, dtype=dtype)
+    y = torch.randn(N, device=device, dtype=dtype)
+    out = torch.empty_like(x)
+    grid = lambda meta: (triton.cdiv(N, meta['BLOCK']), )
+
+    pgm = _add_kernel[grid](x, y, out, N, BLOCK=block_size, num_warps=num_warps, max_vec_bits=256)
+
+    ref = x + y
+    torch.testing.assert_close(out, ref)
+
+    ptx = pgm.asm["ptx"]
+    assert "v8.b32" in ptx, ("Expected v8.b32 instructions in PTX:\n" +
+                             "\n".join(l for l in ptx.splitlines() if "ld.global" in l or "st.global" in l))
 
 
 @pytest.mark.interpreter

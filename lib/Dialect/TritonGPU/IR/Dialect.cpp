@@ -4184,6 +4184,18 @@ int triton::gpu::lookupNumWarps(Region *region) {
   return lookupNumWarps(region->getParentOp());
 }
 
+std::optional<unsigned> triton::gpu::maybeLookupMaxVecBits(Operation *op) {
+  if (auto attr = op->getAttrOfType<IntegerAttr>(AttrMaxVecBitsName))
+    return attr.getInt();
+  if (Operation *parent = op->getParentOp())
+    return maybeLookupMaxVecBits(parent);
+  return {};
+}
+
+unsigned triton::gpu::lookupMaxVecBits(Operation *op) {
+  return maybeLookupMaxVecBits(op).value_or(128);
+}
+
 int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
   assert(rewriter.getInsertionBlock() && "expected an insertion point");
   Operation *op =

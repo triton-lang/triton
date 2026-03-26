@@ -111,6 +111,12 @@ class CUDAOptions:
     # maxnreg corresponds to the ptx parameter .maxnreg, which controls the
     # maximum number of 32-bit registers used by one thread.
     maxnreg: Optional[int] = None
+    # Maximum vectorization width in bits for global memory loads/stores.
+    # 128 = v4.b32 (default), 256 = v8.b32 (requires sm_100+ and PTX 8.8+).
+    # This controls the coalesce pass (layout) and LLVM lowering (PTX emission).
+    # AtomicRMWOp also reads this value but independently clamps to its own
+    # hardware-supported widths (vec=1 or packed f16x2), so 256 is safe.
+    max_vec_bits: int = 128
     ptx_version: int = None
     ptx_options: Optional[str] = knobs.nvidia.ptxas_options
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
@@ -145,6 +151,8 @@ class CUDAOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
+        assert self.max_vec_bits in (128, 256), \
+               f"max_vec_bits must be 128 or 256, got {self.max_vec_bits}"
 
     def hash(self):
         hash_dict = dict(self.__dict__)
@@ -209,6 +217,16 @@ class CUDABackend(BaseBackend):
 
         args["max_num_imprecise_acc_default"] = 2**30 if capability == 90 else 0
 
+        # v8.b32 (256-bit) requires sm_100+ and PTX 8.8+.
+        if args.get("max_vec_bits", 128) > 128:
+            ptx_ver = args.get("ptx_version") or ptx_get_version(get_ptxas(capability).version)
+            if capability < 100:
+                raise ValueError(f"max_vec_bits=256 requires sm_100+ (Blackwell), "
+                                 f"but current target is sm_{capability}")
+            if ptx_ver < 88:
+                raise ValueError(f"max_vec_bits=256 requires PTX 8.8+, "
+                                 f"but current PTX version is {ptx_ver}")
+
         return CUDAOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -258,6 +276,8 @@ class CUDABackend(BaseBackend):
         # Set maxnreg on all kernels, if it was provided.
         if opt.maxnreg is not None:
             mod.set_attr("ttg.maxnreg", ir.builder(mod.context).get_int32_attr(opt.maxnreg))
+        # Set max vectorization width for global memory ops.
+        mod.set_attr("ttg.max-vec-bits", ir.builder(mod.context).get_int32_attr(opt.max_vec_bits))
 
         pm = ir.pass_manager(mod.context)
         dump_enabled = pm.enable_debug()

@@ -106,16 +106,30 @@ struct LoadStoreConversionBase {
     return axisAnalysisPass.getContiguity(ptr);
   }
 
+  // Compute the maximum vector width for a global memory access.
+  // This is used by LoadOp, StoreOp, and AtomicRMWOp lowering.
+  // For atomics, the result is an upper bound — AtomicRMWOpConversion
+  // further clamps to vec=1 (or packed f16x2) based on hardware support,
+  // so max_vec_bits > 128 does not affect atomic instruction selection.
   unsigned getVectorSize(Value ptr) const {
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return 1;
     auto contiguity = getContiguity(ptr);
     auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
+    // Read max vectorization width from module attribute (default 128 bits).
+    unsigned maxVecBits = 128;
+    if (auto *defOp = ptr.getDefiningOp()) {
+      maxVecBits = triton::gpu::lookupMaxVecBits(defOp);
+    } else if (auto blockArg = dyn_cast<BlockArgument>(ptr)) {
+      maxVecBits =
+          triton::gpu::lookupMaxVecBits(blockArg.getOwner()->getParentOp());
+    }
     LDBG("getVectorSize contiguity = " << contiguity << " pointeeBitWidth = "
-                                       << pointeeBitWidth);
-    // The maximum vector size is 128 bits on NVIDIA GPUs.
-    return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
+                                       << pointeeBitWidth
+                                       << " maxVecBits = " << maxVecBits);
+    return std::max<unsigned>(
+        std::min<unsigned>(maxVecBits / pointeeBitWidth, contiguity), 1);
   }
 
   unsigned getMaskAlignment(Value mask) const {
@@ -1132,7 +1146,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     }
     // If the op has a contiguity hint use it to increase the vector size.
     maxVec = std::max(maxVec, op.getContiguity());
-    // The maximum vector size is 128 bits on NVIDIA GPUs.
+    // The maximum vector size is 128 bits for cp.async on NVIDIA GPUs.
     maxVec = std::min(maxVec, 128 / resElemTy.getIntOrFloatBitWidth());
 
     int vecBytes = maxVec * resElemTy.getIntOrFloatBitWidth() / 8;

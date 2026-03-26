@@ -21,6 +21,8 @@ buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
   Value ptr = getMemAccessPtr(op);
   auto refTensorType = cast<RankedTensorType>(ptr.getType());
 
+  auto maxVecBits = lookupMaxVecBits(op);
+
   LDBG("Considering op: " << *op);
   LLVM_DEBUG({
     DBGS() << "axis info of pointer: ";
@@ -60,15 +62,15 @@ buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
   int numElems = product<int64_t>(shapePerCTA);
   int numThreads = numWarps * threadsPerWarp;
 
-  unsigned perThread =
-      getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA);
+  unsigned perThread = getNumElementsPerThread(op, order, axisInfoAnalysis,
+                                               shapePerCTA, maxVecBits);
   LDBG("perThread for op: " << perThread);
 
   for (Operation *opSameOrder : memAccessesSameOrder) {
     if (opSameOrder == op)
       continue;
     unsigned currPerThread = getNumElementsPerThread(
-        opSameOrder, order, axisInfoAnalysis, shapePerCTA);
+        opSameOrder, order, axisInfoAnalysis, shapePerCTA, maxVecBits);
     LDBG("perThread for opSameOrder: " << currPerThread);
     perThread = std::max(perThread, currPerThread);
   }
@@ -78,14 +80,14 @@ buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
 
   if (!dyn_cast<triton::LoadOp>(op)) {
     // For ops that can result in a global memory write, we should enforce
-    // that each thread handles at most 128 bits, which is the widest
+    // that each thread handles at most maxVecBits, which is the widest
     // available vectorized store op; otherwise, the store will have "gaps"
     // in the memory write at the warp level, resulting in worse performance.
     // For loads, we can expect that the gaps won't matter due to the L1
     // cache.
     perThread = std::min<int>(
-        perThread,
-        getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA));
+        perThread, getNumElementsPerThread(op, order, axisInfoAnalysis,
+                                           shapePerCTA, maxVecBits));
   }
   SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
   sizePerThread[order[0]] = perThread;

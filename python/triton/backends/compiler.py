@@ -75,18 +75,26 @@ class BaseBackend(metaclass=ABCMeta):
     def parse_attr(desc):
         assert isinstance(desc, str)
         ret = []
-        if "D" in desc:
+        if "D32" in desc:
+            ret += [["tt.divisibility", 32]]
+        elif "D" in desc:
             ret += [["tt.divisibility", 16]]
         return ret
 
     @staticmethod
     def get_int_specialization(arg, **kwargs):
-        if arg % 16 == 0 and kwargs.get("align", False):
-            return "D"
+        if kwargs.get("align", False):
+            if arg % 32 == 0:
+                return "D32"
+            if arg % 16 == 0:
+                return "D"
         return ""
 
     @staticmethod
     def get_tensor_specialization(arg, **kwargs):
-        if arg.data_ptr() % 16 == 0 and kwargs.get("align", False):
-            return "D"
+        if kwargs.get("align", False):
+            if arg.data_ptr() % 32 == 0:
+                return "D32"
+            if arg.data_ptr() % 16 == 0:
+                return "D"
         return ""

@@ -54,6 +54,7 @@ static PyObject *u64_str = nullptr;
 static PyObject *fp32_str = nullptr;
 static PyObject *u1_str = nullptr;
 static PyObject *D_str = nullptr;
+static PyObject *D32_str = nullptr;
 static PyObject *constexpr_str = nullptr;
 static PyObject *empty_str = nullptr;
 static PyObject *nvTmaDesc_str = nullptr;
@@ -103,6 +104,7 @@ void init_interned_strings() {
   fp32_str = intern_from_string("fp32");
   u1_str = intern_from_string("u1");
   D_str = intern_from_string("D");
+  D32_str = intern_from_string("D32");
   constexpr_str = intern_from_string("constexpr");
   empty_str = intern_from_string("");
   nvTmaDesc_str = intern_from_string("nvTmaDesc");
@@ -280,7 +282,12 @@ std::pair<py::object, py::object> handle_long_type(PyObject *backend,
   if (overflow == 0) {
     type_str = (val >= INT32_MIN && val <= INT32_MAX) ? i32_str : i64_str;
     if (specialize_value) {
-      key_obj = (align && ((val & 15) == 0)) ? D_str : empty_str;
+      if (align && ((val & 31) == 0))
+        key_obj = D32_str;
+      else if (align && ((val & 15) == 0))
+        key_obj = D_str;
+      else
+        key_obj = empty_str;
     }
   } else {
     unsigned long long val_64 = PyLong_AsUnsignedLongLong(arg);
@@ -296,7 +303,12 @@ std::pair<py::object, py::object> handle_long_type(PyObject *backend,
     }
     type_str = u64_str;
     if (specialize_value) {
-      key_obj = (align && ((val_64 & 15) == 0)) ? D_str : empty_str;
+      if (align && ((val_64 & 31) == 0))
+        key_obj = D32_str;
+      else if (align && ((val_64 & 15) == 0))
+        key_obj = D_str;
+      else
+        key_obj = empty_str;
     }
   }
   if (!key_obj) {
@@ -360,7 +372,13 @@ std::pair<py::object, py::object> handle_tensor(PyObject *backend,
     if (PyErr_Occurred())
       return {};
 
-    auto key_obj = (align && ((data_ptr & 15) == 0)) ? D_str : empty_str;
+    auto key_obj = empty_str;
+    if (align) {
+      if ((data_ptr & 31) == 0)
+        key_obj = D32_str;
+      else if ((data_ptr & 15) == 0)
+        key_obj = D_str;
+    }
     key = from_borrowed_ref(key_obj);
   } else {
     PyObject *args[3] = {backend, arg, align ? Py_True : Py_False};

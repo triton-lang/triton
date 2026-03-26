@@ -26,15 +26,16 @@ namespace gpu {
 // Descriptor load/stores don't need to consider L1 coalescing but the
 // destination layout will affect the shared memory load/store generated. So we
 // still want to allow vectorization for the src/destination layout up to
-// 16bytes.
+// maxVecBits (default 128 bits, 256 bits on Blackwell with max_vec_bits=256).
 static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
-                                               RankedTensorType type) {
+                                               RankedTensorType type,
+                                               unsigned maxVecBits) {
   auto shapePerCTA = triton::gpu::getShapePerCTA(type);
   int numElems = product<int64_t>(shapePerCTA);
   int numThreads = numWarps * threadsPerWarp;
   int numElemsPerThread = std::max(numElems / numThreads, 1);
 
-  int maxVectorSize = 128 / type.getElementTypeBitWidth();
+  int maxVectorSize = maxVecBits / type.getElementTypeBitWidth();
 
   int vectorSize = std::min(numElemsPerThread, maxVectorSize);
   SmallVector<unsigned> sizePerThread(type.getRank(), 1);
@@ -53,17 +54,18 @@ static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
 static void pickDescriptorLoadStoreLayout(
     ModuleOp moduleOp, llvm::MapVector<Operation *, Attribute> &layoutMap) {
   int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(moduleOp);
+  auto maxVecBits = lookupMaxVecBits(moduleOp);
   moduleOp.walk([&](Operation *op) {
     int numWarps = lookupNumWarps(op);
     if (auto load = dyn_cast<DescriptorOpInterface>(op)) {
       if (load->getNumResults() == 1)
         layoutMap[op] = pickDescriptorLoadStoreLayout(
             numWarps, threadsPerWarp,
-            cast<RankedTensorType>(load->getResult(0).getType()));
+            cast<RankedTensorType>(load->getResult(0).getType()), maxVecBits);
     }
     if (auto store = dyn_cast<DescriptorStoreLikeOpInterface>(op)) {
-      layoutMap[op] = pickDescriptorLoadStoreLayout(numWarps, threadsPerWarp,
-                                                    store.getSrc().getType());
+      layoutMap[op] = pickDescriptorLoadStoreLayout(
+          numWarps, threadsPerWarp, store.getSrc().getType(), maxVecBits);
     }
   });
 }

@@ -46,6 +46,7 @@ template <> struct hash<CacheKey> {
 namespace mlir::triton::gpu {
 
 constexpr static char AttrMaxRegistersName[] = "ttg.maxnreg";
+constexpr static char AttrMaxVecBitsName[] = "ttg.max-vec-bits";
 constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
@@ -63,6 +64,13 @@ int lookupNumWarps(Region *region);
 // executed. Returns nullopt if a warp size cannot be find. This is used for
 // verifiers.
 std::optional<int> maybeLookupNumWarps(Operation *op);
+
+// Walk up the op tree looking for the ttg.max-vec-bits attribute.
+// Returns nullopt if no enclosing op carries the attribute.
+std::optional<unsigned> maybeLookupMaxVecBits(Operation *op);
+// Convenience wrapper: returns maybeLookupMaxVecBits(op).value_or(128).
+// The 128-bit default preserves backward compatibility (v4.b32).
+unsigned lookupMaxVecBits(Operation *op);
 
 // FIXME: Make this API and that of maybeLookupNumWarps consistent!
 // Utility to find the number of threads per warp
