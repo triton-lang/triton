@@ -443,6 +443,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
   SmallVector<BufferRegion> barrierRegions;
   getBuffersAndBarriers(module, bufRegions, barrierRegions);
   int numCTAs = lookupNumCTAs(module);
+  int captureCounter = 0;
 
   FuncOp entryPoint = getEntryPoint(module);
   assert(entryPoint);
@@ -493,7 +494,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
         entryRegion, {createZeroInitStateTensor(b, {numCTAs, numBufs}, 64, fb),
                       getIntTensorType(entryRegion, {numCTAs, numBufs}, 64)});
     passToWarpSpecialize(entryPoint, writeVisibility[iMemType].at(entryRegion),
-                         writeVisibility[iMemType]);
+                         writeVisibility[iMemType], captureCounter);
     readVisibility[iMemType].insert(
         entryRegion,
         {createZeroInitStateTensor(b, {numCTAs, numBufs, THREADS_BITMASK_SIZE},
@@ -501,7 +502,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
          getIntTensorType(entryRegion, {numCTAs, numBufs, THREADS_BITMASK_SIZE},
                           64)});
     passToWarpSpecialize(entryPoint, readVisibility[iMemType].at(entryRegion),
-                         readVisibility[iMemType]);
+                         readVisibility[iMemType], captureCounter);
   }
 
   if (!barrierRegions.empty()) {
@@ -521,7 +522,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
         {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 32, fb),
          getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
     passToWarpSpecialize(entryPoint, barrierStates.at(entryRegion),
-                         barrierStates);
+                         barrierStates, captureCounter);
 
     // Deadlock detection aux data over [cta, barrier]: waiting
     // stores waiting flag and phase bits per thread (two bits per thread).
@@ -529,7 +530,8 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
         entryRegion,
         {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 32, fb),
          getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
-    passToWarpSpecialize(entryPoint, waiting.at(entryRegion), waiting);
+    passToWarpSpecialize(entryPoint, waiting.at(entryRegion), waiting,
+                         captureCounter);
 
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       int iMemType = (int)memType;
@@ -544,7 +546,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
                               8)});
         passToWarpSpecialize(entryPoint,
                              writeTracking[iMemType].at(entryRegion),
-                             writeTracking[iMemType]);
+                             writeTracking[iMemType], captureCounter);
         readTracking[iMemType].insert(
             entryRegion,
             {createZeroInitStateTensor(b, {numCTAs, numBufs, numBarriers}, 64,
@@ -552,7 +554,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
              getIntTensorType(entryRegion, {numCTAs, numBufs, numBarriers},
                               64)});
         passToWarpSpecialize(entryPoint, readTracking[iMemType].at(entryRegion),
-                             readTracking[iMemType]);
+                             readTracking[iMemType], captureCounter);
       }
     }
   }
@@ -573,7 +575,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
                       AddrSpace::GlobalRead | AddrSpace::GlobalWrite);
   }
   lock.insert(entryRegion, {lockVal, lockVal.getType()});
-  passToWarpSpecialize(entryPoint, lock.at(entryRegion), lock);
+  passToWarpSpecialize(entryPoint, lock.at(entryRegion), lock, captureCounter);
 
   auto createCommitTensor = [&](CommitKind::Kind commitKind) {
     int numBufs = bufRegions[(int)MemType::SHARED_MEM].size();
@@ -586,7 +588,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
         {createZeroInitStateTensor(b, {numCTAs, numBufs, NUM_THREADS}, 8, fb),
          getIntTensorType(entryRegion, {numCTAs, numBufs, NUM_THREADS}, 8)});
     passToWarpSpecialize(entryPoint, commits[commitKind].at(entryRegion),
-                         commits[commitKind]);
+                         commits[commitKind], captureCounter);
   };
 
   // Create write commits tensor for cp-async
@@ -599,6 +601,21 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
       if (commits[kind].empty())
         createCommitTensor(kind);
     }
+  }
+
+  // Verify the actual capture count matches the expected one.
+  if (captureCounter > 0) {
+    int numActiveMemTypes = 0;
+    for (int i = 0; i < numMemTypes; ++i)
+      numActiveMemTypes += !bufRegions[i].empty();
+    int numCommitKinds = 0;
+    for (int i = 0; i < CommitKind::NumCommitKinds; ++i)
+      numCommitKinds += !commits[i].empty();
+    int expected = estimateConSanCaptureCount(
+        numActiveMemTypes, !barrierRegions.empty(), numCommitKinds);
+    assert(captureCounter == expected &&
+           "capture count changed -- update estimateConSanCaptureCount if this "
+           "is expected!");
   }
 }
 
@@ -637,7 +654,9 @@ void AuxDataMap::getBuffersAndBarriers(
 }
 
 void AuxDataMap::passToWarpSpecialize(FuncOp func, ValueType valueType,
-                                      RegionToValueMap &map) {
+                                      RegionToValueMap &map,
+                                      int &captureCounter) {
+  ++captureCounter;
   func.walk([&](WarpSpecializePartitionsOp op) {
     op->insertOperands(op.getNumOperands(), {valueType.value});
     for (Region &region : op.getPartitionRegions()) {

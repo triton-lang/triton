@@ -31,7 +31,7 @@ All types are generated on-demand (per partition) based on:
 - readVisibility (scratch, <B x 64 x i64>): Per-buffer, per-thread lanes. Each lane stores a 64-bit mask of other threads whose reads are visible to that lane’s thread
 - writeTracking (scratch, <B x K x i8>): Map buffers → barriers tracking writes (boolean stored in i8)
 - readTracking (scratch, <B x K x i64>): Map buffers → barriers tracking reads (bitmask of threads)
-- barrierStates (scratch, <K x i32>): Packed barrier metadata. Bit 0 stores the current phase, bits [1..8] the initial arrival count, bits [9..16] the current arrival count. The verifier checks underflow before updating, and flips the phase when the current count reaches zero.
+- barrierStates (scratch, <K x i32>): Packed barrier metadata. Bit 0 stores the current phase, bits [1..10] the initial arrival count, bits [11..20] the current arrival count. The verifier checks underflow before updating, and flips the phase when the current count reaches zero.
 - waiting (scratch, <K x i32>): Per-barrier bitfield describing waiting threads. Each base thread gets two bits: bit (2 * thread + 0) is the waiting flag, bit (2 * thread + 1) stores the phase the thread is waiting on.
 - outstandingCommits (scratch, <B x 16 x i8>): Per-buffer, per-base-thread commit counters for cp.async and wgmma
 
