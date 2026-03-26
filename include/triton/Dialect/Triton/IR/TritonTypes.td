@@ -106,44 +106,55 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", [TT_TensorDesc
       A portable abstraction for TMA descriptors.
       This is the base tensor descriptor type for tiled tensor memory access.
 
-      The blockType describes shape and element type. The optional sharedLayout
-      attribute carries the shared memory encoding that is planned during lowering.
+      Shape and elementType describe the block dimensions and data type.
+      The optional sharedLayout attribute carries the shared memory encoding
+      (e.g. swizzle pattern) that is assigned during lowering.
 
       For specialized access patterns like im2col, see TensorDescIm2ColType
       in the TritonNvidiaGPU dialect.
   }];
 
-  let parameters = (ins
-    "RankedTensorType":$blockType,
-    OptionalParameter<"Attribute">:$sharedLayout
-  );
-
-  let assemblyFormat = "`<` $blockType (`,` $sharedLayout^)? `>`";
+  let parameters = (ins ArrayRefParameter<"int64_t">:$shape,
+      "Type":$elementType, OptionalParameter<"Attribute">:$sharedLayout);
 
   let builders = [
-    TypeBuilder<(ins "RankedTensorType":$blockType), [{
-      return Base::get($_ctxt, blockType, Attribute{});
+      // Builder from shape + elementType
+      TypeBuilderWithInferredContext<
+          (ins "llvm::ArrayRef<int64_t>":$shape, "Type":$elementType), [{
+      return $_get(elementType.getContext(), shape, elementType, Attribute{});
     }]>,
-    // Builder with signedness
-    TypeBuilder<(ins "RankedTensorType":$blockType, "bool":$isSigned), [{
-      if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
-        auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
-        auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
-        blockType = blockType.clone(elemTy);
-      }
-      return Base::get($_ctxt, blockType, Attribute{});
+      // Builder from shape + elementType + sharedLayout
+      TypeBuilderWithInferredContext<(ins "llvm::ArrayRef<int64_t>":$shape,
+                                         "Type":$elementType,
+                                         "Attribute":$sharedLayout),
+                                     [{
+      return $_get(elementType.getContext(), shape, elementType, sharedLayout);
     }]>,
-    // Builder with signedness and shared layout
-    TypeBuilder<(ins "RankedTensorType":$blockType, "Attribute":$sharedLayout,
-                     "bool":$isSigned), [{
-      if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
+      // Builder with signedness
+      TypeBuilderWithInferredContext<(ins "llvm::ArrayRef<int64_t>":$shape,
+                                         "Type":$elementType, "bool":$isSigned),
+                                     [{
+      if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
-        auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
-        blockType = blockType.clone(elemTy);
+        elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
       }
-      return Base::get($_ctxt, blockType, sharedLayout);
+      return $_get(elementType.getContext(), shape, elementType, Attribute{});
+    }]>,
+      // Builder with signedness and shared layout
+      TypeBuilderWithInferredContext<
+          (ins "llvm::ArrayRef<int64_t>":$shape, "Type":$elementType,
+              "Attribute":$sharedLayout, "bool":$isSigned),
+          [{
+      if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
+        auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
+        elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
+      }
+      return $_get(elementType.getContext(), shape, elementType, sharedLayout);
     }]>,
   ];
+
+  let hasCustomAssemblyFormat = 1;
+  let skipDefaultBuilders = 1;
 }
 
 #endif

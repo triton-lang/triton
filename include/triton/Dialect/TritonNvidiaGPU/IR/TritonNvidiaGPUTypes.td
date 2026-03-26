@@ -52,7 +52,8 @@ def TTNG_TensorDescIm2ColType : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2
     operations.
 
     Parameters:
-    - blockType: The shape and element type of the data block being accessed
+    - shape: The block dimensions
+    - elementType: The element type of the data block
     - sharedLayout: Optional shared memory encoding (swizzle pattern, etc.)
 
     This type implements TensorDescInterface, sharing common operations with
@@ -62,33 +63,33 @@ def TTNG_TensorDescIm2ColType : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2
     https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
   }];
 
-  let parameters = (ins
-    "RankedTensorType":$blockType,
-    OptionalParameter<"Attribute">:$sharedLayout
-  );
+  let parameters = (ins ArrayRefParameter<"int64_t">:$shape,
+      "Type":$elementType, OptionalParameter<"Attribute">:$sharedLayout);
 
-  let assemblyFormat = [{
-    `<` $blockType (`,` $sharedLayout^)? `>`
-  }];
-
-  let builders = [
-    TypeBuilder<(ins "RankedTensorType":$blockType), [{
-      return Base::get($_ctxt, blockType, Attribute{});
+  let builders =
+      [TypeBuilderWithInferredContext<
+           (ins "llvm::ArrayRef<int64_t>":$shape, "Type":$elementType), [{
+      return $_get(elementType.getContext(), shape, elementType, Attribute{});
     }]>,
-    // Builder with signedness for integer types
-    TypeBuilder<(ins
-      "RankedTensorType":$blockType,
-      "bool":$isSigned
-    ), [{
-      if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
+       TypeBuilderWithInferredContext<(ins "llvm::ArrayRef<int64_t>":$shape,
+                                          "Type":$elementType,
+                                          "Attribute":$sharedLayout),
+                                      [{
+      return $_get(elementType.getContext(), shape, elementType, sharedLayout);
+    }]>,
+       TypeBuilderWithInferredContext<(ins "llvm::ArrayRef<int64_t>":$shape,
+                                          "Type":$elementType,
+                                          "bool":$isSigned),
+                                      [{
+      if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
-        auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
-        blockType = blockType.clone(elemTy);
+        elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
       }
-      return Base::get($_ctxt, blockType, Attribute{});
-    }]>
-  ];
+      return $_get(elementType.getContext(), shape, elementType, Attribute{});
+    }]>];
 
+  let hasCustomAssemblyFormat = 1;
+  let skipDefaultBuilders = 1;
   let genVerifyDecl = 1;
 }
 

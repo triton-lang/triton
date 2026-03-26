@@ -462,9 +462,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 
-tt.func @scalar_load_in_bwd_slice(%arg0: tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %arg1: !tt.tensordesc<tensor<128x128xf8E5M2>>, %arg2: !tt.ptr<i32>) -> tensor<128x128xf32, #blocked> {
+tt.func @scalar_load_in_bwd_slice(%arg0: tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %arg1: !tt.tensordesc<128x128xf8E5M2>, %arg2: !tt.ptr<i32>) -> tensor<128x128xf32, #blocked> {
   %0 = tt.load %arg2 : !tt.ptr<i32>
-  %1 = tt.descriptor_load %arg1[%0, %0] : !tt.tensordesc<tensor<128x128xf8E5M2>> -> tensor<128x128xf8E5M2, #blocked1>
+  %1 = tt.descriptor_load %arg1[%0, %0] : !tt.tensordesc<128x128xf8E5M2> -> tensor<128x128xf8E5M2, #blocked1>
   %2 = ttg.convert_layout %1 : tensor<128x128xf8E5M2, #blocked1> -> tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
   %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
   %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf32, #blocked>
@@ -601,8 +601,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: identify_load_then_trans
   tt.func public @identify_load_then_trans(
-    %arg0: !tt.tensordesc<tensor<128x128xf16>>,
-    %arg1: !tt.tensordesc<tensor<128x128xf16>>,
+    %arg0: !tt.tensordesc<128x128xf16>,
+    %arg1: !tt.tensordesc<128x128xf16>,
     %arg2: i32,
     %arg3: i32,
     %arg4: i32,
@@ -610,8 +610,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   ) -> tensor<128x128xf32, #blocked> {
     // CHECK:   %[[DESC0:.*]] = tt.descriptor_load %arg0
     // CHECK:   %[[DESC1:.*]] = tt.descriptor_load %arg1
-    %13 = tt.descriptor_load %arg0[%arg4, %arg2] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16, #blocked2>
-    %14 = tt.descriptor_load %arg1[%arg3, %arg4] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16, #blocked2>
+    %13 = tt.descriptor_load %arg0[%arg4, %arg2] : !tt.tensordesc<128x128xf16> -> tensor<128x128xf16, #blocked2>
+    %14 = tt.descriptor_load %arg1[%arg3, %arg4] : !tt.tensordesc<128x128xf16> -> tensor<128x128xf16, #blocked2>
     // CHECK:   %[[TRANS0:.*]] = tt.trans %[[DESC0]]
     // CHECK:   %[[ALLOC0:.*]] = ttg.local_alloc %[[TRANS0]]
     %15 = tt.trans %13 {order = array<i32: 1, 0>} : tensor<128x128xf16, #blocked2> -> tensor<128x128xf16, #blocked3>

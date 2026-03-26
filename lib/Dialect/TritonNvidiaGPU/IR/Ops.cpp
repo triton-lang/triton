@@ -304,7 +304,7 @@ static bool isIm2ColDescriptor(Type descType) {
 static LogicalResult verifyAsyncTMACoords(Operation *op, ValueRange coords,
                                           TensorDescInterface desc,
                                           bool isIm2Col) {
-  unsigned blockRank = desc.getBlockType().getRank();
+  unsigned blockRank = desc.getShape().size();
 
   if (isIm2Col) {
     // For IM2COL mode, coordinates are for the full tensor (3D-5D)

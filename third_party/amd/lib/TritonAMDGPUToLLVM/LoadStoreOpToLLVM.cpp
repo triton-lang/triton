@@ -1218,8 +1218,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
 
-    SmallVector<int64_t> blockShape =
-        llvm::to_vector(tensorDescTy.getBlockType().getShape());
+    SmallVector<int64_t> blockShape = llvm::to_vector(tensorDescTy.getShape());
 
     // 2D tensors: 12 dwords (group0: 4, group1: 8)
     // 3D-5D tensors: 20 dwords (group0: 4, group1: 8, group2: 4, group3: 4)
@@ -1287,8 +1286,7 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
 
-    SmallVector<int64_t> blockShape =
-        llvm::to_vector(tensorDescTy.getBlockType().getShape());
+    SmallVector<int64_t> blockShape = llvm::to_vector(tensorDescTy.getShape());
 
     // 2D tensors: 12 dwords (group0: 4, group1: 8)
     // 3D-5D tensors: 20 dwords (group0: 4, group1: 8, group2: 4, group3: 4)
@@ -1375,8 +1373,7 @@ struct AsyncTDMScatterOpConversion
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
 
-    SmallVector<int64_t> blockShape =
-        llvm::to_vector(tensorDescTy.getBlockType().getShape());
+    SmallVector<int64_t> blockShape = llvm::to_vector(tensorDescTy.getShape());
 
     // Scatter only supports 2D tensors
     assert(blockShape.size() == 2 &&
@@ -1462,8 +1459,7 @@ struct AsyncTDMGatherOpConversion
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
 
-    SmallVector<int64_t> blockShape =
-        llvm::to_vector(tensorDescTy.getBlockType().getShape());
+    SmallVector<int64_t> blockShape = llvm::to_vector(tensorDescTy.getShape());
 
     // Gather only supports 2D tensors
     assert(blockShape.size() == 2 &&
@@ -2474,10 +2470,9 @@ struct TDMPrefetchConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     auto tdescType = op.getDesc().getType();
-    auto tensorType = tdescType.getBlockType();
-    SmallVector<int64_t> blockShape = llvm::to_vector(tensorType.getShape());
+    SmallVector<int64_t> blockShape = llvm::to_vector(tdescType.getShape());
     Type elementType =
-        getTypeConverter()->convertType(tensorType.getElementType());
+        getTypeConverter()->convertType(tdescType.getElementType());
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
     SmallVector<Value> offset = adaptor.getIndices();

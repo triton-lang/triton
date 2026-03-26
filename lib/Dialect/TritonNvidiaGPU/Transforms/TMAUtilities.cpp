@@ -21,7 +21,7 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
     llvm::report_fatal_error(msg);
   }
   auto sharedEnc = cast<ttg::SharedEncodingTrait>(encoding);
-  if (descType.getBlockType().getShape() == tensorType.getShape())
+  if (descType.getShape() == tensorType.getShape())
     return sharedEnc;
 
   return ttg::updateEncodingForShape(op, sharedEnc, tensorType);
@@ -90,14 +90,13 @@ enum TMA_ELEMENT_TYPES {
 };
 
 FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
-  auto blockType = ty.getBlockType();
   auto encoding = ty.getSharedLayout();
   bool fp4Padded = isFp4Padded(encoding);
 
   if (fp4Padded)
     return TMA_B4X16_P64;
 
-  auto elemTy = blockType.getElementType();
+  auto elemTy = ty.getElementType();
   if (elemTy.isBF16()) {
     return TMA_BF16;
   } else if (elemTy.isF16()) {

@@ -1002,7 +1002,7 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
 
   let extraClassDeclaration = [{
     ArrayRef<int64_t> getTensorShape() {
-      return getType().getBlockType().getShape();
+      return getType().getShape();
     }
   }];
 }
