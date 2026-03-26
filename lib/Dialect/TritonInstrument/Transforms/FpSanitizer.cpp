@@ -476,8 +476,8 @@ Value fpsanExp2FromI32(PatternRewriter &rewriter, Location loc, Value xI,
     auto bit = getIntConstantLike(rewriter, loc, xI.getType(),
                                   int64_t(1ull << (31 - i)));
     auto masked = arith::AndIOp::create(rewriter, loc, xI, bit);
-    auto isZero = arith::CmpIOp::create(rewriter, loc,
-                                        arith::CmpIPredicate::eq, masked, zero);
+    auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                        masked, zero);
     auto factor = arith::SelectOp::create(rewriter, loc, isZero, one, c);
     y = arith::MulIOp::create(rewriter, loc, y, factor);
   }
