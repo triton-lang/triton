@@ -1321,16 +1321,21 @@ bool isCvtDimSync(const triton::LinearLayout &srcLayout,
   auto *ctx = srcLayout.getInDimNames().begin()->getContext();
   auto kWarp = StringAttr::get(ctx, "warp");
   auto kBlock = StringAttr::get(ctx, "block");
-  assert((dim == kWarp || dim == kBlock) && "expected dim to be warp or block");
   assert(srcLayout.hasInDim(dim) && dstLayout.hasInDim(dim) &&
          "expected dim to be present in both layouts");
-  auto parentTrivial = true;
-  if (dim == kWarp) {
-    parentTrivial = isCvtDimSync(srcLayout, dstLayout, kBlock);
-  }
   auto comp = dstLayout.invertAndCompose(srcLayout);
-  return parentTrivial && comp.isTrivialOver(dim) &&
-         srcLayout.getFreeVariableMasks()[dim] == 0 &&
-         dstLayout.getFreeVariableMasks()[dim] == 0;
+  if (dim == kWarp) {
+    // We check that it's trivial over block and warps and that
+    // there is no broadcasting over warp, as if there is, we'll
+    // deduplicate the writes and the reads will read from data
+    // that other warp has written.
+    auto isBlockSync = isCvtDimSync(srcLayout, dstLayout, kBlock);
+    return isBlockSync && comp.isTrivialOver(dim) &&
+           srcLayout.getFreeVariableMasks()[dim] == 0 &&
+           dstLayout.getFreeVariableMasks()[dim] == 0;
+  } else {
+    assert(dim == kBlock);
+    return comp.isTrivialOver(dim);
+  }
 }
 } // namespace mlir
