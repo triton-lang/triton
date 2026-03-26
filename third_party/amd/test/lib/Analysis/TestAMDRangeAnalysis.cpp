@@ -34,14 +34,30 @@ struct TestAMDRangeAnalysisPass
         solver->load<AMD::TritonIntegerRangeAnalysis>(
             assumptions, &getAnalysis<DominanceInfo>());
 
-    // Apply PID bounds from module attributes (e.g. "test.pid-bound-x"=127).
+    // Apply global PID bounds from module attributes
+    // (e.g. "test.pid-bound-x"=127).
     for (auto [axis, name] : llvm::zip(
              SmallVector<int>{0, 1, 2},
              SmallVector<StringRef>{"test.pid-bound-x", "test.pid-bound-y",
                                     "test.pid-bound-z"})) {
-      if (auto attr = mod->getAttrOfType<IntegerAttr>(name))
+      if (auto attr = mod->getAttrOfType<IntegerAttr>(name)) {
         rangeAnalysis->setPidBound(axis, attr.getInt());
+      }
     }
+
+    // Apply per-function PID bounds from function attributes
+    // (e.g. "test.pid-bound-x"=31 on a specific tt.func).
+    mod->walk([&](FuncOp funcOp) {
+      for (auto [axis, name] : llvm::zip(
+               SmallVector<int>{0, 1, 2},
+               SmallVector<StringRef>{"test.pid-bound-x", "test.pid-bound-y",
+                                      "test.pid-bound-z"})) {
+        if (auto attr = funcOp->getAttrOfType<IntegerAttr>(name)) {
+          rangeAnalysis->setPidBound(
+              funcOp.getOperation(), axis, attr.getInt());
+        }
+      }
+    });
 
     AMD::initializeFuncOps(mod, rangeAnalysis);
     if (failed(solver->initializeAndRun(getOperation())))
