@@ -32,14 +32,14 @@ public:
   std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const override {
     if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op))
-      return BarrierInitInfo{initOp.getAlloc(), initOp.getCount()};
+      return BarrierInitInfo{initOp.getBarrier(), initOp.getCount()};
     return std::nullopt;
   }
 
   std::optional<BarrierWaitInfo>
   getBarrierWaitInfo(Operation *op) const override {
     if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op))
-      return BarrierWaitInfo{waitOp.getAlloc(), waitOp.getPhase(),
+      return BarrierWaitInfo{waitOp.getBarrier(), waitOp.getPhase(),
                              waitOp.getPred()};
     return std::nullopt;
   }
@@ -68,7 +68,8 @@ public:
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = expectOp.getPred();
-      info->barriers.push_back({expectOp.getAlloc(), nullptr, /*count=*/1,
+      info->barriers.push_back({expectOp.getBarrier(), nullptr,
+                                /*count=*/1,
                                 MemEffectsOpInfo::BarrierTrackingMode::None});
     }
     if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
@@ -171,7 +172,7 @@ public:
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = arriveOp.getPred();
       info->barriers.push_back(
-          {arriveOp.getAlloc(), nullptr, (int)arriveOp.getCount()});
+          {arriveOp.getBarrier(), nullptr, (int)arriveOp.getCount()});
     }
     return info;
   }

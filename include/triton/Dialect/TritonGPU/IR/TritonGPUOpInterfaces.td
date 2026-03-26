@@ -54,8 +54,25 @@ def MBarrierOpInterface : OpInterface<"MBarrierOpInterface"> {
   let methods = [
     InterfaceMethod<
       /*desc=*/"Return the barrier memdesc operand, or null if absent.",
-      /*retType=*/"::mlir::Value",
-      /*methodName=*/"getBarrierMemDesc"
+      /*retType=*/"::mlir::TypedValue<::mlir::triton::gpu::MemDescType>",
+      /*methodName=*/"getBarrier",
+      /*args=*/(ins),
+      /*methodBody=*/[{}],
+      /*defaultImplementation=*/[{
+        return {};
+      }]
+    >,
+    InterfaceMethod<
+      /*desc=*/"Return all barrier memdesc operands.",
+      /*retType=*/"::llvm::SmallVector<::mlir::Value>",
+      /*methodName=*/"getBarriers",
+      /*args=*/(ins),
+      /*methodBody=*/[{}],
+      /*defaultImplementation=*/[{
+        if (::mlir::Value barrier = $_op.getBarrier())
+          return {barrier};
+        return {};
+      }]
     >
   ];
 }

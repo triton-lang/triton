@@ -37,14 +37,14 @@ public:
   std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const override {
     if (auto initOp = dyn_cast<ttag::InitBarrierOp>(op))
-      return BarrierInitInfo{initOp.getAlloc(), initOp.getCount()};
+      return BarrierInitInfo{initOp.getBarrier(), initOp.getCount()};
     return std::nullopt;
   }
 
   std::optional<BarrierWaitInfo>
   getBarrierWaitInfo(Operation *op) const override {
     if (auto waitOp = dyn_cast<ttag::WaitBarrierOp>(op))
-      return BarrierWaitInfo{waitOp.getAlloc(), waitOp.getPhase(),
+      return BarrierWaitInfo{waitOp.getBarrier(), waitOp.getPhase(),
                              /*pred=*/Value()};
     return std::nullopt;
   }
@@ -91,10 +91,10 @@ public:
     // counter (AsyncTDMWait), modeled as CommitCount with implicitCommit.
     if (auto copyOp = dyn_cast<ttag::AsyncTDMCopyGlobalToLocalOp>(op)) {
       info.emplace();
-      if (copyOp.getBarrier()) {
+      if (Value barrier = copyOp.getBarrier()) {
         info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
         int numWarps = ttg::lookupNumWarps(copyOp);
-        info->barriers.push_back({copyOp.getBarrier(), nullptr, numWarps});
+        info->barriers.push_back({barrier, nullptr, numWarps});
       } else {
         info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
         info->commitKind = tti::CommitKind::TmaStore;
@@ -107,10 +107,10 @@ public:
     // Same principles as AsyncTDMCopyGlobalToLocalOp apply.
     if (auto storeOp = dyn_cast<ttag::AsyncTDMCopyLocalToGlobalOp>(op)) {
       info.emplace();
-      if (storeOp.getBarrier()) {
+      if (Value barrier = storeOp.getBarrier()) {
         info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
         int numWarps = ttg::lookupNumWarps(storeOp);
-        info->barriers.push_back({storeOp.getBarrier(), nullptr, numWarps});
+        info->barriers.push_back({barrier, nullptr, numWarps});
       } else {
         info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
         info->commitKind = tti::CommitKind::TmaStore;
@@ -130,7 +130,7 @@ public:
       auto mod = arriveOp->getParentOfType<ModuleOp>();
       int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
       int totalCount = (int)arriveOp.getCount() * numWarps * threadsPerWarp;
-      info->barriers.push_back({arriveOp.getAlloc(), nullptr, totalCount});
+      info->barriers.push_back({arriveOp.getBarrier(), nullptr, totalCount});
     }
     return info;
   }

@@ -52,12 +52,12 @@ Value getSmemDest(Operation *op) {
 }
 
 bool isAsyncProxyRead(Operation *op) {
-  return isa<
-      triton::nvidia_gpu::WarpGroupDotOp, triton::nvidia_gpu::TCGen5MMAOp,
-      triton::nvidia_gpu::TCGen5MMAScaledOp, triton::nvidia_gpu::TMEMCopyOp,
-      triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp,
-      triton::nvidia_gpu::AsyncTMAScatterOp,
-      triton::nvidia_gpu::AsyncTMAReduceOp>(op);
+  return isa<triton::nvidia_gpu::WarpGroupDotOp,
+             triton::nvidia_gpu::MMAv5OpInterface,
+             triton::nvidia_gpu::TMEMCopyOp,
+             triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp,
+             triton::nvidia_gpu::AsyncTMAScatterOp,
+             triton::nvidia_gpu::AsyncTMAReduceOp>(op);
 }
 
 bool isAsyncProxyReadSource(Operation *op, Value value) {
@@ -80,13 +80,8 @@ bool isAsyncProxyReadSource(Operation *op, Value value) {
   if (auto warpGroupDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     return value == warpGroupDotOp.getA() || value == warpGroupDotOp.getB();
   }
-  if (auto tcGen5MMAOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
-    return value == tcGen5MMAOp.getA() || value == tcGen5MMAOp.getB();
-  }
-  if (auto tcGen5MMAScaledOp =
-          dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(op)) {
-    return value == tcGen5MMAScaledOp.getA() ||
-           value == tcGen5MMAScaledOp.getB();
+  if (auto mma = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
+    return value == mma.getA() || value == mma.getB();
   }
   if (auto tmemCopyOp = dyn_cast<triton::nvidia_gpu::TMEMCopyOp>(op)) {
     return value == tmemCopyOp.getSrc();
