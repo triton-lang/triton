@@ -24,4 +24,12 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     tt.store %ptrs, %vals : tensor<128x!tt.ptr<i32>, #blocked>
     tt.return
   }
+
+  // CHECK-LABEL: llvm.func @unmasked_atomic_add
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  tt.func @unmasked_atomic_add(%ptr: !tt.ptr<i32>, %val: i32) {
+    %0 = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    tt.return
+  }
 }
