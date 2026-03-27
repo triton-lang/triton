@@ -177,7 +177,7 @@ class Translator(ReferenceRewriter):
 
         node = self.uncanonicalize_call(node, canonicalized)
         new_node = self.generic_visit(node)
-        if value in [tl.reshape, tl.trans, tl.permute, tl.join, tl.split, tl.reduce, tl.sum]:
+        if value in [tl.reshape, tl.trans, tl.permute, tl.join, tl.split, tl.reduce, tl.sum, tl.max, tl.min]:
             new_node = cast(ast.Call, parse_expr(f"helpers.reset_to_default_layout({ast.unparse(new_node)})"))
         return new_node
 
