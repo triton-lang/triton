@@ -32,12 +32,6 @@ inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
       mmaEnc.getFp4Padded(), mmaEnc.getTransposed(), packedSize, mode);
 }
 
-inline SmallVector<int64_t>
-getTMABlockShape(RankedTensorType ty, bool packedSize, gpu::TMAMode mode) {
-  auto shapePerCTA = gpu::getShapePerCTA(ty);
-  return getTMABlockShape(ty.getEncoding(), shapePerCTA, packedSize, mode);
-}
-
 inline SmallVector<int64_t> getTMABlockShape(triton::gpu::MemDescType ty,
                                              bool packedSize,
                                              gpu::TMAMode mode) {
