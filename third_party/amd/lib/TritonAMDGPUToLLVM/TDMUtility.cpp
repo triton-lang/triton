@@ -4,6 +4,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include <numeric>
 #include <optional>
 
 // Include shared C-compatible TDM utilities
@@ -50,7 +51,7 @@ SmallVector<unsigned> getWarpDistribution(ArrayRef<int64_t> blockShape,
 // the linear stream won't align with the shared memory row structure.
 //
 // Returns: (warpsPerCTA, numTDMInstructions)
-std::pair<SmallVector<unsigned>, unsigned> getPartitionAlignedWarpDistribution(
+std::pair<SmallVector<unsigned>, unsigned> distributeTDMWarpsAlignToPartition(
     ArrayRef<int64_t> blockShape, int numWarps,
     PartitionedSharedEncodingAttr partitionedEnc) {
   unsigned numDims = blockShape.size();
@@ -65,7 +66,7 @@ std::pair<SmallVector<unsigned>, unsigned> getPartitionAlignedWarpDistribution(
          "block shape must be divisible by numLogicalPieces");
 
   unsigned warpsAlongPartition =
-      std::min(static_cast<unsigned>(numWarps), numLogicalPieces);
+      std::gcd(static_cast<unsigned>(numWarps), numLogicalPieces);
   unsigned numTDMInstructions =
       llvm::divideCeil(numLogicalPieces, warpsAlongPartition);
 
@@ -104,11 +105,11 @@ std::pair<SmallVector<unsigned>, unsigned> getPartitionAlignedWarpDistribution(
 } // namespace
 
 std::pair<SmallVector<unsigned>, unsigned>
-getPartitionAlignedWarpDistribution(ArrayRef<int64_t> blockShape, int numWarps,
-                                    Attribute encoding) {
+distributeTDMWarpsAlignToPartition(ArrayRef<int64_t> blockShape, int numWarps,
+                                   Attribute encoding) {
   if (auto partitionedEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding))
-    return getPartitionAlignedWarpDistribution(blockShape, numWarps,
-                                               partitionedEnc);
+    return distributeTDMWarpsAlignToPartition(blockShape, numWarps,
+                                              partitionedEnc);
   return {getWarpDistribution(blockShape, numWarps), 1};
 }
 
@@ -231,7 +232,7 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
                                   unsigned padInterval, unsigned padAmount,
                                   SmallVector<Value> tensorShape,
                                   SmallVector<Value> tensorStride, Value srcPtr,
-                                  bool isRowMajor, Attribute encoding) {
+                                  bool isRowMajor, Attribute sharedEncoding) {
   size_t numDims = tensorShape.size();
   assert(numDims >= 1 && numDims <= 5 && tensorStride.size() == numDims &&
          "TDM only supported for 1D-5D tensors.");
@@ -267,9 +268,10 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   // the effective extent along partitionDim is the slice extent
   // (warps * pieceSize), not the full block extent.
   {
-    auto [warpsPerCTA, numInstr] =
-        getPartitionAlignedWarpDistribution(blockShape, numWarps, encoding);
-    if (auto partitionedEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding);
+    auto [warpsPerCTA, numInstr] = distributeTDMWarpsAlignToPartition(
+        blockShape, numWarps, sharedEncoding);
+    if (auto partitionedEnc =
+            dyn_cast<PartitionedSharedEncodingAttr>(sharedEncoding);
         partitionedEnc && numInstr > 1)
       blockShape[partitionedEnc.getPartitionDim()] /= numInstr;
 
@@ -886,10 +888,10 @@ void fillTDMDescriptorForGatherScatter(
 // Compute how many elements each partition buffer advances between consecutive
 // TDM instruction slices, accounting for padding if present.
 //
-// For a partitioned layout split into multiple TDM instructions, each
-// instruction writes a "slice" of data into each partition buffer.  We need to
-// know the padded size of that slice so the next instruction can offset its LDS
-// pointer correctly.
+// For a partitioned layout that splits one piece into multiple TDM
+// instructions, each instruction writes a "slice" of data into each partition
+// buffer.  We need to know the padded size of that slice so the next
+// instruction can offset its LDS pointer correctly.
 static int64_t computePerPartitionSliceStride(
     ArrayRef<int64_t> blockShape, unsigned partitionDim,
     int64_t sliceExtentPerPartition, unsigned numPartitions,
@@ -927,7 +929,7 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                  size_t numDims, Type elementType,
                  SmallVector<int64_t> effectiveBlockShape, int numWarps,
                  unsigned padInterval, unsigned padAmount,
-                 SmallVector<Value> instrOffset, ArrayRef<Value> instrDstPtrs,
+                 SmallVector<Value> globalOffset, ArrayRef<Value> instrDstPtrs,
                  Value pred, Value multicastMask, Value barrier,
                  const triton::LinearLayout &instrSharedLayout, Value ctaId,
                  bool isLoad, bool isRowMajor, ArrayRef<unsigned> warpsPerCTA) {
@@ -944,7 +946,7 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
     fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
                       effectiveBlockShape, numWarps, padInterval, padAmount,
                       group0Vec, group1Vec, std::ref(group2Vec),
-                      std::ref(group3Vec), instrOffset, instrDstPtrs, pred,
+                      std::ref(group3Vec), globalOffset, instrDstPtrs, pred,
                       multicastMask, barrier, instrSharedLayout, ctaId, !isLoad,
                       isRowMajor, warpsPerCTA);
 
@@ -965,7 +967,7 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
     fillTDMDescriptor(
         rewriter, loc, typeConverter, elementType, effectiveBlockShape,
         numWarps, padInterval, padAmount, group0Vec, group1Vec, std::nullopt,
-        std::nullopt, instrOffset, instrDstPtrs, pred, multicastMask, barrier,
+        std::nullopt, globalOffset, instrDstPtrs, pred, multicastMask, barrier,
         instrSharedLayout, ctaId, !isLoad, isRowMajor, warpsPerCTA);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
@@ -1007,7 +1009,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 
   // Compute warp distribution -- partition-aligned when needed.
   auto [warpsPerCTA, numTDMInstructions] =
-      getPartitionAlignedWarpDistribution(blockShape, numWarps, encoding);
+      distributeTDMWarpsAlignToPartition(blockShape, numWarps, encoding);
 
   // Fast path: single instruction covers the entire block.
   if (numTDMInstructions == 1) {
@@ -1057,9 +1059,9 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
       partitionedEnc);
 
   for (unsigned instrIdx = 0; instrIdx < numTDMInstructions; ++instrIdx) {
-    SmallVector<Value> instrOffset(offset.begin(), offset.end());
-    instrOffset[partitionDim] =
-        b.add(instrOffset[partitionDim], b.i32_val(instrIdx * sliceExtent));
+    SmallVector<Value> globalOffset(offset.begin(), offset.end());
+    globalOffset[partitionDim] =
+        b.add(globalOffset[partitionDim], b.i32_val(instrIdx * sliceExtent));
 
     SmallVector<int64_t> effectiveBlockShape(blockShape.begin(),
                                              blockShape.end());
@@ -1078,7 +1080,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
                      effectiveBlockShape, numWarps, padInterval, padAmount,
-                     instrOffset, instrDstPtrs, pred, multicastMask, barrier,
+                     globalOffset, instrDstPtrs, pred, multicastMask, barrier,
                      sliceLayout, ctaId, isLoad, isRowMajor, warpsPerCTA);
   }
 }

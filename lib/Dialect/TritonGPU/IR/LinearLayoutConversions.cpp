@@ -1252,10 +1252,6 @@ LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
   return partitionedSharedToLinearLayout(shape, partitioned);
 }
 
-LinearLayout paddedLinearLayout(RankedTensorType type) {
-  return paddedLinearLayout(type.getShape(), type.getEncoding());
-}
-
 LinearLayout paddedLinearLayout(MemDescType type) {
   auto shape = type.getAllocShape().take_back(type.getRank());
   return paddedLinearLayout(shape, type.getEncoding());

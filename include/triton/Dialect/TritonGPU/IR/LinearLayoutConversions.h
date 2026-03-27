@@ -61,7 +61,6 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 // Unlike toLinearLayout, this makes explicit that the resulting linear layout
 // is incomplete — the padding information is not captured in the linear layout.
 LinearLayout paddedLinearLayout(MemDescType type);
-LinearLayout paddedLinearLayout(RankedTensorType type);
 LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding);
 
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a

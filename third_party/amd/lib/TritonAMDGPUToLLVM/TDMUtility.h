@@ -37,7 +37,7 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
                                   unsigned padInterval, unsigned padAmount,
                                   SmallVector<Value> tensorShape,
                                   SmallVector<Value> tensorStride, Value srcPtr,
-                                  bool isRowMajor, Attribute encoding);
+                                  bool isRowMajor, Attribute sharedEncoding);
 
 // Update the global memory address with offset, and fill the shared memory
 // address and pred in a given TDM descriptor for regular load/store (1D-5D).
@@ -101,8 +101,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 // distribution.  For all other encodings, falls back to the default TDM warp
 // distribution with numTDMInstructions = 1.
 std::pair<SmallVector<unsigned>, unsigned>
-getPartitionAlignedWarpDistribution(ArrayRef<int64_t> blockShape, int numWarps,
-                                    Attribute encoding);
+distributeTDMWarpsAlignToPartition(ArrayRef<int64_t> blockShape, int numWarps,
+                                   Attribute encoding);
 
 // Calculate the number of TDM gather/scatter instructions needed.
 // - numIndices: number of row indices
