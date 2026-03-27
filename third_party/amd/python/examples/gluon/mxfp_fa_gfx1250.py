@@ -27,7 +27,7 @@ from triton.experimental.gluon.language import expand_dims
 from triton.experimental.gluon.language.amd import warp_pipeline_stage
 from triton.experimental.gluon.language.amd.gfx1250 import wmma_scaled
 from triton.experimental.gluon.language.amd.gfx1250 import tdm
-from triton.experimental.gluon.language.amd.gfx1250 import buffer_load, buffer_store
+from triton.experimental.gluon.language.amd.gfx1250 import buffer_load
 from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout
 
 # Handle imports for both pytest (module context) and direct execution
@@ -42,11 +42,12 @@ except ImportError:
 
 
 @gluon.constexpr_function
-def get_shared_layout(shape, padding=False, transposed=False):
+def get_shared_layout(shape, padding=False, transposed=False, clamp=False):
     """Default shared memory layout for TDM.
 
     When `padding=True`, use a padded shared memory layout to reduce LDS bank
-    conflicts.
+    conflicts. When `clamp=True`, we will clamp the padding_interval to be no
+    more than the inner dimension of the block.
     """
     if not padding:
         return ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
@@ -58,7 +59,7 @@ def get_shared_layout(shape, padding=False, transposed=False):
     ## least 256 elements.
     ## On the other hand, we only need to add padding after a row of
     ## elements. So we also want the padding_interval to be at least inner_dim.
-    padding_interval = max(inner_dim, 256)
+    padding_interval = inner_dim if clamp else max(inner_dim, 256)
     ## For K tensor, we use ds_load_b128 and 16 x 8-bit element is the vector size
     ## For V tensor, there are 3 cases
     ## 1. V is HEAD_SZ contiguous. In this case, ds_load_tr8_b64 is
@@ -113,63 +114,6 @@ def get_wmma_layout(shape, num_warps, packed=False, preshuffled=False, warp_axis
 
     instr_shape = [16, 16, 128] if not packed else [16, 16, 64]
     return ttgl.amd.AMDWMMALayout(3, True, warp_bases, reg_bases, instr_shape, rank=rank)
-
-
-@gluon.constexpr_function
-def get_store_layout(shape, num_warps):
-    """
-    The goal of this layout is to store contiguous data as much as possible.
-    Assume we are storing fp32 data. The inner dim is head_sz, which can be
-    either 128 or 64. For the normal wmma layout for a block of 16x16, we have
-    2 threads in a row, and each thread stores 8 elements. We can follow
-    the "2 threads in a row" manner, so that for head_sz=128, each thread
-    stores 64 elements / 256B; for head_sz=64, each thread stores 32 elements /
-    128B.
-    """
-    dim_outer, dim_inner = shape
-
-    # Ensure storing 4 contiguous elements = 128 bits
-    reg = [[0, 1], [0, 2]]
-    tile_inner = 4
-    # Distribute 16 lanes for outer dim to align with the wmma layout
-    lane = [[1, 0], [2, 0], [4, 0], [8, 0]]
-    tile_outer = 16
-    # Let each lane store half of inner dim.
-    assert tile_inner <= dim_inner // 2
-    while tile_inner < dim_inner // 2:
-        reg.append([0, tile_inner])
-        tile_inner <<= 1
-    # Let the other 16 lanes store the other half of inner dim.
-    lane.append([0, tile_inner])
-    # Distribute warps for outer dim.
-    warp = []
-    while 2**len(warp) < num_warps:
-        if tile_outer < dim_outer:
-            warp.append([tile_outer, 0])
-            tile_outer <<= 1
-        else:
-            warp.append([0, 0])
-    # Repeat the layout to cover the rest of outer dim.
-    while tile_outer < dim_outer:
-        reg.append([tile_outer, 0])
-        tile_outer <<= 1
-
-    return ttgl.DistributedLinearLayout(reg, lane, warp, [], shape)
-
-
-@gluon.jit
-def split_n(x, n: ttgl.constexpr = 2):
-    """
-    Recursively split a 2D tensor along the N-dimension into `n` pieces.
-    """
-    layout: ttgl.constexpr = x.type.layout
-    if n == 1:
-        return (x, )
-    else:
-        a0, a1 = x.reshape([x.shape[0], 2, x.shape[1] // 2]).permute(0, 2, 1).split()
-        a0 = ttgl.convert_layout(a0, layout, assert_trivial=True)
-        a1 = ttgl.convert_layout(a1, layout, assert_trivial=True)
-        return (split_n(a0, n // 2) + split_n(a1, n // 2))
 
 
 @aggregate
@@ -623,7 +567,6 @@ class GlobalScaledAttentionConfig:
     p_layout: ttgl.constexpr
     v_layout: ttgl.constexpr
     acc_layout: ttgl.constexpr
-    store_layout: ttgl.constexpr
 
     # Whether the layout convert between QK and P is trivial - no data movement. This can happen when we use
     # k_width=8 for P and V, which effectively makes QK and P have the same layout.
@@ -672,7 +615,6 @@ class GlobalScaledAttentionConfig:
         self.p_layout = ttgl.constexpr(p_layout)
         self.v_layout = ttgl.constexpr(v_layout)
         self.acc_layout = ttgl.constexpr(acc_layout)
-        self.store_layout = ttgl.constexpr(get_store_layout([BLOCK_M, HEAD_SZ], NUM_WARPS))
 
         self.KV_PACK_DIV = ttgl.constexpr(2 if KV_TYPE == 'e2m1' else 1)
         self.SUBTILE = ttgl.constexpr(SUBTILE)
@@ -1488,7 +1430,6 @@ class BlockScaledAttentionConfig:
     v_scale_layout: ttgl.constexpr
 
     acc_layout: ttgl.constexpr
-    store_layout: ttgl.constexpr
 
     # Whether to use per-block scaling for P; if False, use an uniform scale of 1.0.
     P_SCALING: ttgl.constexpr
@@ -1553,7 +1494,6 @@ class BlockScaledAttentionConfig:
         self.p_scale_layout = ttgl.constexpr(p_scale_layout)
         self.v_scale_layout = ttgl.constexpr(v_scale_layout)
         self.acc_layout = ttgl.constexpr(acc_layout)
-        self.store_layout = ttgl.constexpr(get_store_layout([BLOCK_M, HEAD_SZ], NUM_WARPS))
 
         self.KV_PACK_DIV = ttgl.constexpr(2 if KV_TYPE == 'e2m1' else 1)
         self.SUBTILE = ttgl.constexpr(SUBTILE)
@@ -2534,39 +2474,21 @@ def store_output(  #
     if SEQLEN_Q == SEQLEN_K:
         ttgl.static_assert(SPLIT_K == 1)
 
-        o_off = SEQLEN_Q * HEAD_SZ * (NUM_Q_HEADS * off_z + off_h) + \
-                BLOCK_M * HEAD_SZ * off_m
-        o_blk = MemoryBlock.initialize(  #
-            o_ptr + o_off,  #
-            shape=[SEQLEN_Q, HEAD_SZ],  #
-            block_shape=[BLOCK_M, HEAD_SZ],  #
-            layout=cfg.store_layout)
-
         l_recip = 1 / l_i
         acc = acc * expand_dims(l_recip, -1)
-        o = acc.to(o_blk.dtype)
-        o = ttgl.convert_layout(o, cfg.store_layout)
-        buffer_store(o, o_blk.ptr, o_blk.offs, o_blk.mask)
+
+        o_base = SEQLEN_Q * HEAD_SZ * (NUM_Q_HEADS * off_z + off_h)
+        o_shape = [SEQLEN_Q, HEAD_SZ]
+
     else:
         GROUP_SZ: ttgl.constexpr = NUM_Q_HEADS // NUM_K_HEADS
         NUM_GROUPS: ttgl.constexpr = NUM_K_HEADS
 
         if SPLIT_K == 1:
-            o_off = GROUP_SZ * HEAD_SZ * (NUM_GROUPS * off_z + off_h) + \
-                    BLOCK_M * HEAD_SZ * off_m
-            o_blk = MemoryBlock.initialize(  #
-                o_ptr + o_off,  #
-                shape=[GROUP_SZ, HEAD_SZ],  #
-                block_shape=[BLOCK_M, HEAD_SZ],  #
-                layout=cfg.store_layout)
-
             l_recip = 1 / l_i
             acc = acc * expand_dims(l_recip, -1)
-            o = acc.to(o_blk.dtype)
-            o = ttgl.convert_layout(o, cfg.store_layout)
-            buffer_store(o, o_blk.ptr, o_blk.offs, o_blk.mask)
+
         else:
-            # LDS reduction for split-k
             m_ij = ttgl.max(m_i, 0)
             m_ij_scaled = m_ij * sm_scale
             m_diff = m_i * sm_scale - expand_dims(m_ij_scaled, 0)
@@ -2577,10 +2499,7 @@ def store_output(  #
             acc = acc.reshape(shape)
 
             acc_smem_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[HEAD_SZ, 4]], shape, [1, 0])
-            acc_smem = ttgl.allocate_shared_memory(  #
-                acc.dtype,  #
-                shape,  #
-                acc_smem_layout)
+            acc_smem = ttgl.allocate_shared_memory(acc.dtype, shape, acc_smem_layout)
             acc_smem.store(acc)
 
             acc_layout: ttgl.constexpr = ttgl.BlockedLayout([1, HEAD_SZ // NUM_WARPS // 2], [16, 2], [1, NUM_WARPS],
@@ -2595,15 +2514,22 @@ def store_output(  #
             l_recip = ttgl.permute(l_recip, [1, 0])
             l_recip = ttgl.convert_layout(l_recip, acc.type.layout)
             acc = acc * l_recip
-            o_off = GROUP_SZ * HEAD_SZ * (NUM_GROUPS * off_z + off_h) + \
-                    BLOCK_M * HEAD_SZ * off_m
-            o_blk = MemoryBlock.initialize(  #
-                o_ptr + o_off,  #
-                shape=[GROUP_SZ, HEAD_SZ],  #
-                block_shape=[BLOCK_M, HEAD_SZ],  #
-                layout=acc_layout)
 
-            buffer_store(acc, o_blk.ptr, o_blk.offs)
+        o_base = GROUP_SZ * HEAD_SZ * (NUM_GROUPS * off_z + off_h)
+        o_shape = [GROUP_SZ, HEAD_SZ]
+
+    o_smem_layout: ttgl.constexpr = get_shared_layout([BLOCK_M, HEAD_SZ], padding=True, clamp=True)
+    o_desc = tdm.make_tensor_descriptor(  #
+        base=o_ptr + o_base,  #
+        shape=o_shape,  #
+        strides=[HEAD_SZ, 1],  #
+        block_shape=[BLOCK_M, HEAD_SZ],  #
+        layout=o_smem_layout)
+
+    o = acc.to(o_ptr.dtype.element_ty)
+    o_smem = ttgl.allocate_shared_memory(o_ptr.dtype.element_ty, [BLOCK_M, HEAD_SZ], o_smem_layout)
+    o_smem.store(o)
+    tdm.async_store(o_desc, [off_m * BLOCK_M, 0], o_smem)
 
 
 @gluon.jit

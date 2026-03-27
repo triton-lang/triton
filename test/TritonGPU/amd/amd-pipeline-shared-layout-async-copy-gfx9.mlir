@@ -43,3 +43,53 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %result : tensor<16x32xf32, #mma>
   }
 }
+
+// -----
+
+// For sizePerThrad=[1, 1] threadsPerWarp=[1, 64] order=[1, 0] and dim1=64 the registers will be contigious along dim0 which is the *non* contig dimension.
+// Check that we correctly follow the memory order which will be the lane order instead of the register order.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+// CHECK: #shared = {{.*}} order = [1, 0]
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [16, 16, 4], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: async_copy_lanes_cover_contig_dim
+  tt.func @async_copy_lanes_cover_contig_dim(
+              %arg0: tensor<16x64x!tt.ptr<f32>, #blocked> {tt.contiguity = dense<[1, 1]> : tensor<2xi32>, tt.divisibility = dense<16> : tensor<2xi32>},
+              %arg1: tensor<64x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>,
+              %lb: i32, %ub: i32, %step: i32) -> tensor<16x16xf32, #mma> {
+    // CHECK: ttg.async_copy_global_to_local {{.*}} -> <16x64xf32, #shared, #smem, mutable>
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma>
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<16x16xf32, #mma>) : i32 {
+      %a = tt.load %arg0 : tensor<16x64x!tt.ptr<f32>, #blocked>
+      %a_dot = ttg.convert_layout %a : tensor<16x64xf32, #blocked> -> tensor<16x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %c = tt.dot %a_dot, %arg1, %acc : tensor<16x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<16x16xf32, #mma>
+      scf.yield %c : tensor<16x16xf32, #mma>
+    } {tt.scheduled_max_stage = 1 : i32}
+    tt.return %result : tensor<16x16xf32, #mma>
+  }
+}
+
+// -----
+
+// If sizePerThread is > 1 in the non contig dim we still need to choose the actual memory order.
+#blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+// CHECK: #shared = {{.*}} order = [1, 0]
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [16, 16, 4], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: async_copy_sizeperthread_in_noncontig_dim_not_vectorized
+  tt.func @async_copy_sizeperthread_in_noncontig_dim_not_vectorized(
+              %arg0: tensor<16x64x!tt.ptr<f32>, #blocked> {tt.contiguity = dense<[1, 1]> : tensor<2xi32>, tt.divisibility = dense<16> : tensor<2xi32>},
+              %arg1: tensor<64x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>,
+              %lb: i32, %ub: i32, %step: i32) -> tensor<16x16xf32, #mma> {
+    // CHECK: ttg.async_copy_global_to_local {{.*}} -> <16x64xf32, #shared, #smem, mutable>
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma>
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<16x16xf32, #mma>) : i32 {
+      %a = tt.load %arg0 : tensor<16x64x!tt.ptr<f32>, #blocked>
+      %a_dot = ttg.convert_layout %a : tensor<16x64xf32, #blocked> -> tensor<16x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %c = tt.dot %a_dot, %arg1, %acc : tensor<16x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<16x16xf32, #mma>
+      scf.yield %c : tensor<16x16xf32, #mma>
+    } {tt.scheduled_max_stage = 1 : i32}
+    tt.return %result : tensor<16x16xf32, #mma>
+  }
+}

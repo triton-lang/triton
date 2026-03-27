@@ -1,4 +1,5 @@
 import os
+import tempfile
 import torch
 import pytest
 from triton import knobs
@@ -8,14 +9,7 @@ from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, mbarrier, tma
-from triton._internal_testing import is_cuda
-import multiprocessing
-import tempfile
-
-try:
-    multiprocessing.set_start_method("spawn")
-except RuntimeError:
-    pass  # start method already set
+from triton._internal_testing import is_cuda, run_in_process
 
 
 @pytest.fixture
@@ -30,47 +24,9 @@ def num_ctas(request):
     return request.param
 
 
-class ProcessResult:
-
-    def __init__(self, exc, driver_stderr_output):
-        self.exc = exc
-        self.driver_stderr_output = driver_stderr_output
-
-
 def assert_expected_cuda_failure(exc):
     assert exc is not None
     assert any(msg in str(exc) for msg in ["device-side assert", "unspecified launch failure"]), str(exc)
-
-
-def target(client_fn, queue: multiprocessing.Queue, args, kwargs):
-    # Prepare temp file for capturing low-level stderr
-    with tempfile.TemporaryFile(mode="w+") as tmp_stderr:
-        saved_stderr_fd = os.dup(2)
-        os.dup2(tmp_stderr.fileno(), 2)  # Redirect fd 2 to tmp_stderr
-        exc = None
-
-        try:
-            client_fn(*args, **kwargs)
-        except Exception as e:
-            exc = e
-        finally:
-            # Restore original stderr
-            os.dup2(saved_stderr_fd, 2)
-            os.close(saved_stderr_fd)
-
-            # Read driver stderr
-            tmp_stderr.seek(0)
-            driver_stderr_output = tmp_stderr.read()
-            queue.put(ProcessResult(exc, driver_stderr_output))
-
-
-def run_in_process(client_fn, args=(), kwargs={}):
-    queue = multiprocessing.Queue()
-    p = multiprocessing.Process(target=target, args=(client_fn, queue, args, kwargs))
-    p.start()
-    p.join()
-    result = queue.get()
-    return result
 
 
 @gluon.constexpr_function

@@ -27,6 +27,8 @@ void gsanFree(void *ptr, ssize_t size, int device, void *stream);
 }
 
 namespace {
+constexpr size_t kThreadStateHeaderSize =
+    offsetof(gsan::ThreadState, vectorClock);
 
 // We use a tree structure to manage virtual address allocations.
 //
@@ -746,6 +748,54 @@ PyObject *pyGetGlobalStatePointer([[maybe_unused]] PyObject *self,
   return PyLong_FromUnsignedLongLong(alloc->globalStateAddress);
 }
 
+PyObject *pyGetRuntimeStateLayout([[maybe_unused]] PyObject *self,
+                                  PyObject *const *args, Py_ssize_t nargs) {
+  if (nargs != 1) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.get_runtime_state_layout expected 1 positional argument, "
+                 "got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  int device = 0;
+  if (!parseIntArg(args[0], "device", &device))
+    return nullptr;
+
+  std::lock_guard lg(mut);
+  if (gsanEnsureInit() != 0) {
+    PyErr_SetString(PyExc_RuntimeError, "failed to initialize gsan allocator");
+    return nullptr;
+  }
+  if (ensureRuntimeStateMapped(device) != CUDA_SUCCESS) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "failed to map runtime state for device");
+    return nullptr;
+  }
+
+  const auto &config = alloc->config;
+  uintptr_t globalStateAddress =
+      alloc->globalStateAddress + device * gsan::kPerDeviceStateStride;
+  uintptr_t threadStateBase =
+      roundUp(globalStateAddress + sizeof(gsan::GlobalState),
+              alignof(gsan::ThreadState));
+  size_t threadStateStride =
+      sizeof(gsan::ThreadState) +
+      sizeof(gsan::epoch_t) * config.numThreads * (1 + config.clockBufferSize);
+  threadStateStride = roundUp(threadStateStride, alignof(gsan::ThreadState));
+
+  return Py_BuildValue(
+      "{s:K,s:K,s:K,s:K,s:i,s:i,s:i}", "global_state_ptr",
+      static_cast<unsigned long long>(globalStateAddress),
+      "thread_state_base_ptr", static_cast<unsigned long long>(threadStateBase),
+      "thread_state_stride_bytes",
+      static_cast<unsigned long long>(threadStateStride),
+      "thread_state_header_size_bytes",
+      static_cast<unsigned long long>(kThreadStateHeaderSize), "num_sms",
+      config.numSMs, "num_threads", config.numThreads, "clock_buffer_size",
+      config.clockBufferSize);
+}
+
 PyMethodDef kGSanAllocatorMethods[] = {
     {"malloc", reinterpret_cast<PyCFunction>(pyMalloc), METH_FASTCALL,
      "Allocate GSan memory. Returns a CUDA pointer as an integer."},
@@ -761,6 +811,9 @@ PyMethodDef kGSanAllocatorMethods[] = {
     {"get_global_state_pointer",
      reinterpret_cast<PyCFunction>(pyGetGlobalStatePointer), METH_NOARGS,
      "Return the pointer to the GSan global state region."},
+    {"get_runtime_state_layout",
+     reinterpret_cast<PyCFunction>(pyGetRuntimeStateLayout), METH_FASTCALL,
+     "Return the per-device GSan runtime state layout."},
     {nullptr, nullptr, 0, nullptr},
 };
 
