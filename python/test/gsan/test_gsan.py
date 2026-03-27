@@ -52,6 +52,37 @@ def test_load_store_updates_shadow(with_gsan):
     assert cell1.num_reads == 1
 
 
+@gluon.jit
+def _gluon_ws_completion_default(out_ptr, layout: gl.constexpr):
+    offsets = gl.arange(0, 128, layout=layout)
+    gl.store(out_ptr + offsets, offsets)
+
+
+@gluon.jit
+def _gluon_ws_completion_worker(out_ptr, layout: gl.constexpr):
+    offsets = 128 + gl.arange(0, 128, layout=layout)
+    gl.store(out_ptr + offsets, offsets)
+
+
+@gluon.jit
+def _gluon_ws_completion_kernel(out_ptr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+    gl.warp_specialize([
+        (_gluon_ws_completion_default, (out_ptr, layout)),
+        (_gluon_ws_completion_worker, (out_ptr, layout)),
+    ], [4], [24])
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_gluon_warp_specialize_completes(with_gsan):
+    expected = torch.arange(256, dtype=torch.int32, device="cuda")
+
+    out = torch.full((256, ), -1, dtype=torch.int32, device="cuda")
+    _gluon_ws_completion_kernel[(1, )](out, num_warps=4)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, expected)
+
+
 @triton.jit
 def _write_blocks_kernel(ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)

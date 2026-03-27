@@ -3,7 +3,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cuda/atomic>
 #include <device_launch_parameters.h>
 #include <limits>
 
@@ -32,50 +31,42 @@ namespace {
 static constexpr uint32_t writerFlag = 1u << 31;
 
 __device__ void rwLockAcquireRead(uint32_t &lock) {
-  cuda::atomic_ref<uint32_t, cuda::thread_scope_block> atom{lock};
-  auto old = atom.fetch_add(1, cuda::memory_order_acquire);
+  uint32_t old = __scoped_atomic_fetch_add(&lock, 1, __ATOMIC_ACQUIRE,
+                                           __MEMORY_SCOPE_WRKGRP);
   if ((old & writerFlag) == 0)
     return;
 
   do {
-    old = atom.load(cuda::memory_order_acquire);
+    old =
+        __scoped_atomic_load_n(&lock, __ATOMIC_ACQUIRE, __MEMORY_SCOPE_WRKGRP);
   } while ((old & writerFlag) != 0);
 }
 
 __device__ void rwLockAcquireWrite(uint32_t &lock) {
-  cuda::atomic_ref<uint32_t, cuda::thread_scope_block> atom{lock};
-
   uint32_t actual = 0;
-  while (!atom.compare_exchange_weak(actual, writerFlag,
-                                     cuda::memory_order_acquire,
-                                     cuda::memory_order_relaxed)) {
+  while (!__scoped_atomic_compare_exchange_n(&lock, &actual, writerFlag, true,
+                                             __ATOMIC_ACQUIRE, __ATOMIC_RELAXED,
+                                             __MEMORY_SCOPE_WRKGRP)) {
     actual = 0;
   }
 }
 
 __device__ void rwLockReleaseRead(uint32_t &lock) {
-  cuda::atomic_ref<uint32_t, cuda::thread_scope_block> atom{lock};
-  atom.fetch_sub(1, cuda::memory_order_relaxed);
+  __scoped_atomic_fetch_sub(&lock, 1, __ATOMIC_RELAXED, __MEMORY_SCOPE_WRKGRP);
 }
 
 __device__ void rwLockReleaseWrite(uint32_t &lock) {
-  cuda::atomic_ref<uint32_t, cuda::thread_scope_block> atom{lock};
   // Note we don't set 0 as there may be readers who've already
   // incremented optimistically
-  atom.fetch_and(~writerFlag, cuda::memory_order_release);
+  __scoped_atomic_fetch_and(&lock, ~writerFlag, __ATOMIC_RELEASE,
+                            __MEMORY_SCOPE_WRKGRP);
 }
 
 __device__ inline uintptr_t roundUp(uintptr_t ptr, uintptr_t align) {
   return ptr % align == 0 ? ptr : ptr + align - (ptr % align);
 }
 
-__device__ uint32_t getSmId() {
-  uint32_t smid;
-  asm("mov.b32 %0, %%smid;" : "=r"(smid));
-  return smid;
-}
-
-__device__ void ctaBarrier() { asm volatile("bar.sync 0;" : : : "memory"); }
+__device__ uint32_t getSmId() { return __nvvm_read_ptx_sreg_smid(); }
 
 __device__ uintptr_t getThreadStateStrideBytes(GlobalState *globals) {
   auto clocksPerThread = 1u + globals->clockBufferSize;
@@ -105,8 +96,7 @@ __device__ ThreadState *getThreadState(GlobalState *globals) {
     state->clockBufferDirty = 0;
     state->clockBufferHead = 0;
     state->threadId = getDeviceThreadId(globals, smid);
-    cuda::atomic_thread_fence(cuda::memory_order_release,
-                              cuda::thread_scope_device);
+    __scoped_atomic_thread_fence(__ATOMIC_RELEASE, __MEMORY_SCOPE_SYSTEM);
     state->globals = globals;
   }
 
@@ -127,8 +117,6 @@ __device__ void initThread(GlobalState *globals, Location loc) {
                "Vector clock overflowed");
     clock[tid] += 1;
   }
-
-  ctaBarrier();
 }
 
 struct Range {
@@ -149,18 +137,17 @@ __device__ ShadowCell *acquireShadow(uintptr_t shadowAddr) {
   auto cell = reinterpret_cast<ShadowCell *>(shadowAddr);
   uint16_t actual = 0;
 
-  cuda::atomic_ref<uint16_t, cuda::thread_scope_system> lock(cell->lock);
-
-  while (!lock.compare_exchange_weak(actual, 1, cuda::memory_order_acquire,
-                                     cuda::memory_order_relaxed)) {
+  while (!__scoped_atomic_compare_exchange_n(&cell->lock, &actual, 1, true,
+                                             __ATOMIC_ACQUIRE, __ATOMIC_RELAXED,
+                                             __MEMORY_SCOPE_SYSTEM)) {
     actual = 0;
   }
   return cell;
 }
 
 __device__ void releaseShadow(ShadowCell *cell) {
-  cuda::atomic_ref<uint16_t, cuda::thread_scope_system> lock(cell->lock);
-  lock.store(0, cuda::memory_order_release);
+  __scoped_atomic_store_n(&cell->lock, 0, __ATOMIC_RELEASE,
+                          __MEMORY_SCOPE_SYSTEM);
 }
 
 __device__ void doWrite(ThreadState *state, ShadowCell *cell, Location loc) {
@@ -237,10 +224,8 @@ __device__ void doRead(ThreadState *state, ShadowCell *cell, Location loc) {
   }
 
   // Otherwise, do stochastic replacement
-  cuda::atomic_ref<uint32_t, cuda::thread_scope_block> threadNumReadsAtomic{
-      state->numReads};
-  auto threadNumReads =
-      threadNumReadsAtomic.fetch_add(1, cuda::memory_order_relaxed);
+  auto threadNumReads = __scoped_atomic_fetch_add(
+      &state->numReads, 1, __ATOMIC_RELAXED, __MEMORY_SCOPE_WRKGRP);
   auto seed = getGlobalState(state)->rngSeed;
   uint32_t rand = hash2x32(threadNumReads, state->threadId, seed);
   if ((rand >> 8) % numReads != 0)
@@ -287,24 +272,24 @@ __device__ void tensorLoad(ThreadState *state, const char *stackPtr, int nElems,
 
 extern "C" __device__ void
 __triton_gsan_load_tensor(void *globalState, const char *stackPtr, int numElems,
-                          int bytesPerElem, const char *file, int line) {
-  auto loc = gsan::Location{file, static_cast<unsigned>(line)};
+                          int bytesPerElem, const char *file, unsigned line) {
+  auto loc = gsan::Location{file, line};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorLoad(threadState, stackPtr, numElems, bytesPerElem, loc);
 }
 
 extern "C" __device__ void __triton_gsan_init(void *globalState,
-                                              const char *file, int line) {
-  auto loc = gsan::Location{file, static_cast<unsigned>(line)};
+                                              const char *file, unsigned line) {
+  auto loc = gsan::Location{file, line};
   gsan::initThread(reinterpret_cast<gsan::GlobalState *>(globalState), loc);
 }
 
 extern "C" __device__ void
 __triton_gsan_store_tensor(void *globalState, const char *stackPtr,
                            int numElems, int bytesPerElem, const char *file,
-                           int line) {
-  auto loc = gsan::Location{file, static_cast<unsigned>(line)};
+                           unsigned line) {
+  auto loc = gsan::Location{file, line};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorStore(threadState, stackPtr, numElems, bytesPerElem, loc);

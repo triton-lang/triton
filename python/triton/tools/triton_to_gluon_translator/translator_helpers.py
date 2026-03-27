@@ -632,17 +632,9 @@ def tl_full(shape, value, dtype=None):
     return ttgl.full(shape, value, dtype, layout=layout)
 
 
-# Builtin because varargs aren't supported in JIT functions
-@ttgl._core.builtin
-def tl_trans(value, *dims, _semantic=None):
-    return value.trans(*dims, _semantic=_semantic)
-
-
-def _wrap_axis(axis, ndim):
-    if not (-ndim <= axis < ndim):
-        raise ValueError(f"invalid axis {axis}. Expected {-ndim} <= axis < {ndim}")
-
-    return axis if axis >= 0 else axis + ndim
+@gluon.jit
+def tl_trans(value, *dims):
+    return value.trans(*dims)
 
 
 @gluon.constexpr_function

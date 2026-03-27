@@ -104,29 +104,15 @@ void init_triton_passes_ttgpuir(py::module &&m) {
 }
 
 void init_plugin_passes(py::module &&m) {
-  std::string filename =
-      mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-  if (filename.empty())
-    return;
-
-  TritonPlugin TP(filename);
-  std::vector<const char *> passNames;
-  if (auto result = TP.getPassHandles(passNames); !result)
-    throw TP.err2exp(result.takeError());
-
-  for (unsigned i = 0; i < passNames.size(); ++i) {
-    const char *passName = passNames.data()[i];
-
-    m.def(
-        passName,
-        [passName](mlir ::PassManager &pm, std::vector<std::string> args) {
-          std::string filename =
-              mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-          TritonPlugin TP(filename);
-          if (auto result = TP.addPass(&pm, passName, args); !result)
-            throw TP.err2exp(result.takeError());
-        },
-        py::arg("pm"), py::arg("args") = std::vector<std::string>());
+  for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
+    for (const auto &pass : plugin.listPasses()) {
+      m.def(
+          pass.name,
+          [pass](mlir::PassManager &pm, std::vector<std::string> args) {
+            pass.addPass(&pm, args);
+          },
+          py::arg("pm"), py::arg("args") = std::vector<std::string>());
+    }
   }
 }
 

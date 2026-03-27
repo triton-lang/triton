@@ -189,13 +189,14 @@ public:
       if (!pred) {
         pred = arith::ConstantIntOp::create(rewriter, op.getLoc(), true, 1);
       }
-      if (!moveDefiningOpsBefore(commit.getBarrier(), op) ||
+      Value barrier = commit.getBarrier();
+      if (!moveDefiningOpsBefore(barrier, op) ||
           !moveDefiningOpsBefore(pred, op)) {
         // Give up merging a commit if its defining ops cannot be moved above
         // the mma op.
         continue;
       }
-      op.addCompletionBarrier(commit.getBarrier(), pred);
+      op.addCompletionBarrier(barrier, pred);
       rewriter.eraseOp(commit);
     }
     return success();
