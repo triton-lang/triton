@@ -73,8 +73,13 @@ def TTNG_TensorDescIm2ColType : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2
     TypeBuilderWithInferredContext<(ins
       "llvm::ArrayRef<int64_t>":$shape,
       "Type":$elementType,
-      "Attribute":$sharedLayout
+      "Attribute":$sharedLayout,
+      "bool":$isSigned
     ), [{
+      if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
+        auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
+        elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
+      }
       return $_get(elementType.getContext(), shape, elementType, sharedLayout);
     }]>
   ];

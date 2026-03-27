@@ -605,7 +605,8 @@ void init_gluon_ir(py::module &&m) {
               Attribute layout) -> Type {
              auto blockTy = cast<RankedTensorType>(blockType);
              return triton::nvidia_gpu::TensorDescIm2ColType::get(
-                 blockTy.getShape(), blockTy.getElementType(), layout);
+                 blockTy.getShape(), blockTy.getElementType(), layout,
+                 isSigned);
            })
       .def("is_convert_layout_trivial",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> bool {

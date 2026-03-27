@@ -187,7 +187,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
     auto encoding = descTy.getSharedLayout();
 
     py::dict metadata;
-    if (isa_and_present<ttg::NVMMASharedEncodingAttr>(encoding)) {
+    if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
       auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
       auto swizzle = ttng::getTMASwizzleMode(arg.getLoc(), descTy);
       auto elemType = ttng::getTMAElementType(arg.getLoc(), descTy);
