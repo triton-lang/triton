@@ -1949,7 +1949,7 @@ def test_split_auto_layout_execution():
 
         out_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [threads_per_warp], [4], [0])
         diff = ttgl.set_auto_layout(rhs - lhs, out_layout)
-        out_offsets = ttgl.arange(0, XBLOCK, ttgl.AutoLayout())
+        out_offsets = ttgl.arange(0, XBLOCK)
         ttgl.store(out_ptr + out_offsets, diff)
 
     XBLOCK = 128
