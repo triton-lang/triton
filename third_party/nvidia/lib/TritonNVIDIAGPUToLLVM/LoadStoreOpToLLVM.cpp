@@ -22,6 +22,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 
+#include "llvm/ADT/Twine.h"
+
 #include <cassert>
 
 using namespace mlir;
@@ -1101,38 +1103,17 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
-static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
-                                               ttg::TMAMode mode) {
-  auto ctx = ty.getContext();
-  auto kMsg = str_attr("msg");
-  auto kBlock = str_attr("block");
-  auto shapePerCTA = ttg::getShapePerCTA(ty);
-  int rank = shapePerCTA.size();
-  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true, mode);
-  auto outDimNames = standardOutDimNames(ctx, rank);
-  LinearLayout msgToOffset;
-  for (int dim = 0; dim < rank; ++dim) {
-    msgToOffset *=
-        LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
-                                blockShape[dim], kMsg, outDimNames[dim]);
-  }
-  msgToOffset *= getCGALayout(ty.getEncoding()).getLinearLayout();
-  return msgToOffset;
-}
-
 static LinearLayout
-getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
-                             ttg::MemDescType ty) {
-  auto isFp4Padded =
-      cast<NVMMASharedEncodingAttr>(ty.getEncoding()).getFp4Padded();
-  if (!isFp4Padded) {
+getTMAMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
+                                ttg::MemDescType ty) {
+  auto mmaEncoding = cast<NVMMASharedEncodingAttr>(ty.getEncoding());
+  if (!mmaEncoding.getFp4Padded())
     return packedLayout;
-  }
+
   auto ctx = ty.getContext();
-  auto rank = ty.getRank();
   auto kMsg = str_attr("msg");
-  auto kLastDim = str_attr("dim" + Twine(rank - 1));
-  // Multiply to offset by 2 in the last dimension
+  auto kLastDim = str_attr("dim" + Twine(ty.getRank() - 1));
+  // Multiply to offset by 2 in the last dimension.
   auto unpackLayout = LinearLayout::zeros1D(1, kMsg, kLastDim, 2);
   return unpackLayout * packedLayout;
 }
@@ -1187,10 +1168,12 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     int rank = op.getCoord().size();
 
-    auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
+    auto msgToPackedOffset =
+        ttng::getTMAMsgToPackedOffsetLayout(smemTy, tmaMode);
     auto smemLayout = ttg::toLinearLayout(smemTy);
     auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
-    auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
+    auto msgToOffset =
+        getTMAMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
 
     auto ctx = op.getContext();
     auto kMsg = str_attr("msg");
@@ -1338,10 +1321,10 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   auto rank = coords.size();
 
   auto msgToPackedOffset =
-      getMsgToPackedOffsetLayout(srcTy, ttg::TMAMode::Tiled);
+      ttng::getTMAMsgToPackedOffsetLayout(srcTy, ttg::TMAMode::Tiled);
   auto smemLayout = ttg::toLinearLayout(srcTy);
   auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
-  auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
+  auto msgToOffset = getTMAMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
 
   auto ctx = op->getContext();
   auto kMsg = str_attr("msg");
@@ -1349,6 +1332,14 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   auto numCopies = msgToOffset.getInDimSize(kMsg);
   auto zero = b.i32_val(0);
   auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+  uint32_t maskCGABroadcast = smemLayout.getFreeVariableMasks().lookup(kBlock);
+  if (maskCGABroadcast != 0) {
+    // Stores and reductions operate from CTA-local shared memory, so if the
+    // source tile is broadcast across CTAs only the lead CTA should issue the
+    // TMA message.
+    Value ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
+    pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, zero));
+  }
 
   for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
     int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
@@ -1445,19 +1436,6 @@ struct AsyncTMAReduceOpConversion
   }
 };
 
-static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
-  auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(type.getEncoding());
-  if (!mmaEncoding) {
-    assert(isa<ttg::SwizzledSharedEncodingAttr>(type.getEncoding()));
-    return ttg::toLinearLayout(type);
-  }
-  assert(type.getShape() == type.getAllocShape().take_back(type.getRank()));
-  // TMA gather/scatter only supports tiled mode
-  return ttg::nvmmaSharedToLinearLayout(
-      type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
-      ttg::TMAMode::Tiled, /*disableSwizzle=*/true);
-}
-
 // This function is shared between the TMA gather and scatter lowerings. It
 // handles the logic for iterating over the x offset values in groups of 4
 // consecutive indices and mapping them to the appropriate shared memory offset.
@@ -1469,13 +1447,12 @@ static LogicalResult iterateGatherScatterIndices(
     const TypeConverter &typeConverter,
     mlir::TypedValue<RankedTensorType> xCoords,
     mlir::TypedValue<ttg::MemDescType> smem, Value smemObjValue,
-    Value xOffsetsValue, Value yOffsetValue, Value pred,
+    Value xOffsetsValue, Value yOffsetValue, Value pred, bool multicast,
     function_ref<void(Value, Value, Value, ArrayRef<Value>)> callback) {
   MLIRContext *ctx = op->getContext();
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  StringAttr kDim1 = str_attr("dim1");
   StringAttr kMsg = str_attr("msg");
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
@@ -1524,21 +1501,17 @@ static LogicalResult iterateGatherScatterIndices(
   unsigned contigDimSize = tmaBlockShape.back();
   unsigned numMessagesPerRow = ceil<unsigned>(innerBlockSize, contigDimSize);
 
-  // `xCoordsLayout` maps the register ID into dim0. Tile dim1 by adding a new
-  // dimension representing the TMA message ID.
   assert(innerBlockSize % numMessagesPerRow == 0);
   assert(llvm::isPowerOf2_32(numMessagesPerRow));
   unsigned msgSize = innerBlockSize / numMessagesPerRow;
-  LinearLayout msgToCol =
-      LinearLayout::strided1D(numMessagesPerRow, msgSize, kMsg, kDim1);
-  LinearLayout msgLayout = xCoordsLayout * msgToCol;
 
   // `gather4` will put the segments of the 4 rows consecutively in
   // shared memory. However, if the 4 rows are smaller than the shared memory
   // swizzle tile size, e.g. [4, 32] vs. [8, 32], then, for example, the address
   // of the 0th element of row 4 will not be at the start of the segment.
-  LinearLayout sharedLayout = getUnswizzledLayout(smemType);
-  LinearLayout msgToShared = msgLayout.invertAndCompose(sharedLayout);
+  LinearLayout smemLayout = ttg::toLinearLayout(smemType);
+  LinearLayout msgToShared =
+      ttng::getTMAGatherScatterMsgToSharedLayout(xCoords.getType(), smemType);
 
   // If there are too few rows, warps will have redundant data. An individual
   // thread might also have redundant indices if there is register broadcasting.
@@ -1550,6 +1523,13 @@ static LogicalResult iterateGatherScatterIndices(
 
   Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
   Value blockId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+
+  if (multicast) {
+    uint32_t maskCGABroadcast =
+        smemLayout.getFreeVariableMasks().lookup(kBlock);
+    Value ctaIdInGroup = b.and_(blockId, b.i32_val(maskCGABroadcast));
+    pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
+  }
 
   // Mask out warps with redundant x offsets.
   pred = b.and_(pred,
@@ -1573,7 +1553,7 @@ static LogicalResult iterateGatherScatterIndices(
                                       {{kRegister, regIdVal},
                                        {kLane, laneId},
                                        {kWarp, warpId},
-                                       {kBlock, blockId},
+                                       {kBlock, b.i32_val(0)},
                                        {kMsg, msgIdVal}});
       assert(result.size() == 2 && result.front().first == "offset" &&
              result.back().first == "block");
@@ -1602,23 +1582,56 @@ struct AsyncTMAGatherOpConversion
 LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
     triton::nvidia_gpu::AsyncTMAGatherOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
+  MLIRContext *ctx = op.getContext();
   Location loc = op.getLoc();
 
   LLVM::LLVMVoidType voidTy = void_ty(op->getContext());
+  auto barrierTy = op.getBarrier().getType();
   auto barrierMemObj = LLVM::getSharedMemoryObjectFromStruct(
       loc, adaptor.getBarrier(),
-      typeConverter->convertType(op.getBarrier().getType().getElementType()),
-      rewriter);
+      typeConverter->convertType(barrierTy.getElementType()), rewriter);
+
+  auto kBlock = str_attr("block");
+  bool multicast = op.getMulticast();
+  Value multicastMask;
+  if (multicast) {
+    auto smemLayout = ttg::toLinearLayout(op.getResult().getType());
+    uint32_t maskCGABroadcast =
+        smemLayout.getFreeVariableMasks().lookup(kBlock);
+    multicastMask =
+        LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, maskCGABroadcast);
+  }
+
+  Value barrierPtr = barrierMemObj.getBase();
+  uint32_t barrierMask =
+      toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
+  bool clusterBarrier = barrierMask != 0;
+  if (clusterBarrier) {
+    barrierPtr =
+        LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
+  }
+
+  std::string ctaGroup;
+  if (getModuleTwoCTAs(op))
+    ctaGroup = ".cta_group::2";
 
   // Callback to generate the gather4 instruction.
   auto callback = [&](Value pred, Value shMemPtr, Value yOffset,
                       ArrayRef<Value> xOffsets) {
-    std::string tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::gather4.shared"
-                          "::cta.global.mbarrier::complete_tx::bytes "
-                          "[$1], [$2, {$3, $4, $5, $6, $7}], [$8];";
+    std::string tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::gather4";
+    tmaInst += ctaGroup;
+    tmaInst += ".shared::";
+    tmaInst += (clusterBarrier || multicast) ? "cluster" : "cta";
+    tmaInst += ".global.mbarrier::complete_tx::bytes";
+    if (multicast)
+      tmaInst += ".multicast::cluster";
+    tmaInst += " [$1], [$2, {$3, $4, $5, $6, $7}], [$8]";
+    if (multicast)
+      tmaInst += ", $9";
+    tmaInst += ";";
 
     PTXBuilder ptxBuilder;
-    SmallVector<PTXBuilder::Operand *, 9> operands{
+    SmallVector<PTXBuilder::Operand *, 10> operands{
         // clang-format off
         ptxBuilder.newOperand(pred, "b"),
         ptxBuilder.newOperand(shMemPtr, "r"),
@@ -1628,7 +1641,9 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
     };
     for (Value xOffset : xOffsets)
       operands.push_back(ptxBuilder.newOperand(xOffset, "r"));
-    operands.push_back(ptxBuilder.newOperand(barrierMemObj.getBase(), "r"));
+    operands.push_back(ptxBuilder.newOperand(barrierPtr, "r"));
+    if (multicast)
+      operands.push_back(ptxBuilder.newOperand(multicastMask, "h"));
 
     auto &tma = *ptxBuilder.create(tmaInst);
     tma(operands, /*attachOnlyMLIRArgs=*/true);
@@ -1638,7 +1653,7 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
   if (failed(iterateGatherScatterIndices(
           op, rewriter, *getTypeConverter(), op.getXOffsets(), op.getResult(),
           adaptor.getResult(), adaptor.getXOffsets(), adaptor.getYOffset(),
-          adaptor.getPred(), callback)))
+          adaptor.getPred(), multicast, callback)))
     return failure();
 
   rewriter.eraseOp(op);
@@ -1657,16 +1672,28 @@ struct AsyncTMAScatterOpConversion
 LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
     triton::nvidia_gpu::AsyncTMAScatterOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
+  MLIRContext *ctx = op.getContext();
   Location loc = op.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   LLVM::LLVMVoidType voidTy = void_ty(op->getContext());
+  auto kBlock = str_attr("block");
+  Value pred = b.true_val();
+  auto smemLayout = ttg::toLinearLayout(op.getSrc().getType());
+  uint32_t maskCGABroadcast = smemLayout.getFreeVariableMasks().lookup(kBlock);
+  if (maskCGABroadcast != 0) {
+    // `scatter4` only reads from the current CTA's shared memory, so if the
+    // source is broadcast across CTAs only the lead CTA should issue it.
+    Value ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+    Value ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
+    pred = b.icmp_eq(ctaIdInGroup, b.i32_val(0));
+  }
 
   // Callback to generate the scatter4 instruction.
   auto callback = [&](Value pred, Value shMemPtr, Value yOffset,
                       ArrayRef<Value> xOffsets) {
-    std::string tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::scatter4.global"
-                          ".shared::cta.bulk_group "
-                          "[$1, {$2, $3, $4, $5, $6}], [$7];";
+    std::string tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::scatter4";
+    tmaInst += ".global.shared::cta.bulk_group "
+               "[$1, {$2, $3, $4, $5, $6}], [$7];";
 
     PTXBuilder ptxBuilder;
     SmallVector<PTXBuilder::Operand *, 8> operands{
@@ -1687,8 +1714,8 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
 
   if (failed(iterateGatherScatterIndices(
           op, rewriter, *getTypeConverter(), op.getXOffsets(), op.getSrc(),
-          adaptor.getSrc(), adaptor.getXOffsets(), adaptor.getYOffset(),
-          /*pred=*/b.true_val(), callback)))
+          adaptor.getSrc(), adaptor.getXOffsets(), adaptor.getYOffset(), pred,
+          /*multicast=*/false, callback)))
     return failure();
 
   // TODO: Separate the syncronizations operations into separate TTGIR ops to

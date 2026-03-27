@@ -27,6 +27,7 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.nvidia.blackwell import tma as blackwell_tma
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
 from triton.experimental.gluon.language.extra import libdevice
 from triton.experimental.gluon.language.nvidia.blackwell import (
@@ -260,6 +261,131 @@ def test_tma_multicast_copy(ctas_per_cga):
     expect_multicast = any(ctas_per_cga[i] > cga_split_num[i] for i in range(len(ctas_per_cga)))
     assert (".multicast::cluster" in compiled.asm["ptx"]) == expect_multicast
     torch.testing.assert_close(out, inp, atol=0, rtol=0)
+
+
+@gluon.jit
+def tma_multicast_gather_kernel(in_desc, out_desc, idx_ptr, BLOCK_M: ttgl.constexpr, x_offsets_layout: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, [BLOCK_M, out_desc.block_shape[1]], out_desc.layout)
+
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+
+    x_offsets = ttgl.load(idx_ptr + ttgl.arange(0, BLOCK_M, layout=x_offsets_layout))
+    mbarrier.expect(bar, out_desc.nbytes_per_cta)
+    blackwell_tma.async_gather(in_desc, x_offsets, 0, bar, smem, multicast=True)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+
+    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.store_wait(0)
+
+    mbarrier.invalidate(bar)
+    smem._keep_alive()
+
+
+def get_split_dim(cga_layout, dim):
+    return 1 << sum(basis[dim] != 0 for basis in cga_layout)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("cga_layout", [
+    [[1, 0]],
+    [[0, 0], [1, 0]],
+    [[1, 0], [0, 0]],
+])
+def test_tma_multicast_gather(cga_layout):
+    cga_split_num = [get_split_dim(cga_layout, dim) for dim in range(2)]
+
+    BLOCK_M = 32 * cga_split_num[0]
+    BLOCK_N = 128 * cga_split_num[1]
+
+    inp = torch.arange(BLOCK_M * BLOCK_N, dtype=torch.float16, device="cuda").reshape(BLOCK_M, BLOCK_N)
+    idx = torch.arange(BLOCK_M - 1, -1, -1, dtype=torch.int32, device="cuda")
+    out = torch.empty_like(inp)
+
+    layout = ttgl.NVMMASharedLayout.get_default_for(
+        [BLOCK_M, BLOCK_N],
+        ttgl.float16,
+        cga_layout=cga_layout,
+    )
+    in_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(inp, [1, BLOCK_N // cga_split_num[1]], layout)
+    out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, [BLOCK_M, BLOCK_N], layout)
+
+    x_offsets_cga_layout = [basis[::-1] for basis in cga_layout]
+    offset_layout = ttgl.BlockedLayout([1, 4], [32, 1], [1, 4], [1, 0], cga_layout=x_offsets_cga_layout)
+    x_offsets_layout = ttgl.SliceLayout(0, offset_layout)
+
+    num_ctas = 1 << len(cga_layout)
+    compiled = tma_multicast_gather_kernel[(1, )](
+        in_desc,
+        out_desc,
+        idx,
+        BLOCK_M,
+        x_offsets_layout,
+        num_warps=4,
+        num_ctas=num_ctas,
+    )
+
+    expect_multicast = any(all(coord == 0 for coord in basis) for basis in cga_layout)
+    assert (".multicast::cluster" in compiled.asm["ptx"]) == expect_multicast
+    torch.testing.assert_close(out, inp[idx.to(torch.int64)], atol=0, rtol=0)
+
+
+@gluon.jit
+def tma_scatter_kernel(in_desc, out_desc, idx_ptr, BLOCK_M: ttgl.constexpr, x_offsets_layout: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
+
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+
+    mbarrier.expect(bar, in_desc.nbytes_per_cta)
+    tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+    mbarrier.invalidate(bar)
+
+    x_offsets = ttgl.load(idx_ptr + ttgl.arange(0, BLOCK_M, layout=x_offsets_layout))
+    blackwell_tma.async_scatter(out_desc, x_offsets, 0, smem)
+    tma.store_wait(0)
+    smem._keep_alive()
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("ctas_per_cga", [[2, 1], [4, 1]])
+def test_tma_scatter_multi_cta(ctas_per_cga):
+    cga_layout = make_cga_layout(ctas_per_cga, ctas_per_cga, [1, 0])
+
+    BLOCK_M = 32 * ctas_per_cga[0]
+    BLOCK_N = 128 * ctas_per_cga[1]
+
+    inp = torch.arange(BLOCK_M * BLOCK_N, dtype=torch.float16, device="cuda").reshape(BLOCK_M, BLOCK_N)
+    idx = torch.arange(BLOCK_M - 1, -1, -1, dtype=torch.int32, device="cuda")
+    out = torch.zeros_like(inp)
+
+    layout = ttgl.NVMMASharedLayout.get_default_for(
+        [BLOCK_M, BLOCK_N],
+        ttgl.float16,
+        cga_layout=cga_layout,
+    )
+    in_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(inp, [BLOCK_M, BLOCK_N], layout)
+    out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, [1, BLOCK_N // ctas_per_cga[1]], layout)
+
+    x_offsets_cga_layout = make_cga_layout([ctas_per_cga[1], ctas_per_cga[0]], [1, ctas_per_cga[0]], [0, 1])
+    offset_layout = ttgl.BlockedLayout([1, 4], [32, 1], [1, 4], [1, 0], cga_layout=x_offsets_cga_layout)
+    x_offsets_layout = ttgl.SliceLayout(0, offset_layout)
+
+    num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
+    tma_scatter_kernel[(1, )](
+        in_desc,
+        out_desc,
+        idx,
+        BLOCK_M,
+        x_offsets_layout,
+        num_warps=4,
+        num_ctas=num_ctas,
+    )
+
+    expected = torch.zeros_like(inp)
+    expected[idx.to(torch.int64)] = inp
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
 
 
 @gluon.jit
