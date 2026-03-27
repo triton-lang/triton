@@ -336,6 +336,51 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   return verifyTMAEncoding(op, desc.getType(), srcEnc);
 }
 
+static LogicalResult
+verifyTMAMsgToSharedHasLocalOffsets(Operation *op,
+                                    const LinearLayout &msgToShared) {
+  auto kBlock = StringAttr::get(op->getContext(), "block");
+  auto kOffset = StringAttr::get(op->getContext(), "offset");
+  if (!msgToShared.sublayoutIsZero({kBlock}, {kOffset})) {
+    return op->emitOpError("requires the shared layout to place each TMA "
+                           "message at the same local shared-memory offset "
+                           "in every CTA");
+  }
+  return success();
+}
+
+static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
+                                                   ShapedType blockType,
+                                                   MemDescType memDescType,
+                                                   ShapedType indicesType) {
+  if (blockType.getRank() != 2)
+    return op->emitOpError("descriptor block must be a 2D tensor, but got ")
+           << blockType;
+  if (blockType.getShape()[0] != 1)
+    return op->emitOpError("descriptor block must have exactly 1 row, but got ")
+           << blockType;
+  if (failed(verifyGatherScatterResultType(op, memDescType, indicesType)))
+    return failure();
+
+  auto shapePerCTA = getShapePerCTA(memDescType);
+  if (shapePerCTA[1] != blockType.getShape()[1])
+    return op->emitOpError(
+               "result tensor number of columns per CTA must match block (")
+           << blockType.getShape()[1] << "), but got " << memDescType;
+  if (memDescType.getElementType() != blockType.getElementType())
+    return op->emitOpError("result tensor element type must match block (")
+           << blockType.getElementType() << "), but got " << memDescType;
+
+  ArrayRef<int64_t> allocShape = memDescType.getAllocShape();
+  if (allocShape.size() < 2 ||
+      memDescType.getShape() != allocShape.take_back(2))
+    return op->emitOpError("memdesc shape must match alloc shape");
+
+  auto msgToShared = getTMAGatherScatterMsgToSharedLayout(
+      cast<RankedTensorType>(indicesType), memDescType);
+  return verifyTMAMsgToSharedHasLocalOffsets(op, msgToShared);
+}
+
 // Helper to determine if the descriptor type is for im2col mode
 static bool isIm2ColDescriptor(Type descType) {
   return isa<TensorDescIm2ColType>(descType);
@@ -392,6 +437,29 @@ static LogicalResult verifyTMAMode(Operation *op, bool isIm2Col,
   return success();
 }
 
+static LogicalResult
+verifyTMAMsgToSharedHasLocalOffsets(Operation *op, MemDescType memDescType,
+                                    TMAMode mode) {
+  auto msgToPackedOffset = getTMAMsgToPackedOffsetLayout(memDescType, mode);
+  auto msgToShared =
+      msgToPackedOffset.invertAndCompose(toLinearLayout(memDescType));
+  return verifyTMAMsgToSharedHasLocalOffsets(op, msgToShared);
+}
+
+static LogicalResult verifyTMAMulticastLayout(Operation *op,
+                                              MemDescType memDescType) {
+  if (!hasCGABroadcast(memDescType)) {
+    return op->emitOpError(
+        "multicast requires the shared layout to broadcast across CTAs");
+  }
+  if (!hasCoordinateMaskCGABroadcast(memDescType)) {
+    return op->emitOpError(
+        "multicast requires CTA groups to be given by a coordinate mask on "
+        "the CTA id");
+  }
+  return success();
+}
+
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   auto descType = getDesc().getType();
@@ -408,9 +476,11 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
     return failure();
   if (failed(verifyTMAMode(*this, isIm2Col, getCoord(), getOffsets())))
     return failure();
-  if (getMulticast() && !hasCGABroadcast(resultType))
-    return emitOpError(
-        "multicast requires the shared layout to broadcast across CTAs");
+  if (failed(verifyTMAMsgToSharedHasLocalOffsets(
+          *this, resultType, isIm2Col ? TMAMode::Im2Col : TMAMode::Tiled)))
+    return failure();
+  if (getMulticast() && failed(verifyTMAMulticastLayout(*this, resultType)))
+    return failure();
   return success();
 }
 
@@ -433,7 +503,9 @@ LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
   MemDescType srcType = getSrc().getType();
   if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
     return failure();
-  return verifyAsyncTMAStoreOp(*this, getDesc(), srcType);
+  if (failed(verifyAsyncTMAStoreOp(*this, getDesc(), srcType)))
+    return failure();
+  return verifyTMAMsgToSharedHasLocalOffsets(*this, srcType, TMAMode::Tiled);
 }
 
 // -- AsyncTMAReduceOp --
@@ -445,11 +517,14 @@ LogicalResult AsyncTMAReduceOp::verify() {
   MemDescType srcType = getSrc().getType();
   if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
     return failure();
-  return verifyAsyncTMAStoreOp(*this, getDesc(), srcType);
+  if (failed(verifyAsyncTMAStoreOp(*this, getDesc(), srcType)))
+    return failure();
+  return verifyTMAMsgToSharedHasLocalOffsets(*this, srcType, TMAMode::Tiled);
 }
 
 // -- AsyncTMAGatherOp --
 LogicalResult AsyncTMAGatherOp::verify() {
+  auto xOffsetsType = getXOffsets().getType();
   auto resultType = getResult().getType();
   if (failed(verifyAsyncTMALoadOp(*this, getDesc().getType(), getBarrier(),
                                   resultType)))
@@ -457,9 +532,28 @@ LogicalResult AsyncTMAGatherOp::verify() {
   // `tile::gather4` does not support fp4_padded operands.
   if (isFp4Padded(getResult().getType().getEncoding()))
     return emitOpError("does not support fp4_padded operands");
-  return verifyGatherScatterOp(*this,
-                               getDesc().getType().getSignlessBlockType(),
-                               resultType, getXOffsets().getType());
+  if (getMulticast()) {
+    if (failed(verifyTMAMulticastLayout(*this, resultType)))
+      return failure();
+    if (auto xOffsetsEncoding =
+            dyn_cast<LayoutEncodingTrait>(xOffsetsType.getEncoding())) {
+      auto resultCGA = getCGALayout(resultType.getEncoding()).getLinearLayout();
+      auto xOffsetsCGA = getCGALayout(xOffsetsEncoding).getLinearLayout();
+      // AA^{-1}B = B, where A^{-1} is the pseudoinverse of A
+      // In other words, ker(A) \subseteq ker(B)
+      // This means that the x offsets are CTA-uniform within each result
+      // multicast group where the multicast group is given by the result.
+      auto xOffsetsFactoredThroughResult =
+          resultCGA.compose(resultCGA.pseudoinvert().compose(xOffsetsCGA));
+      if (xOffsetsFactoredThroughResult != xOffsetsCGA) {
+        return emitOpError("multicast requires x offsets to be CTA-uniform "
+                           "within each result multicast group");
+      }
+    }
+  }
+  return verifyAsyncTMAGatherScatterOp(
+      *this, getDesc().getType().getSignlessBlockType(), resultType,
+      xOffsetsType);
 }
 
 Value AsyncTMAGatherOp::getPredicateOperand() { return getPred(); }
@@ -477,9 +571,9 @@ LogicalResult AsyncTMAScatterOp::verify() {
   auto srcType = getSrc().getType();
   if (failed(verifyAsyncTMAStoreOp(*this, getDesc(), srcType)))
     return failure();
-  return verifyGatherScatterOp(*this,
-                               getDesc().getType().getSignlessBlockType(),
-                               srcType, getXOffsets().getType());
+  return verifyAsyncTMAGatherScatterOp(
+      *this, getDesc().getType().getSignlessBlockType(), srcType,
+      getXOffsets().getType());
 }
 
 // -- TCGen5MMAOp --
