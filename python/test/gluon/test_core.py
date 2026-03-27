@@ -1943,7 +1943,7 @@ def test_split_auto_layout_execution():
 
     @gluon.jit
     def kernel(in_ptr, out_ptr, XBLOCK: ttgl.constexpr):
-        in_offsets = ttgl.arange(0, 2 * XBLOCK, ttgl.AutoLayout())
+        in_offsets = ttgl.arange(0, 2 * XBLOCK)
         x = ttgl.load(in_ptr + in_offsets).reshape((XBLOCK, 2))
         lhs, rhs = x.split()
 
