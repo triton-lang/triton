@@ -108,6 +108,7 @@ void populateInstrumentationToLLVMPatterns(LLVMTypeConverter &typeConverter,
 
 void populateGSanToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                 RewritePatternSet &patterns,
+                                ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                 const TargetInfoBase &targetInfo);
 
 } // namespace triton
