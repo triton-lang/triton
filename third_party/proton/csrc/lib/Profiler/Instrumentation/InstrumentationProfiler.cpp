@@ -262,7 +262,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   exitOp(Scope(functionName));
 }
 
-void InstrumentationProfiler::doAddMetrics(
+void InstrumentationProfiler::addMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
     const std::map<std::string, TensorMetric> &tensorMetrics) {
   if (dataToEntryMap.empty()) {
