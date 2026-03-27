@@ -760,7 +760,10 @@ def get_test_mxfp_variants():
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
-@pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
+@pytest.mark.parametrize("M, N, K",
+                         get_test_mxfp_block_mnk() +
+                         # Add small K testcases
+                         [(16, 64, 32), (64, 128, 64)])
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
 @pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
 @pytest.mark.parametrize("scale_factor", [16, 32])
