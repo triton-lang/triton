@@ -1506,6 +1506,12 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     auto bTileTy =
         RankedTensorType::get({k, tileN}, bMemTy.getElementType(), bTileLayout);
 
+    // Each warp may only populate a subset of the operand scratch tiles, so
+    // synchronize before the emulation loops start reading them.
+    ttg::BarrierOp::create(rewriter, loc,
+                           ttg::AddrSpace::GlobalRead |
+                               ttg::AddrSpace::GlobalWrite);
+
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, aScratch->ptr, bScratch->ptr, dInfo->ptr, m, n, k, tileM,
         tileN, aTileTy, bTileTy, accTileTy, accTileLayout, accElem, useDInt,
@@ -1514,9 +1520,15 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
       return failure();
     rewriter.setInsertionPointAfter(*mLoop);
 
+    // The emulation loop also writes D through scratch memory from multiple
+    // warps, so make those stores visible before signaling completion.
+    auto postLoopBarrier = ttg::BarrierOp::create(
+        rewriter, loc,
+        ttg::AddrSpace::GlobalRead | ttg::AddrSpace::GlobalWrite);
+
     if (!op.getBarriers().empty()) {
       OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointAfter(*mLoop);
+      rewriter.setInsertionPointAfter(postLoopBarrier);
       auto barriers = op.getBarriers();
       auto barrierPreds = op.getBarrierPreds();
       for (size_t i = 0; i < barriers.size(); ++i) {
@@ -1674,6 +1686,12 @@ struct TCGen5MMAScaledPattern
     scale.aScaleFactor = *aScaleFactor;
     scale.bScaleFactor = *bScaleFactor;
 
+    // The operand and scale scratch buffers are written cooperatively, so all
+    // warps must finish those stores before the emulation loop reads them.
+    ttg::BarrierOp::create(rewriter, loc,
+                           ttg::AddrSpace::GlobalRead |
+                               ttg::AddrSpace::GlobalWrite);
+
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, aScratch->ptr, bScratch->ptr, dInfo->ptr, m, n, k, tileM,
         tileN, aTileTy, bTileTy, accTileTy, accTileLayout, accElem, useDInt,
@@ -1682,9 +1700,15 @@ struct TCGen5MMAScaledPattern
       return failure();
     rewriter.setInsertionPointAfter(*mLoop);
 
+    // The emulated MMA updates the accumulator scratch cooperatively as well.
+    // Flush those stores before completion barriers or later TMEM loads.
+    auto postLoopBarrier = ttg::BarrierOp::create(
+        rewriter, loc,
+        ttg::AddrSpace::GlobalRead | ttg::AddrSpace::GlobalWrite);
+
     if (!op.getBarriers().empty()) {
       OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointAfter(*mLoop);
+      rewriter.setInsertionPointAfter(postLoopBarrier);
       auto barriers = op.getBarriers();
       auto barrierPreds = op.getBarrierPreds();
       for (size_t i = 0; i < barriers.size(); ++i) {
