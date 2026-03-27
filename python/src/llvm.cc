@@ -134,7 +134,6 @@ createTargetMachine(llvm::Module *module, std::string proc,
   bool disableLLVMOpt = mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (enable_fp_fusion)
     opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
-  opt.NoNaNsFPMath = true;
   opt.TrapUnreachable = true;
   opt.MCOptions.AsmVerbose = true;
   opt.MCOptions.PreserveAsmComments = true;

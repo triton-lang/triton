@@ -41,10 +41,8 @@ static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
     auto splitNum = ttg::getCTASplitNum(srcTy.getEncoding());
     return splitNum[reduce.getAxis()] > 1;
   }
-  if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     return mma.getTwoCtas();
-  } else if (auto mmaScaled = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-    return mmaScaled.getTwoCtas();
   } else if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
     return tma.getMulticast();
   }
@@ -76,7 +74,7 @@ static bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
 }
 
 static bool isCrossCTAMBarrier(ttng::InitBarrierOp initBarrierOp, int numCTAs) {
-  auto barrierTy = cast<ttg::MemDescType>(initBarrierOp.getAlloc().getType());
+  auto barrierTy = cast<ttg::MemDescType>(initBarrierOp.getBarrier().getType());
   return barrierTy.getShape()[0] != numCTAs;
 }
 
@@ -98,12 +96,10 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
     return value && valueAliasesTrackedBuffers(value, tracked, allocation);
   };
 
-  if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-    return mma.getTwoCtas() && llvm::any_of(mma.getBarriers(), aliasesTracked);
-  }
-  if (auto mmaScaled = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-    return mmaScaled.getTwoCtas() &&
-           llvm::any_of(mmaScaled.getBarriers(), aliasesTracked);
+  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+    auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
+    return mma.getTwoCtas() &&
+           llvm::any_of(barrierOp.getBarriers(), aliasesTracked);
   }
   if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
     return ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier());
@@ -126,7 +122,7 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
 
   Allocation::BufferIdSetT initBarrierBuffers;
   for (auto bufferId :
-       allocation->getAllBufferIdsWithAliases(initBarrierOp.getAlloc())) {
+       allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
     assert(bufferId != Allocation::InvalidBufferId);
     initBarrierBuffers.insert(bufferId);
   }
@@ -198,7 +194,7 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
     assert(topLevelAnchor && "init op must be inside the function region");
     crossCTAInitAnchors.insert(topLevelAnchor);
     for (auto bufferId :
-         allocation->getAllBufferIdsWithAliases(initBarrierOp.getAlloc())) {
+         allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
       assert(bufferId != Allocation::InvalidBufferId);
       trackedBarrierBuffers.insert(bufferId);
     }

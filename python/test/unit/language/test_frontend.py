@@ -219,6 +219,11 @@ def list_of_functions_constexpr(arg, fns: tl.constexpr):
         fns[i](arg)
 
 
+@triton.jit
+def consume_varargs(*dims):
+    return dims[0]
+
+
 @filecheck_test
 @triton.jit
 def test_list_of_functions():
@@ -229,6 +234,15 @@ def test_list_of_functions():
     # CHECK-NEXT: call @{{.*}}anchor
     # CHECK-NEXT: call @{{.*}}forward
     list_of_functions_constexpr(tl.arange(0, 4), [anchor, forward])
+
+
+@filecheck_test
+@triton.jit
+def test_starred_varargs():
+    # CHECK-LABEL: test_starred_varargs
+    # CHECK: call @{{.*}}consume_varargs
+    dims: tl.constexpr = (1, 0)
+    consume_varargs(*dims)
 
 
 @triton.jit

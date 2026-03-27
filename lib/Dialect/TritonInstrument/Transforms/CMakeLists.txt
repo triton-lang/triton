@@ -1,4 +1,5 @@
 add_triton_library(TritonInstrumentTransforms
+  GlobalSanitizer.cpp
   ConcurrencySanitizer.cpp
   FpSanitizer.cpp
 

@@ -425,7 +425,12 @@ def create_function_from_signature(sig, kparams, backend):
                 specialization.append(f"{ret}")
 
     # compute argument string for a given parameter
-    arg = lambda x: x[0] if x[1].default is inspect.Parameter.empty else f"{x[0]}=default_{x[0]}"
+    def arg(name_param):
+        name, param = name_param
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            return f"*{name}"
+        return name if param.default is inspect.Parameter.empty else f"{name}=default_{name}"
+
     func_body = f"""
 def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
     params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}

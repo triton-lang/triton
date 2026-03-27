@@ -34,13 +34,31 @@
 namespace mlir::triton::AMD {
 namespace {
 
+static std::optional<mlir::triton::LinearLayout>
+wmmaRepLayoutForTensor(const mlir::triton::LinearLayout &wholeTileLL,
+                       const mlir::triton::LinearLayout &tileLL) {
+  llvm::SmallDenseMap<StringAttr, int64_t> shape;
+  for (auto outDim : wholeTileLL.getOutDimNames())
+    shape[outDim] = wholeTileLL.getOutDimSize(outDim);
+
+  // Clamp the tileLL to the tensor's output dims so that divideLeft succeeds
+  // when the tensor is smaller than the WMMA instruction shape.
+  auto clampedTileLL = ensureLayoutNotLargerThan(tileLL, shape);
+
+  auto quot = divideLeft(wholeTileLL, clampedTileLL);
+  if (quot.has_value())
+    return zerosLike(clampedTileLL) * *quot;
+  return {};
+}
+
 #define S(v) StringAttr::get(ctx, (v))
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::LinearEncodingAttr;
 
 Value prepareOperands(ConversionPatternRewriter &rewriter, Value rawElems,
-                      Type type, int wmmaVer, int kBase, Location loc) {
+                      Type type, int wmmaVer, int kBase, Location loc,
+                      bool isScale = false) {
   Value convertedElems;
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   if (type.isF32() || type.isF16()) {
@@ -52,7 +70,8 @@ Value prepareOperands(ConversionPatternRewriter &rewriter, Value rawElems,
       convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kBase));
   } else {
     // When scaleFactor == 16, scales are stored in i64
-    Type targetTy = kBase == 8 ? i64_ty : i32_ty;
+    // This only applies to scale operands, not regular dot operands
+    Type targetTy = (isScale && kBase == 8) ? i64_ty : i32_ty;
     auto elems =
         kBase * type.getIntOrFloatBitWidth() / targetTy.getIntOrFloatBitWidth();
     assert(elems >= 1 && "unexpected number of elements");
@@ -362,11 +381,10 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
 
   auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto maybeQuot = divideLeft(wmmaLL, tile);
-  if (!maybeQuot.has_value()) {
+  auto repLayout = wmmaRepLayoutForTensor(wmmaLL, tile);
+  if (!repLayout.has_value()) {
     return op.emitError("failed to divide wmma layout by tile layout");
   }
-  auto repLayout = zerosLike(tile) * maybeQuot.value();
   const unsigned numRepK = std::max(static_cast<unsigned>(K / kDim), 1u);
 
   Value loadedA = adaptor.getA();
@@ -403,9 +421,9 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   llvm::DenseSet<uint64_t> mnProcessed;
   int tiedGroup = 1;
 
-  for (int reg = 0; reg < repLayout.getInDimSize(kRegister);
+  for (int reg = 0; reg < repLayout->getInDimSize(kRegister);
        reg += dElemsToStorePerThread) {
-    auto repIndices = repLayout.apply(
+    auto repIndices = repLayout->apply(
         {{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     int b = (rank == 3 ? repIndices[0].second : 0);
     int m = repIndices[rank == 3 ? 1 : 0].second;
@@ -417,7 +435,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
       if (mnProcessed.count(packMN((uint32_t)m, (uint32_t)n))) {
         continue;
       }
-      nextM = findNextM(repLayout, nextMReg, dElemsToStorePerThread, m, rank);
+      nextM = findNextM(*repLayout, nextMReg, dElemsToStorePerThread, m, rank);
       if (nextM.has_value()) {
         tiedGroup = 2;
         mnProcessed.insert(packMN((uint32_t)m, (uint32_t)n));
@@ -556,11 +574,10 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
 
   auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto maybeQuot = divideLeft(wmmaLL, tile);
-  if (!maybeQuot.has_value()) {
+  auto repLayout = wmmaRepLayoutForTensor(wmmaLL, tile);
+  if (!repLayout.has_value()) {
     return op.emitError("failed to divide wmma layout by tile layout");
   }
-  auto repLayout = zerosLike(tile) * maybeQuot.value();
 
   Value loadedA = adaptor.getA();
   Value loadedAScale = adaptor.getAScale();
@@ -596,10 +613,10 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto dElemsToStorePerThread = mnkDim[0] * mnkDim[1] / warpSize;
   auto vecTy = vec_ty(dstElemTy, elemsPerVec);
 
-  for (int reg = 0; reg < repLayout.getInDimSize(kRegister);
+  for (int reg = 0; reg < repLayout->getInDimSize(kRegister);
        reg += elemsPerVec) {
 
-    auto repIndices = repLayout.apply(
+    auto repIndices = repLayout->apply(
         {{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     int b = (rank == 3 ? repIndices[0].second : 0);
     int m = repIndices[rank == 3 ? 1 : 0].second;
@@ -633,7 +650,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
           /*padding*/ 0, &scaleOpSelA, aScaleTensorTy.getElementType(), loc,
           /*isScale*/ true);
       sa = prepareOperands(rewriter, sa, aScaleTensorTy.getElementType(),
-                           wmmaVer, KBaseScale, loc);
+                           wmmaVer, KBaseScale, loc, /*isScale=*/true);
 
       auto sb = getOperandVals(
           rewriter, typeConverter, bScaleLayout, loadedBScale,
@@ -641,7 +658,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
           /*padding*/ 0, &scaleOpSelB, bScaleTensorTy.getElementType(), loc,
           /*isScale*/ true);
       sb = prepareOperands(rewriter, sb, bScaleTensorTy.getElementType(),
-                           wmmaVer, KBaseScale, loc);
+                           wmmaVer, KBaseScale, loc, /*isScale=*/true);
 
       acc = wmmaLayout.getIsTransposed()
                 ? generateScaledWMMAIntrinsic(

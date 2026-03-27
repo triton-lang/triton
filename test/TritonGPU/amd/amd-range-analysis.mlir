@@ -58,6 +58,24 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// CHECK-LABEL:   tt.func @statically_false_cmpi
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @statically_false_cmpi() {
+    // expected-remark@+2 {{unsigned : [0, 0] signed : [0, 0]}}
+    // expected-remark@+1 {{non-neg}}
+    %c0 = arith.constant 0 : i32
+    // expected-remark@+2 {{unsigned : [1024, 1024] signed : [1024, 1024]}}
+    // expected-remark@+1 {{non-neg}}
+    %c1024 = arith.constant 1024 : i32
+    // expected-remark@+2 {{unsigned : [0, 0] signed : [0, 0]}}
+    // expected-remark@+1 {{result is false}}
+    %cmp = arith.cmpi sgt, %c0, %c1024 : i32
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL:   tt.func @conversion2
 module attributes {"ttg.num-warps" = 4 : i32} {
   tt.func @conversion2(%arg0: !tt.ptr<f32>) -> tensor<1024xf32> {

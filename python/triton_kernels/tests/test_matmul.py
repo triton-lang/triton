@@ -13,11 +13,11 @@ from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FnS
 from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
-from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
+from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
@@ -31,11 +31,15 @@ class DType:
 
     def __init__(self, dtype_str):
         self.has_global_scale = dtype_str.startswith("float8")
-        self.has_mx_scale = dtype_str.startswith("mx")
-        to_torch_dtype = lambda name: torch.uint8 if name == "float4_e2m1" else getattr(torch, name)
-        self.torch_dtype = to_torch_dtype(dtype_str.strip("mx"))
-        self.is_mxfloat4 = self.has_mx_scale and "float4" in dtype_str
-
+        self.is_nvfp4 = dtype_str == "nvfp4_e2m1"
+        self.has_mx_scale = dtype_str.startswith("mx") or self.is_nvfp4
+        if dtype_str in {"float4_e2m1", "mxfloat4_e2m1", "nvfp4_e2m1"}:
+            self.torch_dtype = torch.uint8
+        else:
+            self.torch_dtype = getattr(torch, dtype_str.strip("mx"))
+        self.is_mxfloat4 = self.has_mx_scale and ("float4" in dtype_str or self.is_nvfp4)
+        self.scale_dtype = torch.float8_e4m3fn if self.is_nvfp4 else torch.uint8 if self.has_mx_scale else None
+        self.microblock_size = NVFP_BLOCK_SIZE.value if self.is_nvfp4 else MXFP_BLOCK_SIZE.value if self.has_mx_scale else None
 
 
 # Scope to ensure that the opt_flags_constraints are reset after the test
@@ -55,11 +59,18 @@ def make_constraints(block_m, split_k, is_persistent, epilogue_subtile, hbm_swiz
     }
     if is_hip() and hbm_swizzling and "float4" in weight_dtype_str:
         # Minimum block size to satisfy scale preshuffling
-        constraints.update({
-            "block_m": 32,
-            "block_n": 32,
-            "block_k": 256
-        })
+        if is_hip_gfx1250():
+            constraints.update({
+                "block_m": 128,
+                "block_n": 128,
+                "block_k": 128
+            })
+        else:
+            constraints.update({
+                "block_m": 32,
+                "block_n": 32,
+                "block_k": 256
+            })
     return constraints
 
 # ---------------
@@ -75,6 +86,7 @@ class Case:
     mode: str
     act_dtype_str: str
     weight_dtype_str: str
+    output_dtype_str: Union[str, None] = None
     n_slices: int = None
     split_k: int = 1
     a_hbm_swizzling: bool = False
@@ -153,6 +165,16 @@ def _build_test_op_cases():
         Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True),
         Case(300, 400, 416, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
         Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True),
+        Case(256, 256, 256, "plain", "mxfloat4_e2m1", "mxfloat4_e2m1", "bfloat16"),
+        Case(256, 256, 256, "plain", "mxfloat4_e2m1", "mxfloat4_e2m1", "bfloat16", b_hbm_swizzling=True),
+        Case(16, 256, 256, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True),
+        Case(1024, 1024, 1024, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", split_k=9, b_hbm_swizzling=True),
+        Case(1024, 1024, 1024, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", split_k=9, colmajor_mxfp_weight=False),
+        Case(1000, 704, 800, "batched", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        Case(1000, 704, 800, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        Case(300, 400, 416, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        Case(256, 1024, 512, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        Case(1024, 1024, 1024, "batched", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True),
     ])
     # amd-specific float8
     test_cases.extend([
@@ -210,7 +232,7 @@ def _build_test_op_cases():
 @pytest.mark.parametrize("is_persistent", [False,True])
 @pytest.mark.parametrize("num_warps", [4, 8] if is_hopper() else [None])
 def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
-            mode, act_dtype_str, weight_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
+            mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
             swiglu_opts, device, opt_flags_scope):
     # We catch and re-invoke pytest.skip(), because otherwise pytest may hold a reference to
@@ -218,7 +240,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, i
     skip_message = None
     try:
         _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
-                 mode, act_dtype_str, weight_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
+                 mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
                  a_transpose, b_transpose, c_transpose,
                  swiglu_opts, device, opt_flags_scope)
     except pytest.skip.Exception as e:
@@ -228,27 +250,29 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, i
         pytest.skip(skip_message)
 
 def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
-            mode, act_dtype_str, weight_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
+            mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
             swiglu_opts, device, opt_flags_scope):
+    act_uses_mx = act_dtype_str.startswith("mx") or act_dtype_str == "nvfp4_e2m1"
+    weight_uses_mx = weight_dtype_str.startswith("mx") or weight_dtype_str == "nvfp4_e2m1"
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
         if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("Float8 not tested on A100")
-        if act_dtype_str == "float16" and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] >= 10:
+        if act_dtype_str == "float16" and weight_uses_mx and torch.cuda.get_device_capability()[0] >= 10:
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
-        if weight_dtype_str.startswith("mx"):
+        if weight_uses_mx:
             if "float8" in act_dtype_str and torch.cuda.get_device_capability()[0] < 10:
                 pytest.skip("float8 x mx not supported with cuda capability < 10")
         if swiglu_opts is not None and do_gamma:
             pytest.skip("NYI: swiglu and gamma not supported together")
 
     elif is_hip():
-        if "float8" in act_dtype_str and "mx" in weight_dtype_str and not is_hip_cdna4():
-            pytest.skip("float8 x mx only supported on CDNA4")
+        if "float8" in act_dtype_str and weight_uses_mx and not (is_hip_cdna4() or is_hip_gfx1250()):
+            pytest.skip("float8 x mx only supported on CDNA4 and gfx1250")
         if "float8" in act_dtype_str and "mxfloat8" in weight_dtype_str:
             pytest.skip("NYI: float8 x mxfloat8 not tested on AMD GPU")
-        if act_dtype_str.startswith("mx") and weight_dtype_str.startswith("mx"):
+        if act_uses_mx and weight_uses_mx:
             pytest.skip("NYI: mx x mx not tested on AMD GPU")
         if is_persistent:
             pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
@@ -263,8 +287,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     if b_hbm_swizzling:
         if is_hip():
-            if not is_hip_cdna4():
-                pytest.skip("Scale preshuffling on AMD GPU has not been emulated on non-CDNA4 arch yet.")
+            if not (is_hip_cdna4() or is_hip_gfx1250()):
+                pytest.skip("Scale preshuffling on AMD GPU has not been emulated on archs other than CDNA4 and gfx1250 yet.")
             if "mx" not in weight_dtype_str:
                 pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
         if torch.cuda.get_device_capability()[0] < 9:
@@ -272,29 +296,31 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if torch.cuda.get_device_capability()[0] < 10:
             if "mxfloat4" not in weight_dtype_str:
                 pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
+            if act_dtype_str in {"mxfloat4_e2m1", "mxfloat8_e4m3fn", "nvfp4_e2m1"}:
+                pytest.skip("Hopper mxfp4 swizzled weights do not support microscaled lhs.")
 
     if a_hbm_swizzling:
-        # current x scale swizzling requires B200, batched input, mxfloat8 act and is persistent case
+        # current x scale swizzling requires B200, batched input, microscaled act and persistent case
         if is_hip():
             pytest.skip("NYI. X swizzling not tested on AMD GPU yet.")
         if torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("NYI. X swizzling only implemented for B200 for now.")
-        if not act_dtype_str.startswith("mxfloat8"):
-            pytest.skip(f"NYI. X swizzling only implemented for mxfloat8 act for now. Got {act_dtype_str}")
+        if not act_uses_mx:
+            pytest.skip(f"NYI. X swizzling only implemented for microscaled activations for now. Got {act_dtype_str}")
         if not is_persistent:
             pytest.skip("NYI. X swizzling only implemented for persistent case for now.")
         if block_m < 128:
             pytest.skip("X swizzling requires block_m >= 128")
         if do_gather:
-            pytest.skip("X swizzling requires act to be gathered format")
+            pytest.skip("X swizzling does not support gathered activations")
 
     expt_is_inner = (inner_expt_opt is not None)
     if expt_is_inner:
         if mode != "ragged":
             pytest.skip("inner_expt_opt only meaningful with ragged")
-        if "mx" in act_dtype_str and inner_expt_opt != "pad_a":
+        if act_uses_mx and inner_expt_opt != "pad_a":
             pytest.skip("inner_expt_opt and act mx only supported with pad_a")
-        if "mx" in weight_dtype_str:
+        if weight_uses_mx:
             if inner_expt_opt != "pad_b":
                 pytest.skip("inner_expt_opt and weight mx only supported with pad_b")
             if is_persistent and not b_hbm_swizzling:
@@ -321,7 +347,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     a_dtype = DType(act_dtype_str)
     b_dtype = DType(weight_dtype_str)
-    c_dtype = DType(act_dtype_str)
+    c_dtype = DType(output_dtype_str or act_dtype_str)
 
     # --- create conditionals ---
     do_bias = inner_expt_opt is None
@@ -339,7 +365,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         transpose = a_transpose,
         ragged_padding = inner_expt_opt is not None and "pad_a" in inner_expt_opt,
         squeeze_batch_dim = mode == "plain",
-        scale_hbm_swizzling = layout.make_default_matmul_mxfp8_act_scale_layout if a_hbm_swizzling else None,
+        scale_hbm_swizzling = layout.make_default_matmul_mx_act_scale_layout if a_hbm_swizzling else None,
     )
     b, b_scale_tri, b_ragged_metadata = make_random_tensor(
         shape=(k, n),
@@ -369,7 +395,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     c_shape = (n_slices,) if mode == "batched" or inner_expt_opt is not None else tuple() # batch dim
     c_shape += (scatter_indx.shape[0] if do_scatter else a.shape[-2],) # row dim
     c_shape += (b.shape[-1] // (1 if fused_activation is None else fused_activation.specs.reduction_n) ,) # col dim
-    c = torch.empty(c_shape, dtype=c_dtype.torch_dtype, device=device)
+    c_storage_shape = c_shape[:-1] + (c_shape[-1] // 2,) if c_dtype.has_mx_scale and c_dtype.is_mxfloat4 else c_shape
+    c = torch.empty(c_storage_shape, dtype=c_dtype.torch_dtype, device=device)
     if c_transpose:
         c = c.mT.contiguous().mT
 
@@ -383,15 +410,19 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         acc_scale=2.0 if c_dtype.has_global_scale or b_dtype.has_global_scale else 1.0,
         out_dtype=c_dtype.torch_dtype,
         a_mx_scale=a_scales,
+        a_microblock_size=a_dtype.microblock_size,
         b_mx_scale=b_scale_tri,
+        b_microblock_size=b_dtype.microblock_size,
     )
 
     # --- create epilogue ---
     epilogue = None
     if c_dtype.has_mx_scale:
-        c_scale_shape = c_shape[:-1] + (triton.cdiv(c_shape[-1], MXFP_BLOCK_SIZE),)
-        c_scale = torch.empty(c_scale_shape, dtype=torch.uint8, device=a.device)
+        c_scale_shape = c_shape[:-1] + (triton.cdiv(c_shape[-1], c_dtype.microblock_size),)
+        c_scale = torch.empty(c_scale_shape, dtype=c_dtype.scale_dtype, device=a.device)
         precision_opt.c_mx_scale = c_scale
+        precision_opt.c_microblock_size = c_dtype.microblock_size
+        precision_opt.c_value_pack_factor = 2 if c_dtype.is_mxfloat4 else 1
         epilogue_spec = FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
         epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=6.0)
 
@@ -420,7 +451,15 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     # --- check results ---
     if c_dtype.has_mx_scale:
         tri_y = upcast_from_mxfp(tri_y, precision_opt.c_mx_scale, target_dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)
-        ref_y = upcast_from_mxfp_torch(*downcast_to_mxfp_torch(ref_y, c_dtype.torch_dtype, axis=-1), target_dtype=ref_y.dtype, axis=-1)
+        ref_target_dtype = ref_y.dtype
+        ref_y, ref_scale = downcast_to_mxfp_torch(
+            ref_y,
+            c_dtype.torch_dtype,
+            axis=-1,
+            scale_dtype=c_dtype.scale_dtype,
+            microblock_size=c_dtype.microblock_size,
+        )
+        ref_y = upcast_from_mxfp_torch(ref_y, ref_scale, target_dtype=ref_target_dtype, axis=-1)
     maxtol, rmstol = None, None
     if c_dtype.has_mx_scale:
         maxtol, rmstol = 4e-1, 4e-2
