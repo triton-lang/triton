@@ -119,7 +119,12 @@ struct ConvertTritonGPUToLLVM
       if (failed(cleanupPm.run(mod)))
         return signalPassFailure();
     }
-    mlir::triton::gpu::runGlobalScratchMemoryAllocation(mod);
+    bool hasGlobalScratchAlloc = false;
+    mod.walk([&](triton::gpu::GlobalScratchAllocOp) {
+      hasGlobalScratchAlloc = true;
+    });
+    if (hasGlobalScratchAlloc)
+      mlir::triton::gpu::runGlobalScratchMemoryAllocation(mod);
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
