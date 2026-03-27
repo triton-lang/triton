@@ -64,6 +64,7 @@ llvm::DenseSet<Value> getBarrierOperands(Operation *op) {
     auto barriers = barrierOp.getBarriers();
     return llvm::DenseSet<Value>(barriers.begin(), barriers.end());
   }
+
   return llvm::DenseSet<Value>{};
 }
 

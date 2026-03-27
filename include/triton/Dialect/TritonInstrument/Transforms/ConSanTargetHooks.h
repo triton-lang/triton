@@ -95,9 +95,8 @@ public:
 
   virtual std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const = 0;
 
-  virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b, Operation *op) const {
-    return nullptr;
-  }
+  virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
+                                 Operation *op) const = 0;
 
   virtual std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const {
