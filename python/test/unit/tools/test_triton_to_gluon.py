@@ -352,6 +352,32 @@ def test_reduce_to_scalar(tmp_path):
 
 
 @triton.jit
+def extrema_reduce_kernel(x_ptr, max_ptr, min_ptr, BLOCK: tl.constexpr):
+    offsets = tl.arange(0, BLOCK)
+    x = tl.load(x_ptr + offsets)
+    x = tl.reshape(x, BLOCK // 2, 2)
+    tl.store(max_ptr + tl.arange(0, BLOCK // 2), tl.max(x, axis=1))
+    tl.store(min_ptr + tl.arange(0, BLOCK // 2), tl.min(x, axis=1))
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+def test_extrema_reduction(tmp_path):
+    kernel = convert_kernel(extrema_reduce_kernel, "extrema_reduce_kernel", tmp_path)
+
+    block = 256
+    x = torch.randn(block, device="cuda", dtype=torch.float32)
+    out_max = torch.empty((block // 2, ), device="cuda", dtype=torch.float32)
+    out_min = torch.empty((block // 2, ), device="cuda", dtype=torch.float32)
+    kernel[(1, )](x, out_max, out_min, BLOCK=block)
+
+    ref_max = torch.empty_like(out_max)
+    ref_min = torch.empty_like(out_min)
+    extrema_reduce_kernel[(1, )](x, ref_max, ref_min, BLOCK=block)
+    torch.testing.assert_close(out_max, ref_max, atol=0, rtol=0)
+    torch.testing.assert_close(out_min, ref_min, atol=0, rtol=0)
+
+
+@triton.jit
 def num_threads_kernel(out_ptr):
     num_threads: tl.constexpr = tl.extra.cuda.num_threads()
     offs = tl.arange(0, num_threads)
