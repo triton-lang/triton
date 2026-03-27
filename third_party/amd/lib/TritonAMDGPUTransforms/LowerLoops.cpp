@@ -135,30 +135,6 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
   return {newLoadOp, viewLoad, storeOp, maybeLocalLoad};
 }
 
-// Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
-// and |vecSize| with which dot operand |inputValue| is fed into if possible.
-template <class T>
-T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize,
-                 T *dummy = nullptr) {
-  if (!llvm::hasSingleElement(inputValue.getUses()))
-    return nullptr;
-
-  Operation *user = *inputValue.getUsers().begin();
-  if (user->getNumResults() != 1 ||
-      user->getBlock() != inputValue.getParentBlock())
-    return nullptr;
-
-  if (auto dotOp = dyn_cast<tt::DotOpInterface>(user)) {
-    OpOperand &use = *inputValue.getUses().begin();
-    *opIdx = use.getOperandNumber();
-    auto operandType = cast<RankedTensorType>(inputValue.getType());
-    *vecSize = ttg::toLinearLayout(operandType).getNumConsecutiveInOut();
-    auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
-    return dyn_cast<T>(dotType.getEncoding());
-  }
-  return getDotEncoding<T>(user->getResult(0), opIdx, vecSize);
-}
-
 // Adapted from
 // lib/Dialect/TritonGPU/Transforms/Utility.cpp::getSharedEncIfAllUsersAreDotEnc
 // to support AMDMfmaEncodingAttr.
@@ -329,87 +305,6 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
   LDBG("Deduced shared encoding: " << maxVecSharedEnc);
 
   return maxVecSharedEnc;
-}
-
-// Adapted from
-// lib/Dialect/TritonGPU/Transforms/Utility.cpp::getSharedEncIfAllUsersAreDotEnc
-// to support AMDMfmaEncodingAttr.
-// TODO(max): figure out how to refactor to use upstream
-//
-// If all the transitive uses of the given value have are used by a convert to
-// the same dot operand encoding, return true and get the shared encoding that
-// needs to be used to be compatible with users' layouts.
-static std::optional<ttg::PaddedSharedEncodingAttr>
-getSharedEncIfAllUsersAreDotEncPadded(
-    Value loadedValue, const triton::AMD::TargetInfo &targetInfo) {
-  ttg::PaddedSharedEncodingAttr attr;
-  for (Operation *user : loadedValue.getUsers()) {
-    LDBG(" getSharedEncIfAllUsersAreDotEnc current user: " << *user);
-    if (user->getNumResults() != 1)
-      return std::nullopt;
-
-    ttg::PaddedSharedEncodingAttr tempAttr;
-    Value userResult = user->getResult(0);
-    Type userResType = userResult.getType();
-    if (auto memDesc = dyn_cast<ttg::MemDescType>(userResType)) {
-      // First time we find a shared encoding in the chain, save it and try to
-      // use it if it is compatible with the other users.
-      tempAttr = cast<ttg::PaddedSharedEncodingAttr>(memDesc.getEncoding());
-      auto newAttr =
-          getSharedEncIfAllUsersAreDotEncPadded(user->getResult(0), targetInfo);
-
-      if (!newAttr.has_value())
-        return std::nullopt;
-
-      tempAttr = ttg::PaddedSharedEncodingAttr::get(
-          tempAttr.getContext(), newAttr->getIntervals()[0],
-          newAttr->getPaddings()[0], tempAttr.getLinearComponent());
-    } else {
-      if (!(isa<ttg::ConvertLayoutOp>(user) ||
-            user->hasTrait<OpTrait::LocalLoadTrait>()))
-        return std::nullopt;
-
-      auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
-      auto order = getOrderForMemory(srcTy);
-      SmallVector<unsigned> sharedOrder;
-      int rank = order.size();
-      // TODO rework this when shared -> dotOperand conversions support
-      // arbitrary shared memory ordering
-      if (rank == 3) {
-        // Move the batch dimension (dim #0) to be the last so that it will be
-        // the slowest varying dimension.
-        for (unsigned i = 0; i < rank; ++i)
-          if (order[i] != 0)
-            sharedOrder.emplace_back(order[i]);
-        sharedOrder.emplace_back(0);
-      } else {
-        sharedOrder = order;
-      }
-
-      auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
-      if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
-        tempAttr =
-            composePaddedLayout(targetInfo, dotOpEnc.getOpIdx(),
-                                dotOpEnc.getKWidth(), srcTy, sharedOrder);
-      } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
-        // We use linear layout directly for scaled dot fp8 operands. For such
-        // cases, we need to look further down the def-use chain to find the dot
-        // op for the mfma layout to deduce operand index and other information.
-        unsigned opIdx;
-        unsigned vecSize;
-        if (auto dotEnc = getDotEncoding<ttg::AMDWmmaEncodingAttr>(
-                userResult, &opIdx, &vecSize)) {
-          tempAttr =
-              composePaddedLayout(targetInfo, opIdx, vecSize, srcTy, order);
-        }
-      }
-    }
-    // Check that the shared encodings needed by the users are compatible.
-    if (!tempAttr || (attr != nullptr && attr != tempAttr))
-      return std::nullopt;
-    attr = tempAttr;
-  }
-  return attr;
 }
 
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
@@ -961,12 +856,10 @@ void lowerLoop(scf::ForOp forOp,
       load->removeAttr(AttrBypassLDS);
       loadToInfo[load] = {nullptr, distance, use};
     } else {
-      auto useTDM = isa<tt::DescriptorLoadOp>(load);
-      if (useTDM) {
+      if (auto descLoad = dyn_cast<tt::DescriptorLoadOp>(load)) {
         hasTDMLoad = true;
-        auto paddedEncoding = getSharedEncIfAllUsersAreDotEncPadded(
-                                  load->getResult(0), targetInfo)
-                                  .value_or(nullptr);
+        auto paddedEncoding = getEncodingFromDescriptor(
+            descLoad, descLoad.getResult().getType(), descLoad.getDesc());
         LoadInfo ldInfo;
         ldInfo.sharedEncoding = paddedEncoding;
         ldInfo.distToUse = distance;
