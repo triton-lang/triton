@@ -522,18 +522,18 @@ def block_scaled_matmul_kernel_cdna4(a_ptr, b_ptr, c_ptr, a_scales_ptr, b_scales
     # The BLOCK sizes are of the elements and in fp4 we pack 2 per uint8 container.
     offs_k = tl.arange(0, BLOCK_K // 2)
     offs_k_split = offs_k
-    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
-    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
+    offs_am = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_bn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k_split[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k_split[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     # Create pointers for the first block of A and B scales
-    offs_asn = (pid_n * (BLOCK_N // 32) + tl.arange(0, (BLOCK_N // 32))) % N
+    offs_asn = pid_n * (BLOCK_N // 32) + tl.arange(0, (BLOCK_N // 32))
     offs_ks = tl.arange(0, BLOCK_K // SCALE_GROUP_SIZE * 32)
 
     # B scales are N x K even though B operand is K x N.
     b_scale_ptrs = (b_scales_ptr + offs_asn[:, None] * stride_bsn + offs_ks[None, :] * stride_bsk)
-    offs_asm = (pid_m * (BLOCK_M // 32) + tl.arange(0, (BLOCK_M // 32))) % M
+    offs_asm = pid_m * (BLOCK_M // 32) + tl.arange(0, (BLOCK_M // 32))
     a_scale_ptrs = (a_scales_ptr + offs_asm[:, None] * stride_asm + offs_ks[None, :] * stride_ask)
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
 
@@ -554,8 +554,8 @@ def block_scaled_matmul_kernel_cdna4(a_ptr, b_ptr, c_ptr, a_scales_ptr, b_scales
                                                      1).permute(0, 5, 3, 1, 4, 2,
                                                                 6).reshape(BLOCK_N, BLOCK_K // SCALE_GROUP_SIZE)
 
-        a = tl.load(a_ptrs)
-        b = tl.load(b_ptrs, cache_modifier=None)
+        a = tl.load(a_ptrs, mask=offs_am[:, None] < M, other=0)
+        b = tl.load(b_ptrs, mask=offs_bn[None, :] < N, other=0)
 
         accumulator += tl.dot_scaled(a, a_scales, "e2m1", b, b_scales, "e2m1")
 
