@@ -216,6 +216,10 @@ static void initProton(pybind11::module &&m) {
       },
       pybind11::arg("sessionId"), pybind11::arg("phase"));
   m.def(
+      "poll_data",
+      [](size_t sessionId) { SessionManager::instance().pollData(sessionId); },
+      pybind11::arg("sessionId"));
+  m.def(
       "clear_data",
       [](size_t sessionId, size_t phase, bool clearUpToPhase) {
         SessionManager::instance().clearData(sessionId, phase, clearUpToPhase);

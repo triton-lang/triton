@@ -207,6 +207,7 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
   virtual ~RoctracerProfilerPimpl() = default;
 
   void doStart() override;
+  void doPoll() override;
   void doFlush() override;
   void doStop() override;
 
@@ -419,6 +420,11 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doFlush() {
   profiler.correlation.flush(
       /*maxRetries=*/100, /*sleepUs=*/10, /*flush=*/
       []() { roctracer::flushActivity<true>(); });
+}
+
+void RoctracerProfiler::RoctracerProfilerPimpl::doPoll() {
+  // Best-effort activity drain without synchronizing the device.
+  roctracer::flushActivity<true>();
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStop() {

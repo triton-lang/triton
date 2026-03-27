@@ -11,6 +11,7 @@ import pytest
 from typing import NamedTuple
 import pathlib
 import threading
+import time
 
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
@@ -438,6 +439,48 @@ def test_data_is_phase_complete(tmp_path: pathlib.Path, device: str):
     proton.data.advance_phase(session)
     # phase 0 should remain completed after advancing phases
     assert proton.data.is_phase_complete(session, phase - 1)
+
+    proton.finalize()
+
+
+def test_poll_makes_prior_phase_available_via_get(
+    tmp_path: pathlib.Path, device: str
+):
+    temp_path = tmp_path / "test_poll_makes_prior_phase_available_via_get.hatchet"
+    session = proton.start(str(temp_path.with_suffix("")), context="shadow")
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.ones((2, 2), device=device)
+    y = torch.zeros_like(x)
+
+    with proton.scope("test0"):
+        foo[(1, )](x, y, 4)
+
+    phase = proton.data.advance_phase(session)
+    assert phase == 1
+    assert not proton.data.is_phase_complete(session, 0)
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        proton.data.poll(session)
+        if proton.data.is_phase_complete(session, 0):
+            break
+        time.sleep(0.01)
+
+    assert proton.data.is_phase_complete(session, 0)
+
+    database = proton.data.get(session, phase=0)
+    assert database is not None
+
+    import msgpack
+
+    msgpack_data = proton.data.get_msgpack(session, phase=0)
+    database_unpacked = msgpack.loads(msgpack_data, raw=False, strict_map_key=False)
+    assert database == database_unpacked
 
     proton.finalize()
 
