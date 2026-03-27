@@ -80,6 +80,11 @@ public:
     return std::nullopt;
   }
 
+  Value getIssuerCTAPred(ImplicitLocOpBuilder & /*b*/,
+                         Operation * /*op*/) const override {
+    return nullptr;
+  }
+
   std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const override {
     auto info = ConSanTargetHooks::getMemEffectsOpInfo(op);
