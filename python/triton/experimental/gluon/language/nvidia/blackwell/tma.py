@@ -1,4 +1,5 @@
 import triton.experimental.gluon.language._core as ttgl
+from triton.experimental.gluon._runtime import constexpr_function
 from triton.experimental.gluon.language._core import builtin
 from triton.experimental.gluon.language.nvidia.hopper.tma import (
     async_copy_global_to_shared,
@@ -19,11 +20,21 @@ __all__ = [
     "tensor_descriptor",
     "tensor_descriptor_type",
     "make_tensor_descriptor",
+    "nbytes_per_cta_gather",
 ]
 
 
+@constexpr_function
+def nbytes_per_cta_gather(desc, offsets):
+    num_splits = 1
+    for basis in offsets.type.layout.parent.cga_layout:
+        if basis != [0, 0]:
+            num_splits *= 2
+    return offsets.shape[0] * desc.block_shape[1] * (desc.dtype.primitive_bitwidth // 8) // num_splits
+
+
 @builtin
-def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, _semantic=None):
+def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, multicast=False, _semantic=None):
     """
     Asynchronously gather elements from global memory to shared memory using TMA.
 
@@ -34,14 +45,16 @@ def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, _
         barrier (shared_memory_descriptor): Barrier that will be signaled when the operation is complete.
         result (tensor_memory_descriptor): Result shared memory, must have NVMMASharedLayout.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        multicast (bool): Enable multicast.
     """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, (y_offset, ), "async_gather", "y_offset", _semantic=_semantic)
 
     pred = _semantic.to_tensor(pred)
     y_offset = _semantic.to_tensor(y_offset)
+    multicast = ttgl._unwrap_if_constexpr(multicast)
     _semantic.builder.create_async_tma_gather(tensor_desc.handle, x_offsets.handle, y_offset.handle, barrier.handle,
-                                              result.handle, pred.handle)
+                                              result.handle, pred.handle, multicast)
 
 
 def _emit_scatter_nonnegative_check(x_offsets, y_offset, _semantic=None):
