@@ -353,6 +353,10 @@ class CodeGenerator(ast.NodeVisitor):
     def _unsupported(self, node, message):
         return UnsupportedLanguageConstruct(self.jit_fn.src, node, message)
 
+    def _is_jit_constexpr_param(self, name):
+        """Check if `name` is a JIT function parameter annotated with tl.constexpr."""
+        return any(p.name == name and p.is_constexpr for p in self.jit_fn.params)
+
     def _is_constexpr_global(self, name):
         absent_marker = object()
         val = self.gscope.get(name, absent_marker)
@@ -471,6 +475,16 @@ class CodeGenerator(ast.NodeVisitor):
 
             if _is_triton_value(live_val):
                 loop_val = self.lscope[name]
+
+                # When a JIT-specialized constexpr *parameter* is reassigned
+                # in the loop body, relax it to a runtime tensor so it can
+                # be carried. User-annotated tl.constexpr locals must NOT be
+                # relaxed — reassigning them is a type error.
+                if isinstance(live_val, constexpr) and _is_triton_tensor(loop_val):
+                    if self._is_jit_constexpr_param(name):
+                        live_val = self.semantic.to_tensor(_unwrap_if_constexpr(live_val))
+                        liveins[name] = live_val
+
                 self._verify_loop_carried_variable(name, loop_val, live_val)
 
                 live_handles = flatten_values_to_ir([live_val])
