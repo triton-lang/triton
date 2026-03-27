@@ -893,6 +893,9 @@ mlir::triton::gpu::parseCGAAttr(AsmParser &parser, Attribute attr,
   LinearLayout::BasesT namedBases;
   namedBases.insert(
       std::make_pair(StringAttr::get(ctx, "block"), std::move(bases)));
+  // Compute the minimum size that the LL fits in to be able to call the
+  // requiresSurjective = false constructor. Thisway, if the CGAEncoding
+  // is not surjective it'll error out with a nice message rather than crash
   auto outDims = standardOutDimPairs(ctx, SmallVector<int64_t>(rank, 1));
   for (const auto &basis : namedBases.begin()->second) {
     for (auto [i, value] : llvm::enumerate(basis))
