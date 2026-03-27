@@ -11,8 +11,7 @@ using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
-                         ConversionPatternRewriter &rewriter, bool isTuring,
-                         bool isHopperF64);
+                         ConversionPatternRewriter &rewriter, bool isTuring);
 
 LogicalResult convertMMADotScaled(triton::DotScaledOp op,
                                   triton::DotScaledOp::Adaptor adaptor,
@@ -63,11 +62,8 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
         cast<RankedTensorType>(D.getType()).getEncoding());
     if (mmaLayout) {
       if (mmaLayout.getVersionMajor() == 2) {
-        bool isHopperF64 =
-            computeCapability == 90 &&
-            cast<RankedTensorType>(A.getType()).getElementType().isF64();
         return convertMMA(op, adaptor, getTypeConverter(), rewriter,
-                          mmaLayout.isTuring(), isHopperF64);
+                          mmaLayout.isTuring());
       }
 
       llvm::report_fatal_error(
