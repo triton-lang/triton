@@ -75,6 +75,8 @@ public:
       if (loadOp.getForceNoAlias()) {
         AMD::addLocalLoadNoAliasScope(load);
       }
+      // Propagate shared memory alias scope metadata from the MaskedLoadOp
+      targetInfo.annotateSharedMemoryAlias(load, loadOp);
       return load;
     };
 
@@ -116,7 +118,8 @@ private:
 class ConvertMaskedStoreOp
     : public OpRewritePattern<triton::amdgpu::MaskedStoreOp> {
 public:
-  using OpRewritePattern::OpRewritePattern;
+  ConvertMaskedStoreOp(MLIRContext *context, const AMD::TargetInfo &targetInfo)
+      : OpRewritePattern(context), targetInfo(targetInfo) {}
 
   LogicalResult matchAndRewrite(triton::amdgpu::MaskedStoreOp storeOp,
                                 PatternRewriter &rewriter) const override {
@@ -145,6 +148,8 @@ public:
       if (storeOp.getForceNoAlias()) {
         AMD::addLocalLoadNoAliasScope(store);
       }
+      // Propagate shared memory alias scope metadata from the MaskedStoreOp
+      targetInfo.annotateSharedMemoryAlias(store, storeOp);
       return store;
     };
 
@@ -173,6 +178,9 @@ public:
     rewriter.eraseOp(storeOp);
     return success();
   }
+
+private:
+  const AMD::TargetInfo &targetInfo;
 };
 
 } // namespace
@@ -182,7 +190,7 @@ namespace mlir::triton::AMD {
 void populateMaskedOpsToLLVMPatterns(RewritePatternSet &patterns,
                                      const TargetInfo &targetInfo) {
   patterns.add<ConvertMaskedLoadOp>(patterns.getContext(), targetInfo);
-  patterns.add<ConvertMaskedStoreOp>(patterns.getContext());
+  patterns.add<ConvertMaskedStoreOp>(patterns.getContext(), targetInfo);
 }
 } // namespace mlir::triton::AMD
 

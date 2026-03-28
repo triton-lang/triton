@@ -69,3 +69,48 @@ tt.func @ws_tensordesc_5d_capture(%desc: !tt.tensordesc<tensor<8x8x8x16x16xf16>>
 }
 
 }
+
+// -----
+
+// Test that allocation.scope and allocation.scope.noalias attrs are set on ops
+// with two non-overlapping LDS buffers.
+
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#shared3 = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [0, 1]}>
+#smem3 = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+
+// CHECK-LABEL: @two_lds_buffers_alias_scope
+tt.func @two_lds_buffers_alias_scope(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+  %cst_a = arith.constant dense<0.0> : tensor<64x1xf16, #blocked3>
+  %cst_b = arith.constant dense<0.0> : tensor<64x1xf16, #blocked3>
+
+  // CHECK: ttg.local_alloc
+  // CHECK-SAME: allocation.scope = 0 : i32
+  // CHECK-SAME: allocation.scope.noalias = [1 : i32]
+  %alloc_a = ttg.local_alloc %cst_a : (tensor<64x1xf16, #blocked3>) -> !ttg.memdesc<64x1xf16, #shared3, #smem3>
+
+  // CHECK: ttg.local_alloc
+  // CHECK-SAME: allocation.scope = 1 : i32
+  // CHECK-SAME: allocation.scope.noalias = [0 : i32]
+  %alloc_b = ttg.local_alloc %cst_b : (tensor<64x1xf16, #blocked3>) -> !ttg.memdesc<64x1xf16, #shared3, #smem3>
+
+  // CHECK: ttg.local_load
+  // CHECK-SAME: allocation.scope = 0 : i32
+  // CHECK-SAME: allocation.scope.noalias = [1 : i32]
+  %load_a = ttg.local_load %alloc_a : !ttg.memdesc<64x1xf16, #shared3, #smem3> -> tensor<64x1xf16, #blocked3>
+
+  // CHECK: ttg.local_load
+  // CHECK-SAME: allocation.scope = 1 : i32
+  // CHECK-SAME: allocation.scope.noalias = [0 : i32]
+  %load_b = ttg.local_load %alloc_b : !ttg.memdesc<64x1xf16, #shared3, #smem3> -> tensor<64x1xf16, #blocked3>
+
+  // Stores to keep the local_loads alive
+  %ptr = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x1x!tt.ptr<f16>, #blocked3>
+  tt.store %ptr, %load_a : tensor<64x1x!tt.ptr<f16>, #blocked3>
+  tt.store %ptr, %load_b : tensor<64x1x!tt.ptr<f16>, #blocked3>
+  tt.return
+}
+
+}
