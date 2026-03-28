@@ -22,8 +22,8 @@ static Value decode48BitValue(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
 }
 
 // C++ wrapper for the shared tdmGetWarpDistribution function.
-SmallVector<unsigned> getWarpDistribution(ArrayRef<int64_t> blockShape,
-                                          int numWarps) {
+SmallVector<unsigned> distributeTDMWarps(ArrayRef<int64_t> blockShape,
+                                         int numWarps) {
   int numDims = blockShape.size();
   SmallVector<int> warps(numDims);
   tdmGetWarpDistribution(blockShape.data(), numDims, numWarps, warps.data());
@@ -32,7 +32,7 @@ SmallVector<unsigned> getWarpDistribution(ArrayRef<int64_t> blockShape,
 
 // Compute a warp distribution that respects LDS partition boundaries.
 //
-// The default getWarpDistribution may assign a warp a chunk that spans
+// The default distributeTDMWarps may assign a warp a chunk that spans
 // multiple partitions along partitionDim. This function ensures each warp's
 // chunk stays within a single partition piece.
 //
@@ -110,7 +110,7 @@ distributeTDMWarpsAlignToPartition(ArrayRef<int64_t> blockShape, int numWarps,
   if (auto partitionedEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding))
     return distributeTDMWarpsAlignToPartition(blockShape, numWarps,
                                               partitionedEnc);
-  return {getWarpDistribution(blockShape, numWarps), 1};
+  return {distributeTDMWarps(blockShape, numWarps), 1};
 }
 
 SmallVector<Value> TDMDescriptor::getAllGroups() const {
