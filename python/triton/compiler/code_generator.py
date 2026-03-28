@@ -740,6 +740,14 @@ class CodeGenerator(ast.NodeVisitor):
         self.visit(assign)
         return self.visit(lhs)
 
+    def visit_NamedExpr(self, node: ast.NamedExpr):
+        # Named expressions are simple and can only be of the form x := value
+        target = node.target.id
+        with self._name_loc_prefix(target):
+            value = self.visit(node.value)
+            self.set_value(target, value)
+            return value
+
     def visit_Name(self, node):
         if type(node.ctx) is ast.Store:
             return node.id
