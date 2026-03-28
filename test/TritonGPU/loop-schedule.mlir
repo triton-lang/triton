@@ -74,7 +74,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 tt.func public @fused_loop(%arg5: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}) {
   %c10_i32 = arith.constant 10 : i32
   %false = arith.constant false
-  %0 = ub.poison : !tt.tensordesc<tensor<64x256xf16>>
+  %0 = ub.poison : !tt.tensordesc<64x256xf16>
   %cst = arith.constant dense<0> : tensor<128x1xi64, #blocked>
   %c-1_i32 = arith.constant -1 : i32
   %c1_i32 = arith.constant 1 : i32
@@ -86,12 +86,12 @@ tt.func public @fused_loop(%arg5: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ar
   %1 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
   %2 = tt.expand_dims %1 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
   %3 = arith.extsi %arg7 : i32 to i64
-  %4 = tt.make_tensor_descriptor %arg5, [%arg7, %arg7], [%3, %c1_i64] : <f16>, <tensor<64x256xf16>>
+  %4 = tt.make_tensor_descriptor %arg5, [%arg7, %arg7], [%3, %c1_i64] : <f16>, <64x256xf16>
   %5 = tt.broadcast %2 : tensor<1x64xi32, #blocked> -> tensor<128x64xi32, #blocked>
   %7 = tt.splat %3 : i64 -> tensor<128x1xi64, #blocked>
 
   // CHECK: scf.for
-  %8:9 = scf.for %arg29 = %c0_i32 to %arg7 step %c1_i32 iter_args(%arg30 = %c-1_i32, %arg31 = %4, %arg32 = %c0_i32, %arg33 = %arg5, %arg34 = %cst_0, %arg35 = %c0_i32, %arg36 = %cst, %arg37 = %0, %arg38 = %false) -> (i32, !tt.tensordesc<tensor<64x256xf16>>, i32, !tt.ptr<f16>, tensor<128x256xf32, #mma>, i32, tensor<128x1xi64, #blocked>, !tt.tensordesc<tensor<64x256xf16>>, i1)  : i32 {
+  %8:9 = scf.for %arg29 = %c0_i32 to %arg7 step %c1_i32 iter_args(%arg30 = %c-1_i32, %arg31 = %4, %arg32 = %c0_i32, %arg33 = %arg5, %arg34 = %cst_0, %arg35 = %c0_i32, %arg36 = %cst, %arg37 = %0, %arg38 = %false) -> (i32, !tt.tensordesc<64x256xf16>, i32, !tt.ptr<f16>, tensor<128x256xf32, #mma>, i32, tensor<128x1xi64, #blocked>, !tt.tensordesc<64x256xf16>, i1)  : i32 {
     %9 = arith.addi %arg30, %c1_i32 : i32
     %10 = arith.cmpi eq, %arg30, %c10_i32 : i32
     %11 = arith.select %10, %c0_i32, %9 : i32
@@ -101,7 +101,7 @@ tt.func public @fused_loop(%arg5: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ar
     // CHECK: {_test_marker_0, loop.cluster = 4 : i32, loop.stage = 0 : i32}
     %13 = arith.select %12, %c0_i32, %arg32 {_test_marker_0} : i32
 
-    %14 = arith.select %12, %arg31, %arg37 : !tt.tensordesc<tensor<64x256xf16>>
+    %14 = arith.select %12, %arg31, %arg37 : !tt.tensordesc<64x256xf16>
     %15 = arith.select %12, %c10_i32, %arg35 : i32
     %16 = scf.if %12 -> (tensor<128x1xi64, #blocked>) {
       %32 = arith.muli %cst, %7 : tensor<128x1xi64, #blocked>
@@ -117,7 +117,7 @@ tt.func public @fused_loop(%arg5: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ar
     %22 = tt.load %20 : tensor<128x64x!tt.ptr<f16>, #blocked>
     %23 = ttg.local_alloc %22 : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
     %24 = arith.muli %13, %c64_i32 : i32
-    %25 = tt.descriptor_load %14[%24, %15] : !tt.tensordesc<tensor<64x256xf16>> -> tensor<64x256xf16, #blocked1>
+    %25 = tt.descriptor_load %14[%24, %15] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #blocked1>
     %26 = ttg.local_alloc %25 : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
     %27 = ttng.warp_group_dot %23, %26, %arg34, %arg38 {inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
     %28 = arith.addi %13, %c1_i32 : i32
@@ -135,7 +135,7 @@ tt.func public @fused_loop(%arg5: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ar
       "use"(%27) : (tensor<128x256xf32, #mma>) -> ()
       // CHECK: {_test_marker_3, loop.cluster = 5 : i32, loop.stage = 2 : i32}
     } {_test_marker_3}
-    scf.yield %11, %14, %28, %30, %27, %15, %16, %14, %31 : i32, !tt.tensordesc<tensor<64x256xf16>>, i32, !tt.ptr<f16>, tensor<128x256xf32, #mma>, i32, tensor<128x1xi64, #blocked>, !tt.tensordesc<tensor<64x256xf16>>, i1
+    scf.yield %11, %14, %28, %30, %27, %15, %16, %14, %31 : i32, !tt.tensordesc<64x256xf16>, i32, !tt.ptr<f16>, tensor<128x256xf32, #mma>, i32, tensor<128x1xi64, #blocked>, !tt.tensordesc<64x256xf16>, i1
   }
   tt.return
 }

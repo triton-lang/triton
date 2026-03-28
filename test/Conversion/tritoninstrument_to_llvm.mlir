@@ -103,9 +103,9 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK: llvm.mul %{{.*}}, %{{.*}} : i64
 // CHECK: llvm.udiv %{{.*}}, %{{.*}} : i64
 tt.func private @experimental_gsan_tensordesc_info(
-  %desc: !tt.tensordesc<tensor<32x32xf32, #shared>>
+  %desc: !tt.tensordesc<32x32xf32, #shared>
 ) {
-  %0:5 = "tti.experimental_gsan_tensordesc_info"(%desc) : (!tt.tensordesc<tensor<32x32xf32, #shared>>) -> (!tt.ptr<f32, 1>, i64, i64, i64, i64)
+  %0:5 = "tti.experimental_gsan_tensordesc_info"(%desc) : (!tt.tensordesc<32x32xf32, #shared>) -> (!tt.ptr<f32, 1>, i64, i64, i64, i64)
   tt.return
 }
 }

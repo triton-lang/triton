@@ -598,7 +598,7 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   auto smemTy = getResult().getType();
 
   // Check that every dimension of the block shape is <= 2^16
-  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto blockShape = tensorDescTy.getShape();
   auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
   if (failed(verifyResult))
     return verifyResult;
@@ -666,7 +666,7 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   auto smemTy = getSrc().getType();
 
   // Check that every dimension of the block shape is <= 2^16
-  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto blockShape = tensorDescTy.getShape();
   auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
   if (failed(verifyResult))
     return verifyResult;
@@ -704,7 +704,7 @@ LogicalResult AsyncTDMScatterOp::verify() {
   auto smemTy = getSrc().getType();
 
   // TDM scatter mode only supports 2D tensors
-  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto blockShape = tensorDescTy.getShape();
   if (blockShape.size() != 2)
     return emitOpError("TDM scatter only supports 2D tensors, got ")
            << blockShape.size() << "D";
@@ -754,7 +754,7 @@ LogicalResult AsyncTDMGatherOp::verify() {
   auto smemTy = getDst().getType();
 
   // TDM gather mode only supports 2D tensors
-  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto blockShape = tensorDescTy.getShape();
   if (blockShape.size() != 2)
     return emitOpError("TDM gather only supports 2D tensors, got ")
            << blockShape.size() << "D";
@@ -862,9 +862,8 @@ LogicalResult TDMPrefetchOp::inferReturnTypes(
   }
 
   auto descType = cast<triton::TensorDescType>(ad.getDesc().getType());
-  auto blockType = descType.getBlockType();
-  auto blockShape = blockType.getShape();
-  auto elementType = blockType.getElementType();
+  auto blockShape = descType.getShape();
+  auto elementType = descType.getElementType();
 
   // Lookup the module to get the number of threads per warp, number of warps
   // and number of CTAs

@@ -8,7 +8,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c_stride1 = arith.constant 1 : i64
     // expected-error @+2 {{requires at least one dimension to have stride 1}}
     // expected-error @+1 {{failed to legalize operation}}
-    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%stride0, %stride1] : <f16>, <tensor<64x64xf16, #shared>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%stride0, %stride1] : <f16>, <64x64xf16, #shared>
     tt.return
   }
 }
@@ -22,7 +22,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c_stride1 = arith.constant 1 : i64
     // expected-error @+2 {{requires at least one dimension to have stride 1}}
     // expected-error @+1 {{failed to legalize operation}}
-    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%stride1, %stride1] : <f16>, <tensor<64x64xf16, #shared>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%stride1, %stride1] : <f16>, <64x64xf16, #shared>
     tt.return
   }
 }
@@ -36,7 +36,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c_stride1 = arith.constant 1 : i64
     // expected-error @+2 {{requires shared order [rank-2, rank-1, rank-3, rank-4, ..., 0] because dim[rank-2] has stride 1}}
     // expected-error @+1 {{failed to legalize operation}}
-    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride1, %runtime_stride] : <f16>, <tensor<64x64xf16, #shared>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride1, %runtime_stride] : <f16>, <64x64xf16, #shared>
     tt.return
   }
 }
@@ -50,7 +50,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c_stride1 = arith.constant 1 : i64
     // expected-error @+2 {{requires shared order [rank-1, rank-2, ..., 0]}}
     // expected-error @+1 {{failed to legalize operation}}
-    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%runtime_stride, %c_stride1] : <f16>, <tensor<64x64xf16, #shared>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%runtime_stride, %c_stride1] : <f16>, <64x64xf16, #shared>
     tt.return
   }
 }
@@ -64,7 +64,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func public @tdm_1x1x1(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %c_stride1 = arith.constant 1 : i64
     %c_shape = arith.constant 1 : i32
-    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape, %c_shape], [%c_stride1, %c_stride1, %c_stride1] : <f16>, <tensor<1x1x1xf16, #shared>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape, %c_shape], [%c_stride1, %c_stride1, %c_stride1] : <f16>, <1x1x1xf16, #shared>
     tt.return
   }
 }
@@ -79,7 +79,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c_stride1 = arith.constant 1 : i64
     %c_shape = arith.constant 1 : i32
     %c_shape2 = arith.constant 128 : i32
-    %0 = tt.make_tensor_descriptor %arg0, [%c_shape2, %c_shape, %c_shape], [%runtime_stride, %c_stride1, %c_stride1] : <f16>, <tensor<1x1x1xf16, #shared>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape2, %c_shape, %c_shape], [%runtime_stride, %c_stride1, %c_stride1] : <f16>, <1x1x1xf16, #shared>
     tt.return
   }
 }
@@ -94,7 +94,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c_shape2 = arith.constant 128 : i32
     // expected-error @+2 {{requires all stride 1 dimensions to be consecutive starting from the last dimension}}
     // expected-error @+1 {{failed to legalize operation}}
-    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape2, %c_shape], [%c_stride1, %runtime_stride, %c_stride1] : <f16>, <tensor<1x1x1xf16, #shared>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape2, %c_shape], [%c_stride1, %runtime_stride, %c_stride1] : <f16>, <1x1x1xf16, #shared>
     tt.return
   }
 }
@@ -109,7 +109,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c_shape2 = arith.constant 128 : i32
     // expected-error @+2 {{requires all stride 1 dimensions to be consecutive starting from the last dimension}}
     // expected-error @+1 {{failed to legalize operation}}
-    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape, %c_shape2], [%c_stride1, %c_stride1, %runtime_stride] : <f16>, <tensor<1x1x1xf16, #shared>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape, %c_shape2], [%c_stride1, %c_stride1, %runtime_stride] : <f16>, <1x1x1xf16, #shared>
     tt.return
   }
 }
