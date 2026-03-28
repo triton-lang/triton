@@ -19,7 +19,7 @@ from .driver import driver
 from . import _async_compile
 from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
 from .cache import get_cache_key
-from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, ir
+from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, native_specialize_impl_batched, ir
 
 TRITON_MODULE = "triton.language"
 GLUON_MODULE = "triton.experimental.gluon.language"
@@ -400,29 +400,20 @@ def create_function_from_signature(sig, kparams, backend):
     much of the kernel launch overhead -- every time we run the kernel.
     """
     assert len(sig.parameters) == len(kparams)
-    # Create the function argument list and the dict entries for the return statement
-    specialization = []
-    # signature
-    for name, kp in zip(sig.parameters.keys(), kparams):
-        if kp.is_constexpr:
-            specialization.append(f'("constexpr", {name})')
-        else:
-            is_const = 'True' if kp.is_const else 'False'
-            specialize = 'False' if kp.do_not_specialize else 'True'
-            align = 'False' if kp.do_not_specialize_on_alignment else 'True'
-            ret = f"specialize_impl(backend, {name}, {is_const}, {specialize}, {align})"
-            if kp.annotation_type:
-                if isinstance(kp.annotation_type, str):
-                    if kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]:
-                        # we do not specialize non-constexpr floats and bools:
-                        specialize = False
-                if specialize:
-                    specialization.append(f'("{kp.annotation_type}",) + {ret}[1:]')
-                else:
-                    # skip runtime specialization:
-                    specialization.append(f'("{kp.annotation_type}", None)')
-            else:
-                specialization.append(f"{ret}")
+    param_names = tuple(sig.parameters.keys())
+    constexpr_flags = tuple(kp.is_constexpr for kp in kparams)
+    is_consts = tuple(kp.is_const for kp in kparams)
+    specialize_values = tuple(not kp.do_not_specialize for kp in kparams)
+    aligns = tuple(not kp.do_not_specialize_on_alignment for kp in kparams)
+    override_types = tuple(kp.annotation_type or None for kp in kparams)
+    return_keys = tuple(
+        not (kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]) if kp.annotation_type else True
+        for kp in kparams)
+
+    if param_names:
+        args_tuple_expr = f'({", ".join(param_names)}{"," if len(param_names) == 1 else ""})'
+    else:
+        args_tuple_expr = "()"
 
     # compute argument string for a given parameter
     def arg(name_param):
@@ -433,8 +424,17 @@ def create_function_from_signature(sig, kparams, backend):
 
     func_body = f"""
 def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
-    params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
-    specialization = [{','.join(specialization)}]
+    params = {{{', '.join([f"'{name}': {name}" for name in param_names])}}}
+    specialization = specialize_impl_batched(
+        backend,
+        {args_tuple_expr},
+        constexpr_flags,
+        is_consts,
+        specialize_values,
+        aligns,
+        override_types,
+        return_keys,
+    )
     return params, specialization, options
 """
 
@@ -445,10 +445,14 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
         if param.default is not inspect.Parameter.empty
     }
 
-    specialize_impl = native_specialize_impl
-    func_namespace["specialize_impl"] = specialize_impl
+    func_namespace["specialize_impl_batched"] = native_specialize_impl_batched
     func_namespace["backend"] = backend
-    func_namespace["JITCallable"] = JITCallable
+    func_namespace["constexpr_flags"] = constexpr_flags
+    func_namespace["is_consts"] = is_consts
+    func_namespace["specialize_values"] = specialize_values
+    func_namespace["aligns"] = aligns
+    func_namespace["override_types"] = override_types
+    func_namespace["return_keys"] = return_keys
 
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)

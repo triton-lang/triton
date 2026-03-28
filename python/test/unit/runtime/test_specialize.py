@@ -1,9 +1,10 @@
+import inspect
 import numpy
 import pytest
 import torch
 from collections import namedtuple
-from triton._C.libtriton import native_specialize_impl
-from triton.runtime.jit import MockTensor, JITCallable
+from triton._C.libtriton import native_specialize_impl, native_specialize_impl_batched
+from triton.runtime.jit import MockTensor, JITCallable, KernelParam, create_function_from_signature
 from triton._utils import canonicalize_dtype
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.backends.amd.compiler import HIPBackend
@@ -84,6 +85,22 @@ def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
         return (f"{type_name}<{inner}{list(arg.block_shape)}{rank_suffix},{arg.layout!r}>", None)
     else:
         raise TypeError("Unsupported type: %s" % type(arg))
+
+
+def reference_specialize_impl_batched(backend, args, constexpr_flags, is_consts, specialize_values, aligns,
+                                      override_types, return_keys):
+    result = []
+    for arg, is_constexpr, is_const, specialize_value, align, override_type, return_key in zip(
+            args, constexpr_flags, is_consts, specialize_values, aligns, override_types, return_keys):
+        if is_constexpr:
+            result.append(("constexpr", arg))
+            continue
+        ty, key = reference_specialize_impl(backend, arg, is_const, specialize_value, align)
+        if override_type is not None:
+            result.append((override_type, key if return_key else None))
+        else:
+            result.append((ty, key))
+    return result
 
 
 def native_inputs_to_specialize():
@@ -175,3 +192,76 @@ def test_specialize_impl(input_generator, backend, is_const, specialize_value, a
         result = native_specialize_impl(backend, arg, is_const, specialize_value, align)
         expected = reference_specialize_impl(backend, arg, is_const, specialize_value, align)
         assert result == expected
+
+
+@pytest.mark.parametrize("backend", [CUDABackend, HIPBackend])
+def test_specialize_impl_batched(backend):
+    args = (
+        17,
+        16,
+        torch.empty((16, ), dtype=torch.float32, device="cpu"),
+        torch.empty((15, ), dtype=torch.float32, device="cpu"),
+        False,
+        (16, False),
+    )
+    constexpr_flags = (True, False, False, False, False, False)
+    is_consts = (False, False, False, False, False, False)
+    specialize_values = (True, True, True, True, True, True)
+    aligns = (True, False, True, True, True, True)
+    override_types = (None, "i32", "*fp32", "fp16", "u1", None)
+    return_keys = (True, True, True, False, False, True)
+
+    result = native_specialize_impl_batched(backend, args, constexpr_flags, is_consts, specialize_values, aligns,
+                                            override_types, return_keys)
+    expected = reference_specialize_impl_batched(backend, args, constexpr_flags, is_consts, specialize_values, aligns,
+                                                 override_types, return_keys)
+    assert result == expected
+
+
+@pytest.mark.parametrize("backend", [CUDABackend, HIPBackend])
+def test_create_function_from_signature_uses_batched_specialization(backend):
+    fp16 = "fp16"
+    i32 = "i32"
+    u1 = "u1"
+
+    def kernel(x, y: fp16, z: constexpr, w: i32 = 16, flag: u1 = False, align_only=32):
+        pass
+
+    sig = inspect.signature(kernel)
+    params = list(sig.parameters.values())
+    kparams = [
+        KernelParam(0, params[0], False, False),
+        KernelParam(1, params[1], False, False),
+        KernelParam(2, params[2], False, False),
+        KernelParam(3, params[3], True, False),
+        KernelParam(4, params[4], False, False),
+        KernelParam(5, params[5], False, True),
+    ]
+
+    binder = create_function_from_signature(sig, kparams, backend)
+    tensor = torch.empty((16, ), dtype=torch.float32, device="cpu")
+    bound_args, specialization, options = binder(tensor, 1.0, 7, num_warps=4)
+
+    expected_args = (tensor, 1.0, 7, 16, False, 32)
+    expected = reference_specialize_impl_batched(
+        backend,
+        expected_args,
+        tuple(kp.is_constexpr for kp in kparams),
+        tuple(kp.is_const for kp in kparams),
+        tuple(not kp.do_not_specialize for kp in kparams),
+        tuple(not kp.do_not_specialize_on_alignment for kp in kparams),
+        tuple(kp.annotation_type or None for kp in kparams),
+        tuple(not (kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]) if kp.annotation_type else True
+              for kp in kparams),
+    )
+
+    assert bound_args == {
+        "x": tensor,
+        "y": 1.0,
+        "z": 7,
+        "w": 16,
+        "flag": False,
+        "align_only": 32,
+    }
+    assert specialization == expected
+    assert options == {"num_warps": 4}
