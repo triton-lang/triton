@@ -4,8 +4,11 @@ No GPU kernel should be declared in this test.
 Python API correctness tests involving GPU kernels should be placed in `test_api.py`.
 Profile correctness tests involving GPU kernels should be placed in `test_profile.py`.
 """
+import json
 import pathlib
 import pytest
+import threading
+import time
 
 import triton._C.libproton.proton as libproton
 from triton.profiler.profile import _select_backend
@@ -66,6 +69,63 @@ def test_add_metrics(tmp_path: pathlib.Path):
     libproton.exit_scope(id1, "one")
     libproton.finalize_all("hatchet")
     assert temp_file.exists()
+
+
+def test_trace_scope_metrics_emit_cpu_region(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_trace_scope_metrics_emit_cpu_region.chrome_trace"
+    session_id = libproton.start(str(temp_file.with_suffix("")), "shadow", "trace", "instrumentation", "cuda")
+    scope_id = libproton.record_scope()
+    libproton.enter_scope(scope_id, "outer")
+    libproton.add_metrics(scope_id, {"foo": 1.0})
+    time.sleep(0.001)
+    libproton.exit_scope(scope_id, "outer")
+    libproton.finalize(session_id, "chrome_trace")
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    assert len(data["traceEvents"]) == 1
+    metric_event = data["traceEvents"][0]
+    assert metric_event["name"] == "<metric>"
+    assert metric_event["cat"] == "metric"
+    assert metric_event["tid"].startswith("cpu thread ")
+    assert metric_event["dur"] > 0
+    assert metric_event["args"]["call_stack"] == ["ROOT", "outer"]
+    assert metric_event["args"]["metrics"] == {"foo": "1.000000"}
+
+
+def test_trace_scope_metrics_thread_lanes(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_trace_scope_metrics_thread_lanes.chrome_trace"
+    session_id = libproton.start(str(temp_file.with_suffix("")), "shadow", "trace", "instrumentation", "cuda")
+
+    def worker(name: str, metric_name: str, metric_value: float):
+        scope_id = libproton.record_scope()
+        libproton.enter_scope(scope_id, name)
+        libproton.add_metrics(scope_id, {metric_name: metric_value})
+        time.sleep(0.001)
+        libproton.exit_scope(scope_id, name)
+
+    threads = [
+        threading.Thread(target=worker, args=("thread_a", "a", 1.0)),
+        threading.Thread(target=worker, args=("thread_b", "b", 2.0)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    libproton.finalize(session_id, "chrome_trace")
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    trace_events = data["traceEvents"]
+    assert len(trace_events) == 2
+    assert len({event["tid"] for event in trace_events}) == 2
+    assert {tuple(event["args"]["call_stack"]) for event in trace_events} == {
+        ("ROOT", "thread_a"),
+        ("ROOT", "thread_b"),
+    }
 
 
 def test_init_function_metadata(tmp_path: pathlib.Path):

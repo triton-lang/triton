@@ -3,6 +3,7 @@
 
 #include "Data.h"
 #include <memory>
+#include <thread>
 #include <unordered_map>
 
 namespace proton {
@@ -35,19 +36,19 @@ private:
   // Data
   void doDump(std::ostream &os, OutputFormat outputFormat,
               size_t phase) const override;
-  size_t getCurrentOpParentEntryId() const override;
-  std::vector<Context>
-  getCurrentOpContexts(const std::string &opName) const override;
 
   OutputFormat getDefaultOutputFormat() const override {
     return OutputFormat::ChromeTrace;
   }
 
   void dumpChromeTrace(std::ostream &os, size_t phase) const;
+  uint64_t getCurrentThreadTraceId();
 
   PhaseStore<Trace> tracePhases;
   // ScopeId -> EventId
   std::unordered_map<size_t, size_t> scopeIdToEventId;
+  std::unordered_map<std::thread::id, uint64_t> threadIdToTraceId;
+  uint64_t nextThreadTraceId = 0;
 };
 
 } // namespace proton

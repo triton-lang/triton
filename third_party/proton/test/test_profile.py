@@ -952,22 +952,25 @@ def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str
     assert metric_1["cat"] == "metric"
     assert metric_2["cat"] == "metric"
     assert metric_3["cat"] == "metric"
-    assert metric_1["tid"] == "metrics 2"
-    assert metric_2["tid"] == "metrics 1"
-    assert metric_3["tid"] == "metrics 0"
+    assert metric_1["tid"].startswith("cpu thread ")
+    assert metric_2["tid"] == metric_1["tid"]
+    assert metric_3["tid"] == metric_1["tid"]
     assert metric_1["args"]["call_stack"] == ["ROOT", "scope_3", "scope_2", "scope_1"]
     assert metric_2["args"]["call_stack"] == ["ROOT", "scope_3", "scope_2"]
     assert metric_3["args"]["call_stack"] == ["ROOT", "scope_3"]
     assert metric_1["args"]["metrics"]["m1"] == "1.000000"
     assert metric_2["args"]["metrics"]["m2"] == "2.000000"
     assert metric_3["args"]["metrics"]["m3"] == "3.000000"
+    assert metric_3["ts"] <= metric_2["ts"] <= metric_1["ts"]
+    assert metric_1["ts"] + metric_1["dur"] <= metric_2["ts"] + metric_2["dur"]
+    assert metric_2["ts"] + metric_2["dur"] <= metric_3["ts"] + metric_3["dur"]
 
-    assert metric_1["ts"] == pytest.approx(kernel_1["ts"])
-    assert metric_1["ts"] + metric_1["dur"] == pytest.approx(kernel_1["ts"] + kernel_1["dur"])
-    assert metric_2["ts"] == pytest.approx(kernel_1["ts"])
-    assert metric_2["ts"] + metric_2["dur"] == pytest.approx(kernel_3["ts"] + kernel_3["dur"])
-    assert metric_3["ts"] == pytest.approx(kernel_1["ts"])
-    assert metric_3["ts"] + metric_3["dur"] == pytest.approx(kernel_4["ts"] + kernel_4["dur"])
+    assert kernel_1["args"]["launch_scope_call_stack"] == ["ROOT", "scope_3", "scope_2", "scope_1"]
+    assert kernel_1["args"]["launch_scope_metrics"] == {"m1": "1.000000"}
+    assert kernel_2["args"]["launch_scope_call_stack"] == ["ROOT", "scope_3", "scope_2"]
+    assert kernel_2["args"]["launch_scope_metrics"] == {"m2": "2.000000"}
+    assert kernel_4["args"]["launch_scope_call_stack"] == ["ROOT", "scope_3"]
+    assert kernel_4["args"]["launch_scope_metrics"] == {"m3": "3.000000"}
 
 
 def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
@@ -982,7 +985,13 @@ def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
     with temp_file.open() as f:
         data = json.load(f)
 
-    assert data["traceEvents"] == []
+    assert len(data["traceEvents"]) == 1
+    metric_event = data["traceEvents"][0]
+    assert metric_event["name"] == "<metric>"
+    assert metric_event["cat"] == "metric"
+    assert metric_event["tid"].startswith("cpu thread ")
+    assert metric_event["args"]["call_stack"] == ["ROOT", "metric_only"]
+    assert metric_event["args"]["metrics"] == {"foo": "1.000000"}
 
 
 @pytest.mark.parametrize("profile_kind,suffix", [("tree", ".hatchet"), ("trace", ".chrome_trace")],
