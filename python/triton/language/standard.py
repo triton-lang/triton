@@ -3,6 +3,7 @@ from __future__ import annotations
 from ..runtime.jit import jit, constexpr_function
 from . import core
 from . import math
+from . import random
 
 # constexpr utilities
 
@@ -568,3 +569,20 @@ def squeeze(x, dim: core.constexpr):
 @jit
 def unsqueeze(x, dim: core.constexpr):
     return x.reshape(x.shape[:dim] + (1, ) + x.shape[dim:])
+
+
+@jit
+def stochastic_round(x, dtype: core.constexpr, seed, offset):
+    trunc_bits: core.constexpr = 23 - dtype.fp_mantissa_width
+    int_val = x.to(core.int32, bitcast=True)
+
+    random_bits = random.randint(seed, offset) & ((1 << trunc_bits) - 1)
+    biased = (int_val + random_bits).to(core.float32, bitcast=True)
+
+    result = biased.to(dtype, fp_downcast_rounding='rtz')
+    fallback = x.to(dtype, fp_downcast_rounding='rtne')
+
+    result_f32 = result.to(core.float32)
+    bias_corrupted = (result_f32 != result_f32) & ~(x != x)
+
+    return core.where(bias_corrupted, fallback, result)
