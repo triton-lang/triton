@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <iostream>
 #include <map>
 #include <stdexcept>
 #include <thread>
@@ -177,7 +178,13 @@ protected:
   };
 
   struct Correlation {
+    // Highest correlation id we have seen leave the launch callback path.
+    // "submitted" means Proton has associated launch-side bookkeeping with
+    // this id and is now waiting for activity records to show up.
     std::atomic<uint64_t> maxSubmittedCorrelationId{0};
+    // Highest correlation id for which CUPTI activity processing has observed
+    // records in processActivityBuffer(). "completed" therefore means the
+    // device-side activity stream has caught up through this id.
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
     // Mapping from a native profiler correlation id to an external id.
     CorrIdToExternIdMap corrIdToExternId;
@@ -205,6 +212,24 @@ protected:
       });
     }
 
+    // Drop launch-side correlation state once CUPTI activity handling has
+    // completed through completedId. This is safe only after flush() has
+    // observed completedId >= submittedId, i.e. once activity processing has
+    // caught up with everything submitted so far.
+    size_t purgeCompleted(uint64_t completedId) {
+      auto liveCorrelations = corrIdToExternId.collectIf(
+          [&](uint64_t correlationId, size_t) {
+            return correlationId <= completedId;
+          });
+      size_t purged = 0;
+      for (const auto &[correlationId, externId] : liveCorrelations) {
+        corrIdToExternId.erase(correlationId);
+        externIdToState.erase(externId);
+        ++purged;
+      }
+      return purged;
+    }
+
     template <typename FlushFnT>
     void flush(uint64_t maxRetries, uint64_t sleepUs, FlushFnT &&flushFn) {
       flushFn();
@@ -216,6 +241,17 @@ protected:
         flushFn();
         completedId = maxCompletedCorrelationId.load();
         --retries;
+      }
+      if (completedId >= submittedId) {
+        auto liveBefore = corrIdToExternId.size();
+        auto purged = purgeCompleted(completedId);
+        if (purged > 0 && getBoolEnv("PROTON_CORRELATION_DEBUG", false)) {
+          std::cerr << "[PROTON] Purged " << purged
+                    << " completed correlation entries at flush"
+                    << " (live_before=" << liveBefore
+                    << ", live_after=" << corrIdToExternId.size()
+                    << ", completed_id=" << completedId << ")" << std::endl;
+        }
       }
     }
 

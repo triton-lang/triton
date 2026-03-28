@@ -3,6 +3,7 @@
 
 #include <map>
 #include <mutex>
+#include <vector>
 #include <shared_mutex>
 #include <utility>
 
@@ -86,6 +87,22 @@ public:
   size_t size() const {
     std::shared_lock<std::shared_mutex> lock(mutex);
     return map.size();
+  }
+
+  Container snapshot() const {
+    std::shared_lock<std::shared_mutex> lock(mutex);
+    return map;
+  }
+
+  template <typename PredT>
+  std::vector<std::pair<Key, Value>> collectIf(PredT &&pred) const {
+    std::shared_lock<std::shared_mutex> lock(mutex);
+    std::vector<std::pair<Key, Value>> result;
+    for (const auto &[key, value] : map) {
+      if (pred(key, value))
+        result.emplace_back(key, value);
+    }
+    return result;
   }
 
   std::optional<std::reference_wrapper<Value>> find(const Key &key) {
