@@ -485,11 +485,6 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
      "mma.sync.aligned.m8n8k4.row.col.f64.f64.f64.f64"},
 };
 
-inline static const std::map<TensorCoreType, std::string> mmaInstrPtxHopper = {
-    {TensorCoreType::FP64_FP64_FP64_FP64,
-     "mma.sync.aligned.m16n8k16.row.col.f64.f64.f64.f64"},
-};
-
 inline static const std::map<TensorCoreType, std::string> mmaInstrPtxScaled = {
     {TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32_SCALE_VEC_1X,
      "mma.sync.aligned.m16n8k32.row.col."
@@ -844,20 +839,15 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
 
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
-                         ConversionPatternRewriter &rewriter, bool isTuring,
-                         bool isHopperF64) {
+                         ConversionPatternRewriter &rewriter, bool isTuring) {
   auto aTensorTy = op.getA().getType();
   auto bTensorTy = op.getB().getType();
   auto dTensorTy = op.getD().getType();
 
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
+  NumRegisters numRegisters = {2, 1, 2};
 
-  bool isFp64Path = (mmaType == TensorCoreType::FP64_FP64_FP64_FP64);
-  NumRegisters numRegisters = {2, 1, isFp64Path ? 4 : 2};
-
-  const auto &instrMap =
-      isTuring ? mmaInstrPtxTuring
-               : (isHopperF64 ? mmaInstrPtxHopper : mmaInstrPtxAmpere);
+  const auto &instrMap = isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
   EmitMmaCallback emit = [&](PTXBuilder &builder, int b, int m, int n, int k,
                              mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                              unsigned colsPerThread, unsigned batchOffset,
@@ -879,15 +869,9 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           numCPackedElem, ha, hb, fc, isAccF16);
     } else {
       if (isFp64MMA) {
-        if (!isHopperF64) {
-          callMmaAmpereFp64(builder, b, base, mma, numMmaRets, colsPerThread,
-                            numCPackedElem, batchOffset, ha, hb, fc,
-                            /*kRegs*/ 4);
-        } else {
-          callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
-                    numCPackedElem, batchOffset, ha, hb, fc, "=d", "d",
-                    /*kRegs*/ 4);
-        }
+        callMmaAmpereFp64(builder, b, base, mma, numMmaRets, colsPerThread,
+                          numCPackedElem, batchOffset, ha, hb, fc,
+                          numRegisters.k);
       } else {
         callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
                   numCPackedElem, batchOffset, ha, hb, fc,
