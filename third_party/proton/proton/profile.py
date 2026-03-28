@@ -1,4 +1,5 @@
 import functools
+import os
 import triton
 
 from triton._C.libproton import proton as libproton  # type: ignore
@@ -7,9 +8,22 @@ from .flags import flags
 from .hooks import HookManager, LaunchHook, InstrumentationHook
 from .hooks.hook import Hook
 from .mode import BaseMode
-from typing import Optional, Union
+from typing import IO, Optional, Union
 
 DEFAULT_PROFILE_NAME = "proton"
+
+
+def _normalize_output_name(name: Optional[Union[str, os.PathLike, IO]]) -> str:
+    if name is None:
+        return DEFAULT_PROFILE_NAME
+
+    if hasattr(name, "fileno"):
+        fd = name.fileno()
+        if fd < 0:
+            raise ValueError(f"Invalid file descriptor from profile output object: {fd}")
+        return f"/proc/self/fd/{fd}"
+
+    return os.fspath(name)
 
 
 def _select_backend() -> str:
@@ -55,7 +69,7 @@ def _check_env(backend: str) -> None:
 
 
 def start(
-    name: Optional[str] = None,
+    name: Optional[Union[str, os.PathLike, IO]] = None,
     *,
     context: Optional[str] = "shadow",
     data: Optional[str] = "tree",
@@ -75,7 +89,8 @@ def start(
         ```
 
     Args:
-        name (str, optional): The name (with path) of the profiling session.
+        name (Union[str, os.PathLike, IO], optional): The output target of the profiling session.
+                              You may pass either a path-like object or a writable file object (e.g., a Linux pipe via `os.fdopen`).
                               If not provided, the default name is "~/proton.<suffix>", where suffix is the default
                               format according to the data type. For example, if data is "tree", the default name is "~/proton.hatchet".
         context (str, optional): The context to use for profiling.
@@ -96,6 +111,9 @@ def start(
                                                Each mode has a set of control knobs following with the mode name.
                                                For example, "periodic_flushing" mode has a knob:
                                                - format: The output format of the profiling results. Available options are ["hatchet", "hatchet_msgpack", "chrome_trace"]. Default is "hatchet".
+                                               When the output target is a writable file object such as a Linux pipe,
+                                               `periodic_flushing` streams concatenated MessagePack documents and therefore
+                                               requires `format=hatchet_msgpack`.
                                                The can be set via `mode="periodic_flushing:format=chrome_trace"`.
         hook (Union[str, Hook], optional): The hook to use for profiling.
                                            You may pass either:
@@ -111,7 +129,7 @@ def start(
 
     flags.profiling_on = True
 
-    name = DEFAULT_PROFILE_NAME if name is None else name
+    name = _normalize_output_name(name)
     backend = _select_backend() if backend is None else backend
     # Convert mode to its string representation for libproton's runtime
     mode_str = _get_mode_str(backend, mode)
@@ -203,7 +221,7 @@ def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -
 
 def _profiling(
     func,
-    name: Optional[str] = None,
+    name: Optional[Union[str, os.PathLike, IO]] = None,
     context: Optional[str] = "shadow",
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
@@ -233,7 +251,7 @@ def _profiling(
 def profile(
     func=None,
     *,
-    name: Optional[str] = None,
+    name: Optional[Union[str, os.PathLike, IO]] = None,
     context: Optional[str] = "shadow",
     data: Optional[str] = "tree",
     backend: Optional[str] = None,

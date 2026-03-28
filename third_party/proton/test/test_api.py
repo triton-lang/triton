@@ -6,12 +6,29 @@ Profile correctness tests involving GPU kernels should be placed in `test_profil
 
 import pytest
 import json
+import sys
 import triton.profiler as proton
 import pathlib
 from triton.profiler.hooks.hook import HookManager
 from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
 from triton._internal_testing import is_hip
+
+FD_OUTPUT_CASES = [
+    pytest.param("tree", "hatchet", ".hatchet", id="hatchet"),
+    pytest.param("tree", "hatchet_msgpack", ".hatchet_msgpack", id="hatchet_msgpack"),
+]
+
+
+def load_profile_output(path: pathlib.Path, output_format: str):
+    if output_format == "hatchet_msgpack":
+        import msgpack
+
+        with path.open("rb") as f:
+            return msgpack.load(f, raw=False, strict_map_key=False)
+
+    with path.open() as f:
+        return json.load(f)
 
 
 def test_profile_single_session(tmp_path: pathlib.Path):
@@ -59,6 +76,44 @@ def test_profile_multiple_sessions(tmp_path: pathlib.Path):
     proton.finalize()
     assert temp_file2.exists()
     assert temp_file3.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="File-descriptor-backed profile output is supported via /proc/self/fd on Linux")
+@pytest.mark.parametrize("data_name, output_format, suffix", FD_OUTPUT_CASES)
+def test_profile_output_to_file_descriptor(tmp_path: pathlib.Path, data_name: str, output_format: str, suffix: str):
+    temp_file = tmp_path / f"test_profile_fd{suffix}"
+    with temp_file.open("wb") as f:
+        session_id = proton.start(f, data=data_name)
+        proton.enter_scope("fd_scope")
+        proton.exit_scope()
+        proton.finalize(session_id, output_format=output_format)
+
+    data = load_profile_output(temp_file, output_format)
+    assert len(data) > 0
+    assert len(data[0].get("children", [])) == 1
+    assert data[0]["children"][0]["frame"]["name"] == "fd_scope"
+
+
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="File-descriptor-backed periodic flushing is supported via /proc/self/fd on Linux")
+@pytest.mark.parametrize("data_name, output_format, suffix", FD_OUTPUT_CASES)
+def test_profile_periodic_flushing_output_to_file_descriptor(tmp_path: pathlib.Path, data_name: str, output_format: str,
+                                                             suffix: str):
+    temp_file = tmp_path / f"test_profile_periodic_fd{suffix}"
+    with temp_file.open("wb") as f:
+        session_id = proton.start(f, data=data_name, mode=f"periodic_flushing:format={output_format}")
+        with proton.scope("periodic_fd_scope_0"):
+            pass
+        with proton.scope("periodic_fd_scope_1"):
+            pass
+        proton.finalize(session_id, output_format=output_format)
+
+    data = load_profile_output(temp_file, output_format)
+    assert data[0]["frame"]["name"] == "ROOT"
+    child_names = [child["frame"]["name"] for child in data[0].get("children", [])]
+    assert "periodic_fd_scope_0" in child_names
+    assert "periodic_fd_scope_1" in child_names
 
 
 def test_profile_mode(tmp_path: pathlib.Path):
