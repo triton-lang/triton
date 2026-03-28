@@ -336,12 +336,30 @@ public:
   }
 
 private:
+  static bool isZeroSwizzleCompatibleEncoding(Attribute encoding) {
+    if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(encoding))
+      return nvmma.getSwizzlingByteWidth() == 0;
+    return false;
+  }
+
   struct ViewStep {
     enum Kind { Reshape, Transpose } kind;
     SmallVector<int64_t> shape;
     SmallVector<int32_t> order;
     Location loc;
   };
+
+  static SharedEncodingTrait getSourceSharedEncoding(Value baseTensor) {
+    if (auto descLoad = baseTensor.getDefiningOp<DescriptorLoadOp>()) {
+      auto descTy =
+          dyn_cast<triton::TensorDescType>(descLoad.getDesc().getType());
+      if (!descTy)
+        return nullptr;
+      return dyn_cast_or_null<SharedEncodingTrait>(
+          descTy.getBlockType().getEncoding());
+    }
+    return nullptr;
+  }
 
   LogicalResult rewriteOperand(OpOperand &operand,
                                PatternRewriter &rewriter) const {
@@ -363,8 +381,8 @@ private:
       return failure();
 
     auto allocTy = cast<MemDescType>(localAlloc.getType());
-    auto allocEnc = dyn_cast<NVMMASharedEncodingAttr>(allocTy.getEncoding());
-    if (!allocEnc || allocEnc.getSwizzlingByteWidth() != 0)
+    auto allocSharedEnc = dyn_cast<SharedEncodingTrait>(allocTy.getEncoding());
+    if (!allocSharedEnc)
       return failure();
 
     SmallVector<ViewStep> reverseSteps;
@@ -396,11 +414,23 @@ private:
     if (reverseSteps.empty())
       return failure();
 
+    auto sourceSharedEnc = getSourceSharedEncoding(baseTensor);
+    bool sourceIsZeroSwizzleLike =
+        sourceSharedEnc &&
+        isZeroSwizzleCompatibleEncoding(cast<Attribute>(sourceSharedEnc));
+    if (!isZeroSwizzleCompatibleEncoding(allocTy.getEncoding()) &&
+        !sourceIsZeroSwizzleLike)
+      return failure();
+
     auto baseTensorTy = dyn_cast<RankedTensorType>(baseTensor.getType());
     if (!baseTensorTy)
       return failure();
 
-    auto baseEnc = updateEncodingForShape(localAlloc, allocEnc, baseTensorTy);
+    SharedEncodingTrait refSharedEnc = allocSharedEnc;
+    if (sourceIsZeroSwizzleLike && sourceSharedEnc)
+      refSharedEnc = sourceSharedEnc;
+
+    auto baseEnc = updateEncodingForShape(localAlloc, refSharedEnc, baseTensorTy);
     auto baseMemTy =
         MemDescType::get(baseTensorTy.getShape(), baseTensorTy.getElementType(),
                          cast<Attribute>(baseEnc), allocTy.getMemorySpace(),
