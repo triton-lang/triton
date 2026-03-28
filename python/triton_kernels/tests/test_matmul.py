@@ -13,7 +13,7 @@ from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FnS
 from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, quantize_nvfp4_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
@@ -209,6 +209,13 @@ def _build_test_op_cases():
         Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", a_hbm_swizzling=True, b_hbm_swizzling=True, split_k=split_k, swiglu_opts=(1.1, 7))
      for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
     ])
+    # swiglu together with nvfp4 downcast epilogue
+    test_cases.extend([
+        Case(*shape, mode, "bfloat16", "bfloat16", "nvfp4_e2m1", swiglu_opts=(1.1, 7.0))
+        for shape in [even_shape]
+        for mode in ["ragged", "batched"]
+    ])
+    test_cases.append(Case(256, 2048, 1024, "plain", "bfloat16", "bfloat16", "nvfp4_e2m1", swiglu_opts=(1.1, 7.0)))
 
     return test_cases
 
@@ -404,7 +411,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     wrap_list = lambda vals: torch.tensor(vals, dtype=torch.float32, device=device)
     flex_a = InFlexData(c_dtype.torch_dtype, wrap_list([1.25])) if c_dtype.has_global_scale else InFlexData()
     flex_b = InFlexData(b_dtype.torch_dtype, wrap_list([1.25])) if b_dtype.has_global_scale else InFlexData()
-    flex_c = OutFlexData(c_dtype.torch_dtype, wrap_list([4.00]), wrap_list([0]), None) if c_dtype.has_global_scale else OutFlexData()
+    if c_dtype.has_global_scale:
+        flex_c = OutFlexData(c_dtype.torch_dtype, wrap_list([4.00]), wrap_list([0]), None)
+    elif c_dtype.is_nvfp4:
+        flex_c = OutFlexData(c_dtype.torch_dtype, wrap_list([0.125]), None, None)
+    else:
+        flex_c = OutFlexData(c_dtype.torch_dtype, None, None, None)
     precision_opt = PrecisionConfig(
         flex_ctx=FlexCtx(flex_a, flex_b, flex_c),
         acc_scale=2.0 if c_dtype.has_global_scale or b_dtype.has_global_scale else 1.0,
@@ -423,7 +435,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         precision_opt.c_mx_scale = c_scale
         precision_opt.c_microblock_size = c_dtype.microblock_size
         precision_opt.c_value_pack_factor = 2 if c_dtype.is_mxfloat4 else 1
-        epilogue_spec = FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
+        epilogue_spec = (
+            FnSpecs(FnName.QUANTIZE_NVFP4.name, quantize_nvfp4_fn, (), ())
+            if c_dtype.is_nvfp4
+            else FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
+        )
         epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=6.0)
 
 
@@ -439,10 +455,21 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     # --- torch implementation ---
-    ref_y = matmul_torch(a, b, bias,  #
-                        a_ragged_metadata, b_ragged_metadata,
-                        gather_indx, scatter_indx, precision_opt,
-                        gammas=gammas)
+    # Fused NVFP4 output quantizes the float32 activation result and applies
+    # expected_scale inside downcast_to_mxfp_torch, so keep the reference in
+    # float32 until that final downcast instead of letting matmul_torch
+    # return bf16 and apply the output scale early.
+    ref_y = matmul_torch(
+        a.float() if c_dtype.is_nvfp4 else a,
+        b.float() if c_dtype.is_nvfp4 else b,
+        bias,
+        a_ragged_metadata,
+        b_ragged_metadata,
+        gather_indx,
+        scatter_indx,
+        PrecisionConfig() if c_dtype.is_nvfp4 else precision_opt,
+        gammas=gammas,
+    )
     if swiglu_opts is not None:
         ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
     if c_dtype.has_global_scale:
@@ -458,6 +485,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             axis=-1,
             scale_dtype=c_dtype.scale_dtype,
             microblock_size=c_dtype.microblock_size,
+            expected_scale=precision_opt.flex_ctx.out_data.expected_scale,
         )
         ref_y = upcast_from_mxfp_torch(ref_y, ref_scale, target_dtype=ref_target_dtype, axis=-1)
     maxtol, rmstol = None, None

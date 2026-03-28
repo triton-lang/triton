@@ -137,14 +137,16 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
     valid_y_s1 = offs_y_s1 < Y_S1
     valid_y_smx1 = offs_y_smx1 < tl.cdiv(Y_S1, 1 if Y_MX_BLOCK_SIZE is None else Y_MX_BLOCK_SIZE)
     is_out_fp4: tl.constexpr = YMx is not None and Y_VALUE_PACK_FACTOR == 2
-    y = float_to_flex(y, YFlexExpected, YFlexActual, YFlexChecksum, None, Y, Y_FLEX_SATURATE_INF)
-    # TODO (phil): keeping for backward compatibility, but will remove !
-    if YMx is None and POSTPROCESS_FN2 is not None:
-        y = POSTPROCESS_FN2(y, *postprocess_fn2_args, target_dtype=Y.dtype.element_ty)
     if YMx is not None:
+        y = float_to_flex(y, YFlexExpected, None, None, None, Y, False)
         y, y_scale = POSTPROCESS_MX_FN(y, valid_y_s1[None, :], *postprocess_mx_fn_args)
         y_mx_ptrs = YMx + offs_s0[:, None] * stride_ymx0 + offs_y_smx1[None, :] * stride_ymx1
         tl.store(y_mx_ptrs, y_scale, mask=valid_s0[:, None] & valid_y_smx1[None, :])
+    else:
+        y = float_to_flex(y, YFlexExpected, YFlexActual, YFlexChecksum, None, Y, Y_FLEX_SATURATE_INF)
+        # TODO (phil): keeping for backward compatibility, but will remove !
+        if POSTPROCESS_FN2 is not None:
+            y = POSTPROCESS_FN2(y, *postprocess_fn2_args, target_dtype=Y.dtype.element_ty)
     if is_out_fp4:
         offs_y_s1 = pid_s1 * (BLOCK_Y_S1 // 2) + tl.arange(0, BLOCK_Y_S1 // 2)
         valid_y_s1 = offs_y_s1 < tl.cdiv(Y_S1, 2)
@@ -271,12 +273,16 @@ def reduce_forward(
     if y_has_mx:
         if y_dtype == torch.float8_e4m3fn:
             postprocess_mx_fn = FnSpecs("quantize_mxfp8", quantize_mxfp8_fn, tuple(), tuple())
+            postprocess_mx_fn_args = tuple()
         elif y_mx_scale_dtype == torch.float8_e4m3fn:
             postprocess_mx_fn = FnSpecs("quantize_nvfp4", quantize_nvfp4_fn, tuple(), tuple())
+            postprocess_mx_fn_args = tuple()
         else:
             postprocess_mx_fn = FnSpecs("quantize_mxfp4", quantize_mxfp4_fn, tuple(), tuple())
+            postprocess_mx_fn_args = tuple()
     else:
         postprocess_mx_fn = FnSpecs.default()
+        postprocess_mx_fn_args = tuple()
     reduce_kernel = forward_specializations.get(postprocess_fn1=postprocess_fn1.specs,
                                                 postprocess_fn2=postprocess_fn2.specs,
                                                 postprocess_mx_fn=postprocess_mx_fn)._reduce_forward
@@ -289,7 +295,7 @@ def reduce_forward(
         scale, stride_sr, stride_s0, stride_s1,  #
         unpadded_batch_size,  #
         K, S0, X_S1, Y_S1,  #
-        *postprocess_fn1.fn_args, *postprocess_fn2.fn_args,  #
+        *postprocess_fn1.fn_args, *postprocess_fn2.fn_args, *postprocess_mx_fn_args,  #
         x_flex.scale, x_global_scale, y_flex.expected_scale, y_flex.actual_scale, y_flex.checksum_scale,  #
         y_flex_saturate_inf,  #
         IS_MASK_NONE=(mask is None),  #
@@ -593,7 +599,7 @@ class _ReduceAutograd(torch.autograd.Function):
             dx=dx,
             unpadded_batch_size=ctx.unpadded_batch_size,
         )
-        return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
+        return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
 
 def reduce(
