@@ -28,7 +28,6 @@ namespace mlir {
 // Lower to use GetCanonicalWarpIdOp.
 // In Hopper, each task is a warpgroup consisting of 4 warps.
 static const int WARPS_PER_TASK = 4;
-static const int THREADS_PER_TASK = 128;
 
 Value getMBarrierPhaseBit(OpBuilder &builder, Operation *op,
                           bool emptyBarrier) {
@@ -60,15 +59,14 @@ void processProducerAcquireOp(OpBuilder &builder, ttnvws::ProducerAcquireOp op,
 }
 
 void processProducerCommitOp(OpBuilder &builder, ttnvws::ProducerCommitOp op,
-                             Value bufferFull, ttnvws::TokenLoadType loadType,
-                             unsigned fullCnt) {
+                             Value bufferFull, ttnvws::TokenLoadType loadType) {
   auto loc = op.getLoc();
   ttng::ArriveBarrierOp arriveOp;
 
   if (loadType == ttnvws::TokenLoadType::TMALoadOp) {
     // Get the count from the barriers: trace the local_alloc for the barrier
     // then find the count from init_barrier
-    arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferFull, fullCnt);
+    arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferFull, 1);
   } else {
     llvm::report_fatal_error("unsupported load type for producer commit");
   }
@@ -89,11 +87,9 @@ void processConsumerWaitOp(OpBuilder &builder, ttnvws::ConsumerWaitOp op,
 }
 
 void processConsumerReleaseOp(OpBuilder &builder, ttnvws::ConsumerReleaseOp op,
-                              Value bufferEmpty, int numCTAs,
-                              unsigned emptyCnt) {
+                              Value bufferEmpty, int numCTAs) {
   auto loc = op.getLoc();
-  auto arriveOp =
-      ttng::ArriveBarrierOp::create(builder, loc, bufferEmpty, emptyCnt);
+  auto arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferEmpty, 1);
   assert(op.getOperation()->hasAttr("async_task_id"));
   setAsyncTaskIds(arriveOp, getAsyncTaskIds(op.getOperation()));
 }
@@ -135,22 +131,17 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
     tokenToFull[createTokenOp.getOperation()] = bufferFullArray;
     tokenToEmpty[createTokenOp.getOperation()] = bufferEmptyArray;
 
-    unsigned bufferFullCount =
-        loadType == ttnvws::TokenLoadType::TMALoadOp ? 1 : THREADS_PER_TASK;
-    unsigned bufferEmptyCount = THREADS_PER_TASK;
     for (unsigned i = 0; i < createTokenOp.getNumBuffers(); i++) {
       Value idx = arith::ConstantIntOp::create(builder, loc, i, 32);
       Value barrierFullView = ttg::MemDescIndexOp::create(
           builder, loc, singleBarrierMemDescType, bufferFullArray, idx);
       // EmptyView is used for ConsumerRelease and ProducerAcquire.
       // FullView is for ConsumerWait and ProducerCommit.
-      ttng::InitBarrierOp::create(builder, loc, barrierFullView,
-                                  bufferFullCount);
+      ttng::InitBarrierOp::create(builder, loc, barrierFullView, 1);
 
       Value barrierEmptyView = ttg::MemDescIndexOp::create(
           builder, loc, singleBarrierMemDescType, bufferEmptyArray, idx);
-      ttng::InitBarrierOp::create(builder, loc, barrierEmptyView,
-                                  bufferEmptyCount);
+      ttng::InitBarrierOp::create(builder, loc, barrierEmptyView, 1);
     }
 
     assert(numCTAs == 1 && "remote CTA is not supported yet");
@@ -184,8 +175,7 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
         Value bufferFull = extractBufferFull(loc, op.getIdx());
         assert(user->hasAttr("async_task_id"));
         setAsyncTaskIds(bufferFull.getDefiningOp(), getAsyncTaskIds(user));
-        processProducerCommitOp(builder, op, bufferFull, loadType,
-                                bufferFullCount);
+        processProducerCommitOp(builder, op, bufferFull, loadType);
         deprecatedOps.push_back(user);
         return true;
       } else if (auto op = dyn_cast<ttnvws::ConsumerWaitOp>(user)) {
@@ -199,8 +189,7 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
         Value bufferEmpty = extractBufferEmpty(loc, op.getIdx());
         assert(user->hasAttr("async_task_id"));
         setAsyncTaskIds(bufferEmpty.getDefiningOp(), getAsyncTaskIds(user));
-        processConsumerReleaseOp(builder, op, bufferEmpty, numCTAs,
-                                 bufferEmptyCount);
+        processConsumerReleaseOp(builder, op, bufferEmpty, numCTAs);
         deprecatedOps.push_back(user);
         return true;
       }
