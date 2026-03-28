@@ -1559,6 +1559,8 @@ class BlockScaledAttentionProgram:
         ttgl.static_assert(SEQLEN_K % SPLIT_K == 0)
 
         if SEQLEN_Q == SEQLEN_K:
+            off_hk = off_h // GROUP_SZ
+
             q_off = SEQLEN_Q * HEAD_SZ * (NUM_Q_HEADS * off_z + off_h) + \
                     BLOCK_M * HEAD_SZ * off_m
             q_blk = MemoryBlock.initialize(  #
@@ -1576,6 +1578,8 @@ class BlockScaledAttentionProgram:
                 layout=cfg.q_scale_layout)
 
         else:
+            off_hk = off_h
+
             q_off = GROUP_SZ * HEAD_SZ * (NUM_GROUPS * off_z + off_h) + \
                     BLOCK_M * HEAD_SZ * off_m
             q_scale_off = GROUP_SZ * (HEAD_SZ // 32) * (NUM_GROUPS * off_z + off_h) + \
@@ -1604,11 +1608,11 @@ class BlockScaledAttentionProgram:
                     block_shape=[1, BLOCK_M, HEAD_SZ // 32],  #
                     layout=cfg.q_scale_layout)
 
-        k_off = [kv_mem.k_shape[2] * (kv_mem.k_shape[1] * off_z + off_h), 0]
-        v_off = [kv_mem.v_shape[2] * (kv_mem.v_shape[1] * off_z + off_h), 0]
+        k_off = [kv_mem.k_shape[2] * (kv_mem.k_shape[1] * off_z + off_hk), 0]
+        v_off = [kv_mem.v_shape[2] * (kv_mem.v_shape[1] * off_z + off_hk), 0]
 
-        k_scale_off = [kv_scale_mem.k_shape[2] * (kv_scale_mem.k_shape[1] * off_z + off_h), 0]
-        v_scale_off = [kv_scale_mem.v_shape[2] * (kv_scale_mem.v_shape[1] * off_z + off_h), 0]
+        k_scale_off = [kv_scale_mem.k_shape[2] * (kv_scale_mem.k_shape[1] * off_z + off_hk), 0]
+        v_scale_off = [kv_scale_mem.v_shape[2] * (kv_scale_mem.v_shape[1] * off_z + off_hk), 0]
 
         return BlockScaledAttentionProgram(  #
             cfg,  #
@@ -2663,8 +2667,6 @@ def attn_fwd(  #
 
     if seqlen_q == seqlen_k:
         assert split_k == 1
-        group_sz = num_q_heads // num_k_heads
-        assert group_sz == 1
         # q: [BATCH, NUM_Q_HEADS, SEQLEN_Q, HEAD_SZ]
         # k: [BATCH, NUM_K_HEADS, SEQLEN_K, HEAD_SZ]
         # v: [BATCH, NUM_K_HEADS, SEQLEN_K, HEAD_SZ]
@@ -2900,6 +2902,8 @@ def get_fwd_test_cases(block_scaling: bool):
              for batch in [1]
              for seqlen_q, seqlen_k, num_q_heads, num_k_heads in [
                  (1024, 1024, 1, 1),
+                 (1024, 1024, 4, 1),
+                 (1024, 1024, 4, 2),
                  (1, 1024, 1, 1),
                  (1, 8192, 64, 1),
                  (1, 8192, 64, 2),
@@ -2922,7 +2926,7 @@ def get_fwd_test_cases(block_scaling: bool):
     for test in tests:
         seqlen_q, seqlen_k, num_q_heads, num_k_heads = test[3:7]
         if seqlen_q == seqlen_k:
-            # MHA Prefill
+            # MHA/GQA Prefill
             param.append((*test, *configs["4warp_128x128_loop"]))
             param.append((*test, *configs["4warp_128x128_pipeline"]))
             param.append((*test, *configs["4warp_256x128_pipeline"]))
