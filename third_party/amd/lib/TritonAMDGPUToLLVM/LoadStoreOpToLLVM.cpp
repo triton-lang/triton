@@ -1673,7 +1673,8 @@ struct BufferAtomicRMWOpConversion
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride,
+                                                            /*isAtomic=*/true);
     SmallVector<Value> loadedVals;
 
     // We need to manually emit memory fences (LLVM doesn't do this for buffer
@@ -1792,7 +1793,8 @@ struct BufferAtomicCASOpConversion
     SmallVector<Value> valElems = unpackLLElements(loc, llVal, rewriter);
     SmallVector<Value> cmpElems = unpackLLElements(loc, llCmp, rewriter);
 
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride,
+                                                            /*isAtomic=*/true);
     SmallVector<Value> loadedVals;
 
     // We need to manually emit memory fences (LLVM doesn't do this for buffer
