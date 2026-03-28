@@ -897,6 +897,115 @@ def test_trace(tmp_path: pathlib.Path, device: str):
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
 
 
+def test_trace_flexible_metrics_between_kernels(tmp_path: pathlib.Path, device: str):
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.ones((1024, ), device=device, dtype=torch.float32)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_trace_flexible_metrics_between_kernels.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), data="trace")
+
+    with proton.scope("kernel_0"):
+        foo[(1, )](x, y, x.size()[0], num_warps=4)
+
+    with proton.scope("metric_scope", metrics={"foo": 3.0, "bar": [1, 2, 3]}):
+        pass
+
+    with proton.scope("kernel_1"):
+        foo[(1, )](x, y, x.size()[0], num_warps=4)
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    trace_events = data["traceEvents"]
+    kernel_events = [event for event in trace_events if event["name"] == "foo"]
+    metric_events = [event for event in trace_events if event["name"] == "<metric>"]
+
+    assert len(kernel_events) == 2
+    assert len(metric_events) == 1
+
+    metric_event = metric_events[0]
+    assert metric_event["cat"] == "metric"
+    assert metric_event["tid"] == "metrics"
+    assert metric_event["dur"] == 1.0
+    assert metric_event["args"]["call_stack"] == ["ROOT", "metric_scope"]
+    assert metric_event["args"]["metrics"]["foo"] == "3.000000"
+    assert metric_event["args"]["metrics"]["bar"] == "[1,2,3]"
+    assert kernel_events[0]["ts"] < metric_event["ts"] < kernel_events[1]["ts"]
+
+
+def test_trace_flexible_metrics_leading_trailing(tmp_path: pathlib.Path, device: str):
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.ones((1024, ), device=device, dtype=torch.float32)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_trace_flexible_metrics_leading_trailing.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), data="trace")
+
+    with proton.scope("metric_lead", metrics={"lead": 1.0}):
+        pass
+
+    with proton.scope("kernel_mid"):
+        foo[(1, )](x, y, x.size()[0], num_warps=4)
+
+    with proton.scope("metric_tail", metrics={"tail": 2.0}):
+        pass
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    trace_events = data["traceEvents"]
+    kernel_index = next(i for i, event in enumerate(trace_events) if event["name"] == "foo")
+    lead_index = next(
+        i for i, event in enumerate(trace_events)
+        if event["name"] == "<metric>" and "lead" in event["args"]["metrics"]
+    )
+    tail_index = next(
+        i for i, event in enumerate(trace_events)
+        if event["name"] == "<metric>" and "tail" in event["args"]["metrics"]
+    )
+
+    lead_event = trace_events[lead_index]
+    kernel_event = trace_events[kernel_index]
+    tail_event = trace_events[tail_index]
+
+    assert lead_index < kernel_index < tail_index
+    assert lead_event["tid"] == "metrics"
+    assert tail_event["tid"] == "metrics"
+    assert lead_event["dur"] == 1.0
+    assert tail_event["dur"] == 1.0
+    assert lead_event["ts"] >= 0.0
+    assert lead_event["ts"] <= kernel_event["ts"]
+    assert tail_event["ts"] >= kernel_event["ts"]
+
+
+def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_trace_flexible_metrics_no_kernel_anchor.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), data="trace")
+
+    with proton.scope("metric_only", metrics={"foo": 1.0}):
+        pass
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    assert data["traceEvents"] == []
+
+
 @pytest.mark.parametrize("profile_kind,suffix", [("tree", ".hatchet"), ("trace", ".chrome_trace")],
                          ids=["tree", "trace"])
 def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, device: str):
