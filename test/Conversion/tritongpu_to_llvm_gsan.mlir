@@ -17,6 +17,13 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     tt.store %ptrs, %vals, %mask : tensor<256x!tt.ptr<f32>, #blocked>
     tt.return
   }
+
+  // CHECK-LABEL: llvm.func @unmasked_store
+  // CHECK: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, !llvm.ptr, i32) -> ()
+  tt.func @unmasked_store(%ptrs: tensor<128x!tt.ptr<i32>, #blocked>, %vals: tensor<128xi32, #blocked>) {
+    tt.store %ptrs, %vals : tensor<128x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
 }
 
 // -----

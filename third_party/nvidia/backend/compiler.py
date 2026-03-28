@@ -360,6 +360,7 @@ class CUDABackend(BaseBackend):
         pm.enable_debug()
 
         if "gsan" in options.instrumentation_mode:
+            # GSan introduces layout conversions, so must come before shared memory allocation
             passes.ttgpuir.add_global_sanitizer(pm)
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
