@@ -162,6 +162,16 @@ protected:
   virtual void doDump(std::ostream &os, OutputFormat outputFormat,
                       size_t phase) const = 0;
   virtual OutputFormat getDefaultOutputFormat() const = 0;
+  virtual size_t getCurrentOpParentEntryId() const { return kRootEntryId; }
+  virtual std::vector<Context>
+  getCurrentOpContexts(const std::string &opName) const {
+    std::vector<Context> contexts;
+    if (contextSource != nullptr)
+      contexts = contextSource->getContexts();
+    if (!opName.empty())
+      contexts.emplace_back(opName);
+    return contexts;
+  }
 
   void initPhaseStore(PhaseStoreBase &store);
 

@@ -35,6 +35,9 @@ private:
   // Data
   void doDump(std::ostream &os, OutputFormat outputFormat,
               size_t phase) const override;
+  size_t getCurrentOpParentEntryId() const override;
+  std::vector<Context>
+  getCurrentOpContexts(const std::string &opName) const override;
 
   OutputFormat getDefaultOutputFormat() const override {
     return OutputFormat::ChromeTrace;

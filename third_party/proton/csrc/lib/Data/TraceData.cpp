@@ -216,6 +216,31 @@ void TraceData::addMetrics(
   }
 }
 
+size_t TraceData::getCurrentOpParentEntryId() const {
+  auto activeEventStackIt = traceDataToActiveEventStack.find(this);
+  if (activeEventStackIt == traceDataToActiveEventStack.end() ||
+      activeEventStackIt->second.empty()) {
+    return Data::kRootEntryId;
+  }
+  return activeEventStackIt->second.back();
+}
+
+std::vector<Context>
+TraceData::getCurrentOpContexts(const std::string &opName) const {
+  if (getCurrentOpParentEntryId() == Data::kRootEntryId) {
+    std::vector<Context> contexts;
+    if (contextSource != nullptr)
+      contexts = contextSource->getContexts();
+    if (!opName.empty())
+      contexts.emplace_back(opName);
+    return contexts;
+  }
+  if (opName.empty()) {
+    return {};
+  }
+  return {Context(opName)};
+}
+
 std::string TraceData::toJsonString(size_t phase) const {
   std::ostringstream os;
   dumpChromeTrace(os, phase);

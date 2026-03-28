@@ -80,11 +80,9 @@ void Data::initPhaseStore(PhaseStoreBase &store) {
 }
 
 DataEntry Data::addOp(const std::string &opName) {
-  std::vector<Context> contexts = contextSource->getContexts();
-  if (!opName.empty())
-    contexts.emplace_back(opName);
   const auto phase = currentPhase.load(std::memory_order_relaxed);
-  return addOp(phase, kRootEntryId, contexts);
+  return addOp(phase, getCurrentOpParentEntryId(),
+               getCurrentOpContexts(opName));
 }
 
 size_t Data::advancePhase() {
