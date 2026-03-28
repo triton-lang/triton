@@ -389,7 +389,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
   // CHECK-DAG: %[[B_RS:.*]] = ttg.memdesc_reshape %[[B_BASE]] : !ttg.memdesc<1x64x64xf16, #{{.*}}, #smem> -> !ttg.memdesc<64x64xf16, #{{.*}}, #smem>
   // CHECK-NOT: tt.reshape
   // CHECK-NOT: tt.trans
-  // CHECK: ttng.warp_group_dot %[[A_TR]], %[[B_RS]], %arg2
+  // CHECK: %[[DOT:.*]] = ttng.warp_group_dot %[[A_TR]], %[[B_RS]], %arg2
+  // CHECK: %[[WAIT:.*]]:3 = ttng.warp_group_dot_wait %[[DOT]], %[[A_TR]], %[[B_RS]] {pendings = 0 : i32}
   tt.func @swizzle0_operand_views_warp_group_dot(
       %a_desc: !tt.tensordesc<tensor<1x64x64xf16>>,
       %b_desc: !tt.tensordesc<tensor<1x64x64xf16>>,
@@ -403,7 +404,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %a_s = ttg.local_alloc %aT : (tensor<64x64xf16, #blockedA2_h>) -> !ttg.memdesc<64x64xf16, #shared0_h2, #smem>
     %b_s = ttg.local_alloc %b2d : (tensor<64x64xf16, #blockedB2_h>) -> !ttg.memdesc<64x64xf16, #shared0_h2, #smem>
     %r = ttng.warp_group_dot %a_s, %b_s, %acc : !ttg.memdesc<64x64xf16, #shared0_h2, #smem> * !ttg.memdesc<64x64xf16, #shared0_h2, #smem> -> tensor<64x64xf32, #mma_h2>
-    tt.return %r : tensor<64x64xf32, #mma_h2>
+    %w:3 = ttng.warp_group_dot_wait %r, %a_s, %b_s {pendings = 0 : i32} : tensor<64x64xf32, #mma_h2>, !ttg.memdesc<64x64xf16, #shared0_h2, #smem>, !ttg.memdesc<64x64xf16, #shared0_h2, #smem>
+    tt.return %w#0 : tensor<64x64xf32, #mma_h2>
   }
 }
 

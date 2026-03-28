@@ -14,7 +14,9 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include <algorithm>
 #include <memory>
+#include <type_traits>
 
 namespace mlir::triton::gpu {
 
@@ -327,11 +329,45 @@ public:
 
   LogicalResult matchAndRewrite(DotOpTy dotOp,
                                 PatternRewriter &rewriter) const override {
+    Value oldA = dotOp.getA();
+    Value oldB = dotOp.getB();
     bool changed = false;
     if (succeeded(rewriteOperand(dotOp.getAMutable(), rewriter)))
       changed = true;
     if (succeeded(rewriteOperand(dotOp.getBMutable(), rewriter)))
       changed = true;
+
+    // Keep warp_group_dot_wait operands consistent with rewritten dot operands.
+    // The wait op is variadic and can carry [dot_result, A, B], so after
+    // changing dotOp's A/B we need to retarget corresponding wait operands.
+    if constexpr (std::is_same_v<DotOpTy, triton::nvidia_gpu::WarpGroupDotOp>) {
+      if (changed) {
+        Value newA = dotOp.getA();
+        Value newB = dotOp.getB();
+        for (Operation *user : dotOp.getResult().getUsers()) {
+          auto waitOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotWaitOp>(user);
+          if (!waitOp)
+            continue;
+          bool waitChanged = false;
+          for (OpOperand &operand : waitOp->getOpOperands()) {
+            if (operand.get() == oldA) {
+              operand.assign(newA);
+              waitChanged = true;
+            } else if (operand.get() == oldB) {
+              operand.assign(newB);
+              waitChanged = true;
+            }
+          }
+          if (!waitChanged)
+            continue;
+          rewriter.modifyOpInPlace(waitOp, [&]() {
+            unsigned n = std::min(waitOp->getNumOperands(), waitOp->getNumResults());
+            for (unsigned i = 0; i < n; ++i)
+              waitOp->getResult(i).setType(waitOp->getOperand(i).getType());
+          });
+        }
+      }
+    }
     return changed ? success() : failure();
   }
 
