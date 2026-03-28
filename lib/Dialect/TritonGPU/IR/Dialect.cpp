@@ -2898,18 +2898,64 @@ struct TritonGPUInferLayoutInterface
   }
 
   LogicalResult
-  inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
-                            Attribute &resultEncoding,
-                            std::optional<Location> location) const override {
-    auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(operandEncoding);
-    if (!sliceEncoding)
-      return emitOptionalError(
-          location, "ExpandDimsOp operand encoding must be SliceEncodingAttr");
-    if (sliceEncoding.getDim() != axis)
+  inferExpandDimsSliceEncoding(SliceEncodingAttr sliceEncoding, unsigned axis,
+                               Attribute &resultEncoding,
+                               std::optional<Location> location) const {
+    if (sliceEncoding.getDim() != axis) {
       return emitOptionalError(
           location, "Incompatible slice dimension for ExpandDimsOp operand");
+    }
     resultEncoding = sliceEncoding.getParent();
     return success();
+  }
+
+  LogicalResult
+  inferExpandDimsLinearEncoding(LinearEncodingAttr linearEncoding,
+                                unsigned axis, Attribute &resultEncoding,
+                                std::optional<Location> location) const {
+    auto *ctx = getContext();
+    auto ll = linearEncoding.getLinearLayout();
+    unsigned rank = ll.getNumOutDims();
+    if (axis > rank)
+      return emitOptionalError(location, "ExpandDimsOp axis is out of range");
+
+    LinearLayout::BasesT bases = ll.getBases();
+    for (auto &[inDim, inDimBases] : bases)
+      for (auto &basis : inDimBases)
+        basis.insert(basis.begin() + axis, 0);
+
+    SmallVector<std::pair<StringAttr, int32_t>> outDims;
+    outDims.reserve(rank + 1);
+    auto dimNames = standardOutDimNames(ctx, rank + 1);
+    auto srcSizes = llvm::to_vector(ll.getOutDimSizes());
+    unsigned srcDim = 0;
+    for (unsigned dim = 0; dim < rank + 1; ++dim) {
+      int32_t size = (dim == axis) ? 1 : srcSizes[srcDim++];
+      outDims.push_back({dimNames[dim], size});
+    }
+
+    auto expandedLL =
+        LinearLayout(std::move(bases), outDims, ll.isSurjective());
+    resultEncoding = LinearEncodingAttr::get(ctx, std::move(expandedLL));
+    return success();
+  }
+
+  LogicalResult
+  inferExpandDimsOpEncoding(ArrayRef<int64_t> srcShape,
+                            Attribute operandEncoding, unsigned axis,
+                            Attribute &resultEncoding,
+                            std::optional<Location> location) const override {
+    if (axis > srcShape.size())
+      return emitOptionalError(location, "ExpandDimsOp axis is out of range");
+
+    if (auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(operandEncoding))
+      return inferExpandDimsSliceEncoding(sliceEncoding, axis, resultEncoding,
+                                          location);
+    auto *ctx = operandEncoding.getContext();
+    auto srcLinearEncoding =
+        LinearEncodingAttr::get(ctx, toLinearLayout(srcShape, operandEncoding));
+    return inferExpandDimsLinearEncoding(srcLinearEncoding, axis,
+                                         resultEncoding, location);
   }
 
   LogicalResult

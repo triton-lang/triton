@@ -413,16 +413,18 @@ def TT_UnsplatOp : TT_Op<"unsplat", [Pure,
 }
 
 def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
-                                            DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                             SameOperandsAndResultElementType]> {
     let summary = "expand_dims";
 
     let arguments = (ins TT_Tensor:$src, I32Attr:$axis);
 
     let results = (outs TT_Tensor:$result);
-
+    let builders = [
+      OpBuilder<(ins "Value":$src, "int":$axis)>
+    ];
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
+    let hasVerifier = 1;
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
 }
