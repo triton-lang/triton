@@ -368,12 +368,29 @@ private:
     if (!origTy)
       return failure();
 
-    SmallVector<int32_t> trailingMemDescTransOrder;
+    SmallVector<ViewStep> trailingMemDescSteps;
     Value beforeTrailing = orig;
-    if (auto trailing = beforeTrailing.getDefiningOp<MemDescTransOp>()) {
-      trailingMemDescTransOrder.assign(trailing.getOrder().begin(),
-                                       trailing.getOrder().end());
-      beforeTrailing = trailing.getSrc();
+    while (true) {
+      if (auto trailingTrans = beforeTrailing.getDefiningOp<MemDescTransOp>()) {
+        SmallVector<int32_t> order(trailingTrans.getOrder().begin(),
+                                   trailingTrans.getOrder().end());
+        trailingMemDescSteps.push_back(
+            ViewStep{ViewStep::Transpose, {}, std::move(order),
+                     trailingTrans.getLoc()});
+        beforeTrailing = trailingTrans.getSrc();
+        continue;
+      }
+      if (auto trailingReshape =
+              beforeTrailing.getDefiningOp<MemDescReshapeOp>()) {
+        auto ty = cast<MemDescType>(trailingReshape.getType());
+        SmallVector<int64_t> shape(ty.getShape().begin(), ty.getShape().end());
+        trailingMemDescSteps.push_back(
+            ViewStep{ViewStep::Reshape, std::move(shape), {},
+                     trailingReshape.getLoc()});
+        beforeTrailing = trailingReshape.getSrc();
+        continue;
+      }
+      break;
     }
 
     auto localAlloc = beforeTrailing.getDefiningOp<LocalAllocOp>();
@@ -452,9 +469,14 @@ private:
       }
     }
 
-    if (!trailingMemDescTransOrder.empty()) {
-      rewritten = MemDescTransOp::create(rewriter, localAlloc.getLoc(),
-                                         rewritten, trailingMemDescTransOrder);
+    for (ViewStep &step : llvm::reverse(trailingMemDescSteps)) {
+      if (step.kind == ViewStep::Reshape) {
+        rewritten =
+            MemDescReshapeOp::create(rewriter, step.loc, rewritten, step.shape);
+      } else {
+        rewritten =
+            MemDescTransOp::create(rewriter, step.loc, rewritten, step.order);
+      }
     }
 
     auto rewrittenTy = cast<MemDescType>(rewritten.getType());
