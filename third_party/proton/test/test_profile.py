@@ -897,7 +897,7 @@ def test_trace(tmp_path: pathlib.Path, device: str):
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
 
 
-def test_trace_flexible_metrics_between_kernels(tmp_path: pathlib.Path, device: str):
+def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str):
 
     @triton.jit
     def foo(x, y, size: tl.constexpr):
@@ -906,17 +906,20 @@ def test_trace_flexible_metrics_between_kernels(tmp_path: pathlib.Path, device: 
 
     x = torch.ones((1024, ), device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
-    temp_file = tmp_path / "test_trace_flexible_metrics_between_kernels.chrome_trace"
+    temp_file = tmp_path / "test_trace_flexible_metrics_scope_ranges.chrome_trace"
     proton.start(str(temp_file.with_suffix("")), data="trace")
 
-    with proton.scope("kernel_0"):
-        foo[(1, )](x, y, x.size()[0], num_warps=4)
-
-    with proton.scope("metric_scope", metrics={"foo": 3.0, "bar": [1, 2, 3]}):
-        pass
-
-    with proton.scope("kernel_1"):
-        foo[(1, )](x, y, x.size()[0], num_warps=4)
+    with proton.scope("scope_3", metrics={"m3": 3.0}):
+        with proton.scope("scope_2", metrics={"m2": 2.0}):
+            with proton.scope("scope_1", metrics={"m1": 1.0}):
+                foo[(1, )](x, y, x.size()[0], num_warps=4)
+            with proton.scope("scope_4"):
+                foo[(1, )](x, y, x.size()[0], num_warps=4)
+            with proton.scope("scope_5"):
+                foo[(1, )](x, y, x.size()[0], num_warps=4)
+        with proton.scope("scope_6"):
+            with proton.scope("scope_7"):
+                foo[(1, )](x, y, x.size()[0], num_warps=4)
 
     proton.finalize()
 
@@ -927,68 +930,44 @@ def test_trace_flexible_metrics_between_kernels(tmp_path: pathlib.Path, device: 
     kernel_events = [event for event in trace_events if event["name"] == "foo"]
     metric_events = [event for event in trace_events if event["name"] == "<metric>"]
 
-    assert len(kernel_events) == 2
-    assert len(metric_events) == 1
+    assert len(kernel_events) == 4
+    assert len(metric_events) == 3
 
-    metric_event = metric_events[0]
-    assert metric_event["cat"] == "metric"
-    assert metric_event["tid"] == "metrics"
-    assert metric_event["dur"] == 1.0
-    assert metric_event["args"]["call_stack"] == ["ROOT", "metric_scope"]
-    assert metric_event["args"]["metrics"]["foo"] == "3.000000"
-    assert metric_event["args"]["metrics"]["bar"] == "[1,2,3]"
-    assert kernel_events[0]["ts"] < metric_event["ts"] < kernel_events[1]["ts"]
+    def get_kernel_event(*scope_names: str):
+        expected_stack = ["ROOT", *scope_names, "foo"]
+        return next(event for event in kernel_events if event["args"]["call_stack"] == expected_stack)
 
+    def get_metric_event(metric_name: str):
+        return next(event for event in metric_events if metric_name in event["args"]["metrics"])
 
-def test_trace_flexible_metrics_leading_trailing(tmp_path: pathlib.Path, device: str):
+    kernel_1 = get_kernel_event("scope_3", "scope_2", "scope_1")
+    kernel_2 = get_kernel_event("scope_3", "scope_2", "scope_4")
+    kernel_3 = get_kernel_event("scope_3", "scope_2", "scope_5")
+    kernel_4 = get_kernel_event("scope_3", "scope_6", "scope_7")
 
-    @triton.jit
-    def foo(x, y, size: tl.constexpr):
-        offs = tl.arange(0, size)
-        tl.store(y + offs, tl.load(x + offs))
+    metric_1 = get_metric_event("m1")
+    metric_2 = get_metric_event("m2")
+    metric_3 = get_metric_event("m3")
 
-    x = torch.ones((1024, ), device=device, dtype=torch.float32)
-    y = torch.zeros_like(x)
-    temp_file = tmp_path / "test_trace_flexible_metrics_leading_trailing.chrome_trace"
-    proton.start(str(temp_file.with_suffix("")), data="trace")
+    assert metric_1["cat"] == "metric"
+    assert metric_2["cat"] == "metric"
+    assert metric_3["cat"] == "metric"
+    assert metric_1["tid"] == "metrics 2"
+    assert metric_2["tid"] == "metrics 1"
+    assert metric_3["tid"] == "metrics 0"
+    assert metric_1["args"]["call_stack"] == ["ROOT", "scope_3", "scope_2", "scope_1"]
+    assert metric_2["args"]["call_stack"] == ["ROOT", "scope_3", "scope_2"]
+    assert metric_3["args"]["call_stack"] == ["ROOT", "scope_3"]
+    assert metric_1["args"]["metrics"]["m1"] == "1.000000"
+    assert metric_2["args"]["metrics"]["m2"] == "2.000000"
+    assert metric_3["args"]["metrics"]["m3"] == "3.000000"
 
-    with proton.scope("metric_lead", metrics={"lead": 1.0}):
-        pass
-
-    with proton.scope("kernel_mid"):
-        foo[(1, )](x, y, x.size()[0], num_warps=4)
-
-    with proton.scope("metric_tail", metrics={"tail": 2.0}):
-        pass
-
-    proton.finalize()
-
-    with temp_file.open() as f:
-        data = json.load(f)
-
-    trace_events = data["traceEvents"]
-    kernel_index = next(i for i, event in enumerate(trace_events) if event["name"] == "foo")
-    lead_index = next(
-        i for i, event in enumerate(trace_events)
-        if event["name"] == "<metric>" and "lead" in event["args"]["metrics"]
-    )
-    tail_index = next(
-        i for i, event in enumerate(trace_events)
-        if event["name"] == "<metric>" and "tail" in event["args"]["metrics"]
-    )
-
-    lead_event = trace_events[lead_index]
-    kernel_event = trace_events[kernel_index]
-    tail_event = trace_events[tail_index]
-
-    assert lead_index < kernel_index < tail_index
-    assert lead_event["tid"] == "metrics"
-    assert tail_event["tid"] == "metrics"
-    assert lead_event["dur"] == 1.0
-    assert tail_event["dur"] == 1.0
-    assert lead_event["ts"] >= 0.0
-    assert lead_event["ts"] <= kernel_event["ts"]
-    assert tail_event["ts"] >= kernel_event["ts"]
+    assert metric_1["ts"] == pytest.approx(kernel_1["ts"])
+    assert metric_1["ts"] + metric_1["dur"] == pytest.approx(kernel_1["ts"] + kernel_1["dur"])
+    assert metric_2["ts"] == pytest.approx(kernel_1["ts"])
+    assert metric_2["ts"] + metric_2["dur"] == pytest.approx(kernel_3["ts"] + kernel_3["dur"])
+    assert metric_3["ts"] == pytest.approx(kernel_1["ts"])
+    assert metric_3["ts"] + metric_3["dur"] == pytest.approx(kernel_4["ts"] + kernel_4["dur"])
 
 
 def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):

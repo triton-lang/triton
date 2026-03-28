@@ -48,10 +48,14 @@ public:
 
   struct TraceEvent {
     TraceEvent() = default;
-    TraceEvent(size_t id, size_t contextId) : id(id), contextId(contextId) {}
+    TraceEvent(size_t id, size_t contextId, size_t parentEventId, size_t depth)
+        : id(id), contextId(contextId), parentEventId(parentEventId),
+          depth(depth) {}
     size_t id = 0;
     size_t scopeId = Scope::DummyScopeId;
     size_t contextId = TraceContext::DummyId;
+    size_t parentEventId = DummyId;
+    size_t depth = 0;
     // Direct and linked metrics emitted for this trace event.
     DataEntry::MetricSet metricSet{};
 
@@ -104,8 +108,14 @@ public:
     return contexts;
   }
 
-  size_t addEvent(size_t contextId) {
-    traceEvents.try_emplace(nextEventId, nextEventId, contextId);
+  size_t addEvent(size_t contextId,
+                  size_t parentEventId = TraceEvent::DummyId) {
+    size_t depth = 0;
+    if (parentEventId != TraceEvent::DummyId) {
+      depth = traceEvents.at(parentEventId).depth + 1;
+    }
+    traceEvents.try_emplace(nextEventId, nextEventId, contextId, parentEventId,
+                            depth);
     return nextEventId++;
   }
 
@@ -133,6 +143,9 @@ private:
   std::map<size_t, TraceContext> traceContextMap;
 };
 
+thread_local std::unordered_map<const TraceData *, std::vector<size_t>>
+    traceDataToActiveEventStack;
+
 void TraceData::enterScope(const Scope &scope) {
   // enterOp and addMetric maybe called from different threads
   std::unique_lock<std::shared_mutex> lock(mutex);
@@ -142,11 +155,28 @@ void TraceData::enterScope(const Scope &scope) {
     contexts = contextSource->getContexts();
   else
     contexts.push_back(scope.name);
-  auto eventId = currentTrace->addEvent(currentTrace->addContexts(contexts));
+  auto &activeEventStack = traceDataToActiveEventStack[this];
+  size_t parentEventId = activeEventStack.empty() ? Trace::TraceEvent::DummyId
+                                                  : activeEventStack.back();
+  auto eventId =
+      currentTrace->addEvent(currentTrace->addContexts(contexts), parentEventId);
+  currentTrace->getEvent(eventId).scopeId = scope.scopeId;
   scopeIdToEventId[scope.scopeId] = eventId;
+  activeEventStack.push_back(eventId);
 }
 
 void TraceData::exitScope(const Scope &scope) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  auto scopeEventIt = scopeIdToEventId.find(scope.scopeId);
+  if (scopeEventIt != scopeIdToEventId.end()) {
+    auto &activeEventStack = traceDataToActiveEventStack[this];
+    if (!activeEventStack.empty() && activeEventStack.back() == scopeEventIt->second) {
+      activeEventStack.pop_back();
+      if (activeEventStack.empty()) {
+        traceDataToActiveEventStack.erase(this);
+      }
+    }
+  }
   scopeIdToEventId.erase(scope.scopeId);
 }
 
@@ -162,7 +192,9 @@ DataEntry TraceData::addOp(size_t phase, size_t eventId,
     parentContextId = event.contextId;
   }
   const auto contextId = trace->addContexts(contexts, parentContextId);
-  const auto newEventId = trace->addEvent(contextId);
+  const auto parentEventId =
+      (eventId == Data::kRootEntryId) ? Trace::TraceEvent::DummyId : eventId;
+  const auto newEventId = trace->addEvent(contextId, parentEventId);
   auto &newEvent = trace->getEvent(newEventId);
   return DataEntry(newEventId, phase, newEvent.metricSet);
 }
@@ -210,9 +242,7 @@ struct CycleMetricWithContext {
       : cycleMetric(metric), contexts(std::move(ctx)) {}
 };
 
-constexpr double kSyntheticMetricDurationUs = 1.0;
-constexpr double kSyntheticMetricSpacingUs = 1.0;
-constexpr const char *kSyntheticMetricTid = "metrics";
+constexpr const char *kMetricTidPrefix = "metrics ";
 
 struct OrderedTraceEvent {
   enum class Kind { Kernel, SyntheticMetric };
@@ -221,35 +251,43 @@ struct OrderedTraceEvent {
   const KernelMetric *kernelMetric{};
   const DataEntry::FlexibleMetricMap *flexibleMetrics{};
   std::vector<Context> contexts;
+  size_t owningEventId = TraceData::Trace::TraceEvent::DummyId;
+  size_t depth = 0;
   size_t streamId = 0;
   uint64_t startTimeNs = 0;
   uint64_t endTimeNs = 0;
+  bool hasTimeRange = false;
   double tsUs = 0.0;
   double durUs = 0.0;
 
   static OrderedTraceEvent kernel(const KernelMetric *metric,
                                   const DataEntry::FlexibleMetricMap *metrics,
                                   std::vector<Context> contexts,
-                                  size_t streamId) {
+                                  size_t streamId, size_t owningEventId) {
     OrderedTraceEvent event;
     event.kind = Kind::Kernel;
     event.kernelMetric = metric;
     event.flexibleMetrics = metrics;
     event.contexts = std::move(contexts);
+    event.owningEventId = owningEventId;
     event.streamId = streamId;
     event.startTimeNs =
         std::get<uint64_t>(metric->getValue(KernelMetric::StartTime));
-    event.endTimeNs = std::get<uint64_t>(metric->getValue(KernelMetric::EndTime));
+    event.endTimeNs =
+        std::get<uint64_t>(metric->getValue(KernelMetric::EndTime));
+    event.hasTimeRange = true;
     return event;
   }
 
   static OrderedTraceEvent syntheticMetric(
-      const DataEntry::FlexibleMetricMap *metrics, std::vector<Context> contexts) {
+      const DataEntry::FlexibleMetricMap *metrics, std::vector<Context> contexts,
+      size_t owningEventId, size_t depth) {
     OrderedTraceEvent event;
     event.kind = Kind::SyntheticMetric;
     event.flexibleMetrics = metrics;
     event.contexts = std::move(contexts);
-    event.durUs = kSyntheticMetricDurationUs;
+    event.owningEventId = owningEventId;
+    event.depth = depth;
     return event;
   }
 };
@@ -471,100 +509,68 @@ void dumpCycleMetricTrace(std::vector<CycleMetricWithContext> &cycleEvents,
   writer.write(os);
 }
 
-void assignSyntheticMetricTimestamps(
-    std::vector<OrderedTraceEvent> &orderedTraceEvents) {
-  std::vector<size_t> kernelIndices;
-  kernelIndices.reserve(orderedTraceEvents.size());
+void assignMetricScopeRanges(
+    std::vector<OrderedTraceEvent> &orderedTraceEvents,
+    const std::unordered_map<size_t, size_t> &eventIdToParentEventId) {
+  std::unordered_map<size_t, std::vector<size_t>> eventIdToMetricIndices;
   for (size_t i = 0; i < orderedTraceEvents.size(); ++i) {
-    if (orderedTraceEvents[i].kind == OrderedTraceEvent::Kind::Kernel) {
-      kernelIndices.push_back(i);
+    if (orderedTraceEvents[i].kind == OrderedTraceEvent::Kind::SyntheticMetric) {
+      eventIdToMetricIndices[orderedTraceEvents[i].owningEventId].push_back(i);
     }
   }
-  if (kernelIndices.empty()) {
-    return;
+
+  for (const auto &event : orderedTraceEvents) {
+    if (event.kind != OrderedTraceEvent::Kind::Kernel) {
+      continue;
+    }
+    auto currentEventId = event.owningEventId;
+    while (currentEventId != TraceData::Trace::TraceEvent::DummyId) {
+      if (auto metricIt = eventIdToMetricIndices.find(currentEventId);
+          metricIt != eventIdToMetricIndices.end()) {
+        for (auto metricIndex : metricIt->second) {
+          auto &metricEvent = orderedTraceEvents[metricIndex];
+          if (!metricEvent.hasTimeRange) {
+            metricEvent.startTimeNs = event.startTimeNs;
+            metricEvent.endTimeNs = event.endTimeNs;
+            metricEvent.hasTimeRange = true;
+          } else {
+            metricEvent.startTimeNs =
+                std::min(metricEvent.startTimeNs, event.startTimeNs);
+            metricEvent.endTimeNs =
+                std::max(metricEvent.endTimeNs, event.endTimeNs);
+          }
+        }
+      }
+      auto parentIt = eventIdToParentEventId.find(currentEventId);
+      if (parentIt == eventIdToParentEventId.end()) {
+        break;
+      }
+      currentEventId = parentIt->second;
+    }
   }
-
-  auto assignSyntheticRange = [&](size_t begin, size_t end,
-                                  std::optional<size_t> leftKernelIndex,
-                                  std::optional<size_t> rightKernelIndex) {
-    std::vector<size_t> syntheticIndices;
-    syntheticIndices.reserve(end - begin);
-    for (size_t i = begin; i < end; ++i) {
-      if (orderedTraceEvents[i].kind ==
-          OrderedTraceEvent::Kind::SyntheticMetric) {
-        syntheticIndices.push_back(i);
-      }
-    }
-    if (syntheticIndices.empty()) {
-      return;
-    }
-
-    if (!leftKernelIndex.has_value()) {
-      double firstKernelTs = orderedTraceEvents[*rightKernelIndex].tsUs;
-      double baseTs =
-          firstKernelTs - syntheticIndices.size() * kSyntheticMetricSpacingUs;
-      if (baseTs < 0.0) {
-        baseTs = 0.0;
-      }
-      for (size_t i = 0; i < syntheticIndices.size(); ++i) {
-        orderedTraceEvents[syntheticIndices[i]].tsUs =
-            baseTs + i * kSyntheticMetricSpacingUs;
-      }
-      return;
-    }
-
-    if (!rightKernelIndex.has_value()) {
-      double baseTs =
-          orderedTraceEvents[*leftKernelIndex].tsUs + kSyntheticMetricSpacingUs;
-      for (size_t i = 0; i < syntheticIndices.size(); ++i) {
-        orderedTraceEvents[syntheticIndices[i]].tsUs =
-            baseTs + i * kSyntheticMetricSpacingUs;
-      }
-      return;
-    }
-
-    double leftTs = orderedTraceEvents[*leftKernelIndex].tsUs;
-    double rightTs = orderedTraceEvents[*rightKernelIndex].tsUs;
-    double step = (rightTs - leftTs) / static_cast<double>(syntheticIndices.size() + 1);
-    if (step >= kSyntheticMetricSpacingUs) {
-      for (size_t i = 0; i < syntheticIndices.size(); ++i) {
-        orderedTraceEvents[syntheticIndices[i]].tsUs =
-            leftTs + step * static_cast<double>(i + 1);
-      }
-      return;
-    }
-
-    double baseTs = leftTs + kSyntheticMetricSpacingUs;
-    for (size_t i = 0; i < syntheticIndices.size(); ++i) {
-      orderedTraceEvents[syntheticIndices[i]].tsUs =
-          baseTs + i * kSyntheticMetricSpacingUs;
-    }
-  };
-
-  assignSyntheticRange(0, kernelIndices.front(), std::nullopt, kernelIndices.front());
-  for (size_t i = 0; i + 1 < kernelIndices.size(); ++i) {
-    assignSyntheticRange(kernelIndices[i] + 1, kernelIndices[i + 1], kernelIndices[i],
-                         kernelIndices[i + 1]);
-  }
-  assignSyntheticRange(kernelIndices.back() + 1, orderedTraceEvents.size(),
-                       kernelIndices.back(), std::nullopt);
 }
 
 void dumpKernelMetricTrace(uint64_t minTimeStamp,
                            std::vector<OrderedTraceEvent> orderedTraceEvents,
+                           const std::unordered_map<size_t, size_t>
+                               &eventIdToParentEventId,
                            std::ostream &os) {
   json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
+  assignMetricScopeRanges(orderedTraceEvents, eventIdToParentEventId);
   for (auto &event : orderedTraceEvents) {
-    if (event.kind == OrderedTraceEvent::Kind::Kernel) {
+    if (!event.hasTimeRange) {
+      continue;
+    }
+    if (event.kind == OrderedTraceEvent::Kind::Kernel ||
+        event.kind == OrderedTraceEvent::Kind::SyntheticMetric) {
       event.tsUs = static_cast<double>(event.startTimeNs - minTimeStamp) / 1000.0;
       event.durUs = static_cast<double>(event.endTimeNs - event.startTimeNs) / 1000.0;
     }
   }
-  assignSyntheticMetricTimestamps(orderedTraceEvents);
 
   for (const auto &event : orderedTraceEvents) {
     if (event.kind == OrderedTraceEvent::Kind::SyntheticMetric &&
-        event.flexibleMetrics == nullptr) {
+        (!event.flexibleMetrics || !event.hasTimeRange)) {
       continue;
     }
 
@@ -580,7 +586,7 @@ void dumpKernelMetricTrace(uint64_t minTimeStamp,
     } else {
       element["name"] = GraphState::metricTag;
       element["cat"] = "metric";
-      element["tid"] = kSyntheticMetricTid;
+      element["tid"] = std::string(kMetricTidPrefix) + std::to_string(event.depth);
     }
     element["ph"] = "X";
     element["ts"] = event.tsUs;
@@ -628,13 +634,18 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     auto &events = trace->getEvents();
     std::vector<OrderedTraceEvent> orderedTraceEvents;
     orderedTraceEvents.reserve(events.size());
+    std::unordered_map<size_t, size_t> eventIdToParentEventId;
+    eventIdToParentEventId.reserve(events.size());
+    for (const auto &[eventId, event] : events) {
+      eventIdToParentEventId.emplace(eventId, event.parentEventId);
+    }
     uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
     bool hasKernelMetrics = false, hasCycleMetrics = false;
     std::vector<CycleMetricWithContext> cycleEvents;
     cycleEvents.reserve(events.size());
 
     auto processMetricMaps =
-        [&](const DataEntry::MetricMap &metrics,
+        [&](size_t owningEventId, const DataEntry::MetricMap &metrics,
             const DataEntry::FlexibleMetricMap *flexibleMetrics,
             const std::vector<Context> &contexts) {
           bool emittedKernel = false;
@@ -648,10 +659,11 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
                 kernelMetric->getValue(KernelMetric::StreamId));
             if (isMetricKernel) {
               orderedTraceEvents.push_back(OrderedTraceEvent::kernel(
-                  kernelMetric, flexibleMetrics, contexts, streamId));
+                  kernelMetric, flexibleMetrics, contexts, streamId,
+                  owningEventId));
             } else {
-              orderedTraceEvents.push_back(
-                  OrderedTraceEvent::kernel(kernelMetric, nullptr, contexts, streamId));
+              orderedTraceEvents.push_back(OrderedTraceEvent::kernel(
+                  kernelMetric, nullptr, contexts, streamId, owningEventId));
             }
             const auto startTime = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::StartTime));
@@ -671,12 +683,12 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
 
     for (const auto &[_, event] : events) {
       auto baseContexts = trace->getContexts(event.contextId);
-      bool baseHasKernel = processMetricMaps(event.metricSet.metrics,
-                                            &event.metricSet.flexibleMetrics,
-                                            baseContexts);
-      if (!baseHasKernel && !event.metricSet.flexibleMetrics.empty()) {
+      processMetricMaps(event.id, event.metricSet.metrics,
+                        &event.metricSet.flexibleMetrics, baseContexts);
+      if (!event.metricSet.flexibleMetrics.empty()) {
         orderedTraceEvents.push_back(OrderedTraceEvent::syntheticMetric(
-            &event.metricSet.flexibleMetrics, baseContexts));
+            &event.metricSet.flexibleMetrics, baseContexts, event.id,
+            event.depth));
       }
       std::vector<size_t> sortedLinkedTargetEntryIds;
       sortedLinkedTargetEntryIds.reserve(event.metricSet.linkedMetrics.size());
@@ -697,7 +709,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
         if (iter != event.metricSet.linkedFlexibleMetrics.end()) {
           flexibleMetrics = &iter->second;
         }
-        processMetricMaps(linkedMetrics, flexibleMetrics, contexts);
+        processMetricMaps(event.id, linkedMetrics, flexibleMetrics, contexts);
       }
       if (hasKernelMetrics && hasCycleMetrics) {
         throw std::runtime_error("only one active metric type is supported");
@@ -709,7 +721,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     }
 
     if (hasKernelMetrics) {
-      dumpKernelMetricTrace(minTimeStamp, std::move(orderedTraceEvents), os);
+      dumpKernelMetricTrace(minTimeStamp, std::move(orderedTraceEvents),
+                            eventIdToParentEventId, os);
     } else if (!hasCycleMetrics) {
       os << json({{"displayTimeUnit", "us"}, {"traceEvents", json::array()}})
                 .dump()
