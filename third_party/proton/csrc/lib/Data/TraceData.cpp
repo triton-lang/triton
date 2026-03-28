@@ -1,4 +1,5 @@
 #include "Data/TraceData.h"
+#include "Profiler/Graph.h"
 #include "TraceDataIO/TraceWriter.h"
 #include "Utility/MsgPackWriter.h"
 #include "nlohmann/json.hpp"
@@ -209,12 +210,19 @@ struct CycleMetricWithContext {
 };
 
 struct KernelMetricWithContext {
-  const KernelMetric *kernelMetric;
+  const KernelMetric *kernelMetric{};
+  const DataEntry::FlexibleMetricMap *flexibleMetrics{};
   // Full call path captured for this kernel metric event.
   std::vector<Context> contexts;
 
   KernelMetricWithContext(const KernelMetric *metric, std::vector<Context> ctx)
       : kernelMetric(metric), contexts(std::move(ctx)) {}
+
+  KernelMetricWithContext(const KernelMetric *metric,
+                          const DataEntry::FlexibleMetricMap *flexibleMetrics,
+                          std::vector<Context> ctx)
+      : kernelMetric(metric), flexibleMetrics(flexibleMetrics),
+        contexts(std::move(ctx)) {}
 };
 
 std::vector<KernelTrace>
@@ -395,16 +403,46 @@ void dumpKernelMetricTrace(
         &streamTraceEvents,
     std::ostream &os) {
   json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
+  auto formatFlexibleMetricValue = [](const MetricValueType &value) {
+    return std::visit(
+        [](auto &&v) -> std::string {
+          using T = std::decay_t<decltype(v)>;
+          if constexpr (std::is_same_v<T, uint64_t> ||
+                        std::is_same_v<T, int64_t> ||
+                        std::is_same_v<T, double>) {
+            return std::to_string(v);
+          } else if constexpr (std::is_same_v<T, std::string>) {
+            return v;
+          } else if constexpr (std::is_same_v<T, std::vector<uint64_t>> ||
+                               std::is_same_v<T, std::vector<int64_t>> ||
+                               std::is_same_v<T, std::vector<double>>) {
+            std::ostringstream ss;
+            ss << "[";
+            for (size_t i = 0; i < v.size(); ++i) {
+              if (i != 0) {
+                ss << ",";
+              }
+              ss << v[i];
+            }
+            ss << "]";
+            return ss.str();
+          } else {
+            static_assert(sizeof(T) == 0, "Unsupported MetricValueType");
+          }
+        },
+        value);
+  };
 
   // Emit all streams into a single Chrome trace document while preserving the
   // deterministic stream iteration order from the std::map.
   for (auto const &[streamId, events] : streamTraceEvents) {
     for (const auto &event : events) {
-      auto *kernelMetrics = event.kernelMetric;
+      auto *kernelMetric = event.kernelMetric;
+      auto *flexibleMetrics = event.flexibleMetrics;
       uint64_t startTimeNs =
-          std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::StartTime));
+          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
       uint64_t endTimeNs =
-          std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::EndTime));
+          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime));
       // Convert nanoseconds to microseconds for Chrome trace format
       double ts = static_cast<double>(startTimeNs - minTimeStamp) / 1000;
       double dur = static_cast<double>(endTimeNs - startTimeNs) / 1000;
@@ -412,7 +450,11 @@ void dumpKernelMetricTrace(
       const auto &contexts = event.contexts;
 
       json element;
-      element["name"] = contexts.back().name;
+      if (flexibleMetrics) {
+        element["name"] = GraphState::metricTag;
+      } else {
+        element["name"] = contexts.back().name;
+      }
       element["cat"] = "kernel";
       element["ph"] = "X";
       element["ts"] = ts;
@@ -423,13 +465,21 @@ void dumpKernelMetricTrace(
         callStack.push_back(ctx.name);
       }
       element["args"]["call_stack"] = std::move(callStack);
-
+      if (flexibleMetrics) {
+        json metrics = json::object();
+        for (const auto &[metricName, metricValue] : *flexibleMetrics) {
+          metrics[metricName] =
+              formatFlexibleMetricValue(metricValue.getValues()[0]);
+        }
+        element["args"]["metrics"] = std::move(metrics);
+      }
       object["traceEvents"].push_back(element);
     }
   }
 
   os << object.dump() << "\n";
 }
+
 } // namespace
 
 void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
@@ -469,15 +519,23 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     cycleEvents.reserve(events.size());
 
     auto processMetricMaps =
-        [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
+        [&](const DataEntry::MetricMap &metrics,
+            const DataEntry::FlexibleMetricMap *flexibleMetrics,
             const std::vector<Context> &contexts) {
           if (auto kernelIt = metrics.find(MetricKind::Kernel);
               kernelIt != metrics.end()) {
             auto *kernelMetric =
                 static_cast<KernelMetric *>(kernelIt->second.get());
+            const auto isMetricKernel = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::IsMetricKernel));
             const auto streamId = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::StreamId));
-            streamTraceEvents[streamId].emplace_back(kernelMetric, contexts);
+            auto &streamTrace = streamTraceEvents[streamId];
+            if (isMetricKernel) {
+              streamTrace.emplace_back(kernelMetric, flexibleMetrics, contexts);
+            } else {
+              streamTrace.emplace_back(kernelMetric, contexts);
+            }
             const auto startTime = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::StartTime));
             minTimeStamp = std::min(minTimeStamp, startTime);
@@ -494,16 +552,30 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
 
     for (const auto &[_, event] : events) {
       auto baseContexts = trace->getContexts(event.contextId);
-      processMetricMaps(event.metricSet.metrics, baseContexts);
-      for (const auto &[targetEntryId, linkedMetrics] :
-           event.metricSet.linkedMetrics) {
+      // Don't process flexible metrics for now
+      processMetricMaps(event.metricSet.metrics,
+                        &event.metricSet.flexibleMetrics, baseContexts);
+      std::vector<size_t> sortedLinkedTargetEntryIds;
+      sortedLinkedTargetEntryIds.reserve(event.metricSet.linkedMetrics.size());
+      for (const auto &[targetEntryId, _] : event.metricSet.linkedMetrics) {
+        sortedLinkedTargetEntryIds.push_back(targetEntryId);
+      }
+      std::sort(sortedLinkedTargetEntryIds.begin(),
+                sortedLinkedTargetEntryIds.end());
+      for (const auto targetEntryId : sortedLinkedTargetEntryIds) {
+        const auto &linkedMetrics =
+            event.metricSet.linkedMetrics.at(targetEntryId);
         auto contexts = baseContexts;
         auto &virtualContexts = targetIdToVirtualContexts[targetEntryId];
         contexts.insert(contexts.end(), virtualContexts.begin(),
                         virtualContexts.end());
-        processMetricMaps(linkedMetrics, contexts);
+        const DataEntry::FlexibleMetricMap *flexibleMetrics = nullptr;
+        auto iter = event.metricSet.linkedFlexibleMetrics.find(targetEntryId);
+        if (iter != event.metricSet.linkedFlexibleMetrics.end()) {
+          flexibleMetrics = &iter->second;
+        }
+        processMetricMaps(linkedMetrics, flexibleMetrics, contexts);
       }
-
       if (hasKernelMetrics && hasCycleMetrics) {
         throw std::runtime_error("only one active metric type is supported");
       }
