@@ -57,6 +57,18 @@ DEFINE_DISPATCH(ExternLibHip, ctxGetStreamPriorityRange,
 DEFINE_DISPATCH(ExternLibHip, streamCreateWithPriority,
                 hipStreamCreateWithPriority, hipStream_t *, unsigned int, int)
 
+DEFINE_DISPATCH(ExternLibHip, eventCreate, hipEventCreate, hipEvent_t *)
+
+DEFINE_DISPATCH(ExternLibHip, eventDestroy, hipEventDestroy, hipEvent_t)
+
+DEFINE_DISPATCH(ExternLibHip, eventRecord, hipEventRecord, hipEvent_t,
+                hipStream_t)
+
+DEFINE_DISPATCH(ExternLibHip, streamWaitEvent, hipStreamWaitEvent, hipStream_t,
+                hipEvent_t, unsigned int)
+
+DEFINE_DISPATCH(ExternLibHip, eventQuery, hipEventQuery, hipEvent_t)
+
 DEFINE_DISPATCH(ExternLibHip, streamSynchronize, hipStreamSynchronize,
                 hipStream_t)
 

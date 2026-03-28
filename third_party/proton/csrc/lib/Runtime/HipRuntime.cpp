@@ -1,8 +1,8 @@
 #include "Runtime/HipRuntime.h"
 
 #include "Driver/GPU/HipApi.h"
-#include <algorithm>
 #include <cstdint>
+#include <stdexcept>
 
 namespace proton {
 
@@ -80,6 +80,37 @@ void *HipRuntime::getPriorityStream() {
   return reinterpret_cast<void *>(stream);
 }
 
+void *HipRuntime::createEvent() {
+  hipEvent_t event;
+  (void)hip::eventCreate<true>(&event);
+  return reinterpret_cast<void *>(event);
+}
+
+void HipRuntime::destroyEvent(void *event) {
+  (void)hip::eventDestroy<true>(reinterpret_cast<hipEvent_t>(event));
+}
+
+void HipRuntime::recordEvent(void *event, void *stream) {
+  (void)hip::eventRecord<true>(reinterpret_cast<hipEvent_t>(event),
+                               reinterpret_cast<hipStream_t>(stream));
+}
+
+void HipRuntime::waitEvent(void *stream, void *event) {
+  (void)hip::streamWaitEvent<true>(reinterpret_cast<hipStream_t>(stream),
+                                   reinterpret_cast<hipEvent_t>(event), 0);
+}
+
+bool HipRuntime::queryEvent(void *event) {
+  auto status = hip::eventQuery<false>(reinterpret_cast<hipEvent_t>(event));
+  if (status == hipSuccess) {
+    return true;
+  }
+  if (status == hipErrorNotReady) {
+    return false;
+  }
+  throw std::runtime_error("Failed to query HIP event");
+}
+
 void HipRuntime::synchronizeStream(void *stream) {
   (void)hip::streamSynchronize<true>(reinterpret_cast<hipStream_t>(stream));
 }
@@ -90,24 +121,4 @@ void HipRuntime::destroyStream(void *stream) {
   (void)hip::streamDestroy<true>(reinterpret_cast<hipStream_t>(stream));
 }
 
-void HipRuntime::processHostBuffer(
-    uint8_t *hostBuffer, size_t hostBufferSize, uint8_t *deviceBuffer,
-    size_t deviceBufferSize, void *stream,
-    std::function<void(uint8_t *, size_t)> callback) {
-  int64_t chunkSize = std::min(hostBufferSize, deviceBufferSize);
-  int64_t sizeLeftOnDevice = deviceBufferSize;
-  while (chunkSize > 0) {
-    (void)hip::memcpyDToHAsync<true>(
-        reinterpret_cast<void *>(hostBuffer),
-        reinterpret_cast<hipDeviceptr_t>(deviceBuffer), chunkSize,
-        reinterpret_cast<hipStream_t>(stream));
-    (void)hip::streamSynchronize<true>(reinterpret_cast<hipStream_t>(stream));
-    callback(hostBuffer, chunkSize);
-    hostBuffer += chunkSize;
-    deviceBuffer += chunkSize;
-    sizeLeftOnDevice -= chunkSize;
-    chunkSize =
-        std::min(static_cast<int64_t>(hostBufferSize), sizeLeftOnDevice);
-  }
-}
 } // namespace proton

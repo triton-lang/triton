@@ -32,6 +32,13 @@ constexpr float maxSharedMemRatio = 0.04; // 4 percent of max shared mem
 
 namespace {
 
+// Keep these integer values in sync with the Python launcher constants in
+// third_party/{nvidia,amd}/backend/driver.py.
+enum class ProfileScratchBufferUnit : int32_t {
+  CTA = 0,
+  KERNEL_LAUNCH = 1,
+};
+
 void parseSelectIds(llvm::StringRef selectIds,
                     llvm::SmallVectorImpl<int32_t> &selectIdVec) {
   auto rest = selectIds;
@@ -176,7 +183,8 @@ public:
       llvm::StringRef samplingOptions, gpu::Granularity granularity,
       gpu::BufferStrategy bufferStrategy, gpu::BufferType bufferType,
       int32_t bufferSize, int32_t maxSharedMemSize, int64_t profileScratchSize,
-      int32_t profileScratchAlignment, bool clockExtension)
+      int32_t profileScratchAlignment, bool kernelTraceMode,
+      bool clockExtension)
       : ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass>() {
     this->metricType = metricType;
     this->samplingStrategy = samplingStrategy;
@@ -188,6 +196,7 @@ public:
     this->maxSharedMemSize = maxSharedMemSize;
     this->profileScratchSize = profileScratchSize;
     this->profileScratchAlignment = profileScratchAlignment;
+    this->kernelTraceMode = kernelTraceMode;
     this->clockExtension = clockExtension;
   }
 
@@ -200,6 +209,7 @@ public:
     builder.setInsertionPointToStart(&func.getBody().front());
 
     int numWarps = gpu::getTotalNumWarps(mod);
+    int numCTAs = triton::gpu::lookupNumCTAs(func);
 
     llvm::SmallVector<int32_t, 8> selectIdVec;
     int segmentNum = numWarps;
@@ -214,12 +224,79 @@ public:
       }
     }
 
+    if (kernelTraceMode) {
+      if (hasOperator<Operation, proton::RecordOp>(func.getOperation())) {
+        mlir::emitError(
+            loc, "trace_mode=kernel currently supports launch-level timing "
+                     "only and cannot be combined with proton.record ops");
+        return failure();
+      }
+
+      constexpr int kernelTraceRecordSize = 2 * sizeof(uint64_t);
+      int allocProfileScratchSize =
+          llvm::alignTo(kernelTraceRecordSize, profileScratchAlignment);
+      if (profileScratchSize < allocProfileScratchSize) {
+        LDBG("Global scratch memory for proton kernel trace is not large "
+             "enough, we allocate the scratch size as " +
+             llvm::Twine(allocProfileScratchSize) + " bytes.");
+      }
+
+      // Mark profile_scratch_size as a launch-total allocation, not a per-CTA
+      // slice, so the runtime does not multiply it by the grid size again.
+      mod->setAttr("ttg.profile_scratch_buffer_unit",
+                   builder.getI32IntegerAttr(static_cast<int32_t>(
+                       ProfileScratchBufferUnit::KERNEL_LAUNCH)));
+      // Kernel-trace mode writes a single launch-wide {start, end} record into
+      // profile scratch. Lowering expands initialize/finalize into CTA-leader
+      // atomicMin/atomicMax updates on that shared record.
+      Value profileMem = triton::gpu::GlobalScratchAllocOp::create(
+          builder, loc, triton::getPointerType(builder.getI64Type()),
+          allocProfileScratchSize, profileScratchAlignment,
+          builder.getUnitAttr());
+      gpu::InitializeOp::create(builder, loc, profileMem);
+
+      auto cgaLayout =
+          triton::gpu::CGAEncodingAttr::get1DLayout(context, numCTAs);
+      auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
+          context, 1, 1, 1, {0}, cgaLayout);
+      Attribute sharedMemorySpace =
+          triton::gpu::SharedMemorySpaceAttr::get(context);
+      auto sharedBufferType = triton::gpu::MemDescType::get(
+          {1}, builder.getI32Type(), encoding, sharedMemorySpace,
+          /*mutable_memory=*/true);
+      Value buffer =
+          triton::gpu::LocalAllocOp::create(builder, loc, sharedBufferType);
+      Attribute memorySpace =
+          mlir::cast<triton::gpu::MemDescType>(buffer.getType())
+              .getMemorySpace();
+      auto segmentType = gpu::SegmentType::get(context, sizeof(uint32_t),
+                                               memorySpace, granularity,
+                                               selectIdVec);
+      // Reuse the existing finalize plumbing even though kernel-trace mode does
+      // not emit proton.record scopes. The synthetic segment preserves the
+      // initialize/finalize IR pattern that lowering already understands.
+      Value segment = gpu::SegmentAllocOp::create(builder, loc, segmentType,
+                                                  buffer);
+
+      func.walk([&](triton::ReturnOp ret) {
+        builder.setInsertionPoint(ret);
+        // Finalize every kernel exit path so the launch end timestamp is
+        // recorded even when the Triton function returns from multiple sites.
+        mlir::triton::gpu::BarrierOp::create(
+            builder, loc,
+            triton::gpu::AddrSpace::Local |
+                triton::gpu::AddrSpace::GlobalRead |
+                triton::gpu::AddrSpace::GlobalWrite);
+        gpu::FinalizeOp::create(builder, loc, segment, profileMem);
+      });
+      return success();
+    }
+
     int sharedMemUsed = 0;
     if (mod->hasAttr("ttg.shared"))
       sharedMemUsed =
           mod->getAttrOfType<mlir::IntegerAttr>("ttg.shared").getInt();
 
-    int numCTAs = triton::gpu::lookupNumCTAs(func);
     auto maxSharedMemSizePerCTA = maxSharedMemSize / numCTAs;
 
     int allocSharedMemSize = getAllocSharedMemSize(maxSharedMemSizePerCTA,
@@ -370,8 +447,12 @@ public:
 
     FuncOp func = *m.getOps<triton::FuncOp>().begin();
 
-    // Check if there are any proton records to process
-    if (!hasOperator<Operation, proton::RecordOp>(func.getOperation())) {
+    // Kernel-trace mode still needs the profiling scaffolding even when there
+    // are no explicit proton.record ops. The runtime prototype derives a
+    // launch-level interval from per-CTA init/finalize timestamps written into
+    // profile scratch.
+    if (!hasOperator<Operation, proton::RecordOp>(func.getOperation()) &&
+        !kernelTraceMode) {
       return; // No proton records to process, silently return
     }
 
@@ -405,11 +486,11 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
     llvm::StringRef samplingOptions, gpu::Granularity granularity,
     gpu::BufferStrategy bufferStrategy, gpu::BufferType bufferType,
     int32_t bufferSize, int32_t maxSharedMemSize, int64_t profileScratchSize,
-    int32_t profileScratchAlignment, bool clkExt) {
+    int32_t profileScratchAlignment, bool kernelTraceMode, bool clkExt) {
   return std::make_unique<ConvertProtonToProtonGPUPass>(
       metricType, samplingStrategy, samplingOptions, granularity,
       bufferStrategy, bufferType, bufferSize, maxSharedMemSize,
-      profileScratchSize, profileScratchAlignment, clkExt);
+      profileScratchSize, profileScratchAlignment, kernelTraceMode, clkExt);
 }
 
 } // namespace proton

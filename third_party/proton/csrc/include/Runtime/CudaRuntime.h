@@ -27,14 +27,14 @@ public:
                              void *stream) override;
   void *getDevice() override;
   void *getPriorityStream() override;
+  void *createEvent() override;
+  void destroyEvent(void *event) override;
+  void recordEvent(void *event, void *stream) override;
+  void waitEvent(void *stream, void *event) override;
+  bool queryEvent(void *event) override;
   void synchronizeStream(void *stream) override;
   void synchronizeDevice() override;
   void destroyStream(void *stream) override;
-  void
-  processHostBuffer(uint8_t *hostBuffer, size_t hostBufferSize,
-                    uint8_t *deviceBuffer, size_t deviceBufferSize,
-                    void *stream,
-                    std::function<void(uint8_t *, size_t)> callback) override;
 };
 
 } // namespace proton
