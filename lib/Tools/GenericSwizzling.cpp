@@ -268,7 +268,7 @@ std::pair<int, int> bankConflicts(ArrayRef<int32_t> tileSrc,
 std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
                                       const LinearLayout &dst,
                                       const LinearLayout &smem,
-                                      int32_t bitwidth) {
+                                      int32_t bitwidth, int32_t numBanks) {
   auto srcFlat = src.flattenOuts();
   auto dstFlat = dst.flattenOuts();
   auto *ctx = smem.getOutDimNames().begin()->getContext();
@@ -278,13 +278,16 @@ std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
   auto dstLane = flatten(dstFlat, S("lane"));
   auto log2Vec =
       llvm::Log2_32(std::max(smem.getInDimSize(kVec) * bitwidth / 32, 1));
-  srcLane.resize(srcLane.size() - log2Vec);
-  dstLane.resize(dstLane.size() - log2Vec);
+  auto log2Bank = llvm::Log2_32(numBanks);
+  assert(srcLane.size() >= log2Bank && "srcLane.size() must be >= log2Bank");
+  auto log2Phase = log2Vec + srcLane.size() - log2Bank;
+  srcLane.resize(srcLane.size() - log2Phase);
+  dstLane.resize(dstLane.size() - log2Phase);
   return bankConflicts(srcLane, dstLane, smem);
 }
 
 int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
-                         int32_t bitwidth) {
+                         int32_t bitwidth, int32_t numBanks) {
   auto *ctx = smem.getInDimNames().begin()->getContext();
   auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
 
@@ -299,7 +302,7 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
 
   int32_t vecSize = elemsPerVec;
   int32_t bankSize =
-      std::min(32 * 32 / (vecSize * bitwidth), smem.getTotalInDimSize());
+      std::min(numBanks * 32 / (vecSize * bitwidth), smem.getTotalInDimSize());
   int32_t segmentSize = smem.getTotalInDimSize() / (bankSize * vecSize);
   SmallVector<std::pair<StringAttr, int32_t>> newInDims = {
       {S("vector"), vecSize},
@@ -308,7 +311,7 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
   };
   auto smemReshaped = smem.reshapeIns(newInDims);
   return bankConflictsLdSt(regNoBroadcast, regNoBroadcast, smemReshaped,
-                           bitwidth)
+                           bitwidth, numBanks)
       .first;
 }
 
@@ -396,7 +399,7 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
                               ArrayRef<int32_t> tileDst,
                               ArrayRef<int32_t> blockBases,
                               ArrayRef<std::pair<StringAttr, int32_t>> outDims,
-                              int32_t leaveReps = 0) {
+                              int32_t numBanks, int32_t leaveReps = 0) {
   // We work on the flattened tensors as the tensor dimensions are not relevant
   assert(src.getNumOutDims() == 1 && dst.getNumOutDims() == 1 &&
          "src and dst must have a single output dimension");
@@ -425,8 +428,8 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   bankDst.append(vbasis.begin(), vbasis.end());
   bankDst.append(tileDst.begin(), tileDst.end());
 
-  // Bits in a bank segment: 32 banks x 32 bits
-  constexpr int32_t bankBits = 32 * 32;
+  // Bits in a bank segment: num banks x 32 bits
+  int32_t bankBits = numBanks * 32;
   // Bases needed to cover a whole bank segment
   const int32_t lenBbasis = std::min<int32_t>(
       llvm::Log2_32(bankBits / ((1 << vbasis.size()) * bitwidth)),
@@ -466,7 +469,8 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   return basis1D.reshapeOuts(outDims);
 }
 LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
-                                  const LinearLayout &dst, int32_t bitwidth) {
+                                  const LinearLayout &dst, int32_t bitwidth,
+                                  int32_t numBanks) {
   auto *ctx = src.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -560,10 +564,13 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
   }
   auto log2Vec = llvm::Log2_32(
       std::max<int32_t>(1, ((1 << vbasis.size()) * bitwidth) / 32));
-  auto tileSrc = to_vector(ArrayRef(laneSrc).drop_back(log2Vec));
-  auto tileDst = to_vector(ArrayRef(laneDst).drop_back(log2Vec));
+  auto log2Bank = llvm::Log2_32(numBanks);
+  assert(laneSrc.size() >= log2Bank && "laneSrc.size() must be >= log2Bank");
+  auto log2Phase = log2Vec + laneSrc.size() - log2Bank;
+  auto tileSrc = to_vector(ArrayRef(laneSrc).drop_back(log2Phase));
+  auto tileDst = to_vector(ArrayRef(laneDst).drop_back(log2Phase));
   auto smem = optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc,
-                               tileDst, blockSrc, src.getOutDims());
+                               tileDst, blockSrc, src.getOutDims(), numBanks);
 
   // We might be able to vectorise a bit more the load or the store
   // This may happen when there is broadcasting
@@ -614,7 +621,8 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
 std::pair<LinearLayout, std::pair<int32_t, int32_t>>
 optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
                  ArrayRef<LocalMemOpTile> srcTiles,
-                 ArrayRef<LocalMemOpTile> dstTiles, int32_t bitwidth) {
+                 ArrayRef<LocalMemOpTile> dstTiles, int32_t bitwidth,
+                 int32_t numBanks) {
   assert(bitwidth <= 128 && "bitwidth must be <= 128");
   auto srcFlat = src.flattenOuts();
   auto dstFlat = dst.flattenOuts();
@@ -702,7 +710,7 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 
   if (tiles.empty()) {
     // We lower to an ld / st, but can't use LDS128/STS128
-    auto smem = optimalSwizzlingLdSt(src, dst, bitwidth);
+    auto smem = optimalSwizzlingLdSt(src, dst, bitwidth, numBanks);
     return {smem, {0, 0}};
   } else {
     SmallVector<std::tuple<int, LinearLayout, std::pair<int32_t, int32_t>>>
@@ -712,7 +720,7 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
     for (auto [instrs, vbasis, tileSrc, tileDst, leaveReps] : tiles) {
       auto smem = optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc,
                                    tileDst, blockSrcSet.getArrayRef(),
-                                   src.getOutDims(), leaveReps);
+                                   src.getOutDims(), numBanks, leaveReps);
       auto [read, write] = bankConflicts(tileSrc, tileDst, smem);
       smems.push_back({read + write, smem, {instrs.first, instrs.second}});
     }

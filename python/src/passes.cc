@@ -48,9 +48,9 @@ void init_triton_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_loop_unroll", createTritonLoopUnroll);
   ADD_PASS_WRAPPER_0("add_triton_licm", createTritonLoopInvariantCodeMotion);
   ADD_PASS_WRAPPER_0("add_loop_aware_cse", createTritonLoopAwareCSE);
-  ADD_PASS_OPTION_WRAPPER_4("add_convert_to_ttgpuir",
+  ADD_PASS_OPTION_WRAPPER_5("add_convert_to_ttgpuir",
                             createConvertTritonToTritonGPU, const std::string &,
-                            int, int, int);
+                            int, int, int, int);
 }
 
 void init_triton_passes_ttgpuir(py::module &&m) {

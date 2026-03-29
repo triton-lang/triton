@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/GenericSwizzling.h"
@@ -109,7 +110,8 @@ struct ConvertLayoutOpConversion
   SmallVector<Value> transferSwizzlingLocalMemImpl(
       Location loc, ConversionPatternRewriter &rewriter,
       const LinearLayout &srcLayout, const LinearLayout &dstLayout,
-      ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase) const {
+      ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
+      int numBanks) const {
     auto *ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     // We handle transformations recursively as they all need a preprocessing
@@ -121,9 +123,9 @@ struct ConvertLayoutOpConversion
       auto newInVals = llvm::to_vector(llvm::map_range(inVals, [&](Value v) {
         return b.ptrtoint(llvmElemTyPtr, v).getResult();
       }));
-      auto outVals =
-          transferSwizzlingLocalMemImpl(loc, rewriter, srcLayout, dstLayout,
-                                        newInVals, llvmElemTyPtr, smemBase);
+      auto outVals = transferSwizzlingLocalMemImpl(
+          loc, rewriter, srcLayout, dstLayout, newInVals, llvmElemTyPtr,
+          smemBase, numBanks);
       for (auto &v : outVals) {
         v = b.inttoptr(llvmElemTy, v);
       }
@@ -137,7 +139,8 @@ struct ConvertLayoutOpConversion
       auto newInVals = llvm::to_vector(llvm::map_range(
           inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
       auto outVals = transferSwizzlingLocalMemImpl(
-          loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase);
+          loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase,
+          numBanks);
       for (auto &v : outVals) {
         v = b.trunc(llvmElemTy, v);
       }
@@ -150,22 +153,24 @@ struct ConvertLayoutOpConversion
       auto prmtSrc = removeBroadcastSrc.apply(srcLayout);
       auto newInVals = removeBroadcastSrc.apply(inVals);
       return transferSwizzlingLocalMemImpl(loc, rewriter, prmtSrc, dstLayout,
-                                           newInVals, llvmElemTy, smemBase);
+                                           newInVals, llvmElemTy, smemBase,
+                                           numBanks);
     }
 
     // Remove broadcasting in dst
     auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
     if (!removeBroadcastDst.isIdentity()) {
       auto prmtDst = removeBroadcastDst.apply(dstLayout);
-      auto outVals = transferSwizzlingLocalMemImpl(
-          loc, rewriter, srcLayout, prmtDst, inVals, llvmElemTy, smemBase);
+      auto outVals =
+          transferSwizzlingLocalMemImpl(loc, rewriter, srcLayout, prmtDst,
+                                        inVals, llvmElemTy, smemBase, numBanks);
       return broadcastAs(outVals, dstLayout);
     }
 
     // At this point we have a type that's at least 8-bit
     // and we don't have broadcasting in the registers
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    auto smem = optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth);
+    auto smem = optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth, numBanks);
 
     // Extract reps from smem
     auto kReg = str_attr("register");
@@ -253,8 +258,11 @@ struct ConvertLayoutOpConversion
     auto smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto inVals = unpackLLElements(loc, src, rewriter);
-    auto outVals = transferSwizzlingLocalMemImpl(
-        loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase);
+    int numBanks =
+        TritonGPUDialect::getNumBanks(op->getParentOfType<ModuleOp>());
+    auto outVals =
+        transferSwizzlingLocalMemImpl(loc, rewriter, srcLayout, dstLayout,
+                                      inVals, llvmElemTy, smemBase, numBanks);
 
     Value result =
         packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);
