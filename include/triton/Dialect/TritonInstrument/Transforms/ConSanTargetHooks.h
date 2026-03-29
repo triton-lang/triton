@@ -62,6 +62,10 @@ struct BarrierWaitInfo {
   Value pred;
 };
 
+struct BarrierInvalidateInfo {
+  Value alloc;
+};
+
 struct WaitOpInfo {
   CommitKind::Kind commitKind;
   int pendingCount;
@@ -79,7 +83,6 @@ public:
   virtual ~ConSanTargetHooks() = default;
 
   virtual bool isTMAOp(Operation *op) const = 0;
-  virtual bool isPostInstrumentedOp(Operation *op) const = 0;
 
   virtual std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const = 0;
@@ -87,7 +90,13 @@ public:
   virtual std::optional<BarrierWaitInfo>
   getBarrierWaitInfo(Operation *op) const = 0;
 
+  virtual std::optional<BarrierInvalidateInfo>
+  getBarrierInvalidateInfo(Operation *op) const = 0;
+
   virtual std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const = 0;
+
+  virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
+                                 Operation *op) const = 0;
 
   virtual std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const {

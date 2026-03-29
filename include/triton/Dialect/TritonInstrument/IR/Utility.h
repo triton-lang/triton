@@ -1,6 +1,7 @@
 #ifndef TRITONINSTRUMENT_UTILITY_H
 #define TRITONINSTRUMENT_UTILITY_H
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -86,6 +87,15 @@ uint32_t getMemDescLength(Value buf);
 FuncOp getEntryPoint(ModuleOp module);
 gpu::DistributedEncodingTrait
 getSingleDimSliceEncoding(gpu::DistributedEncodingTrait encoding, int dim);
+
+inline Value maybeAnd(ImplicitLocOpBuilder &b, Value lhs, Value rhs) {
+  if (!lhs)
+    return rhs;
+  if (!rhs)
+    return lhs;
+  return arith::AndIOp::create(b, lhs, rhs);
+}
+
 struct ValueType {
   Value value;
   Type type;
