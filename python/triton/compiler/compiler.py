@@ -435,6 +435,7 @@ class CompiledKernel:
         self.module = None
         self.function = None
         self._run = None
+        self.device = None
 
     def __del__(self):
 
@@ -445,8 +446,11 @@ class CompiledKernel:
             driver.active.utils.unload_module(self.module)
             self.module = None
 
-    def _init_handles(self):
+    def _init_handles(self, device=None):
+        device = driver.active.get_current_device() if device is None else device
         if self.module is not None:
+            if self.device != device:
+                raise RuntimeError(f"Kernel {self.name} was initialized for device {self.device}, not {device}")
             return
 
         def raise_(err):
@@ -459,7 +463,6 @@ class CompiledKernel:
             self._run = functools.partial(_raise_error, cloned_err)
             raise err
 
-        device = driver.active.get_current_device()
         # create launcher
         self._run = driver.active.launcher_cls(self.src, self.metadata)
         # not enough shared memory to run the kernel
@@ -476,7 +479,8 @@ class CompiledKernel:
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
-        warp_size = driver.active.get_current_target().warp_size
+        self.device = device
+        warp_size = driver.active.get_current_target(device).warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise_(OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads"))
         if knobs.runtime.kernel_load_end_hook is not None:
@@ -488,10 +492,10 @@ class CompiledKernel:
             self._init_handles()
         return self._run
 
-    def launch_metadata(self, grid, stream, *args):
+    def launch_metadata(self, grid, stream, *args, device=None):
         if knobs.runtime.launch_enter_hook is None:
             return None
-        self._init_handles()
+        self._init_handles(device=device)
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
             return ret
@@ -500,14 +504,15 @@ class CompiledKernel:
         return ret
 
     def __getitem__(self, grid):
-        self._init_handles()
 
-        def runner(*args, stream=None):
-            if stream is None:
+        def runner(*args, stream=None, device=None):
+            if device is None:
                 device = driver.active.get_current_device()
+            if stream is None:
                 stream = driver.active.get_current_stream(device)
-            launch_metadata = self.launch_metadata(grid, stream, *args)
-            self.run(grid[0], grid[1], grid[2], stream, self.function, self.packed_metadata, launch_metadata,
+            self._init_handles(device=device)
+            launch_metadata = self.launch_metadata(grid, stream, *args, device=device)
+            self.run(grid[0], grid[1], grid[2], stream, device, self.function, self.packed_metadata, launch_metadata,
                      knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *args)
 
         return runner
