@@ -516,6 +516,18 @@ def get_entry_points():
     return entry_points
 
 
+def get_dev_timestamp():
+    # Use the commit timestamp (UTC) as the dev number
+    # This is orderable: .dev20260301 < .dev20260315
+    try:
+        cmd = ['git', 'show', '--quiet', '--date=format-local:%Y%m%d', '--format=%cd']
+        env = {**os.environ, 'TZ': 'UTC0'}
+        timestamp = subprocess.check_output(cmd, env=env).strip().decode('utf-8')
+        return f'.dev{timestamp}'
+    except Exception:
+        return ""
+
+
 def get_git_commit_hash(length=8):
     try:
         cmd = ['git', 'rev-parse', f'--short={length}', 'HEAD']
@@ -533,13 +545,21 @@ def get_git_branch():
 
 
 def get_git_version_suffix():
+    """Generate a PEP 440-compliant version suffix from git state.
+
+    - Release branches: no suffix (e.g., "3.6.0")
+    - Development builds: .devYYYYMMDD (e.g., "3.6.0.dev20260301")
+    - Optionally retains git hash as local segment for traceability
+    """
     if not is_git_repo():
         return ""  # Not a git checkout
     branch = get_git_branch()
     if branch.startswith("release"):
         return ""
-    else:
-        return get_git_commit_hash()
+    timestamp = get_dev_timestamp()
+    # Append git hash as local version for traceability
+    commit_hash = get_git_commit_hash()
+    return f"{timestamp}{commit_hash}"
 
 
 def get_triton_version_suffix():
