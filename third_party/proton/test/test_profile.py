@@ -929,9 +929,11 @@ def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str
     trace_events = data["traceEvents"]
     kernel_events = [event for event in trace_events if event["name"] == "foo"]
     metric_events = [event for event in trace_events if event["cat"] == "metric"]
+    flow_events = [event for event in trace_events if event["cat"] == "flow"]
 
     assert len(kernel_events) == 4
     assert len(metric_events) == 3
+    assert len(flow_events) == 8
 
     def get_kernel_event(*scope_names: str):
         expected_stack = ["ROOT", *scope_names, "foo"]
@@ -974,6 +976,17 @@ def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str
     assert kernel_2["args"]["launch_scope_metrics"] == {"m2": "2.000000"}
     assert "launch_scope_call_stack" not in kernel_4["args"]
     assert kernel_4["args"]["launch_scope_metrics"] == {"m3": "3.000000"}
+
+    flow_starts = [event for event in flow_events if event["ph"] == "s"]
+    flow_finishes = [event for event in flow_events if event["ph"] == "f"]
+    assert len(flow_starts) == 4
+    assert len(flow_finishes) == 4
+    assert {event["id"] for event in flow_starts} == {event["id"] for event in flow_finishes}
+    assert len({event["id"] for event in flow_starts}) == 4
+    assert all(event["name"] == "launch->kernel" for event in flow_events)
+    assert all(event["tid"].startswith("cpu thread ") for event in flow_starts)
+    assert all(event["tid"] == 7 for event in flow_finishes)
+    assert all(event["bp"] == "e" for event in flow_finishes)
 
 
 def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):

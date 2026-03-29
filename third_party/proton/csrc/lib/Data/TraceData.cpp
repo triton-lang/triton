@@ -292,6 +292,8 @@ struct CycleMetricWithContext {
 };
 
 constexpr const char *kCpuThreadTidPrefix = "cpu thread ";
+constexpr const char *kLaunchFlowName = "launch->kernel";
+constexpr const char *kLaunchFlowCategory = "flow";
 
 struct OrderedTraceEvent {
   enum class Kind { Kernel, CpuMetricScope };
@@ -659,6 +661,32 @@ uint64_t getAlignedStartTimeNs(const OrderedTraceEvent &event,
   return alignedStart < 0 ? 0 : static_cast<uint64_t>(alignedStart);
 }
 
+std::string getCpuThreadTid(uint64_t threadId) {
+  return std::string(kCpuThreadTidPrefix) + std::to_string(threadId);
+}
+
+std::optional<std::pair<size_t, uint64_t>>
+getFlowSourceScopeEventIdAndTimeNs(
+    const OrderedTraceEvent &event,
+    const std::map<size_t, TraceData::Trace::TraceEvent> &events) {
+  const auto metricScopeEventId =
+      findNearestMetricScopeEventId(event.launchScopeEventId, events);
+  if (metricScopeEventId == TraceData::Trace::TraceEvent::DummyId) {
+    return std::nullopt;
+  }
+  const auto &scopeEvent = events.at(metricScopeEventId);
+  auto sourceTimeNs = scopeEvent.cpuStartTimeNs;
+  if (auto owningEventIt = events.find(event.owningEventId);
+      owningEventIt != events.end() && owningEventIt->second.hasCpuStartTime) {
+    sourceTimeNs = owningEventIt->second.cpuStartTimeNs;
+  }
+  if (scopeEvent.hasCpuTimeRange()) {
+    sourceTimeNs =
+        std::clamp(sourceTimeNs, scopeEvent.cpuStartTimeNs, scopeEvent.cpuEndTimeNs);
+  }
+  return std::make_pair(metricScopeEventId, sourceTimeNs);
+}
+
 void dumpKernelMetricTrace(
     const std::vector<OrderedTraceEvent> &orderedTraceEvents,
     const std::map<size_t, TraceData::Trace::TraceEvent> &events,
@@ -677,7 +705,15 @@ void dumpKernelMetricTrace(
   for (const auto &event : orderedTraceEvents) {
     minTimeStamp =
         std::min(minTimeStamp, getAlignedStartTimeNs(event, kernelClockOffsetNs));
+    if (event.kind == OrderedTraceEvent::Kind::Kernel) {
+      auto flowSource =
+          getFlowSourceScopeEventIdAndTimeNs(event, events);
+      if (flowSource) {
+        minTimeStamp = std::min(minTimeStamp, flowSource->second);
+      }
+    }
   }
+  uint64_t nextFlowId = 0;
   for (const auto &event : orderedTraceEvents) {
     if (event.kind == OrderedTraceEvent::Kind::CpuMetricScope &&
         !event.flexibleMetrics) {
@@ -716,6 +752,36 @@ void dumpKernelMetricTrace(
           buildFlexibleMetricsJson(*event.flexibleMetrics);
     }
     object["traceEvents"].push_back(element);
+    if (event.kind != OrderedTraceEvent::Kind::Kernel) {
+      continue;
+    }
+    const auto flowSource =
+        getFlowSourceScopeEventIdAndTimeNs(event, events);
+    if (!flowSource) {
+      continue;
+    }
+    const auto [metricScopeEventId, sourceTimeNs] = *flowSource;
+    const auto &scopeEvent = events.at(metricScopeEventId);
+    json flowStart = {{"name", kLaunchFlowName},
+                      {"cat", kLaunchFlowCategory},
+                      {"ph", "s"},
+                      {"id", nextFlowId},
+                      {"ts",
+                       static_cast<double>(sourceTimeNs - minTimeStamp) /
+                           1000.0},
+                      {"tid", getCpuThreadTid(scopeEvent.threadId)}};
+    json flowFinish = {{"name", kLaunchFlowName},
+                       {"cat", kLaunchFlowCategory},
+                       {"ph", "f"},
+                       {"bp", "e"},
+                       {"id", nextFlowId},
+                       {"ts",
+                        static_cast<double>(alignedStartTimeNs - minTimeStamp) /
+                            1000.0},
+                       {"tid", event.streamId}};
+    object["traceEvents"].push_back(flowStart);
+    object["traceEvents"].push_back(flowFinish);
+    ++nextFlowId;
   }
 
   os << object.dump() << "\n";
