@@ -1,4 +1,5 @@
 #include "Proton.h"
+#include "Profiler/RocprofSDK/RocprofSDKProfiler.h"
 
 #include <cstdint>
 #include <map>
@@ -234,6 +235,15 @@ static void initProton(pybind11::module &&m) {
         return SessionManager::instance().isDataPhaseComplete(sessionId, phase);
       },
       pybind11::arg("sessionId"), pybind11::arg("phase"));
+
+  m.def("ensure_rocprofiler_configured", []() {
+    try {
+      RocprofSDKProfiler::instance();
+      return true;
+    } catch (...) {
+      return false;
+    }
+  });
 }
 
 PYBIND11_MODULE(libproton, m) {
