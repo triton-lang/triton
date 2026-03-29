@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import os
 import time
 import inspect
 import hashlib
@@ -167,6 +168,61 @@ class Autotuner(KernelInterface):
                 print(f"Autotuning failed with {e}")
             return [float("inf"), float("inf"), float("inf")]
 
+    @staticmethod
+    def _resolve_num_workers():
+        """Resolve the effective number of compile workers from the knob."""
+        num_workers = knobs.autotuning.compile_workers
+        if num_workers == 0:
+            num_workers = min(4, max(1, (os.cpu_count() or 1) // 2))
+        return num_workers
+
+    def _compile_config(self, *args, config, **meta):
+        """Compile a single config without benchmarking. Thread-safe."""
+        current = dict(meta, **config.all_kwargs())
+        current['warmup'] = True
+        self.fn.run(*args, **current)
+
+    def _parallel_bench(self, *args, configs, num_workers, **kwargs):
+        """Compile configs in parallel, benchmark sequentially."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from ..compiler.errors import CompileTimeAssertionFailure
+
+        # Workaround for thread-unsafe sysconfig initialization (Python <3.12).
+        # See https://github.com/python/cpython/issues/92452
+        import sysconfig
+        sysconfig.get_config_vars()
+
+        verbose = knobs.autotuning.print
+        overlap = knobs.autotuning.overlap_bench
+        timings = {}
+        failed = set()
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_config = {}
+            for config in configs:
+                future = executor.submit(self._compile_config, *args, config=config, **kwargs)
+                future_to_config[future] = config
+
+            for future in as_completed(future_to_config):
+                config = future_to_config[future]
+                try:
+                    future.result()
+                except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as e:
+                    if verbose:
+                        print(f"Autotuning compile failed for {config}: {e}")
+                    timings[config] = [float("inf"), float("inf"), float("inf")]
+                    failed.add(config)
+                    continue
+                if overlap:
+                    timings[config] = self._bench(*args, config=config, **kwargs)
+
+        if not overlap:
+            for config in configs:
+                if config not in failed:
+                    timings[config] = self._bench(*args, config=config, **kwargs)
+
+        return timings
+
     def check_disk_cache(self, tuning_key, configs, bench_fn):
         # We can't serialize prehooks, so just give up and run the benchmarks.
         if not tuning_key or any(cfg.pre_hook for cfg in configs):
@@ -225,9 +281,15 @@ class Autotuner(KernelInterface):
                 pruned_configs = self.prune_configs(kwargs)
 
                 def benchmark():
-                    bench_start = time.time()
-                    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
-                    bench_end = time.time()
+                    num_workers = self._resolve_num_workers()
+
+                    bench_start = time.perf_counter()
+                    if num_workers > 1 and len(pruned_configs) > 1:
+                        timings = self._parallel_bench(*args, configs=pruned_configs, num_workers=num_workers, **kwargs)
+                    else:
+                        timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                    bench_end = time.perf_counter()
+
                     self.bench_time = bench_end - bench_start
                     self.cache[key] = builtins.min(timings, key=timings.get)
                     full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
@@ -286,13 +348,28 @@ class Autotuner(KernelInterface):
 
     def warmup(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
-        ret = []
-        for autotune_config in self.prune_configs(kwargs):
-            ret.append(self.fn.warmup(
-                *args,
-                **kwargs,
-                **autotune_config.all_kwargs(),
-            ))
+        pruned_configs = self.prune_configs(kwargs)
+        num_workers = self._resolve_num_workers()
+        if num_workers > 1 and len(pruned_configs) > 1:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import sysconfig
+            sysconfig.get_config_vars()
+            ret = [None] * len(pruned_configs)
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = {}
+                for i, autotune_config in enumerate(pruned_configs):
+                    future = executor.submit(self.fn.warmup, *args, **kwargs, **autotune_config.all_kwargs())
+                    futures[future] = i
+                for future in as_completed(futures):
+                    ret[futures[future]] = future.result()
+        else:
+            ret = []
+            for autotune_config in pruned_configs:
+                ret.append(self.fn.warmup(
+                    *args,
+                    **kwargs,
+                    **autotune_config.all_kwargs(),
+                ))
         self.nargs = None
         return ret
 
