@@ -7,7 +7,7 @@ from triton._C.libtriton import ir
 
 T = TypeVar("T")
 
-__all__ = ["constexpr_function", "jit"]
+__all__ = ["GluonJITFunction", "constexpr_function", "jit"]
 
 
 class GluonASTSource(ASTSource):

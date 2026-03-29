@@ -292,6 +292,141 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#A_RING = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#B_RING = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#C_RING = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#A_RING_OP = #ttg.dot_op<{opIdx = 0, parent = #C_RING, kWidth = 2}>
+#B_RING_OP = #ttg.dot_op<{opIdx = 1, parent = #C_RING, kWidth = 2}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: tt.func @split_pipelined_mmav2_loads
+// CHECK-DAG: %[[A_VIEW:.+]] = ttg.memdesc_index %[[A_BUF:.+]][
+// CHECK-DAG: %[[WAIT:.+]] = ttg.async_wait
+// CHECK-DAG: %[[B_VIEW:.+]] = ttg.memdesc_index %[[B_BUF:.+]][
+// CHECK-DAG: %[[A0_SMEM:.+]] = ttg.memdesc_subslice %[[A_VIEW]][0, 0]
+// CHECK-DAG: %[[A0:.+]] = ttg.local_load %[[A0_SMEM]] token %[[WAIT]]
+// CHECK-DAG: %[[B0_SMEM:.+]] = ttg.memdesc_subslice %[[B_VIEW]][0, 0]
+// CHECK-DAG: %[[B0:.+]] = ttg.local_load %[[B0_SMEM]] token %[[WAIT]]
+// CHECK: %[[LOOP:.+]]:8 = scf.for {{.+}} iter_args(%[[IDX_ARG:.+]] = %[[C0:.+]], %[[ACC_ARG:.+]] = %{{.+}}, %[[A_VIEW_ARG:.+]] = %[[A_VIEW]], %[[B_VIEW_ARG:.+]] = %[[B_VIEW]], %[[A_WAIT_ARG:.+]] = %[[WAIT]], %[[B_WAIT_ARG:.+]] = %[[WAIT]], %[[A0_ARG:.+]] = %[[A0]], %[[B0_ARG:.+]] = %[[B0]])
+// CHECK-DAG: %[[A1_SMEM:.+]] = ttg.memdesc_subslice %[[A_VIEW_ARG]][0, 16]
+// CHECK-DAG: %[[A1:.+]] = ttg.local_load %[[A1_SMEM]] token %[[A_WAIT_ARG]]
+// CHECK-DAG: %[[B1_SMEM:.+]] = ttg.memdesc_subslice %[[B_VIEW_ARG]][16, 0]
+// CHECK-DAG: %[[B1:.+]] = ttg.local_load %[[B1_SMEM]] token %[[B_WAIT_ARG]]
+// CHECK: %[[DOT0:.+]] = tt.dot %[[A0_ARG]], %[[B0_ARG]], %[[ACC_ARG]]
+// CHECK: ttg.memdesc_index %[[A_BUF]][
+// CHECK: ttg.memdesc_index %[[B_BUF]][
+// CHECK: %[[NEXT_A_HEAD_SMEM:.+]] = ttg.memdesc_subslice %{{.+}}[0, 0] : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable, 128x32>
+// CHECK: ttg.local_load %[[NEXT_A_HEAD_SMEM]] token %{{.+}} : !ttg.memdesc<128x16xf16, #shared, #smem, mutable, 128x32> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+// CHECK: %[[NEXT_B_HEAD_SMEM:.+]] = ttg.memdesc_subslice %{{.+}}[0, 0] : !ttg.memdesc<32x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x128xf16, #shared, #smem, mutable, 32x128>
+// CHECK: ttg.local_load %[[NEXT_B_HEAD_SMEM]] token %{{.+}} : !ttg.memdesc<16x128xf16, #shared, #smem, mutable, 32x128> -> tensor<16x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+// CHECK: tt.dot %[[A1]], %[[B1]], %[[DOT0]]
+module attributes { "ttg.num-warps" = 4 : i32 } {
+tt.func @split_pipelined_mmav2_loads(%lb : index, %ub : index, %step : index, %tok0 : !ttg.async.token, %tok1 : !ttg.async.token) -> tensor<128x128xf32, #C_RING> {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %cst = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C_RING>
+  %a = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #A_RING, #smem, mutable>
+  %b = ttg.local_alloc : () -> !ttg.memdesc<3x32x128xf16, #B_RING, #smem, mutable>
+  %loop:2 = scf.for %iv = %lb to %ub step %step iter_args(%idx = %c0_i32, %acc = %cst) -> (i32, tensor<128x128xf32, #C_RING>) {
+    %idx_p1 = arith.addi %idx, %c1_i32 : i32
+    %idx_cmp = arith.cmpi sge, %idx_p1, %c3_i32 : i32
+    %idx_next = arith.select %idx_cmp, %c0_i32, %idx_p1 : i32
+    %wait = ttg.async_wait %tok0, %tok1 {num = 4 : i32}
+    %a_view = ttg.memdesc_index %a[%idx_next] : !ttg.memdesc<3x128x32xf16, #A_RING, #smem, mutable> -> !ttg.memdesc<128x32xf16, #A_RING, #smem, mutable>
+    %a_val = ttg.local_load %a_view token %wait : !ttg.memdesc<128x32xf16, #A_RING, #smem, mutable> -> tensor<128x32xf16, #A_RING_OP>
+    %b_view = ttg.memdesc_index %b[%idx_next] : !ttg.memdesc<3x32x128xf16, #B_RING, #smem, mutable> -> !ttg.memdesc<32x128xf16, #B_RING, #smem, mutable>
+    %b_val = ttg.local_load %b_view token %wait : !ttg.memdesc<32x128xf16, #B_RING, #smem, mutable> -> tensor<32x128xf16, #B_RING_OP>
+    %acc_next = tt.dot %a_val, %b_val, %acc : tensor<128x32xf16, #A_RING_OP> * tensor<32x128xf16, #B_RING_OP> -> tensor<128x128xf32, #C_RING>
+    scf.yield %idx_next, %acc_next : i32, tensor<128x128xf32, #C_RING>
+  }
+  tt.return %loop#1 : tensor<128x128xf32, #C_RING>
+}
+}  // end module
+
+// CHECK-LABEL: tt.func @prefetch_pipelined_loop_args
+// CHECK-DAG: %[[INIT_WAIT:.+]] = ttg.async_wait %arg3, %arg4 {num = 4 : i32}
+// CHECK-DAG: %[[A0_SMEM:.+]] = ttg.memdesc_subslice %[[A0:.+]][0, 0]
+// CHECK-DAG: %[[A0_PREFETCH:.+]] = ttg.local_load %[[A0_SMEM]] token %[[INIT_WAIT]]
+// CHECK-DAG: %[[B0_SMEM:.+]] = ttg.memdesc_subslice %[[B0:.+]][0, 0]
+// CHECK-DAG: %[[B0_PREFETCH:.+]] = ttg.local_load %[[B0_SMEM]] token %[[INIT_WAIT]]
+// CHECK: %[[LOOP:.+]]:7 = scf.for {{.+}} iter_args(%[[IDX_ARG:.+]] = %[[C0:.+]], %[[A_ARG:.+]] = %[[A0]], %[[B_ARG:.+]] = %[[B0]], %[[WAIT_ARG:.+]] = %[[INIT_WAIT]], %[[ACC_ARG:.+]] = %{{.+}}, %[[A_PREFETCH_ARG:.+]] = %[[A0_PREFETCH]], %[[B_PREFETCH_ARG:.+]] = %[[B0_PREFETCH]])
+// CHECK: %[[WAIT_NEXT:.+]] = ttg.async_wait %arg3, %arg4 {num = 4 : i32}
+// CHECK-DAG: %[[A1_SMEM:.+]] = ttg.memdesc_subslice %[[A_ARG]][0, 16]
+// CHECK-DAG: %[[A1:.+]] = ttg.local_load %[[A1_SMEM]] token %[[WAIT_ARG]]
+// CHECK-DAG: %[[B1_SMEM:.+]] = ttg.memdesc_subslice %[[B_ARG]][16, 0]
+// CHECK-DAG: %[[B1:.+]] = ttg.local_load %[[B1_SMEM]] token %[[WAIT_ARG]]
+// CHECK: %{{.+}} = tt.dot %[[A_PREFETCH_ARG]], %[[B_PREFETCH_ARG]], %[[ACC_ARG]]
+// CHECK-DAG: %[[NEXT_A_SMEM:.+]] = ttg.memdesc_subslice %{{.+}}[0, 0]
+// CHECK-DAG: %[[NEXT_A_PREFETCH:.+]] = ttg.local_load %[[NEXT_A_SMEM]] token %[[WAIT_NEXT]]
+// CHECK-DAG: %[[NEXT_B_SMEM:.+]] = ttg.memdesc_subslice %{{.+}}[0, 0]
+// CHECK-DAG: %[[NEXT_B_PREFETCH:.+]] = ttg.local_load %[[NEXT_B_SMEM]] token %[[WAIT_NEXT]]
+module attributes { "ttg.num-warps" = 4 : i32 } {
+tt.func @prefetch_pipelined_loop_args(%lb : index, %ub : index, %step : index, %tok0 : !ttg.async.token, %tok1 : !ttg.async.token) -> tensor<128x128xf32, #C_RING> {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %cst = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C_RING>
+  %a = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #A_RING, #smem, mutable>
+  %b = ttg.local_alloc : () -> !ttg.memdesc<3x32x128xf16, #B_RING, #smem, mutable>
+  %wait0 = ttg.async_wait %tok0, %tok1 {num = 4 : i32}
+  %a0 = ttg.memdesc_index %a[%c0_i32] : !ttg.memdesc<3x128x32xf16, #A_RING, #smem, mutable> -> !ttg.memdesc<128x32xf16, #A_RING, #smem, mutable>
+  %b0 = ttg.memdesc_index %b[%c0_i32] : !ttg.memdesc<3x32x128xf16, #B_RING, #smem, mutable> -> !ttg.memdesc<32x128xf16, #B_RING, #smem, mutable>
+  %loop:7 = scf.for %iv = %lb to %ub step %step iter_args(%idx = %c0_i32, %a_view = %a0, %b_view = %b0, %wait = %wait0, %tok_a = %tok0, %tok_b = %tok1, %acc = %cst) -> (i32, !ttg.memdesc<128x32xf16, #A_RING, #smem, mutable>, !ttg.memdesc<32x128xf16, #B_RING, #smem, mutable>, !ttg.async.token, !ttg.async.token, !ttg.async.token, tensor<128x128xf32, #C_RING>) {
+    %a_val = ttg.local_load %a_view token %wait : !ttg.memdesc<128x32xf16, #A_RING, #smem, mutable> -> tensor<128x32xf16, #A_RING_OP>
+    %b_val = ttg.local_load %b_view token %wait : !ttg.memdesc<32x128xf16, #B_RING, #smem, mutable> -> tensor<32x128xf16, #B_RING_OP>
+    %idx_p1 = arith.addi %idx, %c1_i32 : i32
+    %idx_cmp = arith.cmpi sge, %idx_p1, %c3_i32 : i32
+    %idx_next = arith.select %idx_cmp, %c0_i32, %idx_p1 : i32
+    %wait_next = ttg.async_wait %tok_a, %tok_b {num = 4 : i32}
+    %a_next = ttg.memdesc_index %a[%idx_next] : !ttg.memdesc<3x128x32xf16, #A_RING, #smem, mutable> -> !ttg.memdesc<128x32xf16, #A_RING, #smem, mutable>
+    %b_next = ttg.memdesc_index %b[%idx_next] : !ttg.memdesc<3x32x128xf16, #B_RING, #smem, mutable> -> !ttg.memdesc<32x128xf16, #B_RING, #smem, mutable>
+    %acc_next = tt.dot %a_val, %b_val, %acc : tensor<128x32xf16, #A_RING_OP> * tensor<32x128xf16, #B_RING_OP> -> tensor<128x128xf32, #C_RING>
+    scf.yield %idx_next, %a_next, %b_next, %wait_next, %tok_a, %tok_b, %acc_next : i32, !ttg.memdesc<128x32xf16, #A_RING, #smem, mutable>, !ttg.memdesc<32x128xf16, #B_RING, #smem, mutable>, !ttg.async.token, !ttg.async.token, !ttg.async.token, tensor<128x128xf32, #C_RING>
+  }
+  tt.return %loop#6 : tensor<128x128xf32, #C_RING>
+}
+}  // end module
+
+// CHECK-LABEL: tt.func @prefetch_induction_var_source
+// CHECK-DAG: %[[LB_I32:.+]] = arith.index_cast %arg0 : index to i32
+// CHECK-DAG: %[[INIT_WAIT:.+]] = ttg.async_wait %arg3, %arg4 {num = 4 : i32}
+// CHECK-DAG: %[[A0_VIEW:.+]] = ttg.memdesc_index %{{.+}}[%[[LB_I32]]]
+// CHECK-DAG: %[[A0_HEAD_SMEM:.+]] = ttg.memdesc_subslice %[[A0_VIEW]][0, 0]
+// CHECK-DAG: %[[A0_HEAD:.+]] = ttg.local_load %[[A0_HEAD_SMEM]] token %[[INIT_WAIT]]
+// CHECK-DAG: %[[B0_VIEW:.+]] = ttg.memdesc_index %{{.+}}[%[[LB_I32]]]
+// CHECK-DAG: %[[B0_HEAD_SMEM:.+]] = ttg.memdesc_subslice %[[B0_VIEW]][0, 0]
+// CHECK-DAG: %[[B0_HEAD:.+]] = ttg.local_load %[[B0_HEAD_SMEM]] token %[[INIT_WAIT]]
+// CHECK: %[[LOOP:.+]]:{{[0-9]+}} = scf.for %[[IV:.+]] = %arg0 to %arg1 step %arg2 iter_args({{.*}}%[[A_PREFETCH_ARG:.+]] = %[[A0_HEAD]], %[[B_PREFETCH_ARG:.+]] = %[[B0_HEAD]])
+// CHECK: %[[WAIT:.+]] = ttg.async_wait %arg3, %arg4 {num = 4 : i32}
+// CHECK-DAG: %[[IV_NEXT:.+]] = arith.addi %[[IV]], %arg2 : index
+// CHECK-DAG: %[[IV_NEXT_I32:.+]] = arith.index_cast %[[IV_NEXT]] : index to i32
+// CHECK: %[[A1_HEAD_SMEM:.+]] = ttg.memdesc_subslice %{{.+}}[0, 0] : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable, 128x32>
+// CHECK: %[[A1_HEAD:.+]] = ttg.local_load %[[A1_HEAD_SMEM]] token %{{.+}} : !ttg.memdesc<128x16xf16, #shared, #smem, mutable, 128x32> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+// CHECK: %[[B1_HEAD_SMEM:.+]] = ttg.memdesc_subslice %{{.+}}[0, 0] : !ttg.memdesc<32x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x128xf16, #shared, #smem, mutable, 32x128>
+// CHECK: %[[B1_HEAD:.+]] = ttg.local_load %[[B1_HEAD_SMEM]] token %{{.+}} : !ttg.memdesc<16x128xf16, #shared, #smem, mutable, 32x128> -> tensor<16x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+// CHECK: %{{.+}} = tt.dot %{{.+}}, %{{.+}}, %{{.+}}
+module attributes { "ttg.num-warps" = 4 : i32 } {
+tt.func @prefetch_induction_var_source(%lb : index, %ub : index, %step : index, %tok0 : !ttg.async.token, %tok1 : !ttg.async.token) -> tensor<128x128xf32, #C_RING> {
+  %cst = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C_RING>
+  %a = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #A_RING, #smem, mutable>
+  %b = ttg.local_alloc : () -> !ttg.memdesc<3x32x128xf16, #B_RING, #smem, mutable>
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst) -> (tensor<128x128xf32, #C_RING>) {
+    %iv_i32 = arith.index_cast %iv : index to i32
+    %wait = ttg.async_wait %tok0, %tok1 {num = 4 : i32}
+    %a_view = ttg.memdesc_index %a[%iv_i32] : !ttg.memdesc<3x128x32xf16, #A_RING, #smem, mutable> -> !ttg.memdesc<128x32xf16, #A_RING, #smem, mutable>
+    %a_val = ttg.local_load %a_view token %wait : !ttg.memdesc<128x32xf16, #A_RING, #smem, mutable> -> tensor<128x32xf16, #A_RING_OP>
+    %b_view = ttg.memdesc_index %b[%iv_i32] : !ttg.memdesc<3x32x128xf16, #B_RING, #smem, mutable> -> !ttg.memdesc<32x128xf16, #B_RING, #smem, mutable>
+    %b_val = ttg.local_load %b_view token %wait : !ttg.memdesc<32x128xf16, #B_RING, #smem, mutable> -> tensor<32x128xf16, #B_RING_OP>
+    %acc_next = tt.dot %a_val, %b_val, %acc : tensor<128x32xf16, #A_RING_OP> * tensor<32x128xf16, #B_RING_OP> -> tensor<128x128xf32, #C_RING>
+    scf.yield %acc_next : tensor<128x128xf32, #C_RING>
+  }
+  tt.return %loop : tensor<128x128xf32, #C_RING>
+}
+}  // end module
+
+// -----
+
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #A = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
@@ -301,7 +436,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #B_OP = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
 #smem = #ttg.shared_memory
 
-// CHECK: tt.func @matmul_loop_mixed_amd
+// CHECK-LABEL: tt.func @matmul_loop_mixed_amd
 // CHECK-DAG: %[[A0_PREFETCH_SMEM:.*]] = ttg.memdesc_subslice %[[A0:.*]][0, 0]
 // CHECK-DAG: %[[A0_PREFETCH:.*]] = ttg.local_load %[[A0_PREFETCH_SMEM]]
 // CHECK-DAG: %[[A0_CVT:.*]] = tt.fp_to_fp %[[A0_PREFETCH]]

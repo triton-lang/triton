@@ -345,7 +345,10 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
 
     loop_ub = ttgl.cdiv(K, BLOCK_K)
     epilogue_lb = loop_ub - (NUM_BUFFERS - 1)
+    ttgl.assume(loop_ub > 0)
     for i in range(0, loop_ub):
+        pred = i - epilogue_lb
+        pred = (pred >> 31) & 1
         # SubIteration0
         # LDS load SubIteration1
         a1, b1 = lds_subtile_load(consumer, SUBTILE_LEN, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
@@ -357,7 +360,7 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
         # TDM load for next tile
         # If we are in epilogue, we have already issued our tile loads
         producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B,
-                               pred=i < epilogue_lb)
+                               pred=pred)
 
         # We prefetch distance - 1 iterations ahead because producer is already incremented by 1
         issue_l2_prefetches(L2_PREFETCH_DISTANCE - 1, producer, a_desc, b_desc, 0, 0, BLOCK_K, TRANSPOSE_B)

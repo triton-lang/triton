@@ -5,8 +5,19 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Debug.h"
 
 using namespace mlir;
+
+inline void dumpScheduleDebug(triton::CoarseSchedule &schedule,
+                              const char *debugType, llvm::StringRef msg) {
+  DEBUG_WITH_TYPE(debugType, {
+    llvm::dbgs() << "\n[" << debugType << "]: " << msg << "\n";
+    schedule.dump();
+  });
+}
 
 // DFS the def chain of 'defValue' starting from 'consumer' and will return the
 // minimum found when accumulating countFunc(op) for all non control flow ops

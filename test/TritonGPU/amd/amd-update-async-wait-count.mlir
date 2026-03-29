@@ -586,3 +586,84 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Test bug fix: With warp = [[0], [0]] the warp dimension has free variables,
+// so the load should contribute 0 instructions — non-canonical warps skip the
+// load entirely.
+
+#linear_warp_free = #ttg.linear<{register = [[0]], lane = [[1], [2], [4], [8], [16], [32]], warp = [[0], [0]], block = []}>
+#shared_simple = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: warp_free_variable_returns_zero
+  tt.func public @warp_free_variable_returns_zero(
+      %ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+      %offsets: tensor<64xi32, #linear_warp_free>,
+      %dest: !ttg.memdesc<64xi32, #shared_simple, #smem, mutable>) {
+    %0 = amdg.buffer_load_to_local %ptr[%offsets] into %dest : <i32>[tensor<64xi32, #linear_warp_free>]  -> <64xi32, #shared_simple, #smem, mutable>
+    %1 = ttg.async_commit_group
+
+    // The load above contributes 0 instructions, so waitcnt should be 0
+    // CHECK: amdg.async_wait {num_inst = 0
+    %2 = ttg.async_wait {num = 1 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// Test bug fix: register zero bases should not inflate instruction count.
+
+#linear_reg_zero = #ttg.linear<{register = [[0]], lane = [[1], [2], [4], [8], [16], [32]], warp = [[64], [128]], block = []}>
+#shared_simple2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: register_zero_bases_not_inflated
+  tt.func public @register_zero_bases_not_inflated(
+      %ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+      %offsets: tensor<256xi32, #linear_reg_zero>,
+      %dest: !ttg.memdesc<256xi32, #shared_simple2, #smem, mutable>) {
+    %0 = amdg.buffer_load_to_local %ptr[%offsets] into %dest : <i32>[tensor<256xi32, #linear_reg_zero>]  -> <256xi32, #shared_simple2, #smem, mutable>
+    %1 = ttg.async_commit_group
+    // Without zero-base removal, register dim size is 2 which would give
+    // num_inst = 2. With zero-base removal, it correctly gives num_inst = 1.
+    // CHECK: amdg.async_wait {num_inst = 1
+    %2 = ttg.async_wait {num = 1 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// Test TDM with partitioned shared encoding where each copy emits multiple instructions
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared_inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 4, partitionDim = 0, partitionLayout = #shared_inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_partitioned_shared_waitcnt
+  tt.func public @tdm_partitioned_shared_waitcnt(
+    %memDesc: !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>,
+    %tensorDesc: !tt.tensordesc<tensor<128x16xf16>>,
+    %mask: i32
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+
+    // numLogicalPieces = numPartitions * numGroups = 2 * 4 = 8
+    // warpsAlongPartition = gcd(numWarps=4, numLogicalPieces=8) = 4
+    // Each async_tdm_copy emits divideCeil(8, 4) = 2 instructions
+    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %mask : !tt.tensordesc<tensor<128x16xf16>> -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %mask : !tt.tensordesc<tensor<128x16xf16>> -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
+
+    // Skip second copy (2 instructions) => count = 2
+    // CHECK: amdg.async_tdm_intrinsic_wait {{.*}} {count = 2
+    %w1 = amdg.async_tdm_wait %1 {num = 0 : i32}
+    // Nothing in between => count = 0
+    // CHECK: amdg.async_tdm_intrinsic_wait {{.*}} {count = 0
+    %w2 = amdg.async_tdm_wait %2 {num = 0 : i32}
+    tt.return
+  }
+}

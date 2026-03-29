@@ -111,4 +111,15 @@ def TritonAMDGPUConvertWarpSpecializeToLLVM : Pass<"triton-amdgpu-convert-warp-s
   ];
 }
 
+def PrepareConSanCaptures : Pass<"prepare-consan-captures", "mlir::ModuleOp"> {
+  let summary = "Reserve shared memory for ConSan captures in WarpSpecializeOps";
+  let description = [{
+    Scans the module to estimate how many WarpSpecialize captures the
+    ConcurrencySanitizer pass will add, and sets a
+    `consan.extra_capture_bytes` attribute on each WarpSpecializeOp.
+    The AllocateAMDGPUSharedMemory pass reads this attribute to reserve
+    enough LDS for the expanded capture struct.
+  }];
+}
+
 #endif
