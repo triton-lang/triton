@@ -8,6 +8,7 @@
 #include <chrono>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 
@@ -214,13 +215,24 @@ DataEntry TraceData::addOp(size_t phase, size_t eventId,
   const auto newEventId = trace->addEvent(contextId);
   auto &newEvent = trace->getEvent(newEventId);
   if (eventId == Data::kRootEntryId) {
+    newEvent.cpuStartTimeNs = getCurrentCpuTimestampNs();
+    newEvent.hasCpuStartTime = true;
+    newEvent.threadId = getCurrentThreadTraceId();
     auto activeEventStackIt = traceDataToActiveEventStack.find(this);
     if (activeEventStackIt != traceDataToActiveEventStack.end() &&
         !activeEventStackIt->second.empty()) {
       newEvent.launchScopeEventId = activeEventStackIt->second.back();
     }
   } else {
-    newEvent.launchScopeEventId = trace->getEvent(eventId).launchScopeEventId;
+    const auto &parentEvent = trace->getEvent(eventId);
+    if (parentEvent.scopeId != Scope::DummyScopeId) {
+      newEvent.launchScopeEventId = eventId;
+    } else {
+      newEvent.launchScopeEventId = parentEvent.launchScopeEventId;
+    }
+    newEvent.cpuStartTimeNs = parentEvent.cpuStartTimeNs;
+    newEvent.hasCpuStartTime = parentEvent.hasCpuStartTime;
+    newEvent.threadId = parentEvent.threadId;
   }
   return DataEntry(newEventId, phase, newEvent.metricSet);
 }
@@ -288,6 +300,7 @@ struct OrderedTraceEvent {
   const KernelMetric *kernelMetric{};
   const DataEntry::FlexibleMetricMap *flexibleMetrics{};
   std::vector<Context> contexts;
+  size_t owningEventId = TraceData::Trace::TraceEvent::DummyId;
   size_t launchScopeEventId = TraceData::Trace::TraceEvent::DummyId;
   uint64_t threadId = 0;
   size_t streamId = 0;
@@ -297,12 +310,14 @@ struct OrderedTraceEvent {
   static OrderedTraceEvent kernel(const KernelMetric *metric,
                                   const DataEntry::FlexibleMetricMap *metrics,
                                   std::vector<Context> contexts,
-                                  size_t streamId, size_t launchScopeEventId) {
+                                  size_t owningEventId, size_t streamId,
+                                  size_t launchScopeEventId) {
     OrderedTraceEvent event;
     event.kind = Kind::Kernel;
     event.kernelMetric = metric;
     event.flexibleMetrics = metrics;
     event.contexts = std::move(contexts);
+    event.owningEventId = owningEventId;
     event.launchScopeEventId = launchScopeEventId;
     event.streamId = streamId;
     event.startTimeNs =
@@ -579,12 +594,59 @@ void appendLaunchScopeArgs(
       buildFlexibleMetricsJson(scopeEvent.metricSet.flexibleMetrics);
 }
 
+std::optional<int64_t> computeKernelClockOffsetNs(
+    const std::vector<OrderedTraceEvent> &orderedTraceEvents,
+    const std::map<size_t, TraceData::Trace::TraceEvent> &events) {
+  std::vector<int64_t> offsets;
+  offsets.reserve(orderedTraceEvents.size());
+  for (const auto &event : orderedTraceEvents) {
+    if (event.kind != OrderedTraceEvent::Kind::Kernel) {
+      continue;
+    }
+    auto traceEventIt = events.find(event.owningEventId);
+    if (traceEventIt == events.end() || !traceEventIt->second.hasCpuStartTime) {
+      continue;
+    }
+    offsets.push_back(static_cast<int64_t>(traceEventIt->second.cpuStartTimeNs) -
+                      static_cast<int64_t>(event.startTimeNs));
+  }
+  if (offsets.empty()) {
+    return std::nullopt;
+  }
+  auto middle = offsets.begin() + offsets.size() / 2;
+  std::nth_element(offsets.begin(), middle, offsets.end());
+  return *middle;
+}
+
+uint64_t getAlignedStartTimeNs(const OrderedTraceEvent &event,
+                               const std::optional<int64_t> &kernelClockOffsetNs) {
+  if (event.kind != OrderedTraceEvent::Kind::Kernel || !kernelClockOffsetNs) {
+    return event.startTimeNs;
+  }
+  const auto alignedStart =
+      static_cast<int64_t>(event.startTimeNs) + *kernelClockOffsetNs;
+  return alignedStart < 0 ? 0 : static_cast<uint64_t>(alignedStart);
+}
+
 void dumpKernelMetricTrace(
-    uint64_t minTimeStamp, const std::vector<OrderedTraceEvent> &orderedTraceEvents,
+    const std::vector<OrderedTraceEvent> &orderedTraceEvents,
     const std::map<size_t, TraceData::Trace::TraceEvent> &events,
     const std::unordered_map<size_t, std::vector<Context>> &eventIdToContexts,
     std::ostream &os) {
   json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
+  const bool hasCpuMetricScopes = std::any_of(
+      orderedTraceEvents.begin(), orderedTraceEvents.end(),
+      [](const auto &event) {
+        return event.kind == OrderedTraceEvent::Kind::CpuMetricScope;
+      });
+  const auto kernelClockOffsetNs =
+      hasCpuMetricScopes ? computeKernelClockOffsetNs(orderedTraceEvents, events)
+                         : std::nullopt;
+  auto minTimeStamp = std::numeric_limits<uint64_t>::max();
+  for (const auto &event : orderedTraceEvents) {
+    minTimeStamp =
+        std::min(minTimeStamp, getAlignedStartTimeNs(event, kernelClockOffsetNs));
+  }
   for (const auto &event : orderedTraceEvents) {
     if (event.kind == OrderedTraceEvent::Kind::CpuMetricScope &&
         !event.flexibleMetrics) {
@@ -609,9 +671,11 @@ void dumpKernelMetricTrace(
           std::string(kCpuThreadTidPrefix) + std::to_string(event.threadId);
       element["args"]["thread_id"] = event.threadId;
     }
+    const auto alignedStartTimeNs =
+        getAlignedStartTimeNs(event, kernelClockOffsetNs);
     element["ph"] = "X";
     element["ts"] =
-        static_cast<double>(event.startTimeNs - minTimeStamp) / 1000.0;
+        static_cast<double>(alignedStartTimeNs - minTimeStamp) / 1000.0;
     element["dur"] =
         static_cast<double>(event.endTimeNs - event.startTimeNs) / 1000.0;
     element["args"]["call_stack"] = buildCallStackJson(event.contexts);
@@ -663,7 +727,6 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     for (const auto &[eventId, event] : events) {
       eventIdToContexts.emplace(eventId, trace->getContexts(event.contextId));
     }
-    uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
     bool hasKernelMetrics = false, hasCycleMetrics = false,
          hasCpuMetricScopes = false;
     std::vector<CycleMetricWithContext> cycleEvents;
@@ -686,16 +749,14 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
                 events.at(owningEventId).launchScopeEventId;
             if (isMetricKernel) {
               orderedTraceEvents.push_back(OrderedTraceEvent::kernel(
-                  kernelMetric, flexibleMetrics, contexts, streamId,
+                  kernelMetric, flexibleMetrics, contexts, owningEventId,
+                  streamId,
                   launchScopeEventId));
             } else {
               orderedTraceEvents.push_back(OrderedTraceEvent::kernel(
-                  kernelMetric, nullptr, contexts, streamId,
+                  kernelMetric, nullptr, contexts, owningEventId, streamId,
                   launchScopeEventId));
             }
-            const auto startTime = std::get<uint64_t>(
-                kernelMetric->getValue(KernelMetric::StartTime));
-            minTimeStamp = std::min(minTimeStamp, startTime);
             hasKernelMetrics = true;
             emittedKernel = true;
           }
@@ -718,7 +779,6 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
         orderedTraceEvents.push_back(OrderedTraceEvent::cpuMetricScope(
             &event.metricSet.flexibleMetrics, baseContexts, event.threadId,
             event.cpuStartTimeNs, event.cpuEndTimeNs));
-        minTimeStamp = std::min(minTimeStamp, event.cpuStartTimeNs);
         hasCpuMetricScopes = true;
       }
       std::vector<size_t> sortedLinkedTargetEntryIds;
@@ -753,8 +813,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     }
 
     if (hasKernelMetrics || hasCpuMetricScopes) {
-      dumpKernelMetricTrace(minTimeStamp, orderedTraceEvents, events,
-                            eventIdToContexts, os);
+      dumpKernelMetricTrace(orderedTraceEvents, events, eventIdToContexts, os);
     } else {
       os << json({{"displayTimeUnit", "us"}, {"traceEvents", json::array()}})
                 .dump()
