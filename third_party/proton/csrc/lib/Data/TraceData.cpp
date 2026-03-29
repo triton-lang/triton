@@ -386,6 +386,39 @@ json buildFlexibleMetricsJson(const DataEntry::FlexibleMetricMap &flexibleMetric
   return metrics;
 }
 
+std::string buildFlexibleMetricEventName(
+    const std::vector<Context> &contexts,
+    const DataEntry::FlexibleMetricMap &flexibleMetrics) {
+  if (flexibleMetrics.empty()) {
+    return GraphState::metricTag;
+  }
+  const auto &scopeName =
+      contexts.empty() ? GraphState::metricTag : contexts.back().name;
+  auto appendTuple =
+      [&](std::ostringstream &os, const std::string &metricName,
+          const FlexibleMetric &metricValue) {
+        os << "(" << scopeName << ", " << metricName << ", "
+           << formatFlexibleMetricValue(metricValue.getValues()[0]) << ")";
+      };
+  std::ostringstream os;
+  if (flexibleMetrics.size() == 1) {
+    const auto &[metricName, metricValue] = *flexibleMetrics.begin();
+    appendTuple(os, metricName, metricValue);
+    return os.str();
+  }
+  os << "[";
+  bool isFirst = true;
+  for (const auto &[metricName, metricValue] : flexibleMetrics) {
+    if (!isFirst) {
+      os << ", ";
+    }
+    appendTuple(os, metricName, metricValue);
+    isFirst = false;
+  }
+  os << "]";
+  return os.str();
+}
+
 std::vector<KernelTrace>
 convertToTimelineTrace(std::vector<CycleMetricWithContext> &cycleEvents) {
   std::vector<KernelTrace> results;
@@ -588,8 +621,6 @@ void appendLaunchScopeArgs(
   const auto &scopeEvent = events.at(metricScopeEventId);
   args["launch_scope_event_id"] = metricScopeEventId;
   args["launch_scope_thread_id"] = scopeEvent.threadId;
-  args["launch_scope_call_stack"] =
-      buildCallStackJson(eventIdToContexts.at(metricScopeEventId));
   args["launch_scope_metrics"] =
       buildFlexibleMetricsJson(scopeEvent.metricSet.flexibleMetrics);
 }
@@ -665,7 +696,8 @@ void dumpKernelMetricTrace(
       appendLaunchScopeArgs(element["args"], event.launchScopeEventId, events,
                             eventIdToContexts);
     } else {
-      element["name"] = GraphState::metricTag;
+      element["name"] =
+          buildFlexibleMetricEventName(event.contexts, *event.flexibleMetrics);
       element["cat"] = "metric";
       element["tid"] =
           std::string(kCpuThreadTidPrefix) + std::to_string(event.threadId);

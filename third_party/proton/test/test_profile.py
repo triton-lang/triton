@@ -928,7 +928,7 @@ def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str
 
     trace_events = data["traceEvents"]
     kernel_events = [event for event in trace_events if event["name"] == "foo"]
-    metric_events = [event for event in trace_events if event["name"] == "<metric>"]
+    metric_events = [event for event in trace_events if event["cat"] == "metric"]
 
     assert len(kernel_events) == 4
     assert len(metric_events) == 3
@@ -958,6 +958,9 @@ def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str
     assert metric_1["args"]["call_stack"] == ["ROOT", "scope_3", "scope_2", "scope_1"]
     assert metric_2["args"]["call_stack"] == ["ROOT", "scope_3", "scope_2"]
     assert metric_3["args"]["call_stack"] == ["ROOT", "scope_3"]
+    assert metric_1["name"] == "(scope_1, m1, 1.000000)"
+    assert metric_2["name"] == "(scope_2, m2, 2.000000)"
+    assert metric_3["name"] == "(scope_3, m3, 3.000000)"
     assert metric_1["args"]["metrics"]["m1"] == "1.000000"
     assert metric_2["args"]["metrics"]["m2"] == "2.000000"
     assert metric_3["args"]["metrics"]["m3"] == "3.000000"
@@ -965,11 +968,11 @@ def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str
     assert metric_1["ts"] + metric_1["dur"] <= metric_2["ts"] + metric_2["dur"]
     assert metric_2["ts"] + metric_2["dur"] <= metric_3["ts"] + metric_3["dur"]
 
-    assert kernel_1["args"]["launch_scope_call_stack"] == ["ROOT", "scope_3", "scope_2", "scope_1"]
+    assert "launch_scope_call_stack" not in kernel_1["args"]
     assert kernel_1["args"]["launch_scope_metrics"] == {"m1": "1.000000"}
-    assert kernel_2["args"]["launch_scope_call_stack"] == ["ROOT", "scope_3", "scope_2"]
+    assert "launch_scope_call_stack" not in kernel_2["args"]
     assert kernel_2["args"]["launch_scope_metrics"] == {"m2": "2.000000"}
-    assert kernel_4["args"]["launch_scope_call_stack"] == ["ROOT", "scope_3"]
+    assert "launch_scope_call_stack" not in kernel_4["args"]
     assert kernel_4["args"]["launch_scope_metrics"] == {"m3": "3.000000"}
 
 
@@ -987,7 +990,7 @@ def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
 
     assert len(data["traceEvents"]) == 1
     metric_event = data["traceEvents"][0]
-    assert metric_event["name"] == "<metric>"
+    assert metric_event["name"] == "(metric_only, foo, 1.000000)"
     assert metric_event["cat"] == "metric"
     assert metric_event["tid"].startswith("cpu thread ")
     assert metric_event["args"]["call_stack"] == ["ROOT", "metric_only"]
