@@ -241,8 +241,6 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
                   hipModule_t module, const char *kname)                       \
   FOR_EACH_ERR_FN(hipFuncGetAttribute, int *, hipFunction_attribute attr,      \
                   hipFunction_t function)                                      \
-  FOR_EACH_ERR_FN(hipDrvLaunchKernelEx, const HIP_LAUNCH_CONFIG *config,       \
-                  hipFunction_t f, void **kernelParams, void **extra)          \
   FOR_EACH_ERR_FN(hipModuleLaunchKernel, hipFunction_t f,                      \
                   unsigned int gridDimX, unsigned int gridDimY,                \
                   unsigned int gridDimZ, unsigned int blockDimX,               \
@@ -618,31 +616,9 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
   if (gridX * gridY * gridZ == 0)
     return;
   if (num_ctas > 1) {
-    if (!hipSymbolTable.hipDrvLaunchKernelEx) {
-      PyErr_SetString(
-          PyExc_RuntimeError,
-          "missing hipDrvLaunchKernelEx symbol; please update HIP runtime");
-      return;
-    }
-
-    hipLaunchAttribute attributes[2];
-    // Attribute0: Cluster dimensions
-    attributes[0].id = 4;
-    int *cluster_dims = (int *)attributes[0].val.pad;
-    cluster_dims[0] = num_ctas;
-    cluster_dims[1] = 1;
-    cluster_dims[2] = 1;
-    // Attribute1: Cooperative launch
-    attributes[1].id = hipLaunchAttributeCooperative;
-    attributes[1].val.cooperative = launch_cooperative_grid;
-
-    HIP_LAUNCH_CONFIG config = {
-        gridX * num_ctas,      gridY,  gridZ,        // Grid size
-        warp_size * num_warps, 1,      1,            // Block size
-        shared_memory,         stream, attributes, 2 // Number of attributes
-    };
-    HIP_CHECK(
-        hipSymbolTable.hipDrvLaunchKernelEx(&config, function, params, 0));
+    PyErr_SetString(
+        PyExc_RuntimeError,
+        "num_ctas > 1 launch is not supported by this Triton HIP driver");
     return;
   } else if (launch_cooperative_grid) {
     HIP_CHECK(hipSymbolTable.hipModuleLaunchCooperativeKernel(
