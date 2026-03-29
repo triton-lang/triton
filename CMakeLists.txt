@@ -452,8 +452,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
     "${TRITON_WHEEL_DIR}/FileCheck"
     COPYONLY)
 
-  # Build plugins when building libtriton since they depend on libtriton.
-  add_subdirectory(examples/plugins)
+  # Example plugin shared libraries link with unresolved LLVM/MLIR symbols when TRITON_EXT_ENABLED is OFF.
+  # With MSVC, unresolved symbols are an error when linking DLLs.
+  if (NOT MSVC)
+    # Build plugins when building libtriton since they depend on libtriton.
+    add_subdirectory(examples/plugins)
+  endif()
 endif()
 
 if (UNIX AND NOT APPLE AND NOT TRITON_EXT_ENABLED)
