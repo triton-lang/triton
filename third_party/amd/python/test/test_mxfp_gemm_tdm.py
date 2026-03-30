@@ -11,12 +11,6 @@ Features:
 - Pre-shuffled scale layout (128-element groups) for coalesced memory access
 - Supports fp4, fp8_e5m2, and fp8_e4m3 data types
 
-Usage:
-    # Run tests with pytest
-    pytest test_tdm_mxfp_gemm.py -v
-
-    # Run single test
-    python test_tdm_mxfp_gemm.py -M 1024 -N 1024 -K 512 --dtype_a float8_e5m2 --dtype_b float8_e5m2
 """
 
 import torch
@@ -81,21 +75,6 @@ def pack_scale(x: torch.Tensor, preshuffle_factor: int = 128) -> torch.Tensor:
 
 
 def fp8e8m0_to_float32(scale: torch.Tensor) -> torch.Tensor:
-    """
-    Convert E8M0 scale factors to float32.
-
-    E8M0 format is an 8-bit exponent-only format (no mantissa):
-        Value = 2^(exponent - 127)
-
-    This function exploits IEEE float32's bit layout to perform the conversion
-    efficiently by placing the 8-bit exponent directly into float32's exponent field.
-
-    Args:
-        scale: E8M0 scale tensor (uint8)
-
-    Returns:
-        Float32 tensor with scale values
-    """
     scale = scale.view(torch.uint8)
     scale = scale.to(torch.int32)
     scale = scale << 23  # Shift exponent to float32's exponent field (bits 23-30)
@@ -104,20 +83,6 @@ def fp8e8m0_to_float32(scale: torch.Tensor) -> torch.Tensor:
 
 
 def torch_gemm_mxfp(a, b, a_scale, b_scale, scale_block: int, M: int, N: int, K: int) -> torch.Tensor:
-    """
-    Reference implementation for MXFP GEMM: C = (A * scale_A) @ (B * scale_B)
-
-    Args:
-        a: Input matrix A (can be MXFP4Tensor or torch tensor)
-        b: Input matrix B (can be MXFP4Tensor or torch tensor)
-        a_scale: Scale factors for A [M, K // scale_block]
-        b_scale: Scale factors for B [N, K // scale_block]
-        scale_block: Number of elements per scale factor (typically 32)
-        M, N, K: Matrix dimensions
-
-    Returns:
-        Output matrix C [M, N] in float32
-    """
     # Convert scales from E8M0 to float32
     a_scale_f32 = fp8e8m0_to_float32(a_scale)
     b_scale_f32 = fp8e8m0_to_float32(b_scale)
@@ -290,13 +255,13 @@ def run_mxfp_gemm(
     M: int,
     N: int,
     K: int,
-    BLOCK_M: int = 128,
-    BLOCK_N: int = 128,
-    BLOCK_K: int = 128,
-    dtype_a: str = 'float8_e5m2',
-    dtype_b: str = 'float8_e5m2',
-    num_warps: int = 4,
-    group_size_m: int = 8,
+    BLOCK_M: int,
+    BLOCK_N: int,
+    BLOCK_K: int,
+    dtype_a: str,
+    dtype_b: str,
+    num_warps: int,
+    group_size_m: int,
 ):
     """
     Run MXFP GEMM kernel with specified configuration.
@@ -392,6 +357,7 @@ def test_mxgemm(M, N, K, BM, BN, BK, dtype_a, dtype_b):
     output, ref, max_diff = run_mxfp_gemm(M, N, K,  #
                                           BM, BN, BK,  #
                                           dtype_a, dtype_b,  #
+                                          num_warps=4,  #
                                           group_size_m=1)
 
     torch.testing.assert_close(output, ref, rtol=1e-5, atol=0.02)
@@ -403,24 +369,26 @@ def main():
     parser.add_argument('-M', type=int, default=1024, help='M dimension')
     parser.add_argument('-N', type=int, default=1024, help='N dimension')
     parser.add_argument('-K', type=int, default=512, help='K dimension')
-    parser.add_argument('-BM', type=int, default=128, help='BLOCK_M')
-    parser.add_argument('-BN', type=int, default=128, help='BLOCK_N')
-    parser.add_argument('-BK', type=int, default=128, help='BLOCK_K')
+    parser.add_argument('-block_m', type=int, default=128, help='BLOCK_M')
+    parser.add_argument('-block_n', type=int, default=128, help='BLOCK_N')
+    parser.add_argument('-block_k', type=int, default=128, help='BLOCK_K')
     parser.add_argument('--dtype_a', type=str, default='float8_e5m2', choices=['float4', 'float8_e5m2', 'float8_e4m3'])
     parser.add_argument('--dtype_b', type=str, default='float8_e5m2', choices=['float4', 'float8_e5m2', 'float8_e4m3'])
     parser.add_argument('--num_warps', type=int, default=4, help='Number of warps')
+    parser.add_argument('--group_size_m', type=int, default=1, help='Number of programs per group')
 
     args = parser.parse_args()
 
     print(f"Running MXFP GEMM: {args.dtype_a} x {args.dtype_b}")
     print(f"  Dimensions: M={args.M}, N={args.N}, K={args.K}")
-    print(f"  Block sizes: BM={args.BM}, BN={args.BN}, BK={args.BK}")
+    print(f"  Block sizes: block_m={args.block_m}, block_n={args.block_n}, block_k={args.block_k}")
     print("  Mode: Descriptor loads with pre-shuffled scales")
 
     output, ref, max_diff = run_mxfp_gemm(args.M, args.N, args.K,  #
-                                          args.BM, args.BN, args.BK,  #
+                                          args.block_m, args.block_n, args.block_k,  #
                                           args.dtype_a, args.dtype_b,  #
                                           num_warps=args.num_warps,  #
+                                          group_size_m=args.group_size_m,  #
                                           )
 
     print("\nResults:")
