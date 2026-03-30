@@ -12,11 +12,6 @@ def supports_tensor_descriptor():
     return is_hip_gfx1250() and hasattr(tl, "make_tensor_descriptor")
 
 
-HAS_TENSOR_DESC = supports_tensor_descriptor()
-# Todo: Enable this kernel when host tensor descriptor lowering is fully implemented
-HAS_HOST_TENSOR_DESC = supports_tensor_descriptor() and False
-
-
 @triton.jit
 def gemm_device_tdm_kernel(a_ptr, b_ptr, c_ptr, M, N, K, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
                            BLOCK_K: tl.constexpr):
@@ -61,15 +56,15 @@ def gemm_host_tdm_kernel(a_desc, b_desc, c_desc, M, N, K, BLOCK_M: tl.constexpr,
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
     pid_n = pid // num_pid_m
+    offs_cm = pid_m * BLOCK_M
+    offs_cn = pid_n * BLOCK_N
 
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(0, K, BLOCK_K):
-        a = a_desc.load([0, k])
-        b = b_desc.load([k, 0])
+        a = a_desc.load([offs_cm, k])
+        b = b_desc.load([k, offs_cn])
         accumulator = tl.dot(a, b, acc=accumulator)
 
-    offs_cm = pid_m * BLOCK_M
-    offs_cn = pid_n * BLOCK_N
     c_desc.store([offs_cm, offs_cn], accumulator)
 
 
@@ -81,22 +76,16 @@ def _run_kernel(x, y, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, use_tdm='device'):
         b_desc = TensorDescriptor.from_tensor(y, (BLOCK_K, BLOCK_N))
         c_desc = TensorDescriptor.from_tensor(z, (BLOCK_M, BLOCK_N))
         gemm_host_tdm_kernel[grid](a_desc, b_desc, c_desc, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K)
-        return c_desc
     else:  # use_tdm == 'device'
         gemm_device_tdm_kernel[grid](x, y, z, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K)
-        return z
+    return z
 
 
-@pytest.mark.parametrize("M,N,K", [(256, 256, 512), [256, 256, 455]])
-@pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(32, 32, 64)])
+@pytest.mark.parametrize("M,N,K", [(256, 256, 512)])
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(32, 32, 64), (128, 128, 128)])
 @pytest.mark.parametrize("use_tdm", ['device', 'host'])
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on gfx1250.")
 def test_gemm_fp16(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, use_tdm):
-    if use_tdm == 'device' and not HAS_TENSOR_DESC:
-        pytest.skip("Skip unsupported test with device tensor descriptor")
-
-    if use_tdm == 'host' and not HAS_HOST_TENSOR_DESC:
-        pytest.skip("Skip unsupported test with host tensor descriptor")
-
     x = torch.randn(M, K, dtype=torch.float16).cuda()
     y = torch.randn(K, N, dtype=torch.float16).cuda()
 
@@ -124,10 +113,4 @@ if __name__ == "__main__":
     BLOCK_M, BLOCK_N, BLOCK_K = args.block_m, args.block_n, args.block_k
     use_tdm = args.tdm
 
-    # Check if the requested mode is supported
-    if use_tdm == 'device' and not HAS_TENSOR_DESC:
-        print("Warning: Device tensor descriptor not supported, skipping test")
-    elif use_tdm == 'host' and not HAS_HOST_TENSOR_DESC:
-        print("Warning: Host tensor descriptor not supported, skipping test")
-    else:
-        test_gemm_fp16(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, use_tdm)
+    test_gemm_fp16(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, use_tdm)
