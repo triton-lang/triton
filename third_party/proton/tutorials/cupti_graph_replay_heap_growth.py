@@ -40,6 +40,43 @@ If you preload profiling-enabled jemalloc before launch, each checkpoint emits:
 
 That makes the script suitable for the same style of `t+1h` vs `t+3h` heap diff
 used in the RuntimeWorker investigation.
+
+One concrete launch command that produced a clear cupti12 vs cupti13 split on
+`db2-gb200-vd64-spud-susu-0` was:
+
+  LD_PRELOAD=/tmp/runtimeworker_memory_debug/jemalloc-prof/lib/libjemalloc.so.2 \
+  PYTHONMALLOC=malloc \
+  MALLOC_CONF='prof:true,prof_active:true,lg_prof_sample:19,background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000' \
+  _RJEM_MALLOC_CONF='prof:true,prof_active:true,lg_prof_sample:19,background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000' \
+  python /tmp/cupti_graph_replay_heap_growth.py \
+    --output-dir /tmp/triton-cupti-graph-heap-medium1 \
+    --duration-seconds 600 \
+    --t0-seconds 60 \
+    --t1-seconds 300 \
+    --t3-seconds 600 \
+    --sample-every-seconds 30 \
+    --replays-per-step 256 \
+    --graph-ops 8 \
+    --phase-every 100 \
+    --clear-completed-phases
+
+After that run completed, the native heap diff that surfaced the main replay
+path came from a `jeprof --base` comparison between the blackwell checkpoints:
+
+  jeprof=/tmp/runtimeworker_memory_debug/jemalloc-prof/bin/jeprof
+  exe=/root/.pyenv/versions/3.12.9/bin/python3.12
+  base=/tmp/triton-cupti-graph-heap-medium1/checkpoints/blackwell/t_plus_1h/heap_profile_<pid>_<ts>.heap
+  cur=/tmp/triton-cupti-graph-heap-medium1/checkpoints/blackwell/t_plus_3h/heap_profile_<pid>_<ts>.heap
+  "$jeprof" --text --show_bytes --base="$base" "$exe" "$cur" | \
+    egrep 'Total:|at::cuda::CUDAGraph::replay|cuGraphLaunch|cudaGraphLaunch|cuptiEnableAllDomains|cuptiOpenMpInitialize_v2'
+
+That diff highlighted the stack:
+
+  at::cuda::CUDAGraph::replay
+  cuGraphLaunch
+  cudaGraphLaunch@@libcudart.so.13
+  cuptiEnableAllDomains@@libcupti.so.13
+  cuptiOpenMpInitialize_v2
 """
 
 from __future__ import annotations
