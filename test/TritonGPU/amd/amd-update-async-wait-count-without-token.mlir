@@ -25,10 +25,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     // CHECK: amdg.async_wait {num_inst = 0
     ttg.async_wait {num = 0 : i32}
-    // CHECK: amdg.async_wait {num_inst = 2
+    // CHECK: amdg.async_wait {num_inst = 1
     ttg.async_wait {num = 1 : i32}
     // Check we stop at function boundary
-    // CHECK: amdg.async_wait {num_inst = 3
+    // CHECK: amdg.async_wait {num_inst = 2
     ttg.async_wait {num = 2 : i32}
     // CHECK: amdg.async_wait {num_inst = 3
     ttg.async_wait {num = 3 : i32}
@@ -48,10 +48,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttg.async_copy_global_to_local %ptr1Inst, %memDesc1Inst : tensor<64x16x!tt.ptr<f16>, #blocked> -> <64x16xf16, #shared, #smem, mutable>
 
     // We expect 1 because the async copy above has not been committed yet
-    // CHECK: amdg.async_wait {num_inst = 1
+    // CHECK: amdg.async_wait {num_inst = 0
     ttg.async_wait {num = 0 : i32}
     // -1 can be used to wait on all, even non committed async ops
-    // CHECK: amdg.async_wait {num_inst = 0
+    // CHECK: amdg.async_wait {num_inst = -1
     ttg.async_wait {num = -1 : i32}
 
     tt.return
@@ -86,7 +86,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: amdg.async_wait {num_inst = 1
     ttg.async_wait {num = 1: i32}
 
-    // CHECK: amdg.async_wait {num_inst = 3
+    // CHECK: amdg.async_wait {num_inst = 2
     ttg.async_wait {num = 2: i32}
 
 
@@ -113,7 +113,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: amdg.async_wait {num_inst = 1
     ttg.async_wait {num = 1: i32}
     // Check we do not loop in an if but instead continue upwards
-    // CHECK: amdg.async_wait {num_inst = 1
+    // CHECK: amdg.async_wait {num_inst = 2
     ttg.async_wait {num = 2: i32}
 
     scf.if %cond {
@@ -166,7 +166,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       scf.yield
     }
     // The shortest path (else->then) contains 2 async ops -> instruction count 2
-    // CHECK: amdg.async_wait {num_inst = 2
+    // CHECK: amdg.async_wait {num_inst = 1
     ttg.async_wait {num = 1: i32}
 
     tt.return
@@ -216,7 +216,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttg.async_commit_group
     ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     ttg.async_commit_group
-    // CHECK: amdg.async_wait {num_inst = 6
+    // CHECK: amdg.async_wait {num_inst = 3
     ttg.async_wait {num = 3: i32}
 
     scf.for %arg14 = %c0_i32 to %arg0 step %c1_i32 : i32 {
@@ -263,14 +263,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // The loop has 3 commits group which produce 2,1,1 (in program order) async instructions
     scf.for %arg14 = %c0_i32 to %arg0 step %c1_i32 : i32 {
       // 2 full loop iterations => 8
-      // CHECK: amdg.async_wait {num_inst = 8
+      // CHECK: amdg.async_wait {num_inst = 6
       ttg.async_wait {num = 6: i32}
 
       ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
       ttg.async_commit_group
 
       // Wait on 1 full loop iteration (4) + the commit group above (2)
-      // CHECK: amdg.async_wait {num_inst = 6
+      // CHECK: amdg.async_wait {num_inst = 4
       ttg.async_wait {num = 4: i32}
 
       scf.if %cond {
@@ -288,13 +288,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       ttg.async_commit_group
 
       // Wait on 1 full loop iteration (4) + the commit group above (1)
-      // CHECK: amdg.async_wait {num_inst = 5
+      // CHECK: amdg.async_wait {num_inst = 4
       ttg.async_wait {num = 4: i32}
 
       scf.yield
     }
     // 2 Full loop iterations (2 * 4)
-    // CHECK: amdg.async_wait {num_inst = 8
+    // CHECK: amdg.async_wait {num_inst = 6
     ttg.async_wait {num = 6: i32}
 
     tt.return
@@ -316,16 +316,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     ttg.async_commit_group
     %69 = scf.while (%arg10 = %cond) : (i1) -> (i1) {
-      // CHECK: amdg.async_wait {num_inst = 2
+      // CHECK: amdg.async_wait {num_inst = 1
       ttg.async_wait {num = 1: i32}
       scf.condition(%arg10) %arg10 : i1
     } do {
     ^bb0(%arg12: i1):
-      // CHECK: amdg.async_wait {num_inst = 2
+      // CHECK: amdg.async_wait {num_inst = 1
       ttg.async_wait {num = 1: i32}
       scf.yield %arg12 : i1
     }
-    // CHECK: amdg.async_wait {num_inst = 2
+    // CHECK: amdg.async_wait {num_inst = 1
     ttg.async_wait {num = 1: i32}
 
     tt.return
@@ -347,7 +347,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttg.async_commit_group
     ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     ttg.async_commit_group
-    // CHECK: amdg.async_wait {num_inst = 6
+    // CHECK: amdg.async_wait {num_inst = 3
     ttg.async_wait {num = 3: i32}
 
     %70 = scf.while (%arg10 = %cond) : (i1) -> (i1) {
@@ -387,7 +387,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttg.async_commit_group
     ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     ttg.async_commit_group
-    // CHECK: amdg.async_wait {num_inst = 6
+    // CHECK: amdg.async_wait {num_inst = 3
     ttg.async_wait {num = 3: i32}
 
     %71 = scf.while (%arg10 = %cond) : (i1) -> (i1) {
@@ -449,7 +449,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     } do {
     ^bb0(%arg12: i1):
       // 1 commit group in Before-block + 5 commits groups in prologue = 7
-      // CHECK: amdg.async_wait {num_inst = 7
+      // CHECK: amdg.async_wait {num_inst = 6
       ttg.async_wait {num = 6: i32}
       ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
       ttg.async_commit_group
@@ -460,7 +460,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
         // 2 Instructions
         ttg.async_commit_group
         // 1 commit group(2) to escape for, 1 commits group(2) in rest of while after block, 1 commit group (2) in while before block and 3 commits group in prologue = 9
-        // CHECK: amdg.async_wait {num_inst = 9
+        // CHECK: amdg.async_wait {num_inst = 6
         ttg.async_wait {num = 6: i32}
 
         scf.if %cond {
@@ -468,7 +468,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
           ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
 
           // Same as above but we also have to count the 2 async_copies above = 9+3
-          // CHECK: amdg.async_wait {num_inst = 12
+          // CHECK: amdg.async_wait {num_inst = 6
           ttg.async_wait {num = 6: i32}
         } else {
           ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
@@ -482,11 +482,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
           // 3 Instructions
           ttg.async_commit_group
           // 1 commit group (3) in this block, 2 commits group in the rest of the for body (2+2), 1 commits group(2) in rest of while after block, 1 commit group (2) in while before block, 1 commit group (1) in epilogue = 12
-          // CHECK: amdg.async_wait {num_inst = 12
+          // CHECK: amdg.async_wait {num_inst = 6
           ttg.async_wait {num = 6: i32}
         }
         // Same as above but skips the if (first commit group(3)) and instead counts one more in the prologue (1) = 10
-        // CHECK: amdg.async_wait {num_inst = 10
+        // CHECK: amdg.async_wait {num_inst = 6
         ttg.async_wait {num = 6: i32}
         scf.for %arg15 = %c0_i32 to %arg0 step %c1_i32 : i32 {
           ttg.async_copy_global_to_local %ptr1Inst, %memDesc1Inst : tensor<64x16x!tt.ptr<f16>, #blocked> -> <64x16xf16, #shared, #smem, mutable>
@@ -496,19 +496,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
           // 2 Instructions
           ttg.async_commit_group
           // Just staying in the loop is the lowest path (3 per iteration and we do 3 iterations)
-          // CHECK: amdg.async_wait {num_inst = 9
+          // CHECK: amdg.async_wait {num_inst = 6
           ttg.async_wait {num = 6: i32}
           scf.yield
         }
         // Just stay in the inner loop for the lowest path
-        // CHECK: amdg.async_wait {num_inst = 9
+        // CHECK: amdg.async_wait {num_inst = 6
         ttg.async_wait {num = 6: i32}
         scf.yield
       }
       scf.yield %arg12 : i1
     }
     // While before-body (2) + 5 prologue groups = 7
-    // CHECK: amdg.async_wait {num_inst = 7
+    // CHECK: amdg.async_wait {num_inst = 6
     ttg.async_wait {num = 6: i32}
 
     tt.return
@@ -538,22 +538,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       } {triton.warp_pipeline.stage = "stage1"}
 
       // Wait for both execute regions
-      // CHECK: amdg.async_wait {num_inst = 3
+      // CHECK: amdg.async_wait {num_inst = 2
       ttg.async_wait {num = 2 : i32}
 
       // Check that we only traverse each execute region once
-      // CHECK: amdg.async_wait {num_inst = 3
+      // CHECK: amdg.async_wait {num_inst = 6
       ttg.async_wait {num = 6 : i32}
 
       // Wait only for the second execute region
-      // CHECK: amdg.async_wait {num_inst = 2
+      // CHECK: amdg.async_wait {num_inst = 1
       ttg.async_wait {num = 1 : i32}
 
       scf.yield
     }
 
     // Wait for both nested execute regions
-    // CHECK: amdg.async_wait {num_inst = 3
+    // CHECK: amdg.async_wait {num_inst = 2
     ttg.async_wait {num = 2 : i32}
 
     tt.return

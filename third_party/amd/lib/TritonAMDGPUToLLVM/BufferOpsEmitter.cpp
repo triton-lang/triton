@@ -124,18 +124,14 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
 
 Operation *BufferEmitter::emitLoadToLds(Type type, Value byteWidth,
                                         Value rsrcDesc, Value offset, Value dst,
-                                        Value pred,
-                                        triton::CacheModifier cm) {
+                                        Value pred, triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
                  commonArgs);
   Type bufferType = getBufferOpType(type, false);
 
-  bool useAsync = llvm::is_contained(
-      {ISAFamily::CDNA3, ISAFamily::CDNA4}, targetInfo.getISAFamily());
-
-  if (useAsync) {
+  if (targetInfo.useAsyncMarks()) {
     // Use the async intrinsic so that LLVM's SIInsertWaitcnts tracks
     // these operations via asyncmark/wait_asyncmark instead of generating
     // conservative vmcnt(0) waits.

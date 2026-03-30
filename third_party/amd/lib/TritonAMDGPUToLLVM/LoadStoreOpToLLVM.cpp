@@ -1010,8 +1010,7 @@ struct AsyncCopyGlobalToLocalOpConversion
         mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
             cacheMod, /*isLoad=*/true, targetInfo);
 
-    if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
-                           targetInfo.getISAFamily())) {
+    if (targetInfo.useAsyncMarks()) {
       // Use the async intrinsic so LLVM tracks these via asyncmark
       auto asyncLoadOp = ROCDL::GlobalLoadAsyncLDSOp::create(
           rewriter, loc, srcPtr, shmemAddr, vecBits / 8,
@@ -2340,45 +2339,18 @@ struct AsyncWaitOpConversion
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    switch (targetInfo.getISAFamily()) {
-    case ISAFamily::CDNA1:
-    case ISAFamily::CDNA2: {
-      // global.load.lds uses vmcnt to synchronize
-      // The rocdl op stores all available counters in a single int32 value (v).
-      // The vmcnt (6 bits) is split into a lower 3:0 and higher 5:4 parts.
-      // The lower part is stored in bits 3:0 of v and the higher part in bits
-      // 15:14. We have to set all other bits in v to 1 to signal we are not
-      // interested in those.
-
-      // Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
-      unsigned vmCnt = std::min(63u, op.getNumInst());
-
-      // Extract low and high bits and combine while setting all other bits to 1
-      unsigned lowBits = vmCnt & 0xF;
-      unsigned highBits = vmCnt >> 4 << 14;
-      unsigned otherCnts = ~0xC00F; // C00F has bits 15:14 and 3:0 set
-      unsigned waitValue = lowBits | highBits | otherCnts;
-
-      ROCDL::SWaitcntOp::create(rewriter, loc, waitValue);
-      break;
-    }
-    case ISAFamily::CDNA3:
-    case ISAFamily::CDNA4: {
+    if (targetInfo.useAsyncMarks()) {
       // Use wait_asyncmark which lets LLVM compute correct vmcnt values
       // that account for both buffer_load_to_lds and regular buffer_load.
       unsigned asyncCnt = std::min(63u, op.getNumInst());
       ROCDL::WaitAsyncmarkOp::create(rewriter, loc, asyncCnt);
-      break;
-    }
-    case ISAFamily::GFX1250: {
-      // Clamp asyncCnt to 6bits(hw imit); lower means conservative
+    } else if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
+      // Clamp asyncCnt to 6bits(hw limit); lower means conservative
       unsigned asyncCnt = std::min(63u, op.getNumInst());
       ROCDL::WaitAsynccntOp::create(rewriter, loc, asyncCnt);
-      break;
-    }
-    default:
+    } else {
       return rewriter.notifyMatchFailure(
-          op, "Only supported on CDNA target architecture");
+          op, "async wait not supported on this target architecture");
     }
 
     // Drop the result AsyncToken
@@ -2421,14 +2393,8 @@ struct AsyncCommitGroupOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     // Emit asyncmark for architectures that use async tracking
-    switch (targetInfo.getISAFamily()) {
-    case ISAFamily::CDNA3:
-    case ISAFamily::CDNA4:
+    if (targetInfo.useAsyncMarks())
       ROCDL::AsyncmarkOp::create(rewriter, loc);
-      break;
-    default:
-      break;
-    }
 
     // Drop the result AsyncToken
     rewriter.replaceOp(op, b.i32_val(0));
@@ -2534,7 +2500,8 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<TDMPrefetchConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncTDMIntrinsicWaitConversion>(typeConverter, benefit);
-  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, targetInfo,
+                                             benefit);
   patterns.add<AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
 }
 } // namespace mlir::triton::AMD
