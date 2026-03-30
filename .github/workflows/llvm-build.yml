@@ -9,8 +9,6 @@ on:
   pull_request:
     paths:
       - .github/workflows/llvm-build.yml
-      - .github/workflows/llvm-build/almalinux.Dockerfile
-      - .github/workflows/llvm-build/centos.Dockerfile
   workflow_dispatch:
 
 env:
@@ -25,7 +23,7 @@ jobs:
   build:
     name: Build on ${{ matrix.config.runner }}
     runs-on: ${{ matrix.config.runs_on }}
-    timeout-minutes: 240  # 4 hours
+    container: ${{ matrix.config.container }}
 
     strategy:
       fail-fast: true
@@ -33,8 +31,8 @@ jobs:
         config:
         - {runner: 'Ubuntu 22.04', runs_on: 'ubuntu-22.04', target-os: 'ubuntu', arch: 'x64'}
         - {runner: 'Ubuntu 22.04 ARM64', runs_on: 'ubuntu-22.04', target-os: 'ubuntu', arch: 'arm64'}
-        - {runner: 'AlmaLinux 8', runs_on: ['self-hosted', 'CPU'], target-os: 'almalinux', arch: 'x64'}
-        - {runner: 'AlmaLinux 8 ARM64', runs_on: 'ubuntu-22.04-arm', target-os: 'almalinux', arch: 'arm64'}
+        - {runner: 'AlmaLinux 8', runs_on: 'ubuntu-22.04', target-os: 'almalinux', arch: 'x64', container: 'almalinux:8.10-20250411'}
+        - {runner: 'AlmaLinux 8 ARM64', runs_on: 'ubuntu-22.04-arm', target-os: 'almalinux', arch: 'arm64', container: 'almalinux:8.10-20250411'}
         - {runner: 'MacOS X64', runs_on: 'macos-15', target-os: 'macos', arch: 'x64'}
         - {runner: 'MacOS ARM64', runs_on: 'macos-15', target-os: 'macos', arch: 'arm64'}
         - {runner: 'Windows Latest', runs_on: 'windows-latest', target-os: 'windows', arch: 'x64'}
@@ -69,6 +67,7 @@ jobs:
         ref: ${{ env.llvm_commit_hash }}
 
     - name: Set up Python
+      if: matrix.config.target-os != 'almalinux'
       uses: actions/setup-python@v6
       with:
         python-version: 3.11
@@ -78,6 +77,15 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1.13.0
       with:
         arch: amd64
+
+    - name: Install System Prerequisites (AlmaLinux)
+      if: matrix.config.target-os == 'almalinux'
+      run: |
+        rpm --import https://packages.microsoft.com/keys/microsoft.asc
+        dnf install --assumeyes https://packages.microsoft.com/config/rhel/8/packages-microsoft-prod.rpm
+        dnf install --assumeyes azure-cli llvm-toolset python38-pip python38-devel git tar gzip
+        alternatives --set python3 /usr/bin/python3.8
+        echo "extra_cmake_flags=-DCMAKE_ASM_COMPILER=clang -DCMAKE_CXX_FLAGS=-Wno-everything -DPython3_EXECUTABLE=/usr/bin/python3.8 -DPython_EXECUTABLE=/usr/bin/python3.8" >> "$GITHUB_ENV"
 
     - name: Install Prerequisites
       shell: bash
@@ -104,8 +112,8 @@ jobs:
         sudo apt-get clean
         df -h
 
-    - name: Configure, Build, Test, and Install LLVM (Ubuntu and macOS x64)
-      if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'macos')
+    - name: Configure, Build, Test, and Install LLVM (Linux and macOS x64)
+      if: (matrix.config.arch == 'x64' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'macos')) || matrix.config.target-os == 'almalinux'
       run: >
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
 
@@ -123,6 +131,7 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_ZSTD=OFF
+        $extra_cmake_flags
         llvm-project/llvm
 
         ninja -C llvm-project/build check-mlir install
@@ -243,35 +252,6 @@ jobs:
         ninja -C llvm-project/build install
 
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
-
-    - name: Configure, Build, Test, and Install LLVM (AlmaLinux)
-      if: matrix.config.target-os == 'almalinux'
-      run: |
-        # if this step crashes, it can leave behind a stale docker container
-        docker container prune -f
-
-        images=$(docker images -q)
-        if [ -n "$images" ]; then
-          docker rmi -f $images
-        fi
-
-        docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
-          -f llvm-build/.github/workflows/llvm-build/almalinux.Dockerfile .
-
-        # Create temporary container to copy cache and installed artifacts.
-        CONTAINER_ID=$(docker create llvm-build)
-
-        # We remove the existing directories, otherwise docker cp will
-        # create a subdirectory inside the existing directory.
-        rm -rf "${{ env.SCCACHE_DIR }}" "${{ env.llvm_install_dir }}"
-
-        docker cp "${CONTAINER_ID}:/install" "${{ env.llvm_install_dir }}"
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
-
-        docker cp "${CONTAINER_ID}:/sccache" "${{ env.SCCACHE_DIR }}"
-        sudo chown -R "$(id -u -n):$(id -g -n)" "${{ env.SCCACHE_DIR }}"
-
-        docker rm "${CONTAINER_ID}"
 
     - name: Upload Build Artifacts
       uses: actions/upload-artifact@v7

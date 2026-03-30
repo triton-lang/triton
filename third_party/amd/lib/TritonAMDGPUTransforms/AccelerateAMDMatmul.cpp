@@ -1222,8 +1222,12 @@ public:
           bElemType == ScaleDotElemType::E2M1) {
         // Fp4 x Fp4 requires to use the same scale dtype for both operands.
         TensorValue otherScale = idx == 0 ? bScale : aScale;
-        Type f8Ty = otherScale.getType().getElementType();
-        return {f8Ty, FloatAttr::get(f8Ty, 1.0)};
+        Type scaleTy = otherScale.getType().getElementType();
+        // int8 in this context is actually represents fp8e8m0 dtype,
+        // 127 constant is how 1.0 is represented in this data type.
+        if (scaleTy.isInteger(8))
+          return {scaleTy, rewriter.getIntegerAttr(scaleTy, 127)};
+        return {scaleTy, rewriter.getOneAttr(scaleTy)};
       }
 
       return {i8_ty, rewriter.getIntegerAttr(i8_ty, 0x7F)};
@@ -1384,13 +1388,8 @@ FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
   auto M = resShape[rank - 2];
   auto N = resShape[rank - 1];
 
-  unsigned mDim = 0;
-  unsigned nDim = 0;
-  int minSize = std::min(M, N);
-  if (minSize >= 16) {
-    mDim = 16;
-    nDim = 16;
-  }
+  unsigned mDim = 16;
+  unsigned nDim = 16;
 
   FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic = WmmaIntrinsic::selectFor(
       wmmaVersion, mDim, nDim, inputKSize, aElemType, bElemType, cElemType);
@@ -1405,7 +1404,6 @@ FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
 
   kDim = maybeWmmaIntrinsic->kDim;
   assert(kDim != 0);
-  assert(M % mDim == 0 && N % nDim == 0);
   return maybeWmmaIntrinsic;
 }
 

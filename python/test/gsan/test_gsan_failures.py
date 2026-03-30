@@ -22,64 +22,75 @@ def nanosleep(duration):
 
 
 @triton.jit
-def _raw_kernel(ptr, scratch_ptr):
+def atomic_poll(counter_ptr, expected):
+    while tl.atomic_add(counter_ptr, 0, sem="relaxed") < expected:
+        nanosleep(100)
+
+
+@triton.jit
+def _raw_kernel(ptr, scratch_ptr, counter_ptr):
     pid = tl.program_id(0)
     if pid == 0:
         tl.store(ptr, 1)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
     else:
-        nanosleep(500_000)
+        atomic_poll(counter_ptr, 1)
         value = tl.load(ptr)
         tl.store(scratch_ptr, value)
 
 
 @triton.jit
-def _war_kernel(ptr, scratch_ptr):
+def _war_kernel(ptr, scratch_ptr, counter_ptr):
     pid = tl.program_id(0)
     if pid == 0:
         value = tl.load(ptr)
         tl.store(scratch_ptr, value)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
     else:
-        nanosleep(500_000)
+        atomic_poll(counter_ptr, 1)
         tl.store(ptr, 1)
 
 
 @triton.jit
-def _waw_kernel(ptr, scratch_ptr):
+def _waw_kernel(ptr, scratch_ptr, counter_ptr):
     pid = tl.program_id(0)
     if pid == 0:
         tl.store(ptr, 1)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
     else:
-        nanosleep(500_000)
+        atomic_poll(counter_ptr, 1)
         tl.store(ptr, 2)
 
 
 @triton.jit
-def _tma_raw_kernel(ptr, scratch_ptr, m_size, n_size, row_idx, col_idx, stride_0, BLOCK: tl.constexpr):
+def _tma_raw_kernel(ptr, scratch_ptr, counter_ptr, m_size, n_size, row_idx, col_idx, stride_0, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     if pid == 0:
         desc = tl.make_tensor_descriptor(ptr, [m_size, n_size], [stride_0, 1], [BLOCK, BLOCK])
         values = tl.full((BLOCK, BLOCK), 1, dtype=tl.int32)
         desc.store([row_idx, col_idx], values)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
     else:
-        nanosleep(500_000)
+        atomic_poll(counter_ptr, 1)
         value = tl.load(ptr + row_idx * stride_0 + col_idx)
         tl.store(scratch_ptr, value)
 
 
 @triton.jit
-def _host_tma_war_kernel(target_ptr, target_desc, scratch_desc, row_idx, col_idx, stride_0):
+def _host_tma_war_kernel(target_ptr, target_desc, scratch_desc, counter_ptr, row_idx, col_idx, stride_0):
     pid = tl.program_id(0)
     if pid == 0:
         block = target_desc.load([row_idx, col_idx])
         scratch_desc.store([row_idx, col_idx], block)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
     else:
-        nanosleep(500_000)
+        atomic_poll(counter_ptr, 1)
         tl.store(target_ptr + row_idx * stride_0 + col_idx, 1)
 
 
 @triton.jit
-def _host_tma_gather_war_kernel(target_ptr, target_desc, x_offsets_ptr, scratch_ptr, row_idx, y_offset, stride_0,
-                                scratch_stride_0, scratch_stride_1, BLOCK_X: tl.constexpr):
+def _host_tma_gather_war_kernel(target_ptr, target_desc, x_offsets_ptr, scratch_ptr, counter_ptr, row_idx, y_offset,
+                                stride_0, scratch_stride_0, scratch_stride_1, BLOCK_X: tl.constexpr):
     BLOCK_Y: tl.constexpr = target_desc.block_shape[1]
     pid = tl.program_id(0)
     if pid == 0:
@@ -88,21 +99,23 @@ def _host_tma_gather_war_kernel(target_ptr, target_desc, x_offsets_ptr, scratch_
         indices_x = tl.arange(0, BLOCK_X)[:, None] * scratch_stride_0
         indices_y = tl.arange(0, BLOCK_Y)[None, :] * scratch_stride_1
         tl.store(scratch_ptr + indices_x + indices_y, values)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
     else:
-        nanosleep(500_000)
+        atomic_poll(counter_ptr, 1)
         tl.store(target_ptr + row_idx * stride_0 + y_offset, 1)
 
 
 @triton.jit
 def _host_tma_scatter_war_kernel(target_ptr, target_desc, x_offsets_ptr, src_ptr, src_stride_0, src_stride_1,
-                                 scratch_ptr, row_idx, y_offset, stride_0, BLOCK_X: tl.constexpr):
+                                 scratch_ptr, counter_ptr, row_idx, y_offset, stride_0, BLOCK_X: tl.constexpr):
     BLOCK_Y: tl.constexpr = target_desc.block_shape[1]
     pid = tl.program_id(0)
     if pid == 0:
         value = tl.load(target_ptr + row_idx * stride_0 + y_offset)
         tl.store(scratch_ptr, value)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
     else:
-        nanosleep(500_000)
+        atomic_poll(counter_ptr, 1)
         indices_x = tl.arange(0, BLOCK_X)[:, None] * src_stride_0
         indices_y = tl.arange(0, BLOCK_Y)[None, :] * src_stride_1
         values = tl.load(src_ptr + indices_x + indices_y)
@@ -158,21 +171,23 @@ def _run_case(case: str) -> None:
         else:
             target = torch.zeros(1, dtype=torch.int32, device="cuda")
             scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
+        counter = torch.zeros(1, dtype=torch.int32, device="cuda")
 
     triton.knobs.compilation.instrumentation_mode = "gsan"
     kernel = globals()[f"_{case}_kernel"]
     if case == "tma_raw":
-        kernel[(2, )](target, scratch, m_size, n_size, row_idx, col_idx, target.stride(0), BLOCK=block, num_warps=4)
+        kernel[(2, )](target, scratch, counter, m_size, n_size, row_idx, col_idx, target.stride(0), BLOCK=block,
+                      num_warps=4)
     elif case == "host_tma_war":
-        kernel[(2, )](target, target_desc, scratch_desc, row_idx, col_idx, target.stride(0), num_warps=4)
+        kernel[(2, )](target, target_desc, scratch_desc, counter, row_idx, col_idx, target.stride(0), num_warps=4)
     elif case == "host_tma_gather_war":
-        kernel[(2, )](target, target_desc, x_offsets, scratch, gather_row_idx, gather_y_offset, target.stride(0),
-                      scratch.stride(0), scratch.stride(1), BLOCK_X=gather_block_x, num_warps=4)
+        kernel[(2, )](target, target_desc, x_offsets, scratch, counter, gather_row_idx, gather_y_offset,
+                      target.stride(0), scratch.stride(0), scratch.stride(1), BLOCK_X=gather_block_x, num_warps=4)
     elif case == "host_tma_scatter_war":
-        kernel[(2, )](target, target_desc, x_offsets, src, src.stride(0), src.stride(1), scratch, gather_row_idx,
-                      gather_y_offset, target.stride(0), BLOCK_X=gather_block_x, num_warps=4)
+        kernel[(2, )](target, target_desc, x_offsets, src, src.stride(0), src.stride(1), scratch, counter,
+                      gather_row_idx, gather_y_offset, target.stride(0), BLOCK_X=gather_block_x, num_warps=4)
     else:
-        kernel[(2, )](target, scratch, num_warps=1)
+        kernel[(2, )](target, scratch, counter, num_warps=1)
 
 
 CASE_INFO = {

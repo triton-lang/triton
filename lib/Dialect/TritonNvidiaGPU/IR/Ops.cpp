@@ -39,6 +39,7 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir::triton::gpu;
 
@@ -186,12 +187,16 @@ LogicalResult InitBarrierOp::verify() {
   return success();
 }
 
+TypedValue<MemDescType> InitBarrierOp::getBarrier() { return getAlloc(); }
+
 // -- InvalBarrierOp --
 LogicalResult InvalBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
 }
+
+TypedValue<MemDescType> InvalBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- BarrierExpectOp --
 LogicalResult BarrierExpectOp::verify() {
@@ -200,12 +205,16 @@ LogicalResult BarrierExpectOp::verify() {
   return success();
 }
 
+TypedValue<MemDescType> BarrierExpectOp::getBarrier() { return getAlloc(); }
+
 // -- WaitBarrierOp --
 LogicalResult WaitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
 }
+
+TypedValue<MemDescType> WaitBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- ArriveBarrierOp --
 LogicalResult ArriveBarrierOp::verify() {
@@ -215,6 +224,8 @@ LogicalResult ArriveBarrierOp::verify() {
     return emitOpError("count must be greater than or equal to 1");
   return success();
 }
+
+TypedValue<MemDescType> ArriveBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- FenceMBarrierInitReleaseClusterOp --
 LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
@@ -538,6 +549,34 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
   return success();
 }
 
+static std::string formatCGALayout(CGAEncodingAttr cgaLayout) {
+  std::string str;
+  llvm::raw_string_ostream os(str);
+  auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
+  os << "[";
+  llvm::interleaveComma(cgaLayout.getLinearLayout().getBases().lookup(kBlock),
+                        os, [&](const auto &basis) {
+                          os << "[";
+                          llvm::interleaveComma(basis, os);
+                          os << "]";
+                        });
+  os << "]";
+  return os.str();
+}
+
+static LogicalResult verifyCompletionBarrierLayout(Operation *op,
+                                                   Value barrier) {
+  auto barrierTy = cast<MemDescType>(barrier.getType());
+  auto expectedCGALayout =
+      CGAEncodingAttr::get1DLayout(op->getContext(), gpu::lookupNumCTAs(op));
+  auto actualCGALayout = getCGALayout(barrierTy.getEncoding());
+  if (actualCGALayout != expectedCGALayout)
+    return op->emitOpError("completion barrier cga_layout must be ")
+           << formatCGALayout(expectedCGALayout) << ", got "
+           << formatCGALayout(actualCGALayout);
+  return success();
+}
+
 LogicalResult TCGen5MMAOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
@@ -545,6 +584,8 @@ LogicalResult TCGen5MMAOp::verify() {
   for (auto barrier : getBarriers()) {
     auto barrierTy = cast<MemDescType>(barrier.getType());
     if (failed(verifyBarrierType(*this, barrierTy)))
+      return failure();
+    if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
       return failure();
   }
   Type atype = getA().getType().getElementType();
@@ -760,6 +801,8 @@ LogicalResult TCGen5CommitOp::verify() {
   auto barrierTy = getBarrier().getType();
   if (failed(verifyBarrierType(*this, barrierTy)))
     return failure();
+  if (failed(verifyCompletionBarrierLayout(getOperation(), getBarrier())))
+    return failure();
   return success();
 }
 
@@ -790,6 +833,16 @@ static Type getScaledMMAOperandType(Type elementType,
 };
 
 LogicalResult TCGen5MMAScaledOp::verify() {
+  if (!getIsAsync() && !getBarriers().empty()) {
+    return emitOpError("The op is synchronous but a barrier is present.");
+  }
+  for (auto barrier : getBarriers()) {
+    auto barrierTy = cast<MemDescType>(barrier.getType());
+    if (failed(verifyBarrierType(*this, barrierTy)))
+      return failure();
+    if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
+      return failure();
+  }
   Type atype =
       getScaledMMAOperandType(getA().getType().getElementType(), getAType());
   Type btype =
@@ -1266,12 +1319,28 @@ static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
                              "single dimension equal to 2, but got "
                           << desc.getShape() << ".";
   }
+  auto cgaLayout = getCGALayout(layout);
+  auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
+  if (!llvm::all_of(cgaLayout.getLinearLayout().getBases().lookup(kBlock),
+                    [](const auto &basis) {
+                      return llvm::all_of(basis,
+                                          [](auto base) { return base == 0; });
+                    }))
+    return emitError(loc) << "Expected CLC result buffer cga_layout bases to "
+                             "be all zeros. Got "
+                          << formatCGALayout(cgaLayout);
   return success();
 }
 
 LogicalResult CLCTryCancelOp::verify() {
-  return verifyCLCResultMemdesc(getLoc(), getResult().getType());
+  if (failed(verifyCLCResultMemdesc(getLoc(), getResult().getType())))
+    return failure();
+  if (failed(verifyBarrierType(*this, getMbarrier().getType())))
+    return failure();
+  return verifyCompletionBarrierLayout(getOperation(), getMbarrier());
 }
+
+TypedValue<MemDescType> CLCTryCancelOp::getBarrier() { return getMbarrier(); }
 
 LogicalResult CLCLoadResultOp::verify() {
   return verifyCLCResultMemdesc(getLoc(), getSrc().getType());

@@ -169,11 +169,11 @@ struct MakeTensorDescOpConversion
     auto sharedOrder = triton::gpu::getOrder(
         cast<triton::gpu::SharedEncodingTrait>(sharedEnc), shapePerCTA);
     bool isRowMajor = sharedOrder[0] == (sharedOrder.size() - 1);
-
     // Create TDM descriptor for 2D-5D tensors
     auto tdmDesc = LLVM::AMD::createTDMDescriptor(
         rewriter, loc, getTypeConverter(), elementType, shapePerCTA, numWarps,
-        padInterval, padAmount, tensorShape, tensorStride, basePtr, isRowMajor);
+        padInterval, padAmount, tensorShape, tensorStride, basePtr, isRowMajor,
+        sharedEnc);
 
     SmallVector<Value> groups = tdmDesc.getAllGroups();
 

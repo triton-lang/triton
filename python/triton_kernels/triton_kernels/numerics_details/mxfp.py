@@ -6,7 +6,7 @@ import triton
 import torch
 import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
-from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE, _quantize_mxfp8_fn
+from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE, _quantize_mxfp8_fn, _quantize_mxfp4_fn, _quantize_nvfp4_fn
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton_kernels.tensor import Tensor, wrap_torch_tensor, empty
 from triton_kernels.tensor_details.layout import StridedLayout
@@ -23,11 +23,13 @@ class DequantScaleRoundingMode(Enum):
     ROUND_DOWN = 1
 
 def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
+                     scale_dtype: torch.dtype = torch.uint8,
+                     microblock_size: int = MXFP_BLOCK_SIZE.value,
                      DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP):
     """
          Convert the src weights to mx format. The src weight is quantized along the axis dimension.
 
-         If weight_quant_type is torch.uint8, we output mxfp4 where two e2m1 values are packed into a single byte.
+         If weight_quant_type is torch.uint8, we output mxfp4/NVFP4 where two e2m1 values are packed into a single byte.
          Note that this means the k_dim of the tensor will be half of the logical k_dim.
 
          If weight_quant_type is torch.float8_e4m3fn or torch.float8_e5m2, we output mxfp8 with the float8s are stored
@@ -35,26 +37,31 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
     """
     if not isinstance(x, Tensor):
         x = wrap_torch_tensor(x)
+    assert scale_dtype == torch.uint8 or scale_dtype == torch.float8_e4m3fn, f"Invalid scale dtype {scale_dtype=}"
     if isinstance(out_dtype, torch.dtype):
         out_dtype = {
             torch.uint8: FP4,
             torch.float8_e4m3fn: FP8_E4M3FN,
             torch.float8_e5m2: FP8_E5M2,
         }[out_dtype]
-    assert x.shape[axis] % MXFP_BLOCK_SIZE.value == 0, f"axis dim must be divisible by {MXFP_BLOCK_SIZE.value}. Got {x.shape[axis]}"
+    assert x.shape[axis] % microblock_size == 0, f"axis dim must be divisible by {microblock_size}. Got {x.shape[axis]}"
     assert isinstance(x.storage.layout, StridedLayout), "input data must be strided"
     assert -x.ndim <= axis < x.ndim, f"Invalid axis {axis=}"
     assert out_dtype in (FP4, FP8_E4M3FN, FP8_E5M2), f"Invalid output dtype {out_dtype=}"
+    if scale_dtype == torch.float8_e4m3fn:
+        assert out_dtype == FP4, f"Direct float8 scales are only supported for FP4 values. Got {out_dtype=}"
+        assert DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_UP, \
+            "Direct float8 scales only support ROUND_UP in downcast_to_mxfp"
     # handle negative `axis``
     axis = axis if axis >= 0 else axis + x.ndim
     # downcast
     L = x.shape[axis]
-    # Ensure last dimension is a multiple of MXFP_BLOCK_SIZE. This is expected by the kernel.
+    # Ensure last dimension is a multiple of the microblock size. This is expected by the kernel.
     # output value storage
     y_layout = StridedLayout(major_dim=axis - x.ndim)
-    y_scale_shape = (*x.shape[:axis], triton.cdiv(L, MXFP_BLOCK_SIZE), *x.shape[axis+1:])
+    y_scale_shape = (*x.shape[:axis], triton.cdiv(L, microblock_size), *x.shape[axis+1:])
     y_value = empty(x.shape, out_dtype, x.device, y_layout)
-    y_scale = empty(y_scale_shape, UINT8, x.device, y_layout)
+    y_scale = empty(y_scale_shape, UINT8 if scale_dtype == torch.uint8 else FP8_E4M3FN, x.device, y_layout)
     if x.numel() > 0:
         # canonicalize to a 2D tensor that paxks 4-bit values on its inner-most dimension
         x_storage = x.storage.data.transpose(axis, -1).reshape(-1, x.shape[axis])
@@ -62,7 +69,7 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
         y_storage_scale = y_scale.storage.data.transpose(axis, -1).view(-1, y_scale.storage.data.shape[axis])
         # performance hyper-parameters
         BLOCK_OUT_DIM = 32
-        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value * 4
+        BLOCK_QUANT_DIM = microblock_size * 4
         NUM_WARPS = 4 if x.dtype == torch.float32 else 8
         # launch kernel
         blocks_out_dim = triton.cdiv(x_storage.shape[0], BLOCK_OUT_DIM)
@@ -73,6 +80,7 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
             x_storage, *x_storage.stride(), *x_storage.shape,
             BLOCK_OUT_DIM,
             BLOCK_QUANT_DIM,
+            microblock_size,
             DEQUANT_SCALE_ROUNDING_MODE.value,
             num_warps=NUM_WARPS,
         )
@@ -95,7 +103,8 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: to
     # dtype checks
     assert tensor.dtype in {torch.uint8, torch.float8_e5m2, torch.float8_e4m3fn}, \
         f"Invalid tensor dtype {tensor.dtype=}"
-    assert scale.dtype == torch.uint8, f"Invalid scale dtype {scale.dtype=}"
+    assert scale.dtype == torch.uint8 or scale.dtype == torch.float8_e4m3fn, \
+        f"Invalid scale dtype {scale.dtype=}"
     assert target_dtype in (torch.float16, torch.bfloat16, torch.float32), f"Invalid output dtype {target_dtype=}"
     # upcast
     pack_multiple = 2 if tensor.dtype == torch.uint8 else 1
@@ -122,10 +131,11 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: to
         reshaped_out = out.view(-1, out.shape[-1])
 
         is_fp4 = reshaped_tensor.dtype == torch.uint8
+        scale_block_size = MXFP_BLOCK_SIZE.value if scale.dtype == torch.uint8 else NVFP_BLOCK_SIZE.value
 
         # performance hyper-parameters
         BLOCK_OUT_DIM = 64
-        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value * 4
+        BLOCK_QUANT_DIM = scale_block_size * 4
         NUM_WARPS = 4
 
         blocks_out_dim = triton.cdiv(reshaped_out.shape[0], BLOCK_OUT_DIM)
@@ -142,6 +152,7 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: to
             *reshaped_out.shape,
             BLOCK_OUT_DIM,
             BLOCK_QUANT_DIM,
+            scale_block_size,
             num_warps=NUM_WARPS,
         )
         if needs_padding:
@@ -167,6 +178,8 @@ def get_max_quant_val(dtype: torch.dtype):
 
 
 def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int,
+                           scale_dtype: torch.dtype = torch.uint8,
+                           microblock_size: int = MXFP_BLOCK_SIZE.value,
                            DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP):
     """
     Converts the src tensor to the output format specified by out_quant_type.
@@ -176,10 +189,8 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     Returns:
       out_quant_tensor: Quantized tensor in mx format.
          • For mxfp8, the output has the same shape as src_tensor.
-         • For mxfp4, the size along the axis is halved, and the tensor is returned as a torch.uint8.
-      scale: Scale tensor (stored as uint8) computed per group of 32 elements along the axis.
-             Its shape is the same as src_tensor except that the axis is replaced by ceil(L/32),
-             where L is the original length along that axis.
+         • For FP4, the size along the axis is halved, and the tensor is returned as a torch.uint8.
+      scale: Scale tensor computed per microblock along the axis.
     """
     # This should probably be packed into its own tiny class
     ndim = src_tensor.ndim
@@ -191,6 +202,11 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     is_fp4 = out_quant_type == torch.uint8
     is_fp8 = "float8" in str(out_quant_type)
     assert is_fp4 or is_fp8, f"Invalid input tensor dtype {out_quant_type}"
+    assert scale_dtype == torch.uint8 or scale_dtype == torch.float8_e4m3fn, f"Invalid scale dtype {scale_dtype=}"
+    if scale_dtype == torch.float8_e4m3fn:
+        assert is_fp4, f"Direct float8 scales are only supported for FP4 values. Got {out_quant_type=}"
+        assert DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_UP, \
+            "Direct float8 scales only support ROUND_UP in downcast_to_mxfp_torch"
 
     device = src_tensor.device
 
@@ -203,38 +219,39 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     src = src_tensor.transpose(axis, src_tensor.ndim - 1).to(torch.float32)
     axis_shape = src.shape[-1]
 
-    # Pad the axis to be divisible by 32, in case it is not.
-    next_multiple = triton.cdiv(axis_shape, MXFP_BLOCK_SIZE) * MXFP_BLOCK_SIZE
+    # Pad the axis to be divisible by the microblock size, in case it is not.
+    next_multiple = triton.cdiv(axis_shape, microblock_size) * microblock_size
     pad_amount = next_multiple - axis_shape
     padded_src = F.pad(src, (0, pad_amount))
     valid_mask = F.pad(torch.ones_like(src, dtype=torch.bool), (0, pad_amount))
-    padded_axis_shape = padded_src.size(-1)  # now divisible by 32
+    padded_axis_shape = padded_src.size(-1)
 
     # --- Compute per-group maximums for scale ---
     # Set padded entries to -1 so they don’t affect the max.
     abs_f = torch.abs(padded_src)
     abs_f = torch.where(valid_mask, abs_f, torch.tensor(-1.0, device=device, dtype=padded_src.dtype))
-    # Reshape the last dimension into groups of 32.
-    new_shape = padded_src.shape[:-1] + (padded_axis_shape // MXFP_BLOCK_SIZE, MXFP_BLOCK_SIZE)
+    # Reshape the last dimension into microblocks.
+    new_shape = padded_src.shape[:-1] + (padded_axis_shape // microblock_size, microblock_size)
     abs_groups = abs_f.view(*new_shape)
-    # Compute maximum along the group dimension (of size 32).
+    # Compute maximum along the microblock dimension.
     max_val, _ = abs_groups.max(dim=-1, keepdim=True)
 
     # Choose a max quantization value depending on type.
     max_quant_val = get_max_quant_val(out_quant_type)
     if DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_UP:
-        dequant_scale = max_val / max_quant_val  # shape: (..., padded_axis_shape//32, 1)
+        dequant_scale = max_val / max_quant_val
     else:
         dequant_scale = max_val / (2 ** math.floor(math.log2(max_quant_val)))
-
-    # Convert to int to round the FP32 scale, prior to quantization!
-    ds_int = dequant_scale.view(torch.int32)
-    if DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_UP:
-        ds_int_rounded = (ds_int + 0x007FFFFF) & 0x7F800000
+    if scale_dtype == torch.uint8:
+        # Convert to int to round the FP32 scale, prior to quantization!
+        ds_int = dequant_scale.view(torch.int32)
+        if DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_UP:
+            ds_int_rounded = (ds_int + 0x007FFFFF) & 0x7F800000
+        else:
+            ds_int_rounded = ds_int & 0x7F800000
+        dequant_scale_rounded = ds_int_rounded.view(torch.float32)
     else:
-        ds_int_rounded = ds_int & 0x7F800000
-    # Reinterpret back as float32.
-    dequant_scale_rounded = ds_int_rounded.view(torch.float32)
+        dequant_scale_rounded = dequant_scale.to(scale_dtype).to(torch.float32)
 
     # Compute the quantization scale.
     quant_scale = torch.where(dequant_scale_rounded == 0, torch.tensor(0.0, device=device), 1.0 / dequant_scale_rounded)
@@ -291,8 +308,11 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
         out_weight = evens | (odds << 4)  # shape: (..., axis_shape//2)
 
     # --- Process and output the scale ---
-    dq_scale = (ds_int_rounded.view(*dequant_scale.shape) >> 23).to(torch.uint8)  # shape: (..., axis_shape//32, 1)
-    dq_scale = dq_scale.squeeze(-1)
+    if scale_dtype == torch.uint8:
+        dq_scale = (ds_int_rounded.view(*dequant_scale.shape) >> 23).to(torch.uint8)
+        dq_scale = dq_scale.squeeze(-1)
+    else:
+        dq_scale = dequant_scale_rounded.to(scale_dtype).squeeze(-1)
     out_weight = out_weight.transpose(axis, src_tensor.ndim - 1)
     dq_scale = dq_scale.transpose(axis, src_tensor.ndim - 1)
     return out_weight, dq_scale
@@ -318,7 +338,7 @@ def cvt_e2m1_to_fp32(input_tensor):
 
 def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: torch.dtype, axis: int):
     """
-    Converts the mxfp4/mxfp8 tensor to the target format specified by target_dtype.
+    Converts a microscaled tensor to the target format specified by target_dtype.
       axis: The axis along which dequantization is applied.
 
     Returns:
@@ -329,26 +349,34 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     assert -ndim <= axis < ndim, f"Invalid axis {axis=}"
     is_fp8 = tensor.dtype == torch.float8_e4m3fn or tensor.dtype == torch.float8_e5m2
     assert is_fp8 or tensor.dtype == torch.uint8, f"Invalid input quantization type {tensor.dtype}"
+    assert scale.dtype == torch.uint8 or scale.dtype == torch.float8_e4m3fn, \
+        f"Invalid scale dtype {scale.dtype}"
 
     # Permute the tensor and scale so that the quantization axis becomes the last dimension
     axis = axis if axis >= 0 else axis + ndim
     scale = scale.transpose(axis, scale.ndim - 1)
     tensor = tensor.transpose(axis, tensor.ndim - 1)
 
-    dq_scale = (scale.to(torch.int32) << 23).view(torch.float32)  # Shift to the exponent and bitcast to fp32
     if tensor.dtype == torch.uint8:
         fp32_tensor = cvt_e2m1_to_fp32(tensor)
     else:
         fp32_tensor = tensor.to(torch.float32)
 
     logical_quant_dim = tensor.shape[-1] * (2 if tensor.dtype == torch.uint8 else 1)
+    if scale.dtype == torch.uint8:
+        dq_scale = (scale.to(torch.int32) << 23).view(torch.float32)
+        scale_block_size = MXFP_BLOCK_SIZE.value
+    else:
+        dq_scale = scale.to(torch.float32)
+        scale_block_size = logical_quant_dim // scale.shape[-1]
+        assert scale_block_size in (NVFP_BLOCK_SIZE.value, MXFP_BLOCK_SIZE.value), f"Unsupported direct scale block size {scale_block_size}"
     axis_shape = fp32_tensor.size(-1)
-    padded_axis_shape = triton.cdiv(logical_quant_dim, MXFP_BLOCK_SIZE) * MXFP_BLOCK_SIZE
+    padded_axis_shape = triton.cdiv(logical_quant_dim, scale_block_size) * scale_block_size
     pad_size = padded_axis_shape - axis_shape
     padded_tensor = F.pad(fp32_tensor, (0, pad_size))
 
     new_axis_shape = padded_tensor.shape[-1]
-    new_shape = padded_tensor.shape[:-1] + (new_axis_shape // MXFP_BLOCK_SIZE, MXFP_BLOCK_SIZE)
+    new_shape = padded_tensor.shape[:-1] + (new_axis_shape // scale_block_size, scale_block_size)
     padded_tensor = padded_tensor.view(*new_shape)
     dq_scale_padded = dq_scale.unsqueeze(-1)  # shape: [..., ceil(axis_shape/32), 1]
     out_padded = padded_tensor * dq_scale_padded
@@ -375,3 +403,5 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
 
 
 quantize_mxfp8_fn = _quantize_mxfp8_fn
+quantize_mxfp4_fn = _quantize_mxfp4_fn
+quantize_nvfp4_fn = _quantize_nvfp4_fn

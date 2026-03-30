@@ -462,6 +462,49 @@ Value fpsanSRem(PatternRewriter &rewriter, Location loc, Value num, Value den) {
   return bitcastToFloat(rewriter, loc, resI, num.getType());
 }
 
+// Modular exponentiation in payload space; this preserves
+// exp2(a + b) = exp2(a) * exp2(b) under the integer rewrite.
+Value fpsanExp2FromI32(PatternRewriter &rewriter, Location loc, Value xI,
+                       Type floatTy) {
+  auto one = getIntConstantLike(rewriter, loc, xI.getType(), 1);
+  auto zero = getIntConstantLike(rewriter, loc, xI.getType(), 0);
+  auto c = getIntConstantLike(rewriter, loc, xI.getType(), 0xa343836d);
+
+  Value y = one;
+  for (int i = 0; i < 32; ++i) {
+    y = arith::MulIOp::create(rewriter, loc, y, y);
+    auto bit = getIntConstantLike(rewriter, loc, xI.getType(),
+                                  int64_t(1ull << (31 - i)));
+    auto masked = arith::AndIOp::create(rewriter, loc, xI, bit);
+    auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                        masked, zero);
+    auto factor = arith::SelectOp::create(rewriter, loc, isZero, one, c);
+    y = arith::MulIOp::create(rewriter, loc, y, factor);
+  }
+
+  return bitcastToFloat(rewriter, loc, y, floatTy);
+}
+
+Value fpsanExp2(PatternRewriter &rewriter, Location loc, Value input) {
+  auto elemTy = dyn_cast<FloatType>(getElementType(input.getType()));
+  if (!elemTy || elemTy.getWidth() != 32)
+    return Value();
+  return fpsanExp2FromI32(rewriter, loc, bitcastToInt(rewriter, loc, input),
+                          input.getType());
+}
+
+Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
+  auto elemTy = dyn_cast<FloatType>(getElementType(input.getType()));
+  if (!elemTy || elemTy.getWidth() != 32)
+    return Value();
+
+  auto inputI = bitcastToInt(rewriter, loc, input);
+  auto rcpLog2 =
+      getIntConstantLike(rewriter, loc, inputI.getType(), 0x3fb8aa3b);
+  auto scaledI = arith::MulIOp::create(rewriter, loc, inputI, rcpLog2);
+  return fpsanExp2FromI32(rewriter, loc, scaledI, input.getType());
+}
+
 bool isIntLike(Type ty) { return isa<IntegerType>(getElementType(ty)); }
 
 bool isNumericLike(Type ty) {
@@ -932,6 +975,36 @@ struct FmaPattern : public OpRewritePattern<math::FmaOp> {
     auto sum = arith::AddIOp::create(rewriter, loc, mul, cI);
     auto resF = bitcastToFloat(rewriter, loc, sum, op.getType());
     rewriter.replaceOp(op, resF);
+    return success();
+  }
+};
+
+struct ExpOpPattern : public OpRewritePattern<math::ExpOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(math::ExpOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isFloatLike(op.getType()))
+      return failure();
+    Value result = fpsanExp(rewriter, op.getLoc(), op.getOperand());
+    if (!result)
+      result = fpsanUnaryTagged(rewriter, op.getLoc(), op.getOperand(),
+                                UnaryOpId::Exp);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct Exp2OpPattern : public OpRewritePattern<math::Exp2Op> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(math::Exp2Op op,
+                                PatternRewriter &rewriter) const override {
+    if (!isFloatLike(op.getType()))
+      return failure();
+    Value result = fpsanExp2(rewriter, op.getLoc(), op.getOperand());
+    if (!result)
+      result = fpsanUnaryTagged(rewriter, op.getLoc(), op.getOperand(),
+                                UnaryOpId::Exp2);
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -1433,6 +1506,12 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     auto bTileTy =
         RankedTensorType::get({k, tileN}, bMemTy.getElementType(), bTileLayout);
 
+    // Each warp may only populate a subset of the operand scratch tiles, so
+    // synchronize before the emulation loops start reading them.
+    ttg::BarrierOp::create(rewriter, loc,
+                           ttg::AddrSpace::GlobalRead |
+                               ttg::AddrSpace::GlobalWrite);
+
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, aScratch->ptr, bScratch->ptr, dInfo->ptr, m, n, k, tileM,
         tileN, aTileTy, bTileTy, accTileTy, accTileLayout, accElem, useDInt,
@@ -1441,9 +1520,15 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
       return failure();
     rewriter.setInsertionPointAfter(*mLoop);
 
+    // The emulation loop also writes D through scratch memory from multiple
+    // warps, so make those stores visible before signaling completion.
+    auto postLoopBarrier = ttg::BarrierOp::create(
+        rewriter, loc,
+        ttg::AddrSpace::GlobalRead | ttg::AddrSpace::GlobalWrite);
+
     if (!op.getBarriers().empty()) {
       OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointAfter(*mLoop);
+      rewriter.setInsertionPointAfter(postLoopBarrier);
       auto barriers = op.getBarriers();
       auto barrierPreds = op.getBarrierPreds();
       for (size_t i = 0; i < barriers.size(); ++i) {
@@ -1601,6 +1686,12 @@ struct TCGen5MMAScaledPattern
     scale.aScaleFactor = *aScaleFactor;
     scale.bScaleFactor = *bScaleFactor;
 
+    // The operand and scale scratch buffers are written cooperatively, so all
+    // warps must finish those stores before the emulation loop reads them.
+    ttg::BarrierOp::create(rewriter, loc,
+                           ttg::AddrSpace::GlobalRead |
+                               ttg::AddrSpace::GlobalWrite);
+
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, aScratch->ptr, bScratch->ptr, dInfo->ptr, m, n, k, tileM,
         tileN, aTileTy, bTileTy, accTileTy, accTileLayout, accElem, useDInt,
@@ -1609,9 +1700,15 @@ struct TCGen5MMAScaledPattern
       return failure();
     rewriter.setInsertionPointAfter(*mLoop);
 
+    // The emulated MMA updates the accumulator scratch cooperatively as well.
+    // Flush those stores before completion barriers or later TMEM loads.
+    auto postLoopBarrier = ttg::BarrierOp::create(
+        rewriter, loc,
+        ttg::AddrSpace::GlobalRead | ttg::AddrSpace::GlobalWrite);
+
     if (!op.getBarriers().empty()) {
       OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointAfter(*mLoop);
+      rewriter.setInsertionPointAfter(postLoopBarrier);
       auto barriers = op.getBarriers();
       auto barrierPreds = op.getBarrierPreds();
       for (size_t i = 0; i < barriers.size(); ++i) {
@@ -1683,11 +1780,10 @@ public:
                  BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
                  BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
                  DivFOpPattern, PreciseDivFOpPattern, RemFOpPattern, FmaPattern,
-                 ExtFOpPattern, TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
-                 DotPattern, DotScaledPattern>(&getContext());
-    patterns.add<UnaryPattern<math::ExpOp>>(&getContext(), UnaryOpId::Exp);
+                 ExpOpPattern, Exp2OpPattern, ExtFOpPattern, TruncFOpPattern,
+                 FpToFpPattern, Fp4ToFpPattern, DotPattern, DotScaledPattern>(
+        &getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
-    patterns.add<UnaryPattern<math::Exp2Op>>(&getContext(), UnaryOpId::Exp2);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::CosOp>>(&getContext(), UnaryOpId::Cos);
     patterns.add<UnaryPattern<math::SinOp>>(&getContext(), UnaryOpId::Sin);

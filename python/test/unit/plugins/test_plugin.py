@@ -28,7 +28,7 @@ def kernel3(BLOCK_SIZE: tl.constexpr):
 
 
 def test_op(capfd, device: str):
-    if os.environ.get('LLVM_BUILD_SHARED_LIBS', '0') == '0':
+    if os.environ.get('TRITON_EXT_ENABLED', '0') == '0':
         return
 
     size = 98432
