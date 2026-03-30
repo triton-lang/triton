@@ -470,10 +470,6 @@ LogicalResult Prefetcher::initialize() {
   for (triton::DotOp dot : dotsInFor) {
     auto aType = dot.getA().getType();
     auto bType = dot.getB().getType();
-    // TODO(Keren): reenable f64 prefetch
-    if (aType.getElementType().isF64() || bType.getElementType().isF64() ||
-        dot.getType().getElementType().isF64())
-      continue;
     auto dotEncoding = dot.getType().getEncoding();
     auto aEnc =
         mlir::cast<triton::gpu::DotOperandEncodingAttr>(aType.getEncoding());

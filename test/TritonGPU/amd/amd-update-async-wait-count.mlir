@@ -634,3 +634,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Test TDM with partitioned shared encoding where each copy emits multiple instructions
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared_inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 4, partitionDim = 0, partitionLayout = #shared_inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_partitioned_shared_waitcnt
+  tt.func public @tdm_partitioned_shared_waitcnt(
+    %memDesc: !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>,
+    %tensorDesc: !tt.tensordesc<tensor<128x16xf16>>,
+    %mask: i32
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+
+    // numLogicalPieces = numPartitions * numGroups = 2 * 4 = 8
+    // warpsAlongPartition = gcd(numWarps=4, numLogicalPieces=8) = 4
+    // Each async_tdm_copy emits divideCeil(8, 4) = 2 instructions
+    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %mask : !tt.tensordesc<tensor<128x16xf16>> -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %mask : !tt.tensordesc<tensor<128x16xf16>> -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
+
+    // Skip second copy (2 instructions) => count = 2
+    // CHECK: amdg.async_tdm_intrinsic_wait {{.*}} {count = 2
+    %w1 = amdg.async_tdm_wait %1 {num = 0 : i32}
+    // Nothing in between => count = 0
+    // CHECK: amdg.async_tdm_intrinsic_wait {{.*}} {count = 0
+    %w2 = amdg.async_tdm_wait %2 {num = 0 : i32}
+    tt.return
+  }
+}

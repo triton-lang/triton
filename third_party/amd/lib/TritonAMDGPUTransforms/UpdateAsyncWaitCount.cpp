@@ -454,9 +454,20 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
 
       auto v = [&]() -> int {
         using namespace triton::amdgpu;
-        // Load and store always emit 1 instrinsic
-        if (isa<AsyncTDMCopyGlobalToLocalOp, AsyncTDMCopyLocalToGlobalOp>(op)) {
-          return 1;
+        if (auto copyOp = dyn_cast<AsyncTDMCopyGlobalToLocalOp>(op)) {
+          auto smemTy = copyOp.getResult().getType();
+          int numWarps = ttg::lookupNumWarps(op);
+          auto [_, numInstr] =
+              mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
+                  smemTy.getShape(), numWarps, smemTy.getEncoding());
+          return numInstr;
+        } else if (auto copyOp = dyn_cast<AsyncTDMCopyLocalToGlobalOp>(op)) {
+          auto smemTy = copyOp.getSrc().getType();
+          int numWarps = ttg::lookupNumWarps(op);
+          auto [_, numInstr] =
+              mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
+                  smemTy.getShape(), numWarps, smemTy.getEncoding());
+          return numInstr;
         } else if (isa<AsyncTDMScatterOp, AsyncTDMGatherOp>(op)) {
           // For scatter and gather we need to get the count of TDM intrinsics
           // based on the row indices tensor type

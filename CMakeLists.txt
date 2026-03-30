@@ -339,15 +339,11 @@ if(TRITON_BUILD_PYTHON_MODULE)
     ${triton_plugins}
 
     # mlir
-    MLIRAMDGPUDialect
     MLIRNVVMDialect
     MLIRNVVMToLLVMIRTranslation
     MLIRGPUToNVVMTransforms
-    MLIRGPUToGPURuntimeTransforms
-    MLIRGPUTransforms
     MLIRIR
     MLIRControlFlowToLLVM
-    MLIRBytecodeWriter
     MLIRPass
     MLIRTransforms
     MLIRLLVMDialect
@@ -360,7 +356,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRIndexToLLVM
     MLIRGPUToROCDLTransforms
     MLIRUBToLLVM
-    MLIRPluginsLib
 
     # LLVM
     LLVMPasses
