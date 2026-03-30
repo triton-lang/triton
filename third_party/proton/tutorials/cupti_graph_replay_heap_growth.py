@@ -42,7 +42,7 @@ That makes the script suitable for the same style of `t+1h` vs `t+3h` heap diff
 used in the RuntimeWorker investigation.
 
 One concrete launch command that produced a clear cupti12 vs cupti13 split on
-`db2-gb200-vd64-spud-susu-0` was:
+a GB200 devbox was:
 
   LD_PRELOAD=/tmp/runtimeworker_memory_debug/jemalloc-prof/lib/libjemalloc.so.2 \
   PYTHONMALLOC=malloc \
@@ -60,13 +60,24 @@ One concrete launch command that produced a clear cupti12 vs cupti13 split on
     --phase-every 100 \
     --clear-completed-phases
 
-After that run completed, the native heap diff that surfaced the main replay
-path came from a `jeprof --base` comparison between the blackwell checkpoints:
+After that run completed, the safest way to identify the blackwell heap-profile
+pair is to read `summary_blackwell.json` instead of guessing from the filenames:
+
+  read base cur < <(
+    python - <<'PY'
+  import json, pathlib
+  summary = json.loads(pathlib.Path("/tmp/triton-cupti-graph-heap-medium1/summary_blackwell.json").read_text())
+  print(
+      summary["checkpoints"]["t_plus_1h"]["heap_profile_path"],
+      summary["checkpoints"]["t_plus_3h"]["heap_profile_path"],
+  )
+  PY
+  )
+
+The native heap diff that surfaced the main replay path then came from:
 
   jeprof=/tmp/runtimeworker_memory_debug/jemalloc-prof/bin/jeprof
   exe=/root/.pyenv/versions/3.12.9/bin/python3.12
-  base=/tmp/triton-cupti-graph-heap-medium1/checkpoints/blackwell/t_plus_1h/heap_profile_<pid>_<ts>.heap
-  cur=/tmp/triton-cupti-graph-heap-medium1/checkpoints/blackwell/t_plus_3h/heap_profile_<pid>_<ts>.heap
   "$jeprof" --text --show_bytes --base="$base" "$exe" "$cur" | \
     egrep 'Total:|at::cuda::CUDAGraph::replay|cuGraphLaunch|cudaGraphLaunch|cuptiEnableAllDomains|cuptiOpenMpInitialize_v2'
 
