@@ -26,7 +26,7 @@ import re
 import subprocess
 import tempfile
 
-FLINE_RE = re.compile(r'\s*/\*\w{4}\*/\s*([^;]*;)\s*/\* 0x(\w{16}) \*/\s*')
+FLINE_RE = re.compile(r'\s*/\*\w{4,}\*/\s*([^;]*;)\s*/\* 0x(\w{16}) \*/\s*')
 SLINE_RE = re.compile(r'\s*/\* 0x(\w{16}) \*/\s*')
 FNAME_RE = re.compile(r'\s*Function : (\w+)\s*')
 BRA_RE = re.compile(r'(.*BRA(?:\.U)? )(0x\w+);')
@@ -123,6 +123,8 @@ def extract(file_path, fun):
             line_idx += 1
             asm_buffer.append(processSassLines(fline, sline, labels))
             # peek the next line
+            if line_idx >= len(sass_lines):
+                break
             line = sass_lines[line_idx].decode()
         # Print sass
         # label naming convention: LBB#i

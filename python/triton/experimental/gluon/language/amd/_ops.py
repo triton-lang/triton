@@ -42,36 +42,61 @@ def _wmma(version, a, b, acc, semantic):
 def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, semantic):
     """ Shared implementation for AMD WMMA scaled and MFMA scaled operation. """
 
-    def _get_scale_shape(op_idx, operand, format):
+    def _get_scale_shape(op_idx, operand, format, scale_factor):
         operand_shape = [s for s in operand.type.shape]
         scale_shape = operand_shape
         unpack_factor = 2 if format.value == "e2m1" else 1
         if op_idx == 0:
             k = scale_shape[-1] * unpack_factor
-            scale_shape[-1] = k // 32
+            scale_shape[-1] = k // scale_factor
         else:
             k = scale_shape[-2] * unpack_factor
-            scale_shape[-2] = k // 32
+            scale_shape[-2] = k // scale_factor
             scale_shape[-2], scale_shape[-1] = scale_shape[-1], scale_shape[-2]
         return scale_shape
 
-    def _create_and_broadcast_default_scale(op_idx, scale, format):
+    def _get_default_scale_dtype_and_unit_value(op_idx):
+        default_value_by_dtype = {ttgl.uint8: 0x7F, ttgl.float8e4nv: 1.0}
+
+        a_scale_value = _unwrap_if_constexpr(a_scale)
+        b_scale_value = _unwrap_if_constexpr(b_scale)
+        if a_scale_value is None and b_scale_value is None:
+            return ttgl.uint8, 0x7F
+
+        if a_format.value == b_format.value == "e2m1":
+            # Fp4 x Fp4 requries to use the same scale dtype for both operands.
+            other_scale = b_scale if op_idx == 0 else a_scale
+            return other_scale.dtype, default_value_by_dtype[other_scale.dtype]
+
+        return ttgl.uint8, 0x7F
+
+    def _create_and_broadcast_default_scale(op_idx, scale, format, scale_factor):
         operand = a if op_idx == 0 else b
 
-        scale_shape = _get_scale_shape(op_idx, operand, format)
+        scale_shape = _get_scale_shape(op_idx, operand, format, scale_factor)
         if isinstance(scale, ttgl.tensor) and scale.numel.value != 1:
             # In the case of scale pre-shuffling, the input shape is different from the default shape. We only check
             # the number of elements here.
             assert math.prod(scale_shape) == scale.numel.value, "Incompatible scale shape"
             return scale
 
-        scale_layout = scale_fn(operand.type.layout, scale_shape)
+        scale_layout = scale_fn(operand.type.layout, scale_shape, scale_factor)
         scale_value = _unwrap_if_constexpr(scale)
-        scale_value = 0x7F if scale_value is None else scale_value
-        return semantic.full(scale_shape, scale_value, ttgl.uint8, scale_layout)
+        if scale_value is None:
+            scale_dtype, scale_value = _get_default_scale_dtype_and_unit_value(op_idx)
+        elif isinstance(scale_value, int):
+            scale_dtype = ttgl.uint8
+        elif isinstance(scale_value, float):
+            scale_dtype = ttgl.float8e4nv
+        else:
+            scale_dtype = scale.dtype
 
-    a_scale = _create_and_broadcast_default_scale(0, a_scale, a_format)
-    b_scale = _create_and_broadcast_default_scale(1, b_scale, b_format)
+        return semantic.full(scale_shape, scale_value, scale_dtype, scale_layout)
+
+    scale_factor = semantic.deduce_scale_factor(a, a_scale, a_format, True, b, b_scale, b_format, True)
+
+    a_scale = _create_and_broadcast_default_scale(0, a_scale, a_format, scale_factor)
+    b_scale = _create_and_broadcast_default_scale(1, b_scale, b_format, scale_factor)
     output = semantic.dot_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, fast_math=False, lhs_k_pack=True,
                                  rhs_k_pack=True, out_dtype=ttgl.float32)
     return ttgl.tensor(output.handle, acc.type)

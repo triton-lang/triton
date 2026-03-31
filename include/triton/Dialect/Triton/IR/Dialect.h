@@ -25,7 +25,7 @@ namespace mlir {
 namespace triton {
 
 struct GlobalMemory : public SideEffects::Resource::Base<GlobalMemory> {
-  StringRef getName() final { return "<GlobalMemory>"; }
+  StringRef getName() const final { return "<GlobalMemory>"; }
 };
 
 class DialectInferLayoutInterface

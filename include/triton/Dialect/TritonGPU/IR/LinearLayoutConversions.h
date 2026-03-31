@@ -61,6 +61,7 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 // Unlike toLinearLayout, this makes explicit that the resulting linear layout
 // is incomplete — the padding information is not captured in the linear layout.
 LinearLayout paddedLinearLayout(MemDescType type);
+LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding);
 
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
@@ -139,6 +140,7 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
 LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<int64_t> dotOperandShape,
                                          unsigned wmmaMDim,
+                                         unsigned scaleFactor,
                                          LinearLayout ctaLayout,
                                          CGAEncodingAttr cgaLayout);
 
@@ -161,5 +163,17 @@ std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 // Create the core layout (atom in the PTX manual) a given nvmma shared encoding
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle);
+
+// Create a LinearLayout for TDM (Tensor DMA) block shapes.
+// Returns a (message, warp, block) -> (dim0, dim1, ...) layout.
+//
+// TDM operates at warp granularity. The warp dimension distributes warps across
+// output dimensions according to warpsPerCTA. The message dimension covers each
+// warp's portion of the block (blockShape / warpsPerCTA) for surjectivity. The
+// block dimension comes from cgaLayout.
+LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
+                                ArrayRef<unsigned> warpsPerCTA,
+                                const LinearLayout &cgaLayout);
+
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

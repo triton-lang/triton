@@ -148,3 +148,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %2 : tensor<64x128xi32, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @infer_if_yield_propagation
+  tt.func public @infer_if_yield_propagation(%cond: i1) -> tensor<16xi32, #blocked> {
+    // The scf.if has two results. Result #0 is resolved from outside (via
+    // set_auto_layout on %z#0). Result #1 can only be resolved via forward
+    // propagation from the yield operands inside the if body.
+    //
+    // CHECK: %[[IF:.*]]:2 = scf.if {{.*}} -> (tensor<16xi32, #{{.*}}>, tensor<16xi32, #{{.*}}>)
+    // CHECK-NOT: auto_encoding
+    %c1 = arith.constant dense<1> : tensor<16xi32, #gluon.auto_encoding>
+    %c2 = arith.constant dense<2> : tensor<16xi32, #gluon.auto_encoding>
+    %z:2 = scf.if %cond -> (tensor<16xi32, #gluon.auto_encoding>, tensor<16xi32, #gluon.auto_encoding>) {
+      %range = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #gluon.auto_encoding>
+      %resolved = gluon.set_auto_layout %range : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked1>
+      scf.yield %c1, %range : tensor<16xi32, #gluon.auto_encoding>, tensor<16xi32, #gluon.auto_encoding>
+    } else {
+      %cst = arith.constant dense<0> : tensor<16xi32, #gluon.auto_encoding>
+      %resolved2 = gluon.set_auto_layout %cst : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked1>
+      scf.yield %c2, %cst : tensor<16xi32, #gluon.auto_encoding>, tensor<16xi32, #gluon.auto_encoding>
+    }
+    %out = gluon.set_auto_layout %z#0 : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked>
+    tt.return %out : tensor<16xi32, #blocked>
+  }
+}

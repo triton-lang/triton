@@ -493,20 +493,21 @@ struct MemDescIndexOpConversion
     auto dstTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
-    if (auto partitionedEnc =
-            dyn_cast<PartitionedSharedEncodingAttr>(srcTy.getEncoding())) {
-      if (partitionedEnc.getPartitionDim() == 0) {
-        return rewriter.notifyMatchFailure(
-            op, "memdesc_index into partitioned dimension (partitionDim=0) "
-                "is not yet supported");
-      }
-    }
-
-    // getAllocationShapePerCTA returns the correct number fp4 elements that we
-    // need to skip when we have fp4Padded=True. getShapePerCTA does not account
-    // for this
-    auto stride = product(
+    // Stride is computed from dstTy (the result after dropping the leading
+    // buffer dimension). The encoding's partitionDim is relative to this
+    // reduced shape, so partitionDim=0 refers to the tensor's first dimension,
+    // not the multi-buffer dimension that was just indexed away.
+    //
+    // getAllocationShapePerCTA returns the correct number of fp4 elements that
+    // we need to skip when we have fp4Padded=True. getShapePerCTA does not
+    // account for this.
+    auto allocShape = product(
         getAllocationShapePerCTA(dstTy.getEncoding(), dstTy.getShape()));
+    int64_t stride = allocShape;
+    if (auto partEnc =
+            dyn_cast<PartitionedSharedEncodingAttr>(dstTy.getEncoding())) {
+      stride = allocShape / partEnc.getNumPartitions();
+    }
     Value offset = b.mul(op.getIndex(), b.i32_val(stride));
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
@@ -515,17 +516,17 @@ struct MemDescIndexOpConversion
                                   prevOffsets.end());
 
     // Apply padding based on the amount we move the base ptr
-    if (isPaddedEncoding(dstTy.getEncoding())) {
+    if (auto padEnc = getPaddedEncoding(dstTy.getEncoding())) {
       auto bitwidth = dstTy.getElementTypeBitWidth();
-      auto paddingShifts = getPaddedSharedShifts(dstTy.getEncoding(), bitwidth,
-                                                 /*offsetInBytes=*/false);
+      auto paddingShifts =
+          getPaddedSharedShifts(padEnc, bitwidth, /*offsetInBytes=*/false);
       offset = applyPadding(loc, rewriter, offset, paddingShifts);
     }
 
-    // For partitioned tensors (when partitionDim > 0), all partitions have the
-    // same layout structure. Each partition contains portions of every "buffer"
-    // along dimension 0. When we select buffer i, we advance all partition
-    // bases by the same offset.
+    // For partitioned tensors, all partitions have the same layout structure.
+    // Each partition contains portions of every "buffer" along dimension 0.
+    // When we select buffer i, we advance all partition bases by the same
+    // offset.
     SmallVector<Value> newBases;
     for (Value base : smemObj.getBases()) {
       auto elemPtrTy = base.getType();

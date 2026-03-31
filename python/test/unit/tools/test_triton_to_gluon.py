@@ -207,6 +207,38 @@ def test_triton_to_gluon_descriptor_load_roundtrip(tmp_path):
 
 
 @triton.jit
+def make_tensor_descriptor_copy_kernel(x_ptr, y_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    in_desc = tl.make_tensor_descriptor(
+        x_ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[BLOCK_M, BLOCK_N],
+    )
+    out_desc = tl.make_tensor_descriptor(
+        y_ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[BLOCK_M, BLOCK_N],
+    )
+    tile = in_desc.load([0, 0])
+    out_desc.store([0, 0], tile)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_triton_to_gluon_make_tensor_descriptor(tmp_path, with_allocator):
+    kernel = convert_kernel(make_tensor_descriptor_copy_kernel, "make_tensor_descriptor_copy_kernel", tmp_path)
+
+    M = N = 64
+    x = torch.randn((M, N), device="cuda", dtype=torch.float16)
+    y = torch.zeros_like(x)
+    grid = (1, )
+
+    kernel[grid](x, y, M, N, M, N)
+
+    torch.testing.assert_close(y, x, atol=0, rtol=0)
+
+
+@triton.jit
 def reshape_trans_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK: tl.constexpr, TRANS_KIND: tl.constexpr):
     pid = tl.program_id(0)
     offsets = pid * BLOCK + tl.arange(0, BLOCK)
@@ -273,6 +305,34 @@ def test_split(tmp_path):
 
 
 @triton.jit
+def cat_translation_kernel(x_ptr, y_ptr, out_ptr, BLOCK: tl.constexpr, CAN_REORDER: tl.constexpr):
+    offsets = tl.arange(0, BLOCK)
+    x = tl.load(x_ptr + offsets)
+    y = tl.load(y_ptr + offsets)
+    z = tl.cat(x, y, can_reorder=CAN_REORDER)
+    tl.store(out_ptr + tl.arange(0, 2 * BLOCK), z)
+
+
+@pytest.mark.parametrize("can_reorder", [False, True])
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+def test_cat_translation(tmp_path, can_reorder):
+    kernel = convert_kernel(cat_translation_kernel, "cat_translation_kernel", tmp_path)
+
+    block = 128
+    x = torch.arange(0, block, device="cuda", dtype=torch.int32)
+    y = torch.arange(-block, 0, device="cuda", dtype=torch.int32)
+    out = torch.empty((2 * block, ), device="cuda", dtype=torch.int32)
+
+    kernel[(1, )](x, y, out, BLOCK=block, CAN_REORDER=can_reorder, num_warps=4)
+
+    ref = torch.cat([x, y], dim=0)
+    if can_reorder:
+        torch.testing.assert_close(torch.sort(out).values, torch.sort(ref).values, atol=0, rtol=0)
+    else:
+        torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@triton.jit
 def reduce_to_scalar_kernel(out_ptr):
     x = tl.arange(0, 16)
     x = tl.sum(x)
@@ -292,6 +352,32 @@ def test_reduce_to_scalar(tmp_path):
 
 
 @triton.jit
+def extrema_reduce_kernel(x_ptr, max_ptr, min_ptr, BLOCK: tl.constexpr):
+    offsets = tl.arange(0, BLOCK)
+    x = tl.load(x_ptr + offsets)
+    x = tl.reshape(x, BLOCK // 2, 2)
+    tl.store(max_ptr + tl.arange(0, BLOCK // 2), tl.max(x, axis=1))
+    tl.store(min_ptr + tl.arange(0, BLOCK // 2), tl.min(x, axis=1))
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+def test_extrema_reduction(tmp_path):
+    kernel = convert_kernel(extrema_reduce_kernel, "extrema_reduce_kernel", tmp_path)
+
+    block = 256
+    x = torch.randn(block, device="cuda", dtype=torch.float32)
+    out_max = torch.empty((block // 2, ), device="cuda", dtype=torch.float32)
+    out_min = torch.empty((block // 2, ), device="cuda", dtype=torch.float32)
+    kernel[(1, )](x, out_max, out_min, BLOCK=block)
+
+    ref_max = torch.empty_like(out_max)
+    ref_min = torch.empty_like(out_min)
+    extrema_reduce_kernel[(1, )](x, ref_max, ref_min, BLOCK=block)
+    torch.testing.assert_close(out_max, ref_max, atol=0, rtol=0)
+    torch.testing.assert_close(out_min, ref_min, atol=0, rtol=0)
+
+
+@triton.jit
 def num_threads_kernel(out_ptr):
     num_threads: tl.constexpr = tl.extra.cuda.num_threads()
     offs = tl.arange(0, num_threads)
@@ -308,3 +394,23 @@ def test_num_threads(tmp_path):
     ref = torch.empty_like(out)
     num_threads_kernel[(1, )](ref, num_warps=num_threads // 32)
     torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@triton.jit
+def atomic_add_kernel(out_ptr, BLOCK: tl.constexpr):
+    idx = tl.arange(0, BLOCK)
+    scalar_mask = True
+    tl.atomic_add(out_ptr + idx, idx, mask=scalar_mask, sem="release", scope="cta")
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+def test_atomic_add(tmp_path):
+    kernel = convert_kernel(atomic_add_kernel, "atomic_add_kernel", tmp_path)
+
+    block = 32 * 4
+    ref = torch.zeros((block, ), device="cuda")
+    atomic_add_kernel[(1, )](ref, BLOCK=block)
+
+    out = torch.zeros((block, ), device="cuda")
+    kernel[(1, )](out, BLOCK=block)
+    torch.testing.assert_close(out, ref)

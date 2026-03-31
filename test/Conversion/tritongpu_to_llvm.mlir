@@ -1343,6 +1343,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[0]]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32} {
+  // Broadcast-only CGA bases should not force a cluster barrier.
+  // CHECK-LABEL: convert_blocked_to_blocked_broadcast_cga
+  tt.func @convert_blocked_to_blocked_broadcast_cga(%src: tensor<32xf32, #blocked0>) {
+    // CHECK: llvm.store
+    // CHECK: nvvm.bar.warp.sync
+    // CHECK: llvm.load
+    // CHECK-NOT: nvvm.cluster.arrive
+    // CHECK-NOT: nvvm.cluster.wait
+    // CHECK: llvm.return
+    %cvt = ttg.convert_layout %src : tensor<32xf32, #blocked0> -> tensor<32xf32, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
 // Regression test for https://github.com/triton-lang/triton/issues/5745
 #linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[1, 0], [2, 0], [4, 0]], block = []}>
 #linear1 = #ttg.linear<{register = [[0, 2]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]], warp = [[2, 0], [4, 0], [0, 1]], block = []}>

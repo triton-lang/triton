@@ -63,6 +63,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
           pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(
               arch, numStages));
         });
+  ADD_PASS_WRAPPER_0("add_prepare_consan_captures",
+                     mlir::triton::createPrepareConSanCaptures);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      mlir::triton::createAllocateAMDGPUSharedMemory);
   ADD_PASS_OPTION_WRAPPER_3("add_accelerate_matmul",
@@ -104,6 +106,7 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_FUNC_PASS_WRAPPER_0("add_optimize_buffer_op_ptr",
                           mlir::createTritonAMDGPUOptimizeBufferOpPtr);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
+  ADD_PASS_WRAPPER_0("add_fp_sanitizer", mlir::createTritonAMDGPUFpSanitizer);
 
   ADD_PASS_OPTION_WRAPPER_1("add_block_pingpong",
                             mlir::createTritonAMDGPUBlockPingpong, int32_t);
@@ -117,8 +120,11 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_OPTION_WRAPPER_1("add_update_async_wait_count",
                             mlir::createTritonAMDGPUUpdateAsyncWaitCount,
                             std::string);
+  ADD_PASS_WRAPPER_0("add_optimize_descriptor_encoding",
+                     mlir::createTritonAMDGPUOptimizeDescriptorEncoding);
   ADD_PASS_WRAPPER_0("add_convert_to_tensor_ops",
                      mlir::createTritonAMDGPUConvertToTensorOps);
+  mlir::registerConSanAMDHooks();
   m.def("add_in_thread_transpose", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUInThreadTranspose());
@@ -326,7 +332,7 @@ static std::optional<std::string> lldInvoke(const char *inPath,
   std::array args{"ld.lld", "--threads=1", "-shared", inPath, "-o", outPath};
   std::string errString;
   llvm::raw_string_ostream errStream(errString);
-  auto lldRes = lld::lldMain(args, llvm::outs(), llvm::errs(),
+  auto lldRes = lld::lldMain(args, llvm::outs(), errStream,
                              {{lld::Gnu, &lld::elf::link}});
   bool noErrors = (!lldRes.retCode && lldRes.canRunAgain);
   if (!noErrors) {
@@ -550,6 +556,16 @@ void init_triton_amd(py::module &&m) {
   });
 
   auto hipBlas = m.def_submodule("hipblas");
+  // For ROCm installed via TheRock wheels: Preload hipblaslt library via
+  // rocm_sdk if available. When using TheRock wheel installs, libhipblaslt
+  // resides within the Python wheel package rather than in the standard
+  // /opt/rocm/lib location. This preload ensures the library is properly
+  // loaded before HipblasLtInstance tries to dlopen it, allowing the dynamic
+  // linker to find it from the ROCm wheel's bundled libraries.
+  try {
+    py::module_::import("rocm_sdk").attr("preload_libraries")("hipblaslt");
+  } catch (...) {
+  }
   py::class_<HipblasLtInstance>(hipBlas, "HipblasLt")
       .def(py::init<>([&](py::object &workspace) {
         auto wrk_ptr = workspace.attr("data_ptr")().cast<uint64_t>();

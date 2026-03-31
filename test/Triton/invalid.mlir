@@ -560,7 +560,7 @@ module {
     %a_scale: tensor<128x128xi8>,
     %b_scale: tensor<128x4xi8>) -> tensor<128x128xf32> {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
-    // expected-error @below {{scales K dimension must match the operand K divided by the scale factor}}
+    // expected-error @below {{scale factor must be 16 or 32. Got 1}}
     %result = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %cst lhs = e4m3 rhs = e4m3 {fastMath = true} : tensor<128x128xf8E4M3FN>, tensor<128x128xi8>  * tensor<128x128xf8E4M3FN>, tensor<128x4xi8>-> tensor<128x128xf32>
     tt.return %result : tensor<128x128xf32>
   }

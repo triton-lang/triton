@@ -696,9 +696,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   //  CHECK-LABEL: ds_transpose_with_padding
   tt.func @ds_transpose_with_padding(%arg0: !ttg.memdesc<128x64xf16, #padding, #smem, mutable>, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
-    // CHECK:      [[CST0:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:      [[SHR:%.*]]  = llvm.lshr [[OFF:%.*]], [[SHIFT_AMT0:%.*]] : i32
-    // CHECK-NEXT: [[SHL:%.*]]  = llvm.shl [[SHR]], [[SHIFT_AMT1:%.*]] : i32
+    // CHECK-DAG:  [[CST0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-DAG:  [[SHIFT_AMT0:%.*]] = llvm.mlir.constant(10 : i32) : i32
+    // CHECK-DAG:  [[SHIFT_AMT1:%.*]] = llvm.mlir.constant(5 : i32) : i32
+    // CHECK:      [[SHR:%.*]]  = llvm.lshr [[OFF:%.*]], [[SHIFT_AMT0]] : i32
+    // CHECK-NEXT: [[SHL:%.*]]  = llvm.shl [[SHR]], [[SHIFT_AMT1]] : i32
     // CHECK-NEXT: [[ADD0:%.*]] = llvm.add [[SHL:%.*]], [[CST0:%.*]] : i32
     // CHECK-NEXT: [[ADD1:%.*]] = llvm.add [[OFF]], [[ADD0:%.*]] : i32
     // CHECK-NEXT: [[ADD2:%.*]] = llvm.add [[ADD1]], [[CST0]] : i32

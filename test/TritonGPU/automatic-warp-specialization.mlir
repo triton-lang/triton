@@ -286,6 +286,26 @@ tt.func public @attention_forward(
 
 // -----
 
+#indices_layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @no_eligible_memory_ops
+  tt.func @no_eligible_memory_ops(%arg0: i32, %arg1: tensor<128xf32, #indices_layout>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: scf.for
+    // CHECK-NOT: ttg.warp_specialize
+    // CHECK-NOT: ttg.partition
+    // CHECK-NOT: ttg.warp_specialize.tag
+    scf.for %i = %c0_i32 to %arg0 step %c1_i32 iter_args(%acc = %arg1) -> (tensor<128xf32, #indices_layout>) : i32 {
+      %next = "compute"(%acc, %i) : (tensor<128xf32, #indices_layout>, i32) -> tensor<128xf32, #indices_layout>
+      scf.yield %next : tensor<128xf32, #indices_layout>
+    } {tt.num_stages = 2 : i32, tt.warp_specialize}
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: @grouped_matmul_tma_kernel
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>

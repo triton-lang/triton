@@ -1,5 +1,5 @@
 from . import libdevice
 
-from .utils import memrealtime
+from .utils import memrealtime, num_threads, num_warps, smid
 
-__all__ = ["libdevice", "memrealtime"]
+__all__ = ["libdevice", "memrealtime", "num_threads", "num_warps", "smid"]

@@ -17,7 +17,7 @@ from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_
 # quantization
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4
 from triton_kernels.numerics import InFlexData
-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
+from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
 
 
 def was_launched_with_torchrun():
@@ -140,9 +140,21 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     wg_global, wg_flex, wg_scale = quantize_weight(wg_global, torch.bfloat16)
     w1_ep_local, w1_flex, w1_scale = quantize_weight(w1_ep_local, w_dtype, **opt1)
     w2_ep_local, w2_flex, w2_scale = quantize_weight(w2_ep_local, w_dtype, **opt2)
-    pcg = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), b_mx_scale=wg_scale)
-    pc1 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), b_mx_scale=w1_scale)
-    pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), b_mx_scale=w2_scale)
+    pcg = PrecisionConfig(
+        flex_ctx=FlexCtx(rhs_data=wg_flex),
+        b_mx_scale=wg_scale,
+        b_microblock_size=MXFP_BLOCK_SIZE.value,
+    )
+    pc1 = PrecisionConfig(
+        flex_ctx=FlexCtx(rhs_data=w1_flex),
+        b_mx_scale=w1_scale,
+        b_microblock_size=MXFP_BLOCK_SIZE.value,
+    )
+    pc2 = PrecisionConfig(
+        flex_ctx=FlexCtx(rhs_data=w2_flex),
+        b_mx_scale=w2_scale,
+        b_microblock_size=MXFP_BLOCK_SIZE.value,
+    )
 
     # -- init activation --
     x_dp_local_fp8 = torch.randn((batch // n_ranks, dim1), device=dev).to(x_dtype)

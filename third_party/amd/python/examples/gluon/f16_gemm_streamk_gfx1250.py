@@ -154,7 +154,8 @@ def process_streamk_tiles(
     GROUP_SIZE_M: ttgl.constexpr = 8,
 ):
     """
-    Phase 2: Process StreamK tiles for 4 warps
+    Phase 2: Process StreamK tiles (remainder tiles).
+    Extracted as a helper to reduce code duplication between kernel variants.
     """
     if STREAMK_TILES == 0:
         return
@@ -167,16 +168,17 @@ def process_streamk_tiles(
         p_ptr + p_offset,
         ttgl.zeros((BLOCK_M, BLOCK_N), dtype=p_ptr.type.element_ty, layout=WMMA_LAYOUT),
     )
+    ttgl.barrier()
     ttgl.store(locks_ptr + pid, 0)
 
-    # Compute StreamK params
+    # Compute StreamK params inline
     iters_per_tile = ttgl.cdiv(K, BLOCK_K)
     num_streamk_tiles = scheduler.get_num_streamk_tiles()
     total_streamk_iters = num_streamk_tiles * iters_per_tile
     streamk_iters_pcu = total_streamk_iters // num_sms
     streamk_remainder_iters = total_streamk_iters % num_sms
 
-    # Compute iteration range
+    # Compute iteration range inline
     base_offset = num_full_tiles * iters_per_tile
     start_iter = (base_offset + pid * streamk_iters_pcu + ttgl.minimum(pid, streamk_remainder_iters))
     last_iter = (base_offset + (pid + 1) * streamk_iters_pcu + ttgl.minimum(pid + 1, streamk_remainder_iters))
@@ -218,6 +220,15 @@ def process_streamk_tiles(
         HALF_M: ttgl.constexpr = BLOCK_M // 2
         HALF_N: ttgl.constexpr = BLOCK_N // 2
 
+        # Pre-define range tensors BEFORE the runtime if to prevent them from
+        # being yielded as scf.if results with unresolvable auto_encoding.
+        # (The Triton frontend yields variables defined in both if/else branches,
+        # and the encoding inference can't resolve scf.if result types that have
+        # no downstream consumers.)
+        if BLOCK_M == 256 and BLOCK_N == 256:
+            rm_q = ttgl.arange(0, HALF_M)
+            rn_q = ttgl.arange(0, HALF_N)
+
         # Contributor or Owner logic
         if current_start_iter != tile_iter:
             # Contributor: Store accumulator to P buffer
@@ -229,9 +240,6 @@ def process_streamk_tiles(
                 acc_00, acc_10 = acc_n0.split()
                 acc_01, acc_11 = acc_n1.split()
 
-                # Use WMMA layout offsets for buffer_store
-                rm_q = ttgl.arange(0, HALF_M)
-                rn_q = ttgl.arange(0, HALF_N)
                 P_base_offs = pid * BLOCK_M * BLOCK_N
 
                 # Store each quadrant with buffer_store
@@ -262,15 +270,12 @@ def process_streamk_tiles(
             end = end_iter
 
             if BLOCK_M == 256 and BLOCK_N == 256:
+                # Quadrant accumulation for 256x256 tiles using buffer_load/store
                 acc_4d = accumulator.reshape([2, HALF_M, 2, HALF_N])
                 acc_4d = acc_4d.permute(1, 3, 0, 2)
                 acc_n0, acc_n1 = acc_4d.split()
                 acc_00, acc_10 = acc_n0.split()
                 acc_01, acc_11 = acc_n1.split()
-
-                # Use WMMA layout offsets for buffer_load
-                rm_q = ttgl.arange(0, HALF_M)
-                rn_q = ttgl.arange(0, HALF_N)
 
                 while end < tile_iter + iters_per_tile and next_pid < num_sms:
                     while ttgl.atomic_cas(locks_ptr + next_pid, 1, 1) != 1:
@@ -371,6 +376,7 @@ def process_streamk_tiles_8warps(
 ):
     """
     Phase 2: StreamK tiles for 8-warp kernels.
+    Uses sequential quadrant store/accumulate to reduce VGPR pressure.
     """
     if STREAMK_TILES == 0:
         return
@@ -383,16 +389,17 @@ def process_streamk_tiles_8warps(
         p_ptr + p_offset,
         ttgl.zeros((BLOCK_M, BLOCK_N), dtype=p_ptr.type.element_ty, layout=WMMA_LAYOUT),
     )
+    ttgl.barrier()
     ttgl.store(locks_ptr + pid, 0)
 
-    # Compute StreamK params
+    # Compute StreamK params inline
     iters_per_tile = ttgl.cdiv(K, BLOCK_K)
     num_streamk_tiles = scheduler.get_num_streamk_tiles()
     total_streamk_iters = num_streamk_tiles * iters_per_tile
     streamk_iters_pcu = total_streamk_iters // num_sms
     streamk_remainder_iters = total_streamk_iters % num_sms
 
-    # Compute iteration range
+    # Compute iteration range inline
     base_offset = num_full_tiles * iters_per_tile
     start_iter = (base_offset + pid * streamk_iters_pcu + ttgl.minimum(pid, streamk_remainder_iters))
     last_iter = (base_offset + (pid + 1) * streamk_iters_pcu + ttgl.minimum(pid + 1, streamk_remainder_iters))
@@ -411,6 +418,7 @@ def process_streamk_tiles_8warps(
         accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=WMMA_LAYOUT)
         num_k_iters = end_iter - current_start_iter
 
+        # Synchronous K-loop to minimize live registers
         for k_idx in range(num_k_iters):
             k_offset = (remainder + k_idx) * BLOCK_K
 
@@ -603,13 +611,17 @@ def streamk_gemm_tdm_pipelined_kernel_4warps(
     # Initialize scheduler
     scheduler = TileScheduler.initialize(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, STREAMK_TILES)
 
+    # ============================================================================
     # Phase 1: Process full tiles (persistent scheduling) - 4-warp pipelined loop
+    # ============================================================================
     pid = scheduler.get_pid()
     num_sms = scheduler.get_num_sms()
     num_full_tiles = scheduler.get_num_full_tiles()
 
+    # Enable chiplet transformation (8 XCDs) to improve l2 reuse
     pid = scheduler.apply_chiplet_transform_chunked(pid, num_sms, num_xcds=8, chunk_size=2)
 
+    # Persistent loop: each CU processes its assigned tiles with stride NUM_SMS
     for tile_idx in range(pid, num_full_tiles, num_sms):
         pid_m, pid_n = scheduler.get_swizzled_tile_coords(tile_idx, GROUP_SIZE_M)
         off_am = pid_m * BLOCK_M
@@ -619,6 +631,7 @@ def streamk_gemm_tdm_pipelined_kernel_4warps(
         consumer = 0
         accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=WMMA_LAYOUT)
 
+        # Prefill pipeline
         for i in ttgl.static_range(NUM_BUFFERS - 1):
             producer = issue_loads(
                 producer,
@@ -633,6 +646,7 @@ def streamk_gemm_tdm_pipelined_kernel_4warps(
                 TRANSPOSE_B,
             )
 
+        # Steady state: overlap load and compute
         for k_iter in range(0, ttgl.cdiv(K, BLOCK_K) - (NUM_BUFFERS - 1)):
             producer = issue_loads(
                 producer,
@@ -658,6 +672,7 @@ def streamk_gemm_tdm_pipelined_kernel_4warps(
                 TRANSPOSE_B,
             )
 
+        # Drain pipeline
         for i in ttgl.static_range(NUM_BUFFERS - 1):
             consumer, accumulator = issue_wmma(
                 consumer,
@@ -671,13 +686,16 @@ def streamk_gemm_tdm_pipelined_kernel_4warps(
                 TRANSPOSE_B,
             )
 
+        # Store result
         offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
         offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
         offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
         mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
         ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
 
-    # Phase 2: Process StreamK tiles - 4-warp path
+    # ============================================================================
+    # Phase 2: Process StreamK tiles (remainder tiles) - 4-warp path
+    # ============================================================================
     process_streamk_tiles(
         a_desc,
         b_desc,
@@ -742,7 +760,7 @@ def streamk_gemm_tdm_pipelined_kernel_8warps(
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
     ttgl.static_assert(b_dtype.is_fp16() or b_dtype.is_bf16(), "Only fp16/bf16 supported for B")
-    ttgl.static_assert(NUM_BUFFERS >= 2, "NUM_BUFFERS must be 3")
+    ttgl.static_assert(NUM_BUFFERS >= 2, "NUM_BUFFERS must be at least 2")
     ttgl.static_assert(NUM_WARPS == 8, "This kernel is only valid for NUM_WARPS == 8")
 
     WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32])
@@ -777,13 +795,17 @@ def streamk_gemm_tdm_pipelined_kernel_8warps(
     # Initialize scheduler
     scheduler = TileScheduler.initialize(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, STREAMK_TILES)
 
-    # Phase 1: Process full tiles (persistent scheduling)
+    # ============================================================================
+    # Phase 1: Process full tiles (persistent scheduling) - same pattern as 4-warp
+    # ============================================================================
     pid = scheduler.get_pid()
     num_sms = scheduler.get_num_sms()
     num_full_tiles = scheduler.get_num_full_tiles()
 
+    # Enable chiplet transformation (8 XCDs) to improve l2 reuse
     pid = scheduler.apply_chiplet_transform_chunked(pid, num_sms, num_xcds=8, chunk_size=2)
 
+    # Persistent loop: each CU processes its assigned tiles with stride NUM_SMS
     for tile_idx in range(pid, num_full_tiles, num_sms):
         pid_m, pid_n = scheduler.get_swizzled_tile_coords(tile_idx, GROUP_SIZE_M)
         off_am = pid_m * BLOCK_M
@@ -793,6 +815,7 @@ def streamk_gemm_tdm_pipelined_kernel_8warps(
         consumer = 0
         accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=WMMA_LAYOUT)
 
+        # Prefill pipeline
         for i in ttgl.static_range(NUM_BUFFERS - 1):
             producer = issue_loads(
                 producer,
@@ -807,6 +830,7 @@ def streamk_gemm_tdm_pipelined_kernel_8warps(
                 TRANSPOSE_B,
             )
 
+        # Steady state: overlap load and compute
         for k_iter in range(0, ttgl.cdiv(K, BLOCK_K) - (NUM_BUFFERS - 1)):
             producer = issue_loads(
                 producer,
@@ -832,6 +856,7 @@ def streamk_gemm_tdm_pipelined_kernel_8warps(
                 TRANSPOSE_B,
             )
 
+        # Drain pipeline
         for i in ttgl.static_range(NUM_BUFFERS - 1):
             consumer, accumulator = issue_wmma(
                 consumer,
@@ -845,13 +870,16 @@ def streamk_gemm_tdm_pipelined_kernel_8warps(
                 TRANSPOSE_B,
             )
 
+        # Store result
         offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
         offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
         offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
         mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
         ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
 
-    # Phase 2: Process StreamK tiles - 8-warp path with quadrant splitting
+    # ============================================================================
+    # Phase 2: Process StreamK tiles (remainder tiles) - 8-warp path with quadrant splitting
+    # ============================================================================
     process_streamk_tiles_8warps(
         a_desc,
         b_desc,
@@ -953,12 +981,15 @@ def streamk_gemm_tdm_prefetch_kernel(
     # Initialize scheduler
     scheduler = TileScheduler.initialize(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, STREAMK_TILES)
 
+    # ============================================================================
     # Phase 1: Process full tiles with TRUE prologue-epilogue overlap
     # Uses separate k_counter and buffer_slot tracking to enable cross-tile prefetch
+    # ============================================================================
     pid = scheduler.get_pid()
     num_sms = scheduler.get_num_sms()
     num_full_tiles = scheduler.get_num_full_tiles()
 
+    # Enable chiplet transformation (8 XCDs) to improve l2 reuse
     pid = scheduler.apply_chiplet_transform_chunked(pid, num_sms, num_xcds=8, chunk_size=2)
 
     num_k_iters = ttgl.cdiv(K, BLOCK_K)
@@ -988,6 +1019,7 @@ def streamk_gemm_tdm_prefetch_kernel(
     k_counter = NUM_BUFFERS - 1
     consumer_slot = 0
 
+    # ===== Main tile loop =====
     for tile_idx in range(pid, num_full_tiles, num_sms):
         pid_m, pid_n = scheduler.get_swizzled_tile_coords(tile_idx, GROUP_SIZE_M)
         off_am = pid_m * BLOCK_M
@@ -995,6 +1027,7 @@ def streamk_gemm_tdm_prefetch_kernel(
 
         accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=WMMA_LAYOUT)
 
+        # Steady state: overlap load and compute
         for _ in range(0, num_k_iters - (NUM_BUFFERS - 1)):
             # Issue load for current tile
             k_offset = k_counter * BLOCK_K
@@ -1018,6 +1051,7 @@ def streamk_gemm_tdm_prefetch_kernel(
             accumulator = ttgl.amd.gfx1250.wmma(a_operand, b_operand, accumulator)
             consumer_slot += 1
 
+        # Check for next tile
         next_tile_idx = tile_idx + num_sms
         has_next_tile = next_tile_idx < num_full_tiles
         if has_next_tile:
@@ -1028,7 +1062,9 @@ def streamk_gemm_tdm_prefetch_kernel(
             off_am_next = off_am
             off_bn_next = off_bn
 
+        # Drain + Prefetch for next tile
         for i in ttgl.static_range(NUM_BUFFERS - 1):
+            # Consume remaining data from current tile
             ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 2 - i) * 2)
             cons_slot = consumer_slot % NUM_BUFFERS
             a_operand = a_buffer.index(cons_slot).load(layout=OPERAND_LAYOUT_A)
@@ -1060,7 +1096,9 @@ def streamk_gemm_tdm_prefetch_kernel(
         mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
         ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
 
-    # Phase 2: Process StreamK tiles
+    # ============================================================================
+    # Phase 2: Process StreamK tiles (remainder tiles)
+    # ============================================================================
     process_streamk_tiles(
         a_desc,
         b_desc,
@@ -1103,15 +1141,17 @@ def run_streamk_gemm_tdm_pipelined(
     use_prefetch=False,
     disable_streamk=False,
 ):
-    """
-      Helper function for StreamK GEMM kernel testing.
+    """Helper function for StreamK GEMM kernel testing.
+
+    Args:
+        use_prefetch: If True, use the prefetch kernel variant with prologue-epilogue overlap.
+        disable_streamk: If True, set STREAMK_TILES=0 (pure persistent mode, no K-splitting).
     """
     if triton.cdiv(K, BLOCK_K) < NUM_BUFFERS:
         print(f"Skipping: K/BLOCK_K ({triton.cdiv(K, BLOCK_K)}) < NUM_BUFFERS ({NUM_BUFFERS})")
         return
 
-    # num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
-    # NOTE: Explicitly set num_sms to small number to ensure that each CU will compute multiple tiles.
+    # Calculate STREAMK_TILES automatically (remainder tiles for load balancing)
     num_sms = 8
     total_tiles = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
     STREAMK_TILES = 0 if disable_streamk else (total_tiles % num_sms)
@@ -1165,7 +1205,7 @@ def run_streamk_gemm_tdm_pipelined(
     kernel = kernel_fn[grid](
         a_device,
         b_device,
-        c_device,
+        c_device,  #
         p_device,
         locks_device,
         M,
@@ -1179,7 +1219,7 @@ def run_streamk_gemm_tdm_pipelined(
         stride_cn,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
-        BLOCK_K=BLOCK_K,
+        BLOCK_K=BLOCK_K,  #
         NUM_BUFFERS=NUM_BUFFERS,
         TRANSPOSE_B=TRANSPOSE_B,
         NUM_WARPS=num_warps,

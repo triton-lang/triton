@@ -394,10 +394,11 @@ void dumpKernelMetricTrace(
     const std::map<size_t, std::vector<KernelMetricWithContext>>
         &streamTraceEvents,
     std::ostream &os) {
-  // for each streamId in ascending order, emit one JSON line
-  for (auto const &[streamId, events] : streamTraceEvents) {
-    json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
+  json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
 
+  // Emit all streams into a single Chrome trace document while preserving the
+  // deterministic stream iteration order from the std::map.
+  for (auto const &[streamId, events] : streamTraceEvents) {
     for (const auto &event : events) {
       auto *kernelMetrics = event.kernelMetric;
       uint64_t startTimeNs =
@@ -425,10 +426,9 @@ void dumpKernelMetricTrace(
 
       object["traceEvents"].push_back(element);
     }
-
-    // one JSON object per line
-    os << object.dump() << "\n";
   }
+
+  os << object.dump() << "\n";
 }
 } // namespace
 

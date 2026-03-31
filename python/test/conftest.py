@@ -3,7 +3,9 @@ import tempfile
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "interpreter: indicate whether interpreter supports the test")
+    # If pytest-sugar is not active, enable instafail
+    if not config.pluginmanager.hasplugin("sugar"):
+        config.option.instafail = True
 
 
 def pytest_addoption(parser):

@@ -95,6 +95,7 @@ def _tensor_member_fn(fn: T) -> T:
 
 def _unwrap_iterable(x):
     """Returns x[0] if x has one element and x[0] is iterable."""
+    x = _unwrap_if_constexpr(x)
     if len(x) == 1:
         # Determine whether x[0] is iterable.
         #
@@ -1584,9 +1585,10 @@ def _wrap_init_args(x):
 
 
 def _aggregate(cls):
+    field_annotations = typing.get_type_hints(cls)
+    field_names = builtins.tuple(field_annotations.keys())
     init = cls.__dict__.get("__init__", None)
     if init is None:
-        field_names = builtins.tuple(cls.__annotations__.keys())
 
         def init(self, *args, **kwargs):
             if len(args) > len(field_names):
@@ -1616,7 +1618,7 @@ def _aggregate(cls):
     class aggregate_value(base_value):
         __triton_builtin__ = True
         __triton_aggregate__ = True
-        __annotations__ = cls.__annotations__
+        __annotations__ = field_annotations
 
         @classmethod
         def _get_instance(this_cls):
@@ -1637,7 +1639,7 @@ def _aggregate(cls):
             init(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
-            for name in cls.__annotations__.keys():
+            for name in field_names:
                 if not hasattr(instance, name):
                     raise AttributeError(f"constructor for {cls.__name__} did not initialize attribute '{name}'")
 
@@ -1645,24 +1647,23 @@ def _aggregate(cls):
 
         # Only allow setting attributes defined in the class annotations.
         def __setattr__(self, name, value):
-            if name not in cls.__annotations__:
+            if name not in field_annotations:
                 raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
-            if not isinstance(value, cls.__annotations__[name]):
-                raise TypeError(f"Expected {cls.__annotations__[name]} for attribute '{name}', got {type(value)}")
+            if not isinstance(value, field_annotations[name]):
+                raise TypeError(f"Expected {field_annotations[name]} for attribute '{name}', got {type(value)}")
             super().__setattr__(name, value)
 
         def _set_name(self, builder: ir.builder, name: str) -> None:
-            for key_name in cls.__annotations__.keys():
+            for key_name in field_names:
                 getattr(self, key_name)._set_name(builder, f"{name}.{key_name}")
 
         def _flatten_ir(self, handles: List[ir.value]) -> None:
-            for name in cls.__annotations__.keys():
+            for name in field_names:
                 getattr(self, name)._flatten_ir(handles)
 
         @property
         def type(self):
-            return _aggregate_type(aggregate_value,
-                                   [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
+            return _aggregate_type(aggregate_value, [(name, getattr(self, name).type) for name in field_names])
 
     hash_attrs = [init]
 
@@ -1685,6 +1686,167 @@ def _aggregate(cls):
 
     return aggregate_value
 
+
+def _is_block_ptr(value) -> bool:
+    return isinstance(value, base_value) and getattr(value, "__triton_block_ptr__", False)
+
+
+def _as_list_like(values):
+    normalized = _normalize_tuple(values)
+    if isinstance(normalized, (list, builtins.tuple, tuple)):
+        return list(normalized)
+    return [normalized]
+
+
+def _canonicalize_block_ptr_static_tuple(values, name: str, *, positive: bool = False) -> tuple:
+    converted = []
+    for value in _as_list_like(values):
+        value = _unwrap_if_constexpr(value)
+        if not isinstance(value, int):
+            raise ValueError(f"Expected `{name}` to contain only integers")
+        if positive and value <= 0:
+            raise ValueError(f"Expected `{name}` to contain only positive integers")
+        converted.append(constexpr(value))
+    return tuple(converted)
+
+
+def _canonicalize_block_ptr_dynamic_tuple(values, name: str, _semantic) -> tuple:
+    converted = []
+    for value in _as_list_like(values):
+        value = _semantic.to_tensor(value)
+        if value.shape:
+            raise ValueError(f"Expected `{name}` entries to be scalar tensors")
+        if not value.dtype.is_int():
+            raise ValueError(f"Expected `{name}` entries to be integers")
+        if value.dtype != int64:
+            value = _semantic.cast(value, int64)
+        converted.append(value)
+    return tuple(converted)
+
+
+def _canonicalize_block_ptr_boundary_check(boundary_check, rank: int) -> builtins.tuple[int, ...]:
+    checked = set()
+    if boundary_check is None:
+        return checked
+
+    for dim in _as_list_like(boundary_check):
+        dim = _unwrap_if_constexpr(dim)
+        if not isinstance(dim, int) or not (0 <= dim < rank):
+            raise ValueError(f"Expected `boundary_check` to contain dimensions in [0, {rank})")
+        checked.add(dim)
+    if len(checked) != len(boundary_check):
+        raise ValueError("Duplicate dimension in `boundary_check`")
+    return checked
+
+
+@_aggregate
+class _block_ptr:
+    base: tensor
+    shape: tuple
+    strides: tuple
+    offsets: tuple
+    block_shape: tuple
+    order: tuple
+
+    __triton_block_ptr__ = True
+
+    def __init__(self, base, shape, strides, offsets, block_shape, order, _semantic=None):
+        if not base.type.is_ptr() or base.type.is_block():
+            raise ValueError("Expected `base` to be a scalar pointer type")
+        if isinstance(base.type.element_ty, block_type):
+            raise ValueError("Expected `base` to point to a scalar element type")
+
+        self.base = base
+        self.shape = _canonicalize_block_ptr_dynamic_tuple(shape, "shape", _semantic)
+        self.strides = _canonicalize_block_ptr_dynamic_tuple(strides, "strides", _semantic)
+        self.offsets = _canonicalize_block_ptr_dynamic_tuple(offsets, "offsets", _semantic)
+        self.block_shape = _canonicalize_block_ptr_static_tuple(block_shape, "block_shape", positive=True)
+        self.order = _canonicalize_block_ptr_static_tuple(order, "order")
+
+        rank = len(self.block_shape)
+        if rank == 0:
+            raise ValueError("Expected `make_block_ptr` to describe at least one dimension")
+        for field_name, field_value in (("shape", self.shape), ("strides", self.strides), ("offsets", self.offsets),
+                                        ("order", self.order)):
+            if len(field_value) != rank:
+                raise ValueError(
+                    f"Expected `shape`, `strides`, `offsets`, `block_shape`, and `order` to have the same length; "
+                    f"`{field_name}` has length {len(field_value)} but expected {rank}")
+        order_values = [_unwrap_if_constexpr(value) for value in self.order]
+        if sorted(order_values) != list(builtins.range(rank)):
+            raise ValueError(f"Expected `order` to be a permutation of 0..{rank - 1}")
+
+    def _tile_shape(self):
+        return [_unwrap_if_constexpr(extent) for extent in self.block_shape]
+
+    def _materialize(self, boundary_check=(), _semantic=None):
+        tile_shape = self._tile_shape()
+        checked_dims = _canonicalize_block_ptr_boundary_check(boundary_check, len(tile_shape))
+        ptrs = self.base
+        mask = None
+        for dim, extent in enumerate(tile_shape):
+            coord = add(self.offsets[dim], arange(0, extent, _semantic=_semantic), _semantic=_semantic)
+            for _ in builtins.range(dim):
+                coord = expand_dims(coord, 0, _semantic=_semantic)
+            for _ in builtins.range(dim + 1, len(tile_shape)):
+                coord = expand_dims(coord, -1, _semantic=_semantic)
+            coord = broadcast_to(coord, tile_shape, _semantic=_semantic)
+            ptrs = add(ptrs, mul(coord, self.strides[dim], _semantic=_semantic), _semantic=_semantic)
+            if dim in checked_dims:
+                valid = _semantic.and_(_semantic.greater_equal(coord, 0), _semantic.less_than(coord, self.shape[dim]))
+                mask = valid if mask is None else _semantic.and_(mask, valid)
+        return ptrs, mask
+
+    def advance(self, offsets, _semantic=None):
+        new_offsets = []
+        offsets = _canonicalize_block_ptr_dynamic_tuple(offsets, "offsets", _semantic)
+        if len(offsets) != len(self.offsets):
+            raise ValueError(f"Expected `offsets` to have length {len(self.offsets)} but received {len(offsets)}")
+        for old_offset, delta in zip(self.offsets, offsets):
+            new_offsets.append(add(old_offset, delta, _semantic=_semantic))
+        return _block_ptr(self.base, self.shape, self.strides, tuple(new_offsets), self.block_shape, self.order,
+                          _semantic=_semantic)
+
+    def load(self, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
+             volatile=False, _semantic=None):
+        if mask is not None or other is not None:
+            raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
+
+        padding_option = _unwrap_if_constexpr(padding_option)
+        cache_modifier = _unwrap_if_constexpr(cache_modifier)
+        eviction_policy = _unwrap_if_constexpr(eviction_policy)
+        volatile = _unwrap_if_constexpr(volatile)
+        if padding_option is None:
+            padding_option = ""
+        ptrs, mask = self._materialize(boundary_check, _semantic=_semantic)
+
+        if padding_option == "":
+            generated_other = None
+        elif padding_option == "zero":
+            generated_other = 0
+        elif padding_option == "nan":
+            if self.base.dtype.element_ty.is_int():
+                raise ValueError("Padding option `nan` is not supported for integer block pointers")
+            generated_other = float("nan")
+        else:
+            raise ValueError(f"Padding option {padding_option} not supported")
+
+        return load(ptrs, mask=mask, other=generated_other, cache_modifier=cache_modifier,
+                    eviction_policy=eviction_policy, volatile=volatile, _semantic=_semantic)
+
+    def store(self, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _semantic=None):
+        if mask is not None:
+            raise ValueError("`mask` argument cannot be specified for storing block pointers")
+
+        cache_modifier = _unwrap_if_constexpr(cache_modifier)
+        eviction_policy = _unwrap_if_constexpr(eviction_policy)
+        ptrs, mask = self._materialize(boundary_check, _semantic=_semantic)
+        return store(ptrs, value, mask=mask, cache_modifier=cache_modifier, eviction_policy=eviction_policy,
+                     _semantic=_semantic)
+
+
+_block_ptr.__triton_block_ptr__ = True
+_block_ptr.dtype = property(lambda self: self.base.dtype)
 
 # -----------------------
 # SPMD Programming Model
@@ -2266,6 +2428,11 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :param volatile: changes volatile option in NVIDIA PTX
     :type volatile: bool, optional
     """
+    if _is_block_ptr(pointer):
+        return pointer.load(mask=mask, other=other, boundary_check=boundary_check, padding_option=padding_option,
+                            cache_modifier=cache_modifier, eviction_policy=eviction_policy, volatile=volatile,
+                            _semantic=_semantic)
+
     # `mask` and `other` can be constexpr
     mask = _unwrap_if_constexpr(mask)
     other = _unwrap_if_constexpr(other)
@@ -2336,6 +2503,10 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     :param eviction_policy: changes eviction policy in NVIDIA PTX
     :type eviction_policy: str, optional, should be one of {"", "evict_first", "evict_last"}
     """
+    if _is_block_ptr(pointer):
+        return pointer.store(value, mask=mask, boundary_check=boundary_check, cache_modifier=cache_modifier,
+                             eviction_policy=eviction_policy, _semantic=_semantic)
+
     # `value` can be constexpr
     value = _semantic.to_tensor(value)
     mask = _unwrap_if_constexpr(mask)
@@ -2358,7 +2529,8 @@ def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _s
     :param block_shape: The shape of the block
     :param order: The order of the original data format
     """
-    return _semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order)
+    warn("tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.")
+    return _block_ptr(base, shape, strides, offsets, block_shape, order, _semantic=_semantic)
 
 
 @must_use_result(
@@ -2373,7 +2545,9 @@ def advance(base, offsets, _semantic=None):
     :param base: the block pointer to advance
     :param offsets: the offsets to advance, a tuple by dimension
     """
-    return _semantic.advance(base, offsets)
+    if _is_block_ptr(base):
+        return base.advance(offsets, _semantic=_semantic)
+    raise ValueError("`tl.advance` only supports block pointers created by `tl.make_block_ptr`")
 
 
 @builtin
