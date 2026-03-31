@@ -212,6 +212,92 @@ def test_slice_kernel_translate_to_gluon_inlines_descriptor_adapter(tmp_path):
     assert "def convert_host_descriptor" in output
 
 
+def test_slice_kernel_binds_local_imports(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "helpers.py":
+            """
+                def local_helper() -> int:
+                    return 3
+            """,
+            "kernel_mod.py":
+            """
+                def kernel() -> int:
+                    from .helpers import local_helper
+                    return local_helper()
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"])
+    assert "from .helpers import local_helper" not in output
+    assert "def local_helper() -> int:" in output
+    assert "return local_helper()" in output
+
+
+def test_slice_kernel_treats_assign_targets_as_locals(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "kernel_mod.py":
+            """
+                def helper() -> int:
+                    return 1
+
+                def kernel() -> int:
+                    helper = lambda: 2
+                    return helper()
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"])
+    assert "def helper() -> int:" not in output
+    assert any(line.replace("lambda :", "lambda:") == "helper = lambda: 2" for line in _normalize(output))
+
+
+def test_slice_kernel_treats_annassign_targets_as_locals(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "kernel_mod.py":
+            """
+                value = 7
+
+                def kernel() -> int:
+                    value: int = 3
+                    return value
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"])
+    assert "value = 7" not in output
+    assert "value: int = 3" in output
+
+
+def test_slice_kernel_translate_to_gluon_avoids_double_descriptor_wrap(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "kernel_mod.py":
+            """
+                from triton.tools.tensor_descriptor import TensorDescriptor
+
+                def convert_host_descriptor(desc):
+                    return desc
+
+                def kernel(t):
+                    return convert_host_descriptor(TensorDescriptor.from_tensor(t, [16, 16]))
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], translate_to_gluon=True)
+    assert "convert_host_descriptor(convert_host_descriptor(" not in output
+
+
 def test_slice_kernel_public_imports():
     from triton.tools.triton_to_gluon_translator.slice_kernel import slice_kernel as new_slice_kernel
     from triton.tools.triton_to_gluon_translator.translator import translate_paths

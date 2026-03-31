@@ -119,13 +119,13 @@ void SessionManager::activateAllSessions() {
 
 void SessionManager::deactivateSession(size_t sessionId, bool flushing) {
   std::lock_guard<std::mutex> lock(mutex);
-  deActivateSessionImpl(sessionId, flushing);
+  deactivateSessionImpl(sessionId, flushing);
 }
 
 void SessionManager::deactivateAllSessions(bool flushing) {
   std::lock_guard<std::mutex> lock(mutex);
   for (auto iter : sessionActive) {
-    deActivateSessionImpl(iter.first, flushing);
+    deactivateSessionImpl(iter.first, flushing);
   }
 }
 
@@ -143,7 +143,7 @@ void SessionManager::activateSessionImpl(size_t sessionId) {
   registerInterface<MetricInterface>(sessionId, metricInterfaceCounts);
 }
 
-void SessionManager::deActivateSessionImpl(size_t sessionId, bool flushing) {
+void SessionManager::deactivateSessionImpl(size_t sessionId, bool flushing) {
   throwIfSessionNotInitialized(sessions, sessionId);
   if (!sessionActive[sessionId]) {
     return;
@@ -204,7 +204,7 @@ void SessionManager::finalizeSession(size_t sessionId,
   if (!hasSession(sessionId)) {
     return;
   }
-  deActivateSessionImpl(sessionId, /*flushing=*/true);
+  deactivateSessionImpl(sessionId, /*flushing=*/true);
   sessions[sessionId]->finalize(outputFormat);
   removeSession(sessionId);
 }
@@ -213,7 +213,7 @@ void SessionManager::finalizeAllSessions(const std::string &outputFormat) {
   std::lock_guard<std::mutex> lock(mutex);
   auto sessionIds = std::vector<size_t>{};
   for (auto &[sessionId, session] : sessions) {
-    deActivateSessionImpl(sessionId, /*flushing=*/true);
+    deactivateSessionImpl(sessionId, /*flushing=*/true);
     session->finalize(outputFormat);
     sessionIds.push_back(sessionId);
   }

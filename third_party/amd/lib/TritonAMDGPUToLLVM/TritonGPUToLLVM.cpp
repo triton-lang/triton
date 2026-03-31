@@ -27,6 +27,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir::triton {
@@ -59,6 +60,7 @@ public:
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
+    addIllegalDialect<triton::instrument::TritonInstrumentDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addLegalOp<triton::amdgpu::InstructionSchedHint>();
@@ -245,6 +247,9 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
+
+    mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter, patterns,
+                                                        targetInfo);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();

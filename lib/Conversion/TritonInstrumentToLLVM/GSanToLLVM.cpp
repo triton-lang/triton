@@ -97,7 +97,7 @@ void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
                                  ArrayRef<Value> ptrElems,
                                  ArrayRef<Value> maskElems, uint32_t regMask,
                                  Value threadPred, int32_t bytesPerElem,
-                                 bool isStore) {
+                                 bool isStore, unsigned elemIndexStride = 1) {
   if (ptrElems.empty())
     return;
 
@@ -108,14 +108,15 @@ void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
   Type i8Ty = rewriter.getI8Type();
   Type i64Ty = rewriter.getI64Type();
 
-  auto ptrArrayTy = array_ty(i64Ty, ptrElems.size());
-  auto maskArrayTy = array_ty(i8Ty, ptrElems.size());
+  unsigned numElems = ptrElems.size();
+  auto ptrArrayTy = array_ty(i64Ty, numElems);
+  auto maskArrayTy = array_ty(i8Ty, numElems);
   SmallVector<Type> argsFieldTys = {ptrArrayTy, maskArrayTy};
   auto argsTy = LLVM::LLVMStructType::getLiteral(ctx, argsFieldTys);
   auto argsBuffer = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), argsTy,
                                            one, /*alignment=*/0);
 
-  for (unsigned i = 0; i < ptrElems.size(); ++i) {
+  for (unsigned i = 0; i < numElems; ++i) {
     Value idx = b.i32_val(i);
     Value ptrValue = b.ptrtoint(i64_ty, ptrElems[i]);
     Value ptrSlot =
@@ -123,7 +124,7 @@ void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
     b.store(ptrValue, ptrSlot);
 
     Value maskValue = maskElems.empty() ? b.true_val() : maskElems[i];
-    if (!isCanonicalIndex(i, regMask))
+    if (!isCanonicalIndex(i * elemIndexStride, regMask))
       maskValue = b.false_val();
     maskValue = maybeAnd(rewriter, loc, maskValue, threadPred);
     Value maskByte = b.zext(i8Ty, maskValue);
@@ -140,8 +141,9 @@ void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
   }
   Value argsPtr = b.bitcast(argsBuffer, ptr_ty(ctx));
   auto sourceLoc = materializeSourceLocation(rewriter, loc);
+
   b.call(runtimeFunc,
-         ValueRange{gsanGlobalStatePtr, argsPtr, b.i32_val(ptrElems.size()),
+         ValueRange{gsanGlobalStatePtr, argsPtr, b.i32_val(numElems),
                     b.i32_val(bytesPerElem), sourceLoc.file, sourceLoc.line});
 }
 
@@ -218,12 +220,31 @@ public:
   using ConvertOpToLLVMPattern<
       tti::ExperimentalGSanTensorAccessOp>::ConvertOpToLLVMPattern;
   const TargetInfoBase *targetInfo;
+  ModuleAxisInfoAnalysis *axisInfoAnalysis;
 
   GSanTensorAccessOpConversion(LLVMTypeConverter &typeConverter,
+                               ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                const TargetInfoBase &targetInfo,
                                PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern(typeConverter, benefit),
-        targetInfo(&targetInfo) {}
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(&targetInfo),
+        axisInfoAnalysis(&axisInfoAnalysis) {}
+
+  unsigned getVecSize(tti::ExperimentalGSanTensorAccessOp op) const {
+    auto ptrTy = op.getPtr().getType();
+    auto contiguity = axisInfoAnalysis->getContiguity(op.getPtr());
+    if (!op.getMask()) {
+      return contiguity;
+    }
+
+    auto maskAlign = axisInfoAnalysis->getMaskAlignment(op.getMask());
+    auto bytesPerElem = tt::getPointeeBitWidth(ptrTy) / 8;
+    // Round up to at least shadow granularity, and we will or together the
+    // masks
+    if (bytesPerElem < 4) {
+      maskAlign = std::max(maskAlign, 4 / bytesPerElem);
+    }
+    return std::min(contiguity, maskAlign);
+  }
 
   LogicalResult
   matchAndRewrite(tti::ExperimentalGSanTensorAccessOp op, OpAdaptor adaptor,
@@ -249,6 +270,33 @@ public:
              "Expected mask element count to match layout");
     }
 
+    unsigned mergeVec = getVecSize(op);
+    if (mergeVec > 1) {
+      auto maskAlign =
+          op.getMask() ? axisInfoAnalysis->getMaskAlignment(op.getMask()) : 1;
+      SmallVector<Value> mergedPtrElems;
+      SmallVector<Value> mergedMaskElems;
+      mergedPtrElems.reserve(numElems / mergeVec);
+      if (!maskElems.empty())
+        mergedMaskElems.reserve(numElems / mergeVec);
+
+      for (unsigned i = 0; i < numElems; i += mergeVec) {
+        mergedPtrElems.push_back(ptrElems[i]);
+        if (maskElems.empty())
+          continue;
+        Value mergedMask = maskElems[i];
+        for (unsigned j = maskAlign; j < mergeVec; j += maskAlign) {
+          mergedMask =
+              arith::OrIOp::create(rewriter, loc, mergedMask, maskElems[i + j]);
+        }
+        mergedMaskElems.push_back(mergedMask);
+      }
+
+      ptrElems = std::move(mergedPtrElems);
+      maskElems = std::move(mergedMaskElems);
+      bytesPerElem *= mergeVec;
+    }
+
     auto freeVarMasks = getFreeVariableMasks(ptrTy);
     auto *ctx = getContext();
     uint32_t regMask = freeVarMasks.lookup(str_attr("reg"));
@@ -256,7 +304,7 @@ public:
                                                          loc, *targetInfo);
     emitTensorAccessRuntimeCall(rewriter, loc, gsanGlobalStatePtr, ptrElems,
                                 maskElems, regMask, threadPred, bytesPerElem,
-                                op.getIsStore());
+                                op.getIsStore(), mergeVec);
 
     rewriter.eraseOp(op);
     return success();
@@ -344,8 +392,10 @@ public:
 
 void mlir::triton::populateGSanToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis,
     const TargetInfoBase &targetInfo) {
   patterns.add<GSanInitOpConversion>(typeConverter);
   patterns.add<GSanTensorDescInfoOpConversion>(typeConverter);
-  patterns.add<GSanTensorAccessOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanTensorAccessOpConversion>(typeConverter, axisInfoAnalysis,
+                                             targetInfo);
 }

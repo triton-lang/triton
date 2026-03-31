@@ -5,7 +5,7 @@ import triton_kernels
 import triton_kernels.swiglu
 from triton_kernels.matmul import PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.numerics import InFlexData
-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
+from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, Tensor
 from triton_kernels.target_info import is_cuda, get_cdna_version, cuda_capability_geq, is_hip
 from triton_kernels.tensor_details import layout
@@ -73,9 +73,21 @@ def prepare_mlp_numerics(batch: int, w_dtype: str, wg, w1, w2) -> MlpNumerics:
         wg=wg,
         w1=w1,
         w2=w2,
-        pcg=PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), b_mx_scale=wg_scale),
-        pc1=PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), b_mx_scale=w1_scale),
-        pc2=PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), b_mx_scale=w2_scale),
+        pcg=PrecisionConfig(
+            flex_ctx=FlexCtx(rhs_data=wg_flex),
+            b_mx_scale=wg_scale,
+            b_microblock_size=MXFP_BLOCK_SIZE.value,
+        ),
+        pc1=PrecisionConfig(
+            flex_ctx=FlexCtx(rhs_data=w1_flex),
+            b_mx_scale=w1_scale,
+            b_microblock_size=MXFP_BLOCK_SIZE.value,
+        ),
+        pc2=PrecisionConfig(
+            flex_ctx=FlexCtx(rhs_data=w2_flex),
+            b_mx_scale=w2_scale,
+            b_microblock_size=MXFP_BLOCK_SIZE.value,
+        ),
         activation=activation,
     )
 
