@@ -175,8 +175,10 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                              const std::vector<std::string> &modeAndOptions,
                              const char *profilerName) {
   periodicFlushingEnabled = true;
-  if (modeAndOptions.size() < 2)
+  if (modeAndOptions.size() < 2) {
     periodicFlushingFormat = "hatchet";
+    return;
+  }
 
   auto delimiterPos = modeAndOptions[1].find('=');
   if (delimiterPos != std::string::npos) {

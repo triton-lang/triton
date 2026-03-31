@@ -871,6 +871,58 @@ def test_trace(tmp_path: pathlib.Path, device: str):
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
 
 
+@pytest.mark.parametrize("profile_kind,suffix", [("tree", ".hatchet"), ("trace", ".chrome_trace")],
+                         ids=["tree", "trace"])
+def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, device: str):
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    temp_file = tmp_path / f"test_multi_stream{suffix}"
+    device_obj = torch.device(device)
+    x = torch.ones((1024, ), device=device_obj, dtype=torch.float32)
+    outputs = [torch.zeros_like(x) for _ in range(2)]
+    streams = [torch.cuda.Stream(device=device_obj) for _ in range(2)]
+    scope_names = [f"stream_scope_{idx}" for idx in range(len(streams))]
+
+    foo[(1, )](x, outputs[0], x.numel(), num_warps=4)
+    torch.cuda.synchronize(device_obj)
+
+    start_kwargs = {"data": "trace"} if profile_kind == "trace" else {}
+    proton.start(str(temp_file.with_suffix("")), **start_kwargs)
+
+    for scope_name, stream, output in zip(scope_names, streams, outputs):
+        with torch.cuda.stream(stream):
+            with proton.scope(scope_name):
+                foo[(1, )](x, output, x.numel(), num_warps=4)
+
+    for stream in streams:
+        stream.synchronize()
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    if profile_kind == "trace":
+        assert "traceEvents" in data
+        kernel_events = [event for event in data["traceEvents"] if event["name"] == "foo"]
+        assert len(kernel_events) == len(scope_names)
+        assert len({event["tid"] for event in kernel_events}) == len(scope_names)
+        for scope_name in scope_names:
+            matching_events = [event for event in kernel_events if scope_name in event["args"]["call_stack"]]
+            assert len(matching_events) == 1
+    else:
+        root = data[0]
+        scope_0 = next(child for child in root["children"] if child["frame"]["name"] == "stream_scope_0")
+        scope_1 = next(child for child in root["children"] if child["frame"]["name"] == "stream_scope_1")
+        assert len(scope_0["children"]) > 0
+        assert len(scope_1["children"]) > 0
+        assert scope_0["children"][0]["metrics"]["time (ns)"] > 0
+        assert scope_1["children"][0]["metrics"]["time (ns)"] > 0
+
+
 def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_scope_threads.hatchet"
     proton.start(str(temp_file.with_suffix("")))

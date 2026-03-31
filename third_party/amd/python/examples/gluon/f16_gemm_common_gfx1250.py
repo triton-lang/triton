@@ -139,7 +139,7 @@ def issue_l2_prefetches(distance, producer, a_desc, b_desc, off_am, off_bn, BLOC
     """
     Creates L2 prefetch for iteration `producer + distance`.
     """
-    if distance == 0:
+    if distance <= 0:
         return
 
     prefetch_iteration = producer + distance

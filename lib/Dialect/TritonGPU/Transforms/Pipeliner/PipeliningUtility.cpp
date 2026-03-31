@@ -379,8 +379,6 @@ int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
 
 bool mlir::triton::canBeConvertedToAsyncLoad(
     tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
-  assert(!isLoadFromTensorPtr(loadOp) &&
-         "Block ptr should have been lowered before this pass.");
   auto ptr = loadOp.getPtr();
   unsigned vec = axisInfoAnalysis.getContiguity(ptr);
   if (auto mask = loadOp.getMask())

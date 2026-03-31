@@ -205,6 +205,10 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
   if (auto sharedLayout = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
     return llvm::to_vector(sharedLayout.getOrder());
   }
+  if (auto partitionedLayout =
+          dyn_cast<PartitionedSharedEncodingAttr>(layout)) {
+    return getOrder(partitionedLayout.getPartitionLayout(), shape);
+  }
   llvm::report_fatal_error("Unimplemented usage of getOrder for MemDescType");
   return {};
 }
@@ -428,6 +432,27 @@ verifyLayoutOrder(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
+static LogicalResult
+verifyDistributedLinearLayout(function_ref<InFlightDiagnostic()> emitError,
+                              const LinearLayout &linearLayout,
+                              StringRef subject) {
+  LinearLayout flattened = linearLayout.flattenIns().flattenOuts();
+  auto inDim = *flattened.getInDimNames().begin();
+  LinearLayout withoutBroadcast = flattened.removeZeroBasesAlongDim(inDim);
+  if (!llvm::all_of(withoutBroadcast.getBases().lookup(inDim),
+                    [](const auto &basis) {
+                      return llvm::isPowerOf2_32(basis.front());
+                    })) {
+    return emitError() << "After removing the zero bases " << subject
+                       << " must be a permutation matrix";
+  }
+  if (!withoutBroadcast.isInvertible()) {
+    return emitError() << "After removing the zero bases " << subject
+                       << " must be a permutation matrix";
+  }
+  return success();
+}
+
 LogicalResult
 CGAEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                         LinearLayout linearLayout) {
@@ -450,7 +475,8 @@ CGAEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                        << outDimNames << "].";
   }
 
-  return success();
+  return verifyDistributedLinearLayout(emitError, linearLayout,
+                                       "the CGA encoding");
 }
 
 CGAEncodingAttr CGAEncodingAttr::get1CTALayout(MLIRContext *ctx, int rank) {
@@ -851,7 +877,6 @@ mlir::triton::gpu::parseCGAAttr(AsmParser &parser, Attribute attr,
   auto ctx = parser.getContext();
   auto cgaName = StringAttr::get(ctx, "CGALayout");
   std::vector<std::vector<int32_t>> bases;
-  bases.reserve(array.size());
   for (Attribute vecAttr : array) {
     SmallVector<unsigned> basisValues;
     NamedAttribute basisAttr(cgaName, vecAttr);
@@ -864,7 +889,6 @@ mlir::triton::gpu::parseCGAAttr(AsmParser &parser, Attribute attr,
       return {};
     }
     std::vector<int32_t> basis;
-    basis.reserve(basisValues.size());
     for (unsigned value : basisValues)
       basis.push_back(static_cast<int32_t>(value));
     bases.push_back(std::move(basis));
@@ -873,8 +897,21 @@ mlir::triton::gpu::parseCGAAttr(AsmParser &parser, Attribute attr,
   LinearLayout::BasesT namedBases;
   namedBases.insert(
       std::make_pair(StringAttr::get(ctx, "block"), std::move(bases)));
-  LinearLayout ll(namedBases, standardOutDimNames(ctx, rank));
-  return CGAEncodingAttr::get(ctx, std::move(ll));
+  // Compute the minimum size that the LL fits in to be able to call the
+  // requiresSurjective = false constructor. Thisway, if the CGAEncoding
+  // is not surjective it'll error out with a nice message rather than crash
+  auto outDims = standardOutDimPairs(ctx, SmallVector<int64_t>(rank, 1));
+  for (const auto &basis : namedBases.begin()->second) {
+    for (auto [i, value] : llvm::enumerate(basis))
+      outDims[i].second =
+          std::max<int64_t>(outDims[i].second, llvm::NextPowerOf2(value));
+  }
+  LinearLayout ll(std::move(namedBases), outDims,
+                  /*requireSurjective=*/false);
+  auto cgaLayout = parser.getChecked<CGAEncodingAttr>(ctx, std::move(ll));
+  if (!cgaLayout)
+    return {};
+  return cgaLayout;
 }
 
 Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -975,28 +1012,7 @@ LinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     }
   }
 
-  const auto &bases = linearLayout.getBases();
-  auto nonZero = [](auto val) { return val != 0; };
-  for (const auto &dimBases : llvm::make_second_range(bases)) {
-    if (!llvm::all_of(dimBases, [&](const auto &basis) {
-          return std::count_if(basis.begin(), basis.end(), nonZero) <= 1;
-        })) {
-      return emitError()
-             << "In a distributed layout, each base must move in at most one "
-                "dimension.";
-    }
-  }
-
-  LinearLayout withoutBroadcast = linearLayout;
-  for (auto inDim : linearLayout.getInDimNames()) {
-    withoutBroadcast = withoutBroadcast.removeZeroBasesAlongDim(inDim);
-  }
-  if (!withoutBroadcast.isInvertible()) {
-    return emitError()
-           << "After removing the zero bases the layout must be bijective";
-  }
-
-  return success();
+  return verifyDistributedLinearLayout(emitError, linearLayout, "the layout");
 }
 
 // If we only had BlockedEncodingAttr, we could simply return ArrayRefs here.
@@ -1081,9 +1097,11 @@ CGAEncodingAttr linearToCGAEncodingAttr(const LinearLayout &ll,
     shape[i].second /= cgaLogicalShape[i];
   }
   auto inDims = to_vector(ll.getInDimNames());
-  auto kBlock = inDims.back();
-  assert(kBlock.str() == "block");
-  inDims.pop_back();
+  auto *ctx = inDims[0].getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
+  assert(llvm::is_contained(inDims, kBlock) &&
+         "layout must have a 'block' dim");
+  llvm::erase(inDims, kBlock);
   auto outDims = to_vector(ll.getOutDimNames());
   auto subLl = ll.sublayout(inDims, outDims);
   // sublayout returns the same output size. We trim it to the
@@ -1093,7 +1111,6 @@ CGAEncodingAttr linearToCGAEncodingAttr(const LinearLayout &ll,
   // the layout in a single CTA.
   auto maybeCgaLayout = divideLeft(ll, subLl);
   assert(maybeCgaLayout.has_value());
-  auto *ctx = inDims[0].getContext();
   auto cgaLayout = maybeCgaLayout->sublayout({kBlock}, outDims);
   return CGAEncodingAttr::get(ctx, std::move(cgaLayout));
 }
@@ -2598,7 +2615,7 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
     tileSize.push_back(1);
   }
   // warpSizeK * (warpRepK * VecBitWidth)
-  auto tileBitWidthK = (isAmpere() && bitwidth == 64) ? (4 * 256) : (4 * 64);
+  auto tileBitWidthK = bitwidth == 64 ? (2 * 256) : (4 * 64);
   if (opIdx == 0) {
     // m x k
     tileSize.push_back(16);
@@ -2973,18 +2990,18 @@ struct TritonGPUInferLayoutInterface
     }
 
     // For AMDWmmaEncodingAttr verify multi-cta CGA layout compatibility
-    auto wmmaAEncoding = dyn_cast<AMDWmmaEncodingAttr>(aEncoding.getParent());
-    auto wmmaBEncoding = dyn_cast<AMDWmmaEncodingAttr>(bEncoding.getParent());
+    auto wmmaAParentEnc = dyn_cast<AMDWmmaEncodingAttr>(aEncoding.getParent());
+    auto wmmaBParentEnc = dyn_cast<AMDWmmaEncodingAttr>(bEncoding.getParent());
     auto wmmaResEncoding = dyn_cast<AMDWmmaEncodingAttr>(resEnc);
-    if (wmmaAEncoding && wmmaBEncoding && wmmaResEncoding) {
+    if (wmmaAParentEnc && wmmaBParentEnc && wmmaResEncoding) {
       auto resLL = wmmaResEncoding.getCGALayout().getLinearLayout();
 
       if (!resLL.isInvertible())
         return op->emitError("Accumulator CGA layout should not broadcast or "
                              "have repeated rows");
 
-      auto aLL = wmmaAEncoding.getCGALayout().getLinearLayout();
-      auto bLL = wmmaBEncoding.getCGALayout().getLinearLayout();
+      auto aLL = aEncoding.getCGALayout().getLinearLayout();
+      auto bLL = bEncoding.getCGALayout().getLinearLayout();
       // In multi-CTA, the CGA layout of operand 0 broadcasts across dim1 and
       // operand 1 broadcasts across dim0.
       auto ctx = op->getContext();

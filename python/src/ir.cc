@@ -6,7 +6,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
@@ -234,7 +233,6 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 /*****************************************************************************/
 /* Python bindings for ir                                                    */
 /*****************************************************************************/
-
 void init_triton_ir(py::module &&m) {
   using ret = py::return_value_policy;
   using namespace pybind11::literals;
@@ -339,23 +337,9 @@ void init_triton_ir(py::module &&m) {
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
 
-    if (std::string filename =
-            mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-        !filename.empty()) {
-      TritonPlugin TP(filename);
-
-      std::vector<const char *> dialectNames;
-      if (auto result = TP.getDialectHandles(dialectNames); !result)
-        llvm::report_fatal_error(result.takeError());
-
-      for (unsigned i = 0; i < dialectNames.size(); ++i) {
-        const char *dialectName = dialectNames.data()[i];
-        auto result = TP.getDialectPluginInfo(dialectName);
-        if (!result)
-          throw TP.err2exp(result.takeError());
-        ::mlir::DialectPluginLibraryInfo dialectPluginInfo = *result;
-        dialectPluginInfo.registerDialectRegistryCallbacks(&registry);
-      }
+    // Register plugin dialects.
+    for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
+      plugin.registerDialects(registry);
     }
 
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
@@ -438,6 +422,16 @@ void init_triton_ir(py::module &&m) {
                  owner->getParentOp()->setAttr(attrName, attr);
                }
              }
+           })
+      .def("get_shape",
+           [](Value &self) -> py::object {
+             auto type = self.getType();
+             if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+               auto shape = tensorType.getShape();
+               return py::cast(
+                   std::vector<int64_t>(shape.begin(), shape.end()));
+             }
+             return py::none();
            })
       .def("get_context", &Value::getContext)
       .def("get_loc", &Value::getLoc)
@@ -645,6 +639,26 @@ void init_triton_ir(py::module &&m) {
                return py::none();
              return py::int_(ret.getInt());
            })
+      .def("get_constant_value",
+           [](Operation &self) -> py::object {
+             auto constOp = dyn_cast<arith::ConstantOp>(self);
+             if (!constOp)
+               return py::none();
+
+             auto attr = constOp.getValue();
+
+             if (auto intAttr = dyn_cast<IntegerAttr>(attr))
+               return py::int_(intAttr.getValue().getSExtValue());
+
+             if (auto denseAttr = dyn_cast<DenseIntElementsAttr>(attr)) {
+               if (denseAttr.isSplat())
+                 return py::int_(
+                     denseAttr.getSplatValue<APInt>().getSExtValue());
+               return py::none();
+             }
+
+             return py::none();
+           })
       .def("get_bool_attr",
            [](Operation &self, const std::string &name) -> py::object {
              auto ret = self.getAttrOfType<BoolAttr>(name);
@@ -772,6 +786,21 @@ void init_triton_ir(py::module &&m) {
       },
       ret::take_ownership);
 
+  m.def("deduce_scale_factor",
+        [](Value &lhs, std::optional<Value> &lhsScale,
+           ScaleDotElemType lhsFormat, bool lhsKPack, Value &rhs,
+           std::optional<Value> &rhsScale, ScaleDotElemType rhsFormat,
+           bool rhsKPack) -> int32_t {
+          int32_t scaleFactor = 0;
+          std::string errMsg;
+          if (failed(DotScaledOp::deduceScaleFactor(
+                  lhs, lhsScale.value_or(Value()), lhsFormat, lhsKPack, rhs,
+                  rhsScale.value_or(Value()), rhsFormat, rhsKPack, scaleFactor,
+                  errMsg)))
+            throw std::runtime_error(errMsg);
+          return scaleFactor;
+        });
+
   py::class_<FuncOp, OpState>(m, "function", py::module_local())
       // .def_property_readonly("attrs", &ir::function::attrs)
       // .def("add_attr", &ir::function::add_attr);
@@ -808,9 +837,10 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<OpBuilder::InsertPoint>(m, "InsertPoint", py::module_local());
 
-  py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
-                              py::dynamic_attr())
-      .def(py::init<MLIRContext *>())
+  py::class_<TritonOpBuilder> TritonOpBuilderBinding =
+      py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
+                                  py::dynamic_attr());
+  TritonOpBuilderBinding.def(py::init<MLIRContext *>())
       .def("get_op_builder", &TritonOpBuilder::getBuilder, ret::reference)
       // getters
       .def("create_module",
@@ -1159,7 +1189,8 @@ void init_triton_ir(py::module &&m) {
            })
 
       // Cast instructions
-      // Conversions for custom FP types (FP8 and non-standard rounding modes)
+      // Conversions for custom FP types (FP8 and non-standard rounding
+      // modes)
       .def("create_fp_to_fp",
            [](TritonOpBuilder &self, Value &src, Type &dstType,
               std::optional<RoundingMode> roundingMode) -> Value {
@@ -1300,8 +1331,8 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::MinUIOp>(lhs, rhs));
            })
-      // minimumf follows the torch.minimum convention and returns NaN if either
-      // operand is NaN
+      // minimumf follows the torch.minimum convention and returns NaN if
+      // either operand is NaN
       .def("create_minimumf",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::MinimumFOp>(lhs, rhs));
@@ -1320,8 +1351,8 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::MaxUIOp>(lhs, rhs));
            })
-      // maximumf follows the torch.maximum convention and returns NaN if either
-      // operand is NaN
+      // maximumf follows the torch.maximum convention and returns NaN if
+      // either operand is NaN
       .def("create_maximumf",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::MaximumFOp>(lhs, rhs));
@@ -1487,23 +1518,6 @@ void init_triton_ir(py::module &&m) {
               CacheModifier cacheModifier,
               EvictionPolicy evictionPolicy) -> void {
              self.create<StoreOp>(ptrs, value, cacheModifier, evictionPolicy);
-           })
-      .def("create_tensor_pointer_load",
-           [](TritonOpBuilder &self, Value &ptr,
-              std::vector<int32_t> &boundaryCheck,
-              std::optional<PaddingOption> paddingOption,
-              CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
-              bool isVolatile) -> Value {
-             return self.create<LoadOp>(ptr, boundaryCheck, paddingOption,
-                                        cacheModifier, evictionPolicy,
-                                        isVolatile);
-           })
-      .def("create_tensor_pointer_store",
-           [](TritonOpBuilder &self, Value &ptr, Value &val,
-              std::vector<int32_t> &boundaryCheck, CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy) -> void {
-             self.create<StoreOp>(ptr, val, boundaryCheck, cacheModifier,
-                                  evictionPolicy);
            })
       .def("create_masked_load",
            [](TritonOpBuilder &self, Value &ptrs, Value &mask,
@@ -1836,21 +1850,6 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self) {
              self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
            })
-      // Make a block pointer (tensor pointer in Triton IR)
-      .def("create_make_block_ptr",
-           [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
-              std::vector<Value> &strides, std::vector<Value> &offsets,
-              std::vector<int32_t> &tensorShape,
-              std::vector<int32_t> &order) -> Value {
-             return self.create<MakeTensorPtrOp>(base, shape, strides, offsets,
-                                                 tensorShape, order);
-           })
-      // Advance a block pointer
-      .def("create_advance",
-           [](TritonOpBuilder &self, Value &ptr,
-              std::vector<Value> &offsets) -> Value {
-             return self.create<AdvanceOp>(ptr.getType(), ptr, offsets);
-           })
       // Make a tensor descriptor
       .def("create_make_tensor_descriptor",
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
@@ -1860,6 +1859,18 @@ void init_triton_ir(py::module &&m) {
                                                   tensorShape, isSignedInteger,
                                                   paddingOption);
            });
+
+  // Add custom operations.
+  for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
+    for (const auto &op : plugin.listOps()) {
+      TritonOpBuilderBinding.def(
+          op.name, [op](TritonOpBuilder &self, std::vector<Value> args) {
+            args.insert(args.begin(), Value());
+            op.addOp(self, args);
+            return args[0];
+          });
+    }
+  }
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
       .def(py::init<MLIRContext *>())

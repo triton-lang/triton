@@ -130,7 +130,7 @@ protected:
   virtual void doStart() override { pImpl->doStart(); }
   virtual void doFlush() override { pImpl->doFlush(); }
   virtual void doStop() override { pImpl->doStop(); }
-  virtual void doAddMetrics(
+  virtual void addMetrics(
       size_t scopeId,
       const std::map<std::string, MetricValueType> &scalarMetrics,
       const std::map<std::string, TensorMetric> &tensorMetrics) override {
@@ -217,6 +217,13 @@ protected:
         completedId = maxCompletedCorrelationId.load();
         --retries;
       }
+    }
+
+    void clear() {
+      corrIdToExternId.clear();
+      externIdToState.clear();
+      maxCompletedCorrelationId.store(0);
+      maxSubmittedCorrelationId.store(0);
     }
   };
 

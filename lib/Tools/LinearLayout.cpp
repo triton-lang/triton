@@ -163,7 +163,6 @@ LinearLayout::LinearLayout(BasesT bases,
 
 std::optional<std::string>
 LinearLayout::checkInvariants(bool requireSurjective) {
-  LDBG("checkInvariants: " << toString());
   // Check that basis values are non-negative.
   for (const auto &[inDim, inDimBases] : bases) {
     for (const auto &basis : inDimBases) {

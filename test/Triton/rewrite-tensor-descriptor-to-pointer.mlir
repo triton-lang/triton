@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --triton-rewrite-tensor-descriptor-to-pointer --canonicalize --cse --split-input-file | FileCheck %s --implicit-check-not \!tt.tensordesc
+// RUN: triton-opt %s --triton-rewrite-tensor-descriptor-to-pointer --canonicalize --cse --mlir-print-debuginfo --split-input-file | FileCheck %s --implicit-check-not \!tt.tensordesc
 
 module {
   tt.func public @load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<128x128xf32>) {
@@ -109,8 +109,9 @@ module {
 
 // -----
 
+#loc2 = loc("rewrite-tensor-descriptor-to-pointer.mlir":147:28)
 module {
-  tt.func public @callee(%tensordesc: !tt.tensordesc<tensor<128x128xf32>>) -> !tt.tensordesc<tensor<128x128xf32>> {
+  tt.func public @callee(%tensordesc: !tt.tensordesc<tensor<128x128xf32>> loc("tensordesc"(#loc2))) -> !tt.tensordesc<tensor<128x128xf32>> {
     tt.return %tensordesc : !tt.tensordesc<tensor<128x128xf32>>
   }
 
@@ -126,12 +127,19 @@ module {
 
 // CHECK-LABEL: @callee
 // CHECK-SAME: %[[PTR:[^:]*]]
+// CHECK-SAME: loc("tensordesc"(#loc{{[^,]*}}))
 // CHECK-SAME: %[[SHAPE0:[^:]*]]
+// CHECK-SAME: loc("tensordesc.shape.0"(#loc{{[^,]*}}))
 // CHECK-SAME: %[[SHAPE1:[^:]*]]
+// CHECK-SAME: loc("tensordesc.shape.1"(#loc{{[^,]*}}))
 // CHECK-SAME: %[[STRIDE0:[^:]*]]
+// CHECK-SAME: loc("tensordesc.stride.0"(#loc{{[^,]*}}))
 // CHECK-SAME: %[[STRIDE1:[^:]*]]
+// CHECK-SAME: loc("tensordesc.stride.1"(#loc{{[^,]*}}))
 // CHECK-SAME: %[[PAD:[^:]*]]
+// CHECK-SAME: loc("tensordesc.padding"(#loc{{[^,]*}}))
 // CHECK-SAME: %[[ROUND:[^:]*]]
+// CHECK-SAME: loc("tensordesc.roundF32ToTF32"(#loc{{[^,]*}}))
 // CHECK-NEXT: tt.return %[[PTR]], %[[SHAPE0]], %[[SHAPE1]], %[[STRIDE0]], %[[STRIDE1]], %[[PAD]], %[[ROUND]]
 
 // CHECK-LABEL: @caller
@@ -150,4 +158,4 @@ module {
 }
 
 // CHECK-LABEL: @arg_attr
-// CHECK-SAME: %arg7: i32 {tt.divisibility = 16 : i32}) {
+// CHECK-SAME: %arg7: i32 {tt.divisibility = 16 : i32} loc({{.*}})) {

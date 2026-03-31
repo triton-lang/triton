@@ -6,6 +6,7 @@ import torch
 import triton
 from triton_kernels.numerics_details.mxfp import (
     MXFP_BLOCK_SIZE,
+    NVFP_BLOCK_SIZE,
     DequantScaleRoundingMode,
     downcast_to_mxfp,
     downcast_to_mxfp_torch,
@@ -139,18 +140,19 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype, device):
 
 # fmt: off
 @pytest.mark.parametrize(
-    "shape, axis, quant_dtype, rounding_mode",
+    "shape, axis, quant_dtype, rounding_mode, scale_dtype, microblock_size",
     [
         # Zero-sized arrays
-        ((0, 4096, 1024), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP),
-        ((3, 4096, 0), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN),
-        ((10, 0, 1024), 2, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP),
-        ((0, 0, 1024), 2, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN),
+        ((0, 4096, 1024), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((3, 4096, 0), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((10, 0, 1024), 2, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((0, 0, 1024), 2, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
 
-        ((3, 4096, 1024), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP),
-        ((32, 254, 60), 0, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN),
-        ((1, 320, 160), 2, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP),
-        ((2, 16, 512), -1, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN),
+        ((3, 4096, 1024), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((32, 254, 60), 0, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((1, 320, 160), 2, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((2, 16, 512), -1, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((2, 64, 3), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP, torch.float8_e4m3fn, NVFP_BLOCK_SIZE.value),
     ],
 )
 # fmt: on
@@ -161,9 +163,12 @@ def test_mxfp_casting(
     quant_dtype: str,
     dequant_dtype: str,
     rounding_mode: DequantScaleRoundingMode,
+    scale_dtype: torch.dtype,
+    microblock_size: int,
     device,
 ):
-    if "float8" in quant_dtype and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
+    if ("float8" in quant_dtype
+            or scale_dtype == torch.float8_e4m3fn) and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
         pytest.skip("Float8 not tested on A100")
     torch.manual_seed(0)
     quant_torch_type = dtype_str_to_torch(quant_dtype)
@@ -172,9 +177,22 @@ def test_mxfp_casting(
     x = torch.randn(shape, device=device, dtype=dequant_torch_type)
 
     # Quantize and check equivalence
-    quant, scale = downcast_to_mxfp(x, quant_torch_type, axis, DEQUANT_SCALE_ROUNDING_MODE=rounding_mode)
-    quant_torch, scale_torch = downcast_to_mxfp_torch(x, quant_torch_type, axis,
-                                                      DEQUANT_SCALE_ROUNDING_MODE=rounding_mode)
+    quant, scale = downcast_to_mxfp(
+        x,
+        quant_torch_type,
+        axis,
+        scale_dtype=scale_dtype,
+        microblock_size=microblock_size,
+        DEQUANT_SCALE_ROUNDING_MODE=rounding_mode,
+    )
+    quant_torch, scale_torch = downcast_to_mxfp_torch(
+        x,
+        quant_torch_type,
+        axis,
+        scale_dtype=scale_dtype,
+        microblock_size=microblock_size,
+        DEQUANT_SCALE_ROUNDING_MODE=rounding_mode,
+    )
 
     assert_equal(quant_torch, quant)
     assert_equal(scale_torch, scale)

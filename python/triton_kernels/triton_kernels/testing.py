@@ -6,7 +6,7 @@ import sys
 import torch
 from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, MXFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 import itertools
 from dataclasses import replace
 
@@ -310,13 +310,39 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
     scales = None
     if mxfp_dim is not None:
         assert dtype.has_mx_scale
-        buffer_dtype = dtype.torch_dtype
+        is_nvfp4 = getattr(dtype, "is_nvfp4", False)
+        scale_dtype = torch.float8_e4m3fn if is_nvfp4 else torch.uint8
+        microblock_size = NVFP_BLOCK_SIZE.value if is_nvfp4 else MXFP_BLOCK_SIZE.value
+        if dtype.is_mxfloat4:
+            logical_shape = list(buffer.shape)
         if is_mx_rowmajor:
-            scales = downcast_to_mxfp(buffer, buffer_dtype, axis=mxfp_dim)[1]
-            buffer = downcast_to_mxfp(buffer.mT.contiguous(), buffer_dtype, axis=mxfp_dim)[0].mT
+            scales = downcast_to_mxfp(
+                buffer,
+                dtype.torch_dtype,
+                axis=mxfp_dim,
+                scale_dtype=scale_dtype,
+                microblock_size=microblock_size,
+            )[1]
+            buffer = downcast_to_mxfp(
+                buffer.mT.contiguous(),
+                dtype.torch_dtype,
+                axis=mxfp_dim,
+                scale_dtype=scale_dtype,
+                microblock_size=microblock_size,
+            )[0].mT
         else:
-            buffer, scales = downcast_to_mxfp(buffer, buffer_dtype, axis=mxfp_dim)
-        buffer = wrap_torch_tensor(buffer, FP4 if dtype.is_mxfloat4 else None)
+            buffer, scales = downcast_to_mxfp(
+                buffer,
+                dtype.torch_dtype,
+                axis=mxfp_dim,
+                scale_dtype=scale_dtype,
+                microblock_size=microblock_size,
+            )
+        buffer = wrap_torch_tensor(
+            buffer,
+            FP4 if dtype.is_mxfloat4 else None,
+            shape=logical_shape if dtype.is_mxfloat4 else None,
+        )
         scales = wrap_torch_tensor(scales)
         if value_hbm_swizzling is not None:
             # convert buffer to swizzled hbm layout

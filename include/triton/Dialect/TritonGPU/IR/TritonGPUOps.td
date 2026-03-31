@@ -527,14 +527,28 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
     This operation allocates a buffer in global memory that is private to the current program.
     A custom third-party allocation can be marked using the optional
     `third_party_allocation` unit attribute.
+    Concurrency sanitizer allocations that hold cluster-wide state can be marked
+    using the optional `shared_cluster_state` unit attribute.
   }];
   let arguments = (
     ins
     I32Attr:$nbytes,
     I32Attr:$alignment,
-    OptionalAttr<UnitAttr>:$third_party_allocation
+    OptionalAttr<UnitAttr>:$third_party_allocation,
+    OptionalAttr<UnitAttr>:$shared_cluster_state
   );
   let results = (outs Arg<TT_Ptr, "", [MemAlloc<GlobalMemory>]>:$result);
+
+  let extraClassDeclaration = [{
+    static GlobalScratchAllocOp create(::mlir::OpBuilder &builder,
+                                       ::mlir::Location location,
+                                       ::mlir::Type result, uint32_t nbytes,
+                                       uint32_t alignment,
+                                       ::mlir::UnitAttr third_party_allocation) {
+      return create(builder, location, result, nbytes, alignment,
+                    third_party_allocation, ::mlir::UnitAttr());
+    }
+  }];
 
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }

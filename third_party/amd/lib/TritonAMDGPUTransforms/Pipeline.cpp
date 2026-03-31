@@ -40,6 +40,15 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
                                        copyOp.getPred(), predI32);
     copyOp.getPredMutable().assign(mask);
     return op;
+  } else if (auto gatherOp = dyn_cast<triton::amdgpu::AsyncTDMGatherOp>(op)) {
+    rewriter.setInsertionPoint(gatherOp);
+    // TDM requires the mask as I32
+    auto predI32 = arith::ExtUIOp::create(rewriter, gatherOp->getLoc(),
+                                          gatherOp.getPred().getType(), pred);
+    Value mask = arith::AndIOp::create(rewriter, gatherOp->getLoc(),
+                                       gatherOp.getPred(), predI32);
+    gatherOp.getPredMutable().assign(mask);
+    return op;
   } else if (auto prefetchOp = dyn_cast<triton::amdgpu::TDMPrefetchOp>(op)) {
     rewriter.setInsertionPoint(prefetchOp);
     Value mask = arith::AndIOp::create(rewriter, prefetchOp->getLoc(),

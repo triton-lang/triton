@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/bit.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -131,43 +132,6 @@ protected:
                                                   const AxisInfo &rhs) {
     return {};
   }
-};
-
-class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
-                             dataflow::Lattice<AxisInfo>> {
-private:
-  AxisInfoVisitorList visitors;
-
-  void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override {
-    propagateIfChanged(
-        lattice, lattice->join(
-                     AxisInfo::getPessimisticValueState(lattice->getAnchor())));
-  }
-
-  void visitNonControlFlowArguments(
-      Operation *op, const RegionSuccessor & /*successor*/,
-      ValueRange /*nonSuccessorInputs*/,
-      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) override {
-    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      visitForOpInductionVar(forOp, argLattices);
-    } else {
-      setAllToEntryStates(argLattices);
-    }
-  }
-
-public:
-  AxisInfoAnalysis(DataFlowSolver &solver,
-                   axisinfo::CallbackType callback = nullptr);
-  using dataflow::SparseForwardDataFlowAnalysis<
-      dataflow::Lattice<AxisInfo>>::getLatticeElement;
-
-  LogicalResult
-  visitOperation(Operation *op,
-                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
-                 ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
-  void
-  visitForOpInductionVar(scf::ForOp op,
-                         ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
 };
 
 template <typename OpTy>
@@ -705,6 +669,125 @@ public:
   }
 };
 
+class ReshapeOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::ReshapeOp> {
+public:
+  using AxisInfoVisitorImpl<triton::ReshapeOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::ReshapeOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    AxisInfo srcInfo = operands[0]->getValue();
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+    auto dstTy = cast<RankedTensorType>(op.getType());
+    auto dstShape = dstTy.getShape();
+
+    // Constant tensor stays constant
+    if (srcInfo.getConstantValue().has_value()) {
+      AxisInfo::DimVectorT contiguity(dstTy.getRank(), 1);
+      AxisInfo::DimVectorT divisibility(
+          dstTy.getRank(),
+          highestPowOf2Divisor(srcInfo.getConstantValue().value()));
+      AxisInfo::DimVectorT constancy(dstShape.begin(), dstShape.end());
+      return AxisInfo(contiguity, divisibility, constancy,
+                      srcInfo.getConstantValue());
+    }
+
+    auto srcShape = srcTy.getShape();
+    // `suffixProducts[d + 1]` is the flat stride of axis `d` in row-major
+    // order.
+    auto getSuffixProducts = [](ArrayRef<int64_t> shape) {
+      SmallVector<int64_t> suffixProducts(shape.size() + 1, 1);
+      for (int d = shape.size() - 1; d >= 0; --d)
+        suffixProducts[d] = suffixProducts[d + 1] * shape[d];
+      return suffixProducts;
+    };
+    auto srcSuffixProducts = getSuffixProducts(srcShape);
+    auto dstSuffixProducts = getSuffixProducts(dstShape);
+
+    AxisInfo::DimVectorT contiguity(dstTy.getRank(), 1);
+    AxisInfo::DimVectorT divisibility(dstTy.getRank(), 1);
+    AxisInfo::DimVectorT constancy(dstTy.getRank(), 1);
+
+    for (int dstDim = 0; dstDim < dstTy.getRank(); ++dstDim) {
+      int64_t dstStride = dstSuffixProducts[dstDim + 1];
+      // Main idea:
+      // Let m = dstDim, and Q = dstSuffixProducts, P = srcSuffixProducts
+      // Q[m + 1] \in [P[i + 1], P[i]).
+      // This means that dimension m is splitting dimension i, so it often
+      // inherits the properties of this dimension
+      // Note that the "off by one" indexing comes from the fact that the
+      // stride for dimension m is in Q[m + 1].
+      int srcDim = 0;
+      for (; srcDim < srcTy.getRank(); ++srcDim) {
+        int64_t srcStride = srcSuffixProducts[srcDim + 1];
+        if (srcStride <= dstStride && dstStride < srcSuffixProducts[srcDim])
+          break;
+      }
+
+      if (srcDim == srcTy.getRank()) {
+        // If there are 1-sized axes at the beginning, we do not have
+        // dstStride < srcSuffixProducts[srcDim] but we can still reuse
+        // the outermost source axis.
+        assert(dstShape[dstDim] == 1);
+        srcDim = 0;
+      }
+
+      int64_t srcStride = srcSuffixProducts[srcDim + 1];
+      int64_t srcContiguity = srcInfo.getContiguity(srcDim);
+      int64_t srcDivisibility = srcInfo.getDivisibility(srcDim);
+      int64_t srcConstancy = srcInfo.getConstancy(srcDim);
+
+      if (srcContiguity > 1) {
+        // Contiguity only survives when reshape lands on the low boundary of
+        // the source axis. Starting inside the axis loses the unit-stride run.
+        if (dstStride == srcStride) {
+          int64_t dstContiguity = std::min(srcContiguity, dstShape[dstDim]);
+          contiguity[dstDim] = dstContiguity;
+          // If the whole contiguous run survives, the group bases are
+          // unchanged. When the run is truncated, later group bases can start
+          // inside the original run, so divisibility must be clamped
+          // accordingly.
+          divisibility[dstDim] = dstContiguity == srcContiguity
+                                     ? srcDivisibility
+                                     : std::min(srcDivisibility, dstContiguity);
+        }
+        continue;
+      }
+
+      int64_t constancyEnd = srcStride * srcConstancy;
+      if (dstStride <= constancyEnd) {
+        // If we land inside a constant axis, the constancy is the minimum
+        // between the shape and how much constancy survives.
+        int64_t dstConstancy =
+            std::min<int64_t>(dstShape[dstDim], constancyEnd / dstStride);
+
+        // Several constant dimensions can merge into a single constant
+        // dimension
+        int64_t remainingSize = dstShape[dstDim] / dstConstancy;
+        for (int dim = srcDim - 1;
+             srcConstancy == srcShape[srcDim] && dim >= 0 && remainingSize > 1;
+             --dim) {
+          int64_t pieceSize = std::min(srcShape[dim], remainingSize);
+          int64_t pieceConstancy =
+              std::min(srcInfo.getConstancy(dim), pieceSize);
+          dstConstancy *= pieceConstancy;
+          if (pieceConstancy < pieceSize)
+            break;
+          remainingSize /= pieceSize;
+        }
+        constancy[dstDim] = dstConstancy;
+      }
+      // Divisibility stays the same when the constant block is split
+      // even for constancy == 1.
+      divisibility[dstDim] = srcDivisibility;
+    }
+
+    return AxisInfo(contiguity, divisibility, constancy,
+                    srcInfo.getConstantValue());
+  }
+};
+
 template <typename OpTy>
 class CmpOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
 public:
@@ -1072,12 +1155,13 @@ public:
   }
 };
 
+} // anonymous namespace
+
 //===----------------------------------------------------------------------===//
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
 
-AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
-                                   axisinfo::CallbackType callback)
+AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
     : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
           solver) {
   // UnrealizedConversionCast:
@@ -1105,6 +1189,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
   visitors.append<BroadcastOpAxisInfoVisitor>();
   visitors.append<SplatOpAxisInfoVisitor>();
   visitors.append<ExpandDimsOpAxisInfoVisitor>();
+  visitors.append<ReshapeOpAxisInfoVisitor>();
   visitors.append<CmpOpAxisInfoVisitor<arith::CmpIOp>>();
   visitors.append<LogicalOpAxisInfoVisitor<arith::AndIOp>,
                   LogicalOpAxisInfoVisitor<arith::OrIOp>,
@@ -1118,9 +1203,22 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
   visitors.append<TransOpAxisInfoVisitor>();
+}
 
-  if (callback)
-    callback(visitors);
+void AxisInfoAnalysis::setToEntryState(dataflow::Lattice<AxisInfo> *lattice) {
+  propagateIfChanged(lattice, lattice->join(AxisInfo::getPessimisticValueState(
+                                  lattice->getAnchor())));
+}
+
+void AxisInfoAnalysis::visitNonControlFlowArguments(
+    Operation *op, const RegionSuccessor & /*successor*/,
+    ValueRange /*nonSuccessorInputs*/,
+    ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
+  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+    visitForOpInductionVar(forOp, argLattices);
+  } else {
+    setAllToEntryStates(argLattices);
+  }
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
@@ -1173,8 +1271,6 @@ void AxisInfoAnalysis::visitForOpInductionVar(
       AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   (void)argLattices[0]->join(inductionVar);
 }
-
-} // anonymous namespace
 
 void AxisInfo::initPessimisticStateFromFunc(int argNumber,
                                             FunctionOpInterface funcOp,
@@ -1258,6 +1354,11 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
       lhs.getConstantValue() == rhs.getConstantValue())
     constantValue = lhs.getConstantValue();
   return AxisInfo(contiguity, divisibility, constancy, constantValue);
+}
+
+AxisInfoAnalysis *
+AxisInfoAnalysis::loadDefaultAnalysis(DataFlowSolver *solver) {
+  return solver->load<AxisInfoAnalysis>();
 }
 
 unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
@@ -1357,10 +1458,10 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
-void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
-                                        axisinfo::CallbackType callback) {
+void ModuleAxisInfoAnalysis::initialize(
+    FunctionOpInterface funcOp, AxisInfoAnalysis::LoadCallback loadAnalysis) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>(callback);
+  AxisInfoAnalysis *analysis = loadAnalysis(solver.get());
   if (failed(solver->initializeAndRun(funcOp)))
     return;
 

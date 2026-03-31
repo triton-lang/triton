@@ -30,6 +30,14 @@ namespace gpu {
 
 namespace {
 
+static bool isUnsupportedMMAv5Int8Dot(int computeCapability, DotOp op) {
+  if (computeCapability != 103)
+    return false;
+  auto aElemTy = op.getA().getType().getElementType();
+  auto bElemTy = op.getB().getType().getElementType();
+  return aElemTy.isInteger(8) && bElemTy.isInteger(8);
+}
+
 // Get the highest version supported for the hardware and the dot.
 static int getMMAVersionSafe(int computeCapability, DotOp op) {
   // List supported mma version in order of preference.
@@ -42,7 +50,11 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
     versionsSupported = {3, 2};
   } else if (computeCapability < 120) {
     // Exclude consumer Blackwell (sm120)
-    versionsSupported = {5, 2};
+    if (isUnsupportedMMAv5Int8Dot(computeCapability, op)) {
+      versionsSupported = {2};
+    } else {
+      versionsSupported = {5, 2};
+    }
   } else if (computeCapability < 130) {
     versionsSupported = {2};
   } else {
@@ -1013,9 +1025,8 @@ public:
     patterns.add<BlockedToMMAv5, ScaledBlockedToMMAv5>(
         context, computeCapability, benefitMMAv5);
 
-    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
-      signalPassFailure();
-    }
+    if (applyPatternsGreedily(m, std::move(patterns)).failed())
+      return signalPassFailure();
     // Now that we have picked the mma type, decompose dot that are not natively
     // supported.
     decomposeMixedModeDotOp(m, computeCapability);
