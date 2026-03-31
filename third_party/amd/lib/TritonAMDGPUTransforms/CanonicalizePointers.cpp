@@ -1673,9 +1673,11 @@ static const std::string kInitFuncArgsRewritten =
 /// extracting the tt.ptr and c0 operands).
 struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
   InitFuncPtrArgs(MLIRContext *context, FatPointers &fatPtrs,
-                  bool enableLargeTensorPtrCanon_)
+                  bool enableLargeTensorPtrCanon_,
+                  const DenseSet<unsigned> &nonPromotableArgs_)
       : OpRewritePattern(context, 0), fatPtrs(fatPtrs),
-        enableLargeTensorPtrCanon(enableLargeTensorPtrCanon_) {}
+        enableLargeTensorPtrCanon(enableLargeTensorPtrCanon_),
+        nonPromotableArgs(nonPromotableArgs_) {}
 
   LogicalResult matchAndRewrite(tt::FuncOp newOp,
                                 PatternRewriter &rewriter) const override {
@@ -1699,6 +1701,11 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
         continue;
       }
 
+      if (nonPromotableArgs.contains(idx)) {
+        LDBG("Skip arg " << idx << ": merges with non-promotable pointer");
+        continue;
+      }
+
       Value zeroOffset = arith::ConstantIntOp::create(
           rewriter, newOp.getLoc(), static_cast<int64_t>(0), bitness);
       auto dummyCast = UnrealizedConversionCastOp::create(
@@ -1716,6 +1723,7 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
 
   FatPointers &fatPtrs;
   bool enableLargeTensorPtrCanon;
+  const DenseSet<unsigned> &nonPromotableArgs;
 };
 
 /// No-op to make conversion framework happy.
@@ -1848,6 +1856,149 @@ public:
   void runOnOperation() override;
 };
 
+/// Helper to check if a function argument at `idx` has pointer_range <= 32,
+/// making it a candidate for fat pointer promotion.
+static bool isPromotableArg(tt::FuncOp func, unsigned idx) {
+  if (auto attr = func.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
+    return attr.getInt() <= 32;
+  return false;
+}
+
+/// Recursively collect all function argument indices that a pointer value
+/// traces back to through arith.select, scf.if, and tt.addptr chains.
+/// This is used before InitFuncPtrArgs to identify merge points where
+/// promotable and non-promotable pointers converge.
+static void collectLeafPtrArgs(Value val, tt::FuncOp func,
+                               DenseSet<unsigned> &argIndices) {
+  if (auto blockArg = dyn_cast<BlockArgument>(val)) {
+    if (blockArg.getOwner() == &func.getBody().front() &&
+        isa<tt::PointerType>(val.getType()))
+      argIndices.insert(blockArg.getArgNumber());
+    return;
+  }
+
+  if (auto selectOp = val.getDefiningOp<arith::SelectOp>()) {
+    collectLeafPtrArgs(selectOp.getTrueValue(), func, argIndices);
+    collectLeafPtrArgs(selectOp.getFalseValue(), func, argIndices);
+    return;
+  }
+
+  if (auto ifOp = val.getDefiningOp<scf::IfOp>()) {
+    unsigned resultIdx = cast<OpResult>(val).getResultNumber();
+    collectLeafPtrArgs(ifOp.thenYield().getOperand(resultIdx), func,
+                       argIndices);
+    if (ifOp.getNumRegions() > 1)
+      collectLeafPtrArgs(ifOp.elseYield().getOperand(resultIdx), func,
+                         argIndices);
+    return;
+  }
+
+  if (auto addPtrOp = val.getDefiningOp<tt::AddPtrOp>()) {
+    collectLeafPtrArgs(addPtrOp.getPtr(), func, argIndices);
+    return;
+  }
+
+  // scf.for result: trace back to the corresponding init arg.
+  if (auto forOp = val.getDefiningOp<scf::ForOp>()) {
+    unsigned resultIdx = cast<OpResult>(val).getResultNumber();
+    collectLeafPtrArgs(forOp.getInitArgs()[resultIdx], func, argIndices);
+    return;
+  }
+
+  // scf.for body block arg: trace back to the corresponding init arg.
+  // Block args are [induction_var, iter_arg0, iter_arg1, ...], so subtract 1.
+  if (auto blockArg = dyn_cast<BlockArgument>(val)) {
+    if (auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
+      unsigned argIdx = blockArg.getArgNumber();
+      if (argIdx >= forOp.getNumInductionVars()) {
+        collectLeafPtrArgs(
+            forOp.getInitArgs()[argIdx - forOp.getNumInductionVars()], func,
+            argIndices);
+        return;
+      }
+    }
+  }
+
+  // scf.while result: trace back to the corresponding init arg.
+  if (auto whileOp = val.getDefiningOp<scf::WhileOp>()) {
+    unsigned resultIdx = cast<OpResult>(val).getResultNumber();
+    collectLeafPtrArgs(whileOp.getInits()[resultIdx], func, argIndices);
+    return;
+  }
+}
+
+/// Pre-scan the function IR to find pointer merge points (arith.select,
+/// scf.if) where promotable (pointer_range=32) and non-promotable (64-bit)
+/// pointers converge. Returns the set of function argument indices whose
+/// promotion should be disabled to avoid the merge mismatch.
+///
+/// This handles the case where a Triton kernel selects among multiple pointer
+/// arguments based on a condition:
+///   src = ptr_a if cond else ptr_b
+///   val = tl.load(src + offset)
+/// When ptr_a has pointer_range=32 but ptr_b does not (or vice versa), the
+/// CanonicalizePointers pass would decompose one into a fat pointer (base,
+/// offset) but leave the other as a single value, causing operand count
+/// mismatches at the select/scf.if merge point.
+static DenseSet<unsigned>
+findNonPromotableArgs(tt::FuncOp func, bool enableLargeTensorPtrCanon) {
+  DenseSet<unsigned> nonPromotableArgs;
+
+  // When large tensor ptr canonicalization is enabled, all pointers are
+  // promoted uniformly, so there's no mixed case.
+  if (enableLargeTensorPtrCanon)
+    return nonPromotableArgs;
+
+  // Collect merge groups: sets of function arg indices whose pointers converge
+  // at the same merge point (arith.select or scf.if on !tt.ptr types).
+  SmallVector<DenseSet<unsigned>> mergeGroups;
+
+  func.walk([&](arith::SelectOp selectOp) {
+    if (!isa<tt::PointerType>(selectOp.getType()))
+      return;
+    DenseSet<unsigned> group;
+    collectLeafPtrArgs(selectOp.getResult(), func, group);
+    if (group.size() > 1)
+      mergeGroups.push_back(std::move(group));
+  });
+
+  func.walk([&](scf::IfOp ifOp) {
+    for (auto result : ifOp.getResults()) {
+      if (!isa<tt::PointerType>(result.getType()))
+        continue;
+      DenseSet<unsigned> group;
+      collectLeafPtrArgs(result, func, group);
+      if (group.size() > 1)
+        mergeGroups.push_back(std::move(group));
+    }
+  });
+
+  // For each merge group, if it contains both promotable and non-promotable
+  // args, demote the promotable ones — they cannot safely be decomposed into
+  // fat pointers since they merge with non-promotable pointers.
+  for (const auto &group : mergeGroups) {
+    bool hasPromotable = false;
+    bool hasNonPromotable = false;
+    for (unsigned idx : group) {
+      if (isPromotableArg(func, idx))
+        hasPromotable = true;
+      else
+        hasNonPromotable = true;
+    }
+    if (hasPromotable && hasNonPromotable) {
+      for (unsigned idx : group) {
+        if (isPromotableArg(func, idx)) {
+          LDBG("Demoting arg " << idx
+                               << ": merges with non-promotable pointer");
+          nonPromotableArgs.insert(idx);
+        }
+      }
+    }
+  }
+
+  return nonPromotableArgs;
+}
+
 /// Forward slice == transitive use
 /// This is a port/adaptation of upstream's getForwardSliceImpl
 /// that operates on values instead of ops so that we can track tt.ptr through
@@ -1930,10 +2081,16 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   if (walkResult.wasInterrupted())
     return;
 
+  // Pre-scan for merge points where promotable and non-promotable pointers
+  // converge. Demote the promotable ones to avoid fat/non-fat mismatches.
+  DenseSet<unsigned> nonPromotableArgs =
+      findNonPromotableArgs(func, enableLargeTensorPtrCanon);
+
   FatPointers fatPrs;
   PatternRewriter rewriter(&getContext());
   // Convert tt.func; %1 = unrealize_cast(%arg0: tt.ptr, c0: i32) -> tt.ptr
-  InitFuncPtrArgs pat(&getContext(), fatPrs, enableLargeTensorPtrCanon);
+  InitFuncPtrArgs pat(&getContext(), fatPrs, enableLargeTensorPtrCanon,
+                      nonPromotableArgs);
   if (failed(pat.matchAndRewrite(func, rewriter)))
     return signalPassFailure();
 
@@ -1949,6 +2106,11 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
 
     if (!enableLargeTensorPtrCanon && (bitness == 64)) {
       LDBG("ignore " << idx << "-th argument of large-tensor ptr: " << arg);
+      continue;
+    }
+
+    if (nonPromotableArgs.contains(idx)) {
+      LDBG("ignore " << idx << "-th argument: demoted due to merge point");
       continue;
     }
 
