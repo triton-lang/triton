@@ -331,48 +331,53 @@ public:
                                 PatternRewriter &rewriter) const override {
     Value oldA = dotOp.getA();
     Value oldB = dotOp.getB();
-    bool changed = false;
-    if (succeeded(rewriteOperand(dotOp.getAMutable(), rewriter)))
-      changed = true;
-    if (succeeded(rewriteOperand(dotOp.getBMutable(), rewriter)))
-      changed = true;
+    bool changedA = rewriteOperand(dotOp.getAMutable(), rewriter).succeeded();
+    bool changedB = rewriteOperand(dotOp.getBMutable(), rewriter).succeeded();
 
-    // Keep warp_group_dot_wait operands consistent with rewritten dot operands.
-    // The wait op is variadic and can carry [dot_result, A, B], so after
-    // changing dotOp's A/B we need to retarget corresponding wait operands.
-    if constexpr (std::is_same_v<DotOpTy, triton::nvidia_gpu::WarpGroupDotOp>) {
-      if (changed) {
-        Value newA = dotOp.getA();
-        Value newB = dotOp.getB();
-        for (Operation *user : dotOp.getResult().getUsers()) {
-          auto waitOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotWaitOp>(user);
-          if (!waitOp)
-            continue;
-          bool waitChanged = false;
-          for (OpOperand &operand : waitOp->getOpOperands()) {
-            if (operand.get() == oldA) {
-              operand.assign(newA);
-              waitChanged = true;
-            } else if (operand.get() == oldB) {
-              operand.assign(newB);
-              waitChanged = true;
-            }
-          }
-          if (!waitChanged)
-            continue;
-          rewriter.modifyOpInPlace(waitOp, [&]() {
-            unsigned n =
-                std::min(waitOp->getNumOperands(), waitOp->getNumResults());
-            for (unsigned i = 0; i < n; ++i)
-              waitOp->getResult(i).setType(waitOp->getOperand(i).getType());
-          });
-        }
-      }
+    if (changedA || changedB) {
+      updateDependentOps(dotOp, oldA, oldB, rewriter);
+      return success();
     }
-    return changed ? success() : failure();
+
+    return failure();
   }
 
 private:
+  template <typename T>
+  static void updateDependentOps(T, Value, Value, PatternRewriter &) {}
+
+  static void updateDependentOps(triton::nvidia_gpu::WarpGroupDotOp dotOp,
+                                 Value oldA, Value oldB,
+                                 PatternRewriter &rewriter) {
+    // Keep warp_group_dot_wait operands consistent with rewritten dot
+    // operands. The wait op is variadic and can carry [dot_result, A, B], so
+    // after changing dotOp's A/B we need to retarget corresponding wait
+    // operands.
+    Value newA = dotOp.getA();
+    Value newB = dotOp.getB();
+    for (Operation *user : dotOp.getResult().getUsers()) {
+      auto waitOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotWaitOp>(user);
+      if (!waitOp)
+        continue;
+      rewriter.modifyOpInPlace(waitOp, [&]() {
+        for (OpOperand &operand : waitOp->getOpOperands()) {
+          Value replacement;
+          if (operand.get() == oldA)
+            replacement = newA;
+          else if (operand.get() == oldB)
+            replacement = newB;
+          else
+            continue;
+
+          operand.assign(replacement);
+          if (operand.getOperandNumber() < waitOp->getNumResults())
+            waitOp->getResult(operand.getOperandNumber())
+                .setType(replacement.getType());
+        }
+      });
+    }
+  }
+
   static bool isZeroSwizzleCompatibleEncoding(Attribute encoding) {
     if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(encoding))
       return nvmma.getSwizzlingByteWidth() == 0;
