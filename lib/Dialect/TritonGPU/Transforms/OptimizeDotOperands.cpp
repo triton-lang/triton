@@ -414,51 +414,34 @@ private:
     return {current, llvm::to_vector(llvm::reverse(replaySteps))};
   }
 
-  static bool isZeroSwizzleCompatibleEncoding(Attribute encoding) {
-    if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(encoding))
-      return nvmma.getSwizzlingByteWidth() == 0;
-    return false;
-  }
-
-  static SharedEncodingTrait getSourceSharedEncoding(Value baseTensor) {
+  static SharedEncodingTrait getSourceSwizzle0SharedEncoding(Value baseTensor) {
     if (auto descLoad = baseTensor.getDefiningOp<DescriptorLoadOp>()) {
       auto descTy = cast<TensorDescType>(descLoad.getDesc().getType());
       auto descBlockTy = descTy.getBlockType();
-      return dyn_cast_or_null<SharedEncodingTrait>(descBlockTy.getEncoding());
+      auto sourceSharedEnc =
+          dyn_cast_or_null<SharedEncodingTrait>(descBlockTy.getEncoding());
+      if (auto nvmma = dyn_cast_or_null<NVMMASharedEncodingAttr>(
+              cast_or_null<Attribute>(sourceSharedEnc));
+          nvmma && nvmma.getSwizzlingByteWidth() == 0)
+        return sourceSharedEnc;
     }
     return nullptr;
   }
 
-  // Compute the memdesc type for the rewritten base `local_alloc`. The
-  // original alloc may already have a transformed 2D shared layout suitable for
-  // the final dot operand, while `baseTensor` is the pre-view tensor we want to
-  // allocate instead. This helper chooses the zero-swizzle-capable shared
-  // encoding we should preserve, retargets it to `baseTensor`'s shape, and
-  // builds the corresponding memdesc type.
-  static FailureOr<MemDescType>
-  getRewrittenBaseMemDescType(LocalAllocOp localAlloc, Value baseTensor) {
-    auto allocTy = cast<MemDescType>(localAlloc.getType());
-    auto allocSharedEnc = cast<SharedEncodingTrait>(allocTy.getEncoding());
-    auto sourceSharedEnc = getSourceSharedEncoding(baseTensor);
-    bool allocIsZeroSwizzleLike =
-        isZeroSwizzleCompatibleEncoding(cast<Attribute>(allocSharedEnc));
-    bool sourceIsZeroSwizzleLike =
-        sourceSharedEnc &&
-        isZeroSwizzleCompatibleEncoding(cast<Attribute>(sourceSharedEnc));
-    if (!allocIsZeroSwizzleLike && !sourceIsZeroSwizzleLike)
+  // Build a new memdesc type for the rewritten `local_alloc` by taking the
+  // original MMA operand memdesc and replacing its shape and shared encoding
+  // with those from swizzle-0 `tt.descriptor_load` result
+  static FailureOr<MemDescType> getSwizzle0MemDescType(MemDescType refTy,
+                                                       Value baseTensor) {
+    auto sourceSharedEnc = getSourceSwizzle0SharedEncoding(baseTensor);
+    if (!sourceSharedEnc)
       return failure();
 
-    SharedEncodingTrait refSharedEnc = allocSharedEnc;
-    if (sourceIsZeroSwizzleLike)
-      refSharedEnc = sourceSharedEnc;
-
     auto baseTensorTy = cast<RankedTensorType>(baseTensor.getType());
-    auto baseEnc =
-        updateEncodingForShape(localAlloc, refSharedEnc, baseTensorTy);
     return MemDescType::get(baseTensorTy.getShape(),
                             baseTensorTy.getElementType(),
-                            cast<Attribute>(baseEnc), allocTy.getMemorySpace(),
-                            allocTy.getMutableMemory());
+                            cast<Attribute>(sourceSharedEnc),
+                            refTy.getMemorySpace(), refTy.getMutableMemory());
   }
 
   LogicalResult rewriteOperand(OpOperand &operand,
@@ -483,7 +466,7 @@ private:
       return failure();
 
     FailureOr<MemDescType> baseMemTy =
-        getRewrittenBaseMemDescType(localAlloc, baseTensor);
+        getSwizzle0MemDescType(origTy, baseTensor);
     if (failed(baseMemTy))
       return failure();
 
