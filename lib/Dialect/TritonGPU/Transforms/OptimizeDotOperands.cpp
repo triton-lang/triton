@@ -429,9 +429,15 @@ private:
     return nullptr;
   }
 
-  static FailureOr<MemDescType> getRewrittenBaseMemDescType(LocalAllocOp localAlloc,
-                                                     MemDescType allocTy,
-                                                     Value baseTensor) {
+  // Compute the memdesc type for the rewritten base `local_alloc`. The
+  // original alloc may already have a transformed 2D shared layout suitable for
+  // the final dot operand, while `baseTensor` is the pre-view tensor we want to
+  // allocate instead. This helper chooses the zero-swizzle-capable shared
+  // encoding we should preserve, retargets it to `baseTensor`'s shape, and
+  // builds the corresponding memdesc type.
+  static FailureOr<MemDescType>
+  getRewrittenBaseMemDescType(LocalAllocOp localAlloc, Value baseTensor) {
+    auto allocTy = cast<MemDescType>(localAlloc.getType());
     auto allocSharedEnc = cast<SharedEncodingTrait>(allocTy.getEncoding());
     auto sourceSharedEnc = getSourceSharedEncoding(baseTensor);
     bool allocIsZeroSwizzleLike =
@@ -442,14 +448,11 @@ private:
     if (!allocIsZeroSwizzleLike && !sourceIsZeroSwizzleLike)
       return failure();
 
-    auto baseTensorTy = dyn_cast<RankedTensorType>(baseTensor.getType());
-    if (!baseTensorTy)
-      return failure();
-
     SharedEncodingTrait refSharedEnc = allocSharedEnc;
     if (sourceIsZeroSwizzleLike)
       refSharedEnc = sourceSharedEnc;
 
+    auto baseTensorTy = cast<RankedTensorType>(baseTensor.getType());
     auto baseEnc =
         updateEncodingForShape(localAlloc, refSharedEnc, baseTensorTy);
     return MemDescType::get(baseTensorTy.getShape(),
@@ -472,8 +475,6 @@ private:
     if (!localAlloc || !localAlloc.getSrc())
       return failure();
 
-    auto allocTy = cast<MemDescType>(localAlloc.getType());
-
     auto [baseTensor, tensorReplaySteps] =
         collectViewSteps<triton::ReshapeOp, triton::TransOp>(
             localAlloc.getSrc());
@@ -482,7 +483,7 @@ private:
       return failure();
 
     FailureOr<MemDescType> baseMemTy =
-        getRewrittenBaseMemDescType(localAlloc, allocTy, baseTensor);
+        getRewrittenBaseMemDescType(localAlloc, baseTensor);
     if (failed(baseMemTy))
       return failure();
 
