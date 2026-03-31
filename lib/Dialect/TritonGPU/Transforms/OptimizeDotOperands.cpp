@@ -380,12 +380,6 @@ private:
     }
   }
 
-  static bool isZeroSwizzleCompatibleEncoding(Attribute encoding) {
-    if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(encoding))
-      return nvmma.getSwizzlingByteWidth() == 0;
-    return false;
-  }
-
   struct ViewStep {
     enum Kind { Reshape, Transpose } kind;
     SmallVector<int64_t> shape;
@@ -397,12 +391,12 @@ private:
   static std::tuple<Value, SmallVector<ViewStep>>
   collectViewSteps(Value value) {
     Value current = value;
-    SmallVector<ViewStep> steps;
+    SmallVector<ViewStep> replaySteps;
     while (true) {
       if (auto reshape = current.template getDefiningOp<ReshapeOpTy>()) {
         auto ty = reshape.getType();
         SmallVector<int64_t> shape(ty.getShape().begin(), ty.getShape().end());
-        steps.push_back(ViewStep{
+        replaySteps.push_back(ViewStep{
             ViewStep::Reshape, std::move(shape), {}, reshape.getLoc()});
         current = reshape.getSrc();
         continue;
@@ -410,14 +404,20 @@ private:
       if (auto trans = current.template getDefiningOp<TransOpTy>()) {
         SmallVector<int32_t> order(trans.getOrder().begin(),
                                    trans.getOrder().end());
-        steps.push_back(ViewStep{
+        replaySteps.push_back(ViewStep{
             ViewStep::Transpose, {}, std::move(order), trans.getLoc()});
         current = trans.getSrc();
         continue;
       }
       break;
     }
-    return {current, std::move(steps)};
+    return {current, llvm::to_vector(llvm::reverse(replaySteps))};
+  }
+
+  static bool isZeroSwizzleCompatibleEncoding(Attribute encoding) {
+    if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(encoding))
+      return nvmma.getSwizzlingByteWidth() == 0;
+    return false;
   }
 
   static SharedEncodingTrait getSourceSharedEncoding(Value baseTensor) {
@@ -429,9 +429,9 @@ private:
     return nullptr;
   }
 
-  static FailureOr<MemDescType>
-  getRewrittenBaseMemDescType(LocalAllocOp localAlloc, MemDescType allocTy,
-                              Value baseTensor) {
+  static FailureOr<MemDescType> getRewrittenBaseMemDescType(LocalAllocOp localAlloc,
+                                                     MemDescType allocTy,
+                                                     Value baseTensor) {
     auto allocSharedEnc = cast<SharedEncodingTrait>(allocTy.getEncoding());
     auto sourceSharedEnc = getSourceSharedEncoding(baseTensor);
     bool allocIsZeroSwizzleLike =
@@ -465,7 +465,7 @@ private:
     if (!origTy)
       return failure();
 
-    auto [beforeTrailing, trailingMemDescSteps] =
+    auto [beforeTrailing, trailingMemDescReplaySteps] =
         collectViewSteps<MemDescReshapeOp, MemDescTransOp>(orig);
 
     auto localAlloc = beforeTrailing.template getDefiningOp<LocalAllocOp>();
@@ -474,11 +474,11 @@ private:
 
     auto allocTy = cast<MemDescType>(localAlloc.getType());
 
-    auto [baseTensor, reverseSteps] =
+    auto [baseTensor, tensorReplaySteps] =
         collectViewSteps<triton::ReshapeOp, triton::TransOp>(
             localAlloc.getSrc());
 
-    if (reverseSteps.empty())
+    if (tensorReplaySteps.empty())
       return failure();
 
     FailureOr<MemDescType> baseMemTy =
@@ -492,7 +492,7 @@ private:
     Value rewritten = LocalAllocOp::create(rewriter, localAlloc.getLoc(),
                                            *baseMemTy, baseTensor);
 
-    for (ViewStep &step : llvm::reverse(reverseSteps)) {
+    for (ViewStep &step : tensorReplaySteps) {
       if (step.kind == ViewStep::Reshape) {
         rewritten =
             MemDescReshapeOp::create(rewriter, step.loc, rewritten, step.shape);
@@ -502,7 +502,7 @@ private:
       }
     }
 
-    for (ViewStep &step : llvm::reverse(trailingMemDescSteps)) {
+    for (ViewStep &step : trailingMemDescReplaySteps) {
       if (step.kind == ViewStep::Reshape) {
         rewritten =
             MemDescReshapeOp::create(rewriter, step.loc, rewritten, step.shape);
