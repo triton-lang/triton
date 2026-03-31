@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 """Reproduce cupti13-specific heap growth during CUDA graph replay under Proton.
 
 This script is meant to be run on a CUDA machine with Triton, Torch, and Proton
@@ -108,12 +107,8 @@ from typing import Any
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Run a Triton + Torch CUDA-graph replay workload under Proton and "
-            "capture timed heap snapshots for one or more CUPTI variants."
-        )
-    )
+    parser = argparse.ArgumentParser(description=("Run a Triton + Torch CUDA-graph replay workload under Proton and "
+                                                  "capture timed heap snapshots for one or more CUPTI variants."))
     parser.add_argument(
         "--single-run",
         action="store_true",
@@ -127,11 +122,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cupti-dir",
         default=None,
-        help=(
-            "CUPTI directory to force for this run. When set, both "
-            "TRITON_CUPTI_LIB_PATH and TRITON_CUPTI_LIB_BLACKWELL_PATH are set "
-            "to this directory before Triton is imported."
-        ),
+        help=("CUPTI directory to force for this run. When set, both "
+              "TRITON_CUPTI_LIB_PATH and TRITON_CUPTI_LIB_BLACKWELL_PATH are set "
+              "to this directory before Triton is imported."),
     )
     parser.add_argument(
         "--generic-cupti-dir",
@@ -230,10 +223,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--lifecycle",
         default="step",
         choices=["continuous", "step"],
-        help=(
-            "How to drive the Proton session. 'step' repeatedly activates one "
-            "replay scope, then deactivates before the next outer step."
-        ),
+        help=("How to drive the Proton session. 'step' repeatedly activates one "
+              "replay scope, then deactivates before the next outer step."),
     )
     parser.add_argument(
         "--clear-completed-phases",
@@ -353,6 +344,7 @@ def _read_loaded_shared_objects(needle: str, *, exact_basename: bool = False) ->
 
 
 class _JemallocMallctl:
+
     def __init__(self) -> None:
         self._lib = self._load_library()
         self.mallctl = getattr(self._lib, "mallctl", None) if self._lib is not None else None
@@ -554,18 +546,14 @@ def _top_anon_vmas_tsv(limit: int = 20) -> str:
     )
     rows = ["private_dirty_kb\tanonymous_kb\trss_kb\tsize_kb\tpath\theader"]
     for region in regions[:limit]:
-        rows.append(
-            "\t".join(
-                [
-                    str(region["private_dirty_kb"]),
-                    str(region["anonymous_kb"]),
-                    str(region["rss_kb"]),
-                    str(region["size_kb"]),
-                    str(region["path"]),
-                    str(region["header"]),
-                ]
-            )
-        )
+        rows.append("\t".join([
+            str(region["private_dirty_kb"]),
+            str(region["anonymous_kb"]),
+            str(region["rss_kb"]),
+            str(region["size_kb"]),
+            str(region["path"]),
+            str(region["header"]),
+        ]))
     return "\n".join(rows) + "\n"
 
 
@@ -623,20 +611,21 @@ def _write_csv(samples: list[dict[str, Any]], path: Path) -> None:
 
 
 def _summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
+
     def _series(name: str) -> list[int]:
         return [sample[name] for sample in samples if sample.get(name) is not None]
 
     summary: dict[str, Any] = {"num_samples": len(samples)}
     for field in (
-        "rss_bytes",
-        "cgroup_working_set_bytes",
-        "cgroup_anon_bytes",
-        "cgroup_file_bytes",
-        "allocated",
-        "active",
-        "resident",
-        "mapped",
-        "retained",
+            "rss_bytes",
+            "cgroup_working_set_bytes",
+            "cgroup_anon_bytes",
+            "cgroup_file_bytes",
+            "allocated",
+            "active",
+            "resident",
+            "mapped",
+            "retained",
     ):
         values = _series(field)
         summary[f"{field}_start"] = values[0] if values else None
@@ -724,9 +713,9 @@ def _run_single(args: argparse.Namespace) -> int:
         tl.store(z_ptr + offsets, x + y, mask=mask)
 
     numel = args.numel
-    grid = lambda meta: (triton.cdiv(numel, meta["BLOCK_SIZE"]),)
-    static_x = torch.rand((numel,), device=device, dtype=torch.float32)
-    static_y = torch.rand((numel,), device=device, dtype=torch.float32)
+    grid = lambda meta: (triton.cdiv(numel, meta["BLOCK_SIZE"]), )
+    static_x = torch.rand((numel, ), device=device, dtype=torch.float32)
+    static_y = torch.rand((numel, ), device=device, dtype=torch.float32)
     static_z = torch.empty_like(static_x)
 
     def direct_iteration() -> None:
@@ -815,9 +804,7 @@ def _run_single(args: argparse.Namespace) -> int:
     samples.append(_collect_sample("pre_start", 0.0, 0, profile_base))
     session = proton.start(str(profile_base), backend="cupti", context="shadow", mode=profile_mode)
     samples.append(_collect_sample("post_start", 0.0, 0, profile_base))
-    run_metadata["loaded_cupti_libs_after_start"] = _read_loaded_shared_objects(
-        "libcupti.so", exact_basename=True
-    )
+    run_metadata["loaded_cupti_libs_after_start"] = _read_loaded_shared_objects("libcupti.so", exact_basename=True)
     run_metadata["loaded_libcupti_objects_after_start"] = _read_loaded_shared_objects("libcupti")
 
     if not args.capture_before_start:
@@ -873,9 +860,7 @@ def _run_single(args: argparse.Namespace) -> int:
     maybe_capture_checkpoints(time.monotonic() - start)
     proton.finalize(output_format=args.data_format)
     samples.append(_collect_sample("post_finalize", time.monotonic() - start, step, profile_base))
-    run_metadata["loaded_cupti_libs_after_finalize"] = _read_loaded_shared_objects(
-        "libcupti.so", exact_basename=True
-    )
+    run_metadata["loaded_cupti_libs_after_finalize"] = _read_loaded_shared_objects("libcupti.so", exact_basename=True)
     run_metadata["loaded_libcupti_objects_after_finalize"] = _read_loaded_shared_objects("libcupti")
 
     sample_path = output_dir / f"samples_{args.label}.csv"
@@ -905,14 +890,14 @@ def _compare_summaries(summaries: list[dict[str, Any]]) -> dict[str, Any]:
     base = summaries[0]
     other = summaries[1]
     for field in (
-        "allocated_delta",
-        "active_delta",
-        "resident_delta",
-        "mapped_delta",
-        "retained_delta",
-        "rss_bytes_delta",
-        "cgroup_anon_bytes_delta",
-        "cgroup_file_bytes_delta",
+            "allocated_delta",
+            "active_delta",
+            "resident_delta",
+            "mapped_delta",
+            "retained_delta",
+            "rss_bytes_delta",
+            "cgroup_anon_bytes_delta",
+            "cgroup_file_bytes_delta",
     ):
         base_value = base["samples"].get(field)
         other_value = other["samples"].get(field)
