@@ -4,7 +4,7 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
+from triton._internal_testing import is_hopper, is_blackwell, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3
@@ -1842,7 +1842,7 @@ def test_host_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
             "ptx"] or "stmatrix.sync.aligned.x4.m8n8.shared.b16" in kernel.asm["ptx"]
 
 
-# TODO: require blackwell
+@pytest.mark.skipif(not (is_hopper() or is_blackwell()), reason="Requires Hopper or Blackwell")
 def test_host_tensor_descriptor_matmul_fp8_swizzle0_b(device):
     M = N = K = 512
     BLOCK_M = 128
@@ -1877,16 +1877,11 @@ def test_host_tensor_descriptor_matmul_fp8_swizzle0_b(device):
         num_stages=1,
     )
 
-    # Compare against quantized operands actually consumed by the kernel.
     ref_out = torch.matmul(a.to(torch.float32), b.to(torch.float32).T)
     torch.testing.assert_close(ref_out, c, rtol=1.5e-1, atol=2.5e-1)
 
     ttgir = kernel.asm["ttgir"]
-    # assert "ttng.tc_gen5_mma" in ttgir
     assert "swizzlingByteWidth = 0" in ttgir and "#ttg.shared_linear" in ttgir
-    # assert any(f"swizzlingByteWidth = {w}" in ttgir for w in [32, 64, 128])
-
-test_host_tensor_descriptor_matmul_fp8_swizzle0_b("cuda")
 
 
 @pytest.mark.interpreter

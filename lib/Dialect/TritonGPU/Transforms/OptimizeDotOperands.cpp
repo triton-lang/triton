@@ -361,7 +361,8 @@ public:
           if (!waitChanged)
             continue;
           rewriter.modifyOpInPlace(waitOp, [&]() {
-            unsigned n = std::min(waitOp->getNumOperands(), waitOp->getNumResults());
+            unsigned n =
+                std::min(waitOp->getNumOperands(), waitOp->getNumResults());
             for (unsigned i = 0; i < n; ++i)
               waitOp->getResult(i).setType(waitOp->getOperand(i).getType());
           });
@@ -410,9 +411,8 @@ private:
       if (auto trailingTrans = beforeTrailing.getDefiningOp<MemDescTransOp>()) {
         SmallVector<int32_t> order(trailingTrans.getOrder().begin(),
                                    trailingTrans.getOrder().end());
-        trailingMemDescSteps.push_back(
-            ViewStep{ViewStep::Transpose, {}, std::move(order),
-                     trailingTrans.getLoc()});
+        trailingMemDescSteps.push_back(ViewStep{
+            ViewStep::Transpose, {}, std::move(order), trailingTrans.getLoc()});
         beforeTrailing = trailingTrans.getSrc();
         continue;
       }
@@ -420,9 +420,8 @@ private:
               beforeTrailing.getDefiningOp<MemDescReshapeOp>()) {
         auto ty = cast<MemDescType>(trailingReshape.getType());
         SmallVector<int64_t> shape(ty.getShape().begin(), ty.getShape().end());
-        trailingMemDescSteps.push_back(
-            ViewStep{ViewStep::Reshape, std::move(shape), {},
-                     trailingReshape.getLoc()});
+        trailingMemDescSteps.push_back(ViewStep{
+            ViewStep::Reshape, std::move(shape), {}, trailingReshape.getLoc()});
         beforeTrailing = trailingReshape.getSrc();
         continue;
       }
@@ -483,7 +482,8 @@ private:
     if (sourceIsZeroSwizzleLike && sourceSharedEnc)
       refSharedEnc = sourceSharedEnc;
 
-    auto baseEnc = updateEncodingForShape(localAlloc, refSharedEnc, baseTensorTy);
+    auto baseEnc =
+        updateEncodingForShape(localAlloc, refSharedEnc, baseTensorTy);
     auto baseMemTy =
         MemDescType::get(baseTensorTy.getShape(), baseTensorTy.getElementType(),
                          cast<Attribute>(baseEnc), allocTy.getMemorySpace(),
