@@ -1702,8 +1702,7 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
       }
 
       if (nonPromotableArgs.contains(idx)) {
-        LDBG("Skip arg " << idx
-                         << ": merges with non-promotable pointer");
+        LDBG("Skip arg " << idx << ": merges with non-promotable pointer");
         continue;
       }
 
