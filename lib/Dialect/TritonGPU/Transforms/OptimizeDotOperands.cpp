@@ -17,6 +17,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include <algorithm>
 #include <memory>
+#include <tuple>
 #include <type_traits>
 
 namespace mlir::triton::gpu {
@@ -393,28 +394,30 @@ private:
   };
 
   template <typename ReshapeOpTy, typename TransOpTy>
-  static SmallVector<ViewStep> collectViewSteps(Value &value) {
+  static std::tuple<Value, SmallVector<ViewStep>>
+  collectViewSteps(Value value) {
+    Value current = value;
     SmallVector<ViewStep> steps;
     while (true) {
-      if (auto reshape = value.getDefiningOp<ReshapeOpTy>()) {
+      if (auto reshape = current.template getDefiningOp<ReshapeOpTy>()) {
         auto ty = reshape.getType();
         SmallVector<int64_t> shape(ty.getShape().begin(), ty.getShape().end());
-        steps.push_back(
-            ViewStep{ViewStep::Reshape, std::move(shape), {}, reshape.getLoc()});
-        value = reshape.getSrc();
+        steps.push_back(ViewStep{
+            ViewStep::Reshape, std::move(shape), {}, reshape.getLoc()});
+        current = reshape.getSrc();
         continue;
       }
-      if (auto trans = value.getDefiningOp<TransOpTy>()) {
+      if (auto trans = current.template getDefiningOp<TransOpTy>()) {
         SmallVector<int32_t> order(trans.getOrder().begin(),
                                    trans.getOrder().end());
-        steps.push_back(ViewStep{ViewStep::Transpose, {}, std::move(order),
-                                 trans.getLoc()});
-        value = trans.getSrc();
+        steps.push_back(ViewStep{
+            ViewStep::Transpose, {}, std::move(order), trans.getLoc()});
+        current = trans.getSrc();
         continue;
       }
       break;
     }
-    return steps;
+    return {current, std::move(steps)};
   }
 
   static SharedEncodingTrait getSourceSharedEncoding(Value baseTensor) {
@@ -426,39 +429,17 @@ private:
     return nullptr;
   }
 
-  LogicalResult rewriteOperand(OpOperand &operand,
-                               PatternRewriter &rewriter) const {
-    Value orig = operand.get();
-    auto origTy = dyn_cast<MemDescType>(orig.getType());
-    if (!origTy)
-      return failure();
-
-    Value beforeTrailing = orig;
-    SmallVector<ViewStep> trailingMemDescSteps =
-        collectViewSteps<MemDescReshapeOp, MemDescTransOp>(beforeTrailing);
-
-    auto localAlloc = beforeTrailing.getDefiningOp<LocalAllocOp>();
-    if (!localAlloc || !localAlloc.getSrc())
-      return failure();
-
-    auto allocTy = cast<MemDescType>(localAlloc.getType());
-    auto allocSharedEnc = dyn_cast<SharedEncodingTrait>(allocTy.getEncoding());
-    if (!allocSharedEnc)
-      return failure();
-
-    Value baseTensor = localAlloc.getSrc();
-    SmallVector<ViewStep> reverseSteps =
-        collectViewSteps<triton::ReshapeOp, triton::TransOp>(baseTensor);
-
-    if (reverseSteps.empty())
-      return failure();
-
+  static FailureOr<MemDescType>
+  getRewrittenBaseMemDescType(LocalAllocOp localAlloc, MemDescType allocTy,
+                              Value baseTensor) {
+    auto allocSharedEnc = cast<SharedEncodingTrait>(allocTy.getEncoding());
     auto sourceSharedEnc = getSourceSharedEncoding(baseTensor);
+    bool allocIsZeroSwizzleLike =
+        isZeroSwizzleCompatibleEncoding(cast<Attribute>(allocSharedEnc));
     bool sourceIsZeroSwizzleLike =
         sourceSharedEnc &&
         isZeroSwizzleCompatibleEncoding(cast<Attribute>(sourceSharedEnc));
-    if (!isZeroSwizzleCompatibleEncoding(allocTy.getEncoding()) &&
-        !sourceIsZeroSwizzleLike)
+    if (!allocIsZeroSwizzleLike && !sourceIsZeroSwizzleLike)
       return failure();
 
     auto baseTensorTy = dyn_cast<RankedTensorType>(baseTensor.getType());
@@ -466,21 +447,50 @@ private:
       return failure();
 
     SharedEncodingTrait refSharedEnc = allocSharedEnc;
-    if (sourceIsZeroSwizzleLike && sourceSharedEnc)
+    if (sourceIsZeroSwizzleLike)
       refSharedEnc = sourceSharedEnc;
 
     auto baseEnc =
         updateEncodingForShape(localAlloc, refSharedEnc, baseTensorTy);
-    auto baseMemTy =
-        MemDescType::get(baseTensorTy.getShape(), baseTensorTy.getElementType(),
-                         cast<Attribute>(baseEnc), allocTy.getMemorySpace(),
-                         allocTy.getMutableMemory());
+    return MemDescType::get(baseTensorTy.getShape(),
+                            baseTensorTy.getElementType(),
+                            cast<Attribute>(baseEnc), allocTy.getMemorySpace(),
+                            allocTy.getMutableMemory());
+  }
+
+  LogicalResult rewriteOperand(OpOperand &operand,
+                               PatternRewriter &rewriter) const {
+    Value orig = operand.get();
+    auto origTy = dyn_cast<MemDescType>(orig.getType());
+    if (!origTy)
+      return failure();
+
+    auto [beforeTrailing, trailingMemDescSteps] =
+        collectViewSteps<MemDescReshapeOp, MemDescTransOp>(orig);
+
+    auto localAlloc = beforeTrailing.template getDefiningOp<LocalAllocOp>();
+    if (!localAlloc || !localAlloc.getSrc())
+      return failure();
+
+    auto allocTy = cast<MemDescType>(localAlloc.getType());
+
+    auto [baseTensor, reverseSteps] =
+        collectViewSteps<triton::ReshapeOp, triton::TransOp>(
+            localAlloc.getSrc());
+
+    if (reverseSteps.empty())
+      return failure();
+
+    FailureOr<MemDescType> baseMemTy =
+        getRewrittenBaseMemDescType(localAlloc, allocTy, baseTensor);
+    if (failed(baseMemTy))
+      return failure();
 
     PatternRewriter::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(localAlloc);
 
     Value rewritten = LocalAllocOp::create(rewriter, localAlloc.getLoc(),
-                                           baseMemTy, baseTensor);
+                                           *baseMemTy, baseTensor);
 
     for (ViewStep &step : llvm::reverse(reverseSteps)) {
       if (step.kind == ViewStep::Reshape) {
@@ -503,9 +513,9 @@ private:
     }
 
     auto rewrittenTy = cast<MemDescType>(rewritten.getType());
-    if (rewrittenTy.getShape() != origTy.getShape() ||
-        rewrittenTy.getElementType() != origTy.getElementType())
-      return failure();
+    assert(rewrittenTy.getShape() == origTy.getShape() &&
+           rewrittenTy.getElementType() == origTy.getElementType() &&
+           "rewrite must preserve memdesc shape and element type");
 
     operand.assign(rewritten);
     return success();
