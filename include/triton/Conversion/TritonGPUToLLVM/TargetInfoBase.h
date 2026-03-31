@@ -2,6 +2,7 @@
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 
 #include "triton/Conversion/MLIRTypes.h"
+#include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/ArrayRef.h"
 
 namespace mlir::triton {
@@ -116,6 +117,14 @@ public:
   // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
   virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                      Operation *llLoadOp) const {}
+
+  // Returns bases of lanes {LoadBases, StoreBases} that are active in a
+  // single hardware cycle for shared memory loads and stores.
+  virtual std::pair<SmallVector<gpu::LocalMemOpTile>,
+                    SmallVector<gpu::LocalMemOpTile>>
+  getSharedLdStTiles() const {
+    return {{}, {}};
+  }
 
   virtual ~TargetInfoBase() {}
 };

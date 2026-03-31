@@ -779,4 +779,28 @@ bool TargetInfo::supportDppBroadcast() const {
 
   return false;
 }
+
+std::pair<SmallVector<mlir::triton::gpu::LocalMemOpTile>,
+          SmallVector<mlir::triton::gpu::LocalMemOpTile>>
+TargetInfo::getSharedLdStTiles() const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA3:
+  case ISAFamily::RDNA1:
+  case ISAFamily::RDNA2:
+  case ISAFamily::RDNA3:
+    return {/* load */ {/* b32  */ {},
+                        /* b64  */ {},
+                        /* b128 */ {{}, {0, 1, 4}}},
+            /* store */ {}};
+  case ISAFamily::CDNA4:
+  case ISAFamily::GFX1250:
+    return {/* load */ {/* b32  */ {},
+                        /* b64  */ {},
+                        /* b128 */ {{}, {0, 1, 3, 4}}},
+            /* store */ {}};
+  default:
+    break;
+  }
+  return {{}, {}};
+}
 } // namespace mlir::triton::AMD

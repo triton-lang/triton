@@ -126,6 +126,10 @@ public:
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                              Operation *llLoadOp) const override;
 
+  virtual std::pair<SmallVector<mlir::triton::gpu::LocalMemOpTile>,
+                    SmallVector<mlir::triton::gpu::LocalMemOpTile>>
+  getSharedLdStTiles() const override;
+
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   ArrayRef<bool> isSigned, RewriterBase &rewriter,

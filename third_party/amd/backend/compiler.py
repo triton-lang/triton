@@ -88,6 +88,8 @@ class HIPOptions:
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
+        num_banks = 64 if self.arch in ['gfx950', 'gfx1250'] else 32
+        object.__setattr__(self, 'num_banks', num_banks)
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
             "num_warps must be a power of 2"
 
@@ -102,8 +104,6 @@ class HIPOptions:
         for lib in ["ocml", "ockl"]:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
-        num_banks = 64 if self.arch == 'gfx950' else 32
-        object.__setattr__(self, 'num_banks', num_banks)
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])

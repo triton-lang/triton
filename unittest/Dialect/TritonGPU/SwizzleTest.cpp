@@ -14,12 +14,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <llvm/ADT/SmallSet.h>
-#include <set>
 
 using namespace mlir;
 using namespace mlir::triton;
 
 using mlir::triton::gpu::bankConflictsLdSt;
+using mlir::triton::gpu::LocalMemOpTile;
 using mlir::triton::gpu::optimalSwizzling;
 using mlir::triton::gpu::optimalSwizzlingLdSt;
 
@@ -119,11 +119,12 @@ protected:
   }
 
   int computeConflicts(ArrayRef<int64_t> shape, Attribute regAttr,
-                       Attribute sharedAttr, int bitwidth, int numBanks = 32) {
+                       Attribute sharedAttr, int bitwidth, int numBanks = 32,
+                       ArrayRef<LocalMemOpTile> laneTiles = {}) {
     auto regLL = toLL(shape, regAttr);
     auto sharedLL = toLL(shape, sharedAttr);
     return mlir::triton::gpu::bankConflictsMemDesc(regLL, sharedLL, bitwidth,
-                                                   numBanks);
+                                                   numBanks, laneTiles);
   }
 
   int bruteforceBankConflictsPerWavefront(ArrayRef<int64_t> shape,
@@ -155,20 +156,17 @@ protected:
     int vectorisation = llvm::divideCeil(bitwidth * elemsPerVec, 32);
     assert(vectorisation == 1 || vectorisation == 2 || vectorisation == 4);
     int wavefronts = 0;
-
     // For all the emitted instructions
     for (int regIdx = 0; regIdx < regToShared.getInDimSize(kReg);
          regIdx += elemsPerVec) {
       for (int warpIdx = 0; warpIdx < regToShared.getInDimSize(kWarp);
            warpIdx++) {
         // For each instruction
-        for (int startLaneIdx = 0;
-             startLaneIdx < regToShared.getInDimSize(kLane);
-             startLaneIdx += (32 / vectorisation)) {
+        for (int laneIdx = 0; laneIdx < regToShared.getInDimSize(kLane);
+             laneIdx += (32 / vectorisation)) {
           // For each wavefront
           llvm::SmallSet<int, 32> uniqueOffsets;
-          for (int laneIdx = startLaneIdx;
-               laneIdx < startLaneIdx + (32 / vectorisation); laneIdx++) {
+          for (int laneIdx = 0; laneIdx < 32 / vectorisation; laneIdx++) {
             for (int vecIdx = 0; vecIdx < elemsPerVec; vecIdx++) {
               auto offset = regToShared
                                 .apply({{kReg, regIdx + vecIdx},
@@ -196,10 +194,9 @@ protected:
     return wavefronts / minWavefronts - 1;
   }
 
-  int bruteforceBankConflictsPerWavefront64(ArrayRef<int64_t> shape,
-                                            Attribute regAttr,
-                                            Attribute sharedAttr, int bitwidth,
-                                            int numBanks) {
+  int bruteforceBankConflictsPerWavefront64(
+      ArrayRef<int64_t> shape, Attribute regAttr, Attribute sharedAttr,
+      int bitwidth, int numBanks, ArrayRef<LocalMemOpTile> laneTiles) {
     // Compute the bank conflicts per wavefront
     // In other words, we compute how many extra memory accesses (bank
     // conflicts) are needed for a given wavefront.
@@ -225,79 +222,77 @@ protected:
 
     int vectorisation = llvm::divideCeil(bitwidth * elemsPerVec, 32);
     assert(vectorisation == 1 || vectorisation == 2 || vectorisation == 4);
-    assert(numBanks <= 64);
     int threadsPerPhase = numBanks / vectorisation;
+    int numLanes = regToShared.getInDimSize(kLane);
+    int numPhases = numLanes / threadsPerPhase;
     int wavefronts = 0;
-
-    auto getPhasesB128 = [](int banks) -> std::vector<std::vector<int>> {
-      if (banks == 64)
-        return {
-            {0, 1, 2, 3, 12, 13, 14, 15, 20, 21, 22, 23, 24, 25, 26, 27},
-            {32, 33, 34, 35, 44, 45, 46, 47, 52, 53, 54, 55, 56, 57, 58, 59},
-            {4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 19, 28, 29, 30, 31},
-            {36, 37, 38, 39, 40, 41, 42, 43, 48, 49, 50, 51, 60, 61, 62, 63}};
-      return {
-          {0, 1, 2, 3, 20, 21, 22, 23},     {32, 33, 34, 35, 52, 53, 54, 55},
-          {4, 5, 6, 7, 16, 17, 18, 19},     {36, 37, 38, 39, 48, 49, 50, 51},
-          {8, 9, 10, 11, 28, 29, 30, 31},   {40, 41, 42, 43, 60, 61, 62, 63},
-          {12, 13, 14, 15, 24, 25, 26, 27}, {44, 45, 46, 47, 56, 57, 58, 59}};
-    };
     // For all the emitted instructions
     for (int regIdx = 0; regIdx < regToShared.getInDimSize(kReg);
          regIdx += elemsPerVec) {
       for (int warpIdx = 0; warpIdx < regToShared.getInDimSize(kWarp);
            warpIdx++) {
-        if (vectorisation == 4) {
-          for (const auto &phaseLanes : getPhasesB128(numBanks)) {
-            std::set<int> uniqueOffsets;
-            for (int laneIdx : phaseLanes) {
-              for (int vecIdx = 0; vecIdx < elemsPerVec; vecIdx++) {
-                auto offset = regToShared
-                                  .apply({{kReg, regIdx + vecIdx},
-                                          {kLane, laneIdx},
-                                          {kWarp, warpIdx}})[0]
-                                  .second;
-                auto offsetB32 = offset * bitwidth / 32;
-                uniqueOffsets.insert(offsetB32);
-              }
+        // For each instruction
+        llvm::SmallVector<llvm::SmallSet<int, 32>, 8> uniqueOffsetsByPhase(
+            numPhases);
+        for (int laneIdx = 0; laneIdx < numLanes; laneIdx++) {
+          int phaseIdx;
+          int maskedLaneIdx;
+          if (vectorisation == 4) {
+            int half = (laneIdx < 32) ? 0 : 1;
+            int b2 = (laneIdx >> 2) & 1;
+            int b3 = (laneIdx >> 3) & 1;
+            int b4 = (laneIdx >> 4) & 1;
+            if (numBanks == 32) {
+              // Group threads into 8 phases of 8 threads each.
+              // Logic: 'half' (bit 5) selects even/odd phase indices.
+              // Bit 3 (b3) and the XOR of bits 2 and 4 (b2^b4) determine the
+              // intra-half grouping.
+              // Phase 0: T0-3,   T20-23 | Phase 1: T32-35, T52-55
+              // Phase 2: T4-7,   T16-19 | Phase 3: T36-39, T48-51
+              // Phase 4: T8-11,  T28-31 | Phase 5: T40-43, T60-63
+              // Phase 6: T12-15, T24-27 | Phase 7: T44-47, T56-59
+              int basePhase = (b3 << 2) | ((b2 ^ b4) << 1);
+              phaseIdx = half + basePhase;
+            } else {
+              // Group threads into 4 phases of 16 threads each.
+              // Logic: 'half' (bit 5) selects Phase 0/1 or 2/3.
+              // Parity of bits 2, 3, and 4 (b2^b3^b4) determines the intra-half
+              // grouping.
+              // Phase 0: T0-3,   T12-15, T20-23, T24-27
+              // Phase 1: T32-35, T44-47, T52-55, T56-59
+              // Phase 2: T4-7,   T8-11,  T16-19, T28-31
+              // Phase 3: T36-39, T40-43, T48-51, T60-63
+              int basePhase = (b2 ^ b3 ^ b4) << 1;
+              phaseIdx = half + basePhase;
             }
-            llvm::SmallVector<int, 64> banks(numBanks, 0);
-            for (int offset : uniqueOffsets) {
-              banks[offset % numBanks]++;
-            }
-            wavefronts += *llvm::max_element(banks);
+            maskedLaneIdx = 0;
+            for (int shift : laneTiles[vectorisation / 2].laneAddr)
+              maskedLaneIdx |= laneIdx & (1 << shift);
+          } else {
+            phaseIdx = laneIdx / threadsPerPhase;
+            maskedLaneIdx = laneIdx % threadsPerPhase;
           }
-        } else {
-          // For each instruction
-          for (int startLaneIdx = 0;
-               startLaneIdx < regToShared.getInDimSize(kLane);
-               startLaneIdx += threadsPerPhase) {
-            // For each wavefront
-            std::set<int> uniqueOffsets;
-            for (int laneIdx = startLaneIdx;
-                 laneIdx < startLaneIdx + threadsPerPhase; laneIdx++) {
-              for (int vecIdx = 0; vecIdx < elemsPerVec; vecIdx++) {
-                auto offset = regToShared
-                                  .apply({{kReg, regIdx + vecIdx},
-                                          {kLane, laneIdx},
-                                          {kWarp, warpIdx}})[0]
-                                  .second;
-                auto offsetB32 = offset * bitwidth / 32;
-                uniqueOffsets.insert(offsetB32);
-              }
-            }
-            llvm::SmallVector<int, 64> banks(numBanks, 0);
-            for (int offset : uniqueOffsets) {
-              banks[offset % numBanks]++;
-            }
-            wavefronts += *llvm::max_element(banks);
+          for (int vecIdx = 0; vecIdx < elemsPerVec; vecIdx++) {
+            auto offset = regToShared
+                              .apply({{kReg, regIdx + vecIdx},
+                                      {kLane, maskedLaneIdx},
+                                      {kWarp, warpIdx}})[0]
+                              .second;
+            auto offsetB32 = offset * bitwidth / 32;
+            uniqueOffsetsByPhase[phaseIdx].insert(offsetB32);
           }
+        }
+        for (auto &uniqueOffsets : uniqueOffsetsByPhase) {
+          llvm::SmallVector<int, 64> banks(numBanks, 0);
+          for (int offset : uniqueOffsets) {
+            banks[offset % numBanks]++;
+          }
+          wavefronts += *llvm::max_element(banks);
         }
       }
     }
     auto minWavefronts = (regToShared.getInDimSize(kReg) / elemsPerVec) *
-                         regToShared.getInDimSize(kWarp) *
-                         (regToShared.getInDimSize(kLane) / threadsPerPhase);
+                         regToShared.getInDimSize(kWarp) * numPhases;
     // Assert homogeneity
     assert(wavefronts % minWavefronts == 0);
     return wavefronts / minWavefronts - 1;
@@ -423,8 +418,12 @@ TEST_F(SwizzleTest, Test64x128F16BlockedLinear32Bank) {
        {S("block"), {}}},
       {{S("dim0"), 64}, {S("dim1"), 128}},
       /*requireSurjective=*/true);
-  auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/16);
-  auto [r, w] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/16);
+  auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/16, /*numBanks*/ 32,
+                                   /*srcTiles*/ {},
+                                   /*dstTiles*/ {{}, {}, {{}, {0, 1, 4}}});
+  auto [r, w] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/16,
+                                  /*numBanks*/ 32, /*srcTiles*/ {},
+                                  /*dstTiles*/ {{}, {}, {{}, {0, 1, 4}}});
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
 }
@@ -446,9 +445,11 @@ TEST_F(SwizzleTest, Test64x128F16BlockedMfma64Bank) {
       {{S("dim0"), 64}, {S("dim1"), 128}},
       /*requireSurjective=*/true);
   auto smem = optimalSwizzlingLdSt(blocked, mma, /*bitwidth=*/16,
-                                   /*numBanks*/ 64);
+                                   /*numBanks*/ 64, /*dstTiles*/ {},
+                                   /*srcTiles*/ {{}, {}, {{}, {0, 1, 3, 4}}});
   auto [r, w] = bankConflictsLdSt(blocked, mma, smem, /*bitwidth=*/16,
-                                  /*numBanks*/ 64);
+                                  /*numBanks*/ 64, /*dstTiles*/ {},
+                                  /*srcTiles*/ {{}, {}, {{}, {0, 1, 3, 4}}});
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
 }
@@ -562,6 +563,7 @@ TEST_F(BankConflictTest, bankConflictsWavefront64) {
     SmallVector<int64_t, 3> shape;
     int bitwidth;
     int numBanks;
+    SmallVector<LocalMemOpTile> laneTiles;
   };
 
   SmallVector<Case, 6> cases = {
@@ -571,50 +573,57 @@ TEST_F(BankConflictTest, bankConflictsWavefront64) {
            mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 2)),
        {128, 128},
        16,
-       32},
+       32,
+       {{}, {}, {{}, {0, 1, 4}}}},
       {blocked({1, 8}, {4, 16}, {4, 1}, {1, 0}),
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 8, 1, 16, {1, 0},
            mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 2)),
        {128, 128},
        16,
-       64},
+       64,
+       {{}, {}, {{}, {0, 1, 3, 4}}}},
       {dotAV3,
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 4, 1, 16, {1, 0},
            mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 2)),
        {128, 128},
        16,
-       32},
+       32,
+       {{}, {}, {{}, {0, 1, 4}}}},
       {dotAV4,
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 8, 1, 16, {1, 0},
            mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 2)),
        {128, 128},
        16,
-       64},
+       64,
+       {{}, {}, {{}, {0, 1, 3, 4}}}},
       {dotBV3,
        AMDRotatingShared(/*vec=*/4, /*perPhase=*/1, /*maxPhase=*/16,
                          /*order=*/{0, 1}),
        {64, 128},
        16,
-       32},
+       32,
+       {{}, {}, {{}, {0, 1, 4}}}},
       {dotBV4,
        AMDRotatingShared(/*vec=*/4, /*perPhase=*/2, /*maxPhase=*/8,
                          /*order=*/{0, 1}),
        {64, 128},
        16,
-       64},
+       64,
+       {{}, {}, {{}, {0, 1, 3, 4}}}},
   };
 
   for (const auto &c : cases) {
-    EXPECT_EQ(
-        computeConflicts(c.shape, c.reg, c.shared, c.bitwidth, c.numBanks),
-        bruteforceBankConflictsPerWavefront64(c.shape, c.reg, c.shared,
-                                              c.bitwidth, c.numBanks))
-
+    EXPECT_EQ(computeConflicts(c.shape, c.reg, c.shared, c.bitwidth, c.numBanks,
+                               c.laneTiles),
+              bruteforceBankConflictsPerWavefront64(c.shape, c.reg, c.shared,
+                                                    c.bitwidth, c.numBanks,
+                                                    c.laneTiles))
         << toLL(c.shape, c.reg).invertAndCompose(toLL(c.shape, c.shared))
         << "\nbitwidth=" << c.bitwidth << "\n"
+        << "numBanks=" << c.numBanks << "\n"
         << attrStr(c.reg) << "\n"
         << attrStr(c.shared);
   }
