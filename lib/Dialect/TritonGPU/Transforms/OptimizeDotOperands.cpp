@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include <algorithm>
@@ -391,14 +392,36 @@ private:
     Location loc;
   };
 
+  template <typename ReshapeOpTy, typename TransOpTy>
+  static SmallVector<ViewStep> collectViewSteps(Value &value) {
+    SmallVector<ViewStep> steps;
+    while (true) {
+      if (auto reshape = value.getDefiningOp<ReshapeOpTy>()) {
+        auto ty = reshape.getType();
+        SmallVector<int64_t> shape(ty.getShape().begin(), ty.getShape().end());
+        steps.push_back(
+            ViewStep{ViewStep::Reshape, std::move(shape), {}, reshape.getLoc()});
+        value = reshape.getSrc();
+        continue;
+      }
+      if (auto trans = value.getDefiningOp<TransOpTy>()) {
+        SmallVector<int32_t> order(trans.getOrder().begin(),
+                                   trans.getOrder().end());
+        steps.push_back(ViewStep{ViewStep::Transpose, {}, std::move(order),
+                                 trans.getLoc()});
+        value = trans.getSrc();
+        continue;
+      }
+      break;
+    }
+    return steps;
+  }
+
   static SharedEncodingTrait getSourceSharedEncoding(Value baseTensor) {
     if (auto descLoad = baseTensor.getDefiningOp<DescriptorLoadOp>()) {
-      auto descTy =
-          dyn_cast<triton::TensorDescType>(descLoad.getDesc().getType());
-      if (!descTy)
-        return nullptr;
-      return dyn_cast_or_null<SharedEncodingTrait>(
-          descTy.getBlockType().getEncoding());
+      if (auto tensorTy = dyn_cast<RankedTensorType>(descLoad.getType()))
+        return triton::nvidia_gpu::getEncodingFromDescriptor(
+            descLoad, tensorTy, descLoad.getDesc());
     }
     return nullptr;
   }
@@ -410,28 +433,9 @@ private:
     if (!origTy)
       return failure();
 
-    SmallVector<ViewStep> trailingMemDescSteps;
     Value beforeTrailing = orig;
-    while (true) {
-      if (auto trailingTrans = beforeTrailing.getDefiningOp<MemDescTransOp>()) {
-        SmallVector<int32_t> order(trailingTrans.getOrder().begin(),
-                                   trailingTrans.getOrder().end());
-        trailingMemDescSteps.push_back(ViewStep{
-            ViewStep::Transpose, {}, std::move(order), trailingTrans.getLoc()});
-        beforeTrailing = trailingTrans.getSrc();
-        continue;
-      }
-      if (auto trailingReshape =
-              beforeTrailing.getDefiningOp<MemDescReshapeOp>()) {
-        auto ty = cast<MemDescType>(trailingReshape.getType());
-        SmallVector<int64_t> shape(ty.getShape().begin(), ty.getShape().end());
-        trailingMemDescSteps.push_back(ViewStep{
-            ViewStep::Reshape, std::move(shape), {}, trailingReshape.getLoc()});
-        beforeTrailing = trailingReshape.getSrc();
-        continue;
-      }
-      break;
-    }
+    SmallVector<ViewStep> trailingMemDescSteps =
+        collectViewSteps<MemDescReshapeOp, MemDescTransOp>(beforeTrailing);
 
     auto localAlloc = beforeTrailing.getDefiningOp<LocalAllocOp>();
     if (!localAlloc || !localAlloc.getSrc())
@@ -442,31 +446,9 @@ private:
     if (!allocSharedEnc)
       return failure();
 
-    SmallVector<ViewStep> reverseSteps;
     Value baseTensor = localAlloc.getSrc();
-    while (true) {
-      if (auto cvt = baseTensor.getDefiningOp<ConvertLayoutOp>()) {
-        baseTensor = cvt.getSrc();
-        continue;
-      }
-      if (auto reshape = baseTensor.getDefiningOp<triton::ReshapeOp>()) {
-        SmallVector<int64_t> shape(reshape.getType().getShape().begin(),
-                                   reshape.getType().getShape().end());
-        reverseSteps.push_back(ViewStep{
-            ViewStep::Reshape, std::move(shape), {}, reshape.getLoc()});
-        baseTensor = reshape.getSrc();
-        continue;
-      }
-      if (auto trans = baseTensor.getDefiningOp<triton::TransOp>()) {
-        SmallVector<int32_t> order(trans.getOrder().begin(),
-                                   trans.getOrder().end());
-        reverseSteps.push_back(ViewStep{
-            ViewStep::Transpose, {}, std::move(order), trans.getLoc()});
-        baseTensor = trans.getSrc();
-        continue;
-      }
-      break;
-    }
+    SmallVector<ViewStep> reverseSteps =
+        collectViewSteps<triton::ReshapeOp, triton::TransOp>(baseTensor);
 
     if (reverseSteps.empty())
       return failure();
