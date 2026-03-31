@@ -422,9 +422,9 @@ private:
 
   static SharedEncodingTrait getSourceSharedEncoding(Value baseTensor) {
     if (auto descLoad = baseTensor.getDefiningOp<DescriptorLoadOp>()) {
-      if (auto tensorTy = dyn_cast<RankedTensorType>(descLoad.getType()))
-        return triton::nvidia_gpu::getEncodingFromDescriptor(
-            descLoad, tensorTy, descLoad.getDesc());
+      auto descTy = cast<TensorDescType>(descLoad.getDesc().getType());
+      auto descBlockTy = descTy.getBlockType();
+      return dyn_cast_or_null<SharedEncodingTrait>(descBlockTy.getEncoding());
     }
     return nullptr;
   }
