@@ -9,7 +9,7 @@ profiles plus process-memory snapshots at timed checkpoints.
 
 Typical usage on the target machine:
 
-  python third_party/proton/tutorials/cupti_graph_replay_heap_growth.py \
+  python third_party/proton/test/reproducers/cupti_graph_replay_heap_growth.py \
     --output-dir /tmp/proton-graph-heap-smoke \
     --duration-seconds 180 \
     --t0-seconds 30 \
@@ -21,7 +21,7 @@ Typical usage on the target machine:
 Compare Triton's packaged generic vs Blackwell CUPTI variants in separate
 processes:
 
-  python third_party/proton/tutorials/cupti_graph_replay_heap_growth.py \
+  python third_party/proton/test/reproducers/cupti_graph_replay_heap_growth.py \
     --output-dir /tmp/proton-graph-heap-compare \
     --duration-seconds 3600 \
     --t0-seconds 60 \
