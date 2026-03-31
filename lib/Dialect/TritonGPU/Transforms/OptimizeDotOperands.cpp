@@ -323,6 +323,11 @@ private:
   }
 };
 
+// Rewrite
+//   desc_load<swizzle=0> -> tt.reshape / tt.trans -> local_alloc -> memdesc
+//   reshape / trans
+// into
+//   desc_load<swizzle=0> -> local_alloc<swizzle=0> -> memdesc reshape / trans
 template <typename DotOpTy>
 class RewriteSwizzle0OperandViewsToMemDescForDotOp
     : public OpRewritePattern<DotOpTy> {
