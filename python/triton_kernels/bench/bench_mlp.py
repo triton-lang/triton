@@ -14,6 +14,7 @@ from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata  # ragged tensor
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_assignment, SymmetricMemoryPool
+from triton_kernels.distributed_details.mesh import Mesh
 # quantization
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4
 from triton_kernels.numerics import InFlexData
@@ -45,8 +46,8 @@ def quantize_weight(w, dtype, **opt):
         assert dtype == FP4, f"{dtype=}"
         w, w_scale = downcast_to_mxfp(w.to(torch.bfloat16), torch.uint8, axis=1)
         if opt:
-            w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"], **opt["value_layout_opts"])
-            w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"], **opt["scale_layout_opts"])
+            w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"])
+            w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"])
         return w, InFlexData(), w_scale
 
 
@@ -97,17 +98,15 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     assert EP == n_ranks, f"{EP=}, {n_ranks=}"
 
     #-- init memory pool --
-    symm_mem_pool = SymmetricMemoryPool()
+    symm_mem_pool = SymmetricMemoryPool(Mesh(torch.distributed.group.WORLD))
     symm_mem_pool.initialize_matmul(
         n_tokens_global=batch_per_expt * n_expts_tot // n_expts_act,
         d_input=dim1,
         d_model=dim2,
         n_expts_act=n_expts_act,
         n_expts_tot=n_expts_tot,
-        n_ranks=world_size,
         dtype=x_dtype,
-        group=torch.distributed.group.WORLD,
-        device=torch.cuda.current_device(),
+        device=torch.device(dev),
     )
 
     # -- init prameters --
@@ -127,14 +126,11 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     opt2 = dict()
     if w_dtype == FP4:
         num_warps = 4 if batch <= 512 else 8
-        value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
-        scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
-            mx_axis=1, num_warps=num_warps)
+        value_layout = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
+        scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
         opt1 = {
             "value_layout": value_layout,
-            "value_layout_opts": value_layout_opts,
             "scale_layout": scale_layout,
-            "scale_layout_opts": scale_layout_opts,
         }
         opt2 = deepcopy(opt1)
     wg_global, wg_flex, wg_scale = quantize_weight(wg_global, torch.bfloat16)
@@ -167,22 +163,24 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     expt_dict = make_expt_dict_uniform(EP, n_expts_tot)
     expt_assignment = make_expt_assignment(EP, n_expts_tot, expt_dict, torch.device(dev))
     fpath = Path(f"profile_{rank}")
+    # Compile and warm up outside the profiler so subsequent profiled launches
+    # retain launch metadata needed by roofline.parse_profile.
+    run_mlp(x_dp_local_bf16, x_dp_local_fp8,  #
+            wg_global, bg_global, pcg,  #
+            w1_ep_local, b1_ep_local, pc1, act1,  #
+            w2_ep_local, b2_ep_local, pc2,  #
+            n_expts_act, expt_assignment, rank, symm_mem_pool)
+    torch.cuda.synchronize()
     proton.start(str(fpath), hook="triton")
-    g = torch.cuda.CUDAGraph()
-    stream = torch.cuda.Stream()
-    with torch.cuda.stream(stream):
-        with torch.cuda.graph(g):
-            run_mlp(x_dp_local_bf16, x_dp_local_fp8,  #
-                    wg_global, bg_global, pcg,  #
-                    w1_ep_local, b1_ep_local, pc1, act1,  #
-                    w2_ep_local, b2_ep_local, pc2,  #
-                    n_expts_act, expt_assignment, rank, symm_mem_pool)
     for i in range(100):
-        g.replay()
+        run_mlp(x_dp_local_bf16, x_dp_local_fp8,  #
+                wg_global, bg_global, pcg,  #
+                w1_ep_local, b1_ep_local, pc1, act1,  #
+                w2_ep_local, b2_ep_local, pc2,  #
+                n_expts_act, expt_assignment, rank, symm_mem_pool)
     torch.cuda.synchronize()
     torch.distributed.barrier()
     proton.finalize()
-    symm_mem_pool.release()
     return roofline.parse_profile(fpath.with_suffix(".hatchet"), useful_op_regex=".*matmul.*")
 
 
