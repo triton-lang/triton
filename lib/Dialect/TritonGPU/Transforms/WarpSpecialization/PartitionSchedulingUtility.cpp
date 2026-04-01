@@ -60,7 +60,7 @@ Flags getNodeFlags(Node *node) {
 }
 
 size_t computeCost(Operation *op) {
-  if (auto mma = dyn_cast<nvidia_gpu::TCGen5MMAOp>(op)) {
+  if (auto mma = dyn_cast<nvidia_gpu::MMAv5OpInterface>(op)) {
     auto a = mma.getA();
     auto b = mma.getB();
     auto a_shape = a.getType().getShape();

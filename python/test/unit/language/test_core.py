@@ -3237,6 +3237,21 @@ def get_test_dot_vdot2_cases():
             (4, 32, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
 
 
+def get_test_dot_small_mn_wmma_cases():
+    if not is_hip_gfx1250():
+        return []
+    return [(*shape_nw, False, False, 'none', 'ieee', 'float16', 'float32', 1, None)
+            for shape_nw in [(8, 8, 32, 1), (8, 32, 32, 1), (32, 8, 32, 1)]]
+
+
+def get_test_dot_small_k_wmma_cases():
+    if not is_hip_gfx1250():
+        return []
+    return [(16, 64, k_size, 4, False, False, 'none', 'ieee', 'float32', 'float32', 1, None) for k_size in [2]] + \
+           [(16, 64, k_size, 4, False, False, 'none', 'ieee', 'float16', 'float32', 1, None) for k_size in [2, 4, 8, 16, 32]] + \
+           [(16, 64, k_size, 4, False, False, 'none', 'ieee', 'float8e5', 'float32', 1, None) for k_size in [2, 4, 8, 16, 32, 64]]
+
+
 def get_test_small_dots_cases():
     if not is_cuda():
         return []
@@ -3257,6 +3272,8 @@ def get_test_small_dots_cases():
     get_test_dot_fp8_output_cases() + \
     get_test_dot_small_k_mfma_cases() + \
     get_test_dot_small_mn_mfma_cases() + \
+    get_test_dot_small_mn_wmma_cases() + \
+    get_test_dot_small_k_wmma_cases() + \
     get_test_dot_softmax() + \
     get_test_small_dots_cases())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)

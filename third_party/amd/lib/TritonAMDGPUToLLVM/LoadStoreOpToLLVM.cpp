@@ -16,6 +16,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 
@@ -1192,13 +1193,17 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     auto tensorDescTy = op.getDesc().getType();
-    auto smemTy = op.getResult().getType();
-    auto encoding = smemTy.getEncoding();
-    Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
-    triton::LinearLayout sharedLayout = isPaddedEncoding(smemTy.getEncoding())
-                                            ? paddedLinearLayout(smemTy)
-                                            : toLinearLayout(smemTy);
-
+    auto descBlockTy = tensorDescTy.getBlockType();
+    auto encoding = descBlockTy.getEncoding();
+    Type elementType =
+        getTypeConverter()->convertType(descBlockTy.getElementType());
+    // Use descBlockTy to query shared layout because TDM lowering logic expects
+    // the descriptor's dimensionality. For rank-reducing loads, destination
+    // shared memory may have fewer dimensions than the descriptor block type.
+    triton::LinearLayout sharedLayout =
+        isPaddedEncoding(encoding)
+            ? paddedLinearLayout(descBlockTy.getShape(), encoding)
+            : toLinearLayout(descBlockTy);
     // Extract padding information if present
     unsigned padInterval = 0;
     unsigned padAmount = 0;
@@ -1208,6 +1213,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       padInterval = padEnc.getIntervals()[0];
       padAmount = padEnc.getPaddings()[0];
     }
+
     Value multicastMask;
     if (targetInfo.supportsMultiCTALaunch()) {
       multicastMask = LLVM::AMD::emitCtaMulticastMask(
@@ -1245,16 +1251,16 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
 
     auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
-    auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
+    auto shapePerCTA = triton::gpu::getShapePerCTA(descBlockTy);
     auto sharedOrder = triton::gpu::getOrder(
-        cast<triton::gpu::SharedEncodingTrait>(smemTy.getEncoding()),
+        cast<triton::gpu::SharedEncodingTrait>(descBlockTy.getEncoding()),
         shapePerCTA);
     bool isRowMajor = sharedOrder[0] == (sharedOrder.size() - 1);
 
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, dstPtrs, op.getPred(), multicastMask,
-        elementType, barrierPtr, /*isLoad=*/true, sharedLayout, ctaId,
+        elementType, barrierPtr, /*isLoad=*/true, sharedLayout, encoding, ctaId,
         isRowMajor);
 
     rewriter.eraseOp(op);
@@ -1312,21 +1318,20 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
       barrierPtr = smemObj.getBase();
     }
 
-    auto paddedEnc = dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
+    auto encoding = smemTy.getEncoding();
+    auto paddedEnc = getPaddedEncoding(encoding);
     unsigned padInterval = 0;
     unsigned padAmount = 0;
-    triton::LinearLayout sharedLayout;
 
     if (paddedEnc) {
-      // Verifier ensures that there is exactly one interval-padding pair
       padInterval = paddedEnc.getIntervals()[0];
       padAmount = paddedEnc.getPaddings()[0];
-      sharedLayout = paddedEnc.getLinearComponent();
-    } else {
-      sharedLayout = triton::gpu::toLinearLayout(smemTy);
     }
 
-    // Verifier ensures smem is not usind a PaddedSharedEncodingAttr
+    triton::LinearLayout sharedLayout = isPaddedEncoding(encoding)
+                                            ? paddedLinearLayout(smemTy)
+                                            : toLinearLayout(smemTy);
+
     auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
@@ -1340,7 +1345,7 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, srcPtrs, pred,
         /*multicastMask=*/{}, elementType, barrierPtr,
-        /*isLoad=*/false, sharedLayout, ctaId, isRowMajor);
+        /*isLoad=*/false, sharedLayout, encoding, ctaId, isRowMajor);
 
     rewriter.eraseOp(op);
     return success();

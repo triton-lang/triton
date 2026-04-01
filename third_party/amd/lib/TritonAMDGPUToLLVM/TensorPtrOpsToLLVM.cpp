@@ -93,36 +93,6 @@ void collectUsers(Value value, llvm::SetVector<Operation *> &users) {
   }
 }
 
-Attribute findEncodingFromUsers(Operation *op) {
-  llvm::SetVector<Operation *> users;
-  for (auto result : op->getResults())
-    collectUsers(result, users);
-
-  Attribute sharedEnc;
-  for (auto use : users) {
-    Attribute userEnc;
-    if (auto load = llvm::dyn_cast<amdgpu::AsyncTDMCopyGlobalToLocalOp>(use)) {
-      userEnc = load.getResult().getType().getEncoding();
-    } else if (auto store =
-                   llvm::dyn_cast<amdgpu::AsyncTDMCopyLocalToGlobalOp>(use)) {
-      userEnc = store.getSrc().getType().getEncoding();
-    }
-    if (!userEnc)
-      continue;
-
-    // Assign first encoding found; or error out if different encoding is found
-    if (!sharedEnc)
-      sharedEnc = userEnc;
-    else if (sharedEnc != userEnc) {
-      op->emitError("Descriptor is used with different shared encodings.");
-      return {};
-    }
-  }
-  if (!sharedEnc)
-    op->emitError("Encoding hasn't been found from users.");
-  return sharedEnc;
-}
-
 struct MakeTensorDescOpConversion
     : public ConvertOpToLLVMPattern<triton::MakeTensorDescOp> {
   using ConvertOpToLLVMPattern<
@@ -141,10 +111,9 @@ struct MakeTensorDescOpConversion
     auto blockTy = tensorDescTy.getBlockType();
     auto sharedEnc = blockTy.getEncoding();
     if (!sharedEnc) {
-      // TODO: add an extra pass to assign layout to descriptors
-      sharedEnc = findEncodingFromUsers(op);
       if (!sharedEnc)
-        return rewriter.notifyMatchFailure(op, "Descriptor has no layout.");
+        return rewriter.notifyMatchFailure(
+            op, "Descriptor has no shared memory layout assigned.");
     }
     unsigned padInterval = 0;
     unsigned padAmount = 0;
@@ -169,11 +138,11 @@ struct MakeTensorDescOpConversion
     auto sharedOrder = triton::gpu::getOrder(
         cast<triton::gpu::SharedEncodingTrait>(sharedEnc), shapePerCTA);
     bool isRowMajor = sharedOrder[0] == (sharedOrder.size() - 1);
-
     // Create TDM descriptor for 2D-5D tensors
     auto tdmDesc = LLVM::AMD::createTDMDescriptor(
         rewriter, loc, getTypeConverter(), elementType, shapePerCTA, numWarps,
-        padInterval, padAmount, tensorShape, tensorStride, basePtr, isRowMajor);
+        padInterval, padAmount, tensorShape, tensorStride, basePtr, isRowMajor,
+        sharedEnc);
 
     SmallVector<Value> groups = tdmDesc.getAllGroups();
 

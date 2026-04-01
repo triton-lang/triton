@@ -59,7 +59,7 @@ def add_kernel(
 
 
 def test_custom_ops(tmp_path: pathlib.Path):
-    if os.environ.get('LLVM_BUILD_SHARED_LIBS', '0') == '0':
+    if os.environ.get('TRITON_EXT_ENABLED', '0') == '0':
         return
     size = 8
     x = torch.zeros(size, device=DEVICE, dtype=torch.float32)

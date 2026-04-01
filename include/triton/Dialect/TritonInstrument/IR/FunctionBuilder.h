@@ -232,14 +232,26 @@ public:
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
       int outstandingNum, Value pred, CommitKind::Kind commitKind,
       MemType memType, Operation *insertPoint);
+  // clearOutstandingCommitsTransferBoth: clear entries farther than
+  // outstandingNum from the thread and set both write and read visibility
+  // for threads in transferThreadMask. Handles the partial case gracefully:
+  // if only one visibility table exists, delegates to the corresponding
+  // single-transfer function.
+  void createClearOutstandingCommitsTransferBothCall(
+      ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
+      int outstandingNum, Value pred, CommitKind::Kind commitKind,
+      MemType memType, Operation *insertPoint);
   // checkOutstandingCommits: assert that the outstanding commit row for the
   // buffer is zero before the access described by pendingAccessType.
+  // When excludeSelf is true, the calling thread's own column is masked out
+  // so that only other partitions' outstanding commits are checked.
   void createCheckOutstandingCommitsCall(ImplicitLocOpBuilder &b, Value buf,
                                          uint32_t length, int thread,
                                          StringRef pendingAccessType,
                                          Value pred, MemType memType,
                                          CommitKind::Kind commitKind,
-                                         Operation *insertPoint);
+                                         Operation *insertPoint,
+                                         bool excludeSelf = false);
 
 private:
   ModuleOp module;
