@@ -322,6 +322,22 @@ private:
 //   reshape / trans
 // into
 //   desc_load<swizzle=0> -> local_alloc<swizzle=0> -> memdesc reshape / trans
+//
+// swizzle=0 in NVMMASharedEncodingAttr represents a flat, contiguous layout.
+// This is valid as the destination encoding for TMA, but it is never the
+// correct layout for an MMA operand which requires the special "core-matrices"
+// layout even with swizzle=0. So if the result of swizzle-0 TMA is fed into MMA
+// without smem layout conversion between them, the result would be incorrect.
+//
+// When using swizzle-0 TMA with MMA, it is a user's responsibility to have the
+// source of TMA in global memory to be already in the core-matrices format, and
+// insert a sequence of tt.reshape / tt.trans transformations between desc_load
+// and MMA ops such that the MMA op sees the right core-matrices layout.
+
+// This rewrite pattern ensures that swizzle=0 in TMA and a sequence of
+// tt.reshape / tt.trans ops are correctly propagated, via equivalent
+// transformations on memdesc, into the right MMA SMEM operand layout with
+// swizzle=0.
 template <typename DotOpTy>
 class RewriteSwizzle0OperandViewsToMemDescForDotOp
     : public OpRewritePattern<DotOpTy> {
