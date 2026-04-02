@@ -224,20 +224,25 @@ class Autotuner(KernelInterface):
                 used_cached_result = False
                 pruned_configs = self.prune_configs(kwargs)
 
-                def benchmark():
-                    bench_start = time.time()
-                    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
-                    bench_end = time.time()
-                    self.bench_time = bench_end - bench_start
-                    self.cache[key] = builtins.min(timings, key=timings.get)
-                    full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
-                    self.pre_hook(full_nargs, reset_only=True)
-                    self.configs_timings = timings
-
-                if self.cache_results:
-                    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                if len(pruned_configs) == 1:
+                    self.cache[key] = pruned_configs[0]
+                    used_cached_result = True
                 else:
-                    benchmark()
+
+                    def benchmark():
+                        bench_start = time.time()
+                        timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                        bench_end = time.time()
+                        self.bench_time = bench_end - bench_start
+                        self.cache[key] = builtins.min(timings, key=timings.get)
+                        full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
+                        self.pre_hook(full_nargs, reset_only=True)
+                        self.configs_timings = timings
+
+                    if self.cache_results:
+                        used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                    else:
+                        benchmark()
 
             config = self.cache[key]
         else:

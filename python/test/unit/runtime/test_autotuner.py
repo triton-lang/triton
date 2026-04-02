@@ -173,6 +173,44 @@ def test_prune_configs(with_perf_model: bool, device: str):
         assert records['capture_named_args']
 
 
+@pytest.mark.parametrize('use_perf_model', [False, True])
+def test_skip_bench_single_pruned_config(use_perf_model: bool, device: str):
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+    bench_calls = []
+
+    def tracking_do_bench(kernel_call, quantiles, **kwargs):
+        bench_calls.append(True)
+        return triton.testing.do_bench(kernel_call, quantiles=quantiles, warmup=1, rep=1)
+
+    def early_config_prune(configs, named_args, **kwargs):
+        return [configs[0]]
+
+    def perf_model(*args, **kwargs):
+        return kwargs['BLOCK_SIZE']
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
+
+    if use_perf_model:
+        prune_configs_by = {'perf_model': perf_model, 'top_k': 1}
+    else:
+        prune_configs_by = {'early_config_prune': early_config_prune}
+
+    @triton.autotune(configs=configs, key=['N'], prune_configs_by=prune_configs_by, do_bench=tracking_do_bench)
+    @triton.jit
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    _kernel[grid](dst, src, N=N)
+    torch.testing.assert_close(src, dst)
+    # Benchmarking should be skipped when only one config remains after pruning
+    assert len(bench_calls) == 0, f"Expected no benchmark calls, got {len(bench_calls)}"
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="Requires compute capability >= 9 for NV")
 def test_override_ttir(device):
