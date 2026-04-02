@@ -214,7 +214,7 @@ if __name__ == "__main__":
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.distributed.init_process_group(backend="nccl", world_size=world_size, device_id=torch.device(local_rank))
     parser = argparse.ArgumentParser()
-    parser.add_argument("--quantized", action="store_true", default=True)
+    parser.add_argument("--quantized", action="store_true", default=False)
     args = parser.parse_args()
     # set dtypes
     if args.quantized:
