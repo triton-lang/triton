@@ -126,8 +126,8 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     opt2 = dict()
     if w_dtype == FP4:
         num_warps = 4 if batch <= 512 else 8
-        value_layout = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
-        scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
+        value_layout = layout.make_default_matmul_mxfp4_w_layout(mx_axis=-2)
+        scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2, num_warps=num_warps)
         opt1 = {
             "value_layout": value_layout,
             "scale_layout": scale_layout,
