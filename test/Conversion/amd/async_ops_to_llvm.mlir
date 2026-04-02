@@ -67,10 +67,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
-// NOTE: The async_copy_vectorized_8xf16 test (GFX950 supports 8-byte loads,
-// GFX942 does not) has been moved to async_ops_to_llvm_errors.mlir to avoid
-// split-input-file issues with expected-error annotations across arch runs.
-
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
@@ -80,23 +76,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func public @async_wait(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                              %arg1: i32 {tt.divisibility = 16 : i32},
                              %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
-    // CDNA3/CDNA4 use wait_asyncmark instead of s_waitcnt
+    // CDNA3/CDNA4 lower ttg.async_wait directly to wait_asyncmark.
+    // The commit group count is passed through without clamping since
+    // LLVM will compute the final waitcnt.
     // CHECK: rocdl.wait.asyncmark 0
     // GFX950: rocdl.wait.asyncmark 0
-    amdg.async_wait {num_inst = 0 : i32}
+    ttg.async_wait {num = 0 : i32}
     // CHECK: rocdl.wait.asyncmark 1
     // GFX950: rocdl.wait.asyncmark 1
-    amdg.async_wait {num_inst = 1 : i32}
+    ttg.async_wait {num = 1 : i32}
     // CHECK: rocdl.wait.asyncmark 62
     // GFX950: rocdl.wait.asyncmark 62
-    amdg.async_wait {num_inst = 62 : i32}
+    ttg.async_wait {num = 62 : i32}
     // CHECK: rocdl.wait.asyncmark 63
     // GFX950: rocdl.wait.asyncmark 63
-    amdg.async_wait {num_inst = 63 : i32}
-    // Check that we clamp values > 63
-    // CHECK: rocdl.wait.asyncmark 63
-    // GFX950: rocdl.wait.asyncmark 63
-    amdg.async_wait {num_inst = 64 : i32}
+    ttg.async_wait {num = 63 : i32}
+    // No clamping — LLVM handles it based on instruction count
+    // CHECK: rocdl.wait.asyncmark 64
+    // GFX950: rocdl.wait.asyncmark 64
+    ttg.async_wait {num = 64 : i32}
     tt.return
   }
 }

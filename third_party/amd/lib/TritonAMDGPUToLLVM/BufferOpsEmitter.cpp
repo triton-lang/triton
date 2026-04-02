@@ -131,24 +131,10 @@ Operation *BufferEmitter::emitLoadToLds(Type type, Value byteWidth,
                  commonArgs);
   Type bufferType = getBufferOpType(type, false);
 
-  if (targetInfo.useAsyncMarks()) {
-    // Use the async intrinsic so that LLVM's SIInsertWaitcnts tracks
-    // these operations via asyncmark/wait_asyncmark instead of generating
-    // conservative vmcnt(0) waits.
-    return ROCDL::RawPtrBufferLoadAsyncLdsOp::create(
-        rewriter, loc, TypeRange{},
-        ValueRange{
-            commonArgs[0], // Buffer descriptor
-            dst,           // LDS base ptr
-            byteWidth,     // Instr size
-            commonArgs[1], // Buffer offset
-            b.i32_val(0),  // LDS offset
-            commonArgs[2], // Instruction offset
-            commonArgs[3], // AUX
-        });
-  }
-
-  return ROCDL::RawPtrBufferLoadLdsOp::create(
+  // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
+  // asyncmark. Emit the async intrinsic so LLVM's SIInsertWaitcnts tracks
+  // these operations via asyncmark/wait_asyncmark.
+  return ROCDL::RawPtrBufferLoadAsyncLdsOp::create(
       rewriter, loc, TypeRange{},
       ValueRange{
           commonArgs[0], // Buffer descriptor
@@ -158,8 +144,7 @@ Operation *BufferEmitter::emitLoadToLds(Type type, Value byteWidth,
           b.i32_val(0),  // LDS offset
           commonArgs[2], // Instruction offset
           commonArgs[3], // AUX
-      },
-      ArrayRef<NamedAttribute>());
+      });
 }
 
 Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,

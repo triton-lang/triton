@@ -399,25 +399,16 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
 
     ModuleOp m = getOperation();
 
-    // ttg.async_wait should only count async **non** tdm load:
-    SmallVector<ttg::AsyncWaitOp> waitOps;
-    getOperation()->walk(
-        [&](ttg::AsyncWaitOp waitOp) { waitOps.push_back(waitOp); });
-
     // With asyncmark/wait_asyncmark, LLVM handles vmcnt computation —
     // Triton no longer needs to walk the IR and count outstanding async
-    // intrinsics. Pass through the commit group count directly and skip
-    // the expensive ModuleAxisInfoAnalysis below.
-    if (targetInfo.useAsyncMarks()) {
-      for (auto waitOp : waitOps) {
-        IRRewriter builder(waitOp->getContext());
-        auto tokens = waitOp.getAsyncToken();
-        builder.setInsertionPointAfter(waitOp);
-        builder.replaceOpWithNewOp<amdgpu::AsyncWaitOp>(waitOp, tokens,
-                                                        waitOp.getNum());
-      }
-    } else {
+    // intrinsics. Keep the ttg.async_wait ops unchanged (they track
+    // commit groups) and lower them directly to wait_asyncmark later.
+    if (!targetInfo.useAsyncMarks()) {
       // GFX1250 (and future arches without asyncmark) use instruction counting.
+      SmallVector<ttg::AsyncWaitOp> waitOps;
+      getOperation()->walk(
+          [&](ttg::AsyncWaitOp waitOp) { waitOps.push_back(waitOp); });
+
       ModuleAxisInfoAnalysis axisInfo(m);
       DenseMap<Operation *, int> intrinsicCountCache;
       auto countAsyncLoadInstructions = [&](Operation *op) {

@@ -824,9 +824,8 @@ struct BufferLoadToLocalOpConversion
           vecTy, vecBytesVal, rsrcDesc, offsetElem, shmemAddr,
           hasOther ? b.true_val() : maybeSwizzledMaskElem, op.getCache());
       if (targetInfo.requiresAliasInfoForAsyncOps())
-        if (auto aliasOp =
-                dyn_cast<LLVM::AliasAnalysisOpInterface>(bufferLoadToLds))
-          AMD::addAsyncCopyAliasScope(aliasOp);
+        AMD::addAsyncCopyAliasScope(
+            cast<LLVM::AliasAnalysisOpInterface>(bufferLoadToLds));
 
       if (hasOther) {
         emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy, maskElem,
@@ -2326,6 +2325,40 @@ struct AtomicRMWOpConversion
   }
 };
 
+// Lower ttg.async_wait directly to wait_asyncmark for architectures that use
+// asyncmark-based synchronization (CDNA3/CDNA4). The commit group count from
+// ttg.async_wait is passed through without clamping since LLVM will compute
+// the final waitcnt based on #instructions instead of #commitGroups.
+struct TTGAsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
+  TTGAsyncWaitOpConversion(LLVMTypeConverter &converter,
+                           const AMD::TargetInfo &targetInfo,
+                           PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(AsyncWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!targetInfo.useAsyncMarks())
+      return rewriter.notifyMatchFailure(
+          op, "ttg.async_wait should have been lowered to amdg.async_wait by "
+              "UpdateAsyncWaitCount for non-asyncmark targets");
+
+    auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // Pass through the commit group count. LLVM will compute the correct
+    // vmcnt based on asyncmark/wait_asyncmark markers.
+    ROCDL::WaitAsyncmarkOp::create(rewriter, loc, op.getNum());
+
+    // Drop the result AsyncToken
+    rewriter.replaceOp(op, b.i32_val(0));
+    return success();
+  }
+
+private:
+  const AMD::TargetInfo &targetInfo;
+};
+
 struct AsyncWaitOpConversion
     : public ConvertOpToLLVMPattern<amdgpu::AsyncWaitOp> {
   AsyncWaitOpConversion(LLVMTypeConverter &converter,
@@ -2339,12 +2372,7 @@ struct AsyncWaitOpConversion
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    if (targetInfo.useAsyncMarks()) {
-      // Use wait_asyncmark which lets LLVM compute correct vmcnt values
-      // that account for both buffer_load_to_lds and regular buffer_load.
-      unsigned asyncCnt = std::min(63u, op.getNumInst());
-      ROCDL::WaitAsyncmarkOp::create(rewriter, loc, asyncCnt);
-    } else if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
+    if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
       // Clamp asyncCnt to 6bits(hw limit); lower means conservative
       unsigned asyncCnt = std::min(63u, op.getNumInst());
       ROCDL::WaitAsynccntOp::create(rewriter, loc, asyncCnt);
@@ -2497,6 +2525,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                AsyncTDMCopyLocalToGlobalOpConversion,
                AsyncTDMScatterOpConversion, AsyncTDMGatherOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
+  patterns.add<TTGAsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<TDMPrefetchConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncTDMIntrinsicWaitConversion>(typeConverter, benefit);

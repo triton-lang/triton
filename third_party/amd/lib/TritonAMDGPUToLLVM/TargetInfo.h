@@ -118,9 +118,7 @@ public:
   bool supportsBufferLoadToLocal() const;
 
   // Whether this target uses asyncmark/wait_asyncmark intrinsics for
-  // buffer_load_to_lds synchronization instead of vmcnt-based waits.
-  // When true, LLVM's SIInsertWaitcnts tracks LDS-bound loads separately,
-  // avoiding conservative vmcnt(0) barriers.
+  // async memory ops synchronization instead of waitcnt-based intrinsics waits.
   bool useAsyncMarks() const;
 
   bool supportsMultiCTALaunch() const;
