@@ -267,7 +267,7 @@ if(NOT MSVC)
     # crash a Triton not compiled with visibility due to missing symbols.
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRITON_EXT_ENABLED=1")
   endif()
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default ")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -ffunction-sections -fdata-sections")
 
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4244 /wd4624 /wd4715 /wd4530")
@@ -427,6 +427,13 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton PRIVATE z)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+
+  # Strip dead functions and data.
+  if(APPLE)
+    target_link_options(triton PRIVATE "LINKER:-dead_strip")
+  elseif(UNIX)
+    target_link_options(triton PRIVATE "LINKER:--gc-sections")
+  endif()
 
   if(NOT TRITON_EXT_ENABLED)
     # When extensions are disabled, only export the Python entrypoint.
