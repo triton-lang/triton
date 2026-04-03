@@ -178,14 +178,21 @@ class HIPBackend(BaseBackend):
         if HIPBackend.instrumentation:
             HIPBackend.instrumentation.load_dialects(ctx)
 
-    # is_within_2gb() needs to check for a torch subobject and this var tracks torch
-    # availability state: None - not tested, True - torch is present. Anything else -
-    # no torch available. First call to is_within_2gb() checks torch availability
-    # and caches it.
+    # buffer_ops_range() needs to check for a torch subobject and this var
+    # tracks torch availability state: None - not tested, True - torch is
+    # present.  Anything else - no torch available.  First call checks torch
+    # availability and caches it.
     _torch_available: None | bool = None
 
     @staticmethod
-    def is_within_2gb(arg):
+    def buffer_ops_range(arg):
+        """Classify a tensor argument for buffer-op eligibility.
+
+        Returns:
+            "S" — size fits in signed i32 (≤ 2 GB), safe for all buffer ops
+            "B" — size fits in unsigned i32 (≤ 4 GB), safe for buffer loads only
+            ""  — too large or unknown, no buffer ops
+        """
         if HIPBackend._torch_available is None:
             try:
                 import torch
@@ -196,24 +203,34 @@ class HIPBackend(BaseBackend):
             import torch
 
         MAX_INT_32 = 2**31 - 1
+        MAX_UINT_32 = 2**32 - 1
+        size = None
         if hasattr(arg, "ptr_range"):
-            return arg.ptr_range() <= MAX_INT_32
-        if HIPBackend._torch_available and isinstance(arg, torch.Tensor) and hasattr(arg, "untyped_storage"):
-            return arg.untyped_storage().size() <= MAX_INT_32
-        return False
+            size = arg.ptr_range()
+        elif HIPBackend._torch_available and isinstance(arg, torch.Tensor) and hasattr(arg, "untyped_storage"):
+            size = arg.untyped_storage().size()
+        if size is None:
+            return ""
+        if size <= MAX_INT_32:
+            return "S"
+        if size <= MAX_UINT_32:
+            return "B"
+        return ""
 
     @staticmethod
     def parse_attr(desc):
         ret = BaseBackend.parse_attr(desc)
         if "S" in desc:
             ret += [["tt.pointer_range", 32]]
+        elif "B" in desc:
+            ret += [["tt.pointer_range", 32], ["tt.pointer_range_unsigned", 1]]
         return ret
 
     @staticmethod
     def get_tensor_specialization(arg, **kwargs):
         ret = BaseBackend.get_tensor_specialization(arg, **kwargs)
-        if knobs.amd.use_buffer_ops and HIPBackend.is_within_2gb(arg):
-            ret += "S"
+        if knobs.amd.use_buffer_ops:
+            ret += HIPBackend.buffer_ops_range(arg)
         return ret
 
     @staticmethod

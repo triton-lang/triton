@@ -677,7 +677,7 @@ def test_hooks(device, fresh_triton_cache) -> None:
     assert name == "test_hooks.<locals>.kernel_add"
 
 
-@pytest.mark.skipif(reason="within_2g is a HIP specific optimization", condition=not is_hip())
+@pytest.mark.skipif(reason="buffer_ops_range is a HIP specific optimization", condition=not is_hip())
 def test_within_2gb(device, fresh_triton_cache) -> None:
     default_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0")
     try:
@@ -694,23 +694,38 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
 
             # This is the attribute we want to test
             pointer_range_32 = None
+            pointer_range_unsigned = None
 
             def cache_hook(*args, **kwargs):
-                nonlocal pointer_range_32
+                nonlocal pointer_range_32, pointer_range_unsigned
                 pointer_range_32 = [
                     k for k, v in kwargs["compile"]["configs"][0].items() if ["tt.pointer_range", 32] in v
+                ]
+                pointer_range_unsigned = [
+                    k for k, v in kwargs["compile"]["configs"][0].items() if ["tt.pointer_range_unsigned", 1] in v
                 ]
 
             triton.knobs.runtime.jit_cache_hook = cache_hook
             # In warmup we assume that the pointer range is 32 bits
             kernel_add.warmup(torch.float32, grid=(1, ))
             assert pointer_range_32 == pointer_range
-            # Torch tensor > 2GB
-            kernel_add[(1, 0)](torch.empty(2**31, dtype=torch.int8, device=device))
+            # Torch tensor > 4GB — no buffer ops
+            kernel_add[(1, 0)](torch.empty(2**32, dtype=torch.int8, device=device))
             assert len(pointer_range_32) == 0
-            # Torch tensor <= 2GB
+            # Torch tensor in (2GB, 4GB] — buffer loads only (unsigned range)
+            kernel_add[(1, 0)](torch.empty(2**31, dtype=torch.int8, device=device))
+            assert pointer_range_32 == pointer_range
+            if use_buffer_ops == "1":
+                assert pointer_range_unsigned == [(0, )]
+            else:
+                assert pointer_range_unsigned == []
+            # Torch tensor <= 2GB — all buffer ops (signed range)
             kernel_add[(1, 0)](torch.empty(2**31 - 1, dtype=torch.int8, device=device))
             assert pointer_range_32 == pointer_range
+            if use_buffer_ops == "1":
+                assert pointer_range_unsigned == []
+            else:
+                assert pointer_range_unsigned == []
     finally:
         os.environ["AMDGCN_USE_BUFFER_OPS"] = default_buffer_ops
 

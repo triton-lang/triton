@@ -25,6 +25,7 @@ from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
 # HIP backend can add this attribute to function parameters
 PTRRANGE_PAT = re.compile('(, )?tt.pointer_range = 32 : i32')
+PTRRANGE_UNSIGNED_PAT = re.compile('(, )?tt.pointer_range_unsigned = 1 : i32')
 LIBDEVICE_PAT = re.compile('{libname = "", libpath = "", pure = true, symbol = "__.*"}')
 
 BLACKWELL_TARGET = GPUTarget("cuda", 100, 32)
@@ -42,6 +43,7 @@ ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET_RDNA4]
 def anonymize_ir(ir):
     ir = TARGET_PAT.sub('ttg.target = "..."', ir)
     ir = PTRRANGE_PAT.sub('', ir)
+    ir = PTRRANGE_UNSIGNED_PAT.sub('', ir)
     ir = LIBDEVICE_PAT.sub('{libname = "", libpath = "", pure = true, symbol = "..."}', ir)
     return ir
 

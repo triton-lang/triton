@@ -106,7 +106,7 @@ bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp,
   return byteOfst <= szLimit2GB;
 }
 
-bool isFuncArgWith32bitPtrRange(mlir::Value value) {
+bool isFuncArgWith32bitPtrRange(mlir::Value value, bool isAtomic = false) {
   if (value.getDefiningOp())
     return false;
 
@@ -119,7 +119,17 @@ bool isFuncArgWith32bitPtrRange(mlir::Value value) {
       if (arg != value)
         continue;
       auto attr = funcOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range");
-      return attr && attr.getInt() <= 32;
+      if (!attr || attr.getInt() > 32)
+        return false;
+      // Pointers marked as unsigned-only (2GB–4GB range) are safe for
+      // loads/stores but NOT for atomics, which fault on OOB accesses.
+      if (isAtomic) {
+        auto unsignedAttr = funcOp.getArgAttrOfType<IntegerAttr>(
+            idx, "tt.pointer_range_unsigned");
+        if (unsignedAttr)
+          return false;
+      }
+      return true;
     }
   }
 
@@ -135,7 +145,7 @@ bool canUseBufferOps(Value ptr,
                      const DenseMap<Value, SetVector<Operation *>> &assumptions,
                      std::shared_ptr<DataFlowSolver> solver,
                      bool analyzeSmallTensorOfst, PatternRewriter &rewriter,
-                     Location loc) {
+                     Location loc, bool isAtomic = false) {
   // 1. Check if the pointer is uniform: i.e., if it comes from a uniform
   // pointer(splatted) and non-uniform offset addition
 
@@ -159,7 +169,7 @@ bool canUseBufferOps(Value ptr,
   //    or range analysis.
   bool isSafe = false;
   if (!analyzeSmallTensorOfst &&
-      isFuncArgWith32bitPtrRange(maybeSplatOp.getSrc())) {
+      isFuncArgWith32bitPtrRange(maybeSplatOp.getSrc(), isAtomic)) {
     LDBG("base-ptr has tt.pointer_range=32 attribute");
     isSafe = true;
   } else {
@@ -224,7 +234,7 @@ struct ConvertTritonAtomicCASOpToBufferAtomicCAS
     auto scope = op.getScope();
 
     if (!canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst,
-                         rewriter, op->getLoc())) {
+                         rewriter, op->getLoc(), /*isAtomic=*/true)) {
       return rewriter.notifyMatchFailure(op, "canUseBufferOps check failed");
     }
 
@@ -320,7 +330,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     // In addition to the `canUserBufferOps` check, we should ensure that
     // 1. Perform the canUserBufferOps check
     if (!canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst,
-                         rewriter, op->getLoc())) {
+                         rewriter, op->getLoc(), /*isAtomic=*/true)) {
       return rewriter.notifyMatchFailure(op, "canUseBufferOps check failed");
     }
 
