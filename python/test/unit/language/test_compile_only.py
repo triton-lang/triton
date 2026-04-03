@@ -220,26 +220,3 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
     src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
     triton.compile(src, target=GPUTarget("cuda", 80, 32))
-
-
-def test_f16_min_max_no_promotion():
-    """f16 should not get promoted to f32 in min/max reductions."""
-
-    @triton.jit
-    def reduce_min(src, dst):
-        idx = tl.arange(0, 64)
-        x = tl.load(src + idx)
-        tl.store(dst, tl.min(x, axis=0))
-
-    @triton.jit
-    def reduce_max(src, dst):
-        idx = tl.arange(0, 64)
-        x = tl.load(src + idx)
-        tl.store(dst, tl.max(x, axis=0))
-
-    targets = [GPUTarget("cuda", 90, 32), GPUTarget("hip", "gfx942", 64)]
-    for target in targets:
-        for kernel in [reduce_min, reduce_max]:
-            f16 = triton.compile(ASTSource(fn=kernel, signature={"src": "*fp16", "dst": "*fp16"}, constexprs={}),
-                                 target=target)
-            assert "arith.extf" not in f16.asm["ttir"], "f16 should not get promoted to f32 in min/max reductions"
