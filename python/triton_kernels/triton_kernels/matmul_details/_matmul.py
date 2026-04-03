@@ -388,7 +388,7 @@ def _matmul(
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
 
             if is_x_microscaled:
-                x_scales = tl.load(XMxScalePtrs, mask=mask_x_k_scale[None, :])
+                x_scales = tl.load(XMxScalePtrs, mask=mask_x_k_scale[None, :], other=0.0)
             elif x_format == "fp16" or x_format == "bf16":
                 x_scales: tl.constexpr = None
             else:
@@ -409,7 +409,7 @@ def _matmul(
             elif SWIZZLE_MX_SCALE == "GFX1250_SCALE":
                 w_scales = unswizzle_mx_scale_gfx1250(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
             else:
-                w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :])
+                w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
 
             if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
                 # Handshake with the swizzling code

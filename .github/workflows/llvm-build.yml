@@ -201,7 +201,6 @@ jobs:
         -DCMAKE_LINKER=$LINKER \
         -DMLIR_ENABLE_BINDINGS_PYTHON=OFF \
         -DLLVM_ENABLE_ZSTD=OFF \
-        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF \
         -DLLVM_INSTALL_UTILS=ON \
         -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}" \
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU" \
@@ -246,7 +245,6 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU"
         -DLLVM_USE_HOST_TOOLS=ON
-        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build install
