@@ -702,7 +702,8 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
     if (intervals.size() != 1)
       return emitOpError("TDM store only supports single interval paddings.");
 
-    if (intervals[0] != blockShape[paddedEnc.getOrder().front()])
+    auto shapePerCTA = triton::gpu::getShapePerCTA(paddedEnc, blockShape);
+    if (intervals[0] != shapePerCTA[paddedEnc.getOrder().front()])
       return emitOpError("TDM store padding is only supported when padding "
                          "interval equals the innermost block dimension (got "
                          "padInterval=")
