@@ -184,7 +184,9 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
     else:
         if core.constexpr(input.dtype.primitive_bitwidth) < core.constexpr(32):
             if core.constexpr(input.dtype.is_floating()):
-                input = input.to(core.float32)
+                # Do not promote f16 to f32 as it has native hardware support
+                if not core.constexpr(input.dtype == core.float16):
+                    input = input.to(core.float32)
             else:
                 assert input.dtype.is_int(), "Expecting input to be integer type"
                 input = input.to(core.int32)
@@ -241,9 +243,11 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
         else:
             return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_fast, keep_dims=keep_dims)
     else:
-        if core.constexpr(input.dtype.primitive_bitwidth) < 32:
+        if core.constexpr(input.dtype.primitive_bitwidth) < core.constexpr(32):
             if core.constexpr(input.dtype.is_floating()):
-                input = input.to(core.float32)
+                # Do not promote f16 to f32 as it has native hardware support
+                if not core.constexpr(input.dtype == core.float16):
+                    input = input.to(core.float32)
             else:
                 assert input.dtype.is_int(), "Expecting input to be integer type"
                 input = input.to(core.int32)
