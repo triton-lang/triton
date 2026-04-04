@@ -5,7 +5,7 @@ import pytest
 import triton
 
 current_target = triton.runtime.driver.active.get_current_target()
-if current_target.arch not in ("gfx950", "gfx942", "gfx90a", "gfx908", "gfx1250"):
+if current_target.arch not in ("gfx950", "gfx942", "gfx90a", "gfx908"):
     pytest.skip(allow_module_level=True)
 
 
