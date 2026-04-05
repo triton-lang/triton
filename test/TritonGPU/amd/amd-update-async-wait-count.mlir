@@ -604,7 +604,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %0 = amdg.buffer_load_to_local %ptr[%offsets] into %dest : <i32>[tensor<64xi32, #linear_warp_free>]  -> <64xi32, #shared_simple, #smem, mutable>
     %1 = ttg.async_commit_group
 
-    // With asyncmark, num is passed through directly
+    // Warp free variable means 0 instructions emitted for this warp config
     // CHECK: amdg.async_wait {num_inst = 0
     %2 = ttg.async_wait {num = 1 : i32}
     tt.return
@@ -626,7 +626,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %dest: !ttg.memdesc<256xi32, #shared_simple2, #smem, mutable>) {
     %0 = amdg.buffer_load_to_local %ptr[%offsets] into %dest : <i32>[tensor<256xi32, #linear_reg_zero>]  -> <256xi32, #shared_simple2, #smem, mutable>
     %1 = ttg.async_commit_group
-    // With asyncmark, num is passed through directly
+    // Register zero bases should not inflate count: 1 instruction
     // CHECK: amdg.async_wait {num_inst = 1
     %2 = ttg.async_wait {num = 1 : i32}
     tt.return
