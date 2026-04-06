@@ -78,6 +78,6 @@ TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
                                     dialects,
                                     1,
                                     ops,
-                                    1};
+                                    1, TRITON_VERSION};
   return &info;
 }

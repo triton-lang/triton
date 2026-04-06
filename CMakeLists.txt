@@ -24,6 +24,11 @@ option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
 option(TRITON_EXT_ENABLED "Build with default visibility for Triton+LLVM symbol exposure to plugin extensions" OFF)
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
+set(TRITON_VERSION "" CACHE STRING "Triton version string (passed from setup.py)")
+
+if(TRITON_EXT_ENABLED AND NOT "${TRITON_VERSION}" STREQUAL "")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRITON_VERSION=\\\"${TRITON_VERSION}\\\"")
+endif()
 
 set(TRITON_CACHE_PATH "" CACHE PATH "Path to triton cache")
 set(TRITON_LLVM_SYSTEM_SUFFIX "" CACHE STRING "Path to LLVM system suffix")

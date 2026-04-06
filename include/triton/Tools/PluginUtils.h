@@ -87,6 +87,9 @@ struct PluginInfo {
   /// The list of custom ops.
   OpInfo *ops;
   size_t numOps;
+
+  /// Triton Version
+  const char *tritonVersion;
 };
 
 /// A helper structure for storing information about a pass registered by a
