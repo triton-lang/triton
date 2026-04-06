@@ -201,16 +201,29 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   Value zero = b.i32_val(0);
   for (int i = 0; i < nCol; i++) {
     if ((explicitCols >> i) & 1) {
-      Value bit = b.and_(x, b.i32_val(1 << i));
-      Value bit_is_zero = b.icmp_eq(bit, zero);
       int32_t basis = matrix[i];
       if (basis == 0)
         continue;
-      auto select = b.select(bit_is_zero, zero, b.i32_val(basis));
-      if ((rowsUnique & basis) == basis) {
-        ors.push_back(select);
+      Value term;
+      Value bit = b.and_(x, b.i32_val(1 << i));
+      uint32_t basisBits = basis;
+      if (llvm::isPowerOf2_32(basisBits)) {
+        unsigned row = llvm::countr_zero(basisBits);
+        unsigned col = i;
+        if (row == col)
+          term = bit;
+        else if (row > col)
+          term = b.shl(bit, b.i32_val(row - col));
+        else
+          term = b.lshr(bit, b.i32_val(col - row));
       } else {
-        xors.push_back(select);
+        Value bit_is_zero = b.icmp_eq(bit, zero);
+        term = b.select(bit_is_zero, zero, b.i32_val(basis));
+      }
+      if ((rowsUnique & basis) == basis) {
+        ors.push_back(term);
+      } else {
+        xors.push_back(term);
       }
     }
   }

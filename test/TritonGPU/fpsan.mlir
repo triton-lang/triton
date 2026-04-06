@@ -102,13 +102,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: tt.bitcast
     // CHECK: arith.xori
     // CHECK: arith.xori
-    // CHECK-NOT: math.exp
     // CHECK-NOT: math.log
     // CHECK-NOT: math.sqrt
-    %e = math.exp %a : tensor<4xf32>
-    %l = math.log %e : tensor<4xf32>
+    %l = math.log %a : tensor<4xf32>
     %s = math.sqrt %l : tensor<4xf32>
     tt.return %s : tensor<4xf32>
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @exp_ops
+  tt.func public @exp_ops(%a: tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>) {
+    // CHECK-DAG: arith.constant dense<1069066811>
+    // CHECK-DAG: arith.constant dense<1>
+    // CHECK-DAG: arith.constant dense<0>
+    // CHECK-DAG: arith.constant dense<-1555856531>
+    // CHECK: tt.bitcast
+    // CHECK: arith.muli
+    // CHECK: arith.andi
+    // CHECK: arith.cmpi
+    // CHECK: arith.select
+    // CHECK-NOT: math.exp
+    // CHECK-NOT: math.exp2
+    %0 = math.exp %a : tensor<4xf32>
+    %1 = math.exp2 %a : tensor<4xf32>
+    tt.return %0, %1 : tensor<4xf32>, tensor<4xf32>
   }
 }
 

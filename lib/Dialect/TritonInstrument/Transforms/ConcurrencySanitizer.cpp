@@ -19,7 +19,7 @@
 // ------------------|---------|-----------------|------------
 // buffers           | tensor  | <B x i64>       | Base pointers of all (sub)buffers
 // barriers          | tensor  | <K x i64>       | Pointers to all individual mbarriers
-// barrierStates     | scratch | <K x i32>       | Packed barrier phase (bit 0) and arrival counts (bits[1..8] init, [9..16] current); zero means invalid/uninitialized
+// barrierStates     | scratch | <K x i32>       | Packed barrier phase (bit 0) and arrival counts (bits[1..10] init, [11..20] current); zero means invalid/uninitialized
 // waiting           | scratch | <K x i32>       | Two bits per thread: waiting flag bit (LSB), stored phase bit (bit 1)
 // writeVisibility   | scratch | <B x i64>       | Per-buffer thread-visibility bitmask (bit i => thread i visible)
 // readVisibility    | scratch | <B x T x i64>   | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
@@ -91,8 +91,7 @@ private:
 };
 
 bool isTensorCoreOp(Operation *op) {
-  return isa<ttng::TCGen5MMAOp, ttng::TCGen5MMAScaledOp, ttng::TCGen5CommitOp>(
-      op);
+  return isa<ttng::MMAv5OpInterface, ttng::TCGen5CommitOp>(op);
 }
 
 std::optional<int> maybeGetPartitionIdx(Operation *op) {
@@ -210,7 +209,7 @@ private:
         funcBuilder.createInitBarrierStateCall(b, info->alloc, info->count, op);
       }
       if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op)) {
-        Value barrier = invalOp.getAlloc();
+        Value barrier = invalOp.getBarrier();
         funcBuilder.createVerifyBarrierInitializedCall(b, barrier, nullptr,
                                                        invalOp);
         funcBuilder.createInvalidateBarrierStateCall(b, barrier, invalOp);
@@ -242,11 +241,15 @@ private:
             MemType::SHARED_MEM, op);
       }
       if (auto info = hooks->getWaitOpInfo(op)) {
-        if (info->transferWrites) {
+        if (info->transferWrites && info->transferReads) {
+          funcBuilder.createClearOutstandingCommitsTransferBothCall(
+              b, baseThread, getThreadPeersMask(thread), info->pendingCount,
+              nullptr, info->commitKind, MemType::SHARED_MEM, op);
+        } else if (info->transferWrites) {
           funcBuilder.createClearOutstandingCommitsTransferWritesCall(
               b, baseThread, getThreadPeersMask(thread), info->pendingCount,
               nullptr, info->commitKind, MemType::SHARED_MEM, op);
-        } else {
+        } else if (info->transferReads) {
           funcBuilder.createClearOutstandingCommitsTransferReadsCall(
               b, baseThread, getThreadPeersMask(thread), info->pendingCount,
               nullptr, info->commitKind, MemType::SHARED_MEM, op);
@@ -314,7 +317,7 @@ private:
         // For op that is reading, we only need to check if anything else
         // is writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
-                       thread, effect.operandName);
+                       thread, effect.operandName, opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createSetReadVisibilityCall(b, buf, effect.length,
                                                   getThreadPeersMask(thread),
@@ -332,9 +335,9 @@ private:
         // Op is writing to the buffer, we need to check if anything else
         // is reading or writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
-                       thread, effect.operandName);
+                       thread, effect.operandName, opInfo->commitKind);
         addReadChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
-                      thread, effect.operandName);
+                      thread, effect.operandName, opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createSetWriteVisibilityCall(b, buf, effect.length,
                                                    getThreadPeersMask(thread),
@@ -401,31 +404,40 @@ private:
   void addWriteChecks(ImplicitLocOpBuilder &b,
                       tti::FunctionBuilder &funcBuilder, Operation *op,
                       Value buf, uint32_t length, Value pred, MemType memType,
-                      int thread, const std::string &operandName) {
+                      int thread, const std::string &operandName,
+                      CommitKind::Kind opCommitKind = CommitKind::None) {
     funcBuilder.createVerifyWriteVisibilityCall(b, buf, length, thread,
                                                 operandName, pred, memType, op);
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
-      funcBuilder.createCheckOutstandingCommitsCall(
-          b, buf, length, getBaseThread(thread), "async_copy_global_to_shared",
-          pred, memType, CommitKind::AsyncCp, op);
+      for (const auto &commitKindDesc :
+           hooks->getOutstandingWriteCommitKinds()) {
+        bool excludeSelf = (opCommitKind == commitKindDesc.kind &&
+                            hooks->isOrderedCommitKind(opCommitKind));
+        funcBuilder.createCheckOutstandingCommitsCall(
+            b, buf, length, getBaseThread(thread), commitKindDesc.operationDesc,
+            pred, memType, commitKindDesc.kind, op, excludeSelf);
+      }
     }
   }
 
   void addReadChecks(ImplicitLocOpBuilder &b, tti::FunctionBuilder &funcBuilder,
                      Operation *op, Value buf, uint32_t length, Value pred,
                      MemType memType, int thread,
-                     const std::string &operandName) {
+                     const std::string &operandName,
+                     CommitKind::Kind opCommitKind = CommitKind::None) {
     funcBuilder.createVerifyReadVisibilityCall(b, buf, length, thread,
                                                operandName, pred, memType, op);
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
-      funcBuilder.createCheckOutstandingCommitsCall(
-          b, buf, length, getBaseThread(thread), "warpgroup_mma operand read",
-          pred, memType, CommitKind::Wgmma, op);
-      funcBuilder.createCheckOutstandingCommitsCall(
-          b, buf, length, getBaseThread(thread), "async_copy_shared_to_global",
-          pred, memType, CommitKind::TmaStore, op);
+      for (const auto &commitKindDesc :
+           hooks->getOutstandingReadCommitKinds()) {
+        bool excludeSelf = (opCommitKind == commitKindDesc.kind &&
+                            hooks->isOrderedCommitKind(opCommitKind));
+        funcBuilder.createCheckOutstandingCommitsCall(
+            b, buf, length, getBaseThread(thread), commitKindDesc.operationDesc,
+            pred, memType, commitKindDesc.kind, op, excludeSelf);
+      }
     }
   }
 
