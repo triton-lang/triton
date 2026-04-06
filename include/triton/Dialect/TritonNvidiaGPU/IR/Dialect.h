@@ -142,6 +142,20 @@ std::optional<LinearLayout>
 getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
                                 unsigned numWarps);
 
+SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs);
+
+// Compact encoding of a CTA multicast group for a given broadcast mask:
+// `fixedBits` selects the CTA-id bits that identify the group leader, and
+// `pattern` is the recipient bitset for leader CTA 0 before shifting to the
+// current group.
+struct TMAMulticastMaskEncoding {
+  uint32_t fixedBits;
+  uint32_t pattern;
+};
+
+TMAMulticastMaskEncoding getTMAMulticastMaskEncoding(int numCTAs,
+                                                     uint16_t broadcastBits);
+
 } // namespace mlir::triton::nvidia_gpu
 
 #endif // TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
