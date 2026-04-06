@@ -9,6 +9,7 @@
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/Support/ErrorHandling.h"
 
 // clang-format off
 // Concurrency Sanitizer data structures:
@@ -202,6 +203,51 @@ Value getMulticastBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Value result,
   return createCTABitset(b, encoding.pattern, baseMask);
 }
 
+Value getRecipientCTAsForBroadcastMasks(ImplicitLocOpBuilder &b,
+                                        ArrayRef<uint16_t> broadcastMasks) {
+  if (broadcastMasks.empty())
+    return currentCTAMask(b);
+
+  int numCTAs = ttg::lookupNumCTAs(b);
+  Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value recipientCTAs = arith::ConstantIntOp::create(b, 0, 32);
+  // Match eager tcgen05_commit lowering in
+  // DotOpToLLVM/MMAv5.cpp:createMMACommit: build one concrete recipient bitset
+  // per descriptor, then OR those bitsets.
+  for (uint16_t broadcastBits : broadcastMasks) {
+    // Compute the map that goes from cta_id to lead_cta_id (fixedBits)
+    // and the pattern that goes from cta_0 to its multicast group (pattern).
+    auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastBits);
+    Value fixedBitsVal =
+        arith::ConstantIntOp::create(b, encoding.fixedBits, 32);
+    Value base = arith::AndIOp::create(b, ctaId, fixedBitsVal);
+    Value patternVal = arith::ConstantIntOp::create(b, encoding.pattern, 32);
+    Value descRecipientCTAs = arith::ShLIOp::create(b, patternVal, base);
+    recipientCTAs = arith::OrIOp::create(b, recipientCTAs, descRecipientCTAs);
+  }
+  return recipientCTAs;
+}
+
+SmallVector<uint16_t> getTensorCoreBarrierBroadcastMasks(Operation *op) {
+  assert(isTensorCoreOp(op) && "expected a tensor-core op");
+  bool twoCTAs = ttng::getModuleTwoCTAs(op);
+  SmallVector<Value> commitDescs;
+  if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
+    llvm::append_range(commitDescs, commitOp.getDescs());
+  } else if (auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+    if (mmaOp.getMulticast()) {
+      if (isa<ttg::SharedEncodingTrait>(mmaOp.getA().getType().getEncoding()))
+        commitDescs.push_back(mmaOp.getA());
+      commitDescs.push_back(mmaOp.getB());
+    }
+  } else if (isa<ttng::TMEMCopyOp, ttng::TCGen5MMAScaledOp>(op)) {
+    // TODO: we should support descs for tc_gen5_mma_scaled.
+  } else {
+    llvm_unreachable("unknown tensor-core op");
+  }
+  return ttng::getCTABroadcastMasks(twoCTAs, commitDescs);
+}
+
 Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op);
 
 Value getMemEffectRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
@@ -211,7 +257,8 @@ Value getMemEffectRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
     return currentCTAMask(b);
   }
   if (isTensorCoreOp(op))
-    return getBarrierRecipientCTAs(b, op);
+    return getRecipientCTAsForBroadcastMasks(
+        b, ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), {}));
   return currentCTAMask(b);
 }
 
@@ -231,44 +278,10 @@ Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op))
     return getLeaderCTA(b, gatherOp.getBarrier());
 
-  SmallVector<uint16_t> broadcastMasks;
-  if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    broadcastMasks = ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op),
-                                                commitOp.getDescs());
-  } else if (isa<ttng::TMEMCopyOp>(op)) {
-    broadcastMasks = ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), {});
-  } else if (auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-    SmallVector<Value> commitDescs;
-    if (mmaOp.getMulticast()) {
-      if (isa<ttg::SharedEncodingTrait>(mmaOp.getA().getType().getEncoding()))
-        commitDescs.push_back(mmaOp.getA());
-      commitDescs.push_back(mmaOp.getB());
-    }
-    broadcastMasks =
-        ttng::getCTABroadcastMasks(mmaOp.getTwoCtas(), commitDescs);
-  } else if (auto mmaScaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-    broadcastMasks = ttng::getCTABroadcastMasks(mmaScaledOp.getTwoCtas(), {});
-  }
-  if (broadcastMasks.empty())
-    return currentCTAMask(b);
-
-  int numCTAs = ttg::lookupNumCTAs(b);
-  Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
-  Value recipientCTAs = arith::ConstantIntOp::create(b, 0, 32);
-  // Match tcgen05_commit lowering in MMAv5.cpp: build one concrete recipient
-  // bitset per descriptor, then OR those bitsets.
-  for (uint16_t broadcastBits : broadcastMasks) {
-    // Compute the map that goes from cta_id to lead_cta_id (fixedBits)
-    // and the pattern that goes from cta_0 to its multicast group (pattern).
-    auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastBits);
-    Value fixedBitsVal =
-        arith::ConstantIntOp::create(b, encoding.fixedBits, 32);
-    Value base = arith::AndIOp::create(b, ctaId, fixedBitsVal);
-    Value patternVal = arith::ConstantIntOp::create(b, encoding.pattern, 32);
-    Value descRecipientCTAs = arith::ShLIOp::create(b, patternVal, base);
-    recipientCTAs = arith::OrIOp::create(b, recipientCTAs, descRecipientCTAs);
-  }
-  return recipientCTAs;
+  if (isTensorCoreOp(op))
+    return getRecipientCTAsForBroadcastMasks(
+        b, getTensorCoreBarrierBroadcastMasks(op));
+  return currentCTAMask(b);
 }
 
 Value getWaitRecipientCTAs(ImplicitLocOpBuilder &b, Value barrier) {

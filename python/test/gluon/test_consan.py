@@ -1137,12 +1137,9 @@ def test_multibuffered_loop(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
 def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
         pytest.skip("Need at least 2 CTAs for 2CTA mode in this test")
-    # With 4 CTAs, the A operand multicast spans multiple cta_group::2 barrier
-    # groups, so the per-group TMA waits do not order every row read by the MMA.
-    expect_failure = FAILURE or num_ctas == 4
     if run_wrapper:
         result = run_in_process(test_tma_tcgen05_mma_multicast_loop, (FAILURE, device, False, monkeypatch, num_ctas))
-        if expect_failure:
+        if FAILURE:
             assert_expected_cuda_failure(result.exc)
             assert "Buffer being accessed has outstanding" in result.driver_stderr_output
         else:
