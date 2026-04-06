@@ -16,10 +16,10 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Tools/Plugins/DialectPlugin.h"
 #include "python/src/ir.h"
+#include "triton/Version.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
-#include "triton/Version.h"
 #include <cstdint>
 #include <vector>
 
