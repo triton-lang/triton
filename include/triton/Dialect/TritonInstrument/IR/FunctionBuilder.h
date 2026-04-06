@@ -262,13 +262,11 @@ public:
   // buffer is zero before the access described by pendingAccessType.
   // When excludeSelf is true, the calling thread's own column is masked out
   // so that only other partitions' outstanding commits are checked.
-  void createCheckOutstandingCommitsCall(ImplicitLocOpBuilder &b, Value buf,
-                                         uint32_t length, int thread,
-                                         StringRef pendingAccessType,
-                                         Value pred, MemType memType,
-                                         CommitKind::Kind commitKind,
-                                         Operation *insertPoint,
-                                         bool excludeSelf = false);
+  void createCheckOutstandingCommitsCall(
+      ImplicitLocOpBuilder &b, Value buf, uint32_t length, int thread,
+      StringRef pendingAccessType, Value pred, MemType memType,
+      CommitKind::Kind commitKind, Operation *insertPoint, Value recipientCTAs,
+      bool excludeSelf = false);
 
 private:
   ModuleOp module;

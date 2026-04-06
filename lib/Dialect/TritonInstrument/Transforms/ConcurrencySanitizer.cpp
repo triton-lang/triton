@@ -590,7 +590,7 @@ private:
                             hooks->isOrderedCommitKind(opCommitKind));
         funcBuilder.createCheckOutstandingCommitsCall(
             b, buf, length, getBaseThread(thread), commitKindDesc.operationDesc,
-            pred, memType, commitKindDesc.kind, op, excludeSelf);
+            pred, memType, commitKindDesc.kind, op, recipientCTAs, excludeSelf);
       }
     }
   }
@@ -610,7 +610,7 @@ private:
                             hooks->isOrderedCommitKind(opCommitKind));
         funcBuilder.createCheckOutstandingCommitsCall(
             b, buf, length, getBaseThread(thread), commitKindDesc.operationDesc,
-            pred, memType, commitKindDesc.kind, op, excludeSelf);
+            pred, memType, commitKindDesc.kind, op, recipientCTAs, excludeSelf);
       }
     }
   }

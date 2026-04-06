@@ -2791,7 +2791,8 @@ void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
 void FunctionBuilder::createCheckOutstandingCommitsCall(
     ImplicitLocOpBuilder &b, Value buf, uint32_t length, int thread,
     StringRef pendingAccessType, Value pred, MemType memType,
-    CommitKind::Kind commitKind, Operation *insertPoint, bool excludeSelf) {
+    CommitKind::Kind commitKind, Operation *insertPoint, Value recipientCTAs,
+    bool excludeSelf) {
   if (auxData.buffers[(int)memType].empty() ||
       auxData.commits[commitKind].empty() ||
       (auxData.hasNonTrivialAliasing[(int)memType] &&
@@ -2828,6 +2829,7 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
       Value buffers = entryBlock->getArgument(4);
       Value outstandingCommitsPtr = entryBlock->getArgument(5);
       Value aliasMatrix = useAlias ? entryBlock->getArgument(6) : Value();
+      Value recipientCTAs = entryBlock->getArgument(useAlias ? 7 : 6);
 
       Value outstandingCommits = tti::createLoadScratchMemory(
           fb, fb.getLoc(), outstandingCommitsPtr, commitsType);
@@ -2839,8 +2841,7 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
                           cast<RankedTensorType>(aliasMatrixTypeBase));
       }
       buffersEqBuf = convertAndBroadcast(fb, buffersEqBuf, {0, 1}, commitsType);
-      Value ctaId = tti::ExperimentalClusterCTAIdOp::create(fb, fb.getLoc());
-      Value ctaMask = createDimMask(fb, ctaId, commitsType, /*dim=*/0);
+      Value ctaMask = createRecipientCTAMask(fb, commitsType, recipientCTAs);
       buffersEqBuf = arith::AndIOp::create(fb, buffersEqBuf, ctaMask);
       Value zeroTensor =
           tti::createConstIntTensor(fb, fb.getLoc(), 0, commitsType);
@@ -2870,9 +2871,9 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
     aliasMatrixTypeBase = aliasMatrix.type;
     auto aliasMatrixType = cast<RankedTensorType>(aliasMatrixTypeBase);
     SmallVector<Value> args = {
-        bufOffset,        lengthVal,     pred,
-        threadVal,        buffers.value, outstandingCommits.value,
-        aliasMatrix.value};
+        bufOffset,         lengthVal,     pred,
+        threadVal,         buffers.value, outstandingCommits.value,
+        aliasMatrix.value, recipientCTAs};
     std::string funcName = excludeSelf ? "check_outstanding_commits_excl_self"
                                        : "check_outstanding_commits";
     createCallToCachedFunction(
@@ -2882,7 +2883,8 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
   } else {
     SmallVector<Value> args = {bufOffset,     lengthVal,
                                pred,          threadVal,
-                               buffers.value, outstandingCommits.value};
+                               buffers.value, outstandingCommits.value,
+                               recipientCTAs};
     std::string funcName = excludeSelf
                                ? "check_outstanding_commits_excl_self_noalias"
                                : "check_outstanding_commits_noalias";
