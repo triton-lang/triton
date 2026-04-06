@@ -173,39 +173,46 @@ public:
   void createTrackBarrierWriteForBufferCall(ImplicitLocOpBuilder &b, Value mbar,
                                             Value buf, uint32_t length,
                                             Value pred, MemType memType,
-                                            Operation *insertPoint);
+                                            Operation *insertPoint,
+                                            Value recipientCTAs);
   // clearBarrierWriteTracking: clear all write tracking associated with the
   // given barrier row.
   void createClearBarrierWriteTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
                                            Value pred, MemType memType,
-                                           Operation *insertPoint);
+                                           Operation *insertPoint,
+                                           Value recipientCTAs);
   // clearBarrierReadTracking: clear all read tracking associated with the
   // given barrier row.
   void createClearBarrierReadTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
                                           Value pred, MemType memType,
-                                          Operation *insertPoint);
+                                          Operation *insertPoint,
+                                          Value recipientCTAs);
   // transferVisibleWrites: transfer write visibility tracked by a barrier to
   // all threads in threadMask.
   void createTransferVisibleWritesCall(ImplicitLocOpBuilder &b, Value mbar,
                                        uint64_t threadMask, Value pred,
-                                       MemType memType, Operation *insertPoint);
+                                       MemType memType, Operation *insertPoint,
+                                       Value recipientCTAs);
   // transferVisibleReads: transfer read visibility tracked by a barrier to all
   // threads in threadMask.
   void createTransferVisibleReadsCall(ImplicitLocOpBuilder &b, Value mbar,
                                       uint64_t threadMask, Value pred,
-                                      MemType memType, Operation *insertPoint);
+                                      MemType memType, Operation *insertPoint,
+                                      Value recipientCTAs);
   // verifyWriteVisibility: ensure the thread either sees the latest write or no
   // other thread is writing the buffer.
   void createVerifyWriteVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
                                        uint32_t length, int thread,
                                        StringRef operandName, Value pred,
-                                       MemType memType, Operation *insertPoint);
+                                       MemType memType, Operation *insertPoint,
+                                       Value recipientCTAs);
   // verifyReadVisibility: ensure all reads from the buffer are visible to the
   // thread.
   void createVerifyReadVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
                                       uint32_t length, int thread,
                                       StringRef operandName, Value pred,
-                                      MemType memType, Operation *insertPoint);
+                                      MemType memType, Operation *insertPoint,
+                                      Value recipientCTAs);
   // copyWriteVisibility: replicate the write visibility bit of sourceThread to
   // every destination thread in destMask.
   void createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,
