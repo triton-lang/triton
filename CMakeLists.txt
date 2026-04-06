@@ -22,7 +22,7 @@ option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
-option(TRITON_EXT_ENABLED "Build with default visibility for Triton+LLVM symbol exposure to plugin extensions" OFF)
+option(TRITON_EXT_ENABLED "Build with default visibility for Triton+LLVM symbol exposure to plugin extensions" ON)
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 
 set(TRITON_CACHE_PATH "" CACHE PATH "Path to triton cache")
