@@ -324,10 +324,11 @@ private:
 //   desc_load<swizzle=0> -> local_alloc<swizzle=0> -> memdesc reshape / trans
 //
 // swizzle=0 in NVMMASharedEncodingAttr represents a flat, contiguous layout.
-// This is valid as the destination encoding for TMA, but it is never the
-// correct layout for an MMA operand which requires the special "core-matrices"
-// layout even with swizzle=0. So if the result of swizzle-0 TMA is fed into MMA
-// without smem layout conversion between them, the result would be incorrect.
+// This is valid as the destination encoding for TMA, but unless the operand's
+// contiguous dimension is <= 16 bytes, it is not the correct layout for an MMA
+// operand which requires the special "core-matrices" layout even with
+// swizzle=0. So if the result of swizzle-0 TMA is fed into MMA without smem
+// layout conversion between them, the result would be incorrect.
 //
 // When using swizzle-0 TMA with MMA, it is a user's responsibility to have the
 // source of TMA in global memory to be already in the core-matrices format, and
