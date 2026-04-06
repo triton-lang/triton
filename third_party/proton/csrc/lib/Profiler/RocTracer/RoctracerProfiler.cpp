@@ -213,9 +213,9 @@ const char *getKernelName(uint32_t cbId, const hip_api_data_t *data) {
   case HIP_API_ID_hipHccModuleLaunchKernel:
     return hip::getKernelNameRef(data->args.hipHccModuleLaunchKernel.f);
   case HIP_API_ID_hipLaunchCooperativeKernel:
-    return hip::getKernelNameRefByPtr(data->args.hipLaunchCooperativeKernel.f,
-                                      data->args.hipLaunchCooperativeKernel
-                                          .stream);
+    return hip::getKernelNameRefByPtr(
+        data->args.hipLaunchCooperativeKernel.f,
+        data->args.hipLaunchCooperativeKernel.stream);
   case HIP_API_ID_hipLaunchCooperativeKernelMultiDevice: {
     const hipLaunchParams *launchParams =
         data->args.hipLaunchCooperativeKernelMultiDevice.launchParamsList;
@@ -225,13 +225,13 @@ const char *getKernelName(uint32_t cbId, const hip_api_data_t *data) {
     return hip::getKernelNameRefByPtr(launchParams->func, launchParams->stream);
   }
   case HIP_API_ID_hipLaunchKernel:
-    return hip::getKernelNameRefByPtr(data->args.hipLaunchKernel.function_address,
-                                      data->args.hipLaunchKernel.stream);
+    return hip::getKernelNameRefByPtr(
+        data->args.hipLaunchKernel.function_address,
+        data->args.hipLaunchKernel.stream);
   case HIP_API_ID_hipModuleLaunchKernel:
     return hip::getKernelNameRef(data->args.hipModuleLaunchKernel.f);
   case HIP_API_ID_hipModuleLaunchCooperativeKernel:
-    return hip::getKernelNameRef(
-        data->args.hipModuleLaunchCooperativeKernel.f);
+    return hip::getKernelNameRef(data->args.hipModuleLaunchCooperativeKernel.f);
   case HIP_API_ID_hipModuleLaunchCooperativeKernelMultiDevice: {
     const hipFunctionLaunchParams *launchParams =
         data->args.hipModuleLaunchCooperativeKernelMultiDevice.launchParamsList;
