@@ -27,7 +27,11 @@ set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 set(TRITON_VERSION "" CACHE STRING "Triton version string (passed from setup.py)")
 
 if(TRITON_EXT_ENABLED AND NOT "${TRITON_VERSION}" STREQUAL "")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRITON_VERSION=\\\"${TRITON_VERSION}\\\"")
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/triton/Version.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/include/triton/Version.h"
+    @ONLY
+  )
 endif()
 
 set(TRITON_CACHE_PATH "" CACHE PATH "Path to triton cache")
