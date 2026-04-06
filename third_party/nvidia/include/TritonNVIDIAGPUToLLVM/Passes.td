@@ -16,6 +16,7 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
                              "mlir::LLVM::LLVMDialect",
                              "mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::triton::instrument::TritonInstrumentDialect",
                              "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                              "mlir::triton::nvgpu::NVGPUDialect",
                              "mlir::NVVM::NVVMDialect"];
