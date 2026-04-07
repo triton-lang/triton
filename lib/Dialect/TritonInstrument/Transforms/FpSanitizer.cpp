@@ -9,8 +9,10 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/bit.h"
 #include <cassert>
 
 namespace mlir {
@@ -371,15 +373,6 @@ unsigned getIntBitwidth(Type ty) {
   return elem.getWidth();
 }
 
-bool hasElementWidth(Type ty, unsigned width) {
-  Type elemTy = getElementType(ty);
-  if (auto intTy = dyn_cast<IntegerType>(elemTy))
-    return intTy.getWidth() == width;
-  if (auto floatTy = dyn_cast<FloatType>(elemTy))
-    return floatTy.getWidth() == width;
-  return false;
-}
-
 Type getTypeWithElement(Type ty, Type elemTy) {
   return cast<RankedTensorType>(ty).clone(elemTy);
 }
@@ -388,19 +381,40 @@ Value getIntConstantLike(PatternRewriter &rewriter, Location loc, Type targetTy,
                          int64_t value) {
   if (auto shaped = dyn_cast<ShapedType>(targetTy)) {
     auto elem = cast<IntegerType>(shaped.getElementType());
-    auto attr =
-        DenseElementsAttr::get(shaped, rewriter.getIntegerAttr(elem, value));
+    auto intAttr = IntegerAttr::get(
+        elem, APInt(elem.getWidth(), static_cast<uint64_t>(value),
+                    /*isSigned=*/true, /*implicitTrunc=*/true));
+    auto attr = DenseElementsAttr::get(shaped, intAttr);
     return arith::ConstantOp::create(rewriter, loc, attr);
   }
   auto intTy = cast<IntegerType>(targetTy);
-  return arith::ConstantOp::create(rewriter, loc,
-                                   rewriter.getIntegerAttr(intTy, value));
+  auto attr = IntegerAttr::get(
+      intTy, APInt(intTy.getWidth(), static_cast<uint64_t>(value),
+                   /*isSigned=*/true, /*implicitTrunc=*/true));
+  return arith::ConstantOp::create(rewriter, loc, attr);
+}
+
+Value getUIntConstantLike(PatternRewriter &rewriter, Location loc,
+                          Type targetTy, uint64_t value) {
+  if (auto shaped = dyn_cast<ShapedType>(targetTy)) {
+    auto elem = cast<IntegerType>(shaped.getElementType());
+    auto intAttr =
+        IntegerAttr::get(elem, APInt(elem.getWidth(), value,
+                                     /*isSigned=*/false,
+                                     /*implicitTrunc=*/true));
+    auto attr = DenseElementsAttr::get(shaped, intAttr);
+    return arith::ConstantOp::create(rewriter, loc, attr);
+  }
+  auto intTy = cast<IntegerType>(targetTy);
+  auto attr = IntegerAttr::get(intTy, APInt(intTy.getWidth(), value,
+                                            /*isSigned=*/false,
+                                            /*implicitTrunc=*/true));
+  return arith::ConstantOp::create(rewriter, loc, attr);
 }
 
 Value getU32ConstantLike(PatternRewriter &rewriter, Location loc, Type targetTy,
                          uint32_t value) {
-  return getIntConstantLike(rewriter, loc, targetTy,
-                            static_cast<int64_t>(value));
+  return getUIntConstantLike(rewriter, loc, targetTy, value);
 }
 
 Value castIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
@@ -419,54 +433,157 @@ Value castIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
   return v;
 }
 
-Value selectU32ConstantOnSign(PatternRewriter &rewriter, Location loc,
-                              Value signSource, uint32_t nonNegativeValue,
-                              uint32_t negativeValue) {
+Value castSignedIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
+                               Type targetTy) {
+  if (v.getType() == targetTy)
+    return v;
+
+  unsigned srcWidth = getIntBitwidth(v.getType());
+  unsigned dstWidth = getIntBitwidth(targetTy);
+  if (dstWidth > srcWidth) {
+    return arith::ExtSIOp::create(rewriter, loc, targetTy, v);
+  }
+  if (srcWidth > dstWidth) {
+    return arith::TruncIOp::create(rewriter, loc, targetTy, v);
+  }
+  return v;
+}
+
+Value selectUIntConstantOnSign(PatternRewriter &rewriter, Location loc,
+                               Value signSource, uint64_t signMaskValue,
+                               uint64_t nonNegativeValue,
+                               uint64_t negativeValue) {
   auto signMask =
-      getU32ConstantLike(rewriter, loc, signSource.getType(), 0x80000000u);
-  auto zero = getU32ConstantLike(rewriter, loc, signSource.getType(), 0u);
+      getUIntConstantLike(rewriter, loc, signSource.getType(), signMaskValue);
+  auto zero = getUIntConstantLike(rewriter, loc, signSource.getType(), 0u);
   auto sign = arith::AndIOp::create(rewriter, loc, signSource, signMask);
   auto isNeg = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
                                      sign, zero);
-  auto nonNeg =
-      getU32ConstantLike(rewriter, loc, signSource.getType(), nonNegativeValue);
+  auto nonNeg = getUIntConstantLike(rewriter, loc, signSource.getType(),
+                                    nonNegativeValue);
   auto neg =
-      getU32ConstantLike(rewriter, loc, signSource.getType(), negativeValue);
+      getUIntConstantLike(rewriter, loc, signSource.getType(), negativeValue);
   return arith::SelectOp::create(rewriter, loc, isNeg, neg, nonNeg);
 }
 
-// Move f32 bit patterns into a payload domain where 0.0 maps to 0 and 1.0
-// maps to 1, while preserving a cheap inverse for stores back to f32.
-Value mixF32ToU32(PatternRewriter &rewriter, Location loc, Value u) {
-  auto signFlip = selectU32ConstantOnSign(rewriter, loc, u, 0u, 0x80000000u);
+uint64_t getLowBitsMask(unsigned bitWidth) {
+  assert(bitWidth > 0 && bitWidth <= 64);
+  if (bitWidth == 64)
+    return ~uint64_t{0};
+  return (uint64_t{1} << bitWidth) - 1;
+}
+
+uint64_t invOddU64(uint64_t a) {
+  assert((a & 1) == 1);
+  uint64_t x = 2 - a;
+  for (unsigned correctBits = 2; correctBits < 64; correctBits *= 2)
+    x *= 2 - a * x;
+  return x;
+}
+
+uint64_t getOneBitPattern(FloatType floatTy) {
+  llvm::APFloat one(1.0);
+  bool losesInfo = false;
+  one.convert(floatTy.getFloatSemantics(), llvm::APFloat::rmNearestTiesToEven,
+              &losesInfo);
+  return one.bitcastToAPInt().getZExtValue();
+}
+
+struct PayloadMixConfig {
+  unsigned bitWidth;
+  unsigned shift;
+  uint64_t signMask;
+  uint64_t magMask;
+  uint64_t mulA;
+  uint64_t mulAInv;
+  uint64_t mulBPos;
+  uint64_t mulBNeg;
+  uint64_t mulBPosInv;
+  uint64_t mulBNegInv;
+};
+
+PayloadMixConfig getPayloadMixConfig(FloatType floatTy) {
+  unsigned bitWidth = floatTy.getWidth();
+  assert(bitWidth > 1 && bitWidth <= 64);
+  uint64_t fullMask = getLowBitsMask(bitWidth);
+  uint64_t signMask = uint64_t{1} << (bitWidth - 1);
+  uint64_t magMask = signMask - 1;
+
+  uint64_t oneBits = getOneBitPattern(floatTy);
+  assert(oneBits != 0 && "expected non-zero 1.0 bit pattern");
+  unsigned shift = llvm::countr_zero(oneBits);
+  assert(shift != 0 && "expected even 1.0 bit pattern");
+
+  uint64_t mulA = 922291u;
+  uint64_t oneMixed = (oneBits * mulA) & magMask;
+  oneMixed ^= oneMixed >> shift;
+  assert((oneMixed & 1) == 1 && "expected odd mixed 1.0");
+
+  uint64_t mulBPos = invOddU64(oneMixed) & fullMask;
+  uint64_t mulBNeg = (mulBPos * magMask) & fullMask;
+  return PayloadMixConfig{
+      bitWidth,
+      shift,
+      signMask,
+      magMask,
+      mulA,
+      invOddU64(mulA) & fullMask,
+      mulBPos,
+      mulBNeg,
+      invOddU64(mulBPos) & fullMask,
+      invOddU64(mulBNeg) & fullMask,
+  };
+}
+
+Value xorShiftRight(PatternRewriter &rewriter, Location loc, Value v,
+                    unsigned shift) {
+  auto shiftValue = getUIntConstantLike(rewriter, loc, v.getType(), shift);
+  auto shifted = arith::ShRUIOp::create(rewriter, loc, v, shiftValue);
+  return arith::XOrIOp::create(rewriter, loc, v, shifted);
+}
+
+Value inverseXorShiftRight(PatternRewriter &rewriter, Location loc, Value v,
+                           const PayloadMixConfig &cfg) {
+  for (unsigned shift = cfg.shift; shift < cfg.bitWidth; shift *= 2)
+    v = xorShiftRight(rewriter, loc, v, shift);
+  return v;
+}
+
+// Move float bit patterns into a payload domain where +0.0 maps to 0 and +1.0
+// maps to 1. Negative values use a different final multiplier so that -1.0
+// maps to the all-ones payload.
+Value mixFloatToInt(PatternRewriter &rewriter, Location loc, Value u,
+                    FloatType floatTy) {
+  PayloadMixConfig cfg = getPayloadMixConfig(floatTy);
+  auto signFlip =
+      selectUIntConstantOnSign(rewriter, loc, u, cfg.signMask, 0, cfg.signMask);
   auto x = arith::XOrIOp::create(rewriter, loc, u, signFlip);
-  auto mulA = getU32ConstantLike(rewriter, loc, u.getType(), 922291u);
-  auto magMask = getU32ConstantLike(rewriter, loc, u.getType(), 0x7fffffffu);
+  auto mulA = getUIntConstantLike(rewriter, loc, u.getType(), cfg.mulA);
+  auto magMask = getUIntConstantLike(rewriter, loc, u.getType(), cfg.magMask);
   auto yMul = arith::MulIOp::create(rewriter, loc, x, mulA);
   auto y = arith::AndIOp::create(rewriter, loc, yMul, magMask);
-  auto shift = getU32ConstantLike(rewriter, loc, u.getType(), 23u);
-  auto yShift = arith::ShRUIOp::create(rewriter, loc, y, shift);
-  auto z = arith::XOrIOp::create(rewriter, loc, y, yShift);
-  auto mulB =
-      selectU32ConstantOnSign(rewriter, loc, u, 1037036549u, 1110447099u);
+  auto z = xorShiftRight(rewriter, loc, y, cfg.shift);
+  auto mulB = selectUIntConstantOnSign(rewriter, loc, u, cfg.signMask,
+                                       cfg.mulBPos, cfg.mulBNeg);
   auto wMul = arith::MulIOp::create(rewriter, loc, z, mulB);
   auto w = arith::AndIOp::create(rewriter, loc, wMul, magMask);
   return arith::XOrIOp::create(rewriter, loc, w, signFlip);
 }
 
-Value unmixU32ToF32(PatternRewriter &rewriter, Location loc, Value v) {
-  auto signFlip = selectU32ConstantOnSign(rewriter, loc, v, 0u, 0x80000000u);
+Value unmixIntToFloat(PatternRewriter &rewriter, Location loc, Value v,
+                      FloatType floatTy) {
+  PayloadMixConfig cfg = getPayloadMixConfig(floatTy);
+  auto signFlip =
+      selectUIntConstantOnSign(rewriter, loc, v, cfg.signMask, 0, cfg.signMask);
   auto w = arith::XOrIOp::create(rewriter, loc, v, signFlip);
-  auto magMask = getU32ConstantLike(rewriter, loc, v.getType(), 0x7fffffffu);
-  auto mulA =
-      selectU32ConstantOnSign(rewriter, loc, v, 1719664845u, 427818803u);
-  auto zMul = arith::MulIOp::create(rewriter, loc, w, mulA);
+  auto magMask = getUIntConstantLike(rewriter, loc, v.getType(), cfg.magMask);
+  auto mulBInv = selectUIntConstantOnSign(rewriter, loc, v, cfg.signMask,
+                                          cfg.mulBPosInv, cfg.mulBNegInv);
+  auto zMul = arith::MulIOp::create(rewriter, loc, w, mulBInv);
   auto z = arith::AndIOp::create(rewriter, loc, zMul, magMask);
-  auto shift = getU32ConstantLike(rewriter, loc, v.getType(), 23u);
-  auto zShift = arith::ShRUIOp::create(rewriter, loc, z, shift);
-  auto y = arith::XOrIOp::create(rewriter, loc, z, zShift);
-  auto mulB = getU32ConstantLike(rewriter, loc, v.getType(), 60539u);
-  auto xMul = arith::MulIOp::create(rewriter, loc, y, mulB);
+  auto y = inverseXorShiftRight(rewriter, loc, z, cfg);
+  auto mulAInv = getUIntConstantLike(rewriter, loc, v.getType(), cfg.mulAInv);
+  auto xMul = arith::MulIOp::create(rewriter, loc, y, mulAInv);
   auto x = arith::AndIOp::create(rewriter, loc, xMul, magMask);
   return arith::XOrIOp::create(rewriter, loc, x, signFlip);
 }
@@ -476,15 +593,15 @@ Value bitcastToInt(PatternRewriter &rewriter, Location loc, Value v) {
     return v;
   auto intTy = getIntTypeLike(v.getType());
   Value raw = tt::BitcastOp::create(rewriter, loc, intTy, v);
-  if (hasElementWidth(v.getType(), 32))
-    raw = mixF32ToU32(rewriter, loc, raw);
+  raw = mixFloatToInt(rewriter, loc, raw,
+                      cast<FloatType>(getElementType(v.getType())));
   return raw;
 }
 
 Value bitcastToFloat(PatternRewriter &rewriter, Location loc, Value v,
                      Type floatTy) {
-  if (hasElementWidth(floatTy, 32) && hasElementWidth(v.getType(), 32))
-    v = unmixU32ToF32(rewriter, loc, v);
+  v = unmixIntToFloat(rewriter, loc, v,
+                      cast<FloatType>(getElementType(floatTy)));
   return tt::BitcastOp::create(rewriter, loc, floatTy, v);
 }
 
@@ -1114,7 +1231,8 @@ struct ExtFOpPattern : public OpRewritePattern<arith::ExtFOp> {
     auto loc = op.getLoc();
     auto inI = bitcastToInt(rewriter, loc, op.getIn());
     auto outI =
-        castIntValueToType(rewriter, loc, inI, getIntTypeLike(op.getType()));
+        castSignedIntValueToType(rewriter, loc, inI,
+                                 getIntTypeLike(op.getType()));
     auto outF = bitcastToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
     return success();
@@ -1130,7 +1248,8 @@ struct TruncFOpPattern : public OpRewritePattern<arith::TruncFOp> {
     auto loc = op.getLoc();
     auto inI = bitcastToInt(rewriter, loc, op.getIn());
     auto outI =
-        castIntValueToType(rewriter, loc, inI, getIntTypeLike(op.getType()));
+        castSignedIntValueToType(rewriter, loc, inI,
+                                 getIntTypeLike(op.getType()));
     auto outF = bitcastToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
     return success();
@@ -1146,7 +1265,8 @@ struct FpToFpPattern : public OpRewritePattern<tt::FpToFpOp> {
     auto loc = op.getLoc();
     auto inI = bitcastToInt(rewriter, loc, op.getSrc());
     auto outI =
-        castIntValueToType(rewriter, loc, inI, getIntTypeLike(op.getType()));
+        castSignedIntValueToType(rewriter, loc, inI,
+                                 getIntTypeLike(op.getType()));
     auto outF = bitcastToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
     return success();

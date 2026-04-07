@@ -50,27 +50,82 @@ def _u32_to_i32(x_u32: np.ndarray) -> np.ndarray:
     return x_u32.view(np.int32)
 
 
+def _low_mask_u64(bitwidth: int) -> np.uint64:
+    return np.uint64(2**bitwidth - 1)
+
+
+def _inv_odd_u64(a: np.uint64) -> np.uint64:
+    with np.errstate(over="ignore"):
+        x = np.uint64(2) - a
+        for _ in range(5):
+            x = np.uint64(x * (np.uint64(2) - np.uint64(a * x)))
+        return x
+
+
+def _mix_config(bitwidth: int, one_bits: int) -> tuple[np.uint64, np.uint64, np.uint64, int, np.uint64, np.uint64]:
+    with np.errstate(over="ignore"):
+        full_mask = _low_mask_u64(bitwidth)
+        sign_mask = np.uint64(1 << (bitwidth - 1))
+        mag_mask = sign_mask - np.uint64(1)
+        shift = int((one_bits & -one_bits).bit_length() - 1)
+        y = (np.uint64(one_bits) * np.uint64(922291)) & mag_mask
+        z = y ^ (y >> np.uint64(shift))
+        mul_b_pos = _inv_odd_u64(z) & full_mask
+        mul_b_neg = (mul_b_pos * mag_mask) & full_mask
+        return full_mask, sign_mask, mag_mask, shift, mul_b_pos, mul_b_neg
+
+
+def _xor_shift_right_u64(x: np.ndarray, shift: int) -> np.ndarray:
+    return x ^ (x >> np.uint64(shift))
+
+
+def _inverse_xor_shift_right_u64(x: np.ndarray, shift: int, bitwidth: int) -> np.ndarray:
+    while shift < bitwidth:
+        x = _xor_shift_right_u64(x, shift)
+        shift *= 2
+    return x
+
+
+def _mix_float_bits_to_payload_u64(bits, bitwidth: int, one_bits: int) -> np.ndarray:
+    full_mask, sign_mask, mag_mask, shift, mul_b_pos, mul_b_neg = _mix_config(bitwidth, one_bits)
+    x = bits.astype(np.uint64) & full_mask
+    neg = (x & sign_mask) != 0
+    sign = np.where(neg, sign_mask, np.uint64(0))
+    y = (((x ^ sign) * np.uint64(922291)) & mag_mask)
+    z = _xor_shift_right_u64(y, shift)
+    factor = np.where(neg, mul_b_neg, mul_b_pos)
+    return (((z * factor) & mag_mask) ^ sign) & full_mask
+
+
+def _unmix_payload_u64_to_float_bits(payload, bitwidth: int, one_bits: int) -> np.ndarray:
+    full_mask, sign_mask, mag_mask, shift, mul_b_pos, mul_b_neg = _mix_config(bitwidth, one_bits)
+    v = payload.astype(np.uint64) & full_mask
+    neg = (v & sign_mask) != 0
+    sign = np.where(neg, sign_mask, np.uint64(0))
+    factor = np.where(neg, _inv_odd_u64(mul_b_neg), _inv_odd_u64(mul_b_pos))
+    z = (((v ^ sign) * factor) & mag_mask)
+    y = _inverse_xor_shift_right_u64(z, shift, bitwidth)
+    x = (y * _inv_odd_u64(np.uint64(922291))) & mag_mask
+    return (x ^ sign) & full_mask
+
+
 def _mix_f32_bits_to_payload_u32(x_i32: np.ndarray) -> np.ndarray:
-    x = _as_u32(x_i32).astype(np.uint64)
-    neg = (x & np.uint64(0x80000000)) != 0
-    sign = np.where(neg, np.uint64(0x80000000), np.uint64(0))
-    y = ((x ^ sign) * np.uint64(922291)) & np.uint64(0x7FFFFFFF)
-    z = y ^ (y >> np.uint64(23))
-    factor = np.where(neg, np.uint64(1110447099), np.uint64(1037036549))
-    return (((z * factor) & np.uint64(0x7FFFFFFF)) ^ sign).astype(np.uint32)
+    return _mix_float_bits_to_payload_u64(_as_u32(x_i32), 32, 0x3F800000).astype(np.uint32)
 
 
 def _unmix_payload_u32_to_f32_bits_i32(v_u32: np.ndarray) -> np.ndarray:
     assert v_u32.dtype == np.uint32
-    v = v_u32.astype(np.uint64)
-    neg = (v & np.uint64(0x80000000)) != 0
-    sign = np.where(neg, np.uint64(0x80000000), np.uint64(0))
-    w = v ^ sign
-    factor = np.where(neg, np.uint64(427818803), np.uint64(1719664845))
-    z = (w * factor) & np.uint64(0x7FFFFFFF)
-    y = z ^ (z >> np.uint64(23))
-    x = (y * np.uint64(60539)) & np.uint64(0x7FFFFFFF)
-    return _u32_to_i32((x ^ sign).astype(np.uint32))
+    return _u32_to_i32(_unmix_payload_u64_to_float_bits(v_u32, 32, 0x3F800000).astype(np.uint32))
+
+
+def _signed_cast_payload_u64(payload, src_bitwidth: int, dst_bitwidth: int) -> np.ndarray:
+    x = payload.astype(np.uint64) & _low_mask_u64(src_bitwidth)
+    if dst_bitwidth <= src_bitwidth:
+        return x & _low_mask_u64(dst_bitwidth)
+
+    sign = np.uint64(1 << (src_bitwidth - 1))
+    extension = _low_mask_u64(dst_bitwidth) ^ _low_mask_u64(src_bitwidth)
+    return np.where((x & sign) != 0, x | extension, x) & _low_mask_u64(dst_bitwidth)
 
 
 def _payload_u32_to_f32_bits_i32(x_u64: np.ndarray) -> np.ndarray:
@@ -920,12 +975,14 @@ def _expected_fma_i32(x_i32: np.ndarray, y_i32: np.ndarray, z_i32: np.ndarray) -
 
 def _expected_trunc_ext_roundtrip_i32(x_i32: np.ndarray) -> np.ndarray:
     x_u32 = _mix_f32_bits_to_payload_u32(x_i32)
-    out_u32 = x_u32 & np.uint32(0x0000FFFF)
+    trunc_u16 = _signed_cast_payload_u64(x_u32, 32, 16)
+    out_u32 = _signed_cast_payload_u64(trunc_u16, 16, 32).astype(np.uint32)
     return _unmix_payload_u32_to_f32_bits_i32(out_u32)
 
 
 def _expected_ext_f16_to_f32_i32(x_i16: np.ndarray) -> np.ndarray:
-    out_u32 = x_i16.view(np.uint16).astype(np.uint32)
+    payload_u16 = _mix_float_bits_to_payload_u64(x_i16.view(np.uint16), 16, 0x3C00)
+    out_u32 = _signed_cast_payload_u64(payload_u16, 16, 32).astype(np.uint32)
     return _unmix_payload_u32_to_f32_bits_i32(out_u32)
 
 
@@ -999,6 +1056,8 @@ def test_cast_trunc_ext_payload_semantics(device, fresh_knobs):
     g = torch.Generator(device="cuda")
     g.manual_seed(17)
     x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    special_f32_bits = np.asarray([-1.0, 0.0, 1.0], dtype=np.float32).view(np.int32)
+    x[:3] = torch.tensor(special_f32_bits, dtype=torch.int32, device="cuda")
     out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
 
     xw = triton.TensorWrapper(x, dtype=torch.float32)
@@ -1010,6 +1069,7 @@ def test_cast_trunc_ext_payload_semantics(device, fresh_knobs):
     out_np = out.cpu().numpy().astype(np.int32, copy=False)
     exp_np = _expected_trunc_ext_roundtrip_i32(x.cpu().numpy().astype(np.int32, copy=False))
     _assert_payload_equal(out_np, exp_np)
+    _assert_payload_equal(out_np[:3], special_f32_bits)
 
 
 @gluon.jit
@@ -1035,6 +1095,9 @@ def test_cast_ext_payload_semantics(device, fresh_knobs):
     g = torch.Generator(device="cuda")
     g.manual_seed(19)
     x = torch.randint(-(2**15), 2**15 - 1, (n_elements, ), dtype=torch.int16, device="cuda", generator=g)
+    special_f16_bits = np.asarray([-1.0, 0.0, 1.0], dtype=np.float16).view(np.int16)
+    special_f32_bits = np.asarray([-1.0, 0.0, 1.0], dtype=np.float32).view(np.int32)
+    x[:3] = torch.tensor(special_f16_bits, dtype=torch.int16, device="cuda")
     out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
 
     xw = triton.TensorWrapper(x, dtype=torch.float16)
@@ -1046,6 +1109,7 @@ def test_cast_ext_payload_semantics(device, fresh_knobs):
     out_np = out.cpu().numpy().astype(np.int32, copy=False)
     exp_np = _expected_ext_f16_to_f32_i32(x.cpu().numpy().astype(np.int16, copy=False))
     _assert_payload_equal(out_np, exp_np)
+    _assert_payload_equal(out_np[:3], special_f32_bits)
 
 
 def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = None) -> np.ndarray:
@@ -1079,14 +1143,28 @@ def _unpack_element(data: np.ndarray, row: int, col: int, pack: int, pack_axis: 
     return raw
 
 
+def _mix_float_scalar(val: np.uint64, bitwidth: int, one_bits: int) -> np.uint64:
+    mixed = _mix_float_bits_to_payload_u64(np.asarray([val], dtype=np.uint64), bitwidth, one_bits)
+    return np.uint64(mixed[0])
+
+
+def _mix_dot_scaled_elem(val: np.uint64, elem_type: str) -> np.uint64:
+    if elem_type in ("e4m3", "e5m2"):
+        one_bits = 0x38 if elem_type == "e4m3" else 0x3C
+        return _mix_float_scalar(val, 8, one_bits)
+    if elem_type == "bf16":
+        return _mix_float_scalar(val, 16, 0x3F80)
+    return val
+
+
 def _scale_element(val: np.uint64, scale, idx: int, k: int, mask: np.uint64) -> np.uint64:
     if scale is not None:
         return (val * np.uint64(scale[idx, k // 32])) & mask
     return val
 
 
-def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_scale, a_pack: int,
-                            b_pack: int) -> np.ndarray:
+def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_scale, a_pack: int, b_pack: int,
+                            type_a: str, type_b: str) -> np.ndarray:
     M, N = a_data.shape[0], b_data.shape[1]
     K = a_data.shape[1] * a_pack
     mask = np.uint64(0xFFFFFFFF)
@@ -1096,6 +1174,8 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
         for kk in range(K):
             a_val = _unpack_element(a_data, i, kk, a_pack, pack_axis=1)
             b_val = _unpack_element(b_data, kk, j, b_pack, pack_axis=0)
+            a_val = _mix_dot_scaled_elem(a_val, type_a)
+            b_val = _mix_dot_scaled_elem(b_val, type_b)
             a_val = _scale_element(a_val, a_scale, i, kk, mask)
             b_val = _scale_element(b_val, b_scale, j, kk, mask)
             s = (s + a_val * b_val) & mask
@@ -1104,7 +1184,8 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
 
 
 def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.ndarray, b_scale_u8: np.ndarray,
-                           c_i32: np.ndarray = None, a_pack: int = 1, b_pack: int = 1) -> np.ndarray:
+                           c_i32: np.ndarray = None, a_pack: int = 1, b_pack: int = 1,
+                           elem_type: str = "e2m1") -> np.ndarray:
     a_scale = a_scale_u8.astype(np.uint16)
     b_scale = b_scale_u8.astype(np.uint16)
     c_u = _mix_f32_bits_to_payload_u32(c_i32).astype(np.uint64) if c_i32 is not None else None
@@ -1130,6 +1211,8 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
             for kk in range(k):
                 a_val = unpack(a_u8, i, kk, a_pack, pack_axis=1)
                 b_val = unpack(b_u8, kk, j, b_pack, pack_axis=0)
+                a_val = _mix_dot_scaled_elem(np.uint64(a_val), elem_type)
+                b_val = _mix_dot_scaled_elem(np.uint64(b_val), elem_type)
                 lhs = np.uint16((np.uint32(a_val) * np.uint32(a_scale[i, kk // 32])) & mask16)
                 rhs = np.uint16((np.uint32(b_val) * np.uint32(b_scale[j, kk // 32])) & mask16)
                 s = (s + ((np.uint64(lhs) * np.uint64(rhs)) & mask32)) & mask32
@@ -1250,8 +1333,8 @@ def test_dot_scaled(device, type_a, type_b, fresh_knobs):
         b_bits = rs.randint(0, 65536, size=(packed_k_b, B)).astype(np.uint16)
         b = torch.tensor(b_bits, device="cuda", dtype=torch.uint16).view(torch.bfloat16)
 
-    exp_bits = _dot_scaled_payload_u32(a_bits, b_bits, a_scale_bits, None if type_b == "bf16" else b_scale_bits, a_pack,
-                                       b_pack)
+    exp_bits = _dot_scaled_payload_u32(a_bits, b_bits, a_scale_bits, None if type_b == "bf16" else b_scale_bits,
+                                       a_pack, b_pack, type_a, type_b)
 
     out = torch.empty((B, B), device="cuda", dtype=torch.int32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
@@ -1416,7 +1499,7 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
     b_scale_bits = rs.randint(1, 4, size=(B, B // 32), dtype=np.int8)
     c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
     exp_bits = _mm_scaled_payload_u32(a_bits, b_ref_bits, a_scale_bits.view(np.uint8), b_scale_bits.view(np.uint8),
-                                      c_bits, a_pack=pack_factor, b_pack=pack_factor)
+                                      c_bits, a_pack=pack_factor, b_pack=pack_factor, elem_type=elem_type)
 
     if elem_type == "e2m1":
         a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8)
