@@ -1674,11 +1674,14 @@ void FunctionBuilder::createTrackVisibleReadsCall(ImplicitLocOpBuilder &b,
 
 void FunctionBuilder::createTrackBarrierWriteForBufferCall(
     ImplicitLocOpBuilder &b, Value mbar, Value buf, uint32_t length, Value pred,
-    MemType memType, Operation *insertPoint, Value recipientCTAs) {
+    MemType memType, Operation *insertPoint, Value barrierRecipientCTAs,
+    Value effectRecipientCTAs) {
   if (auxData.barriers.empty() || auxData.buffers[(int)memType].empty() ||
       auxData.writeTracking[(int)memType].empty()) {
     return;
   }
+  assert(!auxData.barrierWriteRecipients.empty() &&
+         "barrier write recipients must exist when tracking TMA writes");
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   Value barriersVal = auxData.barriers.at(insertPoint).value;
@@ -1691,20 +1694,34 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
       auxData.writeTracking[(int)memType].at(insertPoint).value;
   auto writeTrackingType = cast<RankedTensorType>(
       auxData.writeTracking[(int)memType].at(insertPoint).type);
+  Value barrierWriteRecipientsVal =
+      auxData.barrierWriteRecipients.at(insertPoint).value;
+  auto barrierWriteRecipientsType = cast<RankedTensorType>(
+      auxData.barrierWriteRecipients.at(insertPoint).type);
   uint32_t mbarLength = getMemDescLength(mbar);
   Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
   Value mbarLengthVal = arith::ConstantIntOp::create(b, mbarLength, 32);
   Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
   Value bufLengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {mbarOffset, mbarLengthVal,    pred,
-                             bufOffset,  bufLengthVal,     barriersVal,
-                             buffersVal, writeTrackingVal, recipientCTAs};
+  SmallVector<Value> args = {mbarOffset,
+                             mbarLengthVal,
+                             pred,
+                             bufOffset,
+                             bufLengthVal,
+                             barriersVal,
+                             buffersVal,
+                             writeTrackingVal,
+                             barrierWriteRecipientsVal,
+                             barrierRecipientCTAs,
+                             effectRecipientCTAs};
   createCallToCachedFunction(
       b, "track_barrier_write_for_buffer", args,
       /*assertInfo=*/std::nullopt,
-      {barriersType, buffersType, writeTrackingType, (uint64_t)memType},
-      [barriersType, buffersType, writeTrackingType](ImplicitLocOpBuilder &fb,
-                                                     Block *entryBlock) {
+      {barriersType, buffersType, writeTrackingType, barrierWriteRecipientsType,
+       (uint64_t)memType},
+      [barriersType, buffersType, writeTrackingType,
+       barrierWriteRecipientsType](ImplicitLocOpBuilder &fb,
+                                   Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value mbarLengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -1713,17 +1730,33 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
         Value barriers = entryBlock->getArgument(5);
         Value buffers = entryBlock->getArgument(6);
         Value writeTrackingPtr = entryBlock->getArgument(7);
-        Value recipientCTAs = entryBlock->getArgument(8);
+        Value barrierWriteRecipientsPtr = entryBlock->getArgument(8);
+        Value barrierRecipientCTAs = entryBlock->getArgument(9);
+        Value effectRecipientCTAs = entryBlock->getArgument(10);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
 
         Value writeTracking = tti::createLoadScratchMemory(
             fb, fb.getLoc(), writeTrackingPtr, writeTrackingType);
+        Value barrierWriteRecipients = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), barrierWriteRecipientsPtr,
+            barrierWriteRecipientsType);
         Value barrierDescriptor =
             createBufferDescriptor(fb, mbarOffset, mbarLengthVal);
         Value barriersEqBar =
             createCmpIntTensorScalar(fb, barriers, barrierDescriptor);
+        Value effectRecipientCTAsTensor = triton::SplatOp::create(
+            fb, barrierWriteRecipientsType, effectRecipientCTAs);
+        Value updatedBarrierWriteRecipients = arith::OrIOp::create(
+            fb, barrierWriteRecipients, effectRecipientCTAsTensor);
+        updatedBarrierWriteRecipients = arith::SelectOp::create(
+            fb, barriersEqBar, updatedBarrierWriteRecipients,
+            barrierWriteRecipients);
+        createCTAScopedStoreScratchMemory(
+            fb, fb.getLoc(), barrierWriteRecipientsPtr,
+            updatedBarrierWriteRecipients, barrierWriteRecipientsType,
+            barrierRecipientCTAs);
         barriersEqBar =
             convertAndBroadcast(fb, barriersEqBar, {0, 2}, writeTrackingType);
         Value bufferDescriptor =
@@ -1740,7 +1773,7 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
             fb, trackMask, writeTrackingOne, writeTracking);
         createCTAScopedStoreScratchMemory(fb, fb.getLoc(), writeTrackingPtr,
                                           newTracking, writeTrackingType,
-                                          recipientCTAs);
+                                          effectRecipientCTAs);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1749,7 +1782,7 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
 
 void FunctionBuilder::createClearBarrierWriteTrackingCall(
     ImplicitLocOpBuilder &b, Value mbar, Value pred, MemType memType,
-    Operation *insertPoint, Value recipientCTAs) {
+    Operation *insertPoint) {
   if (auxData.writeTracking[(int)memType].empty()) {
     return;
   }
@@ -1765,32 +1798,59 @@ void FunctionBuilder::createClearBarrierWriteTrackingCall(
       auxData.writeTracking[(int)memType].at(insertPoint).value;
   auto writeTrackingType = cast<RankedTensorType>(
       auxData.writeTracking[(int)memType].at(insertPoint).type);
+  Value barrierWriteRecipientsVal =
+      auxData.barrierWriteRecipients.at(insertPoint).value;
+  auto barrierWriteRecipientsType = cast<RankedTensorType>(
+      auxData.barrierWriteRecipients.at(insertPoint).type);
   uint32_t length = getMemDescLength(mbar);
   Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
   Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {mbarOffset,  lengthVal,        pred,
-                             barriersVal, writeTrackingVal, recipientCTAs};
+  SmallVector<Value> args = {
+      mbarOffset,  lengthVal,        pred,
+      barriersVal, writeTrackingVal, barrierWriteRecipientsVal};
   createCallToCachedFunction(
       b, "clear_barrier_write_tracking", args,
       /*assertInfo=*/std::nullopt,
-      {barriersType, writeTrackingType, (uint64_t)memType},
-      [barriersType, writeTrackingType](ImplicitLocOpBuilder &fb,
-                                        Block *entryBlock) {
+      {barriersType, writeTrackingType, barrierWriteRecipientsType,
+       (uint64_t)memType},
+      [barriersType, writeTrackingType, barrierWriteRecipientsType](
+          ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
         Value barriers = entryBlock->getArgument(3);
         Value writeTrackingPtr = entryBlock->getArgument(4);
-        Value recipientCTAs = entryBlock->getArgument(5);
+        Value barrierWriteRecipientsPtr = entryBlock->getArgument(5);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
 
         Value writeTracking = tti::createLoadScratchMemory(
             fb, fb.getLoc(), writeTrackingPtr, writeTrackingType);
+        Value barrierWriteRecipients = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), barrierWriteRecipientsPtr,
+            barrierWriteRecipientsType);
         Value descriptor = createBufferDescriptor(fb, mbarOffset, lengthVal);
         Value barriersEqBar =
             createCmpIntTensorScalar(fb, barriers, descriptor);
+        Value barrierRecipientCTAs = createCurrentCTAMask(fb);
+        Value barrierCTAMask = createRecipientCTAMask(
+            fb, barrierWriteRecipientsType, barrierRecipientCTAs);
+        Value selectedBarrier =
+            arith::AndIOp::create(fb, barriersEqBar, barrierCTAMask);
+        Value zeroRecipients = tti::createConstIntTensor(
+            fb, fb.getLoc(), 0, barrierWriteRecipientsType);
+        Value selectedRecipients = arith::SelectOp::create(
+            fb, selectedBarrier, barrierWriteRecipients, zeroRecipients);
+        Value effectRecipientCTAs =
+            reduceAll<arith::OrIOp>(fb, selectedRecipients);
+        Value recipientCTAs =
+            arith::OrIOp::create(fb, barrierRecipientCTAs, effectRecipientCTAs);
+        Value updatedRecipients = arith::SelectOp::create(
+            fb, selectedBarrier, zeroRecipients, barrierWriteRecipients);
+        createCTAScopedStoreScratchMemory(
+            fb, fb.getLoc(), barrierWriteRecipientsPtr, updatedRecipients,
+            barrierWriteRecipientsType, barrierRecipientCTAs);
         barriersEqBar =
             convertAndBroadcast(fb, barriersEqBar, {0, 2}, writeTrackingType);
         Value zero =
@@ -1808,7 +1868,7 @@ void FunctionBuilder::createClearBarrierWriteTrackingCall(
 
 void FunctionBuilder::createClearBarrierReadTrackingCall(
     ImplicitLocOpBuilder &b, Value mbar, Value pred, MemType memType,
-    Operation *insertPoint, Value recipientCTAs) {
+    Operation *insertPoint) {
   if (auxData.readTracking[(int)memType].empty()) {
     return;
   }
@@ -1827,8 +1887,8 @@ void FunctionBuilder::createClearBarrierReadTrackingCall(
   uint32_t length = getMemDescLength(mbar);
   Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
   Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {mbarOffset,  lengthVal,       pred,
-                             barriersVal, readTrackingVal, recipientCTAs};
+  SmallVector<Value> args = {mbarOffset, lengthVal, pred, barriersVal,
+                             readTrackingVal};
   createCallToCachedFunction(
       b, "clear_barrier_read_tracking", args,
       /*assertInfo=*/std::nullopt,
@@ -1840,7 +1900,6 @@ void FunctionBuilder::createClearBarrierReadTrackingCall(
         Value pred = entryBlock->getArgument(2);
         Value barriers = entryBlock->getArgument(3);
         Value readTrackingPtr = entryBlock->getArgument(4);
-        Value recipientCTAs = entryBlock->getArgument(5);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -1858,7 +1917,7 @@ void FunctionBuilder::createClearBarrierReadTrackingCall(
             arith::SelectOp::create(fb, barriersEqBar, zero, readTracking);
         createCTAScopedStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr,
                                           updated, readTrackingType,
-                                          recipientCTAs);
+                                          createCurrentCTAMask(fb));
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1867,7 +1926,7 @@ void FunctionBuilder::createClearBarrierReadTrackingCall(
 
 void FunctionBuilder::createTransferVisibleWritesCall(
     ImplicitLocOpBuilder &b, Value mbar, uint64_t threadMask, Value pred,
-    MemType memType, Operation *insertPoint, Value recipientCTAs) {
+    MemType memType, Operation *insertPoint) {
 
   if (auxData.barriers.empty() ||
       auxData.writeVisibility[(int)memType].empty() ||
@@ -1888,18 +1947,29 @@ void FunctionBuilder::createTransferVisibleWritesCall(
       auxData.writeTracking[(int)memType].at(insertPoint).value;
   auto writeTrackingType = cast<RankedTensorType>(
       auxData.writeTracking[(int)memType].at(insertPoint).type);
+  Value barrierWriteRecipientsVal =
+      auxData.barrierWriteRecipients.at(insertPoint).value;
+  auto barrierWriteRecipientsType = cast<RankedTensorType>(
+      auxData.barrierWriteRecipients.at(insertPoint).type);
   uint32_t length = getMemDescLength(mbar);
   Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
   Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {mbarOffset,       lengthVal,    pred,
-                             threadMaskVal,    barriersVal,  writeVisibilityVal,
-                             writeTrackingVal, recipientCTAs};
+  SmallVector<Value> args = {mbarOffset,
+                             lengthVal,
+                             pred,
+                             threadMaskVal,
+                             barriersVal,
+                             writeVisibilityVal,
+                             writeTrackingVal,
+                             barrierWriteRecipientsVal};
   createCallToCachedFunction(
       b, "transfer_visible_writes", args,
       /*assertInfo=*/std::nullopt,
-      {barriersType, writeVisibilityType, writeTrackingType, (uint64_t)memType},
-      [barriersType, writeVisibilityType,
-       writeTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      {barriersType, writeVisibilityType, writeTrackingType,
+       barrierWriteRecipientsType, (uint64_t)memType},
+      [barriersType, writeVisibilityType, writeTrackingType,
+       barrierWriteRecipientsType](ImplicitLocOpBuilder &fb,
+                                   Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -1907,7 +1977,7 @@ void FunctionBuilder::createTransferVisibleWritesCall(
         Value barriers = entryBlock->getArgument(4);
         Value writeVisibilityPtr = entryBlock->getArgument(5);
         Value writeTrackingPtr = entryBlock->getArgument(6);
-        Value recipientCTAs = entryBlock->getArgument(7);
+        Value barrierWriteRecipientsPtr = entryBlock->getArgument(7);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -1916,9 +1986,27 @@ void FunctionBuilder::createTransferVisibleWritesCall(
             fb, fb.getLoc(), writeVisibilityPtr, writeVisibilityType);
         Value writeTracking = tti::createLoadScratchMemory(
             fb, fb.getLoc(), writeTrackingPtr, writeTrackingType);
+        Value barrierWriteRecipients = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), barrierWriteRecipientsPtr,
+            barrierWriteRecipientsType);
         Value descriptor = createBufferDescriptor(fb, mbarOffset, lengthVal);
         Value barriersEqBar =
             createCmpIntTensorScalar(fb, barriers, descriptor);
+        Value ctaId = tti::ExperimentalClusterCTAIdOp::create(fb, fb.getLoc());
+        Value barrierCTAMask =
+            createDimMask(fb, ctaId, barrierWriteRecipientsType, /*dim=*/0);
+        Value selectedBarrier =
+            arith::AndIOp::create(fb, barriersEqBar, barrierCTAMask);
+        Value zeroRecipients = tti::createConstIntTensor(
+            fb, fb.getLoc(), 0, barrierWriteRecipientsType);
+        Value selectedRecipients = arith::SelectOp::create(
+            fb, selectedBarrier, barrierWriteRecipients, zeroRecipients);
+        Value trackedRecipientCTAs =
+            reduceAll<arith::OrIOp>(fb, selectedRecipients);
+        Value currentCTA = arith::ShLIOp::create(
+            fb, arith::ConstantIntOp::create(fb, 1, 32), ctaId);
+        Value recipientCTAs =
+            arith::OrIOp::create(fb, currentCTA, trackedRecipientCTAs);
         barriersEqBar =
             convertAndBroadcast(fb, barriersEqBar, {0, 2}, writeTrackingType);
         Value zeroTracking =
@@ -1955,7 +2043,7 @@ void FunctionBuilder::createTransferVisibleWritesCall(
 
 void FunctionBuilder::createTransferVisibleReadsCall(
     ImplicitLocOpBuilder &b, Value mbar, uint64_t threadMask, Value pred,
-    MemType memType, Operation *insertPoint, Value recipientCTAs) {
+    MemType memType, Operation *insertPoint) {
 
   if (auxData.barriers.empty() ||
       auxData.readVisibility[(int)memType].empty() ||
@@ -1979,9 +2067,9 @@ void FunctionBuilder::createTransferVisibleReadsCall(
   uint32_t length = getMemDescLength(mbar);
   Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
   Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {mbarOffset,      lengthVal,    pred,
-                             threadMaskVal,   barriersVal,  readVisibilityVal,
-                             readTrackingVal, recipientCTAs};
+  SmallVector<Value> args = {mbarOffset,     lengthVal,   pred,
+                             threadMaskVal,  barriersVal, readVisibilityVal,
+                             readTrackingVal};
   createCallToCachedFunction(
       b, "transfer_visible_reads", args,
       /*assertInfo=*/std::nullopt,
@@ -1995,7 +2083,6 @@ void FunctionBuilder::createTransferVisibleReadsCall(
         Value barriers = entryBlock->getArgument(4);
         Value readVisibilityPtr = entryBlock->getArgument(5);
         Value readTrackingPtr = entryBlock->getArgument(6);
-        Value recipientCTAs = entryBlock->getArgument(7);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -2024,7 +2111,7 @@ void FunctionBuilder::createTransferVisibleReadsCall(
             fb, threadColumnMask, readVisibilityOrTracking, readVisibility);
         createCTAScopedStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
                                           newVisibility, readVisibilityType,
-                                          recipientCTAs);
+                                          createCurrentCTAMask(fb));
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);

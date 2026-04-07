@@ -164,6 +164,8 @@ uint16_t getBlockBroadcastMask(Value alloc) {
 
 Value createCTABitset(ImplicitLocOpBuilder &b, uint32_t pattern,
                       uint32_t baseMask) {
+  // Create a CTA bitset by shifting `pattern` by the non-broadcast CTA bits of
+  // the current CTA.
   Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
   Value base = arith::AndIOp::create(
       b, ctaId, arith::ConstantIntOp::create(b, baseMask, 32));
@@ -362,12 +364,11 @@ private:
         funcBuilder.createVerifyBarrierInitializedCall(b, barrier, pred, op,
                                                        currentCTAMask(b));
         funcBuilder.createInvalidateBarrierStateCall(b, barrier, pred, op);
-        Value recipientCTAs = getMulticastRecipientCTAs(b, barrier);
         for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
-          funcBuilder.createClearBarrierWriteTrackingCall(
-              b, barrier, pred, memType, op, recipientCTAs);
-          funcBuilder.createClearBarrierReadTrackingCall(
-              b, barrier, pred, memType, op, recipientCTAs);
+          funcBuilder.createClearBarrierWriteTrackingCall(b, barrier, pred,
+                                                          memType, op);
+          funcBuilder.createClearBarrierReadTrackingCall(b, barrier, pred,
+                                                         memType, op);
         }
       }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
@@ -427,14 +428,11 @@ private:
            "barrier descriptors must exist when instrumenting wait");
     wb.setInsertionPointAfter(op);
     tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
-    Value recipientCTAs = getMulticastRecipientCTAs(wb, alloc);
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       funcBuilder.createTransferVisibleWritesCall(
-          wb, alloc, getThreadPeersMask(thread), pred, memType, op,
-          recipientCTAs);
+          wb, alloc, getThreadPeersMask(thread), pred, memType, op);
       funcBuilder.createTransferVisibleReadsCall(
-          wb, alloc, getThreadPeersMask(thread), pred, memType, op,
-          recipientCTAs);
+          wb, alloc, getThreadPeersMask(thread), pred, memType, op);
     }
     funcBuilder.createClearWaitingCall(wb, alloc, baseThread, pred, op);
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
@@ -565,7 +563,7 @@ private:
             memType = MemType::SHARED_MEM;
           funcBuilder.createTrackBarrierWriteForBufferCall(
               b, barrier, effect.buf, effect.length, combinedPred, memType, op,
-              effectRecipientCTAs);
+              recipientCTAs, effectRecipientCTAs);
         }
       }
       if (barrierInfo.count > 0 || barrierInfo.txCount != 0) {
