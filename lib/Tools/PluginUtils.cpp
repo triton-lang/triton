@@ -23,9 +23,8 @@ static bool isTritonAndPluginsVersionsMatch(const std::string &pluginVersion) {
     return pluginVersion == TRITON_VERSION;
 
   // Do partial release version check when TRITON_PLUGIN_VERSION_CHECK unset
-  auto plugVersion = llvm::StringRef(pluginVersion).split('+');
-  auto coreVersion = llvm::StringRef(TRITON_VERSION).split('+');
-  return plugVersion.first == coreVersion.first;
+  return llvm::StringRef(pluginVersion).split('+').first ==
+         llvm::StringRef(TRITON_VERSION).split('+').first;
 }
 
 llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
