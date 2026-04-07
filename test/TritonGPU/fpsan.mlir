@@ -99,8 +99,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @unary_ops
   tt.func public @unary_ops(%a: tensor<4xf32>) -> tensor<4xf32> {
+    // CHECK-DAG: arith.constant dense<314159>
     // CHECK: tt.bitcast
-    // CHECK: arith.constant dense<314159>
+    // CHECK: arith.muli
     // CHECK: arith.xori
     // CHECK: arith.xori
     // CHECK-NOT: math.log
@@ -139,7 +140,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @cast_extf
   tt.func public @cast_extf(%a: tensor<4xf16>) -> tensor<4xf32> {
     // CHECK: tt.bitcast
-    // CHECK: arith.extui
+    // CHECK: arith.extsi
     // CHECK-NOT: arith.extf
     %0 = arith.extf %a : tensor<4xf16> to tensor<4xf32>
     tt.return %0 : tensor<4xf32>
@@ -165,7 +166,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @cast_fp_to_fp
   tt.func public @cast_fp_to_fp(%a: tensor<4xf8E4M3FN>) -> tensor<4xf16> {
     // CHECK: tt.bitcast
-    // CHECK: arith.extui
+    // CHECK: arith.extsi
     // CHECK-NOT: tt.fp_to_fp
     %0 = tt.fp_to_fp %a : tensor<4xf8E4M3FN> -> tensor<4xf16>
     tt.return %0 : tensor<4xf16>

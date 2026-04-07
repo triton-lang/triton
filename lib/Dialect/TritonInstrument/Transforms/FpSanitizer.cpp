@@ -398,10 +398,9 @@ Value getUIntConstantLike(PatternRewriter &rewriter, Location loc,
                           Type targetTy, uint64_t value) {
   if (auto shaped = dyn_cast<ShapedType>(targetTy)) {
     auto elem = cast<IntegerType>(shaped.getElementType());
-    auto intAttr =
-        IntegerAttr::get(elem, APInt(elem.getWidth(), value,
-                                     /*isSigned=*/false,
-                                     /*implicitTrunc=*/true));
+    auto intAttr = IntegerAttr::get(elem, APInt(elem.getWidth(), value,
+                                                /*isSigned=*/false,
+                                                /*implicitTrunc=*/true));
     auto attr = DenseElementsAttr::get(shaped, intAttr);
     return arith::ConstantOp::create(rewriter, loc, attr);
   }
@@ -1230,9 +1229,8 @@ struct ExtFOpPattern : public OpRewritePattern<arith::ExtFOp> {
       return failure();
     auto loc = op.getLoc();
     auto inI = bitcastToInt(rewriter, loc, op.getIn());
-    auto outI =
-        castSignedIntValueToType(rewriter, loc, inI,
-                                 getIntTypeLike(op.getType()));
+    auto outI = castSignedIntValueToType(rewriter, loc, inI,
+                                         getIntTypeLike(op.getType()));
     auto outF = bitcastToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
     return success();
@@ -1247,9 +1245,8 @@ struct TruncFOpPattern : public OpRewritePattern<arith::TruncFOp> {
       return failure();
     auto loc = op.getLoc();
     auto inI = bitcastToInt(rewriter, loc, op.getIn());
-    auto outI =
-        castSignedIntValueToType(rewriter, loc, inI,
-                                 getIntTypeLike(op.getType()));
+    auto outI = castSignedIntValueToType(rewriter, loc, inI,
+                                         getIntTypeLike(op.getType()));
     auto outF = bitcastToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
     return success();
@@ -1264,9 +1261,8 @@ struct FpToFpPattern : public OpRewritePattern<tt::FpToFpOp> {
       return failure();
     auto loc = op.getLoc();
     auto inI = bitcastToInt(rewriter, loc, op.getSrc());
-    auto outI =
-        castSignedIntValueToType(rewriter, loc, inI,
-                                 getIntTypeLike(op.getType()));
+    auto outI = castSignedIntValueToType(rewriter, loc, inI,
+                                         getIntTypeLike(op.getType()));
     auto outF = bitcastToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
     return success();

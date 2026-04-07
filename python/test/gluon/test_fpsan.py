@@ -1333,8 +1333,8 @@ def test_dot_scaled(device, type_a, type_b, fresh_knobs):
         b_bits = rs.randint(0, 65536, size=(packed_k_b, B)).astype(np.uint16)
         b = torch.tensor(b_bits, device="cuda", dtype=torch.uint16).view(torch.bfloat16)
 
-    exp_bits = _dot_scaled_payload_u32(a_bits, b_bits, a_scale_bits, None if type_b == "bf16" else b_scale_bits,
-                                       a_pack, b_pack, type_a, type_b)
+    exp_bits = _dot_scaled_payload_u32(a_bits, b_bits, a_scale_bits, None if type_b == "bf16" else b_scale_bits, a_pack,
+                                       b_pack, type_a, type_b)
 
     out = torch.empty((B, B), device="cuda", dtype=torch.int32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
