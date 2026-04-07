@@ -686,15 +686,6 @@ def tl_dot_mfma(a, b, acc, out_dtype):
 # ---- AMD TDM tensor descriptors (gfx1250 only) ----
 
 
-# Builtin because list literals in @gluon.jit convert constexpr values to tensors,
-# but block_shape requires constexpr ints. Varargs also aren't supported in JIT.
-@ttgl._core.builtin
-def _create_tdm_descriptor(base, shape, strides, *block_shape_and_layout, _semantic=None):
-    layout = block_shape_and_layout[-1]
-    block_shape = list(block_shape_and_layout[:-1])
-    return amd_tdm.make_tensor_descriptor(base, shape, strides, block_shape, layout, _semantic=_semantic)
-
-
 @gluon.constexpr_function
 def get_default_tdm_layout(*block_shape):
     block_shape = list(block_shape)
@@ -816,8 +807,9 @@ def tl_obj_gather_amd(desc_args, x_offsets, y_offset, NUM_IDX: ttgl.constexpr):
     # operates on the full batch, requiring block_shape=[num_indices, block_n].
     BLOCK_N: ttgl.constexpr = desc_args.desc.block_shape[1]
     smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
-    gather_desc = _create_tdm_descriptor(desc_args.base_ptr, desc_args.desc.shape, desc_args.desc.strides, NUM_IDX,
-                                         BLOCK_N, smem_layout)
+    gather_block_shape: ttgl.constexpr = [NUM_IDX, BLOCK_N]
+    gather_desc = amd_tdm.make_tensor_descriptor(desc_args.base_ptr, desc_args.desc.shape, desc_args.desc.strides,
+                                                 gather_block_shape, smem_layout)
     num_warps: ttgl.constexpr = ttgl.num_warps()
     gather_shape: ttgl.constexpr = gather_desc.block_shape
     idx_base: ttgl.constexpr = ttgl.BlockedLayout([gather_shape[0], 1],
@@ -839,8 +831,9 @@ def tl_obj_scatter_amd(desc_args, value, x_offsets, y_offset, NUM_IDX: ttgl.cons
     # See tl_obj_gather_amd for why the descriptor is recreated with a different block_shape.
     BLOCK_N: ttgl.constexpr = desc_args.desc.block_shape[1]
     smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
-    scatter_desc = _create_tdm_descriptor(desc_args.base_ptr, desc_args.desc.shape, desc_args.desc.strides, NUM_IDX,
-                                          BLOCK_N, smem_layout)
+    scatter_block_shape: ttgl.constexpr = [NUM_IDX, BLOCK_N]
+    scatter_desc = amd_tdm.make_tensor_descriptor(desc_args.base_ptr, desc_args.desc.shape, desc_args.desc.strides,
+                                                  scatter_block_shape, smem_layout)
     num_warps: ttgl.constexpr = ttgl.num_warps()
     scatter_shape: ttgl.constexpr = scatter_desc.block_shape
     idx_base: ttgl.constexpr = ttgl.BlockedLayout([scatter_shape[0], 1],
@@ -863,7 +856,7 @@ def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option:
 @gluon.jit
 def tl_make_tensor_descriptor_amd(base, shape, strides, block_shape):
     layout: ttgl.constexpr = get_default_tdm_layout(*block_shape)
-    desc = _create_tdm_descriptor(base, shape, strides, *block_shape, layout)
+    desc = amd_tdm.make_tensor_descriptor(base, shape, strides, block_shape, layout)
     return AMDTensorDescriptorArgs(desc, base)
 
 
