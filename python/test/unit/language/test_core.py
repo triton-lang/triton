@@ -4336,31 +4336,12 @@ def test_load_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        if cache == '':
-            assert 'ld.global.ca' not in ptx
-            assert 'ld.global.cg' not in ptx
-            assert 'ld.global.cs' not in ptx
-            assert 'ld.global.cv' not in ptx
-        if cache == '.ca':
-            assert 'ld.global.ca' in ptx
-            assert 'ld.global.cs' not in ptx
-            assert 'ld.global.cg' not in ptx
-            assert 'ld.global.cv' not in ptx
-        if cache == '.cg':
-            assert 'ld.global.ca' not in ptx
-            assert 'ld.global.cg' in ptx
-            assert 'ld.global.cs' not in ptx
-            assert 'ld.global.cv' not in ptx
-        if cache == '.cs':
-            assert 'ld.global.ca' not in ptx
-            assert 'ld.global.cg' not in ptx
-            assert 'ld.global.cs' in ptx
-            assert 'ld.global.cv' not in ptx
-        if cache == '.cv':
-            assert 'ld.global.ca' not in ptx
-            assert 'ld.global.cs' not in ptx
-            assert 'ld.global.cg' not in ptx
-            assert 'ld.global.cv' in ptx
+        all_modifiers = ['.ca', '.cg', '.cs', '.cv']
+        for modifier in all_modifiers:
+            if modifier == cache:
+                assert f'ld.global.{modifier}' in ptx
+            else:
+                assert f'ld.global.{modifier}' not in ptx
 
 
 @pytest.mark.interpreter
@@ -4482,31 +4463,12 @@ def test_store_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        if cache == '':
-            assert 'st.global.wb' not in ptx
-            assert 'st.global.cg' not in ptx
-            assert 'st.global.cs' not in ptx
-            assert 'st.global.wt' not in ptx
-        if cache == '.wb':
-            assert 'st.global.wb' in ptx
-            assert 'st.global.cg' not in ptx
-            assert 'st.global.cs' not in ptx
-            assert 'st.global.wt' not in ptx
-        if cache == '.cg':
-            assert 'st.global.wb' not in ptx
-            assert 'st.global.cg' in ptx
-            assert 'st.global.cs' not in ptx
-            assert 'st.global.wt' not in ptx
-        if cache == '.cs':
-            assert 'st.global.wb' not in ptx
-            assert 'st.global.cg' not in ptx
-            assert 'st.global.cs' in ptx
-            assert 'st.global.wt' not in ptx
-        if cache == '.wt':
-            assert 'st.global.wb' not in ptx
-            assert 'st.global.cg' not in ptx
-            assert 'st.global.cs' not in ptx
-            assert 'st.global.wt' in ptx
+        all_modifiers = ['.wb', '.cg', '.cs', '.wt']
+        for modifier in all_modifiers:
+            if modifier == cache:
+                assert f'st.global.{modifier}' in ptx
+            else:
+                assert f'st.global.{modifier}' not in ptx
 
 
 @pytest.mark.interpreter
