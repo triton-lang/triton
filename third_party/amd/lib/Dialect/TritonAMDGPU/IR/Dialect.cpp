@@ -635,6 +635,14 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   Type elementType = smemTy.getElementType();
   auto elementBitWidth = elementType.getIntOrFloatBitWidth();
   if (paddedEnc) {
+    auto descPaddedEnc = llvm::dyn_cast_or_null<gpu::PaddedSharedEncodingAttr>(
+        tensorDescTy.getBlockType().getEncoding());
+    if (descPaddedEnc &&
+        descPaddedEnc.getIntervals() != paddedEnc.getIntervals() &&
+        descPaddedEnc.getPaddings() != paddedEnc.getPaddings()) {
+      return emitOpError(
+          "Interval/Padding mismatch between descriptor and allocation");
+    }
     unsigned dwordSize = 32;
     for (auto [interval, padding] :
          llvm::zip(paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
@@ -679,13 +687,23 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   auto paddedEnc =
       llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
   if (paddedEnc) {
+    // Check if descriptor has a compatible padded encoding
+    auto descPaddedEnc = llvm::dyn_cast_or_null<gpu::PaddedSharedEncodingAttr>(
+        tensorDescTy.getBlockType().getEncoding());
+    if (descPaddedEnc &&
+        descPaddedEnc.getIntervals() != paddedEnc.getIntervals() &&
+        descPaddedEnc.getPaddings() != paddedEnc.getPaddings()) {
+      return emitOpError(
+          "Interval/Padding mismatch between descriptor and allocation");
+    }
     // Check if we can apply the padding workaround, see the lowering to LLVM
     // for more details.
     auto intervals = paddedEnc.getIntervals();
     if (intervals.size() != 1)
       return emitOpError("TDM store only supports single interval paddings.");
 
-    if (intervals[0] != blockShape[paddedEnc.getOrder().front()])
+    auto shapePerCTA = triton::gpu::getShapePerCTA(paddedEnc, blockShape);
+    if (intervals[0] != shapePerCTA[paddedEnc.getOrder().front()])
       return emitOpError("TDM store padding is only supported when padding "
                          "interval equals the innermost block dimension (got "
                          "padInterval=")
@@ -810,12 +828,16 @@ LogicalResult InitBarrierOp::verify() {
   return success();
 }
 
+TypedValue<gpu::MemDescType> InitBarrierOp::getBarrier() { return getAlloc(); }
+
 // -- WaitBarrierOp --
 LogicalResult WaitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
 }
+
+TypedValue<gpu::MemDescType> WaitBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- ArriveBarrierOp --
 LogicalResult ArriveBarrierOp::verify() {
@@ -824,6 +846,10 @@ LogicalResult ArriveBarrierOp::verify() {
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
   return success();
+}
+
+TypedValue<gpu::MemDescType> ArriveBarrierOp::getBarrier() {
+  return getAlloc();
 }
 
 // -- AsyncCopyMbarrierArriveOp --

@@ -1,6 +1,7 @@
 #ifndef TRITONINSTRUMENT_UTILITY_H
 #define TRITONINSTRUMENT_UTILITY_H
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -28,6 +29,42 @@ namespace CommitKind {
 enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
 }
 
+// -- ConSan capture-count constants -----------------------------------------
+// Each constant corresponds to specific passToWarpSpecialize() calls in
+// populateAndPassToWarpSpecialize().  Keep in sync with that function and
+// with estimateConSanCaptureCount() below.
+
+// writeVisibility + readVisibility per active memory type.
+constexpr int kCapturesPerMemType = 2;
+
+// barrierStates + waiting (only when barriers exist).
+constexpr int kBarrierBaseCaptures = 2;
+
+// writeTracking + readTracking per active memory type (only when barriers
+// exist and the memory type has buffers).
+constexpr int kBarrierTrackingCapturesPerMemType = 2;
+
+// The lock variable (always present).
+constexpr int kFixedCaptures = 1;
+
+// Size in bytes of each capture (a global-scratch pointer).
+constexpr int kCaptureSizeBytes = 8;
+
+/// Estimate the number of WarpSpecialize captures that the
+/// ConcurrencySanitizer pass will add via passToWarpSpecialize().
+/// \p numActiveMemTypes  Number of memory types with buffers.
+/// \p hasBarriers        Whether barriers exist in the module.
+/// \p numCommitKinds     Number of distinct commit kinds required.
+inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasBarriers,
+                                      int numCommitKinds) {
+  int perMemType = kCapturesPerMemType * numActiveMemTypes;
+  int barrierCaptures =
+      hasBarriers ? kBarrierBaseCaptures +
+                        kBarrierTrackingCapturesPerMemType * numActiveMemTypes
+                  : 0;
+  return perMemType + barrierCaptures + kFixedCaptures + numCommitKinds;
+}
+
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
                           StringRef message);
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
@@ -50,6 +87,15 @@ uint32_t getMemDescLength(Value buf);
 FuncOp getEntryPoint(ModuleOp module);
 gpu::DistributedEncodingTrait
 getSingleDimSliceEncoding(gpu::DistributedEncodingTrait encoding, int dim);
+
+inline Value maybeAnd(ImplicitLocOpBuilder &b, Value lhs, Value rhs) {
+  if (!lhs)
+    return rhs;
+  if (!rhs)
+    return lhs;
+  return arith::AndIOp::create(b, lhs, rhs);
+}
+
 struct ValueType {
   Value value;
   Type type;
@@ -107,7 +153,7 @@ private:
       SmallVector<SmallVector<triton::BufferRegion>, 2> &bufRegions,
       SmallVector<triton::BufferRegion> &barrierRegions);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,
-                            RegionToValueMap &map);
+                            RegionToValueMap &map, int &captureCounter);
   void createInWarpSpecialize(
       triton::FuncOp func, RegionToValueMap &map,
       std::function<ValueType(ImplicitLocOpBuilder &)> createFn);

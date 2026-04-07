@@ -760,7 +760,10 @@ def get_test_mxfp_variants():
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
-@pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
+@pytest.mark.parametrize("M, N, K",
+                         get_test_mxfp_block_mnk() +
+                         # Add small K testcases
+                         [(16, 64, 32), (64, 128, 64)])
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
 @pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
 @pytest.mark.parametrize("scale_factor", [16, 32])
@@ -1412,6 +1415,108 @@ def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYP
 
     b_triton = b_device.cpu()
     assert torch.equal(b_triton, a)
+
+
+# ---------------------------------------------------------------------------
+# Partitioned TDM copy tests
+#
+# These test the partition-aware TDM lowering path, which adjusts the warp
+# distribution so each wave's tile stays within a single LDS partition.
+# Key scenarios:
+#   - partitionDim=0 vs partitionDim=1
+#   - Single TDM instruction (warps >= numLogicalPieces)
+#   - Multi-instruction split  (warps <  numLogicalPieces)
+#   - Different numPartitions / numGroups combinations
+# ---------------------------------------------------------------------------
+
+
+@gluon.jit
+def partitioned_tdm_copy_kernel(a_ptr, b_ptr, M, N,  #
+                                BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,  #
+                                NUM_PARTITIONS: ttgl.constexpr, NUM_GROUPS: ttgl.constexpr,  #
+                                PARTITION_DIM: ttgl.constexpr):
+    """TDM load with PartitionedSharedLayout, then store via registers."""
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+
+    if PARTITION_DIM == 0:
+        inner_shape_m: ttgl.constexpr = BLOCK_M // (NUM_PARTITIONS * NUM_GROUPS)
+        inner_shape_n: ttgl.constexpr = BLOCK_N
+    else:
+        inner_shape_m: ttgl.constexpr = BLOCK_M
+        inner_shape_n: ttgl.constexpr = BLOCK_N // (NUM_PARTITIONS * NUM_GROUPS)
+
+    inner_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [inner_shape_m, inner_shape_n],
+                                                                             [1, 0])
+    smem_layout: ttgl.constexpr = PartitionedSharedLayout(NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, inner_layout)
+
+    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
+
+    pid_m = ttgl.program_id(axis=0)
+    pid_n = ttgl.program_id(axis=1)
+    idx_m = pid_m * BLOCK_M
+    idx_n = pid_n * BLOCK_N
+
+    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
+    a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+
+    ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    a = a_buffer.load(layout=block_layout)
+
+    offs_bm = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, block_layout))
+    offs_bn = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, block_layout))
+    offs_b = (offs_bm[:, None] * N) + offs_bn[None, :]
+    b_mask = (offs_bm[:, None] < M) & (offs_bn[None, :] < N)
+    ttgl.store(b_ptr + offs_b, a, mask=b_mask)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize(
+    "BLOCK_M,BLOCK_N,NUM_PARTITIONS,NUM_GROUPS,PARTITION_DIM",
+    [
+        # # --- partitionDim = 0 (rows) ---
+        # 2 partitions x 1 group = 2 pieces along dim0 -> 4 warps covers it
+        (64, 32, 2, 1, 0),
+        # 2 partitions x 2 groups = 4 pieces along dim0 -> 4 warps covers it
+        (64, 32, 2, 2, 0),
+        # 2 partitions x 4 groups = 8 pieces along dim0 -> 4 warps < 8 -> 2 instructions
+        (64, 32, 2, 4, 0),
+        # 2 partitions x 8 groups = 16 pieces along dim0 -> 4 warps < 16 -> 4 instructions
+        (128, 64, 2, 2, 0),
+        # --- partitionDim = 1 (cols) ---
+        # 2 partitions x 1 group = 2 pieces along dim1
+        (32, 64, 2, 1, 1),
+        # 2 partitions x 2 groups = 4 pieces along dim1 -> 4 warps covers it
+        (64, 64, 2, 2, 1),
+        # 2 partitions x 4 groups = 8 pieces along dim1 -> 4 warps < 8 -> 2 instructions
+        (64, 128, 2, 4, 1),
+        # 2 partitions x 8 groups = 16 pieces along dim1 -> 4 warps < 16 -> 4 instructions
+        (64, 256, 2, 8, 1),
+    ],
+)
+@pytest.mark.parametrize("num_warps", [4])
+@pytest.mark.parametrize("M,N", [(256, 256)])
+def test_runtime_partitioned_tdm_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, num_warps, M, N):
+    """Test TDM async_load with PartitionedSharedLayout (global -> LDS)."""
+    torch.manual_seed(42)
+    a = torch.randint(0x0, 0xFFFF, (M, N), dtype=torch.uint16)
+    b = torch.zeros_like(a)
+
+    a_device = a.cuda()
+    b_device = b.cuda()
+
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    partitioned_tdm_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                      NUM_PARTITIONS=NUM_PARTITIONS, NUM_GROUPS=NUM_GROUPS, PARTITION_DIM=PARTITION_DIM,
+                                      num_warps=num_warps)
+
+    b_triton = b_device.cpu()
+    mismatched = (b_triton != a).sum().item()
+    total = a.numel()
+    assert mismatched == 0, (f"Mismatch: {mismatched}/{total} ({100*mismatched/total:.1f}%) elements differ. "
+                             f"partitionDim={PARTITION_DIM}, numPartitions={NUM_PARTITIONS}, numGroups={NUM_GROUPS}")
 
 
 @gluon.jit
@@ -2668,6 +2773,15 @@ def test_ws_store_wait_load(XBLOCK):
     arange pattern.
     """
 
+    import os
+    if os.environ.get("TRITON_INSTRUMENTATION_MODE") == "consan":
+        from triton.runtime._allocation import set_profile_allocator
+
+        def alloc_fn(size: int, alignment: int, stream):
+            return torch.empty(size, device="cuda", dtype=torch.int8)
+
+        set_profile_allocator(alloc_fn)
+
     @gluon.jit
     def ws_consumer(smem, ready_bar, done_bar, layout: ttgl.constexpr):
         ttgl.amd.gfx1250.mbarrier.wait(ready_bar, phase=0)
@@ -2729,6 +2843,15 @@ def test_ws_store_wait_load_loop(XBLOCK, NUM_ITERS):
     (executed by default warps) waits for done_bar, loads the accumulated result, and stores it to global memory.
     The test verifies that the output equals the expected arange pattern.
     """
+
+    import os
+    if os.environ.get("TRITON_INSTRUMENTATION_MODE") == "consan":
+        from triton.runtime._allocation import set_profile_allocator
+
+        def alloc_fn(size: int, alignment: int, stream):
+            return torch.empty(size, device="cuda", dtype=torch.int8)
+
+        set_profile_allocator(alloc_fn)
 
     @gluon.jit
     def ws_consumer(smem, ready_bar, done_bar, empty_bar, XBLOCK: ttgl.constexpr, NUM_ITERS: ttgl.constexpr,
@@ -2809,6 +2932,15 @@ def test_runtime_ws_tensor_async_load_store_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM
 
     The test verifies that the output matches the input, confirming that async load/store operations are correctly coordinated by mbarriers.
     """
+
+    import os
+    if os.environ.get("TRITON_INSTRUMENTATION_MODE") == "consan":
+        from triton.runtime._allocation import set_profile_allocator
+
+        def alloc_fn(size: int, alignment: int, stream):
+            return torch.empty(size, device="cuda", dtype=torch.int8)
+
+        set_profile_allocator(alloc_fn)
 
     @gluon.jit
     def ws_producer(a_desc, a_buffer, bars, pid_n, idx_m, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
@@ -2892,6 +3024,15 @@ def test_runtime_ws_tensor_copy_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NU
 
     The test verifies that the output matches the input, confirming correct synchronization.
     """
+
+    import os
+    if os.environ.get("TRITON_INSTRUMENTATION_MODE") == "consan":
+        from triton.runtime._allocation import set_profile_allocator
+
+        def alloc_fn(size: int, alignment: int, stream):
+            return torch.empty(size, device="cuda", dtype=torch.int8)
+
+        set_profile_allocator(alloc_fn)
 
     @gluon.jit
     def ws_producer(a_desc, a_buffer, bars, pid_n, idx_m, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
