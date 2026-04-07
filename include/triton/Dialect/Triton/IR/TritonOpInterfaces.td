@@ -114,7 +114,7 @@ def TT_DescriptorStoreLikeOpInterface : OpInterface<"DescriptorStoreLikeOpInterf
   ];
 }
 
-def PredicateOperandOpInterface : OpInterface<"PredicateOperandOpInterface"> {
+def PredicatedOpInterface : OpInterface<"PredicatedOpInterface"> {
   let description = [{
     Common interface for operations that carry a predicate or mask operand that
     can be combined with a pipeline predicate.

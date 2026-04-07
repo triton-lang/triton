@@ -192,7 +192,7 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     ifOp.getConditionMutable().assign(cnd);
     return op;
   }
-  if (auto predicatedOp = dyn_cast<tt::PredicateOperandOpInterface>(op)) {
+  if (auto predicatedOp = dyn_cast<tt::PredicatedOpInterface>(op)) {
     rewriter.setInsertionPoint(op);
     Value mask =
         getPredMask(rewriter, predicatedOp.getPredicateOperandTypeLike(),
