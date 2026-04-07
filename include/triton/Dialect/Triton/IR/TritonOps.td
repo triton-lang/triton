@@ -266,14 +266,6 @@ def TT_LoadOp : TT_Op<"load", [
       attr-dict `:` type($ptr)
     }];
 
-    let extraClassDeclaration = [{
-      ::mlir::Value getPredicateOperand() { return getMask(); }
-      void setPredicateOperand(::mlir::Value pred) {
-        getMaskMutable().assign(pred);
-      }
-      ::mlir::Type getPredicateOperandTypeLike() { return getPtr().getType(); }
-    }];
-
     let hasCanonicalizer = 1;
 }
 
@@ -313,14 +305,6 @@ def TT_StoreOp : TT_Op<"store", [
       $ptr `,` $value (`,` $mask^)?
       oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
       attr-dict `:` type($ptr)
-    }];
-
-    let extraClassDeclaration = [{
-      ::mlir::Value getPredicateOperand() { return getMask(); }
-      void setPredicateOperand(::mlir::Value pred) {
-        getMaskMutable().assign(pred);
-      }
-      ::mlir::Type getPredicateOperandTypeLike() { return getPtr().getType(); }
     }];
 
     let hasCanonicalizer = 1;
@@ -365,13 +349,6 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
       functional-type(operands, $result)
     }];
 
-    let extraClassDeclaration = [{
-      ::mlir::Value getPredicateOperand() { return getMask(); }
-      void setPredicateOperand(::mlir::Value pred) {
-        getMaskMutable().assign(pred);
-      }
-      ::mlir::Type getPredicateOperandTypeLike() { return getPtr().getType(); }
-    }];
 }
 
 def TT_AtomicCASOp : TT_Op<"atomic_cas", [
