@@ -31,6 +31,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   set(GSAN_HOST_GNU_CXX "${CMAKE_CXX_COMPILER}")
   if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     # Force g++ to be used for querying -print-file-name on libstdc++.so
+    # clang++ does not print an absolute path in this case.
     find_program(GSAN_HOST_GNU_CXX NAMES g++ c++)
   endif()
   if(GSAN_HOST_GNU_CXX)
