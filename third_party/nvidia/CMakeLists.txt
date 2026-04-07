@@ -25,8 +25,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
 
   set(GSAN_RUNTIME_TOOLCHAIN_FLAGS)
+  # Detect the right include directory for C++ stdlib.
+  # The way this is currently done is GCC specific.
+  # TODO: Support libc++-based systems.
   set(GSAN_HOST_GNU_CXX "${CMAKE_CXX_COMPILER}")
   if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # Force g++ to be used for querying -print-file-name on libstdc++.so
     find_program(GSAN_HOST_GNU_CXX NAMES g++ c++)
   endif()
   if(GSAN_HOST_GNU_CXX)
