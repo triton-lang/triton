@@ -40,29 +40,28 @@ llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
 #error "TRITON_VERSION must be defined (ie -DTRITON_VERSION=3.7.0+git...) " \
        "when Triton Extensions are enabled (TRITON_EXT_ENABLED)"
 #else
-  auto pluginTritonVersion =
-      llvm::StringRef(plugin.info->tritonVersion).split('+');
-  auto coreTritonVersion = llvm::StringRef(TRITON_VERSION).split('+');
-  bool isTritonReleaseVersionMatch =
-      pluginTritonVersion.first == coreTritonVersion.first;
-  bool isTritonGitHashVersionMatch =
-      pluginTritonVersion.second == coreTritonVersion.second;
-
   // Here, if TRITON_PLUGIN_VERSION_CHECK is unset, then we simply do a default
   // version check. However, if it is set then we either do a full (git hash)
   // check or we skip all checking.
-  auto doCheck = tools::isEnvValueBool("TRITON_PLUGIN_VERSION_CHECK");
-  bool isTritonVersionMatch =
-      (!doCheck.has_value() && isTritonReleaseVersionMatch) ||
-      (doCheck.has_value() && doCheck.value() && isTritonReleaseVersionMatch &&
-       isTritonGitHashVersionMatch);
+  if (auto doCheck = tools::isEnvValueBool("TRITON_PLUGIN_VERSION_CHECK");
+      !(doCheck.has_value() && !doCheck.value())) {
 
-  if (!isTritonVersionMatch) {
-    return llvm::make_error<llvm::StringError>(
-        Twine("Wrong TRITON version on plugin '") + filename +
-            "'. Got version " + Twine(plugin.info->tritonVersion) +
-            ", supported version is " + Twine(TRITON_VERSION) + ".",
-        llvm::inconvertibleErrorCode());
+    bool isVersionMatch =
+      std::string(plugin.info->tritonVersion) == TRITON_VERSION;
+
+    // Do partial release version check if TRITON_PLUGIN_VERSION_CHECK not set
+    if (!doCheck.has_value()) {
+      auto plugVersion = llvm::StringRef(plugin.info->tritonVersion).split('+');
+      auto coreVersion = llvm::StringRef(TRITON_VERSION).split('+');
+      isVersionMatch = plugVersion.first == coreVersion.first;
+    }
+
+    if (!isVersionMatch)
+      return llvm::make_error<llvm::StringError>(
+          Twine("Wrong TRITON version on plugin '") + filename +
+          "'. Got version " + Twine(plugin.info->tritonVersion) +
+          ", supported version is " + Twine(TRITON_VERSION) + ".",
+          llvm::inconvertibleErrorCode());
   }
 #endif
 
