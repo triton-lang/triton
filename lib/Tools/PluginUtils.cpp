@@ -37,8 +37,7 @@ llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
         llvm::inconvertibleErrorCode());
 
 #if !defined(TRITON_VERSION)
-#error "TRITON_VERSION must be defined (ie -DTRITON_VERSION=3.7.0+git...) " \
-       "when Triton Extensions are enabled (TRITON_EXT_ENABLED)"
+#error "TRITON_VERSION must be defined when TRITON_EXT_ENABLED is enabled"
 #else
   // Here, if TRITON_PLUGIN_VERSION_CHECK is unset, then we simply do a default
   // version check. However, if it is set then we either do a full (git hash)
