@@ -1157,16 +1157,47 @@ def _mix_dot_scaled_elem(val: np.uint64, elem_type: str) -> np.uint64:
     return val
 
 
-def _scale_element(val: np.uint64, scale, idx: int, k: int, mask: np.uint64) -> np.uint64:
-    if scale is not None:
-        return (val * np.uint64(scale[idx, k // 32])) & mask
-    return val
+def _signed_cast_payload_scalar(payload: np.uint64, src_bitwidth: int, dst_bitwidth: int) -> np.uint64:
+    casted = _signed_cast_payload_u64(np.asarray([payload], dtype=np.uint64), src_bitwidth, dst_bitwidth)
+    return np.uint64(casted[0])
+
+
+def _dot_scaled_compute_payload_elem(val: np.uint64, elem_type: str, compute_type: str) -> np.uint64:
+    assert compute_type in ("bf16", "fp16")
+    compute_width = 16
+    if elem_type in ("e4m3", "e5m2"):
+        payload = _mix_dot_scaled_elem(val, elem_type)
+        return _signed_cast_payload_scalar(payload, 8, compute_width)
+    if elem_type == "bf16":
+        payload = _mix_float_scalar(val, 16, 0x3F80)
+        return _signed_cast_payload_scalar(payload, 16, compute_width)
+    if elem_type == "fp16":
+        payload = _mix_float_scalar(val, 16, 0x3C00)
+        return _signed_cast_payload_scalar(payload, 16, compute_width)
+
+    # Match sanitized fp4_to_fp: unpacked e2m1 bits are zero-extended into the
+    # destination floating-point payload.  Float6 formats use the same fallback
+    # until the sanitizer has dtype-specific float6 mixing.
+    return val & np.uint64(0xFFFF)
+
+
+def _dot_scaled_scale_payload(raw_scale: np.uint64, compute_type: str) -> np.uint64:
+    if compute_type == "bf16":
+        raw_bf16 = (raw_scale & np.uint64(0xFF)) << np.uint64(7)
+        return _mix_float_scalar(raw_bf16, 16, 0x3F80)
+    if compute_type == "fp16":
+        raw_f32 = (raw_scale & np.uint64(0xFF)) << np.uint64(23)
+        payload_f32 = _mix_float_scalar(raw_f32, 32, 0x3F800000)
+        return _signed_cast_payload_scalar(payload_f32, 32, 16)
+    raise ValueError(f"unsupported dot_scaled compute type: {compute_type}")
 
 
 def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_scale, a_pack: int, b_pack: int,
                             type_a: str, type_b: str) -> np.ndarray:
     M, N = a_data.shape[0], b_data.shape[1]
     K = a_data.shape[1] * a_pack
+    compute_type = "fp16" if "fp16" in (type_a, type_b) else "bf16"
+    compute_mask = np.uint64(0xFFFF)
     mask = np.uint64(0xFFFFFFFF)
     out = np.zeros((M, N), dtype=np.uint64)
     for i, j in itertools.product(range(M), range(N)):
@@ -1174,10 +1205,14 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
         for kk in range(K):
             a_val = _unpack_element(a_data, i, kk, a_pack, pack_axis=1)
             b_val = _unpack_element(b_data, kk, j, b_pack, pack_axis=0)
-            a_val = _mix_dot_scaled_elem(a_val, type_a)
-            b_val = _mix_dot_scaled_elem(b_val, type_b)
-            a_val = _scale_element(a_val, a_scale, i, kk, mask)
-            b_val = _scale_element(b_val, b_scale, j, kk, mask)
+            a_val = _dot_scaled_compute_payload_elem(a_val, type_a, compute_type)
+            b_val = _dot_scaled_compute_payload_elem(b_val, type_b, compute_type)
+            if a_scale is not None:
+                a_scale_val = _dot_scaled_scale_payload(np.uint64(a_scale[i, kk // 32]), compute_type)
+                a_val = (a_val * a_scale_val) & compute_mask
+            if b_scale is not None:
+                b_scale_val = _dot_scaled_scale_payload(np.uint64(b_scale[j, kk // 32]), compute_type)
+                b_val = (b_val * b_scale_val) & compute_mask
             s = (s + a_val * b_val) & mask
         out[i, j] = s
     return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))

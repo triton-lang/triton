@@ -916,6 +916,108 @@ Value unpackPackedFp4Slice(PatternRewriter &rewriter, Location loc,
   return arith::AndIOp::create(rewriter, loc, shifted, mask);
 }
 
+FloatType getDotScaledComputeFloatType(PatternRewriter &rewriter,
+                                        tt::ScaleDotElemType aElemType,
+                                        tt::ScaleDotElemType bElemType) {
+  if (aElemType == tt::ScaleDotElemType::FP16 ||
+      bElemType == tt::ScaleDotElemType::FP16)
+    return Float16Type::get(rewriter.getContext());
+  return BFloat16Type::get(rewriter.getContext());
+}
+
+FloatType getDotScaledStorageFloatType(PatternRewriter &rewriter,
+                                        tt::ScaleDotElemType elemType) {
+  MLIRContext *ctx = rewriter.getContext();
+  switch (elemType) {
+  case tt::ScaleDotElemType::E4M3:
+    return Float8E4M3FNType::get(ctx);
+  case tt::ScaleDotElemType::E5M2:
+    return Float8E5M2Type::get(ctx);
+  case tt::ScaleDotElemType::BF16:
+    return BFloat16Type::get(ctx);
+  case tt::ScaleDotElemType::FP16:
+    return Float16Type::get(ctx);
+  default:
+    return {};
+  }
+}
+
+Value castDotScaledOperandToComputePayload(PatternRewriter &rewriter,
+                                            Location loc, Value slice,
+                                            tt::ScaleDotElemType elemType,
+                                            FloatType computeElem) {
+  Type computeIntTy = getTypeWithElement(
+      slice.getType(), IntegerType::get(rewriter.getContext(),
+                                        computeElem.getIntOrFloatBitWidth()));
+
+  if (auto storageFloat = getDotScaledStorageFloatType(rewriter, elemType)) {
+    Value payload;
+    if (isFloatLike(slice.getType())) {
+      payload = bitcastToInt(rewriter, loc, slice);
+    } else {
+      Value raw = castIntValueToType(
+          rewriter, loc, slice,
+          getTypeWithElement(slice.getType(),
+                             IntegerType::get(rewriter.getContext(),
+                                              storageFloat.getWidth())));
+      payload = mixFloatToInt(rewriter, loc, raw, storageFloat);
+    }
+    return castSignedIntValueToType(rewriter, loc, payload, computeIntTy);
+  }
+
+  // Match ttg.fp4_to_fp sanitization: unpacked e2m1 nibbles are payloads in
+  // the destination floating type.  The 6-bit formats are not packed here, but
+  // use the same payload-preserving integer cast until we add a float6 mixer.
+  Value rawPayload = bitcastToInt(rewriter, loc, slice);
+  return castIntValueToType(rewriter, loc, rawPayload, computeIntTy);
+}
+
+Value scaleI8ToF32Payload(PatternRewriter &rewriter, Location loc,
+                           Value scaleI) {
+  auto i32Elem = rewriter.getI32Type();
+  auto i32Ty = getTypeWithElement(scaleI.getType(), i32Elem);
+  Value scaleI32 = castIntValueToType(rewriter, loc, scaleI, i32Ty);
+  auto shift = getUIntConstantLike(rewriter, loc, i32Ty, 23);
+  Value rawF32 = arith::ShLIOp::create(rewriter, loc, scaleI32, shift);
+  return mixFloatToInt(rewriter, loc, rawF32, rewriter.getF32Type());
+}
+
+Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
+                               Value scaleI, FloatType computeElem) {
+  unsigned computeWidth = computeElem.getIntOrFloatBitWidth();
+  Type computeIntTy = getTypeWithElement(
+      scaleI.getType(), IntegerType::get(rewriter.getContext(), computeWidth));
+
+  if (computeElem == rewriter.getF16Type()) {
+    // The real decomposition builds an f32 E8M0 scale and truncates it to f16.
+    // Under FPSan, truncf means mix-f32, signed-truncate, unmix-f16.
+    Value payloadF32 = scaleI8ToF32Payload(rewriter, loc, scaleI);
+    return castSignedIntValueToType(rewriter, loc, payloadF32, computeIntTy);
+  }
+
+  Value scaleComputeI = castIntValueToType(rewriter, loc, scaleI, computeIntTy);
+  unsigned shiftValue = computeElem.getFPMantissaWidth() - 1;
+  auto shift = getUIntConstantLike(rewriter, loc, computeIntTy, shiftValue);
+  Value rawCompute = arith::ShLIOp::create(rewriter, loc, scaleComputeI, shift);
+  return mixFloatToInt(rewriter, loc, rawCompute, computeElem);
+}
+
+Value castDotScaledScaleToComputePayload(PatternRewriter &rewriter,
+                                          Location loc, Value scaleSlice,
+                                          FloatType computeElem) {
+  Type computeIntTy = getTypeWithElement(
+      scaleSlice.getType(),
+      IntegerType::get(rewriter.getContext(),
+                       computeElem.getIntOrFloatBitWidth()));
+  if (isFloatLike(scaleSlice.getType())) {
+    Value payload = bitcastToInt(rewriter, loc, scaleSlice);
+    return castSignedIntValueToType(rewriter, loc, payload, computeIntTy);
+  }
+  return scaleI8ToComputePayload(rewriter, loc, bitcastToInt(rewriter, loc,
+                                                             scaleSlice),
+                                  computeElem);
+}
+
 struct DotScaleConfig {
   Value aScalePtr;
   Value bScalePtr;
@@ -927,6 +1029,9 @@ struct DotScaleConfig {
   int64_t bKPackFactor = 1;
   int64_t aScaleFactor = 0;
   int64_t bScaleFactor = 0;
+  tt::ScaleDotElemType aElemType;
+  tt::ScaleDotElemType bElemType;
+  FloatType computeElem;
 };
 
 Value loadScaleSlice(PatternRewriter &rewriter, Location loc, bool isLhs,
@@ -954,29 +1059,32 @@ Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aSlice,
                      Value bSlice, Value aScaleSlice, Value bScaleSlice,
                      int64_t m, int64_t n,
                      ttg::DistributedEncodingTrait accLayout,
-                     IntegerType accElem) {
+                     IntegerType accElem, const DotScaleConfig &scale = {}) {
   OpBuilder::InsertionGuard guard(rewriter);
   auto fullTy = RankedTensorType::get({m, n}, accElem, accLayout);
-  auto aI = bitcastToInt(rewriter, loc, aSlice);
-  auto bI = bitcastToInt(rewriter, loc, bSlice);
-  auto scaleElem = rewriter.getI16Type();
-  if (aScaleSlice) {
-    auto aScaleI = bitcastToInt(rewriter, loc, aScaleSlice);
-    aI = castIntValueToType(rewriter, loc, aI,
-                            getTypeWithElement(aI.getType(), scaleElem));
-    aScaleI =
-        castIntValueToType(rewriter, loc, aScaleI,
-                           getTypeWithElement(aScaleI.getType(), scaleElem));
-    aI = arith::MulIOp::create(rewriter, loc, aI, aScaleI);
-  }
-  if (bScaleSlice) {
-    auto bScaleI = bitcastToInt(rewriter, loc, bScaleSlice);
-    bI = castIntValueToType(rewriter, loc, bI,
-                            getTypeWithElement(bI.getType(), scaleElem));
-    bScaleI =
-        castIntValueToType(rewriter, loc, bScaleI,
-                           getTypeWithElement(bScaleI.getType(), scaleElem));
-    bI = arith::MulIOp::create(rewriter, loc, bI, bScaleI);
+
+  Value aI;
+  Value bI;
+  if (scale.computeElem) {
+    aI = castDotScaledOperandToComputePayload(
+        rewriter, loc, aSlice, scale.aElemType, scale.computeElem);
+    bI = castDotScaledOperandToComputePayload(
+        rewriter, loc, bSlice, scale.bElemType, scale.computeElem);
+    if (aScaleSlice) {
+      auto aScaleI =
+          castDotScaledScaleToComputePayload(rewriter, loc, aScaleSlice,
+                                             scale.computeElem);
+      aI = arith::MulIOp::create(rewriter, loc, aI, aScaleI);
+    }
+    if (bScaleSlice) {
+      auto bScaleI =
+          castDotScaledScaleToComputePayload(rewriter, loc, bScaleSlice,
+                                             scale.computeElem);
+      bI = arith::MulIOp::create(rewriter, loc, bI, bScaleI);
+    }
+  } else {
+    aI = bitcastToInt(rewriter, loc, aSlice);
+    bI = bitcastToInt(rewriter, loc, bSlice);
   }
   aI = castIntValueToType(rewriter, loc, aI,
                           getTypeWithElement(aI.getType(), accElem));
@@ -1091,7 +1199,8 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
         loadScaleSlice(rewriter, loc, /*isLhs=*/false, scale, nIdxI32, kI32);
   }
   Value partial = emulateDotStep(rewriter, loc, aSlice, bSlice, aScaleSlice,
-                                 bScaleSlice, tileM, tileN, accLayout, accElem);
+                                 bScaleSlice, tileM, tileN, accLayout, accElem,
+                                 scale);
   Value acc = kLoop.getRegionIterArgs()[0];
   Value next = arith::AddIOp::create(rewriter, loc, acc, partial);
   scf::YieldOp::create(rewriter, loc, next);
@@ -1490,6 +1599,10 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
                       bElemType == tt::ScaleDotElemType::FP16;
 
     DotScaleConfig scale;
+    scale.aElemType = aElemType;
+    scale.bElemType = bElemType;
+    scale.computeElem =
+        getDotScaledComputeFloatType(rewriter, aElemType, bElemType);
     scale.aKPackFactor = aKPackFactor;
     scale.bKPackFactor = bKPackFactor;
     if (aScale && !skipAScale) {
