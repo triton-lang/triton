@@ -289,7 +289,8 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [
 }
 
 def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<PredicateOperandOpInterface>]> {
   let summary = "Signal a barrier of an expected number of bytes to be copied.";
 
   let description = [{
@@ -307,10 +308,19 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
   let assemblyFormat = [{
     $alloc `,` $size attr-dict `,` $pred `:` qualified(type($alloc))
   }];
+
+  let extraClassDeclaration = [{
+    ::mlir::Value getPredicateOperand() { return getPred(); }
+    void setPredicateOperand(::mlir::Value pred) {
+      getPredMutable().assign(pred);
+    }
+    ::mlir::Type getPredicateOperandTypeLike() { return getPred().getType(); }
+  }];
 }
 
 def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
-    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<PredicateOperandOpInterface>]> {
   let summary = "wait until the mbarrier phase completes.";
 
   let description = [{
@@ -353,11 +363,21 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     $alloc `,` $phase (`,` $pred^)? (`deps` $deps^)?
     attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?
   }];
+  let extraClassDeclaration = [{
+    ::mlir::Value getPredicateOperand() { return getPred(); }
+    void setPredicateOperand(::mlir::Value pred) {
+      getPredMutable().assign(pred);
+    }
+    ::mlir::Type getPredicateOperandTypeLike() {
+      return ::mlir::IntegerType::get(getContext(), 1);
+    }
+  }];
   let hasVerifier = 1;
 }
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<PredicateOperandOpInterface>]> {
   let summary = "perform the arrive operation on an mbarrier";
   let description = [{
     The `ttng.arrive_barrier` operation performs the "arrive" operation on an
@@ -391,6 +411,16 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     }]>
   ];
 
+  let extraClassDeclaration = [{
+    ::mlir::Value getPredicateOperand() { return getPred(); }
+    void setPredicateOperand(::mlir::Value pred) {
+      getPredMutable().assign(pred);
+    }
+    ::mlir::Type getPredicateOperandTypeLike() {
+      return ::mlir::IntegerType::get(getContext(), 1);
+    }
+  }];
+
   let hasVerifier = 1;
 }
 
@@ -406,7 +436,8 @@ def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive", [
 
 
 def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [
-    AttrSizedOperandSegments, DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
+    AttrSizedOperandSegments, DeclareOpInterfaceMethods<MBarrierOpInterface>,
+    DeclareOpInterfaceMethods<PredicateOperandOpInterface>]> {
   let summary = "copy data based on descriptor from global memory to local memory asynchronously";
 
   let description = [{
@@ -466,6 +497,14 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
     attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];
+
+  let extraClassDeclaration = [{
+    ::mlir::Value getPredicateOperand() { return getPred(); }
+    void setPredicateOperand(::mlir::Value pred) {
+      getPredMutable().assign(pred);
+    }
+    ::mlir::Type getPredicateOperandTypeLike() { return getPred().getType(); }
+  }];
 }
 
 def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global"> {
@@ -517,7 +556,8 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [MemoryEffects<[MemRead<
 }
 
 def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
+    DeclareOpInterfaceMethods<MBarrierOpInterface>,
+    DeclareOpInterfaceMethods<PredicateOperandOpInterface>]> {
   let summary = "gather data based on descriptor from global memory to local memory asynchronously";
 
   let description = [{
@@ -538,6 +578,14 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather", [
   let assemblyFormat = [{
     $desc `[` $x_offsets `,` $y_offset `]` $result `,` $barrier `,` $pred
     attr-dict `:` type(operands)
+  }];
+
+  let extraClassDeclaration = [{
+    ::mlir::Value getPredicateOperand() { return getPred(); }
+    void setPredicateOperand(::mlir::Value pred) {
+      getPredMutable().assign(pred);
+    }
+    ::mlir::Type getPredicateOperandTypeLike() { return getPred().getType(); }
   }];
 
   let hasVerifier = 1;
@@ -584,6 +632,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
+    DeclareOpInterfaceMethods<PredicateOperandOpInterface>,
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
     AttrSizedOperandSegments
 ]> {
@@ -638,6 +687,12 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     qualified(type($d)) (`,` qualified(type($barriers))^)?
   }];
 
+  let extraClassDeclaration = [{
+    ::mlir::Value getPredicateOperand() { return getPredicate(); }
+    void setPredicateOperand(::mlir::Value pred) { setPredicate(pred); }
+    ::mlir::Type getPredicateOperandTypeLike() { return getPred().getType(); }
+  }];
+
   let hasVerifier = 1;
 }
 
@@ -645,6 +700,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
+    DeclareOpInterfaceMethods<PredicateOperandOpInterface>,
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
     AttrSizedOperandSegments
 ]> {
@@ -685,6 +741,9 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     int64_t getBlockM();
     int64_t getBlockN();
     int64_t getBlockK();
+    ::mlir::Value getPredicateOperand() { return getPredicate(); }
+    void setPredicateOperand(::mlir::Value pred) { setPredicate(pred); }
+    ::mlir::Type getPredicateOperandTypeLike() { return getPred().getType(); }
   }];
 
   let builders = [
@@ -715,7 +774,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
 }
 
 def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
-    DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
+    DeclareOpInterfaceMethods<MBarrierOpInterface>,
+    DeclareOpInterfaceMethods<PredicateOperandOpInterface>]> {
   let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
 
   let description = [{
@@ -753,6 +813,16 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
   let assemblyFormat = [{
     $barrier (`,` $pred^)? (`descs` $descs^)? attr-dict `:`
     qualified(type($barrier)) (`,` qualified(type($descs))^)?
+  }];
+
+  let extraClassDeclaration = [{
+    ::mlir::Value getPredicateOperand() { return getPred(); }
+    void setPredicateOperand(::mlir::Value pred) {
+      getPredMutable().assign(pred);
+    }
+    ::mlir::Type getPredicateOperandTypeLike() {
+      return ::mlir::IntegerType::get(getContext(), 1);
+    }
   }];
 
   let hasVerifier = 1;
@@ -858,7 +928,8 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
   }];
 }
 
-def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store"> {
+def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store", [
+    DeclareOpInterfaceMethods<PredicateOperandOpInterface>]> {
   let summary = "Store a distributed tensor into a buffer in tensor memory";
 
   let description = [{
@@ -885,6 +956,13 @@ def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store"> {
   let assemblyFormat = [{
     $src `,` $dst `` custom<Token>($dep, type($token)) `,` $pred
     attr-dict `:` type($src) `->` qualified(type($dst))
+  }];
+  let extraClassDeclaration = [{
+    ::mlir::Value getPredicateOperand() { return getPred(); }
+    void setPredicateOperand(::mlir::Value pred) {
+      getPredMutable().assign(pred);
+    }
+    ::mlir::Type getPredicateOperandTypeLike() { return getPred().getType(); }
   }];
   let hasVerifier = 1;
 }

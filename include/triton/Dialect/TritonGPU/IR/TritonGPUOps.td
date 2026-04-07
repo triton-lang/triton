@@ -89,6 +89,7 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
 
 def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<PredicateOperandOpInterface>,
   OptionalTypesMatchWith<"infer mask type from src type",
                  "src", "mask", "getI1SameShape($_self)">,
   OptionalTypesMatchWith<"infer other type from src type",
@@ -132,6 +133,11 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
       }
       return validLoadBytes;
     }
+    ::mlir::Value getPredicateOperand() { return getMask(); }
+    void setPredicateOperand(::mlir::Value pred) {
+      getMaskMutable().assign(pred);
+    }
+    ::mlir::Type getPredicateOperandTypeLike() { return getSrc().getType(); }
   }];
 
   // Specify cacheModifier and evictionPolicy explicitly, instead of leaving
