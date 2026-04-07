@@ -56,7 +56,6 @@ enum class UnaryOpId : uint64_t {
   Floor,
   Ceil,
   PreciseSqrt,
-  DivInv,
 };
 
 constexpr uint64_t getUnaryOpId(UnaryOpId opId) {
@@ -527,10 +526,29 @@ Value fpsanUnaryTagged(PatternRewriter &rewriter, Location loc, Value input,
   return bitcastToFloat(rewriter, loc, outI, input.getType());
 }
 
+Value fpsanIntInv(PatternRewriter &rewriter, Location loc, Value u) {
+  auto one = getU32ConstantLike(rewriter, loc, u.getType(), 1u);
+  auto two = getU32ConstantLike(rewriter, loc, u.getType(), 2u);
+  auto evenMask = getIntConstantLike(rewriter, loc, u.getType(), -2);
+
+  Value a = arith::OrIOp::create(rewriter, loc, u, one);
+  Value x = arith::SubIOp::create(rewriter, loc, two, a);
+  for (unsigned correctBits = 2; correctBits < getIntBitwidth(u.getType());
+       correctBits *= 2) {
+    Value ax = arith::MulIOp::create(rewriter, loc, a, x);
+    Value factor = arith::SubIOp::create(rewriter, loc, two, ax);
+    x = arith::MulIOp::create(rewriter, loc, x, factor);
+  }
+
+  Value evenPart = arith::AndIOp::create(rewriter, loc, x, evenMask);
+  Value originalParity = arith::AndIOp::create(rewriter, loc, u, one);
+  return arith::OrIOp::create(rewriter, loc, evenPart, originalParity);
+}
+
 Value fpsanFDiv(PatternRewriter &rewriter, Location loc, Value num, Value den) {
   auto numI = bitcastToInt(rewriter, loc, num);
-  auto inv = bitcastToInt(
-      rewriter, loc, fpsanUnaryTagged(rewriter, loc, den, UnaryOpId::DivInv));
+  auto denI = bitcastToInt(rewriter, loc, den);
+  auto inv = fpsanIntInv(rewriter, loc, denI);
   auto resI = arith::MulIOp::create(rewriter, loc, numI, inv);
   return bitcastToFloat(rewriter, loc, resI, num.getType());
 }

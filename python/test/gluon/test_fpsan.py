@@ -132,7 +132,6 @@ OP_TO_ID_U64 = {
     "floor": np.uint64(9),
     "ceil": np.uint64(10),
     "sqrt_rn": np.uint64(11),
-    "div_inv": np.uint64(12),
 }
 
 OP_TO_TAG_U32 = {name: np.uint32(murmur64Mixer(op_id) & np.uint64(0xFFFFFFFF)) for name, op_id in OP_TO_ID_U64.items()}
@@ -146,13 +145,22 @@ def _expected_unary_tag_payload_u32(x_u32: np.ndarray, op: str) -> np.ndarray:
     return (out_u64 & np.uint64(0xFFFFFFFF)).astype(np.uint32)
 
 
+def _expected_u32_inv(x_u32: np.ndarray) -> np.ndarray:
+    mask = np.uint64(0xFFFFFFFF)
+    a = x_u32.astype(np.uint64) | np.uint64(1)
+    x = (np.uint64(2) - a) & mask
+    for _ in range(4):
+        factor = (np.uint64(2) - ((a * x) & mask)) & mask
+        x = (x * factor) & mask
+    x = (x & np.uint64(0xFFFFFFFE)) | (x_u32.astype(np.uint64) & np.uint64(1))
+    return x.astype(np.uint32)
+
+
 def _expected_div_payload_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
-    # fpsan division is defined as num_bits * tagged(den_bits, DivInvOpId) mod 2^32.
-    # Keep this in sync with UnaryOpId::DivInv in FpSanitizer.cpp.
+    # fpsan division is defined as num_bits * u32_inv(den_bits) mod 2^32.
     num = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
-    den = _mix_f32_bits_to_payload_u32(y_i32).astype(np.uint64)
-    tagged = _expected_unary_tag_payload_u32(den.astype(np.uint32), "div_inv").astype(np.uint64)
-    return _payload_u32_to_f32_bits_i32(num * tagged)
+    inv = _expected_u32_inv(_mix_f32_bits_to_payload_u32(y_i32)).astype(np.uint64)
+    return _payload_u32_to_f32_bits_i32(num * inv)
 
 
 def _expected_exp2_i32(x_i32: np.ndarray) -> np.ndarray:
@@ -350,6 +358,19 @@ def _constant_identity_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOC
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@gluon.jit
+def _reciprocal_involution_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexpr,
+                                  THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    z = 1.0 / (1.0 / x)
+    gl.store(out_ptr + offs, z, mask=mask)
+
+
 @pytest.mark.parametrize("op", ["mul_one", "add_zero"])
 def test_constant_identity_noop(device, op, fresh_knobs):
     _require_cuda_backend(device)
@@ -370,6 +391,31 @@ def test_constant_identity_noop(device, op, fresh_knobs):
         triton.TensorWrapper(out, dtype=torch.float32),
         n_elements,
         OP=op,
+        BLOCK=BLOCK,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+
+    _assert_payload_equal(out, x)
+
+
+def test_reciprocal_involution(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device="cuda")
+    g.manual_seed(3)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _reciprocal_involution_kernel[grid](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        n_elements,
         BLOCK=BLOCK,
         THREADS_PER_WARP=THREADS_PER_WARP,
     )
@@ -501,6 +547,24 @@ def _exp_scaled_identity_kernel(x_ptr, out_ptr, n_elements, MODE: gl.constexpr, 
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@gluon.jit
+def _exp_inverse_identity_kernel(x_ptr, out_ptr, n_elements, MODE: gl.constexpr, BLOCK: gl.constexpr,
+                                 THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    if MODE == "exp_neg":
+        z = gl.exp(-x)
+    elif MODE == "exp_recip":
+        z = 1.0 / gl.exp(x)
+    else:
+        gl.static_assert(False, "unsupported MODE")
+    gl.store(out_ptr + offs, z, mask=mask)
+
+
 @pytest.mark.parametrize(
     "op",
     [
@@ -606,6 +670,33 @@ def test_exp_exp2_scaled_identity(device, fresh_knobs):
                                       THREADS_PER_WARP=THREADS_PER_WARP)
 
     _assert_payload_equal(out_exp, out_exp2)
+
+
+def test_exp_neg_reciprocal_identity(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device="cuda")
+    g.manual_seed(4)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out_neg = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    out_recip = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    out_neg_w = triton.TensorWrapper(out_neg, dtype=torch.float32)
+    out_recip_w = triton.TensorWrapper(out_recip, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _exp_inverse_identity_kernel[grid](xw, out_neg_w, n_elements, MODE="exp_neg", BLOCK=BLOCK,
+                                       THREADS_PER_WARP=THREADS_PER_WARP)
+    _exp_inverse_identity_kernel[grid](xw, out_recip_w, n_elements, MODE="exp_recip", BLOCK=BLOCK,
+                                       THREADS_PER_WARP=THREADS_PER_WARP)
+
+    _assert_payload_equal(out_neg, out_recip)
 
 
 @gluon.jit
