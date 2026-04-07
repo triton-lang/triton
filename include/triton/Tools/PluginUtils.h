@@ -31,7 +31,7 @@
 ///
 /// [MLIR_PLUGIN_API_VERSION]:
 /// https://github.com/llvm/llvm-project/blob/80d6e0b8/mlir/include/mlir/Tools/Plugins/PassPlugin.h#L32
-#define TRITON_PLUGIN_API_VERSION 1
+#define TRITON_PLUGIN_API_VERSION 2
 
 /// Use this helper macro on the public entry point for a Triton plugin.
 #define TRITON_PLUGIN_API extern "C" __attribute__((visibility("default")))
