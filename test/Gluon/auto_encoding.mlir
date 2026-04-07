@@ -178,3 +178,24 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return %out : tensor<16xi32, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @infer_reduce_to_scalar
+  // CHECK-NOT: auto_encoding
+  // CHECK: "tt.reduce"
+  // CHECK: tt.return
+  tt.func public @infer_reduce_to_scalar() -> i32 {
+    %0 = arith.constant dense<1> : tensor<16xi32, #gluon.auto_encoding>
+    %1 = gluon.set_auto_layout %0 : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked>
+    %2 = "tt.reduce"(%0) <{axis = 0 : i32}> ({
+    ^bb0(%lhs: i32, %rhs: i32):
+      %3 = arith.addi %lhs, %rhs : i32
+      tt.reduce.return %3 : i32
+    }) : (tensor<16xi32, #gluon.auto_encoding>) -> i32
+    tt.return %2 : i32
+  }
+}
