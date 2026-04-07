@@ -55,9 +55,7 @@ void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
 
 Value LoadOp::getPredicateOperand() { return getMask(); }
 
-void LoadOp::setPredicateOperand(Value pred) {
-  getMaskMutable().assign(pred);
-}
+void LoadOp::setPredicateOperand(Value pred) { getMaskMutable().assign(pred); }
 
 Type LoadOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
@@ -113,9 +111,7 @@ void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
 
 Value StoreOp::getPredicateOperand() { return getMask(); }
 
-void StoreOp::setPredicateOperand(Value pred) {
-  getMaskMutable().assign(pred);
-}
+void StoreOp::setPredicateOperand(Value pred) { getMaskMutable().assign(pred); }
 
 Type StoreOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
