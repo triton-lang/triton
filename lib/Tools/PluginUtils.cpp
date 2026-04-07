@@ -19,7 +19,7 @@ static bool isTritonAndPluginsVersionsMatch(const std::string &pluginVersion) {
     return true;
 
   // Check full version string when TRITON_PLUGIN_VERSION_CHECK is set true
-  if (doCheck.has_value() && doCheck.has_value())
+  if (doCheck.has_value() && doCheck.value())
     return pluginVersion == TRITON_VERSION;
 
   // Do partial release version check when TRITON_PLUGIN_VERSION_CHECK unset
