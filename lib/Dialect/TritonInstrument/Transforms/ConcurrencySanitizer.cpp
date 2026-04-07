@@ -172,6 +172,8 @@ Value createCTABitset(ImplicitLocOpBuilder &b, uint32_t pattern,
 }
 
 Value getMulticastRecipientCTAs(ImplicitLocOpBuilder &b, Value alloc) {
+  // Return the CTA rows touched by an alloc: current CTA for
+  // non-broadcast allocs, or all CTAs in the current multicast group.
   uint16_t broadcastMask = getBlockBroadcastMask(alloc);
   if (!broadcastMask)
     return currentCTAMask(b);
@@ -284,10 +286,6 @@ Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   return currentCTAMask(b);
 }
 
-Value getWaitRecipientCTAs(ImplicitLocOpBuilder &b, Value barrier) {
-  return getMulticastRecipientCTAs(b, barrier);
-}
-
 class ConcurrencySanitizerImpl {
 public:
   ConcurrencySanitizerImpl(ModuleOp module, const ConSanTargetHooks *hooks)
@@ -364,7 +362,7 @@ private:
         funcBuilder.createVerifyBarrierInitializedCall(b, barrier, pred, op,
                                                        currentCTAMask(b));
         funcBuilder.createInvalidateBarrierStateCall(b, barrier, pred, op);
-        Value recipientCTAs = getLeaderCTA(b, barrier);
+        Value recipientCTAs = getMulticastRecipientCTAs(b, barrier);
         for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
           funcBuilder.createClearBarrierWriteTrackingCall(
               b, barrier, pred, memType, op, recipientCTAs);
@@ -429,7 +427,7 @@ private:
            "barrier descriptors must exist when instrumenting wait");
     wb.setInsertionPointAfter(op);
     tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
-    Value recipientCTAs = getWaitRecipientCTAs(wb, alloc);
+    Value recipientCTAs = getMulticastRecipientCTAs(wb, alloc);
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       funcBuilder.createTransferVisibleWritesCall(
           wb, alloc, getThreadPeersMask(thread), pred, memType, op,
