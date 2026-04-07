@@ -50,25 +50,49 @@ def _u32_to_i32(x_u32: np.ndarray) -> np.ndarray:
     return x_u32.view(np.int32)
 
 
+def _mix_f32_bits_to_payload_u32(x_i32: np.ndarray) -> np.ndarray:
+    x = _as_u32(x_i32).astype(np.uint64)
+    neg = (x & np.uint64(0x80000000)) != 0
+    sign = np.where(neg, np.uint64(0x80000000), np.uint64(0))
+    y = ((x ^ sign) * np.uint64(922291)) & np.uint64(0x7FFFFFFF)
+    z = y ^ (y >> np.uint64(23))
+    factor = np.where(neg, np.uint64(1110447099), np.uint64(1037036549))
+    return (((z * factor) & np.uint64(0x7FFFFFFF)) ^ sign).astype(np.uint32)
+
+
+def _unmix_payload_u32_to_f32_bits_i32(v_u32: np.ndarray) -> np.ndarray:
+    assert v_u32.dtype == np.uint32
+    v = v_u32.astype(np.uint64)
+    neg = (v & np.uint64(0x80000000)) != 0
+    sign = np.where(neg, np.uint64(0x80000000), np.uint64(0))
+    w = v ^ sign
+    factor = np.where(neg, np.uint64(427818803), np.uint64(1719664845))
+    z = (w * factor) & np.uint64(0x7FFFFFFF)
+    y = z ^ (z >> np.uint64(23))
+    x = (y * np.uint64(60539)) & np.uint64(0x7FFFFFFF)
+    return _u32_to_i32((x ^ sign).astype(np.uint32))
+
+
+def _payload_u32_to_f32_bits_i32(x_u64: np.ndarray) -> np.ndarray:
+    return _unmix_payload_u32_to_f32_bits_i32((x_u64 & np.uint64(0xFFFFFFFF)).astype(np.uint32))
+
+
 def _expected_add_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
-    x_u32 = _as_u32(x_i32).astype(np.uint64)
-    y_u32 = _as_u32(y_i32).astype(np.uint64)
-    out_u32 = ((x_u32 + y_u32) & np.uint64(0xFFFFFFFF)).astype(np.uint32)
-    return _u32_to_i32(out_u32)
+    x_u32 = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
+    y_u32 = _mix_f32_bits_to_payload_u32(y_i32).astype(np.uint64)
+    return _payload_u32_to_f32_bits_i32(x_u32 + y_u32)
 
 
 def _expected_sub_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
-    x_u32 = _as_u32(x_i32).astype(np.uint64)
-    y_u32 = _as_u32(y_i32).astype(np.uint64)
-    out_u32 = ((x_u32 - y_u32) & np.uint64(0xFFFFFFFF)).astype(np.uint32)
-    return _u32_to_i32(out_u32)
+    x_u32 = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
+    y_u32 = _mix_f32_bits_to_payload_u32(y_i32).astype(np.uint64)
+    return _payload_u32_to_f32_bits_i32(x_u32 - y_u32)
 
 
 def _expected_mul_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
-    x_u32 = _as_u32(x_i32).astype(np.uint64)
-    y_u32 = _as_u32(y_i32).astype(np.uint64)
-    out_u32 = ((x_u32 * y_u32) & np.uint64(0xFFFFFFFF)).astype(np.uint32)
-    return _u32_to_i32(out_u32)
+    x_u32 = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
+    y_u32 = _mix_f32_bits_to_payload_u32(y_i32).astype(np.uint64)
+    return _payload_u32_to_f32_bits_i32(x_u32 * y_u32)
 
 
 def _expected_srem_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
@@ -76,12 +100,12 @@ def _expected_srem_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     # NOTE: Python/NumPy '%' uses floor division for negatives, so we implement explicitly.
     #
     # In fpsan mode we force denominator non-zero using `den | 1` in the *payload* domain.
-    x = x_i32.astype(np.int64)
-    y_safe_u32 = (_as_u32(y_i32) | np.uint32(1)).astype(np.uint32)
+    x = _u32_to_i32(_mix_f32_bits_to_payload_u32(x_i32)).astype(np.int64)
+    y_safe_u32 = (_mix_f32_bits_to_payload_u32(y_i32) | np.uint32(1)).astype(np.uint32)
     y = _u32_to_i32(y_safe_u32).astype(np.int64)
     q = (np.sign(x) * np.sign(y) * (np.abs(x) // np.abs(y))).astype(np.int64)
-    r = (x - q * y).astype(np.int32)
-    return r
+    r = (x - q * y).astype(np.int32).view(np.uint32)
+    return _unmix_payload_u32_to_f32_bits_i32(r)
 
 
 def murmur64Mixer(h: np.uint64) -> np.uint64:
@@ -118,36 +142,36 @@ def _expected_div_payload_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarra
     # fpsan division is defined as: num_bits * (den_bits xor DivInvOpId) mod 2^32.
     # Keep this in sync with UnaryOpId::DivInv in FpSanitizer.cpp.
     div_inv_tag = OP_TO_TAG_U32["div_inv"].astype(np.uint64)
-    mask = np.uint64(0xFFFFFFFF)
-    num = _as_u32(x_i32).astype(np.uint64)
-    den = _as_u32(y_i32).astype(np.uint64)
+    num = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
+    den = _mix_f32_bits_to_payload_u32(y_i32).astype(np.uint64)
     tagged = (den ^ div_inv_tag).astype(np.uint64)
-    out_u32 = ((num * tagged) & mask).astype(np.uint32)
-    return _u32_to_i32(out_u32)
+    return _payload_u32_to_f32_bits_i32(num * tagged)
 
 
 def _expected_exp2_i32(x_i32: np.ndarray) -> np.ndarray:
     c = np.uint64(0xa343836d)
     mask = np.uint64(0xFFFFFFFF)
-    x = _as_u32(x_i32).astype(np.uint64)
+    x = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
     y = np.ones_like(x, dtype=np.uint64)
     for i in range(32):
         y = (y * y) & mask
         factor = np.where((x & np.uint64(1 << (31 - i))) == 0, np.uint64(1), c)
         y = (y * factor) & mask
-    return _u32_to_i32(y.astype(np.uint32))
+    return _unmix_payload_u32_to_f32_bits_i32(y.astype(np.uint32))
 
 
 def _expected_exp_i32(x_i32: np.ndarray) -> np.ndarray:
-    rcp_log2 = np.full_like(x_i32, np.int32(0x3fb8aa3b), dtype=np.int32)
-    return _expected_exp2_i32(_expected_mul_i32(x_i32, rcp_log2))
+    x = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
+    rcp_log2 = np.uint64(0x236ee9bf)
+    scaled = ((x * rcp_log2) & np.uint64(0xFFFFFFFF)).astype(np.uint32)
+    return _expected_exp2_i32(_unmix_payload_u32_to_f32_bits_i32(scaled))
 
 
 def _expected_unary_tag_i32(x_i32: np.ndarray, op: str) -> np.ndarray:
     # Keep this mapping in sync with UnaryOpId in FpSanitizer.cpp.
     tag = OP_TO_TAG_U32[op]
-    out_u32 = _as_u32(x_i32) ^ tag
-    return _u32_to_i32(out_u32)
+    out_u32 = _mix_f32_bits_to_payload_u32(x_i32) ^ tag
+    return _unmix_payload_u32_to_f32_bits_i32(out_u32)
 
 
 def stable_string_hash_u64(s: str) -> np.uint64:
@@ -176,14 +200,17 @@ def _rotl_u32(x_u32: np.ndarray, amount: int) -> np.ndarray:
     return out_u32.astype(np.uint32)
 
 
-def _expected_extern_variadic_tag_i32(args_i32: list[np.ndarray], symbol: str) -> np.ndarray:
+def _expected_extern_variadic_tag_i32(args_i32: list[np.ndarray], symbol: str, float_args=None) -> np.ndarray:
+    if float_args is None:
+        float_args = [True] * len(args_i32)
     tag = np.uint64(stable_string_hash_u64(symbol) & np.uint64(0xFFFFFFFF))
     total_u64 = np.zeros_like(_as_u32(args_i32[0]), dtype=np.uint64)
-    for i, arg in enumerate(args_i32):
-        rotated = _rotl_u32(_as_u32(arg), i).astype(np.uint64)
+    for i, (arg, is_float) in enumerate(zip(args_i32, float_args)):
+        arg_u32 = _mix_f32_bits_to_payload_u32(arg) if is_float else _as_u32(arg)
+        rotated = _rotl_u32(arg_u32, i).astype(np.uint64)
         total_u64 = (total_u64 + rotated) & np.uint64(0xFFFFFFFF)
     out_u32 = (total_u64 ^ tag).astype(np.uint32)
-    return _u32_to_i32(out_u32)
+    return _unmix_payload_u32_to_f32_bits_i32(out_u32)
 
 
 UNARY_EXTERN_SYMBOLS = {
@@ -295,6 +322,53 @@ def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl
         gl.static_assert(False, "unsupported OP")
 
     gl.store(out_ptr + offs, z, mask=mask)
+
+
+@gluon.jit
+def _constant_identity_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
+                              THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+
+    if OP == "mul_one":
+        z = x * 1.0
+    elif OP == "add_zero":
+        z = x + 0.0
+    else:
+        gl.static_assert(False, "unsupported OP")
+
+    gl.store(out_ptr + offs, z, mask=mask)
+
+
+@pytest.mark.parametrize("op", ["mul_one", "add_zero"])
+def test_constant_identity_noop(device, op, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device="cuda")
+    g.manual_seed(2)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _constant_identity_kernel[grid](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        n_elements,
+        OP=op,
+        BLOCK=BLOCK,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+
+    _assert_payload_equal(out, x)
 
 
 @pytest.mark.parametrize(
@@ -739,6 +813,7 @@ def test_extern_mixed_payload_semantics(device, op, symbol, fresh_knobs):
             y.cpu().numpy().astype(np.int32, copy=False),
         ],
         symbol,
+        float_args=[True, False],
     )
     _assert_payload_equal(out, exp_bits)
 
@@ -748,14 +823,14 @@ def _expected_fma_i32(x_i32: np.ndarray, y_i32: np.ndarray, z_i32: np.ndarray) -
 
 
 def _expected_trunc_ext_roundtrip_i32(x_i32: np.ndarray) -> np.ndarray:
-    x_u32 = _as_u32(x_i32)
+    x_u32 = _mix_f32_bits_to_payload_u32(x_i32)
     out_u32 = x_u32 & np.uint32(0x0000FFFF)
-    return _u32_to_i32(out_u32)
+    return _unmix_payload_u32_to_f32_bits_i32(out_u32)
 
 
 def _expected_ext_f16_to_f32_i32(x_i16: np.ndarray) -> np.ndarray:
     out_u32 = x_i16.view(np.uint16).astype(np.uint32)
-    return out_u32.view(np.int32)
+    return _unmix_payload_u32_to_f32_bits_i32(out_u32)
 
 
 @gluon.jit
@@ -878,10 +953,10 @@ def test_cast_ext_payload_semantics(device, fresh_knobs):
 
 
 def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = None) -> np.ndarray:
-    # Computes: c + a @ b in Z/(2^32) on raw payload bits.
-    a_u = a_i32.view(np.uint32).astype(np.uint64)
-    b_u = b_i32.view(np.uint32).astype(np.uint64)
-    c_u = c_i32.view(np.uint32).astype(np.uint64) if c_i32 is not None else None
+    # Computes: c + a @ b in Z/(2^32) on mixed f32 payload bits.
+    a_u = _mix_f32_bits_to_payload_u32(a_i32).astype(np.uint64)
+    b_u = _mix_f32_bits_to_payload_u32(b_i32).astype(np.uint64)
+    c_u = _mix_f32_bits_to_payload_u32(c_i32).astype(np.uint64) if c_i32 is not None else None
     m, k = a_u.shape
     k2, n = b_u.shape
     assert k == k2
@@ -893,7 +968,7 @@ def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = No
             for kk in range(k):
                 s = (s + (a_u[i, kk] * b_u[kk, j])) & mask
             out[i, j] = s
-    return out.astype(np.uint32).view(np.int32)
+    return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
 
 
 def _unpack_element(data: np.ndarray, row: int, col: int, pack: int, pack_axis: int = 1) -> np.uint64:
@@ -929,14 +1004,14 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
             b_val = _scale_element(b_val, b_scale, j, kk, mask)
             s = (s + a_val * b_val) & mask
         out[i, j] = s
-    return out.astype(np.uint32).view(np.int32)
+    return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
 
 
 def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.ndarray, b_scale_u8: np.ndarray,
                            c_i32: np.ndarray = None, a_pack: int = 1, b_pack: int = 1) -> np.ndarray:
     a_scale = a_scale_u8.astype(np.uint16)
     b_scale = b_scale_u8.astype(np.uint16)
-    c_u = c_i32.view(np.uint32).astype(np.uint64) if c_i32 is not None else None
+    c_u = _mix_f32_bits_to_payload_u32(c_i32).astype(np.uint64) if c_i32 is not None else None
 
     m = a_u8.shape[0]
     n = b_u8.shape[1]
@@ -963,7 +1038,7 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
                 rhs = np.uint16((np.uint32(b_val) * np.uint32(b_scale[j, kk // 32])) & mask16)
                 s = (s + ((np.uint64(lhs) * np.uint64(rhs)) & mask32)) & mask32
             out[i, j] = s
-    return out.astype(np.uint32).view(np.int32)
+    return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
 
 
 def test_dot_fma(device, fresh_knobs):

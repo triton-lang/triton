@@ -115,7 +115,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @exp_ops
   tt.func public @exp_ops(%a: tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>) {
-    // CHECK-DAG: arith.constant dense<1069066811>
+    // CHECK-DAG: arith.constant dense<594471359>
     // CHECK-DAG: arith.constant dense<1>
     // CHECK-DAG: arith.constant dense<0>
     // CHECK-DAG: arith.constant dense<-1555856531>
