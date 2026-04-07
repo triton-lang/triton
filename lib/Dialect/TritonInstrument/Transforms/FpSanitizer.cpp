@@ -973,7 +973,7 @@ Value castDotScaledOperandToComputePayload(PatternRewriter &rewriter,
 }
 
 Value scaleI8ToF32Payload(PatternRewriter &rewriter, Location loc,
-                           Value scaleI) {
+                          Value scaleI) {
   auto i32Elem = rewriter.getI32Type();
   auto i32Ty = getTypeWithElement(scaleI.getType(), i32Elem);
   Value scaleI32 = castIntValueToType(rewriter, loc, scaleI, i32Ty);
@@ -983,7 +983,7 @@ Value scaleI8ToF32Payload(PatternRewriter &rewriter, Location loc,
 }
 
 Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
-                               Value scaleI, FloatType computeElem) {
+                              Value scaleI, FloatType computeElem) {
   unsigned computeWidth = computeElem.getIntOrFloatBitWidth();
   Type computeIntTy = getTypeWithElement(
       scaleI.getType(), IntegerType::get(rewriter.getContext(), computeWidth));
@@ -1003,19 +1003,18 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
 }
 
 Value castDotScaledScaleToComputePayload(PatternRewriter &rewriter,
-                                          Location loc, Value scaleSlice,
-                                          FloatType computeElem) {
-  Type computeIntTy = getTypeWithElement(
-      scaleSlice.getType(),
-      IntegerType::get(rewriter.getContext(),
-                       computeElem.getIntOrFloatBitWidth()));
+                                         Location loc, Value scaleSlice,
+                                         FloatType computeElem) {
+  Type computeIntTy =
+      getTypeWithElement(scaleSlice.getType(),
+                         IntegerType::get(rewriter.getContext(),
+                                          computeElem.getIntOrFloatBitWidth()));
   if (isFloatLike(scaleSlice.getType())) {
     Value payload = bitcastToInt(rewriter, loc, scaleSlice);
     return castSignedIntValueToType(rewriter, loc, payload, computeIntTy);
   }
-  return scaleI8ToComputePayload(rewriter, loc, bitcastToInt(rewriter, loc,
-                                                             scaleSlice),
-                                  computeElem);
+  return scaleI8ToComputePayload(
+      rewriter, loc, bitcastToInt(rewriter, loc, scaleSlice), computeElem);
 }
 
 struct DotScaleConfig {
