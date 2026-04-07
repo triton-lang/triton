@@ -267,6 +267,12 @@ def make_default_opt_flags_nvidia(
 
     # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
+    if (is_persistent and constraints.get("block_n", None) is None
+            and cuda_capability_geq(10, 0) and (lhs_dtype == FP32 or rhs_dtype == FP32)):
+        # Blackwell's fp32/tf32 persistent dot stages an operand in TMEM in
+        # addition to the accumulator. A 128x256 accumulator already consumes
+        # the full 512-column TMEM budget, so leave headroom for that operand.
+        block_n = min(block_n, 128)
     # adjust block_m based on is_persistent signal
     if is_persistent and opt_flags_nvidia.is_x_scale_swizzled(precision_config):
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
