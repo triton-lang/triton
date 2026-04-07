@@ -4339,9 +4339,9 @@ def test_load_cache_modifier(cache, device):
         all_modifiers = ['.ca', '.cg', '.cs', '.cv']
         for modifier in all_modifiers:
             if modifier == cache:
-                assert f'ld.global.{modifier}' in ptx
+                assert f'ld.global{modifier}' in ptx
             else:
-                assert f'ld.global.{modifier}' not in ptx
+                assert f'ld.global{modifier}' not in ptx
 
 
 @pytest.mark.interpreter
@@ -4466,9 +4466,9 @@ def test_store_cache_modifier(cache, device):
         all_modifiers = ['.wb', '.cg', '.cs', '.wt']
         for modifier in all_modifiers:
             if modifier == cache:
-                assert f'st.global.{modifier}' in ptx
+                assert f'st.global{modifier}' in ptx
             else:
-                assert f'st.global.{modifier}' not in ptx
+                assert f'st.global{modifier}' not in ptx
 
 
 @pytest.mark.interpreter
