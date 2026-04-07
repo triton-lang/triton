@@ -511,13 +511,19 @@ uint64_t murmur64Mixer(uint64_t h) {
   return h;
 }
 
+constexpr uint32_t kUnaryTagMultiplier = 314159u;
+
 Value fpsanUnaryTagged(PatternRewriter &rewriter, Location loc, Value input,
                        UnaryOpId opId) {
   auto inI = bitcastToInt(rewriter, loc, input);
   uint64_t opIdHash = murmur64Mixer(getUnaryOpId(opId));
   auto opIdVal = getIntConstantLike(rewriter, loc, inI.getType(),
                                     static_cast<int64_t>(opIdHash));
-  auto outI = arith::XOrIOp::create(rewriter, loc, inI, opIdVal);
+  auto multiplier =
+      getU32ConstantLike(rewriter, loc, inI.getType(), kUnaryTagMultiplier);
+  auto mixedIn = arith::MulIOp::create(rewriter, loc, inI, multiplier);
+  auto tagged = arith::XOrIOp::create(rewriter, loc, mixedIn, opIdVal);
+  auto outI = arith::MulIOp::create(rewriter, loc, tagged, multiplier);
   return bitcastToFloat(rewriter, loc, outI, input.getType());
 }
 

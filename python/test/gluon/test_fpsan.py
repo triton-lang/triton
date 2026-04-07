@@ -136,15 +136,22 @@ OP_TO_ID_U64 = {
 }
 
 OP_TO_TAG_U32 = {name: np.uint32(murmur64Mixer(op_id) & np.uint64(0xFFFFFFFF)) for name, op_id in OP_TO_ID_U64.items()}
+UNARY_TAG_MULTIPLIER_U64 = np.uint64(314159)
+
+
+def _expected_unary_tag_payload_u32(x_u32: np.ndarray, op: str) -> np.ndarray:
+    tag = OP_TO_TAG_U32[op].astype(np.uint64)
+    x = x_u32.astype(np.uint64)
+    out_u64 = (((x * UNARY_TAG_MULTIPLIER_U64) & np.uint64(0xFFFFFFFF)) ^ tag) * UNARY_TAG_MULTIPLIER_U64
+    return (out_u64 & np.uint64(0xFFFFFFFF)).astype(np.uint32)
 
 
 def _expected_div_payload_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
-    # fpsan division is defined as: num_bits * (den_bits xor DivInvOpId) mod 2^32.
+    # fpsan division is defined as num_bits * tagged(den_bits, DivInvOpId) mod 2^32.
     # Keep this in sync with UnaryOpId::DivInv in FpSanitizer.cpp.
-    div_inv_tag = OP_TO_TAG_U32["div_inv"].astype(np.uint64)
     num = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
     den = _mix_f32_bits_to_payload_u32(y_i32).astype(np.uint64)
-    tagged = (den ^ div_inv_tag).astype(np.uint64)
+    tagged = _expected_unary_tag_payload_u32(den.astype(np.uint32), "div_inv").astype(np.uint64)
     return _payload_u32_to_f32_bits_i32(num * tagged)
 
 
@@ -169,8 +176,7 @@ def _expected_exp_i32(x_i32: np.ndarray) -> np.ndarray:
 
 def _expected_unary_tag_i32(x_i32: np.ndarray, op: str) -> np.ndarray:
     # Keep this mapping in sync with UnaryOpId in FpSanitizer.cpp.
-    tag = OP_TO_TAG_U32[op]
-    out_u32 = _mix_f32_bits_to_payload_u32(x_i32) ^ tag
+    out_u32 = _expected_unary_tag_payload_u32(_mix_f32_bits_to_payload_u32(x_i32), op)
     return _unmix_payload_u32_to_f32_bits_i32(out_u32)
 
 

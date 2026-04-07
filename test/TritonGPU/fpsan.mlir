@@ -100,6 +100,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @unary_ops
   tt.func public @unary_ops(%a: tensor<4xf32>) -> tensor<4xf32> {
     // CHECK: tt.bitcast
+    // CHECK: arith.constant dense<314159>
     // CHECK: arith.xori
     // CHECK: arith.xori
     // CHECK-NOT: math.log
