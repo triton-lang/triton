@@ -12,7 +12,7 @@ static bool isTritonAndPluginsVersionsMatch(const std::string &pluginVersion) {
   // version check. However, if it is set then we either do a full (git hash)
   // check or we skip all checking.
   auto doCheck =
-    mlir::triton::tools::isEnvValueBool("TRITON_PLUGIN_VERSION_CHECK");
+      mlir::triton::tools::isEnvValueBool("TRITON_PLUGIN_VERSION_CHECK");
 
   // Skip check when TRITON_PLUGIN_VERSION_CHECK is set false
   if (doCheck.has_value() && !doCheck.value())
@@ -60,8 +60,8 @@ llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
   if (!isTritonAndPluginsVersionsMatch(plugin.info->tritonVersion))
     return llvm::make_error<llvm::StringError>(
         Twine("Wrong TRITON version on plugin '") + filename +
-        "'. Got version " + Twine(plugin.info->tritonVersion) +
-        ", supported version is " + Twine(TRITON_VERSION) + ".",
+            "'. Got version " + Twine(plugin.info->tritonVersion) +
+            ", supported version is " + Twine(TRITON_VERSION) + ".",
         llvm::inconvertibleErrorCode());
 
   return plugin;
