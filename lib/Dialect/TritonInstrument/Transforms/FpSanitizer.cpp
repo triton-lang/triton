@@ -917,8 +917,8 @@ Value unpackPackedFp4Slice(PatternRewriter &rewriter, Location loc,
 }
 
 FloatType getDotScaledComputeFloatType(PatternRewriter &rewriter,
-                                        tt::ScaleDotElemType aElemType,
-                                        tt::ScaleDotElemType bElemType) {
+                                       tt::ScaleDotElemType aElemType,
+                                       tt::ScaleDotElemType bElemType) {
   if (aElemType == tt::ScaleDotElemType::FP16 ||
       bElemType == tt::ScaleDotElemType::FP16)
     return Float16Type::get(rewriter.getContext());
@@ -926,7 +926,7 @@ FloatType getDotScaledComputeFloatType(PatternRewriter &rewriter,
 }
 
 FloatType getDotScaledStorageFloatType(PatternRewriter &rewriter,
-                                        tt::ScaleDotElemType elemType) {
+                                       tt::ScaleDotElemType elemType) {
   MLIRContext *ctx = rewriter.getContext();
   switch (elemType) {
   case tt::ScaleDotElemType::E4M3:
@@ -943,9 +943,9 @@ FloatType getDotScaledStorageFloatType(PatternRewriter &rewriter,
 }
 
 Value castDotScaledOperandToComputePayload(PatternRewriter &rewriter,
-                                            Location loc, Value slice,
-                                            tt::ScaleDotElemType elemType,
-                                            FloatType computeElem) {
+                                           Location loc, Value slice,
+                                           tt::ScaleDotElemType elemType,
+                                           FloatType computeElem) {
   Type computeIntTy = getTypeWithElement(
       slice.getType(), IntegerType::get(rewriter.getContext(),
                                         computeElem.getIntOrFloatBitWidth()));
@@ -1071,15 +1071,13 @@ Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aSlice,
     bI = castDotScaledOperandToComputePayload(
         rewriter, loc, bSlice, scale.bElemType, scale.computeElem);
     if (aScaleSlice) {
-      auto aScaleI =
-          castDotScaledScaleToComputePayload(rewriter, loc, aScaleSlice,
-                                             scale.computeElem);
+      auto aScaleI = castDotScaledScaleToComputePayload(
+          rewriter, loc, aScaleSlice, scale.computeElem);
       aI = arith::MulIOp::create(rewriter, loc, aI, aScaleI);
     }
     if (bScaleSlice) {
-      auto bScaleI =
-          castDotScaledScaleToComputePayload(rewriter, loc, bScaleSlice,
-                                             scale.computeElem);
+      auto bScaleI = castDotScaledScaleToComputePayload(
+          rewriter, loc, bScaleSlice, scale.computeElem);
       bI = arith::MulIOp::create(rewriter, loc, bI, bScaleI);
     }
   } else {
@@ -1198,9 +1196,9 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
     bScaleSlice =
         loadScaleSlice(rewriter, loc, /*isLhs=*/false, scale, nIdxI32, kI32);
   }
-  Value partial = emulateDotStep(rewriter, loc, aSlice, bSlice, aScaleSlice,
-                                 bScaleSlice, tileM, tileN, accLayout, accElem,
-                                 scale);
+  Value partial =
+      emulateDotStep(rewriter, loc, aSlice, bSlice, aScaleSlice, bScaleSlice,
+                     tileM, tileN, accLayout, accElem, scale);
   Value acc = kLoop.getRegionIterArgs()[0];
   Value next = arith::AddIOp::create(rewriter, loc, acc, partial);
   scf::YieldOp::create(rewriter, loc, next);

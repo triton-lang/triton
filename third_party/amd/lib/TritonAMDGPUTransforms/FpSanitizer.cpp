@@ -30,16 +30,14 @@ Value convertScaleElemType(PatternRewriter &rewriter, Location loc, Value scale,
   if (isa<FloatType>(elemTy)) {
     if (elemTy == dstElemTy)
       return scale;
-    return tt::FpToFpOp::create(rewriter, loc, scaleTy.clone(dstElemTy),
-                                scale);
+    return tt::FpToFpOp::create(rewriter, loc, scaleTy.clone(dstElemTy), scale);
   }
 
   auto elemIntTy = dyn_cast<IntegerType>(elemTy);
   if (!elemIntTy || elemIntTy.getWidth() != 8)
     return {};
 
-  FloatType largeFpType =
-      dstElemTy.isF16() ? rewriter.getF32Type() : dstElemTy;
+  FloatType largeFpType = dstElemTy.isF16() ? rewriter.getF32Type() : dstElemTy;
   int intWidth = largeFpType.getIntOrFloatBitWidth();
   auto largeIntTy = rewriter.getIntegerType(intWidth);
 
@@ -51,11 +49,11 @@ Value convertScaleElemType(PatternRewriter &rewriter, Location loc, Value scale,
       DenseElementsAttr::get(scaleTy.clone(largeIntTy),
                              rewriter.getIntegerAttr(largeIntTy, shiftValue)));
   Value shifted = arith::ShLIOp::create(rewriter, loc, ext, shift);
-  Value scaleFP = tt::BitcastOp::create(rewriter, loc,
-                                        scaleTy.clone(largeFpType), shifted);
+  Value scaleFP =
+      tt::BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), shifted);
   if (largeFpType != dstElemTy)
-    scaleFP =
-        arith::TruncFOp::create(rewriter, loc, scaleTy.clone(dstElemTy), scaleFP);
+    scaleFP = arith::TruncFOp::create(rewriter, loc, scaleTy.clone(dstElemTy),
+                                      scaleFP);
   return scaleFP;
 }
 
