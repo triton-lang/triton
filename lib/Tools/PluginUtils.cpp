@@ -7,6 +7,27 @@
 
 using namespace mlir::triton::plugin;
 
+static bool isTritonAndPluginsVersionsMatch(const std::string &pluginVersion) {
+  // Here, if TRITON_PLUGIN_VERSION_CHECK is unset, then we simply do a default
+  // version check. However, if it is set then we either do a full (git hash)
+  // check or we skip all checking.
+  auto doCheck =
+    mlir::triton::tools::isEnvValueBool("TRITON_PLUGIN_VERSION_CHECK");
+
+  // Skip check when TRITON_PLUGIN_VERSION_CHECK is set false
+  if (doCheck.has_value() && !doCheck.value())
+    return true;
+
+  // Check full version string when TRITON_PLUGIN_VERSION_CHECK is set true
+  if (doCheck.has_value() && doCheck.has_value())
+    return pluginVersion == TRITON_VERSION;
+
+  // Do partial release version check when TRITON_PLUGIN_VERSION_CHECK unset
+  auto plugVersion = llvm::StringRef(pluginVersion).split('+');
+  auto coreVersion = llvm::StringRef(TRITON_VERSION).split('+');
+  return plugVersion.first == coreVersion.first;
+}
+
 llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
   std::string error;
   auto library =
@@ -36,29 +57,12 @@ llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
             Twine(TRITON_PLUGIN_API_VERSION) + ".",
         llvm::inconvertibleErrorCode());
 
-  // Here, if TRITON_PLUGIN_VERSION_CHECK is unset, then we simply do a default
-  // version check. However, if it is set then we either do a full (git hash)
-  // check or we skip all checking.
-  if (auto doCheck = tools::isEnvValueBool("TRITON_PLUGIN_VERSION_CHECK");
-      !(doCheck.has_value() && !doCheck.value())) {
-
-    bool isVersionMatch =
-        std::string(plugin.info->tritonVersion) == TRITON_VERSION;
-
-    // Do partial release version check if TRITON_PLUGIN_VERSION_CHECK not set
-    if (!doCheck.has_value()) {
-      auto plugVersion = llvm::StringRef(plugin.info->tritonVersion).split('+');
-      auto coreVersion = llvm::StringRef(TRITON_VERSION).split('+');
-      isVersionMatch = plugVersion.first == coreVersion.first;
-    }
-
-    if (!isVersionMatch)
-      return llvm::make_error<llvm::StringError>(
-          Twine("Wrong TRITON version on plugin '") + filename +
-              "'. Got version " + Twine(plugin.info->tritonVersion) +
-              ", supported version is " + Twine(TRITON_VERSION) + ".",
-          llvm::inconvertibleErrorCode());
-  }
+  if (!isTritonAndPluginsVersionsMatch(plugin.info->tritonVersion))
+    return llvm::make_error<llvm::StringError>(
+        Twine("Wrong TRITON version on plugin '") + filename +
+        "'. Got version " + Twine(plugin.info->tritonVersion) +
+        ", supported version is " + Twine(TRITON_VERSION) + ".",
+        llvm::inconvertibleErrorCode());
 
   return plugin;
 }
