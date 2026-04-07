@@ -1,7 +1,6 @@
 # type: ignore
 
 import math
-from typing import Any
 
 import triton.language as tl
 from triton.experimental import gluon
@@ -1022,7 +1021,7 @@ def build_expand_dims_layout(shape, expand_dims, num_warps):
 
 
 @gluon.jit
-def convert_to_expand_dims_layout(value, expand_dims: list[int]) -> Any:
+def convert_to_expand_dims_layout(value, expand_dims: list[int]):
     layout: ttgl.constexpr = build_expand_dims_layout(value.shape, expand_dims, ttgl.num_warps())
     return ttgl.convert_layout(value, layout)
 
