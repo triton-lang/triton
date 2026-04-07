@@ -422,8 +422,8 @@ Value castIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
 Value selectU32ConstantOnSign(PatternRewriter &rewriter, Location loc,
                               Value signSource, uint32_t nonNegativeValue,
                               uint32_t negativeValue) {
-  auto signMask = getU32ConstantLike(rewriter, loc, signSource.getType(),
-                                     0x80000000u);
+  auto signMask =
+      getU32ConstantLike(rewriter, loc, signSource.getType(), 0x80000000u);
   auto zero = getU32ConstantLike(rewriter, loc, signSource.getType(), 0u);
   auto sign = arith::AndIOp::create(rewriter, loc, signSource, signMask);
   auto isNeg = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
@@ -438,30 +438,26 @@ Value selectU32ConstantOnSign(PatternRewriter &rewriter, Location loc,
 // Move f32 bit patterns into a payload domain where 0.0 maps to 0 and 1.0
 // maps to 1, while preserving a cheap inverse for stores back to f32.
 Value mixF32ToU32(PatternRewriter &rewriter, Location loc, Value u) {
-  auto signFlip =
-      selectU32ConstantOnSign(rewriter, loc, u, 0u, 0x80000000u);
+  auto signFlip = selectU32ConstantOnSign(rewriter, loc, u, 0u, 0x80000000u);
   auto x = arith::XOrIOp::create(rewriter, loc, u, signFlip);
   auto mulA = getU32ConstantLike(rewriter, loc, u.getType(), 922291u);
-  auto magMask =
-      getU32ConstantLike(rewriter, loc, u.getType(), 0x7fffffffu);
+  auto magMask = getU32ConstantLike(rewriter, loc, u.getType(), 0x7fffffffu);
   auto yMul = arith::MulIOp::create(rewriter, loc, x, mulA);
   auto y = arith::AndIOp::create(rewriter, loc, yMul, magMask);
   auto shift = getU32ConstantLike(rewriter, loc, u.getType(), 23u);
   auto yShift = arith::ShRUIOp::create(rewriter, loc, y, shift);
   auto z = arith::XOrIOp::create(rewriter, loc, y, yShift);
-  auto mulB = selectU32ConstantOnSign(rewriter, loc, u, 1037036549u,
-                                      1110447099u);
+  auto mulB =
+      selectU32ConstantOnSign(rewriter, loc, u, 1037036549u, 1110447099u);
   auto wMul = arith::MulIOp::create(rewriter, loc, z, mulB);
   auto w = arith::AndIOp::create(rewriter, loc, wMul, magMask);
   return arith::XOrIOp::create(rewriter, loc, w, signFlip);
 }
 
 Value unmixU32ToF32(PatternRewriter &rewriter, Location loc, Value v) {
-  auto signFlip =
-      selectU32ConstantOnSign(rewriter, loc, v, 0u, 0x80000000u);
+  auto signFlip = selectU32ConstantOnSign(rewriter, loc, v, 0u, 0x80000000u);
   auto w = arith::XOrIOp::create(rewriter, loc, v, signFlip);
-  auto magMask =
-      getU32ConstantLike(rewriter, loc, v.getType(), 0x7fffffffu);
+  auto magMask = getU32ConstantLike(rewriter, loc, v.getType(), 0x7fffffffu);
   auto mulA =
       selectU32ConstantOnSign(rewriter, loc, v, 1719664845u, 427818803u);
   auto zMul = arith::MulIOp::create(rewriter, loc, w, mulA);

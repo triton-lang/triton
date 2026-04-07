@@ -359,8 +359,7 @@ def _constant_identity_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOC
 
 
 @gluon.jit
-def _reciprocal_involution_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexpr,
-                                  THREADS_PER_WARP: gl.constexpr):
+def _reciprocal_involution_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
     pid = gl.program_id(0)
     layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
                                             order=[0])
