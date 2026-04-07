@@ -36,9 +36,6 @@ llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
             Twine(TRITON_PLUGIN_API_VERSION) + ".",
         llvm::inconvertibleErrorCode());
 
-#if !defined(TRITON_VERSION)
-#error "TRITON_VERSION must be defined when TRITON_EXT_ENABLED is enabled"
-#else
   // Here, if TRITON_PLUGIN_VERSION_CHECK is unset, then we simply do a default
   // version check. However, if it is set then we either do a full (git hash)
   // check or we skip all checking.
@@ -62,7 +59,6 @@ llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
               ", supported version is " + Twine(TRITON_VERSION) + ".",
           llvm::inconvertibleErrorCode());
   }
-#endif
 
   return plugin;
 }
