@@ -47,7 +47,7 @@ llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
       !(doCheck.has_value() && !doCheck.value())) {
 
     bool isVersionMatch =
-      std::string(plugin.info->tritonVersion) == TRITON_VERSION;
+        std::string(plugin.info->tritonVersion) == TRITON_VERSION;
 
     // Do partial release version check if TRITON_PLUGIN_VERSION_CHECK not set
     if (!doCheck.has_value()) {
@@ -59,8 +59,8 @@ llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
     if (!isVersionMatch)
       return llvm::make_error<llvm::StringError>(
           Twine("Wrong TRITON version on plugin '") + filename +
-          "'. Got version " + Twine(plugin.info->tritonVersion) +
-          ", supported version is " + Twine(TRITON_VERSION) + ".",
+              "'. Got version " + Twine(plugin.info->tritonVersion) +
+              ", supported version is " + Twine(TRITON_VERSION) + ".",
           llvm::inconvertibleErrorCode());
   }
 #endif
