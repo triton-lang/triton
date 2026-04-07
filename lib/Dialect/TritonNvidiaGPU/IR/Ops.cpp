@@ -326,10 +326,15 @@ static LogicalResult verifyCompletionBarrierLayout(Operation *op,
 }
 
 static LogicalResult verifyTMABarrierLayout(Operation *op, Value barrier) {
+  auto twoCTAsAttr =
+      op->getParentOfType<ModuleOp>()->getAttrOfType<BoolAttr>(AttrTwoCTAsName);
+  if (!twoCTAsAttr)
+    return success();
+
   auto ctx = op->getContext();
   int numCTAs = gpu::lookupNumCTAs(op);
   CGAEncodingAttr expectedCGALayout;
-  if (getModuleTwoCTAs(op)) {
+  if (twoCTAsAttr.getValue()) {
     auto kBlock = StringAttr::get(ctx, "block");
     auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
     auto layout = LinearLayout::zeros1D(2, kBlock, dim) *
