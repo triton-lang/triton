@@ -13,7 +13,6 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include <memory>
-#include <type_traits>
 
 namespace mlir::triton::gpu {
 
@@ -346,8 +345,7 @@ public:
     bool changedB = rewriteOperand(dotOp.getBMutable(), rewriter).succeeded();
 
     if (changedA || changedB) {
-      if constexpr (std::is_same_v<DotOpTy, triton::nvidia_gpu::WarpGroupDotOp>)
-        updateWarpGroupDotWaitOperands(dotOp, oldA, oldB, rewriter);
+      updateDependentOps(dotOp, oldA, oldB, rewriter);
       return success();
     }
 
@@ -355,8 +353,10 @@ public:
   }
 
 private:
-  static void
-  updateWarpGroupDotWaitOperands(triton::nvidia_gpu::WarpGroupDotOp dotOp,
+  template <typename T>
+  static void updateDependentOps(T, Value, Value, PatternRewriter &) {}
+
+  static void updateDependentOps(triton::nvidia_gpu::WarpGroupDotOp dotOp,
                                  Value oldA, Value oldB,
                                  PatternRewriter &rewriter) {
     // Keep warp_group_dot_wait operands consistent with rewritten dot
