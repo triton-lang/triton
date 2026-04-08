@@ -21,6 +21,109 @@ def test_maximum_minium(dtype, op, device):
 
 
 # ---------------
+# test max/min propagate_nan
+# ---------------
+
+
+@triton.jit
+def _nan_propagating_max_combine(a, b):
+    return tl.maximum(a, b, propagate_nan=tl.PropagateNan.ALL)
+
+
+@triton.jit
+def _nan_ignoring_max_combine(a, b):
+    return tl.maximum(a, b, propagate_nan=tl.PropagateNan.NONE)
+
+
+@triton.jit
+def nan_propagating_max(a, axis):
+    return tl.reduce(a, axis, combine_fn=_nan_propagating_max_combine)
+
+
+@triton.jit
+def nan_ignoring_max(a, axis):
+    return tl.reduce(a, axis, combine_fn=_nan_ignoring_max_combine)
+
+
+@triton.jit
+def _nan_propagating_min_combine(a, b):
+    return tl.minimum(a, b, propagate_nan=tl.PropagateNan.ALL)
+
+
+@triton.jit
+def _nan_ignoring_min_combine(a, b):
+    return tl.minimum(a, b, propagate_nan=tl.PropagateNan.NONE)
+
+
+@triton.jit
+def nan_propagating_min(a, axis):
+    return tl.reduce(a, axis, combine_fn=_nan_propagating_min_combine)
+
+
+@triton.jit
+def nan_ignoring_min(a, axis):
+    return tl.reduce(a, axis, combine_fn=_nan_ignoring_min_combine)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
+def test_max_propagate_nan(propagate_nan, device):
+
+    @triton.jit
+    def max_kernel(in_ptr, out_ptr, PROPAGATE_NAN: tl.constexpr):
+        a = tl.load(in_ptr + tl.arange(0, 8)[:, None] * 8 + tl.arange(0, 8)[None, :])
+        if PROPAGATE_NAN:
+            a = nan_propagating_max(a, 0)
+        else:
+            a = nan_ignoring_max(a, 0)
+        tl.store(out_ptr + tl.arange(0, 8), a)
+
+    a = torch.randn((8, 8), device=device)
+    a[1, 2] = torch.nan
+    a[4, 6] = torch.nan
+
+    std = a.clone()
+    nan_cols = torch.isnan(std).any(dim=0)
+    std[torch.isnan(std)] = -torch.inf
+    std = std.max(0)[0]
+    if propagate_nan == tl.PropagateNan.ALL:
+        std[nan_cols] = torch.nan
+
+    ans = torch.zeros((8, ), dtype=torch.float32, device=device)
+    max_kernel[1, 1, 1](a, ans, propagate_nan == tl.PropagateNan.ALL)
+    torch.testing.assert_close(std, ans, equal_nan=True)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
+def test_min_propagate_nan(propagate_nan, device):
+
+    @triton.jit
+    def min_kernel(in_ptr, out_ptr, PROPAGATE_NAN: tl.constexpr):
+        a = tl.load(in_ptr + tl.arange(0, 8)[:, None] * 8 + tl.arange(0, 8)[None, :])
+        if PROPAGATE_NAN:
+            a = nan_propagating_min(a, 0)
+        else:
+            a = nan_ignoring_min(a, 0)
+        tl.store(out_ptr + tl.arange(0, 8), a)
+
+    a = torch.randn((8, 8), device=device)
+    a[1, 2] = torch.nan
+    a[4, 6] = torch.nan
+
+    std = a.clone()
+    nan_cols = torch.isnan(std).any(dim=0)
+    std[torch.isnan(std)] = torch.inf
+    std = std.min(0)[0]
+    if propagate_nan == tl.PropagateNan.ALL:
+        std[nan_cols] = torch.nan
+
+    ans = torch.zeros((8, ), dtype=torch.float32, device=device)
+    min_kernel[1, 1, 1](a, ans, propagate_nan == tl.PropagateNan.ALL)
+    torch.testing.assert_close(std, ans, equal_nan=True)
+
+
+# ---------------
 # test sort op
 # ---------------
 
