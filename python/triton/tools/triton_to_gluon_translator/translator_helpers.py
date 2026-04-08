@@ -713,7 +713,7 @@ class AMDTensorDescriptorArgs:
 
 
 @gluon.jit
-def _load_tdm(desc, offsets):
+def tl_obj_load_amd(desc, offsets):
     smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
     amd_tdm.async_load(desc, offsets, smem)
     amd_tdm.async_wait(0)
@@ -722,7 +722,7 @@ def _load_tdm(desc, offsets):
 
 
 @gluon.jit
-def _store_tdm(desc, offsets, value):
+def tl_obj_store_amd(desc, offsets, value):
     smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
     amd_tdm.async_store(desc, offsets, smem)
     amd_tdm.async_wait(0)
@@ -736,9 +736,9 @@ def tl_obj_store(obj, offsets, value):
     if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
         return tl_store_tensor_descriptor(obj, offsets, value)
     elif isinstance(obj, AMDTensorDescriptorArgs):
-        _store_tdm(obj.desc, offsets, value)
+        tl_obj_store_amd(obj.desc, offsets, value)
     elif isinstance(obj, amd_tdm.tensor_descriptor):
-        _store_tdm(obj, offsets, value)
+        tl_obj_store_amd(obj, offsets, value)
     else:
         return obj.store(offsets, value)
 
@@ -748,15 +748,15 @@ def tl_obj_load(obj, offsets):
     if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
         return tl_load_tensor_descriptor(obj, offsets)
     elif isinstance(obj, AMDTensorDescriptorArgs):
-        return _load_tdm(obj.desc, offsets)
+        return tl_obj_load_amd(obj.desc, offsets)
     elif isinstance(obj, amd_tdm.tensor_descriptor):
-        return _load_tdm(obj, offsets)
+        return tl_obj_load_amd(obj, offsets)
     else:
         return obj.load(offsets)
 
 
 @gluon.jit
-def _gather_tdm(desc_args, x_offsets, y_offset):
+def tl_obj_gather_amd(desc_args, x_offsets, y_offset):
     # Triton creates gather descriptors with block_shape=[1, block_n], but TDM hardware
     # operates on the full batch, requiring block_shape=[num_indices, block_n].
     NUM_IDX: ttgl.constexpr = x_offsets.shape[0]
@@ -782,8 +782,8 @@ def _gather_tdm(desc_args, x_offsets, y_offset):
 
 
 @gluon.jit
-def _scatter_tdm(desc_args, value, x_offsets, y_offset):
-    # See _gather_tdm for why the descriptor is recreated with a different block_shape.
+def tl_obj_scatter_amd(desc_args, value, x_offsets, y_offset):
+    # See tl_obj_gather_amd for why the descriptor is recreated with a different block_shape.
     NUM_IDX: ttgl.constexpr = x_offsets.shape[0]
     BLOCK_N: ttgl.constexpr = desc_args.desc.block_shape[1]
     smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
@@ -825,7 +825,7 @@ def tl_obj_gather(obj, x_offsets, y_offset):
         out = alloc.load(ret_layout)
         return out
     elif isinstance(obj, AMDTensorDescriptorArgs):
-        return _gather_tdm(obj, x_offsets, y_offset)
+        return tl_obj_gather_amd(obj, x_offsets, y_offset)
     else:
         return obj.gather(x_offsets, y_offset)
 
@@ -845,7 +845,7 @@ def tl_obj_scatter(obj, value, x_offsets, y_offset):
         tma_blackwell.async_scatter(desc, x_offsets, y_offset, alloc)
         tma.store_wait(0)
     elif isinstance(obj, AMDTensorDescriptorArgs):
-        _scatter_tdm(obj, value, x_offsets, y_offset)
+        tl_obj_scatter_amd(obj, value, x_offsets, y_offset)
     else:
         obj.scatter(value, x_offsets, y_offset)
 
