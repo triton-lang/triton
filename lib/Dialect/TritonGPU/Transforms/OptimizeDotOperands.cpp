@@ -13,6 +13,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include <memory>
+#include <type_traits>
 
 namespace mlir::triton::gpu {
 
@@ -353,7 +354,8 @@ public:
     bool changedB = rewriteOperand(dotOp.getBMutable(), rewriter).succeeded();
 
     if (changedA || changedB) {
-      updateDependentOps(dotOp, oldA, oldB, rewriter);
+      if constexpr (std::is_same_v<DotOpTy, triton::nvidia_gpu::WarpGroupDotOp>)
+        updateWarpGroupDotWaitOperands(dotOp, oldA, oldB, rewriter);
       return success();
     }
 
@@ -361,10 +363,8 @@ public:
   }
 
 private:
-  template <typename T>
-  static void updateDependentOps(T, Value, Value, PatternRewriter &) {}
-
-  static void updateDependentOps(triton::nvidia_gpu::WarpGroupDotOp dotOp,
+  static void
+  updateWarpGroupDotWaitOperands(triton::nvidia_gpu::WarpGroupDotOp dotOp,
                                  Value oldA, Value oldB,
                                  PatternRewriter &rewriter) {
     // Keep warp_group_dot_wait operands consistent with rewritten dot
@@ -401,7 +401,6 @@ private:
     SmallVector<int64_t> srcShape;
     SmallVector<int64_t> dstShape;
     SmallVector<int32_t> order;
-    Operation *op;
     Location loc;
   };
 
@@ -418,7 +417,6 @@ private:
                                        SmallVector<int64_t>(srcTy.getShape()),
                                        SmallVector<int64_t>(dstTy.getShape()),
                                        {},
-                                       reshape.getOperation(),
                                        reshape.getLoc()});
         current = reshape.getSrc();
         continue;
@@ -428,13 +426,10 @@ private:
                                    trans.getOrder().end());
         auto srcTy = trans.getSrc().getType();
         auto dstTy = trans.getType();
-        replaySteps.push_back(
-            ViewStep{ViewStep::Transpose,
-                     SmallVector<int64_t>(srcTy.getShape()),
-                     SmallVector<int64_t>(dstTy.getShape()),
-                     std::move(order),
-                     trans.getOperation(),
-                     trans.getLoc()});
+        replaySteps.push_back(ViewStep{ViewStep::Transpose,
+                                       SmallVector<int64_t>(srcTy.getShape()),
+                                       SmallVector<int64_t>(dstTy.getShape()),
+                                       std::move(order), trans.getLoc()});
         current = trans.getSrc();
         continue;
       }
@@ -443,24 +438,20 @@ private:
     return {current, llvm::to_vector(llvm::reverse(replaySteps))};
   }
 
-  static SharedEncodingTrait getSourceSwizzle0SharedEncoding(Value baseTensor) {
+  static SharedEncodingTrait getSourceSharedEncoding(Value baseTensor) {
     if (auto descLoad = baseTensor.getDefiningOp<DescriptorLoadOp>()) {
       auto descTy = cast<TensorDescType>(descLoad.getDesc().getType());
       auto descBlockTy = descTy.getBlockType();
-      auto sourceSharedEnc =
-          dyn_cast_or_null<SharedEncodingTrait>(descBlockTy.getEncoding());
-      if (auto nvmma = dyn_cast_or_null<NVMMASharedEncodingAttr>(
-              cast_or_null<Attribute>(sourceSharedEnc));
-          nvmma && nvmma.getSwizzlingByteWidth() == 0)
-        return sourceSharedEnc;
+      return dyn_cast_or_null<SharedEncodingTrait>(descBlockTy.getEncoding());
     }
     return nullptr;
   }
 
   static FailureOr<MemDescType> inferViewStepBackward(MemDescType resultTy,
                                                       const ViewStep &step) {
-    if (resultTy.getShape() != ArrayRef<int64_t>(step.dstShape))
-      return failure();
+    assert(resultTy.getShape() == ArrayRef<int64_t>(step.dstShape) &&
+           "backward inference must start from the view step destination "
+           "shape");
 
     switch (step.kind) {
     case ViewStep::Reshape: {
@@ -473,13 +464,11 @@ private:
     case ViewStep::Transpose: {
       auto inverseOrder = triton::inversePermutation(step.order);
       Attribute srcEnc = resultTy.getEncoding();
-      if (srcEnc) {
-        auto inferLayoutInterface =
-            cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
-        if (failed(inferLayoutInterface->inferTransOpEncoding(
-                srcEnc, resultTy.getShape(), inverseOrder, srcEnc, step.loc)))
-          return failure();
-      }
+      auto inferLayoutInterface =
+          cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
+      if (failed(inferLayoutInterface->inferTransOpEncoding(
+              srcEnc, resultTy.getShape(), inverseOrder, srcEnc, step.loc)))
+        return failure();
       return MemDescType::get(step.srcShape, resultTy.getElementType(), srcEnc,
                               resultTy.getMemorySpace(),
                               resultTy.getMutableMemory());
@@ -500,24 +489,15 @@ private:
     return currentTy;
   }
 
-  static bool layoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
-                                Attribute rhs) {
-    if (lhs == rhs)
-      return true;
-    if (!lhs || !rhs)
-      return false;
-    return areLayoutsEquivalent(shape, cast<LayoutEncodingTrait>(lhs),
-                                cast<LayoutEncodingTrait>(rhs));
-  }
-
-  static LogicalResult verifySourceSwizzle0Layout(MemDescType inferredBaseTy,
-                                                  Value baseTensor) {
-    auto sourceSharedEnc = getSourceSwizzle0SharedEncoding(baseTensor);
+  static LogicalResult verifySourceLayout(MemDescType inferredBaseTy,
+                                          Value baseTensor) {
+    auto sourceSharedEnc = getSourceSharedEncoding(baseTensor);
     if (!sourceSharedEnc)
       return failure();
-    return success(layoutsEquivalent(
-        inferredBaseTy.getShape(), inferredBaseTy.getEncoding(),
-        cast<Attribute>(sourceSharedEnc)));
+    return success(areLayoutsEquivalent(
+        inferredBaseTy.getShape(),
+        cast<LayoutEncodingTrait>(inferredBaseTy.getEncoding()),
+        cast<LayoutEncodingTrait>(cast<Attribute>(sourceSharedEnc))));
   }
 
   LogicalResult rewriteOperand(OpOperand &operand,
@@ -545,7 +525,7 @@ private:
         inferBackwardSourceType(localAlloc.getType(), tensorReplaySteps);
     if (failed(baseMemTy))
       return failure();
-    if (failed(verifySourceSwizzle0Layout(*baseMemTy, baseTensor)))
+    if (failed(verifySourceLayout(*baseMemTy, baseTensor)))
       return failure();
 
     PatternRewriter::InsertionGuard guard(rewriter);
@@ -566,18 +546,18 @@ private:
     }
 
     auto rewrittenSinkTy = cast<MemDescType>(rewritten.getType());
-    if (rewrittenSinkTy.getShape() != sinkTy.getShape() ||
-        rewrittenSinkTy.getElementType() != sinkTy.getElementType() ||
-        !layoutsEquivalent(sinkTy.getShape(), rewrittenSinkTy.getEncoding(),
-                           sinkTy.getEncoding())) {
-      return failure();
-    }
+    assert(rewrittenSinkTy.getShape() == sinkTy.getShape() &&
+           rewrittenSinkTy.getElementType() == sinkTy.getElementType() &&
+           areLayoutsEquivalent(
+               sinkTy.getShape(),
+               cast<LayoutEncodingTrait>(rewrittenSinkTy.getEncoding()),
+               cast<LayoutEncodingTrait>(sinkTy.getEncoding())) &&
+           "rewrite must preserve the intermediate sink memdesc");
 
     for (ViewStep &step : trailingMemDescReplaySteps) {
       if (step.kind == ViewStep::Reshape) {
-        rewritten =
-            MemDescReshapeOp::create(rewriter, step.loc, rewritten,
-                                     step.dstShape);
+        rewritten = MemDescReshapeOp::create(rewriter, step.loc, rewritten,
+                                             step.dstShape);
       } else {
         rewritten =
             MemDescTransOp::create(rewriter, step.loc, rewritten, step.order);
@@ -587,10 +567,11 @@ private:
     auto rewrittenTy = cast<MemDescType>(rewritten.getType());
     assert(rewrittenTy.getShape() == origTy.getShape() &&
            rewrittenTy.getElementType() == origTy.getElementType() &&
-           "rewrite must preserve memdesc shape and element type");
-    if (!layoutsEquivalent(origTy.getShape(), rewrittenTy.getEncoding(),
-                           origTy.getEncoding()))
-      return failure();
+           areLayoutsEquivalent(
+               origTy.getShape(),
+               cast<LayoutEncodingTrait>(rewrittenTy.getEncoding()),
+               cast<LayoutEncodingTrait>(origTy.getEncoding())) &&
+           "rewrite must preserve the final memdesc");
 
     operand.assign(rewritten);
     return success();
