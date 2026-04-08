@@ -78,6 +78,7 @@ bool ignoreOpForProxyFence(Operation *op) {
          isa<triton::nvidia_gpu::ArriveBarrierOp,
              triton::nvidia_gpu::TMEMCopyOp, triton::nvidia_gpu::WaitBarrierOp,
              triton::nvidia_gpu::InitBarrierOp,
+             triton::nvidia_gpu::InitMmaBarrierOp,
              triton::nvidia_gpu::InvalBarrierOp>(op);
 }
 

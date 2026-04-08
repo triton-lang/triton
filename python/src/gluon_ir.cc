@@ -889,6 +889,10 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value memDesc, int count) {
              self.create<ttng::InitBarrierOp>(memDesc, count);
            })
+      .def("create_mma_barrier_init",
+           [](GluonOpBuilder &self, Value memDesc, std::vector<Value> &descs) {
+             self.create<ttng::InitMmaBarrierOp>(memDesc, descs);
+           })
       .def("create_mbarrier_inval",
            [](GluonOpBuilder &self, Value memDesc) {
              self.create<ttng::InvalBarrierOp>(memDesc);

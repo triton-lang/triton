@@ -156,6 +156,13 @@ createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
   return ttng::createTritonGPUProxyFenceInsertion(options);
 }
 
+static std::unique_ptr<mlir::Pass>
+createTritonNvidiaGPUPreferredClusterFallbackWrapper(int32_t capability) {
+  ttng::TritonNvidiaGPUPreferredClusterFallbackPassOptions options;
+  options.computeCapability = capability;
+  return ttng::createTritonNvidiaGPUPreferredClusterFallbackPass(options);
+}
+
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass);
   ADD_PASS_WRAPPER_1("add_fence_insertion",
@@ -172,6 +179,9 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      ttng::createTritonNvidiaGPURemoveTMEMTokensPass);
   ADD_PASS_WRAPPER_0("add_check_matmul_two_cta",
                      ttng::createTritonNvidiaGPUCheckMatmulTwoCTAPass);
+  ADD_PASS_WRAPPER_1("add_preferred_cluster_fallback",
+                     createTritonNvidiaGPUPreferredClusterFallbackWrapper,
+                     int32_t);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVM);
   ADD_PASS_WRAPPER_0("add_warp_specialize_to_llvm",

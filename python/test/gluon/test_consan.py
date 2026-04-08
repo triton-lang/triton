@@ -1449,9 +1449,7 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatc
         tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
         mbarrier.init(tma_bar, count=1)
         mma_bar = mbarrier.allocate_mbarrier()
-        mma_bar_count: ttgl.constexpr = blackwell.tcgen05_mma_barrier_count([smemA, smemB], True,
-                                                                            acc.type.layout.two_ctas)
-        mbarrier.init(mma_bar, count=mma_bar_count)
+        mbarrier.init_tcgen05_mma(mma_bar, [smemA, smemB])
 
         phase_tma = 0
         phase_mma = 0

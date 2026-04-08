@@ -1,4 +1,4 @@
-from ..ampere.mbarrier import MBarrierLayout, allocate_mbarrier, init, invalidate, wait
+from ..ampere.mbarrier import MBarrierLayout, allocate_mbarrier, init, init_tcgen05_mma, invalidate, wait
 from ..._core import _unwrap_if_constexpr, builtin
 
 __all__ = [
@@ -7,6 +7,7 @@ __all__ = [
     "expect",
     "fence_init_release_cluster",
     "init",
+    "init_tcgen05_mma",
     "invalidate",
     "MBarrierLayout",
     "wait",
