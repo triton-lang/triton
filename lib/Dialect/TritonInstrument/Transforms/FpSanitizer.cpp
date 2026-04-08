@@ -1995,6 +1995,10 @@ struct TCGen5MMAScaledPattern
                                          bMemTy.getElementType(), bTileLayout);
 
     DotScaleConfig scale;
+    scale.aElemType = op.getAType();
+    scale.bElemType = op.getBType();
+    scale.computeElem =
+        getDotScaledComputeFloatType(rewriter, scale.aElemType, scale.bElemType);
     scale.aScalePtr = aScaleScratch->ptr;
     scale.bScalePtr = bScaleScratch->ptr;
     scale.aScaleTileTy = RankedTensorType::get(

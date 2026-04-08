@@ -1221,8 +1221,8 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
 def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.ndarray, b_scale_u8: np.ndarray,
                            c_i32: np.ndarray = None, a_pack: int = 1, b_pack: int = 1,
                            elem_type: str = "e2m1") -> np.ndarray:
-    a_scale = a_scale_u8.astype(np.uint16)
-    b_scale = b_scale_u8.astype(np.uint16)
+    a_scale = a_scale_u8.astype(np.uint64)
+    b_scale = b_scale_u8.astype(np.uint64)
     c_u = _mix_f32_bits_to_payload_u32(c_i32).astype(np.uint64) if c_i32 is not None else None
 
     m = a_u8.shape[0]
@@ -1238,7 +1238,8 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
         return np.uint16(_unpack_element(data, row, col, pack, pack_axis=pack_axis))
 
     out = np.empty((m, n), dtype=np.uint64)
-    mask16 = np.uint32(0xFFFF)
+    compute_type = "bf16"
+    compute_mask = np.uint64(0xFFFF)
     mask32 = np.uint64(0xFFFFFFFF)
     for i in range(m):
         for j in range(n):
@@ -1246,10 +1247,12 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
             for kk in range(k):
                 a_val = unpack(a_u8, i, kk, a_pack, pack_axis=1)
                 b_val = unpack(b_u8, kk, j, b_pack, pack_axis=0)
-                a_val = _mix_dot_scaled_elem(np.uint64(a_val), elem_type)
-                b_val = _mix_dot_scaled_elem(np.uint64(b_val), elem_type)
-                lhs = np.uint16((np.uint32(a_val) * np.uint32(a_scale[i, kk // 32])) & mask16)
-                rhs = np.uint16((np.uint32(b_val) * np.uint32(b_scale[j, kk // 32])) & mask16)
+                a_val = _dot_scaled_compute_payload_elem(np.uint64(a_val), elem_type, compute_type)
+                b_val = _dot_scaled_compute_payload_elem(np.uint64(b_val), elem_type, compute_type)
+                a_scale_val = _dot_scaled_scale_payload(a_scale[i, kk // 32], compute_type)
+                b_scale_val = _dot_scaled_scale_payload(b_scale[j, kk // 32], compute_type)
+                lhs = (a_val * a_scale_val) & compute_mask
+                rhs = (b_val * b_scale_val) & compute_mask
                 s = (s + ((np.uint64(lhs) * np.uint64(rhs)) & mask32)) & mask32
             out[i, j] = s
     return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
