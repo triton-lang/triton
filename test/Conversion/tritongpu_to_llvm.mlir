@@ -505,6 +505,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: basic_negf
+  tt.func @basic_negf(%arg0 : tensor<256xf32,#blocked0>) {
+    // CHECK: llvm.fneg
+    // CHECK: llvm.fneg
+    %1 = arith.negf %arg0 : tensor<256xf32,#blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: basic_bitcast
+  tt.func @basic_bitcast(%arg0 : tensor<256xf32,#blocked0>) {
+    // CHECK: llvm.bitcast
+    // CHECK: llvm.bitcast
+    %1 = arith.bitcast %arg0 : tensor<256xf32,#blocked0> to tensor<256xi32,#blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: basic_copysign
+  tt.func @basic_copysign(%arg0 : tensor<256xf32,#blocked0>, %arg1 : tensor<256xf32,#blocked0>) {
+    // CHECK: llvm.intr.copysign
+    // CHECK: llvm.intr.copysign
+    %1 = math.copysign %arg0, %arg1 : tensor<256xf32,#blocked0>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_program_id
   tt.func @basic_program_id() {

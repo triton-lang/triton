@@ -182,3 +182,34 @@ tt.func @split_op(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>) {
   tt.store %2, %res1 : tensor<64x!tt.ptr<f32>>
   tt.return
 }
+
+// -----
+
+// CHECK-LABEL: @arith_bitcast
+tt.func @arith_bitcast(%arg0: f32) {
+  %0 = tt.splat %arg0 : f32 -> tensor<128xf32>
+  // CHECK: arith.bitcast %{{.*}} : tensor<128xf32, #{{.*}}> to tensor<128xi32, #{{.*}}>
+  %1 = arith.bitcast %0 : tensor<128xf32> to tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @arith_negf
+tt.func @arith_negf(%arg0: f32) {
+  %0 = tt.splat %arg0 : f32 -> tensor<128xf32>
+  // CHECK: arith.negf %{{.*}} : tensor<128xf32, #{{.*}}>
+  %1 = arith.negf %0 : tensor<128xf32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @math_copysign
+tt.func @math_copysign(%arg0: f32, %arg1: f32) {
+  %0 = tt.splat %arg0 : f32 -> tensor<128xf32>
+  %1 = tt.splat %arg1 : f32 -> tensor<128xf32>
+  // CHECK: math.copysign %{{.*}}, %{{.*}} : tensor<128xf32, #{{.*}}>
+  %2 = math.copysign %0, %1 : tensor<128xf32>
+  tt.return
+}
