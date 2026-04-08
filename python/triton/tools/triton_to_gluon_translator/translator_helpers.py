@@ -17,6 +17,10 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 from triton.experimental.gluon.language.nvidia.blackwell import tma as tma_blackwell
 from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared, mbarrier, tma
 from triton.experimental.gluon.language.amd.gfx1250 import wmma as amd_wmma
+
+# hack to workaround limited dependencies tracking.
+# TODO: fix this by pulling imports into the generated file.
+from triton.language.target_info import current_target  # noqa: F401
 from triton.experimental.gluon.language.amd.gfx1250 import tdm as amd_tdm
 from triton.experimental.gluon.language.amd.cdna3 import mfma as amd_mfma
 
@@ -1021,33 +1025,3 @@ def convert_to_expand_dims_layout(value, expand_dims: list[int]):
     return ttgl.convert_layout(value, layout)
 
 
-# Module-level target, set by the translator via _make_target().
-# Falls back to the active driver's target if not set.
-_current_target = None
-
-
-def current_target():
-    if _current_target is not None:
-        return _current_target
-    from triton.runtime import driver
-
-    try:
-        active_driver = driver.active
-    except RuntimeError:
-        return None
-    return active_driver.get_current_target()
-
-
-current_target.__triton_builtin__ = True
-
-
-def _make_target(arch):
-    """Construct a GPUTarget from an architecture string (e.g. 'gfx1250', 'nvidia')."""
-    if arch.startswith("gfx"):
-        from triton.backends.amd.compiler import GPUTarget
-        warp_size = 32 if int(arch[3:-2]) >= 10 else 64
-        return GPUTarget("hip", arch, warp_size)
-    return None
-
-
-_make_target.__triton_builtin__ = True
