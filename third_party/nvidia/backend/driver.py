@@ -346,8 +346,8 @@ class CudaLauncher(object):
             launch_table, launch_index = gsan_stream_sync.get_launch_state(device, stream, self.launch_pdl)
             kernel_args = (*args, gsan_state_ptr, launch_table, launch_index)
 
-        num_warps, num_ctas, _ = kernel_metadata
-        kernel_metadata = (num_warps, num_ctas, self.shared)
+        num_warps, num_ctas, _, fallback_ctas = kernel_metadata
+        kernel_metadata = (num_warps, num_ctas, self.shared, fallback_ctas)
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
                     kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
                     profile_scratch, self.arg_annotations, self.kernel_signature, kernel_args)

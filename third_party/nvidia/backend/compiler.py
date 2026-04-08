@@ -267,6 +267,7 @@ class CUDABackend(BaseBackend):
             metadata.num_warps,
             metadata.num_ctas,
             metadata.shared,
+            getattr(metadata, "preferred_cluster_fallback_ctas", 0),
         )
 
     def get_codegen_implementation(self, options):
@@ -428,7 +429,8 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        if is_enabled(options, "gsan") or is_enabled(options, "gsan-profile"):
+        gsan = is_enabled(options, "gsan") or is_enabled(options, "gsan-profile")
+        if gsan:
             # GSan introduces layout conversions, so it must run before shared-memory allocation.
             passes.ttgpuir.add_global_sanitizer(pm)
 
@@ -442,6 +444,8 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
+        if not gsan and not is_enabled(options, "consan") and not options.launch_cooperative_grid:
+            nvidia.passes.ttnvgpuir.add_preferred_cluster_fallback(pm, capability)
         # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
@@ -535,6 +539,7 @@ class CUDABackend(BaseBackend):
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment") or 1
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
+        metadata["preferred_cluster_fallback_ctas"] = src.get_int_attr("ttng.preferred-cluster-fallback-ctas") or 0
 
         # Add Triton and LLVM versions to the dumped IR.
         if knobs.compilation.dump_ir:

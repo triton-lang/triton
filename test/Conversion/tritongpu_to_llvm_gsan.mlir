@@ -302,11 +302,11 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
   // CHECK: %{{.*}} = llvm.mul %[[CLUSTER_BASE]], %[[PROFILE_BYTES]] : i64
   // CHECK: %[[SCRATCH:.*]] = llvm.getelementptr %{{.*}}[%{{.*}}] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, i8
   // CHECK: %[[ELECT_INIT:.*]] = nvvm.elect.sync -> i1
-  // CHECK: %[[CTA_RANK_INIT:.*]] = nvg.cluster_id
+  // CHECK: %[[CTA_RANK_INIT:.*]] = nvg.program_cta_id
   // CHECK: %[[INIT_SCRATCH:.*]] = llvm.addrspacecast %[[SCRATCH]] : !llvm.ptr<1> to !llvm.ptr
   // CHECK: llvm.call @__triton_gsan_cluster_barrier_init(%[[INIT_SCRATCH]], %{{.*}}) : (!llvm.ptr, i32) -> ()
   // CHECK: %[[ELECT_SYNC:.*]] = nvvm.elect.sync -> i1
-  // CHECK: %[[CTA_RANK_SYNC:.*]] = nvg.cluster_id
+  // CHECK: %[[CTA_RANK_SYNC:.*]] = nvg.program_cta_id
   // CHECK: %[[SYNC_SCRATCH:.*]] = llvm.addrspacecast %[[SCRATCH]] : !llvm.ptr<1> to !llvm.ptr
   // CHECK: llvm.call @__triton_gsan_cluster_barrier_sync(%{{.*}}, %[[SYNC_SCRATCH]], %{{.*}}, %[[TWO]], %[[CTA_RANK_SYNC]], %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, !llvm.ptr, i32) -> ()
   tt.func @cluster_barrier() {
@@ -386,18 +386,18 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 4 : i32
   // CHECK-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG: %[[WAIT_ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK: %[[TABLE_ELECT:.*]] = nvvm.elect.sync -> i1
-  // CHECK: %[[TABLE_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[TABLE_CTA:.*]] = nvg.program_cta_id
   // CHECK: llvm.call @__triton_gsan_mbarrier_table_init(%[[TABLE:.*]], %{{.*}}, %{{.*}}) : (!llvm.ptr, i32, i32) -> ()
   // CHECK: %[[INIT_ELECT:.*]] = nvvm.elect.sync -> i1
-  // CHECK: %[[INIT_LEADER_CTA:.*]] = nvg.cluster_id
-  // CHECK: %[[INIT_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[INIT_LEADER_CTA:.*]] = nvvm.read.ptx.sreg.cluster.ctarank
+  // CHECK: %[[INIT_CTA:.*]] = nvg.program_cta_id
   // CHECK: %[[INIT_ADDRESS:.*]] = llvm.ptrtoint %{{.*}} : !llvm.ptr<3> to i32
   // CHECK: %[[INIT_OFFSET:.*]] = llvm.and %[[INIT_ADDRESS]], %[[OFFSET_MASK]] : i32
   // CHECK: %[[INIT_TABLE:.*]] = llvm.addrspacecast %{{.*}} : !llvm.ptr<1> to !llvm.ptr
   // CHECK: llvm.call @__triton_gsan_mbarrier_init(%[[INIT_TABLE]], %[[INIT_OFFSET]], %{{.*}}, %[[INIT_CTA]], %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
   // CHECK: nvvm.cluster.arrive aligned
   // CHECK-NEXT: nvvm.cluster.wait aligned
-  // CHECK: %[[ARRIVE_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[ARRIVE_CTA:.*]] = nvg.program_cta_id
   // CHECK: %[[ARRIVE_ELECT:.*]] = nvvm.elect.sync -> i1
   // CHECK: %[[LEADER_RANK:.*]] = llvm.and %[[ARRIVE_CTA]], %{{.*}} : i32
   // CHECK: %[[RECIPIENTS:.*]] = llvm.shl %[[ONE]], %[[LEADER_RANK]] : i32
@@ -405,11 +405,11 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 4 : i32
   // CHECK: %[[WAIT_ELECT:.*]] = nvvm.elect.sync -> i1
   // CHECK: %[[WAIT_WARP_ELECT:.*]] = llvm.and %{{.*}}, %[[WAIT_ELECT]] : i1
   // CHECK: %[[WAIT_OP_PRED:.*]] = llvm.and %[[WAIT_WARP_ELECT]], %{{.*}} : i1
-  // CHECK: %[[WAIT_LEADER_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[WAIT_LEADER_CTA:.*]] = nvvm.read.ptx.sreg.cluster.ctarank
   // CHECK: %[[WAIT_RANK_IN_GROUP:.*]] = llvm.and %[[WAIT_LEADER_CTA]], %[[ONE]] : i32
   // CHECK: %[[WAIT_IS_LEADER:.*]] = llvm.icmp "eq" %[[WAIT_RANK_IN_GROUP]], %[[WAIT_ZERO]] : i32
   // CHECK: %[[WAIT_PRED:.*]] = llvm.and %[[WAIT_OP_PRED]], %[[WAIT_IS_LEADER]] : i1
-  // CHECK: %[[WAIT_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[WAIT_CTA:.*]] = nvg.program_cta_id
   // CHECK: %[[WAIT_PRED_I32:.*]] = llvm.zext %[[WAIT_PRED]] : i1 to i32
   // CHECK: llvm.call @__triton_gsan_mbarrier_wait(%{{.*}}, %{{.*}}, %{{.*}}, %[[WAIT_PRED_I32]], %[[WAIT_CTA]], %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
   tt.func @mbarrier_release_acquire(%phase: i32, %pred: i1) {
@@ -473,11 +473,11 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
   // CHECK-LABEL: llvm.func @mbarrier_two_cta_source_predicate
   // CHECK-DAG: %[[SOURCE_MASK:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG: %[[SOURCE_ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: %[[ARRIVE_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[ARRIVE_CTA:.*]] = nvg.program_cta_id
   // CHECK: %[[SOURCE_ELECT:.*]] = nvvm.elect.sync -> i1
   // CHECK: %[[SOURCE_WARP_ELECT:.*]] = llvm.and %{{.*}}, %[[SOURCE_ELECT]] : i1
   // CHECK: %[[SOURCE_ELECT_PRED:.*]] = llvm.and %[[SOURCE_WARP_ELECT]], %{{.*}} : i1
-  // CHECK: %[[SOURCE_PRED_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[SOURCE_PRED_CTA:.*]] = nvg.program_cta_id
   // CHECK: %[[SOURCE_RANK:.*]] = llvm.and %[[SOURCE_PRED_CTA]], %[[SOURCE_MASK]] : i32
   // CHECK: %[[SOURCE_LEADER:.*]] = llvm.icmp "eq" %[[SOURCE_RANK]], %[[SOURCE_ZERO]] : i32
   // CHECK: %[[SOURCE_PRED:.*]] = llvm.and %[[SOURCE_ELECT_PRED]], %[[SOURCE_LEADER]] : i1

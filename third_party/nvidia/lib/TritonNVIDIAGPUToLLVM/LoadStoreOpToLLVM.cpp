@@ -1304,9 +1304,10 @@ struct AsyncBulkCopyGlobalToLocalOpConversion
     Value src = b.gep(adaptor.getSrc().getType(), i8_ty, adaptor.getSrc(),
                       sourceOffset);
     if (op.getMulticast()) {
-      Value leader = b.icmp_eq(b.and_(ctaId, b.i32_val(layout.broadcastMask)),
-                               b.i32_val(0));
-      pred = b.and_(pred, leader);
+      Value physicalCtaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
+      Value ctaIdInGroup =
+          b.and_(physicalCtaId, b.i32_val(layout.broadcastMask));
+      pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
     }
     Value barrierPtr = barrier.getBase();
     bool cluster = op.getMulticast();
@@ -1457,7 +1458,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     auto kMsg = str_attr("msg");
     const auto numCopies = msgToOffset.getInDimSize(kMsg);
-    auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+    Value ctaId = triton::nvgpu::ProgramCTAIdOp::create(rewriter, loc);
     // We multicast if the flag is on and the block layout has broadcasting
     bool multicast = op.getMulticast();
     uint32_t maskCGABroadcast =
@@ -1466,7 +1467,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     if (multicast) {
       // If we multicast, we emit the full message from the representative CTA
       // meaning the CTA with the lowest CTA id in a multicast group.
-      auto ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
+      Value physicalCtaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
+      Value ctaIdInGroup = b.and_(physicalCtaId, b.i32_val(maskCGABroadcast));
       pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
     }
 
@@ -1621,7 +1623,7 @@ convertTMAStoreLikeOp(Operation *op, const TypeConverter *typeConverter,
   auto kBlock = str_attr("block");
   auto numCopies = msgToOffset.getInDimSize(kMsg);
   auto zero = b.i32_val(0);
-  auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+  Value ctaId = triton::nvgpu::ProgramCTAIdOp::create(rewriter, loc);
   uint32_t maskCGABroadcast = smemLayout.getFreeVariableMasks().lookup(kBlock);
   if (maskCGABroadcast != 0) {
     // Stores and reductions operate from CTA-local shared memory, so if the
@@ -1783,7 +1785,7 @@ static void iterateGatherScatterIndices(
   bool crossCTA = ttng::getTMASubviewCTAMask(smemType);
 
   Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
-  Value blockId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+  Value blockId = triton::nvgpu::ProgramCTAIdOp::create(rewriter, loc);
   auto ctaOffsets = applyLinearLayout(
       loc, rewriter, msgToOffset, {{kMsg, b.i32_val(0)}, {kBlock, blockId}});
   assert(ctaOffsets.size() == 2 && ctaOffsets.back().first == kDim1);
@@ -1866,7 +1868,7 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
     maskCGABroadcast = ttg::toLinearLayout(op.getResult().getType())
                            .getFreeVariableMasks()
                            .lookup(kBlock);
-    Value ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+    Value ctaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
     Value ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
     pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
   }
@@ -1976,7 +1978,7 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
   if (maskCGABroadcast != 0) {
     // `scatter4` only reads from the current CTA's shared memory, so if the
     // source is broadcast across CTAs only the lead CTA should issue it.
-    Value ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+    Value ctaId = triton::nvgpu::ProgramCTAIdOp::create(rewriter, loc);
     Value ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
     pred = b.icmp_eq(ctaIdInGroup, b.i32_val(0));
   }

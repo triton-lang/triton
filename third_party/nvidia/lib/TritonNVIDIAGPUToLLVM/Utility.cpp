@@ -9,6 +9,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <bit>
 #include <limits>
@@ -100,6 +101,11 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
   return shuffleCommon(loc, rewriter, val, i, NVVM::ShflKind::idx);
 }
 
+bool usePreferredClusterFallback(ModuleOp moduleOp) {
+  return triton::nvidia_gpu::getModulePreferredClusterFallbackCTAs(moduleOp) >
+         0;
+}
+
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis) {
   assert(moduleOp);
@@ -157,16 +163,37 @@ Value createElectPredicateWarp0(Location loc, OpBuilder &rewriter) {
   return b.and_(warp0, createElectPredicate(loc, rewriter));
 }
 
-Value createMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
-                          uint16_t broadcastBits, Value ctaId) {
-  int numCTAs = triton::gpu::lookupNumCTAs(rewriter);
+static Value createMulticastMask(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 uint16_t broadcastBits, int numCTAs,
+                                 Value ctaId) {
   auto encoding =
       triton::nvidia_gpu::getTMAMulticastMaskEncoding(numCTAs, broadcastBits);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (!ctaId)
-    ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
   Value base = b.and_(ctaId, b.i32_val(encoding.fixedBits));
   return b.shl(b.i32_val(encoding.pattern), base);
+}
+
+Value createMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
+                          uint16_t broadcastBits, Value ctaId) {
+  ModuleOp moduleOp =
+      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  if (!ctaId)
+    ctaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
+  int preferredCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+  Value preferredMask =
+      createMulticastMask(loc, rewriter, broadcastBits, preferredCTAs, ctaId);
+  int fallbackCTAs =
+      triton::nvidia_gpu::getModulePreferredClusterFallbackCTAs(moduleOp);
+  if (!fallbackCTAs)
+    return preferredMask;
+
+  Value fallbackMask =
+      createMulticastMask(loc, rewriter, broadcastBits, fallbackCTAs, ctaId);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value actualNCTA = NVVM::ClusterDimBlocksXOp::create(rewriter, loc, i32_ty);
+  Value isFallback = b.icmp_eq(actualNCTA, b.i32_val(fallbackCTAs));
+  return b.select(isFallback, fallbackMask, preferredMask);
 }
 
 uint32_t getCGABroadcastMask(mlir::triton::gpu::MemDescType barrierTy) {
@@ -182,7 +209,7 @@ getLeaderCTAPredicate(Location loc, ConversionPatternRewriter &rewriter,
   if (!maskCGABroadcast)
     return std::nullopt;
 
-  Value ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+  Value ctaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
   Value ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
   return std::optional<Value>(b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
 }
@@ -204,7 +231,7 @@ Value getLeaderAddress(Location loc, ConversionPatternRewriter &rewriter,
 
 Value createLeadCTAPredicate(Location loc, RewriterBase &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value leftClusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+  Value leftClusterId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
   leftClusterId = b.and_(leftClusterId, b.i32_val(1));
   Value cluster0 = b.icmp_eq(leftClusterId, b.i32_val(0));
   return cluster0;

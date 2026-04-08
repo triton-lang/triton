@@ -2852,9 +2852,7 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, SPLIT_A, device, run_wrapper, m
         tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
         mbarrier.init(tma_bar, count=1)
         mma_bar = mbarrier.allocate_mbarrier()
-        mma_bar_count: ttgl.constexpr = blackwell.tcgen05_mma_barrier_count([smemA, smemB], True,
-                                                                            acc.type.layout.two_ctas)
-        mbarrier.init(mma_bar, count=mma_bar_count)
+        mbarrier.init_tcgen05_mma(mma_bar, [smemA, smemB], two_ctas=True)
 
         for k in range(num_k_tiles):
             offs_k = k * XBLOCK

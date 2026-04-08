@@ -9,7 +9,7 @@
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @hoist_loop_lifecycle
   // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
-  // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
+  // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1 {fallback_count = 1 : i32}
   // CHECK: %[[INITIAL_PHASE:.*]] = arith.constant 0 : i32
   // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %[[INITIAL_PHASE]]) -> (i32)
   // CHECK-NOT: arith.constant 0 : i32
@@ -30,7 +30,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %c0 = arith.constant 0 : i32
       %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-      ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      ttng.init_barrier %bar, 1 {fallback_count = 1 : i32} : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
         !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>

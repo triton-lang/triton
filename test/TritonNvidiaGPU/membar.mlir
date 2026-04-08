@@ -617,13 +617,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // Both CTAs contribute their warps to the same physical barrier.
   // FOLD-LABEL: @distributed_arrival_broadcast
-  // FOLD: ttng.init_barrier {{.*}}, 4 :
+  // FOLD: ttng.init_barrier {{.*}}, 4 {fallback_count = 4 : i32} :
   // FOLD: ttng.arrive_barrier {{.*}}, 4 {per_warp} :
   // FOLD-NEXT: ttng.wait_barrier
   tt.func @distributed_arrival_broadcast(%out: !tt.ptr<i32>, %value: i32) {
     %phase = arith.constant 0 : i32
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
-    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.init_barrier %bar, 1 {fallback_count = 1 : i32} : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
     ttg.barrier local
     tt.store %out, %value : !tt.ptr<i32>
     ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>

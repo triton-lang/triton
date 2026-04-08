@@ -5,7 +5,15 @@ from triton.experimental.gluon._runtime import constexpr_function, jit
 from triton.experimental.gluon.language._layouts import SwizzledSharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
 
-__all__ = ["allocate_mbarrier", "arrive", "init", "invalidate", "MBarrierLayout", "wait"]
+__all__ = [
+    "allocate_mbarrier",
+    "arrive",
+    "init",
+    "init_tcgen05_mma",
+    "invalidate",
+    "MBarrierLayout",
+    "wait",
+]
 
 
 class MBarrierLayout(SwizzledSharedLayout):
@@ -67,16 +75,61 @@ def allocate_mbarrier(batch: ttgl.constexpr = None, two_ctas: ttgl.constexpr = F
 
 
 @builtin
-def init(mbarrier, count, _semantic=None):
+def init(mbarrier, count, *, fallback_count=None, _semantic=None):
     """
     Initialize an mbarrier with a specified count.
 
     Args:
         mbarrier (shared_memory_descriptor): The barrier object to initialize.
-        count (int): The initial count for the barrier.
+        count (int): The initial count per CTA sharing the barrier.
+        fallback_count (int, optional): Count per CTA when a preferred cluster
+            falls back to two CTAs. Defaults to ``count``.
+
+    Both counts are multiplied by the number of CTAs sharing the barrier.
     """
     count = _unwrap_if_constexpr(count)
-    _semantic.builder.create_mbarrier_init(mbarrier.handle, count)
+    fallback_count = _unwrap_if_constexpr(fallback_count)
+    _semantic.builder.create_mbarrier_init(mbarrier.handle, count, fallback_count)
+
+
+@builtin
+def init_tcgen05_mma(mbarrier, descs=(), *, two_ctas, _semantic=None):
+    """
+    Initialize a tcgen05 completion barrier for preferred and fallback clusters.
+
+    Args:
+        mbarrier (shared_memory_descriptor): A barrier with one element per CTA,
+            allocated with ``allocate_mbarrier()``.
+        descs (Sequence): Shared or tensor memory descriptors used for multicast
+            completion, matching those passed to ``tcgen05_commit`` or the
+            multicast MMA. Use an empty sequence without multicast.
+        two_ctas (bool): Whether the MMA uses ``cta_group::2``. This must match
+            the accumulator's ``two_ctas`` layout setting.
+
+    For example::
+
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init_tcgen05_mma(bar, [a, b], two_ctas=acc.layout.two_ctas)
+
+    Descriptor layouts determine both counts: broadcasting across CTA bit 0
+    remains within a fallback pair; higher broadcast bits are removed.
+    """
+    from ..blackwell import tcgen05_mma_barrier_count
+
+    descs = _unwrap_if_constexpr(descs)
+    two_ctas = _unwrap_if_constexpr(two_ctas)
+    num_ctas = _unwrap_if_constexpr(ttgl.num_ctas(_semantic=_semantic))
+    cga_layout = [[2**i] for i in range(num_ctas.bit_length() - 1)]
+    actual_cga_layout = [list(basis) for basis in mbarrier.layout.cga_layout]
+    ttgl.static_assert(
+        list(mbarrier.shape) == [num_ctas] and actual_cga_layout == cga_layout,
+        "tcgen05 MMA barriers must have shape [num_ctas] and 1D cga_layout",
+        _semantic=_semantic,
+    )
+    count = tcgen05_mma_barrier_count(descs, multicast=bool(descs), two_ctas=two_ctas)
+    fallback_count = tcgen05_mma_barrier_count(descs, multicast=bool(descs), two_ctas=two_ctas,
+                                               cluster_size=min(num_ctas, 2))
+    init(mbarrier, count, fallback_count=fallback_count, _semantic=_semantic)
 
 
 @builtin
