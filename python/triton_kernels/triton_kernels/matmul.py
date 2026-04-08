@@ -485,6 +485,7 @@ def matmul(a, b, bias,
     # create tma descriptor for y
     c_has_tma = (
         opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
+        and is_tma_compliant(c)
         and (c_acc_in is None or c_acc_is_c)
         and fused_comm is None
         and precision_config.c_value_pack_factor == 1

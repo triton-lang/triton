@@ -127,6 +127,10 @@ def _build_test_op_cases():
         Case(*even_shape, "ragged", "float8_e5m2", "float8_e5m2", epilogue_subtile=val)
         for val in (1, 2, 4)
     ])
+    # fp32
+    test_cases.extend([
+        Case(1024, 1000, 2048, "ragged", "float32", "float32", b_transpose=True)
+    ])
     # bfloat16 x mx
     for shape in [odd_shape2, even_shape]:
         test_cases.extend([
