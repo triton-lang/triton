@@ -53,6 +53,12 @@ void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                 isVolatile);
 }
 
+Value LoadOp::getPredicateOperand() { return getMask(); }
+
+void LoadOp::setPredicateOperand(Value pred) { getMaskMutable().assign(pred); }
+
+Type LoadOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
 // load(ptr, splat(1), ...)        -> load(ptr, ...)
 // load(ptr, splat(0), other, ...) -> other
 struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
@@ -103,6 +109,12 @@ void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
   return StoreOp::build(builder, state, ptr, value, /*mask=*/{}, cache, evict);
 }
 
+Value StoreOp::getPredicateOperand() { return getMask(); }
+
+void StoreOp::setPredicateOperand(Value pred) { getMaskMutable().assign(pred); }
+
+Type StoreOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
 // store(ptr, value, splat(1), ...) -> store(ptr, value, ...)
 // store(ptr, value, splat(0), ...) -> [none]
 struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
@@ -135,6 +147,14 @@ struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
     return success();
   }
 };
+
+Value AtomicRMWOp::getPredicateOperand() { return getMask(); }
+
+void AtomicRMWOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+
+Type AtomicRMWOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
 void StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                           MLIRContext *context) {
@@ -850,9 +870,10 @@ void ReshapeOp::build(OpBuilder &builder, OperationState &state,
   auto srcEnc = srcTy.getEncoding();
   Attribute dstEnc;
   if (srcEnc) {
-    auto result = cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-                      ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape,
-                                               dstEnc, state.location);
+    auto result =
+        cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+            ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape, dstEnc,
+                                     allowReorder, state.location);
     assert(succeeded(result));
   }
   auto dstTy = RankedTensorType::get(shape, srcTy.getElementType(), dstEnc);
@@ -912,17 +933,20 @@ LogicalResult ReshapeOp::verify() {
                      "encodings, or (b) neither does.");
   }
 
-  if (!srcEnc || getAllowReorder()) {
+  if (!srcEnc) {
     return success();
   }
 
-  // Check that we can infer the dst encoding from the src encoding
-  // and that the inferred dst encoding is the same as the given dst encoding
-  Attribute inferredDstEnc;
+  // Check that we can infer the dst encoding from the src encoding and that the
+  // inferred dst encoding is the same as the given dst encoding. We pass the
+  // current dst encoding as a hint so that allowReorder reshapes are guaranteed
+  // to produce the current encoding iff it is valid.
+  Attribute inferredDstEnc = dstEnc;
   auto layoutInterface =
       cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
   auto result = layoutInterface->inferReshapeOpEncoding(
-      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc, getLoc());
+      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc,
+      getAllowReorder(), getLoc());
   if (failed(result))
     return failure();
   return layoutInterface->verifyLayoutsAreEqual(
