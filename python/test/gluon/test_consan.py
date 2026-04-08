@@ -741,21 +741,24 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
             ttgl.NVMMASharedLayout.get_default_for([XBLOCK, block_n], ttgl.float16,
                                                    cga_layout=mma_cga_layout(ttgl.num_ctas(), 1, TWO_CTAS)),
         )
-        bar = mbarrier.allocate_mbarrier(batch=2)
+        mma_bar = mbarrier.allocate_mbarrier()
         acc = blackwell.allocate_tensor_memory(ttgl.float32, [block_m, block_n], acc_layout)
-        mbarrier.init(bar.index(0), count=1)
-        mbarrier.init(bar.index(1), count=1)
+        mbarrier.init(mma_bar, count=1)
+        if MEM_ACCESS_KIND == "tma_cp":
+            tma_bar = mbarrier.allocate_mbarrier(two_ctas=TWO_CTAS)
+            mbarrier.init(tma_bar, count=1)
 
         blackwell.tcgen05_mma(smemA, smemB, acc)
-        blackwell.tcgen05_commit(bar.index(0))
+        blackwell.tcgen05_commit(mma_bar)
 
         if not FAILURE:
-            mbarrier.wait(bar.index(0), 0)
+            mbarrier.wait(mma_bar, 0)
 
         if MEM_ACCESS_KIND == "tma_cp":
-            mbarrier.expect(bar.index(1), input_desc.nbytes_per_cta)
-            tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smemA)
-            mbarrier.wait(bar.index(1), 0)
+            mbarrier.expect(tma_bar, input_desc.nbytes_per_cta)
+            tma.async_copy_global_to_shared(input_desc, [0, 0], tma_bar, smemA)
+            mbarrier.wait(tma_bar, 0)
+            mbarrier.invalidate(tma_bar)
         elif MEM_ACCESS_KIND == "local_store":
             smemA.store(ttgl.full([block_m, XBLOCK], 42, ttgl.float16, smem_a_blocked_layout))
         elif MEM_ACCESS_KIND == "tmem_load":
@@ -769,8 +772,7 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
         elif MEM_ACCESS_KIND == "tmem_store":
             acc.store(ttgl.full([block_m, block_n], 42, ttgl.float32, acc_blocked_layout))
 
-        mbarrier.invalidate(bar.index(0))
-        mbarrier.invalidate(bar.index(1))
+        mbarrier.invalidate(mma_bar)
 
     block_m = mma_block_m(num_ctas)
     block_n = mma_block_n(num_ctas)
