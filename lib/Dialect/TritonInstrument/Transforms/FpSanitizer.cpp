@@ -513,24 +513,28 @@ PayloadMixConfig getPayloadMixConfig(FloatType floatTy) {
   unsigned shift = llvm::countr_zero(oneBits);
   assert(shift != 0 && "expected even 1.0 bit pattern");
 
-  uint64_t mulA = 922291u;
+  // we firstly multiply by an arbitrary odd constant to mix from low
+  // bits to high whilst remaining invertible:
+  uint64_t mulA = 922291u & magMask;
   uint64_t oneMixed = (oneBits * mulA) & magMask;
   oneMixed ^= oneMixed >> shift;
   assert((oneMixed & 1) == 1 && "expected odd mixed 1.0");
 
-  uint64_t mulBPos = invOddU64(oneMixed) & fullMask;
-  uint64_t mulBNeg = (mulBPos * magMask) & fullMask;
+  // the second multiplier is chosen so that the entire payload mixing
+  // operation maps the float 1.0 to the integer 1:
+  uint64_t mulBPos = invOddU64(oneMixed) & magMask;
+  uint64_t mulBNeg = (mulBPos * magMask) & magMask;
   return PayloadMixConfig{
       bitWidth,
       shift,
       signMask,
       magMask,
       mulA,
-      invOddU64(mulA) & fullMask,
+      invOddU64(mulA) & magMask,
       mulBPos,
       mulBNeg,
-      invOddU64(mulBPos) & fullMask,
-      invOddU64(mulBNeg) & fullMask,
+      invOddU64(mulBPos) & magMask,
+      invOddU64(mulBNeg) & magMask,
   };
 }
 
@@ -587,7 +591,7 @@ Value unmixIntToFloat(PatternRewriter &rewriter, Location loc, Value v,
   return arith::XOrIOp::create(rewriter, loc, x, signFlip);
 }
 
-Value bitcastToInt(PatternRewriter &rewriter, Location loc, Value v) {
+Value embedToInt(PatternRewriter &rewriter, Location loc, Value v) {
   if (isa<IntegerType>(getElementType(v.getType())))
     return v;
   auto intTy = getIntTypeLike(v.getType());
@@ -597,7 +601,7 @@ Value bitcastToInt(PatternRewriter &rewriter, Location loc, Value v) {
   return raw;
 }
 
-Value bitcastToFloat(PatternRewriter &rewriter, Location loc, Value v,
+Value unembedToFloat(PatternRewriter &rewriter, Location loc, Value v,
                      Type floatTy) {
   v = unmixIntToFloat(rewriter, loc, v,
                       cast<FloatType>(getElementType(floatTy)));
@@ -626,7 +630,7 @@ constexpr uint32_t kUnaryTagMultiplier = 314159u;
 
 Value fpsanUnaryTagged(PatternRewriter &rewriter, Location loc, Value input,
                        UnaryOpId opId) {
-  auto inI = bitcastToInt(rewriter, loc, input);
+  auto inI = embedToInt(rewriter, loc, input);
   uint64_t opIdHash = murmur64Mixer(getUnaryOpId(opId));
   auto opIdVal = getIntConstantLike(rewriter, loc, inI.getType(),
                                     static_cast<int64_t>(opIdHash));
@@ -635,7 +639,7 @@ Value fpsanUnaryTagged(PatternRewriter &rewriter, Location loc, Value input,
   auto mixedIn = arith::MulIOp::create(rewriter, loc, inI, multiplier);
   auto tagged = arith::XOrIOp::create(rewriter, loc, mixedIn, opIdVal);
   auto outI = arith::MulIOp::create(rewriter, loc, tagged, multiplier);
-  return bitcastToFloat(rewriter, loc, outI, input.getType());
+  return unembedToFloat(rewriter, loc, outI, input.getType());
 }
 
 Value fpsanIntInv(PatternRewriter &rewriter, Location loc, Value u) {
@@ -658,20 +662,20 @@ Value fpsanIntInv(PatternRewriter &rewriter, Location loc, Value u) {
 }
 
 Value fpsanFDiv(PatternRewriter &rewriter, Location loc, Value num, Value den) {
-  auto numI = bitcastToInt(rewriter, loc, num);
-  auto denI = bitcastToInt(rewriter, loc, den);
+  auto numI = embedToInt(rewriter, loc, num);
+  auto denI = embedToInt(rewriter, loc, den);
   auto inv = fpsanIntInv(rewriter, loc, denI);
   auto resI = arith::MulIOp::create(rewriter, loc, numI, inv);
-  return bitcastToFloat(rewriter, loc, resI, num.getType());
+  return unembedToFloat(rewriter, loc, resI, num.getType());
 }
 
 Value fpsanSRem(PatternRewriter &rewriter, Location loc, Value num, Value den) {
-  auto numI = bitcastToInt(rewriter, loc, num);
-  auto denI = bitcastToInt(rewriter, loc, den);
+  auto numI = embedToInt(rewriter, loc, num);
+  auto denI = embedToInt(rewriter, loc, den);
   auto one = getIntConstantLike(rewriter, loc, denI.getType(), 1);
   auto denSafe = arith::OrIOp::create(rewriter, loc, denI, one);
   auto resI = arith::RemSIOp::create(rewriter, loc, numI, denSafe);
-  return bitcastToFloat(rewriter, loc, resI, num.getType());
+  return unembedToFloat(rewriter, loc, resI, num.getType());
 }
 
 // Modular exponentiation in payload space; this preserves
@@ -694,14 +698,14 @@ Value fpsanExp2FromI32(PatternRewriter &rewriter, Location loc, Value xI,
     y = arith::MulIOp::create(rewriter, loc, y, factor);
   }
 
-  return bitcastToFloat(rewriter, loc, y, floatTy);
+  return unembedToFloat(rewriter, loc, y, floatTy);
 }
 
 Value fpsanExp2(PatternRewriter &rewriter, Location loc, Value input) {
   auto elemTy = dyn_cast<FloatType>(getElementType(input.getType()));
   if (!elemTy || elemTy.getWidth() != 32)
     return Value();
-  return fpsanExp2FromI32(rewriter, loc, bitcastToInt(rewriter, loc, input),
+  return fpsanExp2FromI32(rewriter, loc, embedToInt(rewriter, loc, input),
                           input.getType());
 }
 
@@ -710,7 +714,7 @@ Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
   if (!elemTy || elemTy.getWidth() != 32)
     return Value();
 
-  auto inputI = bitcastToInt(rewriter, loc, input);
+  auto inputI = embedToInt(rewriter, loc, input);
   auto rcpLog2 =
       getU32ConstantLike(rewriter, loc, inputI.getType(), 0x236ee9bfu);
   auto scaledI = arith::MulIOp::create(rewriter, loc, inputI, rcpLog2);
@@ -741,7 +745,7 @@ Value castExternOperandToResultInt(PatternRewriter &rewriter, Location loc,
                                    Value operand, Type resultIntTy) {
   if (isFloatLike(operand.getType())) {
     return castIntValueToType(
-        rewriter, loc, bitcastToInt(rewriter, loc, operand), resultIntTy);
+        rewriter, loc, embedToInt(rewriter, loc, operand), resultIntTy);
   }
   if (isIntLike(operand.getType())) {
     return castIntValueToType(rewriter, loc, operand, resultIntTy);
@@ -786,7 +790,7 @@ Value fpsanVariadicExternTagged(PatternRewriter &rewriter, Location loc,
   auto hashVal = getIntConstantLike(rewriter, loc, resultIntTy,
                                     static_cast<int64_t>(hash));
   auto outI = arith::XOrIOp::create(rewriter, loc, sumI, hashVal);
-  return bitcastToFloat(rewriter, loc, outI, resultTy);
+  return unembedToFloat(rewriter, loc, outI, resultTy);
 }
 
 std::optional<ScratchInfo>
@@ -898,7 +902,7 @@ Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
 
 Value unpackPackedFp4Slice(PatternRewriter &rewriter, Location loc,
                            Value packedSlice, Value kI32) {
-  Value packedI = bitcastToInt(rewriter, loc, packedSlice);
+  Value packedI = embedToInt(rewriter, loc, packedSlice);
   auto intTy = packedI.getType();
 
   Value one =
@@ -953,7 +957,7 @@ Value castDotScaledOperandToComputePayload(PatternRewriter &rewriter,
   if (auto storageFloat = getDotScaledStorageFloatType(rewriter, elemType)) {
     Value payload;
     if (isFloatLike(slice.getType())) {
-      payload = bitcastToInt(rewriter, loc, slice);
+      payload = embedToInt(rewriter, loc, slice);
     } else {
       Value raw = castIntValueToType(
           rewriter, loc, slice,
@@ -968,7 +972,7 @@ Value castDotScaledOperandToComputePayload(PatternRewriter &rewriter,
   // Match ttg.fp4_to_fp sanitization: unpacked e2m1 nibbles are payloads in
   // the destination floating type.  The 6-bit formats are not packed here, but
   // use the same payload-preserving integer cast until we add a float6 mixer.
-  Value rawPayload = bitcastToInt(rewriter, loc, slice);
+  Value rawPayload = embedToInt(rewriter, loc, slice);
   return castIntValueToType(rewriter, loc, rawPayload, computeIntTy);
 }
 
@@ -1010,11 +1014,11 @@ Value castDotScaledScaleToComputePayload(PatternRewriter &rewriter,
                          IntegerType::get(rewriter.getContext(),
                                           computeElem.getIntOrFloatBitWidth()));
   if (isFloatLike(scaleSlice.getType())) {
-    Value payload = bitcastToInt(rewriter, loc, scaleSlice);
+    Value payload = embedToInt(rewriter, loc, scaleSlice);
     return castSignedIntValueToType(rewriter, loc, payload, computeIntTy);
   }
   return scaleI8ToComputePayload(
-      rewriter, loc, bitcastToInt(rewriter, loc, scaleSlice), computeElem);
+      rewriter, loc, embedToInt(rewriter, loc, scaleSlice), computeElem);
 }
 
 struct DotScaleConfig {
@@ -1080,8 +1084,8 @@ Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aSlice,
       bI = arith::MulIOp::create(rewriter, loc, bI, bScaleI);
     }
   } else {
-    aI = bitcastToInt(rewriter, loc, aSlice);
-    bI = bitcastToInt(rewriter, loc, bSlice);
+    aI = embedToInt(rewriter, loc, aSlice);
+    bI = embedToInt(rewriter, loc, bSlice);
   }
   aI = castIntValueToType(rewriter, loc, aI,
                           getTypeWithElement(aI.getType(), accElem));
@@ -1135,7 +1139,7 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
       tt::AddPtrOp::create(rewriter, loc, dPtr.getType(), dPtr, dOffset);
   Value accTile =
       loadScratchStrided2D(rewriter, loc, dTilePtr, accTileTy, dStride);
-  Value accTileI = bitcastToInt(rewriter, loc, accTile);
+  Value accTileI = embedToInt(rewriter, loc, accTile);
 
   Value aTilePtr =
       tt::AddPtrOp::create(rewriter, loc, aPtr.getType(), aPtr, mIdxI32);
@@ -1216,7 +1220,7 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
   Value outMasked = arith::MulIOp::create(rewriter, loc, outI, predMask);
   Value accMasked = arith::MulIOp::create(rewriter, loc, accTileI, predInv);
   Value outSelI = arith::AddIOp::create(rewriter, loc, outMasked, accMasked);
-  Value out = bitcastToFloat(rewriter, loc, outSelI, accTileTy);
+  Value out = unembedToFloat(rewriter, loc, outSelI, accTileTy);
   storeScratchStrided2D(rewriter, loc, dTilePtr, out, accTileTy, dStride);
 
   return mLoop;
@@ -1234,10 +1238,10 @@ struct BinaryFloatToIntPattern : public OpRewritePattern<OpF> {
     if (!isFloatLike(op.getType()))
       return failure();
     auto loc = op.getLoc();
-    auto lhsI = bitcastToInt(rewriter, loc, op.getLhs());
-    auto rhsI = bitcastToInt(rewriter, loc, op.getRhs());
+    auto lhsI = embedToInt(rewriter, loc, op.getLhs());
+    auto rhsI = embedToInt(rewriter, loc, op.getRhs());
     auto resI = OpI::create(rewriter, loc, lhsI, rhsI);
-    auto resF = bitcastToFloat(rewriter, loc, resI, op.getType());
+    auto resF = unembedToFloat(rewriter, loc, resI, op.getType());
     rewriter.replaceOp(op, resF);
     return success();
   }
@@ -1286,12 +1290,12 @@ struct FmaPattern : public OpRewritePattern<math::FmaOp> {
     if (!isFloatLike(op.getType()))
       return failure();
     auto loc = op.getLoc();
-    auto aI = bitcastToInt(rewriter, loc, op.getA());
-    auto bI = bitcastToInt(rewriter, loc, op.getB());
-    auto cI = bitcastToInt(rewriter, loc, op.getC());
+    auto aI = embedToInt(rewriter, loc, op.getA());
+    auto bI = embedToInt(rewriter, loc, op.getB());
+    auto cI = embedToInt(rewriter, loc, op.getC());
     auto mul = arith::MulIOp::create(rewriter, loc, aI, bI);
     auto sum = arith::AddIOp::create(rewriter, loc, mul, cI);
-    auto resF = bitcastToFloat(rewriter, loc, sum, op.getType());
+    auto resF = unembedToFloat(rewriter, loc, sum, op.getType());
     rewriter.replaceOp(op, resF);
     return success();
   }
@@ -1334,10 +1338,10 @@ struct ExtFOpPattern : public OpRewritePattern<arith::ExtFOp> {
     if (!isFloatLike(op.getType()))
       return failure();
     auto loc = op.getLoc();
-    auto inI = bitcastToInt(rewriter, loc, op.getIn());
+    auto inI = embedToInt(rewriter, loc, op.getIn());
     auto outI = castSignedIntValueToType(rewriter, loc, inI,
                                          getIntTypeLike(op.getType()));
-    auto outF = bitcastToFloat(rewriter, loc, outI, op.getType());
+    auto outF = unembedToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
     return success();
   }
@@ -1350,10 +1354,10 @@ struct TruncFOpPattern : public OpRewritePattern<arith::TruncFOp> {
     if (!isFloatLike(op.getType()))
       return failure();
     auto loc = op.getLoc();
-    auto inI = bitcastToInt(rewriter, loc, op.getIn());
+    auto inI = embedToInt(rewriter, loc, op.getIn());
     auto outI = castSignedIntValueToType(rewriter, loc, inI,
                                          getIntTypeLike(op.getType()));
-    auto outF = bitcastToFloat(rewriter, loc, outI, op.getType());
+    auto outF = unembedToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
     return success();
   }
@@ -1366,10 +1370,10 @@ struct FpToFpPattern : public OpRewritePattern<tt::FpToFpOp> {
     if (!isFloatLike(op.getType()))
       return failure();
     auto loc = op.getLoc();
-    auto inI = bitcastToInt(rewriter, loc, op.getSrc());
+    auto inI = embedToInt(rewriter, loc, op.getSrc());
     auto outI = castSignedIntValueToType(rewriter, loc, inI,
                                          getIntTypeLike(op.getType()));
-    auto outF = bitcastToFloat(rewriter, loc, outI, op.getType());
+    auto outF = unembedToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
     return success();
   }
@@ -1413,7 +1417,7 @@ struct Fp4ToFpPattern : public OpRewritePattern<ttg::Fp4ToFpOp> {
     if (result.getType() != dstIntTy)
       result = ttg::ConvertLayoutOp::create(rewriter, loc, dstIntTy, result);
 
-    rewriter.replaceOp(op, bitcastToFloat(rewriter, loc, result, dstTy));
+    rewriter.replaceOp(op, unembedToFloat(rewriter, loc, result, dstTy));
     return success();
   }
 };
