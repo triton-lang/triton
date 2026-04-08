@@ -43,7 +43,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
-    tcgen05_mma_barrier_count,
     tcgen05_mma,
     tcgen05_mma_scaled,
     tcgen05_commit,
@@ -795,6 +794,8 @@ def test_tma_multicast_copy(ctas_per_cga, policy):
     assert (".L2::cache_hint" in compiled.asm["ptx"]) == (policy is not None)
     expect_multicast = any(ctas_per_cga[i] > cga_split_num[i] for i in range(len(ctas_per_cga)))
     assert (".multicast::cluster" in compiled.asm["ptx"]) == expect_multicast
+    if is_blackwell() and num_ctas > 2:
+        assert compiled.metadata.preferred_cluster_fallback_ctas == 2
     torch.testing.assert_close(out, inp, atol=0, rtol=0)
 
 
@@ -971,7 +972,7 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=acc_tmem_layout.two_ctas)
     mbarrier.init(tma_bar, count=1)
     mma_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True, acc_tmem.type.layout.two_ctas))
+    mbarrier.init_tcgen05_mma(mma_bar, [smem_a, smem_b], two_ctas=acc_tmem_layout.two_ctas)
 
     mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
     tma.async_load(a_desc, [0, 0], tma_bar, smem_a, multicast=True)
@@ -1028,7 +1029,7 @@ def make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, two_cta_dim):
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [2, 4], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [True, False] if is_blackwell() else [False])
-def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
+def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas, monkeypatch):
     skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
 
     if two_ctas:
@@ -1073,7 +1074,7 @@ def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
     blocked_c = ttgl.BlockedLayout([1, 2], [ctas_per_cga[1], 32 // ctas_per_cga[1]], [4, 1], [1, 0],
                                    cga_layout=cga_layout_c)
 
-    compiled = tcgen05_mma_multicast_commit_kernel[(1, )](
+    args = (
         a_desc,
         b_desc,
         out,
@@ -1081,9 +1082,9 @@ def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
         BLOCK_N,
         acc_tmem_layout,
         blocked_c,
-        num_warps=4,
-        num_ctas=ctas_per_cga[0] * ctas_per_cga[1],
     )
+    num_ctas = math.prod(ctas_per_cga)
+    compiled = tcgen05_mma_multicast_commit_kernel[(1, )](*args, num_warps=4, num_ctas=num_ctas)
 
     assert "tcgen05.commit.cta_group::" + ("2" if two_ctas else "1") in compiled.asm["ptx"]
     if two_ctas:
@@ -1091,7 +1092,16 @@ def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
     # For [2, 1] and two_ctas we don't multicast as there are not enough tiles
     # but we do a commit.multicast::cluster so let's grep that one instead
     assert ("multicast::cluster" in compiled.asm["ptx"])
-    torch.testing.assert_close(out, torch.matmul(a.to(out.dtype), b.to(out.dtype)))
+    expected = torch.matmul(a.to(out.dtype), b.to(out.dtype))
+    torch.testing.assert_close(out, expected)
+    if num_ctas > 2:
+        assert compiled.metadata.preferred_cluster_fallback_ctas == 2
+        out.fill_(float("nan"))
+        num_warps, _, shared_memory, _ = compiled.packed_metadata
+        # Force physical CTA pairs while retaining the compiled logical grid.
+        monkeypatch.setattr(compiled, "packed_metadata", (num_warps, 2, shared_memory, 0))
+        compiled[(num_ctas // 2, 1, 1)](*args)
+        torch.testing.assert_close(out, expected)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
@@ -1155,7 +1165,8 @@ def tcgen05_mma_scaled_direct_multicast_kernel(a_desc, b_desc, out_ptr, BLOCK_M:
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
     mbarrier.init(tma_bar, count=1)
     mma_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True, acc.type.layout.two_ctas))
+    mma_descs: ttgl.constexpr = [smem_a, smem_b, a_scale, b_scale]
+    mbarrier.init_tcgen05_mma(mma_bar, mma_descs, two_ctas=True)
 
     phase_tma = 0
     phase_mma = 0
@@ -1780,8 +1791,8 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, out_desc, gather_idx_p
         )
         mma_bar = mbarrier.allocate_mbarrier()
         phase_mma = 0
-        mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], multicast,
-                                                               acc_tmem.type.layout.two_ctas))
+        mma_descs: ttgl.constexpr = [smem_a, smem_b] if multicast else ()
+        mbarrier.init_tcgen05_mma(mma_bar, mma_descs, two_ctas=two_ctas)
     else:
         acc = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=acc_layout)
 
@@ -4357,6 +4368,53 @@ def test_shared_gather_scatter_two_ctas(gather):
     torch.testing.assert_close(out, inp.reshape(2, 16, 2).flip(-1).reshape(2, 32))
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("op", ["gather", "scatter", "atomic"])
+def test_shared_subslice_preferred_cluster_fallback(op, monkeypatch):
+
+    @gluon.jit
+    def kernel(inp, out, OP: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [1, 4], [1, 0], cga_layout=[[1, 0], [2, 0]])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=[[1, 0], [2, 0]])
+        rows = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))
+        offsets = rows[:, None] * 64 + cols[None, :]
+        parent = ttgl.allocate_shared_memory(ttgl.int32, [16, 64], shared, value=ttgl.load(inp + offsets))
+        tile = parent.slice(32, 32, dim=1)
+        tile_cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+        indices = rows[:, None] * 0 + (tile_cols[None, :] ^ 1)
+        if OP == "gather":
+            tile.store(tile.gather(indices, axis=1))
+        else:
+            values = rows[:, None] * 32 + tile_cols[None, :] + 2000
+            if OP == "scatter":
+                tile.scatter(values, indices, axis=1)
+            else:
+                tile.atomic_scatter_add(values, indices, axis=1)
+        ttgl.store(out + offsets, parent.load(layout))
+
+    inp = torch.arange(16 * 64, dtype=torch.int32, device="cuda").reshape(16, 64)
+    out = torch.empty_like(inp)
+    compiled = kernel.warmup(inp, out, op, grid=(1, ), num_warps=4, num_ctas=4)
+    assert compiled.metadata.preferred_cluster_fallback_ctas == 2
+
+    num_warps, _, shared_memory, _ = compiled.packed_metadata
+    # Require two physical CTAs per cluster while preserving four logical CTAs.
+    monkeypatch.setattr(compiled, "packed_metadata", (num_warps, 2, shared_memory, 0))
+    compiled[(2, 1, 1)](inp, out, op)
+
+    values = inp[:, 32:]
+    if op != "gather":
+        values = torch.arange(16 * 32, dtype=torch.int32, device="cuda").reshape(16, 32) + 2000
+    permuted = values.reshape(16, 16, 2).flip(-1).reshape(16, 32)
+    expected = inp.clone()
+    if op == "atomic":
+        expected[:, 32:] += permuted
+    else:
+        expected[:, 32:] = permuted
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+
+
 def _shared_gather_cga_cases():
     cases = [pytest.param(1, 0, id="1-cta-local")]
     for num_ctas in (2, 4, 8, 16):
@@ -6333,9 +6391,8 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     mbarrier.init(tma_bar, count=1)
 
     mma_bar = mbarrier.allocate_mbarrier()
-    mma_bar_count: ttgl.constexpr = tcgen05_mma_barrier_count([a_smem, b_smem], multicast=multicast,
-                                                              two_ctas=acc_tmem.type.layout.two_ctas)
-    mbarrier.init(mma_bar, count=mma_bar_count)
+    mma_descs: ttgl.constexpr = [a_smem, b_smem, a_scale_tmem, b_scale_tmem] if multicast else ()
+    mbarrier.init_tcgen05_mma(mma_bar, mma_descs, two_ctas=multi_cta)
 
     phase_tma = 0
     phase_mma = 0

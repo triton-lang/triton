@@ -235,7 +235,7 @@ ConvertTritonGPUToLLVM::lowerControlFlow(ModuleOp mod,
 void ConvertTritonGPUToLLVM::finalizeModule(ModuleOp mod) {
   // Fold CTAId when there is only one CTA.
   if (triton::gpu::TritonGPUDialect::getNumCTAs(mod) == 1) {
-    mod.walk([](triton::nvgpu::ClusterCTAIdOp id) {
+    mod.walk([](triton::nvgpu::ProgramCTAIdOp id) {
       OpBuilder builder(id);
       Value zero = LLVM::createConstantI32(id->getLoc(), builder, 0);
       id.replaceAllUsesWith(zero);

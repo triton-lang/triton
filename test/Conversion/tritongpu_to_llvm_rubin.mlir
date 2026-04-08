@@ -233,7 +233,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: llvm.icmp "eq"
     // CHECK-NOT: llvm.icmp "ult"
     // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
-    // CHECK: nvg.cluster_id
     // CHECK-NOT: llvm.ptrtoint
     // CHECK-NOT: llvm.xor
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
@@ -254,7 +253,6 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: llvm.icmp "eq"
     // CHECK-NOT: llvm.icmp "ult"
     // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
-    // CHECK: nvg.cluster_id
     // CHECK: llvm.mlir.constant(5 : i32)
     // CHECK: llvm.shl
     // CHECK-NOT: llvm.ptrtoint

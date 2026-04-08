@@ -1199,6 +1199,56 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("layout,shape,slice_rows,two_ctas,count,fallback_count", [
+    pytest.param(ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=[[0, 0], [1, 0]]), [8, 64], False, False, 2, 2,
+                 id="bit0-broadcast"),
+    pytest.param(ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=[[1, 0], [0, 0]]), [8, 64], False, False, 2, 1,
+                 id="bit1-broadcast"),
+    pytest.param(ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=[[0, 0], [1, 0]]), [8, 64], False, True, 1, 1,
+                 id="bit0-broadcast-two-ctas"),
+    pytest.param(ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=[[1, 0], [0, 0]]), [8, 64], False, True, 2, 1,
+                 id="bit1-broadcast-two-ctas"),
+    pytest.param(ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=[[1, 0], [2, 0]]), [1, 64], False, False, 4, 2,
+                 id="shape-broadcast"),
+    pytest.param(ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=[[1, 0], [2, 0]]), [8, 64], True, False, 1, 1,
+                 id="subview-uses-alloc-shape"),
+    pytest.param(ttgl.SharedLinearLayout([[0, 1 << i] for i in range(6)], [[0, 0], [1, 0]]), [2, 64], False, False, 2,
+                 2, id="linear-shared"),
+])
+def test_tcgen05_mma_barrier_count(layout, shape, slice_rows, two_ctas, count, fallback_count):
+
+    @gluon.jit
+    def kernel(LAYOUT: ttgl.constexpr, SHAPE: ttgl.constexpr, SLICE_ROWS: ttgl.constexpr, TWO_CTAS: ttgl.constexpr):
+        desc = ttgl.allocate_shared_memory(ttgl.float16, SHAPE, LAYOUT)
+        if SLICE_ROWS:
+            desc = desc.slice(0, 1, dim=0)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init_tcgen05_mma(bar, [desc], two_ctas=TWO_CTAS)
+
+    mod = run_parser(kernel, *make_args(layout, shape, slice_rows, two_ctas, num_ctas=4), target=BLACKWELL_TARGET)
+    assert re.search(rf"ttng\.init_barrier %\w+, {count} \{{fallback_count = {fallback_count} : i32\}}",
+                     mod.str_nodebug())
+
+
+@pytest.mark.parametrize("two_ctas,count,fallback_count", [(False, 3, 2), (True, 2, 1)])
+def test_tcgen05_mma_barrier_count_union(two_ctas, count, fallback_count):
+
+    @gluon.jit
+    def kernel(TWO_CTAS: ttgl.constexpr, FALLBACK_COUNT: ttgl.constexpr):
+        shared = ttgl.allocate_shared_memory(ttgl.float16, [128, 128],
+                                             ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=[[0, 0], [1, 0]]))
+        scales = blackwell.allocate_tensor_memory(ttgl.uint8, [128, 8],
+                                                  TensorMemoryScalesLayout(cga_layout=[[1, 0], [0, 0]]))
+        ttgl.static_assert(blackwell.tcgen05_mma_barrier_count([shared, scales], True, TWO_CTAS,
+                                                             cluster_size=2) == FALLBACK_COUNT)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init_tcgen05_mma(bar, [shared, scales, shared, scales], two_ctas=TWO_CTAS)
+
+    mod = run_parser(kernel, *make_args(two_ctas, fallback_count, num_ctas=4), target=BLACKWELL_TARGET)
+    assert re.search(rf"ttng\.init_barrier %\w+, {count} \{{fallback_count = {fallback_count} : i32\}}",
+                     mod.str_nodebug())
+
+
 @gluon.jit
 def mbarrier_from_cta_kernel():
     bar = mbarrier.allocate_mbarrier()

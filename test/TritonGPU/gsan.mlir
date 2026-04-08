@@ -169,9 +169,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @mbarrier_tcgen5_commit_multicast(%desc: !ttg.memdesc<128x128xf16, #shared_commit, #smem>, %wait_pred: i1) {
     // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #mbarrier_local, #smem, mutable>
-    // CHECK: ttng.init_barrier %[[BARRIER:.*]], 2
+    // CHECK: ttng.init_barrier %[[BARRIER:.*]], 2 {fallback_count = 1 : i32}
     // CHECK-NEXT: tti.experimental_gsan_mbarrier_init %[[SCRATCH]], %[[BARRIER]], 2
-    ttng.init_barrier %barrier, 2 : !ttg.memdesc<2xi64, #mbarrier_local, #smem, mutable>
+    ttng.init_barrier %barrier, 2 {fallback_count = 1 : i32} : !ttg.memdesc<2xi64, #mbarrier_local, #smem, mutable>
     // CHECK: tti.experimental_gsan_mbarrier_arrive %[[SCRATCH]], %[[BARRIER:.*]], %{{.*}}, 1
     // CHECK-SAME: multicast = true, multicastMasks = array<i32: 1>, publishClock = false, sourceBroadcastMask = 0 : i32
     // CHECK-NEXT: ttng.tc_gen5_commit %[[BARRIER]] descs %{{.*}}

@@ -1050,10 +1050,18 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<ttng::TMEMSubSliceOp>(resultTy, memDesc, offset,
                                                       dim);
            })
-      .def("create_mbarrier_init",
-           [](GluonOpBuilder &self, Value memDesc, int count) {
-             self.create<ttng::InitBarrierOp>(memDesc, count);
-           })
+      .def(
+          "create_mbarrier_init",
+          [](GluonOpBuilder &self, Value memDesc, int count,
+             std::optional<int> fallbackCount) {
+            auto fallbackCountAttr =
+                fallbackCount
+                    ? self.getBuilder().getI32IntegerAttr(*fallbackCount)
+                    : IntegerAttr();
+            self.create<ttng::InitBarrierOp>(memDesc, count, fallbackCountAttr);
+          },
+          py::arg("memDesc"), py::arg("count"),
+          py::arg("fallbackCount") = py::none())
       .def("create_mbarrier_inval",
            [](GluonOpBuilder &self, Value memDesc) {
              self.create<ttng::InvalBarrierOp>(memDesc);
@@ -1421,6 +1429,16 @@ void init_gluon_ir(py::module_ &m) {
                                IntegerAttr::get(i32Ty, priority));
              }
            });
+
+  m.def("get_cta_broadcast_info", [](Type type) {
+    auto memDescType = dyn_cast<ttg::MemDescType>(type);
+    if (!memDescType)
+      throw py::type_error("expected a shared or tensor memory descriptor");
+    auto layout = ttg::toLinearLayoutIgnoringPadding(memDescType);
+    auto block = StringAttr::get(type.getContext(), "block");
+    return py::make_tuple(layout.getInDimSize(block),
+                          layout.getFreeVariableMasks().lookup(block));
+  });
 
   m.def("compute_tmem_reg_layout",
         [](py::object elementTyObj, std::vector<int64_t> shape,

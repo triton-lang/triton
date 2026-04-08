@@ -1201,7 +1201,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: tt.return
   tt.func @cluster_tc_gen5_commit_multicast_with_per_cta_barrier(%desc: !ttg.memdesc<128x128xf16, #sharedCommit, #smem>) {
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierCommit, #smem, mutable>
-    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierCommit, #smem, mutable>
+    ttng.init_barrier %barrier, 2 : !ttg.memdesc<2xi64, #barrierCommit, #smem, mutable>
     ttng.tc_gen5_commit %barrier descs %desc : !ttg.memdesc<2xi64, #barrierCommit, #smem, mutable>, !ttg.memdesc<128x128xf16, #sharedCommit, #smem>
     tt.return
   }
@@ -1227,7 +1227,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %false = arith.constant false
     %true = arith.constant true
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
-    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    ttng.init_barrier %barrier, 2 : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
     ttng.tc_gen5_mma %a, %b, %acc, %false, %true, %barrier[%true] {is_async, multicast} : !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf32, #tmemMMA, #ttng.tensor_memory, mutable>, !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
     tt.return
   }

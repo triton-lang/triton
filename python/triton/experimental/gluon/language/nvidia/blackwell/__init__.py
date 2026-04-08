@@ -654,35 +654,42 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
 
 
 @constexpr_function
-def tcgen05_mma_barrier_count(smems, multicast, two_ctas):
+def tcgen05_mma_barrier_count(smems, multicast, two_ctas, *, cluster_size=None):
     """
     Calculate the number of CTAs that will commit the tcgen05 MMA instruction.
 
     Args:
-        smems (Sequence[shared_memory_descriptor]): Shared memory descriptors used in the tcgen05 instruction.
+        smems (Sequence): Shared or tensor memory descriptors used for multicast
+            completion of the tcgen05 instruction.
         multicast (bool): Whether the tcgen05 instruction is multicast.
         two_ctas (bool): Whether the tcgen05 instruction uses cta_group::2.
+        cluster_size (int, optional): Physical cluster size to count arrivals
+            for. Defaults to the full cluster described by the layouts. Use
+            ``2`` to calculate the preferred-cluster fallback count.
 
     Returns:
         int: The number of CTAs that will commit the tcgen05 MMA instruction.
     """
+    from triton._C.libtriton.gluon_ir import get_cta_broadcast_info
+
     assert 0 <= len(smems) <= 4, "tcgen05_mma_barrier_count supports 0 to 4 descriptors"
     if not smems or not multicast:
         return 1
 
-    def basis_is_zero(basis):
-        return all(b == 0 for b in basis)
-
-    num_cta_bits = len(smems[0].layout.cga_layout)
-    for desc in smems[1:]:
-        assert len(desc.layout.cga_layout) == num_cta_bits
+    cta_info = [get_cta_broadcast_info(desc.handle.get_type()) for desc in smems]
+    num_ctas = cta_info[0][0]
+    assert all(size == num_ctas for size, _ in cta_info), "descriptor cluster sizes must match"
+    if cluster_size is None:
+        cluster_size = num_ctas
+    assert 0 < cluster_size <= num_ctas and (cluster_size & (cluster_size - 1)) == 0, \
+        "cluster_size must be a power of two no larger than the descriptor cluster"
 
     num_cta_commits = 0
-    for cta in range(1 << num_cta_bits):
+    for cta in range(cluster_size):
         if two_ctas and cta & 1:
             continue
-        for desc in smems:
-            if all(basis_is_zero(basis) or not (cta & (1 << i)) for i, basis in enumerate(desc.layout.cga_layout)):
+        for _, broadcast_mask in cta_info:
+            if cta & ~broadcast_mask == 0:
                 num_cta_commits += 1
                 break
     return num_cta_commits

@@ -15,6 +15,7 @@ add_triton_library(TritonNvidiaGPUTransforms
   OptimizeDescriptorEncoding.cpp
   OptimizeTMemLayouts.cpp
   AssignCGALayouts.cpp
+  PreferredClusterFallback.cpp
   PromoteLHSToTMem.cpp
   ProxyFenceInsertion.cpp
   RemoveTMEMTokens.cpp

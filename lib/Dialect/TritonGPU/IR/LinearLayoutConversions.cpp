@@ -1365,6 +1365,40 @@ LinearLayout toLinearLayoutIgnoringPadding(MemDescType type) {
                                               : toLinearLayout(type);
 }
 
+std::pair<uint64_t, uint64_t> getMaskSpanOffsetsAndBlocks(MemDescType srcTy) {
+  auto ctx = srcTy.getContext();
+  auto encoding = srcTy.getEncoding();
+  auto shape = dropPipeliningDim(srcTy.getShape(), encoding);
+  auto allocShape = dropPipeliningDim(srcTy.getAllocShape(), encoding);
+
+  // Early exit when there is no subview.
+  if (allocShape == shape) {
+    return {0, 0};
+  }
+  auto totalLl = toLinearLayoutIgnoringPadding(allocShape, srcTy.getEncoding());
+  // Map from dimNames to offset, block.
+  auto invLl = totalLl.pseudoinvert();
+  SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
+  for (auto dim : standardOutDimNames(ctx, shape.size())) {
+    logicalOffsets.push_back({dim, 0});
+  }
+
+  uint64_t offsetMask = 0;
+  uint64_t blockMask = 0;
+  for (auto [dim, shapes] : llvm::enumerate(llvm::zip(shape, allocShape))) {
+    auto [shape, allocShape] = shapes;
+    for (int j = llvm::Log2_32(shape); j < llvm::Log2_32(allocShape); ++j) {
+      logicalOffsets[dim].second = 1 << j;
+      auto offsetAndBlock = invLl.apply(logicalOffsets);
+      offsetMask |= offsetAndBlock[0].second;
+      blockMask |= offsetAndBlock[1].second;
+    }
+    // Reset the offset for the next dimension.
+    logicalOffsets[dim].second = 0;
+  }
+  return {offsetMask, blockMask};
+}
+
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
   assert(!layout.getInDimNames().empty());
   MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
