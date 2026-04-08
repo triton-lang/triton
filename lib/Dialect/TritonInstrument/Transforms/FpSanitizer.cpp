@@ -416,22 +416,6 @@ Value getU32ConstantLike(PatternRewriter &rewriter, Location loc, Type targetTy,
   return getUIntConstantLike(rewriter, loc, targetTy, value);
 }
 
-Value castIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
-                         Type targetTy) {
-  if (v.getType() == targetTy)
-    return v;
-
-  unsigned srcWidth = getIntBitwidth(v.getType());
-  unsigned dstWidth = getIntBitwidth(targetTy);
-  if (dstWidth > srcWidth) {
-    return arith::ExtUIOp::create(rewriter, loc, targetTy, v);
-  }
-  if (srcWidth > dstWidth) {
-    return arith::TruncIOp::create(rewriter, loc, targetTy, v);
-  }
-  return v;
-}
-
 Value castSignedIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
                                Type targetTy) {
   if (v.getType() == targetTy)
@@ -744,11 +728,11 @@ bool externInvolvesFloatLike(tt::ExternElementwiseOp op) {
 Value castExternOperandToResultInt(PatternRewriter &rewriter, Location loc,
                                    Value operand, Type resultIntTy) {
   if (isFloatLike(operand.getType())) {
-    return castIntValueToType(
+    return castSignedIntValueToType(
         rewriter, loc, embedToInt(rewriter, loc, operand), resultIntTy);
   }
   if (isIntLike(operand.getType())) {
-    return castIntValueToType(rewriter, loc, operand, resultIntTy);
+    return castSignedIntValueToType(rewriter, loc, operand, resultIntTy);
   }
   return Value();
 }
@@ -959,7 +943,7 @@ Value castDotScaledOperandToComputePayload(PatternRewriter &rewriter,
     if (isFloatLike(slice.getType())) {
       payload = embedToInt(rewriter, loc, slice);
     } else {
-      Value raw = castIntValueToType(
+      Value raw = castSignedIntValueToType(
           rewriter, loc, slice,
           getTypeWithElement(slice.getType(),
                              IntegerType::get(rewriter.getContext(),
@@ -973,14 +957,14 @@ Value castDotScaledOperandToComputePayload(PatternRewriter &rewriter,
   // the destination floating type.  The 6-bit formats are not packed here, but
   // use the same payload-preserving integer cast until we add a float6 mixer.
   Value rawPayload = embedToInt(rewriter, loc, slice);
-  return castIntValueToType(rewriter, loc, rawPayload, computeIntTy);
+  return castSignedIntValueToType(rewriter, loc, rawPayload, computeIntTy);
 }
 
 Value scaleI8ToF32Payload(PatternRewriter &rewriter, Location loc,
                           Value scaleI) {
   auto i32Elem = rewriter.getI32Type();
   auto i32Ty = getTypeWithElement(scaleI.getType(), i32Elem);
-  Value scaleI32 = castIntValueToType(rewriter, loc, scaleI, i32Ty);
+  Value scaleI32 = arith::ExtUIOp::create(rewriter, loc, i32Ty, scaleI);
   auto shift = getUIntConstantLike(rewriter, loc, i32Ty, 23);
   Value rawF32 = arith::ShLIOp::create(rewriter, loc, scaleI32, shift);
   return mixFloatToInt(rewriter, loc, rawF32, rewriter.getF32Type());
@@ -999,7 +983,8 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
     return castSignedIntValueToType(rewriter, loc, payloadF32, computeIntTy);
   }
 
-  Value scaleComputeI = castIntValueToType(rewriter, loc, scaleI, computeIntTy);
+  Value scaleComputeI =
+      arith::ExtUIOp::create(rewriter, loc, computeIntTy, scaleI);
   unsigned shiftValue = computeElem.getFPMantissaWidth() - 1;
   auto shift = getUIntConstantLike(rewriter, loc, computeIntTy, shiftValue);
   Value rawCompute = arith::ShLIOp::create(rewriter, loc, scaleComputeI, shift);
@@ -1087,10 +1072,10 @@ Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aSlice,
     aI = embedToInt(rewriter, loc, aSlice);
     bI = embedToInt(rewriter, loc, bSlice);
   }
-  aI = castIntValueToType(rewriter, loc, aI,
-                          getTypeWithElement(aI.getType(), accElem));
-  bI = castIntValueToType(rewriter, loc, bI,
-                          getTypeWithElement(bI.getType(), accElem));
+  aI = castSignedIntValueToType(rewriter, loc, aI,
+                                getTypeWithElement(aI.getType(), accElem));
+  bI = castSignedIntValueToType(rewriter, loc, bI,
+                                getTypeWithElement(bI.getType(), accElem));
   Value aFull = tt::BroadcastOp::create(rewriter, loc, fullTy, aI);
   Value bFull = tt::BroadcastOp::create(rewriter, loc, fullTy, bI);
   return arith::MulIOp::create(rewriter, loc, aFull, bFull);
@@ -1403,8 +1388,8 @@ struct Fp4ToFpPattern : public OpRewritePattern<ttg::Fp4ToFpOp> {
     auto four = getIntConstantLike(rewriter, loc, srcTy, 4);
     Value lo = arith::AndIOp::create(rewriter, loc, op.getSrc(), mask);
     Value hi = arith::ShRUIOp::create(rewriter, loc, op.getSrc(), four);
-    auto loI = castIntValueToType(rewriter, loc, lo, halfIntTy);
-    auto hiI = castIntValueToType(rewriter, loc, hi, halfIntTy);
+    auto loI = castSignedIntValueToType(rewriter, loc, lo, halfIntTy);
+    auto hiI = castSignedIntValueToType(rewriter, loc, hi, halfIntTy);
     Value joined = tt::JoinOp::create(rewriter, loc, loI, hiI);
 
     auto order = llvm::to_vector(llvm::seq<int32_t>(axis + 1));

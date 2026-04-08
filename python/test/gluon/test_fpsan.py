@@ -1213,6 +1213,8 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
             if b_scale is not None:
                 b_scale_val = _dot_scaled_scale_payload(np.uint64(b_scale[j, kk // 32]), compute_type)
                 b_val = (b_val * b_scale_val) & compute_mask
+            a_val = _signed_cast_payload_scalar(a_val, 16, 32)
+            b_val = _signed_cast_payload_scalar(b_val, 16, 32)
             s = (s + a_val * b_val) & mask
         out[i, j] = s
     return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
@@ -1253,6 +1255,8 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
                 b_scale_val = _dot_scaled_scale_payload(b_scale[j, kk // 32], compute_type)
                 lhs = (a_val * a_scale_val) & compute_mask
                 rhs = (b_val * b_scale_val) & compute_mask
+                lhs = _signed_cast_payload_scalar(lhs, 16, 32)
+                rhs = _signed_cast_payload_scalar(rhs, 16, 32)
                 s = (s + ((np.uint64(lhs) * np.uint64(rhs)) & mask32)) & mask32
             out[i, j] = s
     return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
