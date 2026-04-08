@@ -26,7 +26,7 @@ Note: Some important parts of the Triton eco-system (e.g., Intel XPU backend) ma
 __List of out-of-tree modules (as of 03/24/2026, alphabetical order):__
 * CPU backend (Bert Maher, Ilya Enkovich)
 * Intel backend (Ettore Tiotto, Whitney Tsang)
-* Ascend backend (Tomasz Czajkowski, Chen Cheng, Chunli Zhang)
+* Ascend backend (Amy Wang, Chen Cheng, Chunli Zhang)
 
 
 ## Core maintainers
