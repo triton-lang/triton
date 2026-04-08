@@ -393,6 +393,7 @@ private:
     SmallVector<int64_t> srcShape;
     SmallVector<int64_t> dstShape;
     SmallVector<int32_t> order;
+    Operation *op;
     Location loc;
   };
 
@@ -409,6 +410,7 @@ private:
                                        SmallVector<int64_t>(srcTy.getShape()),
                                        SmallVector<int64_t>(dstTy.getShape()),
                                        {},
+                                       reshape.getOperation(),
                                        reshape.getLoc()});
         current = reshape.getSrc();
         continue;
@@ -421,7 +423,9 @@ private:
         replaySteps.push_back(ViewStep{ViewStep::Transpose,
                                        SmallVector<int64_t>(srcTy.getShape()),
                                        SmallVector<int64_t>(dstTy.getShape()),
-                                       std::move(order), trans.getLoc()});
+                                       std::move(order),
+                                       trans.getOperation(),
+                                       trans.getLoc()});
         current = trans.getSrc();
         continue;
       }
@@ -444,29 +448,19 @@ private:
     assert(resultTy.getShape() == ArrayRef<int64_t>(step.dstShape) &&
            "backward inference must start from the view step destination "
            "shape");
-
-    switch (step.kind) {
-    case ViewStep::Reshape: {
+    if (step.kind == ViewStep::Reshape) {
       MemDescType srcTy;
       if (failed(MemDescReshapeOp::inferReturnTypes(
               resultTy.getContext(), step.loc, resultTy, step.srcShape, srcTy)))
         return failure();
       return srcTy;
     }
-    case ViewStep::Transpose: {
-      auto inverseOrder = triton::inversePermutation(step.order);
-      Attribute srcEnc = resultTy.getEncoding();
-      auto inferLayoutInterface =
-          cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
-      if (failed(inferLayoutInterface->inferTransOpEncoding(
-              srcEnc, resultTy.getShape(), inverseOrder, srcEnc, step.loc)))
-        return failure();
-      return MemDescType::get(step.srcShape, resultTy.getElementType(), srcEnc,
-                              resultTy.getMemorySpace(),
-                              resultTy.getMutableMemory());
-    }
-    }
-    llvm_unreachable("unexpected view step");
+    Attribute srcEnc = inferSrcEncoding(step.op, resultTy.getEncoding());
+    if (!srcEnc)
+      return failure();
+    return MemDescType::get(step.srcShape, resultTy.getElementType(), srcEnc,
+                            resultTy.getMemorySpace(),
+                            resultTy.getMutableMemory());
   }
 
   static FailureOr<MemDescType>
