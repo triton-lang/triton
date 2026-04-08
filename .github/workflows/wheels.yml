@@ -72,6 +72,7 @@ jobs:
           # of RAM and OOMs while building if we give it the default number of
           # workers (2 * NUM_CPUs).
           export CIBW_ENVIRONMENT="MAX_JOBS=4 \
+                  TRITON_EXT_ENABLED=ON \
                   TRITON_BUILD_WITH_CLANG_LLD=1"
 
           # required to build Python 3.14 with cibuildwheel 2.23.3
