@@ -34,7 +34,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
-    tcgen05_mma_barrier_count,
     tcgen05_mma,
     tcgen05_mma_scaled,
     tcgen05_commit,
@@ -467,7 +466,7 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=acc_tmem_layout.two_ctas)
     mbarrier.init(tma_bar, count=1)
     mma_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True, acc_tmem.type.layout.two_ctas))
+    mbarrier.init_tcgen05_mma(mma_bar, [smem_a, smem_b])
 
     mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
     tma.async_load(a_desc, [0, 0], tma_bar, smem_a, multicast=True)
@@ -650,7 +649,8 @@ def tcgen05_mma_scaled_direct_multicast_kernel(a_desc, b_desc, out_ptr, BLOCK_M:
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
     mbarrier.init(tma_bar, count=1)
     mma_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True, acc.type.layout.two_ctas))
+    mma_descs: ttgl.constexpr = [smem_a, smem_b]
+    mbarrier.init_tcgen05_mma(mma_bar, mma_descs)
 
     phase_tma = 0
     phase_mma = 0
@@ -987,8 +987,8 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, out_desc, gather_idx_p
         )
         mma_bar = mbarrier.allocate_mbarrier()
         phase_mma = 0
-        mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], multicast,
-                                                               acc_tmem.type.layout.two_ctas))
+        mma_descs: ttgl.constexpr = [smem_a, smem_b] if multicast else ()
+        mbarrier.init_tcgen05_mma(mma_bar, mma_descs)
     else:
         acc = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=acc_layout)
 
@@ -5020,9 +5020,8 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     mbarrier.init(tma_bar, count=1)
 
     mma_bar = mbarrier.allocate_mbarrier()
-    mma_bar_count: ttgl.constexpr = tcgen05_mma_barrier_count([a_smem, b_smem], multicast=multicast,
-                                                              two_ctas=acc_tmem.type.layout.two_ctas)
-    mbarrier.init(mma_bar, count=mma_bar_count)
+    mma_descs: ttgl.constexpr = [a_smem, b_smem] if multicast else ()
+    mbarrier.init_tcgen05_mma(mma_bar, mma_descs)
 
     phase_tma = 0
     phase_mma = 0

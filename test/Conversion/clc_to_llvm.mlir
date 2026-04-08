@@ -27,6 +27,22 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#sharedClc4 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0], [0]]}>
+#barrier4 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttng.preferred-cluster-fallback-ctas" = 2 : i32} {
+  // CHECK-LABEL: clc_try_cancel_preferred_fallback
+  tt.func @clc_try_cancel_preferred_fallback(%result: !ttg.memdesc<2xi64, #sharedClc4, #smem>, %mbar: !ttg.memdesc<1xi64, #barrier4, #smem>) {
+    // CHECK: %[[RANK:.+]] = nvvm.read.ptx.sreg.cluster.ctarank
+    // CHECK: llvm.icmp "eq" %[[RANK]], {{.*}} : i32
+    // CHECK: clusterlaunchcontrol.try_cancel.async.shared::cta.mbarrier::complete_tx::bytes.multicast::cluster::all.b128
+    ttng.clc_try_cancel %result, %mbar {multicast = false} : !ttg.memdesc<2xi64, #sharedClc4, #smem>, !ttg.memdesc<1xi64, #barrier4, #smem>
+    tt.return
+  }
+}
+
+// -----
+
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {

@@ -3,6 +3,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace {
 
@@ -91,7 +92,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp->setAttr(NVVM::NVVMDialect::getMaxnregAttrName(), maxnregAttr);
 
     // Do we want to do this for nCTAs == 1 whenever sm >= 90?
-    if (numCTAs > 1) {
+    auto preferredClusterFallbackCTAs =
+        funcOp->getParentOfType<ModuleOp>()->getAttrOfType<IntegerAttr>(
+            triton::nvidia_gpu::AttrPreferredClusterFallbackCTAsName);
+    if (numCTAs > 1 && !preferredClusterFallbackCTAs) {
       // Request a specific number of CTAs per cluster in the generated PTX.
       newFuncOp->setAttr(NVVM::NVVMDialect::getClusterDimAttrName(),
                          rewriter.getDenseI32ArrayAttr(numCTAs));

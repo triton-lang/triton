@@ -1777,8 +1777,8 @@ tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
   %blockidy = tt.get_program_id y: i32
   %blockidz = tt.get_program_id z : i32
   // CHECK: clusterid.x
-  // CHECK: clusterid.y
-  // CHECK: clusterid.z
+  // CHECK: ctaid.y
+  // CHECK: ctaid.z
   %v0 = arith.addi %blockidx, %blockidy : i32
   %v1 = arith.addi %v0, %blockidz : i32
   %0 = tt.splat %v1 : i32 -> tensor<32xi32, #blocked0>
@@ -1819,8 +1819,8 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
     %blockdimy = tt.get_num_programs y : i32
     %blockdimz = tt.get_num_programs z : i32
     // CHECK: nclusterid.x
-    // CHECK: nclusterid.y
-    // CHECK: nclusterid.z
+    // CHECK: nctaid.y
+    // CHECK: nctaid.z
     %v0 = arith.addi %blockdimx, %blockdimy : i32
     %v1 = arith.addi %v0, %blockdimz : i32
     %0 = tt.splat %v1 : i32 -> tensor<32xi32, #blocked0>
@@ -3012,11 +3012,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 2304 : i32} {
   // CHECK-LABEL: @profile_scratch_ptr_uses_i64
-  // CHECK: %[[CLUSTER_Z:.*]] = nvvm.read.ptx.sreg.clusterid.z : i32
-  // CHECK: %[[NCLUSTER_Y:.*]] = nvvm.read.ptx.sreg.nclusterid.y : i32
-  // CHECK: %[[CLUSTER_Z_I64:.*]] = llvm.zext %[[CLUSTER_Z]] : i32 to i64
-  // CHECK: %[[NCLUSTER_Y_I64:.*]] = llvm.zext %[[NCLUSTER_Y]] : i32 to i64
-  // CHECK: %[[LINEAR_Z:.*]] = llvm.mul %[[CLUSTER_Z_I64]], %[[NCLUSTER_Y_I64]] : i64
+  // CHECK: %[[CTA_Z:.*]] = nvvm.read.ptx.sreg.ctaid.z : i32
+  // CHECK: %[[NCTA_Y:.*]] = nvvm.read.ptx.sreg.nctaid.y : i32
+  // CHECK: %[[CTA_Z_I64:.*]] = llvm.zext %[[CTA_Z]] : i32 to i64
+  // CHECK: %[[NCTA_Y_I64:.*]] = llvm.zext %[[NCTA_Y]] : i32 to i64
+  // CHECK: %[[LINEAR_Z:.*]] = llvm.mul %[[CTA_Z_I64]], %[[NCTA_Y_I64]] : i64
   // CHECK: %[[NUM_CTAS:.*]] = llvm.mlir.constant(4 : i64) : i64
   // CHECK: %[[CTA_OFFSET:.*]] = llvm.mul %{{.*}}, %[[NUM_CTAS]] : i64
   // CHECK: %[[PROFILE_SIZE:.*]] = llvm.mlir.constant(2304 : i64) : i64

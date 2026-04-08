@@ -221,4 +221,23 @@ def TritonNvidiaGPUCheckMatmulTwoCTAPass : Pass<"triton-nvidia-check-matmul-two-
   }];
 }
 
+def TritonNvidiaGPUPreferredClusterFallbackPass : Pass<"triton-nvidia-preferred-cluster-fallback", "mlir::ModuleOp"> {
+  let summary = "Enable preferred cluster launches with a smaller fallback cluster";
+
+  let description = [{
+    Proves a multi-CTA module only communicates within CTA pairs and marks it
+    for preferred-cluster launch with a 2-CTA fallback cluster.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::triton::TritonDialect"];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"90",
+           "device compute capability">
+  ];
+}
+
 #endif

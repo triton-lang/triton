@@ -12,7 +12,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     clc,
     tcgen05_commit,
     tcgen05_mma,
-    tcgen05_mma_barrier_count,
     tensor_memory_descriptor,
 )
 from triton.experimental.gluon.language.nvidia.hopper import mbarrier, tma
@@ -483,6 +482,15 @@ def _matmul_kernel(
     dtype: gl.constexpr = a_desc.dtype
     a_bufs = gl.allocate_shared_memory(dtype, [STAGES] + a_desc.block_shape, a_desc.layout)
     b_bufs = gl.allocate_shared_memory(dtype, [STAGES] + b_desc.block_shape, b_desc.layout)
+    # MMA completion barrier counts are derived from the multicast TMA layouts.
+    # Equiv. consumed_barrier. Barrier TCGEN05 MMA -> Load TMA
+    load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
+    # Equiv. ab_tma_barrier. Barrier Load TMA -> TCGEN05 MMA
+    load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=TWO_CTAS)
+    for i in gl.static_range(STAGES):
+        mbarrier.init_tcgen05_mma(load_empty_bars.index(i), [a_bufs.index(0), b_bufs.index(0)])
+        mbarrier.init(load_ready_bars.index(i), count=1)
+
     tmem_layout: gl.constexpr = TensorMemoryLayout(
         [BLOCK_SIZE_M, BLOCK_N // get_split_dim(CGA_LAYOUT, 1)],
         col_stride=1,
@@ -490,17 +498,6 @@ def _matmul_kernel(
         two_ctas=TWO_CTAS,
     )
     acc_bufs = allocate_tensor_memory(gl.float32, [ACC_STAGES, BLOCK_M, BLOCK_N], tmem_layout)
-    # Number of CTAs that will arrive on the barrier from a tcgen05_commit after an MMA instruction
-    mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count([a_bufs.index(0), b_bufs.index(0)], multicast=True,
-                                                                two_ctas=acc_bufs.index(0).type.layout.two_ctas)
-
-    # Equiv. consumed_barrier. Barrier TCGEN05 MMA -> Load TMA
-    load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
-    # Equiv. ab_tma_barrier. Barrier Load TMA -> TCGEN05 MMA
-    load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=TWO_CTAS)
-    for i in gl.static_range(STAGES):
-        mbarrier.init(load_empty_bars.index(i), count=mma_barrier_count)
-        mbarrier.init(load_ready_bars.index(i), count=1)
 
     # Equiv. store_done_barrier. Barrier Store TMA -> TCGEN05 MMA
     acc_empty_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=TWO_CTAS)
@@ -508,7 +505,7 @@ def _matmul_kernel(
     acc_ready_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     for i in gl.static_range(ACC_STAGES):
         mbarrier.init(acc_empty_bars.index(i), count=1)
-        mbarrier.init(acc_ready_bars.index(i), count=mma_barrier_count)
+        mbarrier.init_tcgen05_mma(acc_ready_bars.index(i), [a_bufs.index(0), b_bufs.index(0)])
 
     clc_barriers = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     clc_planar_ready_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
@@ -574,6 +571,7 @@ def matmul_with_config(
     cga_layout,
     epilogue_size_n,
     subtile_stages,
+    return_compiled=False,
 ):
     if block_size_n // get_split_dim(cga_layout, 1) > 256:
         raise ValueError(
@@ -620,7 +618,7 @@ def matmul_with_config(
         num_tiles = triton.cdiv(M, tile_m) * triton.cdiv(N, tile_n)
         return (num_tiles, )
 
-    _matmul_kernel[grid](
+    compiled = _matmul_kernel[grid](
         a_desc,
         b_desc,
         c_desc,
@@ -640,7 +638,7 @@ def matmul_with_config(
         num_warps=4,
         num_ctas=2**len(cga_layout),
     )
-    return c
+    return (c, compiled) if return_compiled else c
 
 
 def matmul(a, b):
@@ -721,6 +719,41 @@ def test_matmul_matches_torch(
     except triton.OutOfResources:
         pytest.skip("Out of resources")
     torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("cga_layout", [
+    ((1, 0), ),
+    ((1, 0), (2, 0)),
+    ((1, 0), (2, 0), (4, 0)),
+    ((1, 0), (2, 0), (4, 0), (8, 0)),
+])
+def test_matmul_warp_specialized_clc(cga_layout):
+    torch.manual_seed(0)
+    M, N, K = 100, 200, 200
+    a = torch.rand((M, K), device=torch.device("cuda"), dtype=torch.float16)
+    b = torch.rand((K, N), device=torch.device("cuda"), dtype=torch.float16)
+
+    actual, compiled = matmul_with_config(
+        a,
+        b,
+        block_size_m=64,
+        block_size_n=128,
+        block_size_k=64,
+        grid_minor_dim=0,
+        grid_tile_width=8,
+        stages=2,
+        acc_stages=2,
+        cga_layout=cga_layout,
+        epilogue_size_n=get_epilogue_size_n(64, 128, cga_layout),
+        subtile_stages=4,
+        return_compiled=True,
+    )
+
+    assert compiled.metadata.preferred_cluster_fallback_ctas == 0
+    assert "clusterlaunchcontrol" in compiled.asm["ptx"]
+    assert ".reqnctapercluster" in compiled.asm["ptx"]
+    torch.testing.assert_close(torch.matmul(a, b), actual, atol=1e-1, rtol=1e-2)
 
 
 ########################################################

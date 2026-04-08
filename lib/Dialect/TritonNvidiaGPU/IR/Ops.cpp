@@ -165,6 +165,9 @@ LogicalResult WarpGroupDotWaitOp::verify() {
   return success();
 }
 
+static LogicalResult verifyCompletionBarrierLayout(Operation *op,
+                                                   Value barrier);
+
 // -- InitBarrierOp --
 LogicalResult InitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
@@ -183,6 +186,23 @@ LogicalResult InitBarrierOp::verify() {
 }
 
 TypedValue<MemDescType> InitBarrierOp::getBarrier() { return getAlloc(); }
+
+// -- InitMmaBarrierOp --
+LogicalResult InitMmaBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  if (getDescs().empty() || getDescs().size() > 2)
+    return emitOpError("expects one or two descriptors");
+  auto barrierTy = cast<MemDescType>(getAlloc().getType());
+  int numCTAs = gpu::lookupNumCTAs(getOperation());
+  if (barrierTy.getShape().size() != 1 || barrierTy.getNumElements() != numCTAs)
+    return emitOpError("requires a 1D barrier with one element per CTA");
+  if (failed(verifyCompletionBarrierLayout(getOperation(), getAlloc())))
+    return failure();
+  return success();
+}
+
+TypedValue<MemDescType> InitMmaBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- InvalBarrierOp --
 LogicalResult InvalBarrierOp::verify() {
@@ -1691,6 +1711,28 @@ SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs) {
     broadcastMasks.push_back(1);
   }
   return broadcastMasks;
+}
+
+uint32_t getTCGen5MmaBarrierCount(ValueRange descs, bool fallback) {
+  if (descs.empty())
+    return 1;
+
+  auto kBlock = StringAttr::get(descs.front().getContext(), "block");
+  auto getBroadcastMask = [&](Value desc) {
+    auto descTy = cast<gpu::MemDescType>(desc.getType());
+    uint32_t mask =
+        toLinearLayout(descTy).getFreeVariableMasks().lookup(kBlock);
+    return fallback ? mask & 1 : mask;
+  };
+
+  if (descs.size() == 1)
+    return 1 << llvm::popcount(getBroadcastMask(descs.front()));
+
+  assert(descs.size() == 2 && "expected at most two descriptors");
+  uint32_t lhsMask = getBroadcastMask(descs[0]);
+  uint32_t rhsMask = getBroadcastMask(descs[1]);
+  return (1 << llvm::popcount(lhsMask)) + (1 << llvm::popcount(rhsMask)) -
+         (1 << llvm::popcount(lhsMask & rhsMask));
 }
 
 TMAMulticastMaskEncoding getTMAMulticastMaskEncoding(int numCTAs,
