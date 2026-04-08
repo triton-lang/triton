@@ -1,13 +1,23 @@
-#include <stddef.h>
-#include <stdint.h>
+#pragma once
 
-#ifdef __CUDACC__
+#if defined(__CUDA__) && defined(__clang__)
+#define GSAN_DEVICE __attribute__((device))
+#define GSAN_HOST_DEVICE __attribute__((host)) __attribute__((device))
+#elif defined(__CUDACC__)
+#define GSAN_DEVICE __device__
 #define GSAN_HOST_DEVICE __host__ __device__
 #else
+#define GSAN_DEVICE
 #define GSAN_HOST_DEVICE
 #endif
 
 namespace gsan {
+
+using size_t = __SIZE_TYPE__;
+using uint8_t = __UINT8_TYPE__;
+using uint16_t = __UINT16_TYPE__;
+using uint32_t = __UINT32_TYPE__;
+using uintptr_t = __UINTPTR_TYPE__;
 
 // Reserve 1 PiB, should be big enough for a while :)
 static constexpr size_t kReserveSize = 1ull << 40;
