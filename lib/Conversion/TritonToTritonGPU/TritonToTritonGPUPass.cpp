@@ -89,7 +89,7 @@ void populateArithPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<arith::RemSIOp>, GenericOpPattern<arith::AndIOp>,
       GenericOpPattern<arith::OrIOp>, GenericOpPattern<arith::XOrIOp>,
       GenericOpPattern<arith::ShLIOp>, GenericOpPattern<arith::ShRUIOp>,
-      GenericOpPattern<arith::ShRSIOp>, // NegFOp
+      GenericOpPattern<arith::ShRSIOp>, GenericOpPattern<arith::NegFOp>,
       // Floating point
       GenericOpPattern<arith::AddFOp>, GenericOpPattern<arith::SubFOp>,
       // MaxMin
@@ -109,7 +109,8 @@ void populateArithPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<arith::ExtUIOp>, GenericOpPattern<arith::ExtSIOp>,
       GenericOpPattern<arith::ExtFOp>, GenericOpPattern<arith::SIToFPOp>,
       GenericOpPattern<arith::FPToSIOp>, GenericOpPattern<arith::FPToUIOp>,
-      GenericOpPattern<arith::UIToFPOp>>(typeConverter, context);
+      GenericOpPattern<arith::UIToFPOp>, GenericOpPattern<arith::BitcastOp>>(
+      typeConverter, context);
 }
 
 void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
@@ -123,8 +124,8 @@ void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
                GenericOpPattern<math::LogOp>, GenericOpPattern<math::Log2Op>,
                GenericOpPattern<math::ErfOp>, GenericOpPattern<math::AbsFOp>,
                GenericOpPattern<math::AbsIOp>, GenericOpPattern<math::SqrtOp>,
-               GenericOpPattern<math::RsqrtOp>, GenericOpPattern<math::FmaOp>>(
-      typeConverter, context);
+               GenericOpPattern<math::RsqrtOp>, GenericOpPattern<math::FmaOp>,
+               GenericOpPattern<math::CopySignOp>>(typeConverter, context);
 }
 
 //

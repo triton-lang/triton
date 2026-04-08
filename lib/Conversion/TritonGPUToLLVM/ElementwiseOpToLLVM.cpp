@@ -685,6 +685,8 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(math::Exp2Op, math::Exp2Op)
   POPULATE_UNARY_OP(math::ErfOp, math::ErfOp)
   POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
+  POPULATE_UNARY_OP(arith::BitcastOp, LLVM::BitcastOp)
+  POPULATE_UNARY_OP(arith::NegFOp, LLVM::FNegOp)
   POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
@@ -711,10 +713,11 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::MinNumFOp, LLVM::MinNumOp)
   // fmax (return non-NaN if either op is non-NaN)
   POPULATE_BINARY_OP(arith::MaxNumFOp, LLVM::MaxNumOp)
-  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp) // smin
-  POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp) // smax
-  POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp) // umin
-  POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp) // umax
+  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp)       // smin
+  POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp)       // smax
+  POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp)       // umin
+  POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp)       // umax
+  POPULATE_BINARY_OP(math::CopySignOp, LLVM::CopySignOp) // copysign
 #undef POPULATE_BINARY_OP
 
   patterns.add<ElementwiseOpConversion<math::FmaOp, LLVM::FMAOp>>(
