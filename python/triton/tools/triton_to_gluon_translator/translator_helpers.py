@@ -802,9 +802,10 @@ def tl_obj_scatter(obj, value, x_offsets, y_offset):
 
 
 @gluon.jit
-def tl_obj_gather_amd(desc_args, x_offsets, y_offset, NUM_IDX: ttgl.constexpr):
+def tl_obj_gather_amd(desc_args, x_offsets, y_offset):
     # Triton creates gather descriptors with block_shape=[1, block_n], but TDM hardware
     # operates on the full batch, requiring block_shape=[num_indices, block_n].
+    NUM_IDX: ttgl.constexpr = x_offsets.shape[0]
     BLOCK_N: ttgl.constexpr = desc_args.desc.block_shape[1]
     smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
     gather_block_shape: ttgl.constexpr = [NUM_IDX, BLOCK_N]
@@ -827,8 +828,9 @@ def tl_obj_gather_amd(desc_args, x_offsets, y_offset, NUM_IDX: ttgl.constexpr):
 
 
 @gluon.jit
-def tl_obj_scatter_amd(desc_args, value, x_offsets, y_offset, NUM_IDX: ttgl.constexpr):
+def tl_obj_scatter_amd(desc_args, value, x_offsets, y_offset):
     # See tl_obj_gather_amd for why the descriptor is recreated with a different block_shape.
+    NUM_IDX: ttgl.constexpr = x_offsets.shape[0]
     BLOCK_N: ttgl.constexpr = desc_args.desc.block_shape[1]
     smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
     scatter_block_shape: ttgl.constexpr = [NUM_IDX, BLOCK_N]
