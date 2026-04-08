@@ -1020,5 +1020,3 @@ def build_expand_dims_layout(shape, expand_dims, num_warps):
 def convert_to_expand_dims_layout(value, expand_dims: list[int]):
     layout: ttgl.constexpr = build_expand_dims_layout(value.shape, expand_dims, ttgl.num_warps())
     return ttgl.convert_layout(value, layout)
-
-
