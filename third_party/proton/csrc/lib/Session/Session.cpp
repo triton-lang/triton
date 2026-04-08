@@ -1,26 +1,33 @@
 #include "Session/Session.h"
+#include "Backend/Backend.h"
 #include "Context/Python.h"
 #include "Context/Shadow.h"
 #include "Data/TraceData.h"
 #include "Data/TreeData.h"
-#include "Profiler/Cupti/CuptiProfiler.h"
-#include "Profiler/Instrumentation/InstrumentationProfiler.h"
-#include "Profiler/Roctracer/RoctracerProfiler.h"
+#include "Profiler/Profiler.h"
 #include "Utility/String.h"
+#include <algorithm>
+#include <functional>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace proton {
 
 namespace {
 
 Profiler *makeProfiler(const std::string &name) {
-  if (proton::toLower(name) == "cupti") {
-    return &CuptiProfiler::instance();
-  } else if (proton::toLower(name) == "roctracer") {
-    return &RoctracerProfiler::instance();
-  } else if (proton::toLower(name) == "instrumentation") {
-    return &InstrumentationProfiler::instance();
+  const auto &profilers = getProtonProfilers();
+  auto itr = std::find_if(profilers.begin(), profilers.end(),
+                          [&](const ProfilerRegistration &entry) {
+                            return proton::toLower(name) ==
+                                   proton::toLower(entry.getName());
+                          });
+  if (itr == profilers.end()) {
+    throw std::runtime_error("Unknown profiler: " + name);
   }
-  throw std::runtime_error("Unknown profiler: " + name);
+  return itr->getInstance()();
 }
 
 std::unique_ptr<Data> makeData(const std::string &dataName,
@@ -54,6 +61,31 @@ void throwIfSessionNotInitialized(
 }
 
 } // namespace
+
+std::vector<std::string> getAvailableProfilers() {
+  const auto &profilers = getProtonProfilers();
+  std::vector<std::string> availableProfilers(profilers.size());
+  std::transform(
+      profilers.begin(), profilers.end(), availableProfilers.begin(),
+      [](const ProfilerRegistration &entry) { return entry.getName(); });
+  return availableProfilers;
+}
+
+std::optional<std::string>
+getProfilerForDriverBackend(const std::string &driverBackend) {
+  const auto &profilers = getProtonProfilers();
+  auto itr = std::find_if(
+      profilers.begin(), profilers.end(),
+      [&](const ProfilerRegistration &entry) {
+        return proton::toLower(driverBackend) ==
+               proton::toLower(
+                   entry.getCorrespondingTritonDriverBackend().value_or(""));
+      });
+  if (itr == profilers.end()) {
+    return {};
+  }
+  return itr->getName();
+}
 
 void Session::activate() {
   profiler->start();

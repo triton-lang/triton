@@ -14,12 +14,7 @@ DEFAULT_PROFILE_NAME = "proton"
 
 def _select_backend() -> str:
     backend = triton.runtime.driver.active.get_current_target().backend
-    if backend == "cuda":
-        return "cupti"
-    elif backend == "hip":
-        return "roctracer"
-    else:
-        raise ValueError("No backend is available for the current target.")
+    return libproton.select_profiler_from_driver(backend)
 
 
 def _get_mode_str(backend: str, mode: Optional[Union[str, BaseMode]]) -> str:

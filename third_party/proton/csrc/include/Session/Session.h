@@ -2,6 +2,7 @@
 #define PROTON_SESSION_SESSION_H_
 
 #include "Context/Context.h"
+#include "Data/Data.h"
 #include "Data/Metric.h"
 #include "Utility/Singleton.h"
 #include <algorithm>
@@ -14,6 +15,11 @@
 #include <vector>
 
 namespace proton {
+
+std::vector<std::string> getAvailableProfilers();
+
+std::optional<std::string>
+getProfilerForDriverBackend(const std::string &driverBackend);
 
 class Profiler;
 class Data;

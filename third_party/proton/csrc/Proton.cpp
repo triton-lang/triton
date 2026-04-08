@@ -2,10 +2,13 @@
 
 #include <cstdint>
 #include <map>
+#include <pybind11/cast.h>
 #include <stdexcept>
+#include <string>
 #include <variant>
 #include <vector>
 
+#include "Session/Session.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
@@ -235,6 +238,18 @@ static void initProton(pybind11::module &&m) {
         return SessionManager::instance().isDataPhaseComplete(sessionId, phase);
       },
       pybind11::arg("sessionId"), pybind11::arg("phase"));
+  m.def("get_available_profilers", []() { return getAvailableProfilers(); });
+  m.def(
+      "select_profiler_from_driver",
+      [](const std::string &driver) {
+        const auto profiler = getProfilerForDriverBackend(driver);
+        if (profiler.has_value()) {
+          return profiler.value();
+        }
+        throw pybind11::value_error("No profiler registered for driver " +
+                                    driver);
+      },
+      pybind11::arg("driver"));
 }
 
 PYBIND11_MODULE(libproton, m) {
