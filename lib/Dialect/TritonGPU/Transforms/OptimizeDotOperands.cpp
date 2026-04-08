@@ -438,7 +438,7 @@ private:
     return {current, llvm::to_vector(llvm::reverse(replaySteps))};
   }
 
-  static SharedEncodingTrait getSourceSharedEncoding(Value baseTensor) {
+  static SharedEncodingTrait getDescriptorSharedEncoding(Value baseTensor) {
     if (auto descLoad = baseTensor.getDefiningOp<DescriptorLoadOp>()) {
       auto descTy = cast<TensorDescType>(descLoad.getDesc().getType());
       auto descBlockTy = descTy.getBlockType();
@@ -489,15 +489,16 @@ private:
     return currentTy;
   }
 
-  static LogicalResult verifySourceLayout(MemDescType inferredBaseTy,
-                                          Value baseTensor) {
-    auto sourceSharedEnc = getSourceSharedEncoding(baseTensor);
-    if (!sourceSharedEnc)
+  static LogicalResult
+  verifyBaseMatchesDescriptorLayout(MemDescType inferredBaseTy,
+                                    Value baseTensor) {
+    auto descriptorSharedEnc = getDescriptorSharedEncoding(baseTensor);
+    if (!descriptorSharedEnc)
       return failure();
     return success(areLayoutsEquivalent(
         inferredBaseTy.getShape(),
         cast<LayoutEncodingTrait>(inferredBaseTy.getEncoding()),
-        cast<LayoutEncodingTrait>(cast<Attribute>(sourceSharedEnc))));
+        cast<LayoutEncodingTrait>(cast<Attribute>(descriptorSharedEnc))));
   }
 
   LogicalResult rewriteOperand(OpOperand &operand,
@@ -525,7 +526,7 @@ private:
         inferBackwardSourceType(localAlloc.getType(), tensorReplaySteps);
     if (failed(baseMemTy))
       return failure();
-    if (failed(verifySourceLayout(*baseMemTy, baseTensor)))
+    if (failed(verifyBaseMatchesDescriptorLayout(*baseMemTy, baseTensor)))
       return failure();
 
     PatternRewriter::InsertionGuard guard(rewriter);
