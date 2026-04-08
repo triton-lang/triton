@@ -393,11 +393,9 @@ private:
                                               memType, expectOp, recipientCTAs);
     }
     funcBuilder.createVerifyBarrierArriveCall(
-        b, barrier, /*count=*/1, nonLeaderPred, expectOp, recipientCTAs,
-        /*txCount=*/0);
+        b, barrier, /*count=*/1, nonLeaderPred, expectOp, recipientCTAs);
     funcBuilder.createUpdateBarrierStateCall(
-        b, barrier, /*count=*/1, nonLeaderPred, expectOp, recipientCTAs,
-        /*txCount=*/0);
+        b, barrier, /*count=*/1, nonLeaderPred, expectOp, recipientCTAs);
   }
 
   void instrumentMemEffects(ImplicitLocOpBuilder &b, Operation *op, int thread,

@@ -248,14 +248,13 @@ def test_async_tma_kernel_2bufs_1bar(FAILURE, device, run_wrapper, monkeypatch, 
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
-@pytest.mark.parametrize(("EXPECT_DELTA", "EXPECTED_ERR"), [(-16, "Deadlock detected"), (16, "Deadlock detected")],
-                         ids=["under", "over"])
-def test_async_tma_expect_bytes_mismatch(EXPECT_DELTA, EXPECTED_ERR, device, run_wrapper, monkeypatch, num_ctas):
+@pytest.mark.parametrize("EXPECT_DELTA", [-16, 16], ids=["under", "over"])
+def test_async_tma_expect_bytes_mismatch(EXPECT_DELTA, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_async_tma_expect_bytes_mismatch,
-                                (EXPECT_DELTA, EXPECTED_ERR, device, False, monkeypatch, num_ctas))
+                                (EXPECT_DELTA, device, False, monkeypatch, num_ctas))
         assert_expected_cuda_failure(result.exc)
-        assert EXPECTED_ERR in result.driver_stderr_output
+        assert "Deadlock detected" in result.driver_stderr_output
         return
 
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")

@@ -1,7 +1,6 @@
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
 
 #include <cassert>
-#include <cstdlib>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -55,6 +54,8 @@ constexpr unsigned countBitWidth = 20;
 constexpr unsigned txCountBitWidth = 21;
 constexpr uint64_t countMask = (1ull << countBitWidth) - 1;
 constexpr uint64_t txCountMask = (1ull << txCountBitWidth) - 1;
+constexpr int64_t txCountMin = -(int64_t)countMask;
+constexpr int64_t txCountMax = (int64_t)countMask;
 } // namespace BarrierBits
 
 namespace WaitingBits {
@@ -954,8 +955,8 @@ void FunctionBuilder::createVerifyBarrierArriveCall(
     Operation *insertPoint, Value recipientCTAs, int txCount) {
   assert(count >= 0 && (uint64_t)count <= BarrierBits::countMask &&
          "barrier arrive count exceeds barrier state capacity");
-  assert(std::abs(static_cast<int64_t>(txCount)) <=
-             (int64_t)BarrierBits::countMask &&
+  assert(txCount >= BarrierBits::txCountMin &&
+         txCount <= BarrierBits::txCountMax &&
          "barrier tx-count delta exceeds barrier state capacity");
 
   if (auxData.barriers.empty() || auxData.barrierStates.empty()) {
@@ -1045,10 +1046,10 @@ void FunctionBuilder::createVerifyBarrierArriveCall(
         Value arrivalsNonNegative = arith::CmpIOp::create(
             fb, arith::CmpIPredicate::sge, newCurrentMasked, zero32);
         Value minTxCount = tti::createConstIntTensor(
-            fb, fb.getLoc(), -(int64_t)BarrierBits::countMask,
-            barrierStatesType, /*isSigned=*/true);
+            fb, fb.getLoc(), BarrierBits::txCountMin, barrierStatesType,
+            /*isSigned=*/true);
         Value maxTxCount = tti::createConstIntTensor(
-            fb, fb.getLoc(), BarrierBits::countMask, barrierStatesType);
+            fb, fb.getLoc(), BarrierBits::txCountMax, barrierStatesType);
         Value txCountInRange = arith::AndIOp::create(
             fb,
             arith::CmpIOp::create(fb, arith::CmpIPredicate::sge,
@@ -1076,8 +1077,8 @@ void FunctionBuilder::createUpdateBarrierStateCall(
     Operation *insertPoint, Value recipientCTAs, int txCount) {
   assert(count >= 0 && (uint64_t)count <= BarrierBits::countMask &&
          "barrier update count exceeds barrier state capacity");
-  assert(std::abs(static_cast<int64_t>(txCount)) <=
-             (int64_t)BarrierBits::countMask &&
+  assert(txCount >= BarrierBits::txCountMin &&
+         txCount <= BarrierBits::txCountMax &&
          "barrier tx-count delta exceeds barrier state capacity");
 
   if (auxData.barriers.empty() || auxData.barrierStates.empty()) {
