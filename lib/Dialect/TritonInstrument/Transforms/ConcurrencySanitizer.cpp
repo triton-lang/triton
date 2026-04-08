@@ -179,16 +179,6 @@ Value getLeaderCTA(ImplicitLocOpBuilder &b, Value barrier) {
   return createCTABitset(b, /*pattern=*/1, encoding.fixedBits);
 }
 
-Value getLeaderCTAPred(ImplicitLocOpBuilder &b, Value alloc) {
-  uint16_t broadcastMask = getBlockBroadcastMask(alloc);
-  assert(broadcastMask && "expected a cross-CTA memdesc");
-  Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
-  Value ctaIdInGroup = arith::AndIOp::create(
-      b, ctaId, arith::ConstantIntOp::create(b, broadcastMask, 32));
-  return arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaIdInGroup,
-                               arith::ConstantIntOp::create(b, 0, 32));
-}
-
 Value getRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
     return getLeaderCTA(b, expectOp.getAlloc());
@@ -388,25 +378,20 @@ private:
   }
 
   void instrumentBarrierExpectNonLeaderArrive(
-      ImplicitLocOpBuilder &b, ttng::BarrierExpectOp expectOp, Value pred,
-      tti::FunctionBuilder &funcBuilder) {
+      ImplicitLocOpBuilder &b, ttng::BarrierExpectOp expectOp,
+      Value nonLeaderPred, int thread, tti::FunctionBuilder &funcBuilder) {
     Value barrier = expectOp.getAlloc();
-    uint16_t barrierMask = getBlockBroadcastMask(barrier);
-    if (!barrierMask)
-      return;
-
-    if (!pred)
-      pred = arith::ConstantIntOp::create(b, 1, 1);
-    Value leaderPred = getLeaderCTAPred(b, barrier);
-    Value nonLeaderPred = arith::XOrIOp::create(
-        b, leaderPred, arith::ConstantIntOp::create(b, 1, 1));
-    nonLeaderPred = arith::AndIOp::create(b, pred, nonLeaderPred);
-
     Value recipientCTAs = getLeaderCTA(b, barrier);
 
     // Match BarrierOpToLLVM's cross-CTA path: non-leader CTAs contribute a
     // plain arrive of count 1 to the leader barrier. The generic barrier path
     // models the leader CTA's expect_tx.
+    for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
+      funcBuilder.createTrackVisibleWritesCall(
+          b, barrier, thread, nonLeaderPred, memType, expectOp, recipientCTAs);
+      funcBuilder.createTrackVisibleReadsCall(b, barrier, thread, nonLeaderPred,
+                                              memType, expectOp, recipientCTAs);
+    }
     funcBuilder.createVerifyBarrierArriveCall(
         b, barrier, /*count=*/1, nonLeaderPred, expectOp, recipientCTAs,
         /*txCount=*/0);
@@ -425,9 +410,17 @@ private:
     Value pred = opInfo->pred;
     // Barrier expect performs an arrive on non-leader CTAs, so we need to
     // instrument it separately before incorporating getIssuerCTAPred.
-    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
-      instrumentBarrierExpectNonLeaderArrive(b, expectOp, pred, funcBuilder);
-    pred = tti::maybeAnd(b, pred, hooks->getIssuerCTAPred(b, op));
+    Value issuerCTAPred = hooks->getIssuerCTAPred(b, op);
+    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
+      if (issuerCTAPred) {
+        Value nonLeaderPred = arith::XOrIOp::create(
+            b, issuerCTAPred, arith::ConstantIntOp::create(b, 1, 1));
+        nonLeaderPred = tti::maybeAnd(b, pred, nonLeaderPred);
+        instrumentBarrierExpectNonLeaderArrive(b, expectOp, nonLeaderPred,
+                                               thread, funcBuilder);
+      }
+    }
+    pred = tti::maybeAnd(b, pred, issuerCTAPred);
     Value recipientCTAs = getRecipientCTAs(b, op);
     for (auto effect : opInfo->operandEffects) {
       Value buf = effect.buf;
