@@ -858,6 +858,7 @@ def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option:
 
 @gluon.jit
 def tl_make_tensor_descriptor_amd(base, shape, strides, block_shape):
+    ttgl.static_assert(_is_gfx1250(current_target()), "tl_make_tensor_descriptor_amd requires gfx1250 target")
     layout: ttgl.constexpr = get_default_tdm_layout(*block_shape)
     desc = amd_tdm.make_tensor_descriptor(base, shape, strides, block_shape, layout)
     return AMDTensorDescriptorArgs(desc, base)
