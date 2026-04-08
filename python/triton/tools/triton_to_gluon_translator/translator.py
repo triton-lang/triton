@@ -109,7 +109,6 @@ def add_expr_rewrites(rewrites: list[RewriteFn]) -> None:
 class Translator(ReferenceRewriter):
     tensor_member_match_fns: list[str] = field(default_factory=list)
     target: str = "nvidia"
-    _amd_descriptor_vars: set = field(default_factory=set)
 
     def __post_init__(self) -> None:
         import triton
@@ -151,18 +150,6 @@ class Translator(ReferenceRewriter):
         new_callable = ast.Attribute(value, fn_name, ctx=ast.Load())
         return ast.Call(func=new_callable, args=node.args[1:], keywords=node.keywords)
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
-        # Track variables assigned from tl.make_tensor_descriptor so we can route
-        # their load/store/gather/scatter to AMD-specific helpers.
-        if self.target.startswith("gfx") and isinstance(node.value, ast.Call):
-            ref = self.get_reference(node.value.func) if isinstance(node.value.func,
-                                                                    (ast.Attribute, ast.Name)) else None
-            if ref is not None and ref[0] is tl.make_tensor_descriptor:
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        self._amd_descriptor_vars.add(target.id)
-        return self.generic_visit(node)
-
     def visit_Call(self, node: ast.Call) -> ast.AST:
         node, canonicalized = self.canonicalize_call(node)
         ref = self.get_reference(node.func)
@@ -174,24 +161,7 @@ class Translator(ReferenceRewriter):
                     "gather",
                     "scatter",
             ]:
-                attr = node.func.attr
-                desc_var = node.func.value
-                # Route AMD descriptor ops to TDM-specific helpers.
-                if self.target.startswith("gfx") and isinstance(desc_var, ast.Name):
-                    if desc_var.id in self._amd_descriptor_vars:
-                        if attr in ["load", "store"]:
-                            helper_name = f"tl_{attr}_tensor_descriptor_amd"
-                        else:
-                            helper_name = f"tl_obj_{attr}_amd"
-                        new_callee = parse_expr(f"helpers.{helper_name}")
-                        node = ast.Call(func=new_callee, args=[node.func.value] + node.args, keywords=node.keywords)
-                        return self.generic_visit(node)
-                # Use AMD-specific helpers for gather/scatter on AMD targets (host descriptor path).
-                if attr in ["gather", "scatter"] and self.target.startswith("gfx"):
-                    helper_name = f"tl_obj_{attr}_amd"
-                else:
-                    helper_name = f"tl_obj_{attr}"
-                new_callee = parse_expr(f"helpers.{helper_name}")
+                new_callee = parse_expr(f"helpers.tl_obj_{node.func.attr}")
                 node = ast.Call(func=new_callee, args=[node.func.value] + node.args, keywords=node.keywords)
             return self.generic_visit(node)
         value, _, _ = ref
