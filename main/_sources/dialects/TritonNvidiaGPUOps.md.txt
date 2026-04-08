@@ -26,7 +26,7 @@ ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc<1xi64, #shared, #smem, mut
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `MBarrierOpInterface`
+Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 
@@ -107,7 +107,7 @@ The tensor mode is determined by the descriptor type:
 
 Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `MBarrierOpInterface`
+Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 
@@ -178,7 +178,7 @@ async_tma_copy_global_to_local except that each row is indexed independently.
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `MBarrierOpInterface`
+Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`
 
 #### Operands:
 
@@ -301,7 +301,7 @@ associated barrier wait will block until the expected number of bytes are copied
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `MBarrierOpInterface`
+Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 
@@ -688,7 +688,7 @@ operation on `%barrierB`, even though its commit group is empty.
 
 Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `MBarrierOpInterface`
+Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`
 
 #### Operands:
 
@@ -728,7 +728,7 @@ If true, the integer values are treated as unsigned, otherwise they are treated 
 
 Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `DotOpInterface`, `MBarrierOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`
+Interfaces: `DotOpInterface`, `MBarrierOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 
@@ -789,7 +789,7 @@ be used to check aliasing and modref on the accumulator memory.
 
 Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `DotOpInterface`, `MBarrierOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`
+Interfaces: `DotOpInterface`, `MBarrierOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 
@@ -1095,6 +1095,8 @@ be used to check aliasing and modref on the TMEM buffer.
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
+Interfaces: `PredicatedOpInterface`
+
 #### Operands:
 
 | Operand | Description |
@@ -1179,7 +1181,7 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-
 
 Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `MBarrierOpInterface`
+Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`
 
 #### Operands:
 

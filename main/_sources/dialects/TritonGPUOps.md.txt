@@ -58,7 +58,7 @@ completion of `async_copy_global_to_local`. The async copy operations must be co
 
 Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `InferTypeOpInterface`
+Interfaces: `InferTypeOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 

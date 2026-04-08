@@ -295,7 +295,7 @@ ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc&lt;1xi64, #shared, #smem, 
 </pre></div>
 </div>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="attributes">
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Link to this heading">¶</a></h3>
 <table>
@@ -395,7 +395,7 @@ by <code class="docutils literal notranslate"><span class="pre">desc</span></cod
 </li>
 </ul>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id3">
 <h3>Attributes:<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
 <table>
@@ -485,7 +485,7 @@ by <code class="docutils literal notranslate"><span class="pre">desc</span></cod
 local memory asynchronously.  This is similar to
 async_tma_copy_global_to_local except that each row is indexed independently.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id6">
 <h3>Operands:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -628,7 +628,7 @@ This is needed before the shared memory can be written to.</p>
 <p>This signal the barrier that <code class="docutils literal notranslate"><span class="pre">size</span></code> bytes are expected to be copied. The
 associated barrier wait will block until the expected number of bytes are copied.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id11">
 <h3>Attributes:<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <table>
@@ -1035,7 +1035,7 @@ operations, but since the commit groups are sequential, the arrive-on
 operation on <code class="docutils literal notranslate"><span class="pre">%barrierA</span></code> is guaranteed to be performed before the arrive-on
 operation on <code class="docutils literal notranslate"><span class="pre">%barrierB</span></code>, even though its commit group is empty.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id29">
 <h3>Operands:<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -1079,7 +1079,7 @@ be used to check aliasing and modref on the accumulator memory.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">isUnsigned</span></code> attribute is only relevant when performing an integer MMA operation.
 If true, the integer values are treated as unsigned, otherwise they are treated as signed.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MMAv5OpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MMAv5OpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id30">
 <h3>Attributes:<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h3>
 <table>
@@ -1164,7 +1164,7 @@ The result will be safe to read after a barrier wait.</p>
 and write on its accumulator operand. When the tokens are present, they can
 be used to check aliasing and modref on the accumulator memory.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MMAv5OpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MMAv5OpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id33">
 <h3>Attributes:<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h3>
 <table>
@@ -1536,6 +1536,7 @@ tcgen05.ld.red instruction on supported architectures, e.g. Blackwell Ultra.</p>
 on its source operand. When the tokens are present, they can
 be used to check aliasing and modref on the TMEM buffer.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id45">
 <h3>Operands:<a class="headerlink" href="#id45" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -1645,7 +1646,7 @@ dependencies may be accessed until the barrier completes.</p>
 <p>The barrier behavior is described here:
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-asynchronous-copy-completion-mechanisms</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id50">
 <h3>Operands:<a class="headerlink" href="#id50" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">

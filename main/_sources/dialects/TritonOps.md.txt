@@ -125,6 +125,8 @@ return old value at $ptr
 
 Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
+Interfaces: `PredicatedOpInterface`
+
 #### Attributes:
 
 <table>
@@ -1063,7 +1065,7 @@ operation ::= `tt.load` $ptr (`,` $mask^)? (`,` $other^)?
 
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`, `SameLoadStoreOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`
+Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 
@@ -1658,6 +1660,8 @@ operation ::= `tt.store` $ptr `,` $value (`,` $mask^)?
 ```
 
 Traits: `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `PredicatedOpInterface`
 
 #### Attributes:
 
