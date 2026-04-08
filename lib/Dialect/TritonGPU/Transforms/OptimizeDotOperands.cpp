@@ -341,53 +341,22 @@ public:
                                 PatternRewriter &rewriter) const override {
     Value oldA = dotOp.getA();
     Value oldB = dotOp.getB();
-    bool changedA = rewriteOperand(dotOp.getAMutable(), rewriter).succeeded();
-    bool changedB = rewriteOperand(dotOp.getBMutable(), rewriter).succeeded();
+    bool changed = false;
 
-    if (changedA || changedB) {
-      updateDependentOps(dotOp, oldA, oldB, rewriter);
-      return success();
+    if (rewriteOperand(dotOp.getAMutable(), rewriter).succeeded()) {
+      oldA.replaceAllUsesExcept(dotOp.getA(), dotOp.getOperation());
+      changed = true;
     }
 
-    return failure();
+    if (rewriteOperand(dotOp.getBMutable(), rewriter).succeeded()) {
+      oldB.replaceAllUsesExcept(dotOp.getB(), dotOp.getOperation());
+      changed = true;
+    }
+
+    return success(changed);
   }
 
 private:
-  template <typename T>
-  static void updateDependentOps(T, Value, Value, PatternRewriter &) {}
-
-  static void updateDependentOps(triton::nvidia_gpu::WarpGroupDotOp dotOp,
-                                 Value oldA, Value oldB,
-                                 PatternRewriter &rewriter) {
-    // Keep warp_group_dot_wait operands consistent with rewritten dot
-    // operands. The wait op is variadic and can carry [dot_result, A, B], so
-    // after changing dotOp's A/B we need to retarget corresponding wait
-    // operands.
-    Value newA = dotOp.getA();
-    Value newB = dotOp.getB();
-    for (Operation *user : dotOp.getResult().getUsers()) {
-      auto waitOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotWaitOp>(user);
-      if (!waitOp)
-        continue;
-      rewriter.modifyOpInPlace(waitOp, [&]() {
-        for (OpOperand &operand : waitOp->getOpOperands()) {
-          Value replacement;
-          if (operand.get() == oldA)
-            replacement = newA;
-          else if (operand.get() == oldB)
-            replacement = newB;
-          else
-            continue;
-
-          operand.assign(replacement);
-          if (operand.getOperandNumber() < waitOp->getNumResults())
-            waitOp->getResult(operand.getOperandNumber())
-                .setType(replacement.getType());
-        }
-      });
-    }
-  }
-
   struct ViewStep {
     enum Kind { Reshape, Transpose } kind;
     SmallVector<int64_t> srcShape;
@@ -420,12 +389,10 @@ private:
                                    trans.getOrder().end());
         auto srcTy = trans.getSrc().getType();
         auto dstTy = trans.getType();
-        replaySteps.push_back(ViewStep{ViewStep::Transpose,
-                                       SmallVector<int64_t>(srcTy.getShape()),
-                                       SmallVector<int64_t>(dstTy.getShape()),
-                                       std::move(order),
-                                       trans.getOperation(),
-                                       trans.getLoc()});
+        replaySteps.push_back(ViewStep{
+            ViewStep::Transpose, SmallVector<int64_t>(srcTy.getShape()),
+            SmallVector<int64_t>(dstTy.getShape()), std::move(order),
+            trans.getOperation(), trans.getLoc()});
         current = trans.getSrc();
         continue;
       }
