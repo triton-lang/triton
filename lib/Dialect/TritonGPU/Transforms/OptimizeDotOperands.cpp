@@ -398,8 +398,10 @@ private:
 
   struct ViewStep {
     enum Kind { Reshape, Transpose } kind;
-    SmallVector<int64_t> shape;
+    SmallVector<int64_t> srcShape;
+    SmallVector<int64_t> dstShape;
     SmallVector<int32_t> order;
+    Operation *op;
     Location loc;
   };
 
@@ -410,18 +412,29 @@ private:
     SmallVector<ViewStep> replaySteps;
     while (true) {
       if (auto reshape = current.template getDefiningOp<ReshapeOpTy>()) {
-        auto ty = reshape.getType();
-        SmallVector<int64_t> shape(ty.getShape().begin(), ty.getShape().end());
-        replaySteps.push_back(ViewStep{
-            ViewStep::Reshape, std::move(shape), {}, reshape.getLoc()});
+        auto srcTy = reshape.getSrc().getType();
+        auto dstTy = reshape.getType();
+        replaySteps.push_back(ViewStep{ViewStep::Reshape,
+                                       SmallVector<int64_t>(srcTy.getShape()),
+                                       SmallVector<int64_t>(dstTy.getShape()),
+                                       {},
+                                       reshape.getOperation(),
+                                       reshape.getLoc()});
         current = reshape.getSrc();
         continue;
       }
       if (auto trans = current.template getDefiningOp<TransOpTy>()) {
         SmallVector<int32_t> order(trans.getOrder().begin(),
                                    trans.getOrder().end());
-        replaySteps.push_back(ViewStep{
-            ViewStep::Transpose, {}, std::move(order), trans.getLoc()});
+        auto srcTy = trans.getSrc().getType();
+        auto dstTy = trans.getType();
+        replaySteps.push_back(
+            ViewStep{ViewStep::Transpose,
+                     SmallVector<int64_t>(srcTy.getShape()),
+                     SmallVector<int64_t>(dstTy.getShape()),
+                     std::move(order),
+                     trans.getOperation(),
+                     trans.getLoc()});
         current = trans.getSrc();
         continue;
       }
@@ -444,20 +457,67 @@ private:
     return nullptr;
   }
 
-  // Build a new memdesc type for the rewritten `local_alloc` by taking the
-  // original MMA operand memdesc and replacing its shape and shared encoding
-  // with those from swizzle-0 `tt.descriptor_load` result
-  static FailureOr<MemDescType> getSwizzle0MemDescType(MemDescType refTy,
-                                                       Value baseTensor) {
+  static FailureOr<MemDescType> inferViewStepBackward(MemDescType resultTy,
+                                                      const ViewStep &step) {
+    if (resultTy.getShape() != ArrayRef<int64_t>(step.dstShape))
+      return failure();
+
+    switch (step.kind) {
+    case ViewStep::Reshape: {
+      MemDescType srcTy;
+      if (failed(MemDescReshapeOp::inferReturnTypes(
+              resultTy.getContext(), step.loc, resultTy, step.srcShape, srcTy)))
+        return failure();
+      return srcTy;
+    }
+    case ViewStep::Transpose: {
+      auto inverseOrder = triton::inversePermutation(step.order);
+      Attribute srcEnc = resultTy.getEncoding();
+      if (srcEnc) {
+        auto inferLayoutInterface =
+            cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
+        if (failed(inferLayoutInterface->inferTransOpEncoding(
+                srcEnc, resultTy.getShape(), inverseOrder, srcEnc, step.loc)))
+          return failure();
+      }
+      return MemDescType::get(step.srcShape, resultTy.getElementType(), srcEnc,
+                              resultTy.getMemorySpace(),
+                              resultTy.getMutableMemory());
+    }
+    }
+    llvm_unreachable("unexpected view step");
+  }
+
+  static FailureOr<MemDescType>
+  inferBackwardSourceType(MemDescType sinkTy, ArrayRef<ViewStep> replaySteps) {
+    MemDescType currentTy = sinkTy;
+    for (const ViewStep &step : llvm::reverse(replaySteps)) {
+      auto srcTy = inferViewStepBackward(currentTy, step);
+      if (failed(srcTy))
+        return failure();
+      currentTy = *srcTy;
+    }
+    return currentTy;
+  }
+
+  static bool layoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
+                                Attribute rhs) {
+    if (lhs == rhs)
+      return true;
+    if (!lhs || !rhs)
+      return false;
+    return areLayoutsEquivalent(shape, cast<LayoutEncodingTrait>(lhs),
+                                cast<LayoutEncodingTrait>(rhs));
+  }
+
+  static LogicalResult verifySourceSwizzle0Layout(MemDescType inferredBaseTy,
+                                                  Value baseTensor) {
     auto sourceSharedEnc = getSourceSwizzle0SharedEncoding(baseTensor);
     if (!sourceSharedEnc)
       return failure();
-
-    auto baseTensorTy = cast<RankedTensorType>(baseTensor.getType());
-    return MemDescType::get(baseTensorTy.getShape(),
-                            baseTensorTy.getElementType(),
-                            cast<Attribute>(sourceSharedEnc),
-                            refTy.getMemorySpace(), refTy.getMutableMemory());
+    return success(layoutsEquivalent(
+        inferredBaseTy.getShape(), inferredBaseTy.getEncoding(),
+        cast<Attribute>(sourceSharedEnc)));
   }
 
   LogicalResult rewriteOperand(OpOperand &operand,
@@ -482,8 +542,10 @@ private:
       return failure();
 
     FailureOr<MemDescType> baseMemTy =
-        getSwizzle0MemDescType(origTy, baseTensor);
+        inferBackwardSourceType(localAlloc.getType(), tensorReplaySteps);
     if (failed(baseMemTy))
+      return failure();
+    if (failed(verifySourceSwizzle0Layout(*baseMemTy, baseTensor)))
       return failure();
 
     PatternRewriter::InsertionGuard guard(rewriter);
@@ -491,21 +553,31 @@ private:
 
     Value rewritten = LocalAllocOp::create(rewriter, localAlloc.getLoc(),
                                            *baseMemTy, baseTensor);
+    auto sinkTy = localAlloc.getType();
 
     for (ViewStep &step : tensorReplaySteps) {
       if (step.kind == ViewStep::Reshape) {
-        rewritten =
-            MemDescReshapeOp::create(rewriter, step.loc, rewritten, step.shape);
+        rewritten = MemDescReshapeOp::create(rewriter, step.loc, rewritten,
+                                             step.dstShape);
       } else {
         rewritten =
             MemDescTransOp::create(rewriter, step.loc, rewritten, step.order);
       }
     }
 
+    auto rewrittenSinkTy = cast<MemDescType>(rewritten.getType());
+    if (rewrittenSinkTy.getShape() != sinkTy.getShape() ||
+        rewrittenSinkTy.getElementType() != sinkTy.getElementType() ||
+        !layoutsEquivalent(sinkTy.getShape(), rewrittenSinkTy.getEncoding(),
+                           sinkTy.getEncoding())) {
+      return failure();
+    }
+
     for (ViewStep &step : trailingMemDescReplaySteps) {
       if (step.kind == ViewStep::Reshape) {
         rewritten =
-            MemDescReshapeOp::create(rewriter, step.loc, rewritten, step.shape);
+            MemDescReshapeOp::create(rewriter, step.loc, rewritten,
+                                     step.dstShape);
       } else {
         rewritten =
             MemDescTransOp::create(rewriter, step.loc, rewritten, step.order);
@@ -516,6 +588,9 @@ private:
     assert(rewrittenTy.getShape() == origTy.getShape() &&
            rewrittenTy.getElementType() == origTy.getElementType() &&
            "rewrite must preserve memdesc shape and element type");
+    if (!layoutsEquivalent(origTy.getShape(), rewrittenTy.getEncoding(),
+                           origTy.getEncoding()))
+      return failure();
 
     operand.assign(rewritten);
     return success();
