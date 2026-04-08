@@ -196,7 +196,8 @@ def tl_dot(
         num_warps: ttgl.constexpr = ttgl.num_warps()
         if tl_dot_mmav5_supported(a.type, b.type, num_warps, input_precision, allow_tf32, max_num_imprecise_acc):
             return tl_dot_blackwell(a, b, acc, input_precision, allow_tf32, max_num_imprecise_acc, out_dtype)
-        return tl_dot_mma_sync(a, b, acc, input_precision, out_dtype)
+        else:
+            return tl_dot_mma_sync(a, b, acc, input_precision, out_dtype)
 
 
 @gluon.constexpr_function
