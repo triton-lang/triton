@@ -20,8 +20,30 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   set(GSAN_RUNTIME_PLATFORM_FLAGS
       "--cuda-path=${CMAKE_CURRENT_SOURCE_DIR}/backend")
-  if(APPLE)
+  if(APPLE AND CMAKE_OSX_SYSROOT)
     list(APPEND GSAN_RUNTIME_PLATFORM_FLAGS -isysroot "${CMAKE_OSX_SYSROOT}")
+  endif()
+
+  set(GSAN_RUNTIME_TOOLCHAIN_FLAGS)
+  # Detect the right include directory for C++ stdlib.
+  # The way this is currently done is GCC specific.
+  # TODO: Support libc++-based systems.
+  set(GSAN_HOST_GNU_CXX "${CMAKE_CXX_COMPILER}")
+  if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # Force g++ to be used for querying -print-file-name on libstdc++.so
+    # clang++ does not print an absolute path in this case.
+    find_program(GSAN_HOST_GNU_CXX NAMES g++ c++)
+  endif()
+  if(GSAN_HOST_GNU_CXX)
+    execute_process(
+      COMMAND "${GSAN_HOST_GNU_CXX}" -print-file-name=libstdc++.so
+      OUTPUT_VARIABLE LIBSTDCXX_PATH
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(IS_ABSOLUTE "${LIBSTDCXX_PATH}")
+      get_filename_component(GCC_INSTALL_DIR "${LIBSTDCXX_PATH}" DIRECTORY)
+      list(APPEND GSAN_RUNTIME_TOOLCHAIN_FLAGS "--gcc-install-dir=${GCC_INSTALL_DIR}")
+    endif()
   endif()
 
   add_custom_command(
@@ -38,6 +60,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
               -fcuda-flush-denormals-to-zero
               --cuda-gpu-arch=sm_80
               -Wno-unknown-cuda-version
+              ${GSAN_RUNTIME_TOOLCHAIN_FLAGS}
               ${GSAN_RUNTIME_PLATFORM_FLAGS}
               -isystem "${CMAKE_CURRENT_SOURCE_DIR}/clang_cuda_shims"
               -isystem "${CMAKE_CURRENT_SOURCE_DIR}/backend/include"
