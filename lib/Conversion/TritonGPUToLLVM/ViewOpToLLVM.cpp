@@ -307,7 +307,10 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
   matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    assert(!isExpensiveView(op.getSrc().getType(), op.getType()));
+    if (triton::gpu::isExpensiveView(op.getSrc().getType(), op.getType())) {
+      return emitOptionalError(loc,
+                               "expensive view not supported on reshape op");
+    }
     auto resultTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     auto typeConverter = getTypeConverter();
