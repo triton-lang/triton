@@ -20,7 +20,8 @@ def compute_swap_xw(precision_config, block_m, is_persistent):
         else:
             return block_m < 64 and is_persistent
     elif target_info.cuda_capability_geq(9, 0):
-        layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
+        layout = None if not isinstance(precision_config.b_mx_scale,
+                                        Tensor) else precision_config.b_mx_scale.storage.layout
         return isinstance(layout, HopperMXScaleLayout)
 
     return False

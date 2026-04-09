@@ -335,9 +335,8 @@ def reduce_forward(
     # Always use the 2D tiled kernel with constexpr metaprogramming for mask broadcasting
     opt_flags = _opt_flags.get()
     if opt_flags is None:
-        opt_flags = _select_reduce_forward_config(
-            S0, Y_S1, postprocess_fn1.specs.reduction_n, K, x_mxscale is not None or y_has_mx
-        )
+        opt_flags = _select_reduce_forward_config(S0, Y_S1, postprocess_fn1.specs.reduction_n, K, x_mxscale is not None
+                                                  or y_has_mx)
     grid = (triton.cdiv(S0, opt_flags.block_s0), triton.cdiv(Y_S1, opt_flags.block_y_s1))
     if y_has_mx:
         if y_dtype == torch.float8_e4m3fn:
