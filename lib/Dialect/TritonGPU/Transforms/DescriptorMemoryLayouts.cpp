@@ -250,23 +250,35 @@ EncodingInfo AssignDescriptorMemoryLayouts::combineEncodings(
 
 Attribute
 AssignDescriptorMemoryLayouts::findLoadEncodingFromUsers(Operation *op) {
+  auto getCompatibleEncodingForType = [&](Type type) -> Attribute {
+    if (auto memDescTy = dyn_cast<MemDescType>(type)) {
+      return getCompatibleSharedEncoding(memDescTy.getEncoding(),
+                                         memDescTy.getShape(),
+                                         memDescTy.getElementType());
+    }
+    if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
+      return getCompatibleSharedEncoding(tensorTy.getEncoding(),
+                                         tensorTy.getShape(),
+                                         tensorTy.getElementType());
+    }
+    return {};
+  };
+
   // Check if there are any desired encodings available on the op
   if (auto attr = op->getDiscardableAttr("tt.desired_encoding")) {
-    if (auto enc = dyn_cast<ttg::SharedEncodingTrait>(attr)) {
-      if (isCompatibleSharedEncoding(enc))
-        return enc;
-    }
+    if (auto resultTy = dyn_cast<RankedTensorType>(op->getResult(0).getType()))
+      if (auto compatible = getCompatibleSharedEncoding(
+              attr, resultTy.getShape(), resultTy.getElementType()))
+        return compatible;
   }
   // Ignore multiple users and just pick the first compatible layout
   for (auto use : op->getUsers()) {
     if (auto alloc = dyn_cast<ttg::LocalAllocOp>(use)) {
-      auto enc = alloc.getType().getEncoding();
-      if (isCompatibleSharedEncoding(enc))
-        return enc;
+      if (auto compatible = getCompatibleEncodingForType(alloc.getType()))
+        return compatible;
     } else if (auto store = dyn_cast<ttg::LocalStoreOp>(use)) {
-      auto enc = store.getDst().getType().getEncoding();
-      if (isCompatibleSharedEncoding(enc))
-        return enc;
+      if (auto compatible = getCompatibleEncodingForType(store.getDst().getType()))
+        return compatible;
     }
   }
   return {};
