@@ -88,6 +88,8 @@ ISAFamily TargetFeatures::getISAFamily() const {
   // RDNA ISA cases.
   if (major == 12 && minor == 0)
     return ISAFamily::RDNA4;
+  if (major == 11 && minor == 7)
+    return ISAFamily::RDNA4m;
   if (major == 11)
     return ISAFamily::RDNA3;
   if (major == 10 && minor == 3)
@@ -336,6 +338,7 @@ bool isRDNA(ISAFamily isaFamily) {
   case ISAFamily::RDNA1:
   case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:
     return true;
   default:

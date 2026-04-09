@@ -170,6 +170,7 @@ Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
   Value timer;
   switch (getISAFamily()) {
   case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:
   case ISAFamily::GFX1250: {
     Value msg = b.i32_val(/*MSG_RTN_GET_REALTIME=*/131);
@@ -810,6 +811,7 @@ TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
   case ISAFamily::RDNA1:
   case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
     if (vecBitwidth == 128)
       return {/*load tile*/ {{}, {0, 1, 4}}, /*store tile*/ {}};
     break;

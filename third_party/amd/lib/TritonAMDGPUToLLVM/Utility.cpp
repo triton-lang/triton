@@ -690,6 +690,7 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
   case ISAFamily::CDNA4:
     return getCtrlBitsForCacheModifierOn_CDNA3_CDNA4(cm, isLoad);
   case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
     return getCtrlBitsForCacheModifierOnRDNA3(cm, isLoad);
   case ISAFamily::RDNA4:
     return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ false);
