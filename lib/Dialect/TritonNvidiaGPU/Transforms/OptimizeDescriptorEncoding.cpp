@@ -27,7 +27,9 @@ private:
 
 bool NvidiaGPUAssignDescriptorMemoryLayouts::isCompatibleSharedEncoding(
     Attribute enc) {
-  return isa<ttg::NVMMASharedEncodingAttr>(enc);
+  if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(enc))
+    return !nvmma.getTransposed();
+  return false;
 }
 
 Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
@@ -44,9 +46,10 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
   auto order = ttg::getOrder(sharedLinear, shape);
 
   SmallVector<ttg::NVMMASharedEncodingAttr> preferredCandidates;
-  // Preserve Triton's default shape/order-based choice when it already matches
-  // this shared_linear layout. The full candidate scan below is only a
-  // fallback for equivalent layouts not selected by the heuristic builder.
+  // TMA descriptors only support non-transposed layouts. Preserve Triton's
+  // default shape/order-based choice when it already matches this
+  // shared_linear layout. The full candidate scan below is only a fallback for
+  // equivalent non-transposed layouts not selected by the heuristic builder.
   for (bool fp4Padded : {false, true}) {
     auto preferred = ttg::NVMMASharedEncodingAttr::get(
         ctx, shape, order, cgaLayout, elementType, fp4Padded);
@@ -56,16 +59,15 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
   }
 
   unsigned elementBitWidth = std::max(8u, elementType.getIntOrFloatBitWidth());
-  for (bool transposed : {false, true}) {
-    for (bool fp4Padded : {false, true}) {
-      for (unsigned swizzle : {0u, 32u, 64u, 128u}) {
-        auto candidate = ttg::NVMMASharedEncodingAttr::get(
-            ctx, swizzle, transposed, elementBitWidth, fp4Padded, cgaLayout);
-        if (llvm::is_contained(preferredCandidates, candidate))
-          continue;
-        if (ttg::areLayoutsEquivalent(shape, sharedLinear, candidate))
-          return candidate;
-      }
+  for (bool fp4Padded : {false, true}) {
+    for (unsigned swizzle : {0u, 32u, 64u, 128u}) {
+      auto candidate = ttg::NVMMASharedEncodingAttr::get(
+          ctx, swizzle, /*transposed=*/false, elementBitWidth, fp4Padded,
+          cgaLayout);
+      if (llvm::is_contained(preferredCandidates, candidate))
+        continue;
+      if (ttg::areLayoutsEquivalent(shape, sharedLinear, candidate))
+        return candidate;
     }
   }
 
