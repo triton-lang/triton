@@ -182,6 +182,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      ttng::createTritonNvidiaGPUMMALoweringPass);
   ADD_PASS_WRAPPER_0("add_optimize_descriptor_encoding",
                      ttng::createTritonNvidiaGPUOptimizeDescriptorEncodingPass);
+  ADD_PASS_WRAPPER_0("add_rewrite_mma_operand_views_to_memdesc",
+                     ttng::createTritonNvidiaGPURewriteMmaOperandViewsToMemDescPass);
   ADD_PASS_WRAPPER_0("add_optimize_tmem_layouts",
                      ttng::createTritonNvidiaGPUOptimizeTMemLayoutsPass);
   ADD_PASS_WRAPPER_0("add_interleave_tmem",
