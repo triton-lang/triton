@@ -127,7 +127,7 @@ static DescriptorInfo getDescriptorInfo(Value desc, OpBuilder &builder) {
 
   auto elemTy = descTy.getSignlessBlockType().getElementType();
   auto basePtrTy = tt::getPointerType(elemTy);
-  unsigned rank = descTy.getBlockType().getRank();
+  unsigned rank = descTy.getShape().size();
   SmallVector<Type> resultTypes;
   resultTypes.reserve(1 + 2 * rank);
   resultTypes.push_back(basePtrTy);

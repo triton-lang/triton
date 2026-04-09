@@ -637,7 +637,7 @@ public:
                                          "expected byte-addressable element");
     }
 
-    unsigned rank = descTy.getBlockType().getRank();
+    unsigned rank = descTy.getShape().size();
     unsigned elemBytes = elemTy.getIntOrFloatBitWidth() / 8;
     if (op->getNumResults() != 1 + 2 * rank) {
       return rewriter.notifyMatchFailure(

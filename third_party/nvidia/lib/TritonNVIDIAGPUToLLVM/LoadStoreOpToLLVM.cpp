@@ -1264,7 +1264,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       auto offsets = applyLinearLayout(loc, rewriter, msgToOffset,
                                        {{kMsg, copyIdxVal}, {kBlock, ctaId}});
       int operandIdx = 3;
-      auto encoding = op.getDesc().getType().getBlockType().getEncoding();
+      auto encoding = op.getDesc().getType().getSharedLayout();
       bool fp4Padded = nvidia_gpu::isFp4Padded(encoding);
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];

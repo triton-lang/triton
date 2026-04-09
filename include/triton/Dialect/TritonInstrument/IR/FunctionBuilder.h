@@ -173,7 +173,9 @@ public:
   void createTrackBarrierWriteForBufferCall(ImplicitLocOpBuilder &b, Value mbar,
                                             Value buf, uint32_t length,
                                             Value pred, MemType memType,
-                                            Operation *insertPoint);
+                                            Operation *insertPoint,
+                                            Value barrierRecipientCTAs,
+                                            Value effectRecipientCTAs);
   // clearBarrierWriteTracking: clear all write tracking associated with the
   // given barrier row.
   void createClearBarrierWriteTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
@@ -199,13 +201,15 @@ public:
   void createVerifyWriteVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
                                        uint32_t length, int thread,
                                        StringRef operandName, Value pred,
-                                       MemType memType, Operation *insertPoint);
+                                       MemType memType, Operation *insertPoint,
+                                       Value recipientCTAs);
   // verifyReadVisibility: ensure all reads from the buffer are visible to the
   // thread.
   void createVerifyReadVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
                                       uint32_t length, int thread,
                                       StringRef operandName, Value pred,
-                                      MemType memType, Operation *insertPoint);
+                                      MemType memType, Operation *insertPoint,
+                                      Value recipientCTAs);
   // copyWriteVisibility: replicate the write visibility bit of sourceThread to
   // every destination thread in destMask.
   void createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,
@@ -255,13 +259,11 @@ public:
   // buffer is zero before the access described by pendingAccessType.
   // When excludeSelf is true, the calling thread's own column is masked out
   // so that only other partitions' outstanding commits are checked.
-  void createCheckOutstandingCommitsCall(ImplicitLocOpBuilder &b, Value buf,
-                                         uint32_t length, int thread,
-                                         StringRef pendingAccessType,
-                                         Value pred, MemType memType,
-                                         CommitKind::Kind commitKind,
-                                         Operation *insertPoint,
-                                         bool excludeSelf = false);
+  void createCheckOutstandingCommitsCall(
+      ImplicitLocOpBuilder &b, Value buf, uint32_t length, int thread,
+      StringRef pendingAccessType, Value pred, MemType memType,
+      CommitKind::Kind commitKind, Operation *insertPoint, Value recipientCTAs,
+      bool excludeSelf = false);
 
 private:
   ModuleOp module;

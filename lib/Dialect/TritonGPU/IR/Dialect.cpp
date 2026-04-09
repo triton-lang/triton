@@ -4444,6 +4444,8 @@ std::optional<int> triton::gpu::getWarpSpecializeTag(Operation *op) {
 }
 
 PaddedSharedEncodingAttr triton::gpu::getPaddedEncoding(Attribute encoding) {
+  if (!encoding)
+    return nullptr;
   if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(encoding))
     return padded;
   if (auto partitioned = dyn_cast<PartitionedSharedEncodingAttr>(encoding))
