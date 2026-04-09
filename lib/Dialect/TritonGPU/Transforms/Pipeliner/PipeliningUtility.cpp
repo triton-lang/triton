@@ -192,97 +192,12 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     ifOp.getConditionMutable().assign(cnd);
     return op;
   }
-  if (auto asyncCopyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
-    rewriter.setInsertionPoint(asyncCopyOp);
-    Value mask = getPredMask(rewriter, asyncCopyOp.getSrc().getType(),
-                             asyncCopyOp.getMask(), pred);
-    asyncCopyOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-    rewriter.setInsertionPoint(loadOp);
-    Value mask = getPredMask(rewriter, loadOp.getPtr().getType(),
-                             loadOp.getMask(), pred);
-    loadOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-    rewriter.setInsertionPoint(copyOp);
-    Value mask = getPredMask(rewriter, copyOp.getPred().getType(),
-                             copyOp.getPred(), pred);
-    copyOp.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
-    rewriter.setInsertionPoint(gatherOp);
-    Value mask = getPredMask(rewriter, gatherOp.getPred().getType(),
-                             gatherOp.getPred(), pred);
-    gatherOp.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
-    rewriter.setInsertionPoint(expectOp);
-    Value mask = getPredMask(rewriter, expectOp.getPred().getType(),
-                             expectOp.getPred(), pred);
-    expectOp.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-    rewriter.setInsertionPoint(mmav5Op);
-    auto currPred = mmav5Op.getPredicate();
-    Value mask = getPredMask(rewriter, currPred.getType(), currPred, pred);
-    mmav5Op.setPredicate(mask);
-    return op;
-  }
-  if (auto tmemStoreOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
-    rewriter.setInsertionPoint(tmemStoreOp);
-    Value mask = getPredMask(rewriter, tmemStoreOp.getPred().getType(),
-                             tmemStoreOp.getPred(), pred);
-    tmemStoreOp.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto waitBarrier = dyn_cast<ttng::WaitBarrierOp>(op)) {
-    rewriter.setInsertionPoint(waitBarrier);
-    Value mask = pred;
-    Value currentPred = waitBarrier.getPred();
-    if (currentPred) {
-      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
-    }
-    waitBarrier.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto arriveBarrier = dyn_cast<ttng::ArriveBarrierOp>(op)) {
-    rewriter.setInsertionPoint(arriveBarrier);
-    Value mask = pred;
-    Value currentPred = arriveBarrier.getPred();
-    if (currentPred) {
-      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
-    }
-    arriveBarrier.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    rewriter.setInsertionPoint(commit);
-    Value mask = pred;
-    Value currentPred = commit.getPred();
-    if (currentPred) {
-      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
-    }
-    commit.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
-    rewriter.setInsertionPoint(storeOp);
-    Value mask = getPredMask(rewriter, storeOp.getPtr().getType(),
-                             storeOp.getMask(), pred);
-    storeOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto atomicRMWOp = dyn_cast<tt::AtomicRMWOp>(op)) {
-    rewriter.setInsertionPoint(atomicRMWOp);
-    Value mask = getPredMask(rewriter, atomicRMWOp.getPtr().getType(),
-                             atomicRMWOp.getMask(), pred);
-    atomicRMWOp.getMaskMutable().assign(mask);
+  if (auto predicatedOp = dyn_cast<tt::PredicatedOpInterface>(op)) {
+    rewriter.setInsertionPoint(op);
+    Value mask =
+        getPredMask(rewriter, predicatedOp.getPredicateOperandTypeLike(),
+                    predicatedOp.getPredicateOperand(), pred);
+    predicatedOp.setPredicateOperand(mask);
     return op;
   }
   if (!op->isRegistered()) {

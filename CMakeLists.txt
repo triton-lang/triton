@@ -24,6 +24,7 @@ option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
 option(TRITON_EXT_ENABLED "Build with default visibility for Triton+LLVM symbol exposure to plugin extensions" OFF)
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
+set(TRITON_VERSION "" CACHE STRING "Triton version string (passed from setup.py)")
 
 set(TRITON_CACHE_PATH "" CACHE PATH "Path to triton cache")
 set(TRITON_LLVM_SYSTEM_SUFFIX "" CACHE STRING "Path to LLVM system suffix")
@@ -95,6 +96,13 @@ endif()
 if(NOT "${JSON_SYSPATH}" STREQUAL "" AND NOT DEFINED JSON_INCLUDE_DIR)
   set(JSON_INCLUDE_DIR "${JSON_SYSPATH}/include")
 endif()
+
+# Regenerate Triton Version Header
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/triton/Version.h.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/include/triton/Version.h"
+  @ONLY
+)
 
 # Regenerate configure outputs during `cmake --build` when helper inputs change.
 set_property(

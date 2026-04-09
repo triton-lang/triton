@@ -129,6 +129,7 @@ class AMDGPUAssignDescriptorMemoryLayouts
     : public ttg::AssignDescriptorMemoryLayouts {
 public:
   AMDGPUAssignDescriptorMemoryLayouts() = default;
+  ~AMDGPUAssignDescriptorMemoryLayouts() override = default;
 
 private:
   Attribute buildFallbackSharedEncoding(mlir::MLIRContext *ctx,

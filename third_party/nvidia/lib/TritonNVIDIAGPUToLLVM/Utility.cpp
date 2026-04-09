@@ -142,17 +142,12 @@ Value createElectPredicateWarp0(Location loc, OpBuilder &rewriter) {
 Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
                              uint16_t broadcastBits) {
   int numCTAs = triton::gpu::lookupNumCTAs(rewriter);
-  int blockBits = llvm::Log2_32(numCTAs);
-  uint32_t fixedBits = (~broadcastBits) & (numCTAs - 1);
-  uint32_t pattern = 1;
-  for (int i = 0; i < blockBits; ++i) {
-    if ((fixedBits & (1u << i)) == 0)
-      pattern |= (pattern << (1u << i));
-  }
+  auto encoding =
+      triton::nvidia_gpu::getTMAMulticastMaskEncoding(numCTAs, broadcastBits);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
-  Value base = b.and_(ctaId, b.i32_val(fixedBits));
-  return b.shl(b.i32_val(pattern), base);
+  Value base = b.and_(ctaId, b.i32_val(encoding.fixedBits));
+  return b.shl(b.i32_val(encoding.pattern), base);
 }
 
 static uint32_t getCGABroadcastMask(mlir::triton::gpu::MemDescType barrierTy) {

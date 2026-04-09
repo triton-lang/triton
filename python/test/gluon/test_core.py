@@ -3549,6 +3549,25 @@ def make_scales_descriptor(scales, BLOCK_MN, BLOCK_K, VEC_SIZE, cga_layout=None)
     return TensorDescriptor.from_tensor(scales, block_shape, layout)
 
 
+def get_cga_layout(layout, op_idx):
+    """Based on get_cga_layout from 03-matmul-multicta.py.
+    Difference: B is N×K (transposed), so offsets are in dim 0 not dim 1."""
+    assert op_idx in (0, 1)
+    if not layout:
+        return layout
+
+    # 2CTA performs an outer product so bases are [1, 0] and [0, 1]
+    assert list(layout[0]) == [1, 0]
+    first = (1, 0)
+
+    # Broadcast along K (the reduction dimension)
+    # We multiply by 2 for op_idx == 1, as we have added the (1, 0) basis.
+    def broadcast(b):
+        return (b[0], 0) if op_idx == 0 else (2 * b[1], 0)
+
+    return (first, *map(broadcast, layout[1:]))
+
+
 @gluon.jit
 def unswizzle_scales_shared_memory(smem, BLOCK_MN: ttgl.constexpr, BLOCK_K: ttgl.constexpr, VEC_SIZE: ttgl.constexpr):
     smem = smem.reshape((smem.shape[1], smem.shape[2], 32, 4, 4))
@@ -3558,7 +3577,9 @@ def unswizzle_scales_shared_memory(smem, BLOCK_MN: ttgl.constexpr, BLOCK_K: ttgl
 
 @gluon.jit
 def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, VEC_SIZE: ttgl.constexpr,
-                                   block_layout_c: ttgl.constexpr, multicast: ttgl.constexpr):
+                                   block_layout_c: ttgl.constexpr, a_scale_layout_tmem: ttgl.constexpr,
+                                   b_scale_layout_tmem: ttgl.constexpr, ctas_per_cga: ttgl.constexpr,
+                                   multicast: ttgl.constexpr):
     A_IS_FP4: ttgl.constexpr = a_desc.dtype == ttgl.uint8
     B_IS_FP4: ttgl.constexpr = b_desc.dtype == ttgl.uint8
     A_ELEM_PER_BYTE: ttgl.constexpr = 2 if A_IS_FP4 else 1
@@ -3572,23 +3593,25 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     b_smem = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)
 
     num_ctas: ttgl.constexpr = ttgl.num_ctas()
-    two_ctas: ttgl.constexpr = num_ctas > 1
-    scale_layout_a: ttgl.constexpr = TensorMemoryScalesLayout(cga_layout=[[1, 0]] if two_ctas else [])
-    scale_layout_b: ttgl.constexpr = TensorMemoryScalesLayout(cga_layout=[[0, 0]] if two_ctas else [])
+    multi_cta: ttgl.constexpr = num_ctas > 1
+    scale_layout_a: ttgl.constexpr = TensorMemoryScalesLayout(cga_layout=a_scale_layout_tmem)
+    scale_layout_b: ttgl.constexpr = TensorMemoryScalesLayout(cga_layout=b_scale_layout_tmem)
     a_scale_tmem = allocate_tensor_memory(a_scale_desc.dtype, [BLOCK_M, BLOCK_K // VEC_SIZE], scale_layout_a)
     b_scale_tmem = allocate_tensor_memory(b_scale_desc.dtype, [BLOCK_N, BLOCK_K // VEC_SIZE], scale_layout_b)
     tmem_layout: ttgl.constexpr = TensorMemoryLayout(
-        [BLOCK_M // num_ctas, BLOCK_N],
+        [BLOCK_M // ctas_per_cga[0], BLOCK_N // ctas_per_cga[1]],
         col_stride=1,
-        cga_layout=[[1, 0]] if two_ctas else [],
-        two_ctas=two_ctas,
+        cga_layout=c_desc.layout.cga_layout,
+        two_ctas=multi_cta,
     )
     acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
 
-    tma_bar = mbarrier.allocate_mbarrier(two_ctas=two_ctas)
-    mma_bar = mbarrier.allocate_mbarrier()
+    tma_bar = mbarrier.allocate_mbarrier(two_ctas=multi_cta)
     mbarrier.init(tma_bar, count=1)
-    mbarrier.init(mma_bar, count=1)
+
+    mma_bar = mbarrier.allocate_mbarrier()
+    mma_bar_count: ttgl.constexpr = tcgen05_mma_barrier_count([a_smem, b_smem], multicast=multicast)
+    mbarrier.init(mma_bar, count=mma_bar_count)
 
     phase_tma = 0
     phase_mma = 0
@@ -3615,9 +3638,10 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         EXPECTED_BYTES: ttgl.constexpr = (a_desc.nbytes_per_cta + b_desc.nbytes_per_cta + a_scale_desc.nbytes_per_cta +
                                           b_scale_desc.nbytes_per_cta)
         mbarrier.expect(tma_bar, EXPECTED_BYTES)
-        tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], tma_bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], tma_bar, b_smem)
-        tma.async_copy_global_to_shared(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], tma_bar, a_scale_smem)
+        tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], tma_bar, a_smem, multicast=multicast)
+        tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], tma_bar, b_smem, multicast=multicast)
+        tma.async_copy_global_to_shared(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], tma_bar, a_scale_smem,
+                                        multicast=multicast)
         tma.async_copy_global_to_shared(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], tma_bar, b_scale_smem,
                                         multicast=multicast)
         mbarrier.wait(tma_bar, phase_tma, deps=[a_smem, b_smem, a_scale_smem, b_scale_smem])
@@ -3632,14 +3656,15 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         b_format: ttgl.constexpr = "e2m1" if B_IS_FP4 else "e4m3"
         tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
                            use_acc=(k != 0))
-        tcgen05_commit(mma_bar)
+        mma_descs: ttgl.constexpr = (a_smem, b_smem) if multicast else ()
+        tcgen05_commit(mma_bar, descs=mma_descs)
         mbarrier.wait(mma_bar, phase_mma)
         phase_mma ^= 1
 
     mbarrier.invalidate(tma_bar)
     mbarrier.invalidate(mma_bar)
     acc = acc_tmem.load()
-    if two_ctas:
+    if multi_cta:
         acc = ttgl.convert_layout(acc, block_layout_c)
     acc = acc.to(c_desc.dtype)
     acc_smem = ttgl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
@@ -3648,28 +3673,29 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     tma.store_wait(0)
 
 
-def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, num_ctas, multicast,
+def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast,
                             out_dtype=torch.float16):
     from dataclasses import replace
     M, N = A.shape[0], B.shape[0]
     MIXED_PREC = A.dtype != B.dtype
-    two_ctas = num_ctas > 1
+    num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
+    multi_cta = num_ctas > 1
     warps = [4, 1]
     num_warps = warps[0] * warps[1]
 
-    ctas_per_cga = (2, 1) if two_ctas else None
-    cta_order = (1, 0) if two_ctas else None
-    cta_split = (2, 1) if two_ctas else None
-    cga_layout_a = make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, 0) if two_ctas else None
-    cga_layout_b = make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, 0) if two_ctas else None
-    cga_layout_c = make_2cta_cga_layout(ctas_per_cga, ctas_per_cga, cta_order, 0) if two_ctas else None
+    cta_order = (1, 0) if multi_cta else None
+    cga_layout_c = make_2cta_cga_layout(ctas_per_cga, ctas_per_cga, cta_order, 0) if multi_cta else None
+    cga_layout_a = get_cga_layout(cga_layout_c, 0)
+    cga_layout_b = get_cga_layout(cga_layout_c, 1)
 
-    # Scale tensors have shape [1, REP_MN, REP_K, 2, 256] (5 dimensions)
-    # CGA layout basis vectors describe how indices change between CTAs
-    # A_scale: [0, 1, 0, 0, 0] split A scales along REP_M axis across CTAs
-    # B_scale: [0, 0, 0, 0, 0] duplicate (no split) B scales to all CTAs
-    cga_layout_a_scale = [[0, 1, 0, 0, 0]] if two_ctas else None
-    cga_layout_b_scale = [[0, 0, 0, 0, 0]] if two_ctas else None
+    # Scale CGA layouts derived from C layout:
+    # A scales project M (c[0]), B scales project N (c[1])
+    # CGA layouts are 5D (matching scale SMEM shape [1, REP_MN, REP_K, 2, 256])
+    # TMEM layouts are 2D (matching scale TMEM shape [BLOCK_MN, BLOCK_K // VEC_SIZE])
+    cga_layout_a_scale = [[0, c[0], 0, 0, 0] for c in cga_layout_c] if multi_cta else None
+    cga_layout_b_scale = [[0, c[1], 0, 0, 0] for c in cga_layout_c] if multi_cta else None
+    a_scale_layout_tmem = tuple((c[0], 0) for c in cga_layout_c) if multi_cta else ()
+    b_scale_layout_tmem = tuple((c[1], 0) for c in cga_layout_c) if multi_cta else ()
 
     A_desc = make_operand_descriptor(A, BLOCK_M, BLOCK_K, MIXED_PREC, cga_layout=cga_layout_a)
     B_desc = make_operand_descriptor(B, BLOCK_N, BLOCK_K, MIXED_PREC, cga_layout=cga_layout_b)
@@ -3685,27 +3711,28 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
     B_scale_desc = replace(B_scale_desc, layout=b_scale_layout)
 
     block_layout_c = ttgl.BlockedLayout([1, 8], [1, 32], warps_per_cta=warps, order=[1, 0],
-                                        cga_layout=cga_layout_c) if two_ctas else None
+                                        cga_layout=cga_layout_c) if multi_cta else None
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     mma_scaled_tcgen05_copy_kernel[grid](A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, VEC_SIZE, block_layout_c,
-                                         num_warps=num_warps, num_ctas=num_ctas, multicast=multicast)
+                                         a_scale_layout_tmem, b_scale_layout_tmem, ctas_per_cga, num_warps=num_warps,
+                                         num_ctas=num_ctas, multicast=multicast)
     return C_desc.base
 
 
 @pytest.mark.parametrize("M, N, K", [(2048, 2048, 4096)])
-@pytest.mark.parametrize("BLOCK_N", [128, 256])
 @pytest.mark.parametrize("BLOCK_K", [128, 256])
 @pytest.mark.parametrize("a_format, b_format", [
     ("mxfp8", "mxfp8"),
     ("nvfp4", "nvfp4"),
     ("mxfp8", "mxfp4"),
 ])
-@pytest.mark.parametrize("num_ctas", [1, 2])
+@pytest.mark.parametrize("ctas_per_cga", [(1, 1), (2, 1), (4, 1), (2, 2), (4, 2), (4, 4)])
 @pytest.mark.parametrize("multicast", [True, False])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_N, BLOCK_K, a_format, b_format, num_ctas, multicast):
-    BLOCK_M = 256 if num_ctas == 2 else 128
+def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, ctas_per_cga, multicast):
+    BLOCK_M = 128 * ctas_per_cga[0]
+    BLOCK_N = 128 * ctas_per_cga[1]
     torch.manual_seed(0)
     A, A_scale, A_ref = random_quantized_tensor(M, K, a_format)
     B, B_scale, B_ref = random_quantized_tensor(N, K, b_format)
@@ -3713,5 +3740,5 @@ def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_N, BLOCK_K, a_format, b_format, 
     A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
     B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
     C_ref = A_ref @ B_ref.T
-    C = mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, num_ctas, multicast)
+    C = mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast)
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)

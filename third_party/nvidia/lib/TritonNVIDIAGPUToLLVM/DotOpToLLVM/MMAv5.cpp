@@ -314,22 +314,10 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   PTXBuilder ptxBuilder;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value mask;
-  if (!descs.empty()) {
-    auto kBlock = StringAttr::get(rewriter.getContext(), "block");
-    for (Value desc : descs) {
-      auto descTy = cast<MemDescType>(desc.getType());
-      uint16_t broadcastBits =
-          toLinearLayout(descTy).getFreeVariableMasks().lookup(kBlock);
-      if (twoCTAs)
-        broadcastBits |= 1;
-      if (broadcastBits) {
-        Value descMask =
-            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBits);
-        mask = mask ? b.or_(descMask, mask) : descMask;
-      }
-    }
-  } else if (twoCTAs) {
-    mask = LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, 0x1);
+  for (uint16_t broadcastBits : ttng::getCTABroadcastMasks(twoCTAs, descs)) {
+    Value descMask =
+        LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBits);
+    mask = mask ? b.or_(descMask, mask) : descMask;
   }
 
   SmallVector<PTXBuilder::Operand *> ptxOperands;

@@ -8,6 +8,7 @@ namespace ttag = mlir::triton::amdgpu;
 namespace tti = mlir::triton::instrument;
 
 using tti::BarrierInitInfo;
+using tti::BarrierInvalidateInfo;
 using tti::BarrierWaitInfo;
 using tti::CommitKindDesc;
 using tti::MemEffectsOpInfo;
@@ -30,10 +31,6 @@ public:
     return kind == tti::CommitKind::TmaStore;
   }
 
-  bool isPostInstrumentedOp(Operation *op) const override {
-    return isa<ttag::WaitBarrierOp>(op);
-  }
-
   std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const override {
     if (auto initOp = dyn_cast<ttag::InitBarrierOp>(op))
@@ -46,6 +43,11 @@ public:
     if (auto waitOp = dyn_cast<ttag::WaitBarrierOp>(op))
       return BarrierWaitInfo{waitOp.getBarrier(), waitOp.getPhase(),
                              /*pred=*/Value()};
+    return std::nullopt;
+  }
+
+  std::optional<BarrierInvalidateInfo>
+  getBarrierInvalidateInfo(Operation *op) const override {
     return std::nullopt;
   }
 
@@ -76,6 +78,11 @@ public:
       return std::nullopt;
     }
     return std::nullopt;
+  }
+
+  Value getIssuerCTAPred(ImplicitLocOpBuilder & /*b*/,
+                         Operation * /*op*/) const override {
+    return nullptr;
   }
 
   std::optional<MemEffectsOpInfo>
