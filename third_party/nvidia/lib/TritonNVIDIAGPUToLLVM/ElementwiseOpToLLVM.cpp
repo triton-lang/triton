@@ -690,7 +690,7 @@ struct ClampFOpConversion
     //   %160 = tt.clamp %158, %cst_6, %cst_7
 
     auto getSplatInitializer = [](Value v) -> std::optional<double> {
-      DenseIntOrFPElementsAttr denseAttr;
+      DenseTypedElementsAttr denseAttr;
       if (matchPattern(v, m_Constant(&denseAttr))) {
         if (denseAttr.isSplat()) {
           return denseAttr.getSplatValue<APFloat>().convertToDouble();

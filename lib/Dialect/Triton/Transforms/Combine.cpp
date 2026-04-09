@@ -159,7 +159,7 @@ public:
     auto broadcastLhsShape =
         cast<ShapedType>(broadcastLhsOp.getType()).getShape();
     auto broadcastRhsShape =
-        cast<ShapedType>(broadcastLhsOp.getType()).getShape();
+        cast<ShapedType>(broadcastRhsOp.getType()).getShape();
     if (broadcastLhsShape[2] < 16 || broadcastRhsShape[0] < 16)
       return failure();
     Type newAccType = RankedTensorType::get(
@@ -172,7 +172,7 @@ public:
                                                   rewriter.getF32FloatAttr(0)));
     rewriter.replaceOpWithNewOp<DotOp>(op, expandLhsOp.getSrc(),
                                        expandRhsOp.getSrc(), newAcc,
-                                       InputPrecision::TF32, 0);
+                                       InputPrecision::IEEE, 0);
     return success();
   }
 };

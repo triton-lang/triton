@@ -21,10 +21,12 @@ foreach( plugin ${TRITON_PLUGIN_PASSES} )
     add_library(${plugin} SHARED ${${plugin}_SOURCES})
     add_dependencies(${plugin}
       TritonTableGen
+      TritonGPUTableGen
+      TritonNvidiaGPUTableGen
       TritonCanonicalizeIncGen
       TritonPluginsIncGen
     )
-    target_link_libraries(${plugin} PRIVATE MLIRPass)
+    target_link_libraries(${plugin} PRIVATE triton)
 
     # CMAKE_LIBRARY_OUTPUT_DIRECTORY is only set during the Python
     # build. It is empty if building directly from the root

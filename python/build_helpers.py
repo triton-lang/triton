@@ -2,6 +2,7 @@ import argparse
 import contextlib
 import json
 import os
+import io
 import platform
 import re
 import shutil
@@ -9,10 +10,10 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
+import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass
-from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
@@ -87,6 +88,112 @@ def open_url(url):
     request = urllib.request.Request(url, None, headers)
     # Set timeout to 300 seconds to prevent the request from hanging forever.
     return urllib.request.urlopen(request, timeout=300)
+
+
+def _format_byte_count(num_bytes: int) -> str:
+    units = ["KiB", "MiB", "GiB", "TiB"]
+    if num_bytes < 1024:
+        return f"{num_bytes}B"
+    value = float(num_bytes)
+    for unit in units:
+        value /= 1024
+        if value < 1024:
+            break
+    return f"{value:.1f}{unit}"
+
+
+class DownloadProgressReader:
+    """Wraps a urllib response object with a download progress bar"""
+
+    _BAR_WIDTH = 30
+    _UPDATE_PERIOD = 0.5  # seconds
+
+    def __init__(self, response, label: str):
+        self.response = response
+        self.label = label
+        self.total_bytes = self._get_total_bytes()
+        self.downloaded_bytes = 0
+        self._last_rendered = None
+        self._last_timestamp = 0
+        self._render()
+
+    def _get_total_bytes(self) -> Optional[int]:
+        content_length = self.response.headers.get("Content-Length")
+        if content_length is None:
+            return None
+        with contextlib.suppress(TypeError, ValueError):
+            return int(content_length)
+        return None
+
+    def _build_line(self) -> str:
+        if self.total_bytes and self.total_bytes > 0:
+            downloaded = min(self.downloaded_bytes, self.total_bytes)
+            percent = int(downloaded * 100 / self.total_bytes)
+            filled = int(self._BAR_WIDTH * (downloaded / self.total_bytes))
+            bar = "#" * filled + "-" * (self._BAR_WIDTH - filled)
+            return (f"\r{self.label}: [{bar}] {percent:3d}% "
+                    f"({_format_byte_count(downloaded)}/{_format_byte_count(self.total_bytes)})")
+        return f"\r{self.label}: {_format_byte_count(self.downloaded_bytes)}"
+
+    def _render(self):
+        timestamp = time.monotonic()
+        if (timestamp - self._last_timestamp) < self._UPDATE_PERIOD:
+            return
+        line = self._build_line()
+        if line == self._last_rendered:
+            return
+        print(line, end="", file=sys.stderr, flush=True)
+        self._last_rendered = line
+        self._last_timestamp = timestamp
+
+    def read(self, size=-1):
+        chunk = self.response.read(size)
+        if chunk:
+            self.downloaded_bytes += len(chunk)
+            self._render()
+        return chunk
+
+    def readinto(self, buffer):
+        bytes_read = self.response.readinto(buffer)
+        if bytes_read is None:
+            return None
+        if bytes_read > 0:
+            self.downloaded_bytes += bytes_read
+            self._render()
+        return bytes_read
+
+    def __getattr__(self, name):
+        return getattr(self.response, name)
+
+
+def _download_file(url: str, label: str):
+    file_bytes = io.BytesIO()
+    with open_url(url) as response:
+        progress_reader = DownloadProgressReader(response, label)
+        shutil.copyfileobj(progress_reader, file_bytes)
+    file_bytes.seek(0)
+    return file_bytes
+
+
+def _download_and_extract(url, download_dir, label):
+    label = f"downloading {label}"
+    os.makedirs(download_dir, exist_ok=True)
+    with contextlib.ExitStack() as stack:
+        if url.endswith(".zip"):
+            # unzip requires random access, so download the entire file
+            file_bytes = stack.enter_context(_download_file(url, label))
+            file = stack.enter_context(zipfile.ZipFile(file_bytes, "r"))
+            file.extractall(path=download_dir)
+        else:
+            # tar files can be streamed directly into untar
+            response = stack.enter_context(open_url(url))
+            progress_reader = DownloadProgressReader(response, label)
+            file = stack.enter_context(tarfile.open(fileobj=progress_reader, mode="r|*"))
+            # Use extractall without filter for Python version < 3.12 compatibility
+            if hasattr(tarfile, "data_filter"):
+                file.extractall(path=download_dir, filter="data")
+            else:
+                file.extractall(path=download_dir)
 
 
 def update_symlink(link_path, source_path):
@@ -206,20 +313,7 @@ def _get_thirdparty_package_cmake_vars(package: Package, helper_args: BuildHelpe
     if not helper_args.offline_build and not input_defined and not input_compatible:
         with contextlib.suppress(Exception):
             shutil.rmtree(package_root_dir)
-        os.makedirs(package_root_dir, exist_ok=True)
-        print(f"downloading and extracting {package.url} ...")
-        with open_url(package.url) as response:
-            if package.url.endswith(".zip"):
-                file_bytes = BytesIO(response.read())
-                with zipfile.ZipFile(file_bytes, "r") as file:
-                    file.extractall(path=package_root_dir)
-            else:
-                with tarfile.open(fileobj=response, mode="r|*") as file:
-                    # Use extractall without filter for Python version < 3.12 compatibility
-                    if hasattr(tarfile, "data_filter"):
-                        file.extractall(path=package_root_dir, filter="data")
-                    else:
-                        file.extractall(path=package_root_dir)
+        _download_and_extract(package.url, package_root_dir, package.name)
         # write version url to package_dir
         with open(os.path.join(package_dir, "version.txt"), "w") as file:
             file.write(package.url)
@@ -295,13 +389,7 @@ def download_and_copy(name, src_func, dst_path, override_path, version, url_func
         assert curr_version is not None, f"No version information for {dst_path}"
         download = download or curr_version.group(1) != version
     if download:
-        print(f"downloading and extracting {url} ...")
-        with open_url(url) as url_file, tarfile.open(fileobj=url_file, mode="r|*") as tar_file:
-            # Use extractall without filter for Python version < 3.12 compatibility
-            if hasattr(tarfile, "data_filter"):
-                tar_file.extractall(path=tmp_path, filter="data")
-            else:
-                tar_file.extractall(path=tmp_path)
+        _download_and_extract(url, tmp_path, name)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f"copy {src_path} to {dst_path} ...")
     if os.path.isdir(src_path):

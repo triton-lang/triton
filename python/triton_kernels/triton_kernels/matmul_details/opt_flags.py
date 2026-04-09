@@ -190,6 +190,8 @@ def make_default_opt_flags_nvidia(
     x_transpose,
     has_y_acc_in,
     constraints,
+    x_uses_tma_when_persistent=True,
+    mx_block_size=None,
 ):
     constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps"}
     unsupported = set(constraints.keys()) - constraints_supported
@@ -248,6 +250,8 @@ def make_default_opt_flags_nvidia(
 
     requires_persistent = (not _is_layout_strided(a_mx_scale_layout) or not _is_layout_strided(b_mx_scale_layout)) and target_info.has_native_mxfp()
     if constraints.get("is_persistent", None) is not None:
+        if requires_persistent and not constraints["is_persistent"]:
+            raise InapplicableConstraint("cannot enforce `is_persistent=False` constraint because persistent kernel is required")
         is_persistent = constraints["is_persistent"]
     elif requires_persistent:
         assert supports_persistent, "persistent kernel required but not supported"
@@ -264,6 +268,13 @@ def make_default_opt_flags_nvidia(
 
     # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
+    if (is_persistent and constraints.get("block_n", None) is None
+            and cuda_capability_geq(10, 0) and (lhs_dtype == FP32 or rhs_dtype == FP32)
+            and not x_uses_tma_when_persistent):
+        # Blackwell's fp32/tf32 persistent dot stages an operand in TMEM in
+        # addition to the accumulator. A 128x256 accumulator already consumes
+        # the full 512-column TMEM budget, so leave headroom for that operand.
+        block_n = min(block_n, 128)
     # adjust block_m based on is_persistent signal
     if is_persistent and opt_flags_nvidia.is_x_scale_swizzled(precision_config):
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
@@ -297,6 +308,7 @@ def make_default_opt_flags_nvidia(
         x_transpose,
         epilogue_effective_itemsize,
         has_y_acc_in,
+        mx_block_size,
     )
 
     num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
@@ -399,6 +411,8 @@ def make_opt_flags(
     x_transpose,
     has_y_acc_in,
     block_k,
+    mx_block_size=None,
+    x_uses_tma_when_persistent=True,
 ):
     if _opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
@@ -424,5 +438,9 @@ def make_opt_flags(
     if backend == "hip":
         return make_default_opt_flags_amd(*args)
     if backend == "cuda":
-        return make_default_opt_flags_nvidia(*args)
+        return make_default_opt_flags_nvidia(
+            *args,
+            x_uses_tma_when_persistent=x_uses_tma_when_persistent,
+            mx_block_size=mx_block_size,
+        )
     assert False

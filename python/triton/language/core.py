@@ -95,6 +95,7 @@ def _tensor_member_fn(fn: T) -> T:
 
 def _unwrap_iterable(x):
     """Returns x[0] if x has one element and x[0] is iterable."""
+    x = _unwrap_if_constexpr(x)
     if len(x) == 1:
         # Determine whether x[0] is iterable.
         #

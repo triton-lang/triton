@@ -35,6 +35,7 @@ def test_device_assert(monkeypatch, cond, mask, opt_flag, env_var, jit_flag, dev
     getattr(torch, device).synchronize()
 
 
+@pytest.mark.forked
 def test_device_assert_barrier(monkeypatch, device):
     monkeypatch.setenv("TRITON_DEBUG", "1")
     triton.knobs.refresh_knobs()

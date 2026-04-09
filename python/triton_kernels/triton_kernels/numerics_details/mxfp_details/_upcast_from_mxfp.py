@@ -1,7 +1,7 @@
 import triton
 import triton.language as tl
 
-from ._downcast_to_mxfp import MXFP_BLOCK_SIZE
+from ._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
 
 
@@ -17,9 +17,11 @@ def _upcast_from_mxfp(
     quant_dim,
     BLOCK_SIZE_OUT_DIM: tl.constexpr,
     BLOCK_SIZE_QUANT_DIM: tl.constexpr,
+    MX_BLOCK_SIZE: tl.constexpr,
 ):
 
-    tl.static_assert(BLOCK_SIZE_QUANT_DIM % MXFP_BLOCK_SIZE == 0, f"Block size along quantization block must be a multiple of {MXFP_BLOCK_SIZE=}")
+    tl.static_assert(MX_BLOCK_SIZE == MXFP_BLOCK_SIZE or MX_BLOCK_SIZE == NVFP_BLOCK_SIZE)
+    tl.static_assert(BLOCK_SIZE_QUANT_DIM % MX_BLOCK_SIZE == 0, f"Block size along quantization block must be a multiple of {MX_BLOCK_SIZE=}")
     # uint8 signifies two fp4 e2m1 values packed into a single byte
     mx_tensor_dtype: tl.constexpr = mx_tensor_desc.dtype
     dst_dtype: tl.constexpr = out_desc.dtype
@@ -28,13 +30,17 @@ def _upcast_from_mxfp(
         mx_tensor_dtype == tl.uint8
         or ((mx_tensor_dtype == tl.float8e4nv or mx_tensor_dtype == tl.float8e5) or mx_tensor_dtype == dst_dtype),
         "mx_tensor_ptr must be uint8 or float8 or dst_dtype")
-    tl.static_assert(mx_scale_ptr.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
+    tl.static_assert(
+        mx_scale_ptr.dtype.element_ty == tl.uint8 or mx_scale_ptr.dtype.element_ty == tl.float8e4nv,
+        "mx_scale_ptr must be uint8 or float8e4nv",
+    )
 
     # Determine if we are dealing with fp8 types.
     is_fp4: tl.constexpr = mx_tensor_dtype == tl.uint8
     is_fp8: tl.constexpr = mx_tensor_dtype == tl.float8e4nv or mx_tensor_dtype == tl.float8e5
+    scale_is_ocp: tl.constexpr = mx_scale_ptr.dtype.element_ty == tl.uint8
     K_DIVISOR: tl.constexpr = 2 if is_fp4 else 1
-    BLOCK_SIZE_QUANT_MX_SCALE: tl.constexpr = BLOCK_SIZE_QUANT_DIM // MXFP_BLOCK_SIZE
+    BLOCK_SIZE_QUANT_MX_SCALE: tl.constexpr = BLOCK_SIZE_QUANT_DIM // MX_BLOCK_SIZE
     BLOCK_SIZE_QUANT_MX_TENSOR: tl.constexpr = BLOCK_SIZE_QUANT_DIM // K_DIVISOR
 
     # Compute starting indices for the quantized (packed) dimension and the outer dimension.
@@ -52,19 +58,21 @@ def _upcast_from_mxfp(
     offs_outer = tl.arange(0, BLOCK_SIZE_OUT_DIM)[:, None].to(tl.int64)
     offs_scale = tl.arange(0, BLOCK_SIZE_QUANT_MX_SCALE)[None, :].to(tl.int64)
     mask_outer = start_out + offs_outer < outer_dim
-    mask_scale = start_mx_scale_quant + offs_scale < tl.cdiv(quant_dim, MXFP_BLOCK_SIZE)
+    mask_scale = start_mx_scale_quant + offs_scale < tl.cdiv(quant_dim, MX_BLOCK_SIZE)
     full_scale_mask = mask_scale & mask_outer
     scale_offsets = offs_scale * stride_scale_quant + offs_outer * stride_scale_outer
     scale_ptr_base = mx_scale_ptr + start_out * stride_scale_outer + start_mx_scale_quant * stride_scale_quant
     scale = tl.load(scale_ptr_base + scale_offsets, mask=full_scale_mask)
 
     # Upcast the scale to the destination type.
-    if dst_dtype == tl.bfloat16:
+    if scale_is_ocp and dst_dtype == tl.bfloat16:
         dst_scale = (scale.to(tl.uint16) << 7).to(dst_dtype, bitcast=True)
-    else:
+    elif scale_is_ocp:
         dst_scale = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
         if dst_dtype == tl.float16:
             dst_scale = dst_scale.to(tl.float16)
+    else:
+        dst_scale = scale.to(dst_dtype)
 
     # Now upcast the tensor.
     intermediate_dtype: tl.constexpr = tl.bfloat16 if dst_dtype == tl.float32 else dst_dtype
@@ -138,8 +146,8 @@ def _upcast_from_mxfp(
 
     dst_tensor = dst_tensor.to(dst_dtype)
 
-    # Reshape for proper broadcasting: the scale was stored with a 32‐sized “inner” grouping.
-    dst_tensor = dst_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE, MXFP_BLOCK_SIZE])
+    # Reshape for proper broadcasting over the microscale block.
+    dst_tensor = dst_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE, MX_BLOCK_SIZE])
     dst_scale = dst_scale.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE, 1])
     scale = scale.reshape(dst_scale.shape)
 
@@ -154,7 +162,8 @@ def _upcast_from_mxfp(
     # TODO: handle infinity same as upcast_from_mxfp_torch together with the
     # above FIXME
     out_tensor = tl.clamp(out_tensor, min=-max_fin, max=max_fin)
-    # Correct any NaNs encoded via the scale.
-    out_tensor = tl.where(scale == 0xFF, float("nan"), out_tensor)
+    # Correct any NaNs encoded via OCP E8M0 scales.
+    if scale_is_ocp:
+        out_tensor = tl.where(scale == 0xFF, float("nan"), out_tensor)
     out_tensor = out_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_DIM])
     out_desc.store([start_out.to(tl.int32), start_out_quant.to(tl.int32)], out_tensor)

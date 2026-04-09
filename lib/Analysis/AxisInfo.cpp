@@ -134,43 +134,6 @@ protected:
   }
 };
 
-class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
-                             dataflow::Lattice<AxisInfo>> {
-private:
-  AxisInfoVisitorList visitors;
-
-  void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override {
-    propagateIfChanged(
-        lattice, lattice->join(
-                     AxisInfo::getPessimisticValueState(lattice->getAnchor())));
-  }
-
-  void visitNonControlFlowArguments(
-      Operation *op, const RegionSuccessor & /*successor*/,
-      ValueRange /*nonSuccessorInputs*/,
-      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) override {
-    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      visitForOpInductionVar(forOp, argLattices);
-    } else {
-      setAllToEntryStates(argLattices);
-    }
-  }
-
-public:
-  AxisInfoAnalysis(DataFlowSolver &solver,
-                   axisinfo::CallbackType callback = nullptr);
-  using dataflow::SparseForwardDataFlowAnalysis<
-      dataflow::Lattice<AxisInfo>>::getLatticeElement;
-
-  LogicalResult
-  visitOperation(Operation *op,
-                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
-                 ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
-  void
-  visitForOpInductionVar(scf::ForOp op,
-                         ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
-};
-
 template <typename OpTy>
 class CastOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
 public:
@@ -1192,12 +1155,13 @@ public:
   }
 };
 
+} // anonymous namespace
+
 //===----------------------------------------------------------------------===//
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
 
-AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
-                                   axisinfo::CallbackType callback)
+AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
     : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
           solver) {
   // UnrealizedConversionCast:
@@ -1239,9 +1203,22 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
   visitors.append<TransOpAxisInfoVisitor>();
+}
 
-  if (callback)
-    callback(visitors);
+void AxisInfoAnalysis::setToEntryState(dataflow::Lattice<AxisInfo> *lattice) {
+  propagateIfChanged(lattice, lattice->join(AxisInfo::getPessimisticValueState(
+                                  lattice->getAnchor())));
+}
+
+void AxisInfoAnalysis::visitNonControlFlowArguments(
+    Operation *op, const RegionSuccessor & /*successor*/,
+    ValueRange /*nonSuccessorInputs*/,
+    ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
+  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+    visitForOpInductionVar(forOp, argLattices);
+  } else {
+    setAllToEntryStates(argLattices);
+  }
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
@@ -1294,8 +1271,6 @@ void AxisInfoAnalysis::visitForOpInductionVar(
       AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   (void)argLattices[0]->join(inductionVar);
 }
-
-} // anonymous namespace
 
 void AxisInfo::initPessimisticStateFromFunc(int argNumber,
                                             FunctionOpInterface funcOp,
@@ -1379,6 +1354,11 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
       lhs.getConstantValue() == rhs.getConstantValue())
     constantValue = lhs.getConstantValue();
   return AxisInfo(contiguity, divisibility, constancy, constantValue);
+}
+
+AxisInfoAnalysis *
+AxisInfoAnalysis::loadDefaultAnalysis(DataFlowSolver *solver) {
+  return solver->load<AxisInfoAnalysis>();
 }
 
 unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
@@ -1478,10 +1458,10 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
-void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
-                                        axisinfo::CallbackType callback) {
+void ModuleAxisInfoAnalysis::initialize(
+    FunctionOpInterface funcOp, AxisInfoAnalysis::LoadCallback loadAnalysis) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>(callback);
+  AxisInfoAnalysis *analysis = loadAnalysis(solver.get());
   if (failed(solver->initializeAndRun(funcOp)))
     return;
 

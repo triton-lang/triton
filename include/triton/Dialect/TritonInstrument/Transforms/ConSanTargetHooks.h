@@ -12,6 +12,12 @@
 namespace mlir::triton::instrument {
 
 struct MemEffectsOpInfo {
+  // Frontier: snapshot thread-visible frontier into barrier tracking.
+  // EffectWrites: track only buffers written by op effects.
+  enum class BarrierTrackingMode {
+    Frontier,
+    EffectWrites,
+  };
   struct Effects {
     enum RW { Read, Write } rw;
     Value buf;
@@ -26,6 +32,8 @@ struct MemEffectsOpInfo {
     Value barrier;
     Value pred;
     int count;
+    BarrierTrackingMode trackingMode = BarrierTrackingMode::Frontier;
+    int txCount = 0;
   };
   enum class TrackingKind {
     None,
@@ -53,10 +61,20 @@ struct BarrierWaitInfo {
   Value pred;
 };
 
+struct BarrierInvalidateInfo {
+  Value alloc;
+};
+
 struct WaitOpInfo {
   CommitKind::Kind commitKind;
   int pendingCount;
   bool transferWrites;
+  bool transferReads;
+};
+
+struct CommitKindDesc {
+  CommitKind::Kind kind;
+  std::string operationDesc;
 };
 
 class ConSanTargetHooks {
@@ -64,7 +82,6 @@ public:
   virtual ~ConSanTargetHooks() = default;
 
   virtual bool isTMAOp(Operation *op) const = 0;
-  virtual bool isPostInstrumentedOp(Operation *op) const = 0;
 
   virtual std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const = 0;
@@ -72,7 +89,13 @@ public:
   virtual std::optional<BarrierWaitInfo>
   getBarrierWaitInfo(Operation *op) const = 0;
 
+  virtual std::optional<BarrierInvalidateInfo>
+  getBarrierInvalidateInfo(Operation *op) const = 0;
+
   virtual std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const = 0;
+
+  virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
+                                 Operation *op) const = 0;
 
   virtual std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const {
@@ -106,6 +129,29 @@ public:
       }
     }
     return info;
+  }
+
+  // Returns commit kinds used by addWriteChecks to detect outstanding
+  // write accesses to shared memory.
+  virtual SmallVector<CommitKindDesc> getOutstandingWriteCommitKinds() const {
+    return {{CommitKind::AsyncCp, "async_copy_global_to_shared"}};
+  }
+
+  // Returns commit kinds used by addReadChecks to detect outstanding
+  // read accesses to shared memory.
+  virtual SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const {
+    return {};
+  }
+
+  // Returns true for commit kinds whose ops complete in issue order within a
+  // warp. ConSan's thread model tracks one logical
+  // thread per WS partition, so it cannot distinguish intra-warp ordering from
+  // cross-warp races inside the same partition. For such kinds, the
+  // outstanding-commit check excludes the calling thread's own column, avoiding
+  // intra-partition false positives while still detecting cross-partition
+  // races.
+  virtual bool isOrderedCommitKind(CommitKind::Kind kind) const {
+    return false;
   }
 
   virtual SmallVector<CommitKind::Kind>

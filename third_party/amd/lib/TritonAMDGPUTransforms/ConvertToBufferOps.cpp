@@ -26,7 +26,6 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using ::mlir::LLVM::AMD::getVectorSize;
-using mlir::triton::AMD::ISAFamily;
 
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
@@ -302,11 +301,11 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       mlir::MLIRContext *context,
       DenseMap<Value, SetVector<Operation *>> &assumptions,
       ModuleAxisInfoAnalysis &axisAnalysisPass,
-      std::shared_ptr<DataFlowSolver> solver, ISAFamily isaFamily,
-      bool analyzeSmallTensorOfst_)
+      std::shared_ptr<DataFlowSolver> solver,
+      const triton::AMD::TargetInfo &targetInfo, bool analyzeSmallTensorOfst_)
       : mlir::OpRewritePattern<triton::AtomicRMWOp>(context),
         assumptions(assumptions), axisAnalysisPass(axisAnalysisPass),
-        solver(std::move(solver)), isaFamily(isaFamily),
+        solver(std::move(solver)), targetInfo(targetInfo),
         analyzeSmallTensorOfst(analyzeSmallTensorOfst_) {}
 
   mlir::LogicalResult
@@ -366,17 +365,12 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
     LDBG("RMW supported type");
 
-    // float16 is the only 16-bit dtype supported by buffer atomic fadd on
-    // gfx942
-    if (isaFamily == ISAFamily::CDNA3 && checkType.isBF16() &&
-        atomicRmwOp == RMWOp::FADD) {
-      return rewriter.notifyMatchFailure(op, "RMW FADD does not support bf16");
+    if (atomicRmwOp == RMWOp::FADD &&
+        !targetInfo.supportsBufferAtomicFadd(checkType)) {
+      return rewriter.notifyMatchFailure(
+          op, "RMW FADD unsupported for this type on target");
     }
-    if (isaFamily == ISAFamily::RDNA4 && checkType.isF64() &&
-        atomicRmwOp == RMWOp::FADD) {
-      return rewriter.notifyMatchFailure(op, "RMW FADD does not support F64");
-    }
-    LDBG("RMW FADD supported 16-bit type");
+    LDBG("RMW FADD supported type");
 
     auto vecSize = getVectorSize(ptr, axisAnalysisPass);
     if (auto mask = op.getMask()) {
@@ -451,7 +445,7 @@ private:
   DenseMap<Value, SetVector<Operation *>> assumptions;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
   std::shared_ptr<DataFlowSolver> solver;
-  ISAFamily isaFamily;
+  triton::AMD::TargetInfo targetInfo;
   bool analyzeSmallTensorOfst;
 };
 
@@ -596,8 +590,7 @@ struct TritonAMDGPUConvertToBufferOpsPass
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp mod = getOperation();
-    auto arch = getAMDArch(mod);
-    triton::AMD::TargetInfo targetInfo(arch ? arch->str() : "");
+    triton::AMD::TargetInfo targetInfo(archGenerationName);
 
     // Collect assumptions in the function
     DenseMap<Value, SetVector<Operation *>> assumptions =
@@ -623,16 +616,9 @@ struct TritonAMDGPUConvertToBufferOpsPass
               this->analyzeSmallTensorOfst);
     }
 
-    // Gate buffer atomics behind CDNA3 for now
-    // GFX942-specific assumptions regarding cache coherence are made when
-    // lowering to LLVM
-    triton::AMD::ISAFamily isaFamily =
-        triton::AMD::deduceISAFamily(archGenerationName);
-    if (this->allowBufferAtomics &&
-        (ISAFamily::CDNA3 == isaFamily || ISAFamily::CDNA4 == isaFamily ||
-         ISAFamily::RDNA4 == isaFamily))
+    if (this->allowBufferAtomics && targetInfo.supportsBufferAtomicRMW())
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
-          context, assumptions, axisInfoAnalysis, solver, isaFamily,
+          context, assumptions, axisInfoAnalysis, solver, targetInfo,
           this->analyzeSmallTensorOfst);
     patterns.add<ConvertTritonAtomicCASOpToBufferAtomicCAS>(
         context, assumptions, axisInfoAnalysis, solver,

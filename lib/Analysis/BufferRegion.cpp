@@ -42,7 +42,7 @@ unsigned getMemDescSize(ttg::MemDescType ty) {
   assert(isa<ttg::SharedMemorySpaceAttr>(ty.getMemorySpace()) &&
          "Unsupported memory space");
   unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
-  return product(ty.getShape()) * elSize;
+  return product(ttg::getShapePerCTA(ty)) * elSize;
 }
 
 unsigned getAllocSize(ttg::LocalAllocOp op) {
@@ -60,31 +60,11 @@ unsigned getNumBuffers(ttg::MemDescIndexOp memdescIndexOp) {
 }
 
 llvm::DenseSet<Value> getBarrierOperands(Operation *op) {
-  if (auto initBarrierOp = dyn_cast<ttng::InitBarrierOp>(op)) {
-    return {initBarrierOp.getOperand()};
+  if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op)) {
+    auto barriers = barrierOp.getBarriers();
+    return llvm::DenseSet<Value>(barriers.begin(), barriers.end());
   }
-  if (auto waitBarrierOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
-    return {waitBarrierOp.getAlloc()};
-  }
-  if (auto arriveBarrierOp = dyn_cast<ttng::ArriveBarrierOp>(op)) {
-    return {arriveBarrierOp.getAlloc()};
-  }
-  if (auto barrierExpectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
-    return {barrierExpectOp.getAlloc()};
-  }
-  if (auto invalBarrierOp = dyn_cast<ttng::InvalBarrierOp>(op)) {
-    return {invalBarrierOp.getAlloc()};
-  }
-  if (auto asyncOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-    return {asyncOp.getBarrier()};
-  }
-  if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
-    return {gatherOp.getBarrier()};
-  }
-  if (auto mmaV5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-    return llvm::DenseSet<Value>(mmaV5Op.getCompletionBarriers().begin(),
-                                 mmaV5Op.getCompletionBarriers().end());
-  }
+
   return llvm::DenseSet<Value>{};
 }
 
@@ -133,11 +113,12 @@ uint32_t getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
   }
 
   StringAttr offsetDim = StringAttr::get(ctx, "offset");
-  layout = layout.sublayout({offsetDim}, dimNames);
+  StringAttr blockDim = StringAttr::get(ctx, "block");
   mlir::triton::LinearLayout inverse = layout.invert();
   auto mapped = inverse.apply(logicalOffsets);
-  assert(mapped.size() == 1 && mapped[0].first == offsetDim &&
-         "expected single offset dimension after inversion");
+  assert(mapped.size() == 2 && mapped[0].first == offsetDim &&
+         mapped[1].first == blockDim && mapped[1].second == 0 &&
+         "expected offset and zero block dimensions after inversion");
   uint64_t elementOffset = static_cast<uint32_t>(mapped[0].second);
 
   uint64_t elementSizeBytes =
@@ -331,10 +312,10 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
 bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttng::TMEMLoadOp,
           ttng::TMEMStoreOp, ttg::AsyncCopyGlobalToLocalOp,
-          ttng::AsyncTMACopyGlobalToLocalOp, ttng::AsyncTMACopyLocalToGlobalOp,
-          ttng::AsyncTMAGatherOp, ttng::AsyncTMAScatterOp, ttng::InitBarrierOp,
-          ttng::BarrierExpectOp, ttng::InvalBarrierOp, ttng::WaitBarrierOp,
-          ttng::ArriveBarrierOp>(op)) {
+          ttng::AsyncTMACopyLocalToGlobalOp, ttng::AsyncTMAScatterOp>(op)) {
+    return true;
+  }
+  if (isa<ttg::MBarrierOpInterface>(op)) {
     return true;
   }
   // Allocations with operands write to the memory.
