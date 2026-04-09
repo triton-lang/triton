@@ -22,14 +22,17 @@ namespace {
 // reshape/transpose chain, hoists local_alloc to the base tensor feeding that
 // view chain, and replays those tensor views as memdesc reshape/transpose
 // ops so the original local_alloc type is preserved.
-template <typename DotOpTy>
 class RewriteMmaOperandViewsToMemDescForDotOp
-    : public OpRewritePattern<DotOpTy> {
+    : public OpInterfaceRewritePattern<triton::DotOpInterface> {
 public:
-  using OpRewritePattern<DotOpTy>::OpRewritePattern;
+  using OpInterfaceRewritePattern<
+      triton::DotOpInterface>::OpInterfaceRewritePattern;
 
-  LogicalResult matchAndRewrite(DotOpTy dotOp,
+  LogicalResult matchAndRewrite(triton::DotOpInterface dotOp,
                                 PatternRewriter &rewriter) const override {
+    if (!isa<TCGen5MMAOp, TCGen5MMAScaledOp, WarpGroupDotOp>(dotOp))
+      return failure();
+
     bool changed = false;
 
     if (rewriteOperand(dotOp.getA(), rewriter).succeeded())
@@ -150,10 +153,7 @@ public:
 
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns.add<RewriteMmaOperandViewsToMemDescForDotOp<TCGen5MMAOp>,
-                 RewriteMmaOperandViewsToMemDescForDotOp<TCGen5MMAScaledOp>,
-                 RewriteMmaOperandViewsToMemDescForDotOp<WarpGroupDotOp>>(
-        &getContext());
+    patterns.add<RewriteMmaOperandViewsToMemDescForDotOp>(&getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
   }
