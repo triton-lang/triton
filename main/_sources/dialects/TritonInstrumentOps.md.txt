@@ -84,7 +84,7 @@ slabs. For single-CTA kernels this is always zero.
 
 Traits: `AlwaysSpeculatableImplTrait`
 
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 
@@ -93,6 +93,81 @@ Effects: `MemoryEffects::Effect{}`
 | Result | Description |
 | :----: | ----------- |
 | `result` | 32-bit signless integer |
+
+
+
+### `tti.experimental_gsan_atomic_cas` (triton::instrument::ExperimentalGSanAtomicCASOp)
+
+_Lower a GSan-instrumented atomic cas_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_gsan_atomic_cas` $sem `,` $scope `,` $ptr `,` $cmp `,` $val attr-dict `:`
+              functional-type(operands, $result)
+```
+
+Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>sem</code></td><td>::mlir::triton::MemSemanticAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `ptr` | ptr or ranked tensor of ptr values |
+| `cmp` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `val` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+
+
+
+### `tti.experimental_gsan_atomic_rmw` (triton::instrument::ExperimentalGSanAtomicRMWOp)
+
+_Lower a GSan-instrumented atomic rmw_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_gsan_atomic_rmw` $atomic_rmw_op `,` $sem `,` $scope `,` $ptr `,` $val (`,` $mask^)? attr-dict `:`
+              functional-type(operands, $result)
+```
+
+Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>atomic_rmw_op</code></td><td>::mlir::triton::RMWOpAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10</td></tr>
+<tr><td><code>sem</code></td><td>::mlir::triton::MemSemanticAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `ptr` | ptr or ranked tensor of ptr values |
+| `val` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
 
 
 
@@ -234,7 +309,7 @@ pointers maintained by the concurrency sanitizer.
 
 Traits: `AlwaysSpeculatableImplTrait`
 
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 
