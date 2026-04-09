@@ -1102,9 +1102,11 @@ void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
 }
 
 //-- IntToPtrOp --
-// Canonicalize: int_to_ptr(addi(ptr_to_int(ptr), constant_offset)) -> addptr(ptr, element_offset)
-// Only when offset is constant and divisible by element size.
-struct CanonicalizeIntToPtrWithConstantOffset : public OpRewritePattern<IntToPtrOp> {
+// Canonicalize: int_to_ptr(addi(ptr_to_int(ptr), constant_offset)) ->
+// addptr(ptr, element_offset) Only when offset is constant and divisible by
+// element size.
+struct CanonicalizeIntToPtrWithConstantOffset
+    : public OpRewritePattern<IntToPtrOp> {
   CanonicalizeIntToPtrWithConstantOffset(MLIRContext *context)
       : OpRewritePattern<IntToPtrOp>(context, 1) {}
 
@@ -1133,7 +1135,8 @@ struct CanonicalizeIntToPtrWithConstantOffset : public OpRewritePattern<IntToPtr
     Value originalPtr = ptrToIntOp.getSrc();
 
     // Get the element size from the pointer type
-    auto ptrType = cast<PointerType>(getElementTypeOrSelf(originalPtr.getType()));
+    auto ptrType =
+        cast<PointerType>(getElementTypeOrSelf(originalPtr.getType()));
     int64_t elemSizeBits = triton::getPointeeBitWidth(ptrType);
     int64_t elemSizeBytes = std::max<int64_t>(1, elemSizeBits / 8);
 
@@ -1143,8 +1146,10 @@ struct CanonicalizeIntToPtrWithConstantOffset : public OpRewritePattern<IntToPtr
     if (auto constOp = offsetValue.getDefiningOp<arith::ConstantOp>()) {
       if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
         constantByteOffset = intAttr.getValue().getSExtValue();
-      } else if (auto splatAttr = dyn_cast<SplatElementsAttr>(constOp.getValue())) {
-        constantByteOffset = splatAttr.getSplatValue<IntegerAttr>().getValue().getSExtValue();
+      } else if (auto splatAttr =
+                     dyn_cast<SplatElementsAttr>(constOp.getValue())) {
+        constantByteOffset =
+            splatAttr.getSplatValue<IntegerAttr>().getValue().getSExtValue();
       }
     }
 
@@ -1167,7 +1172,8 @@ struct CanonicalizeIntToPtrWithConstantOffset : public OpRewritePattern<IntToPtr
       // Create a splat constant for tensor types
       auto i32Type = rewriter.getI32Type();
       auto offsetAttr = rewriter.getI32IntegerAttr(elementOffset);
-      auto splatType = RankedTensorType::get(tensorType.getShape(), i32Type, tensorType.getEncoding());
+      auto splatType = RankedTensorType::get(tensorType.getShape(), i32Type,
+                                             tensorType.getEncoding());
       auto splatAttr = SplatElementsAttr::get(splatType, offsetAttr);
       elementOffsetValue = arith::ConstantOp::create(rewriter, loc, splatAttr);
     } else {
@@ -1177,13 +1183,14 @@ struct CanonicalizeIntToPtrWithConstantOffset : public OpRewritePattern<IntToPtr
     }
 
     // Replace with addptr
-    rewriter.replaceOpWithNewOp<AddPtrOp>(intToPtrOp, resultType, originalPtr, elementOffsetValue);
+    rewriter.replaceOpWithNewOp<AddPtrOp>(intToPtrOp, resultType, originalPtr,
+                                          elementOffsetValue);
     return success();
   }
 };
 
 void IntToPtrOp::getCanonicalizationPatterns(RewritePatternSet &results,
-                                              MLIRContext *context) {
+                                             MLIRContext *context) {
   results.add<CanonicalizeIntToPtrWithConstantOffset>(context);
 }
 
