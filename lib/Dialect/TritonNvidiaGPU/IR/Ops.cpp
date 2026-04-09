@@ -376,9 +376,13 @@ static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
       memDescType.getShape() != allocShape.take_back(2))
     return op->emitOpError("memdesc shape must match alloc shape");
 
-  auto msgToShared = getTMAGatherScatterMsgToSharedLayout(
-      cast<RankedTensorType>(indicesType), memDescType);
-  return verifyTMAMsgToSharedHasLocalOffsets(op, msgToShared);
+  auto xOffsetsType = cast<RankedTensorType>(indicesType);
+  if (xOffsetsType.getEncoding()) {
+    auto msgToShared =
+        getTMAGatherScatterMsgToSharedLayout(xOffsetsType, memDescType);
+    return verifyTMAMsgToSharedHasLocalOffsets(op, msgToShared);
+  }
+  return success();
 }
 
 // Helper to determine if the descriptor type is for im2col mode
@@ -535,8 +539,8 @@ LogicalResult AsyncTMAGatherOp::verify() {
   if (getMulticast()) {
     if (failed(verifyTMAMulticastLayout(*this, resultType)))
       return failure();
-    if (auto xOffsetsEncoding =
-            dyn_cast<LayoutEncodingTrait>(xOffsetsType.getEncoding())) {
+    if (auto xOffsetsEncoding = dyn_cast_if_present<LayoutEncodingTrait>(
+            xOffsetsType.getEncoding())) {
       auto resultCGA = getCGALayout(resultType.getEncoding()).getLinearLayout();
       auto xOffsetsCGA = getCGALayout(xOffsetsEncoding).getLinearLayout();
       // AA^{-1}B = B, where A^{-1} is the pseudoinverse of A
