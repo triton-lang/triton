@@ -1004,11 +1004,6 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
     "triton::PaddingOption":$padding)>
   ];
 
-  let extraClassDeclaration = [{
-    ArrayRef<int64_t> getTensorShape() {
-      return getType().getBlockType().getShape();
-    }
-  }];
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and modified from
