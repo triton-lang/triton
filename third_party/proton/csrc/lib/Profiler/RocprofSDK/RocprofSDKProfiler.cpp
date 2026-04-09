@@ -54,6 +54,7 @@ namespace {
 constexpr size_t BufferSize = 64 * 1024 * 1024;
 constexpr const char *UnknownKernelName = "<unknown>";
 
+// Forward-declare so the runtime state can hold a typed pointer.
 struct RocprofSDKProfilerPimpl;
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
@@ -111,8 +112,6 @@ using RoctxTracerCallbackFn = int (*)(uint32_t domain, uint32_t operationId,
                                       void *data);
 using RoctxRegisterTracerCallbackFn = void (*)(RoctxTracerCallbackFn);
 
-// registerRoctxCallback is defined after the Pimpl class (needs access to
-// the static roctxCallback member).
 void registerRoctxCallback(bool enable);
 
 // ---- Agent (GPU) ID mapping ----
@@ -694,6 +693,8 @@ void tryBindGraphExecState(RocprofSDKProfiler::RocprofSDKProfilerPimpl *impl,
 #endif
 
 // ---- HIP Runtime API callback (correlation tracking) ----
+// Accesses the profiler via threadState (like CUPTI), safe because this
+// callback only fires after the singleton is fully constructed.
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleStreamCaptureBegin() {
@@ -809,6 +810,17 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleSuccessfulRuntimeExit(
       impl->graphExecToGraph[*graphExecPtr] = graph;
       tryBindGraphExecState(impl, *graphExecPtr);
     }
+    break;
+  }
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphExecDestroy: {
+    auto graphExec = payload->args.hipGraphExecDestroy.graphExec;
+    impl->graphExecToGraph.erase(graphExec);
+    impl->graphExecToGraphExecId.erase(graphExec);
+    break;
+  }
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphDestroy: {
+    auto graph = payload->args.hipGraphDestroy.graph;
+    impl->graphToState.erase(graph);
     break;
   }
   default:
@@ -1022,6 +1034,10 @@ void registerRoctxCallback(bool enable) {
   // callback registration entry point, but resolving it from the library handle
   // does.
   void *roctxLib = dlopen("libroctx64.so", RTLD_NOLOAD | RTLD_NOW);
+  for (int v = 9; v >= 1 && !roctxLib; --v) {
+    auto versioned = std::string("libroctx64.so.") + std::to_string(v);
+    roctxLib = dlopen(versioned.c_str(), RTLD_NOLOAD | RTLD_NOW);
+  }
   if (!roctxLib)
     return;
   auto *fn = reinterpret_cast<RoctxRegisterTracerCallbackFn>(
@@ -1034,6 +1050,8 @@ void registerRoctxCallback(bool enable) {
 } // namespace
 
 // ---- Code object callback (kernel_id -> name mapping) ----
+// Receives the pimpl pointer via the SDK's callback `arg` parameter,
+// avoiding any call to instance() which would deadlock during construction.
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::codeObjectCallback(
     rocprofiler_callback_tracing_record_t record,
@@ -1054,6 +1072,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::codeObjectCallback(
 }
 
 // ---- Kernel dispatch buffer callback ----
+// Accesses the profiler via threadState (like CUPTI).
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
     rocprofiler_context_id_t context, rocprofiler_buffer_id_t buffer,
@@ -1131,6 +1150,8 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
 
   // Context 1: lightweight, always-active context for code object tracking.
   // Captures kernel_id -> name mappings as kernels are compiled.
+  // Passes pimpl as the callback arg so codeObjectCallback can populate
+  // the name map without re-entering the singleton.
   rocprofiler::createContext<true>(&state->codeObjectContext);
 
   const rocprofiler_tracing_operation_t codeObjectOps[] = {
@@ -1171,6 +1192,8 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiate,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithFlags,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithParams,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphExecDestroy,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphDestroy,
 #endif
   };
 
@@ -1338,6 +1361,7 @@ RocprofSDKProfiler::RocprofSDKProfiler() {
   // Construction of this singleton is triggered at libproton.so load time
   // via the __attribute__((constructor)) hook below, so force_configure
   // lands before any user code touches the HIP/HSA runtimes.
+  std::lock_guard<std::mutex> lock(state.mutex);
   if (!state.configured) {
     rocprofiler::forceConfigure<true>(&protonConfigure);
   }
