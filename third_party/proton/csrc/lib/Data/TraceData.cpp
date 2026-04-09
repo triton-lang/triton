@@ -1012,6 +1012,13 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
               // event
               launchEventId = events.at(launchEventId).parentEventId;
             }
+            // Walk up to the nearest ancestor with a CPU time range.
+            // Intermediate op events (e.g. from late-bound kernel names)
+            // don't carry CPU timestamps and can't serve as launch anchors.
+            while (launchEventId != Trace::Event::DummyId &&
+                   !events.at(launchEventId).hasCpuTimeRange()) {
+              launchEventId = events.at(launchEventId).parentEventId;
+            }
             kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
                                                 contexts, launchEventId,
                                                 isGraphLinked);

@@ -95,19 +95,26 @@ public:
 
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
-      // If not found, try to load it from the default path
       auto dir =
           ExternLib::pathEnv == nullptr ? "" : getStrEnv(ExternLib::pathEnv);
       if (!dir.empty()) {
         auto fullPath = dir + "/" + name;
         *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
       } else {
-        // Only if the default path is not set, we try to load it from the
-        // system.
-        // First reuse the existing handle
+        // Try to reuse an already-loaded library matching this name.
         *lib = dlopen(name, RTLD_NOLOAD);
         if (*lib == nullptr) {
-          // If not found, try to load it from LD_LIBRARY_PATH
+          // RTLD_NOLOAD matches by SONAME. If the library was loaded under
+          // a versioned SONAME (e.g. "libfoo.so.7" vs "libfoo.so") the
+          // unversioned name won't match. Probe common major versions
+          // to reuse the resident copy instead of loading a duplicate
+          // from a different installation.
+          for (int major = 9; major >= 1 && *lib == nullptr; --major) {
+            auto versioned = std::string(name) + "." + std::to_string(major);
+            *lib = dlopen(versioned.c_str(), RTLD_NOLOAD);
+          }
+        }
+        if (*lib == nullptr) {
           *lib = dlopen(name, RTLD_LOCAL | RTLD_LAZY);
         }
       }
