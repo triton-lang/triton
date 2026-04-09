@@ -535,8 +535,8 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
     int numBarriers = barrierRegions.size();
     barrierStates.insert(
         entryRegion,
-        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 32, fb),
-         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
+        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 64, fb),
+         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 64)});
     passToWarpSpecialize(entryPoint, barrierStates.at(entryRegion),
                          barrierStates, captureCounter);
 
@@ -548,6 +548,13 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
          getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
     passToWarpSpecialize(entryPoint, waiting.at(entryRegion), waiting,
                          captureCounter);
+
+    barrierWriteRecipients.insert(
+        entryRegion,
+        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 32, fb),
+         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
+    passToWarpSpecialize(entryPoint, barrierWriteRecipients.at(entryRegion),
+                         barrierWriteRecipients, captureCounter);
 
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       int iMemType = (int)memType;

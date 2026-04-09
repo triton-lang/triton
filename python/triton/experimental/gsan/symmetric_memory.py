@@ -202,8 +202,8 @@ class GSanSymmetricMemoryHandle:
         if channel != 0:
             raise NotImplementedError("Only channel=0 is supported in GSan symmetric memory.")
         _ = timeout_ms
-        dist.barrier(group=self._group)
         if self._world_size > 1:
+            dist.barrier(group=self._group)
             _stream_sync.synchronize_process_group_barrier(self._device_index, self._peer_device_indices)
             dist.barrier(group=self._group)
 

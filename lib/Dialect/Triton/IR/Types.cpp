@@ -24,6 +24,42 @@ void TritonDialect::registerTypes() {
       >();
 }
 
+// Format: !tt.tensordesc<128x64xf16>
+//         !tt.tensordesc<128x64xf16, #shared>
+Type TensorDescType::parse(AsmParser &parser) {
+  if (failed(parser.parseLess()))
+    return Type();
+
+  SmallVector<int64_t> shape;
+  if (failed(parser.parseDimensionList(shape, /*allowDynamic=*/false)))
+    return Type();
+
+  Type elementType;
+  if (failed(parser.parseType(elementType)))
+    return Type();
+
+  Attribute sharedLayout;
+  if (succeeded(parser.parseOptionalComma())) {
+    if (failed(parser.parseAttribute(sharedLayout)))
+      return Type();
+  }
+
+  if (failed(parser.parseGreater()))
+    return Type();
+
+  return TensorDescType::get(shape, elementType, sharedLayout);
+}
+
+void TensorDescType::print(AsmPrinter &printer) const {
+  printer << "<";
+  for (auto dim : getShape())
+    printer << dim << "x";
+  printer << getElementType();
+  if (getSharedLayout())
+    printer << ", " << getSharedLayout();
+  printer << ">";
+}
+
 Type PointerType::parse(AsmParser &parser) {
   if (parser.parseLess())
     return Type();
