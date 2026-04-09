@@ -455,7 +455,9 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
   auto ctx = func.getContext();
   auto numCTAs = triton::gpu::lookupNumCTAs(func);
   for (auto &[desc, einfo] : valueToEncodingInfo) {
-    auto existingTy = desc.getType().getBlockType();
+    auto descTy = desc.getType();
+    auto existingTy =
+        RankedTensorType::get(descTy.getShape(), descTy.getElementType());
     Attribute newEncoding;
     if (einfo->desiredEncoding) {
       newEncoding = einfo->desiredEncoding;
@@ -473,10 +475,11 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
   SmallVector<Type> resultTys(func.getResultTypes());
   for (auto [i, resultTy] : llvm::enumerate(resultTys)) {
     if (auto descTy = dyn_cast<TensorDescType>(resultTy)) {
-      auto encoding =
-          getFallbackSharedEncoding(descTy.getBlockType(), {}, {}, numCTAs);
-      resultTys[i] = getTensorDescTypeWithEncoding(
-          nullptr, descTy.getBlockType(), encoding);
+      auto existingTy =
+          RankedTensorType::get(descTy.getShape(), descTy.getElementType());
+      auto encoding = getFallbackSharedEncoding(existingTy, {}, {}, numCTAs);
+      resultTys[i] =
+          getTensorDescTypeWithEncoding(nullptr, existingTy, encoding);
     }
   }
   func.setFunctionType(FunctionType::get(ctx, argTys, resultTys));
