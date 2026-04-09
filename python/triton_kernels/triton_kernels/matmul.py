@@ -386,12 +386,16 @@ def matmul(a, b, bias,
     block_k = None
     if ragged_dimension == "K":
         block_k = a_ragged_metadata.slice_sizes_divisibility or b_ragged_metadata.slice_sizes_divisibility
+        a_uses_tma_when_persistent = a.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None)
+    else:
+        a_uses_tma_when_persistent = has_gather_tma or not has_gather
     opt_flags = make_opt_flags(out_dtype, a.dtype, b.dtype, precision_config,
         batch_size, M, N, b.shape[-2], a_ragged_metadata,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
         a_transpose, c_acc_in is not None,
         block_k = block_k,
         mx_block_size = mx_block_size,
+        x_uses_tma_when_persistent = a_uses_tma_when_persistent,
     )
     # there seems to be a bug on A100
     # pytest -vs test_matmul.py::test_op[False-False-False-False-pad_b-16-768-512-1024-ragged-float16-float16-10-1-False-None-False-False-False-True-None]
@@ -485,6 +489,7 @@ def matmul(a, b, bias,
     # create tma descriptor for y
     c_has_tma = (
         opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
+        and is_tma_compliant(c)
         and (c_acc_in is None or c_acc_is_c)
         and fused_comm is None
         and precision_config.c_value_pack_factor == 1

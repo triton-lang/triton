@@ -19,7 +19,7 @@
 // ------------------|---------|-----------------|------------
 // buffers           | tensor  | <B x i64>       | Base pointers of all (sub)buffers
 // barriers          | tensor  | <K x i64>       | Pointers to all individual mbarriers
-// barrierStates     | scratch | <K x i32>       | Packed barrier phase (bit 0) and arrival counts (bits[1..10] init, [11..20] current); zero means invalid/uninitialized
+// barrierStates     | scratch | <K x i64>       | Packed barrier phase (bit 0), arrival counts (bits[1..20] init, [21..40] current), and signed tx-count (bits[41..61]); zero means invalid/uninitialized
 // waiting           | scratch | <K x i32>       | Two bits per thread: waiting flag bit (LSB), stored phase bit (bit 1)
 // writeVisibility   | scratch | <B x i64>       | Per-buffer thread-visibility bitmask (bit i => thread i visible)
 // readVisibility    | scratch | <B x T x i64>   | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
@@ -155,23 +155,37 @@ Value currentCTAMask(ImplicitLocOpBuilder &b) {
                                ctaId);
 }
 
-Value getRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
-  if (auto arriveOp = dyn_cast<ttng::ArriveBarrierOp>(op)) {
-    auto barrierTy = cast<ttg::MemDescType>(arriveOp.getAlloc().getType());
-    auto kBlock = StringAttr::get(op->getContext(), "block");
-    uint16_t broadcastMask =
-        toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    if (broadcastMask) {
-      int numCTAs = ttg::lookupNumCTAs(b);
-      auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastMask);
-      Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
-      Value leaderCTA = arith::AndIOp::create(
-          b, ctaId, arith::ConstantIntOp::create(b, encoding.fixedBits, 32));
-      return arith::ShLIOp::create(b, arith::ConstantIntOp::create(b, 1, 32),
-                                   leaderCTA);
-    }
+uint16_t getBlockBroadcastMask(Value alloc) {
+  auto allocTy = cast<ttg::MemDescType>(alloc.getType());
+  auto kBlock = StringAttr::get(alloc.getContext(), "block");
+  return toLinearLayout(allocTy).getFreeVariableMasks().lookup(kBlock);
+}
+
+Value createCTABitset(ImplicitLocOpBuilder &b, uint32_t pattern,
+                      uint32_t baseMask) {
+  Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value base = arith::AndIOp::create(
+      b, ctaId, arith::ConstantIntOp::create(b, baseMask, 32));
+  return arith::ShLIOp::create(b, arith::ConstantIntOp::create(b, pattern, 32),
+                               base);
+}
+
+Value getLeaderCTA(ImplicitLocOpBuilder &b, Value barrier) {
+  uint16_t broadcastMask = getBlockBroadcastMask(barrier);
+  if (!broadcastMask)
     return currentCTAMask(b);
-  }
+  int numCTAs = ttg::lookupNumCTAs(b);
+  auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastMask);
+  return createCTABitset(b, /*pattern=*/1, encoding.fixedBits);
+}
+
+Value getRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
+  if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
+    return getLeaderCTA(b, expectOp.getAlloc());
+  if (auto arriveOp = dyn_cast<ttng::ArriveBarrierOp>(op))
+    return getLeaderCTA(b, arriveOp.getAlloc());
+  if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op))
+    return getLeaderCTA(b, copyOp.getBarrier());
 
   SmallVector<uint16_t> broadcastMasks;
   if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
@@ -363,6 +377,27 @@ private:
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
   }
 
+  void instrumentBarrierExpectNonLeaderArrive(
+      ImplicitLocOpBuilder &b, ttng::BarrierExpectOp expectOp,
+      Value nonLeaderPred, int thread, tti::FunctionBuilder &funcBuilder) {
+    Value barrier = expectOp.getAlloc();
+    Value recipientCTAs = getLeaderCTA(b, barrier);
+
+    // Match BarrierOpToLLVM's cross-CTA path: non-leader CTAs contribute a
+    // plain arrive of count 1 to the leader barrier. The generic barrier path
+    // models the leader CTA's expect_tx.
+    for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
+      funcBuilder.createTrackVisibleWritesCall(
+          b, barrier, thread, nonLeaderPred, memType, expectOp, recipientCTAs);
+      funcBuilder.createTrackVisibleReadsCall(b, barrier, thread, nonLeaderPred,
+                                              memType, expectOp, recipientCTAs);
+    }
+    funcBuilder.createVerifyBarrierArriveCall(
+        b, barrier, /*count=*/1, nonLeaderPred, expectOp, recipientCTAs);
+    funcBuilder.createUpdateBarrierStateCall(
+        b, barrier, /*count=*/1, nonLeaderPred, expectOp, recipientCTAs);
+  }
+
   void instrumentMemEffects(ImplicitLocOpBuilder &b, Operation *op, int thread,
                             tti::FunctionBuilder &funcBuilder) {
     int baseThread = getBaseThread(thread);
@@ -370,7 +405,20 @@ private:
     if (!opInfo) {
       return;
     }
-    Value pred = tti::maybeAnd(b, opInfo->pred, hooks->getIssuerCTAPred(b, op));
+    Value pred = opInfo->pred;
+    // Barrier expect performs an arrive on non-leader CTAs, so we need to
+    // instrument it separately before incorporating getIssuerCTAPred.
+    Value issuerCTAPred = hooks->getIssuerCTAPred(b, op);
+    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
+      if (issuerCTAPred) {
+        Value nonLeaderPred = arith::XOrIOp::create(
+            b, issuerCTAPred, arith::ConstantIntOp::create(b, 1, 1));
+        nonLeaderPred = tti::maybeAnd(b, pred, nonLeaderPred);
+        instrumentBarrierExpectNonLeaderArrive(b, expectOp, nonLeaderPred,
+                                               thread, funcBuilder);
+      }
+    }
+    pred = tti::maybeAnd(b, pred, issuerCTAPred);
     Value recipientCTAs = getRecipientCTAs(b, op);
     for (auto effect : opInfo->operandEffects) {
       Value buf = effect.buf;
@@ -452,11 +500,13 @@ private:
               b, barrier, effect.buf, effect.length, combinedPred, memType, op);
         }
       }
-      if (barrierInfo.count > 0) {
+      if (barrierInfo.count > 0 || barrierInfo.txCount != 0) {
         funcBuilder.createVerifyBarrierArriveCall(
-            b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs);
+            b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs,
+            barrierInfo.txCount);
         funcBuilder.createUpdateBarrierStateCall(
-            b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs);
+            b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs,
+            barrierInfo.txCount);
       }
     }
     if (opInfo->implicitCommit) {

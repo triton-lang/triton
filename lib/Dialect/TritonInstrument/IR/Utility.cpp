@@ -535,8 +535,8 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
     int numBarriers = barrierRegions.size();
     barrierStates.insert(
         entryRegion,
-        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 32, fb),
-         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
+        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 64, fb),
+         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 64)});
     passToWarpSpecialize(entryPoint, barrierStates.at(entryRegion),
                          barrierStates, captureCounter);
 

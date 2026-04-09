@@ -4,6 +4,8 @@
 include "triton/Dialect/TritonInstrument/IR/TritonInstrumentDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
+include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
@@ -56,11 +58,6 @@ def TTI_ExperimentalMemDescToI32Op : TTI_Op<"experimental_memdesc_to_i32", [Pure
   }];
   let arguments = (ins TTG_MemDescType:$memdesc);
   let results = (outs I32:$result);
-  let builders = [
-    OpBuilder<(ins "Value":$memdesc), [{
-      build($_builder, $_state, $_builder.getI32Type(), memdesc);
-    }]>
-  ];
   let assemblyFormat = "$memdesc attr-dict `:` type($memdesc)";
 }
 
@@ -117,6 +114,55 @@ def TTI_ExperimentalGSanTensorAccessOp
     $ptr `,` $isStore (`,` $mask^)? attr-dict `:` type($ptr)
   }];
 }
+
+def TTI_ExperimentalGSanAtomicRMWOp : TTI_Op<"experimental_gsan_atomic_rmw", [
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding,
+  TypesMatchWith<"ptr type matches value type", "val", "ptr",
+                 "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"mask type matches value type",
+                 "val", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+  let summary = "Lower a GSan-instrumented atomic rmw";
+  let arguments = (ins
+    TT_AtomicRMWAttr:$atomic_rmw_op,
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_Type:$val,
+    Optional<TT_BoolLike>:$mask,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let results = (outs TT_Type:$result);
+  let assemblyFormat = [{
+    $atomic_rmw_op `,` $sem `,` $scope `,` $ptr `,` $val (`,` $mask^)? attr-dict `:`
+    functional-type(operands, $result)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicCASOp : TTI_Op<"experimental_gsan_atomic_cas", [
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding,
+  TypesMatchWith<"ptr type matches cmp type", "cmp", "ptr",
+                 "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"ptr type matches value type", "val", "ptr",
+                 "getPointerTypeSameShape($_self)">
+]> {
+  let summary = "Lower a GSan-instrumented atomic cas";
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_Type:$cmp,
+    TT_Type:$val,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let results = (outs TT_Type:$result);
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr `,` $cmp `,` $val attr-dict `:`
+    functional-type(operands, $result)
+  }];
+}
+
 
 // ===== Critical section lock ops =====
 

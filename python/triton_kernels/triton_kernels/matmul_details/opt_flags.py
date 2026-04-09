@@ -190,6 +190,7 @@ def make_default_opt_flags_nvidia(
     x_transpose,
     has_y_acc_in,
     constraints,
+    x_uses_tma_when_persistent=True,
     mx_block_size=None,
 ):
     constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps"}
@@ -267,6 +268,13 @@ def make_default_opt_flags_nvidia(
 
     # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
+    if (is_persistent and constraints.get("block_n", None) is None
+            and cuda_capability_geq(10, 0) and (lhs_dtype == FP32 or rhs_dtype == FP32)
+            and not x_uses_tma_when_persistent):
+        # Blackwell's fp32/tf32 persistent dot stages an operand in TMEM in
+        # addition to the accumulator. A 128x256 accumulator already consumes
+        # the full 512-column TMEM budget, so leave headroom for that operand.
+        block_n = min(block_n, 128)
     # adjust block_m based on is_persistent signal
     if is_persistent and opt_flags_nvidia.is_x_scale_swizzled(precision_config):
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
@@ -404,6 +412,7 @@ def make_opt_flags(
     has_y_acc_in,
     block_k,
     mx_block_size=None,
+    x_uses_tma_when_persistent=True,
 ):
     if _opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
@@ -429,5 +438,9 @@ def make_opt_flags(
     if backend == "hip":
         return make_default_opt_flags_amd(*args)
     if backend == "cuda":
-        return make_default_opt_flags_nvidia(*args, mx_block_size=mx_block_size)
+        return make_default_opt_flags_nvidia(
+            *args,
+            x_uses_tma_when_persistent=x_uses_tma_when_persistent,
+            mx_block_size=mx_block_size,
+        )
     assert False
