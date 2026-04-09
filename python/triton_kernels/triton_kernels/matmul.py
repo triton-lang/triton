@@ -387,7 +387,7 @@ def matmul(a, b, bias,
         can_use_tma = False
     has_gather_tma = has_gather and target_info.has_tma_gather()
     is_ragged_mx = (a_has_mx or b_has_mx) and (is_a_ragged or is_b_ragged)
-    can_use_split_k = scatter_indx is None and not is_ragged_mx and ragged_dimension != "K" and c_acc_in is None
+    can_use_split_k = scatter_indx is None and not is_ragged_mx and ragged_dimension != "K" and c_acc_in is None and precision_config.c_mx_scale is None
     block_k = None
     if ragged_dimension == "K":
         block_k = a_ragged_metadata.slice_sizes_divisibility or b_ragged_metadata.slice_sizes_divisibility
