@@ -48,6 +48,8 @@ def TT_IntToPtrOp : TT_Op<"int_to_ptr", [Elementwise,
     let results = (outs TT_PtrLike:$result);
 
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+
+    let hasCanonicalizer = 1;
 }
 
 def TT_PtrToIntOp : TT_Op<"ptr_to_int", [Elementwise,

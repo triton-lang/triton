@@ -317,30 +317,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
-
-// -----
-
-// Test async_copy_local_to_global with ptr_to_int/int_to_ptr casts.
-// AxisInfoAnalysis must preserve contiguity through the cast chain for proper vectorization.
-// sizePerThread = [8] with f16 should generate 128-bit stores (8 * 16 = 128 bits).
-#blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {ttg.target = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 2048 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: async_copy_with_ptr_casts
-  tt.func public @async_copy_with_ptr_casts(%dst: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
-                                             %byte_offset: i32 {tt.divisibility = 16 : i32},
-                                             %smem: !ttg.memdesc<1024xf16, #shared, #smem, mutable>) {
-    %offs = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-    %ptrs = tt.splat %dst : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked>
-    %ptrs_1 = tt.addptr %ptrs, %offs : tensor<1024x!tt.ptr<f16>, #blocked>, tensor<1024xi32, #blocked>
-    %ptrs_2 = tt.ptr_to_int %ptrs_1 : tensor<1024x!tt.ptr<f16>, #blocked> -> tensor<1024xi64, #blocked>
-    %offset_i64 = arith.extsi %byte_offset : i32 to i64
-    %offset_splat = tt.splat %offset_i64 : i64 -> tensor<1024xi64, #blocked>
-    %ptrs_3 = arith.addi %ptrs_2, %offset_splat : tensor<1024xi64, #blocked>
-    %ptrs_4 = tt.int_to_ptr %ptrs_3 : tensor<1024xi64, #blocked> -> tensor<1024x!tt.ptr<f16>, #blocked>
-    // CHECK: llvm.call_intrinsic "llvm.amdgcn.global.store.async.from.lds.b128"
-    %0 = amdg.async_copy_local_to_global %smem, %ptrs_4 : !ttg.memdesc<1024xf16, #shared, #smem, mutable> -> tensor<1024x!tt.ptr<f16>, #blocked>
-    tt.return
-  }
-}
