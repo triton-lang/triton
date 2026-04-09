@@ -1102,40 +1102,44 @@ void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
 }
 
 //-- IntToPtrOp --
-// Canonicalize: int_to_ptr(addi(ptr_to_int(ptr), constant_offset)) ->
-// addptr(ptr, element_offset) Only when offset is constant and divisible by
-// element size.
-struct CanonicalizeIntToPtrWithConstantOffset
-    : public OpRewritePattern<IntToPtrOp> {
-  CanonicalizeIntToPtrWithConstantOffset(MLIRContext *context)
+// Pattern 1: int_to_ptr(ptr_to_int(ptr)) -> ptr
+// Eliminates round-trip pointer conversions
+struct CanonicalizeIntToPtrOfPtrToInt : public OpRewritePattern<IntToPtrOp> {
+  CanonicalizeIntToPtrOfPtrToInt(MLIRContext *context)
       : OpRewritePattern<IntToPtrOp>(context, 1) {}
 
   LogicalResult matchAndRewrite(IntToPtrOp intToPtrOp,
                                 PatternRewriter &rewriter) const override {
-    // Match: int_to_ptr(addi(...))
+    // Match: int_to_ptr(ptr_to_int(ptr))
+    auto ptrToIntOp = intToPtrOp.getSrc().getDefiningOp<PtrToIntOp>();
+    if (!ptrToIntOp)
+      return failure();
+
+    // Replace with the original pointer
+    rewriter.replaceOp(intToPtrOp, ptrToIntOp.getSrc());
+    return success();
+  }
+};
+
+// Pattern 2: int_to_ptr(addi(val, constant_offset)) -> addptr(int_to_ptr(val),
+// element_offset). Only when offset is constant and divisible by element size
+struct CanonicalizeIntToPtrWithAdd : public OpRewritePattern<IntToPtrOp> {
+  CanonicalizeIntToPtrWithAdd(MLIRContext *context)
+      : OpRewritePattern<IntToPtrOp>(context, 1) {}
+
+  LogicalResult matchAndRewrite(IntToPtrOp intToPtrOp,
+                                PatternRewriter &rewriter) const override {
+    // Match: int_to_ptr(addi(val, constant_offset))
     auto addOp = intToPtrOp.getSrc().getDefiningOp<arith::AddIOp>();
     if (!addOp)
       return failure();
 
-    // Find which operand is ptr_to_int and which is the offset
-    PtrToIntOp ptrToIntOp = nullptr;
-    Value offsetValue = nullptr;
+    Value intValue = addOp.getLhs();
+    Value offsetValue = addOp.getRhs();
 
-    if (auto lhsPtrToInt = addOp.getLhs().getDefiningOp<PtrToIntOp>()) {
-      ptrToIntOp = lhsPtrToInt;
-      offsetValue = addOp.getRhs();
-    } else if (auto rhsPtrToInt = addOp.getRhs().getDefiningOp<PtrToIntOp>()) {
-      ptrToIntOp = rhsPtrToInt;
-      offsetValue = addOp.getLhs();
-    } else {
-      return failure();
-    }
-
-    Value originalPtr = ptrToIntOp.getSrc();
-
-    // Get the element size from the pointer type
-    auto ptrType =
-        cast<PointerType>(getElementTypeOrSelf(originalPtr.getType()));
+    // Get the element size from the result pointer type
+    auto resultType = intToPtrOp.getType();
+    auto ptrType = cast<PointerType>(getElementTypeOrSelf(resultType));
     int64_t elemSizeBits = triton::getPointeeBitWidth(ptrType);
     int64_t elemSizeBytes = std::max<int64_t>(1, elemSizeBits / 8);
 
@@ -1162,9 +1166,11 @@ struct CanonicalizeIntToPtrWithConstantOffset
     // Compute element offset at compile time
     int64_t elementOffset = constantByteOffset.value() / elemSizeBytes;
 
-    // Create the element offset constant
+    // Create int_to_ptr(val) for the base
     auto loc = intToPtrOp.getLoc();
-    auto resultType = intToPtrOp.getType();
+    Value basePtr = IntToPtrOp::create(rewriter, loc, resultType, intValue);
+
+    // Create the element offset constant
     Value elementOffsetValue;
 
     // Get the integer type from the offset value to match its type
@@ -1189,8 +1195,8 @@ struct CanonicalizeIntToPtrWithConstantOffset
           rewriter.getIntegerAttr(offsetElemType, elementOffset));
     }
 
-    // Replace with addptr
-    rewriter.replaceOpWithNewOp<AddPtrOp>(intToPtrOp, resultType, originalPtr,
+    // Replace with addptr(int_to_ptr(val), element_offset)
+    rewriter.replaceOpWithNewOp<AddPtrOp>(intToPtrOp, resultType, basePtr,
                                           elementOffsetValue);
     return success();
   }
@@ -1198,7 +1204,8 @@ struct CanonicalizeIntToPtrWithConstantOffset
 
 void IntToPtrOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                              MLIRContext *context) {
-  results.add<CanonicalizeIntToPtrWithConstantOffset>(context);
+  results.add<CanonicalizeIntToPtrOfPtrToInt, CanonicalizeIntToPtrWithAdd>(
+      context);
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and

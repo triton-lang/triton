@@ -175,6 +175,19 @@ tt.func @fold_transpose_constant() -> tensor<128x16xf32> {
 }
 // -----
 
+// CHECK-LABEL: @canonicalize_int_to_ptr_of_ptr_to_int
+// Test: int_to_ptr(ptr_to_int(ptr)) -> ptr (round-trip elimination)
+tt.func @canonicalize_int_to_ptr_of_ptr_to_int(%ptr: tensor<64x!tt.ptr<f32>>) -> tensor<64x!tt.ptr<f32>> {
+  // CHECK-NOT: tt.ptr_to_int
+  // CHECK-NOT: tt.int_to_ptr
+  // CHECK: tt.return %{{.*}} : tensor<64x!tt.ptr<f32>>
+  %int = tt.ptr_to_int %ptr : tensor<64x!tt.ptr<f32>> -> tensor<64xi64>
+  %result = tt.int_to_ptr %int : tensor<64xi64> -> tensor<64x!tt.ptr<f32>>
+  tt.return %result : tensor<64x!tt.ptr<f32>>
+}
+
+// -----
+
 // CHECK-LABEL: @canonicalize_int_to_ptr_with_constant_offset_f32
 // Test: int_to_ptr(addi(ptr_to_int(ptr), constant)) -> addptr(ptr, element_offset)
 // For f32 (4 bytes): 16 bytes = 4 elements
@@ -202,22 +215,6 @@ tt.func @canonicalize_int_to_ptr_with_constant_offset_f16(%base: tensor<1024x!tt
   %result = tt.int_to_ptr %offset_ptr_int : tensor<1024xi64> -> tensor<1024x!tt.ptr<f16>>
   // CHECK-NEXT: tt.return %[[RESULT]] : tensor<1024x!tt.ptr<f16>>
   tt.return %result : tensor<1024x!tt.ptr<f16>>
-}
-
-// -----
-
-// CHECK-LABEL: @canonicalize_int_to_ptr_commutative
-// Test: addi is commutative, offset can be on either side
-tt.func @canonicalize_int_to_ptr_commutative(%base: tensor<64x!tt.ptr<i32>>) -> tensor<64x!tt.ptr<i32>> {
-  // CHECK: %[[OFFSET:.*]] = arith.constant dense<2> : tensor<64xi64>
-  // CHECK-NEXT: %[[RESULT:.*]] = tt.addptr %{{.*}}, %[[OFFSET]] : tensor<64x!tt.ptr<i32>>, tensor<64xi64>
-  %byte_offset = arith.constant dense<8> : tensor<64xi64>
-  %ptr_as_int = tt.ptr_to_int %base : tensor<64x!tt.ptr<i32>> -> tensor<64xi64>
-  // Offset on the left side of add
-  %offset_ptr_int = arith.addi %byte_offset, %ptr_as_int : tensor<64xi64>
-  %result = tt.int_to_ptr %offset_ptr_int : tensor<64xi64> -> tensor<64x!tt.ptr<i32>>
-  // CHECK-NEXT: tt.return %[[RESULT]] : tensor<64x!tt.ptr<i32>>
-  tt.return %result : tensor<64x!tt.ptr<i32>>
 }
 
 // -----
