@@ -78,7 +78,13 @@ jobs:
       - name: Setup Python environment for H100
         if: ${{ startsWith(matrix.config.runner_type, 'nvidia-h100') }}
         run: |
-          sudo chown -R "$(id -u):$(id -g)" /venv
+          site_packages="$(/venv/bin/python - <<'PY'
+          import sysconfig
+
+          print(sysconfig.get_path("purelib"))
+          PY
+          )"
+          sudo chown "$(id -u):$(id -g)" /venv/bin "$site_packages"
           echo "/venv/bin" >> $GITHUB_PATH
           echo "VIRTUAL_ENV=/venv" >> $GITHUB_ENV
           echo "PYTHONHOME=" >> $GITHUB_ENV
