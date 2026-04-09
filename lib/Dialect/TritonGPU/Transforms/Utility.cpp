@@ -457,9 +457,28 @@ static Attribute inferSrcEncoding(triton::TransposeOpInterface op,
   //   transpose(transpose(x, order), inverse(order)) == x,
   // we can see this is equivalent to
   //   transpose(dstEnc, inverse(order)) -> srcEnc.
-  auto shape = cast<RankedTensorType>(op->getResult(0).getType()).getShape();
+  auto shape =
+      cast<triton::gpu::TensorOrMemDesc>(op->getResult(0).getType()).getShape();
   return inferTransOpDstEncoding(encoding, shape,
                                  triton::inversePermutation(op.getOrder()));
+}
+
+static Attribute inferMemDescReshapeOpSrcEncoding(MLIRContext *ctx,
+                                                  std::optional<Location> loc,
+                                                  ArrayRef<int64_t> resultShape,
+                                                  Type elementType,
+                                                  Attribute resultEnc,
+                                                  ArrayRef<int64_t> srcShape) {
+  auto resultTy = triton::gpu::MemDescType::get(
+      resultShape, elementType, resultEnc,
+      triton::gpu::SharedMemorySpaceAttr::get(ctx));
+
+  triton::gpu::MemDescType srcTy;
+  if (failed(triton::gpu::MemDescReshapeOp::inferReturnTypes(
+          ctx, loc, resultTy, srcShape, srcTy))) {
+    return {};
+  }
+  return srcTy.getEncoding();
 }
 
 static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
@@ -491,6 +510,12 @@ static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
 }
 
 static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
+  if (isa<triton::gpu::SharedEncodingTrait>(encoding)) {
+    return inferMemDescReshapeOpSrcEncoding(
+        op.getContext(), op.getLoc(), op.getType().getShape(),
+        op.getType().getElementType(), encoding,
+        op.getSrc().getType().getShape());
+  }
   // The encoding of x given the encoding of y in `reshape(x) -> y` is the same
   // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
   // invariant of inferReshapeOpNoReorderEncoding that it's symmetric in this
@@ -498,6 +523,14 @@ static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
   return inferReshapeOpDstEncoding(
       op.getType().getShape(), encoding, op.getSrc().getType().getShape(),
       op.getSrc().getType().getEncoding(), op.getAllowReorder());
+}
+
+static Attribute inferSrcEncoding(triton::gpu::MemDescReshapeOp op,
+                                  Attribute encoding) {
+  auto resultTy = op.getResult().getType();
+  return inferMemDescReshapeOpSrcEncoding(
+      op.getContext(), op.getLoc(), resultTy.getShape(),
+      resultTy.getElementType(), encoding, op.getSrc().getType().getShape());
 }
 
 static bool isSingleValue(Value value) {
@@ -542,6 +575,8 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   if (auto trans = dyn_cast<triton::TransposeOpInterface>(op))
     return inferSrcEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
+    return inferSrcEncoding(reshape, encoding);
+  if (auto reshape = dyn_cast<triton::gpu::MemDescReshapeOp>(op))
     return inferSrcEncoding(reshape, encoding);
   if (auto gather = dyn_cast<triton::GatherOp>(op))
     return inferSrcEncoding(gather, encoding);
