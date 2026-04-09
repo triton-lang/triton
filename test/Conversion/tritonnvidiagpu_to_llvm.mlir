@@ -193,8 +193,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // Gather uses shared::cluster when barrier mask is non-zero
   // CHECK: cp.async.bulk.tensor.2d.tile::gather4.shared::cluster.global.mbarrier::complete_tx::bytes
   // CHECK-NOT: cp.async.bulk.tensor.2d.tile::gather4.shared::cta.global.mbarrier
-  tt.func @tma_gather_barrier_mask_nonzero(%tma: !tt.tensordesc<tensor<1x128xbf16, #shared1_split>>, %alloc: !ttg.memdesc<32x128xbf16, #shared1_split, #smem, mutable>, %x_offsets: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked_offsets}>>, %y: i32, %barrier: !ttg.memdesc<1xi64, #shared0_cluster, #smem>, %pred: i1) {
-    ttng.async_tma_gather %tma[%x_offsets, %y] %alloc, %barrier, %pred : !tt.tensordesc<tensor<1x128xbf16, #shared1_split>>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked_offsets}>>, i32, !ttg.memdesc<1xi64, #shared0_cluster, #smem>, !ttg.memdesc<32x128xbf16, #shared1_split, #smem, mutable>, i1
+  tt.func @tma_gather_barrier_mask_nonzero(%tma: !tt.tensordesc<1x128xbf16, #shared1_split>, %alloc: !ttg.memdesc<32x128xbf16, #shared1_split, #smem, mutable>, %x_offsets: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked_offsets}>>, %y: i32, %barrier: !ttg.memdesc<1xi64, #shared0_cluster, #smem>, %pred: i1) {
+    ttng.async_tma_gather %tma[%x_offsets, %y] %alloc, %barrier, %pred : !tt.tensordesc<1x128xbf16, #shared1_split>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked_offsets}>>, i32, !ttg.memdesc<1xi64, #shared0_cluster, #smem>, !ttg.memdesc<32x128xbf16, #shared1_split, #smem, mutable>, i1
     tt.return
   }
 }
@@ -317,8 +317,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: "@$0 cp.async.bulk.tensor.2d.global.shared::cta.bulk_group [$1, {$2, $3}], [$4];", "b,l,r,r,r" {{.*}} : (i1, !llvm.ptr, i32, i32, !llvm.ptr<3>) -> !llvm.void
   // CHECK-NOT: shared::cluster
   // CHECK: nvvm.cp.async.bulk.commit.group
-  tt.func @tma_copy_local_to_global_broadcast(%tma: !tt.tensordesc<tensor<128x128xf32, #shared1_broadcast>>, %alloc: !ttg.memdesc<128x128xf32, #shared1_broadcast, #smem>, %x: i32) {
-    ttng.async_tma_copy_local_to_global %tma[%x, %x] %alloc : !tt.tensordesc<tensor<128x128xf32, #shared1_broadcast>>, !ttg.memdesc<128x128xf32, #shared1_broadcast, #smem>
+  tt.func @tma_copy_local_to_global_broadcast(%tma: !tt.tensordesc<128x128xf32, #shared1_broadcast>, %alloc: !ttg.memdesc<128x128xf32, #shared1_broadcast, #smem>, %x: i32) {
+    ttng.async_tma_copy_local_to_global %tma[%x, %x] %alloc : !tt.tensordesc<128x128xf32, #shared1_broadcast>, !ttg.memdesc<128x128xf32, #shared1_broadcast, #smem>
     tt.return
   }
 }
