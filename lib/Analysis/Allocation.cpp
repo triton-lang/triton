@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -30,6 +31,7 @@ static size_t getPartitionIndex(size_t offset, size_t partitionSize) {
 }
 
 namespace ttng = mlir::triton::nvidia_gpu;
+namespace tti = mlir::triton::instrument;
 
 namespace mlir {
 
@@ -115,7 +117,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
     return elems * getBitwidth(srcTy) / 8;
   }
-  if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
+  if (isa<AtomicRMWOp, AtomicCASOp, tti::ExperimentalGSanAtomicRMWOp,
+          tti::ExperimentalGSanAtomicCASOp>(op)) {
     auto value = op->getOperand(0);
     auto smemShape = getRepShapeForAtomic(op->getResult(0));
     auto elems = getNumScratchElements(smemShape);
