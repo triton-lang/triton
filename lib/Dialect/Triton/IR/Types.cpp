@@ -88,6 +88,17 @@ void PointerType::print(AsmPrinter &printer) const {
   }
 }
 
+LogicalResult TensorDescType::verify(function_ref<InFlightDiagnostic()> emitError,
+                                     ArrayRef<int64_t> shape, Type elementType,
+                                     Attribute sharedLayout) {
+  if (isa<RankedTensorType>(elementType)) {
+    return emitError()
+           << "tensor descriptors must not wrap tensor types; use "
+              "!tt.tensordesc<shape x element-type[, layout]> instead";
+  }
+  return success();
+}
+
 LogicalResult PointerType::verify(function_ref<InFlightDiagnostic()> emitError,
                                   Type pointeeType, int addressSpace) {
   if (isa<RankedTensorType>(pointeeType)) {
