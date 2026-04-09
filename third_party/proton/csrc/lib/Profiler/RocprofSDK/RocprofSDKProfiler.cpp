@@ -569,6 +569,10 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
   // time, even though the context is not yet active.
   rocprofiler::createContext<true>(&state->profilingContext);
 
+  // Subscribe only to the HIP operations Proton needs: kernel launches,
+  // graph capture/instantiate/destroy. Passing nullptr/0 would subscribe to
+  // all ~519 HIP runtime APIs, causing the SDK to construct correlation IDs
+  // and invoke our callback for every hipMalloc, hipMemcpy, etc.
   constexpr rocprofiler_tracing_operation_t kTracedHipOps[] = {
       ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchKernel,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchKernel,
