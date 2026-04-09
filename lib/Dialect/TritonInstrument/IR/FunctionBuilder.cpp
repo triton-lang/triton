@@ -2156,8 +2156,8 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
       Value threadVal = entryBlock->getArgument(3);
       Value buffers = entryBlock->getArgument(4);
       Value writeVisibilityPtr = entryBlock->getArgument(5);
-      Value aliasMatrix = useAlias ? entryBlock->getArgument(6) : Value();
-      Value recipientCTAs = entryBlock->getArgument(useAlias ? 7 : 6);
+      Value recipientCTAs = entryBlock->getArgument(6);
+      Value aliasMatrix = useAlias ? entryBlock->getArgument(7) : Value();
 
       Value writeVisibility = tti::createLoadScratchMemory(
           fb, fb.getLoc(), writeVisibilityPtr, writeVisibilityType);
@@ -2209,9 +2209,9 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
     aliasMatrixTypeBase =
         auxData.aliasMatrices[(int)memType].at(insertPoint).type;
     auto aliasMatrixType = cast<RankedTensorType>(aliasMatrixTypeBase);
-    SmallVector<Value> args = {bufOffset,      lengthVal,    pred,
-                               threadVal,      buffersVal,   writeVisibilityVal,
-                               aliasMatrixVal, recipientCTAs};
+    SmallVector<Value> args = {bufOffset,     lengthVal,     pred,
+                               threadVal,     buffersVal,    writeVisibilityVal,
+                               recipientCTAs, aliasMatrixVal};
     createCallToCachedFunction(
         b, "verify_write_visibility", args, assertInfo,
         {buffersType, writeVisibilityType, aliasMatrixType, (uint64_t)memType},
@@ -2265,8 +2265,8 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
       Value threadVal = entryBlock->getArgument(3);
       Value buffers = entryBlock->getArgument(4);
       Value readVisibilityPtr = entryBlock->getArgument(5);
-      Value aliasMatrix = useAlias ? entryBlock->getArgument(6) : Value();
-      Value recipientCTAs = entryBlock->getArgument(useAlias ? 7 : 6);
+      Value recipientCTAs = entryBlock->getArgument(6);
+      Value aliasMatrix = useAlias ? entryBlock->getArgument(7) : Value();
 
       Value readVisibility = tti::createLoadScratchMemory(
           fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
@@ -2313,9 +2313,9 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
     aliasMatrixTypeBase =
         auxData.aliasMatrices[(int)memType].at(insertPoint).type;
     auto aliasMatrixType = cast<RankedTensorType>(aliasMatrixTypeBase);
-    SmallVector<Value> args = {bufOffset,      lengthVal,    pred,
-                               threadVal,      buffersVal,   readVisibilityVal,
-                               aliasMatrixVal, recipientCTAs};
+    SmallVector<Value> args = {bufOffset,     lengthVal,     pred,
+                               threadVal,     buffersVal,    readVisibilityVal,
+                               recipientCTAs, aliasMatrixVal};
     createCallToCachedFunction(
         b, "verify_read_visibility", args, assertInfo,
         {buffersType, readVisibilityType, aliasMatrixType, (uint64_t)memType},
@@ -2915,8 +2915,8 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
       Value threadVal = entryBlock->getArgument(3);
       Value buffers = entryBlock->getArgument(4);
       Value outstandingCommitsPtr = entryBlock->getArgument(5);
-      Value aliasMatrix = useAlias ? entryBlock->getArgument(6) : Value();
-      Value recipientCTAs = entryBlock->getArgument(useAlias ? 7 : 6);
+      Value recipientCTAs = entryBlock->getArgument(6);
+      Value aliasMatrix = useAlias ? entryBlock->getArgument(7) : Value();
 
       Value outstandingCommits = tti::createLoadScratchMemory(
           fb, fb.getLoc(), outstandingCommitsPtr, commitsType);
@@ -2957,10 +2957,10 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
     ValueType aliasMatrix = auxData.aliasMatrices[(int)memType].at(insertPoint);
     aliasMatrixTypeBase = aliasMatrix.type;
     auto aliasMatrixType = cast<RankedTensorType>(aliasMatrixTypeBase);
-    SmallVector<Value> args = {
-        bufOffset,         lengthVal,     pred,
-        threadVal,         buffers.value, outstandingCommits.value,
-        aliasMatrix.value, recipientCTAs};
+    SmallVector<Value> args = {bufOffset,     lengthVal,
+                               pred,          threadVal,
+                               buffers.value, outstandingCommits.value,
+                               recipientCTAs, aliasMatrix.value};
     std::string funcName = excludeSelf ? "check_outstanding_commits_excl_self"
                                        : "check_outstanding_commits";
     createCallToCachedFunction(
