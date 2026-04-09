@@ -277,7 +277,8 @@ AssignDescriptorMemoryLayouts::findLoadEncodingFromUsers(Operation *op) {
       if (auto compatible = getCompatibleEncodingForType(alloc.getType()))
         return compatible;
     } else if (auto store = dyn_cast<ttg::LocalStoreOp>(use)) {
-      if (auto compatible = getCompatibleEncodingForType(store.getDst().getType()))
+      if (auto compatible =
+              getCompatibleEncodingForType(store.getDst().getType()))
         return compatible;
     }
   }
