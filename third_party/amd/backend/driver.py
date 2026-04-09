@@ -312,6 +312,12 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
     return wrap_handle_tensordesc_impl(launcher, signature, tensordesc_meta, make_tensordesc_arg)
 
 
+# Keep these integer values in sync with the C++ ProfileScratchBufferUnit enums
+# in ProtonToProtonGPU and ProtonGPUToLLVM.
+PROFILE_SCRATCH_BUFFER_UNIT_CTA = 0
+PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH = 1
+
+
 class HIPLauncher(object):
 
     def __init__(self, src, metadata):
@@ -339,6 +345,9 @@ class HIPLauncher(object):
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
+        self.profile_scratch_buffer_unit = getattr(
+            metadata, "profile_scratch_buffer_unit", PROFILE_SCRATCH_BUFFER_UNIT_CTA
+        )
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
@@ -346,16 +355,29 @@ class HIPLauncher(object):
 
         def allocate_scratch(size, align, allocator):
             if size > 0:
-                grid_size = gridX * gridY * gridZ
-                alloc_size = grid_size * size
+                # KERNEL_LAUNCH means profile_scratch_size already describes the
+                # total launch-sized allocation instead of a per-CTA slice.
+                if (
+                    self.profile_scratch_buffer_unit == PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH
+                    and allocator is _allocation._profile_allocator
+                ):
+                    alloc_size = size
+                else:
+                    grid_size = gridX * gridY * gridZ
+                    alloc_size = grid_size * size
                 alloc_fn = allocator.get()
                 return alloc_fn(alloc_size, align, stream)
             return None
 
         def allocate_default_profile_scratch(size, align):
             if size > 0:
-                grid_size = gridX * gridY * gridZ
-                alloc_size = grid_size * size
+                # The default profile allocator uses the same launch-total
+                # contract when profile_scratch_buffer_unit=KERNEL_LAUNCH.
+                if self.profile_scratch_buffer_unit == PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH:
+                    alloc_size = size
+                else:
+                    grid_size = gridX * gridY * gridZ
+                    alloc_size = grid_size * size
                 return active_driver.allocate_default_profile_scratch(alloc_size, align, stream)
             return None
 

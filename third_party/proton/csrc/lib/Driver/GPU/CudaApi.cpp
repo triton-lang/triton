@@ -37,6 +37,18 @@ DEFINE_DISPATCH(ExternLibCuda, deviceGetAttribute, cuDeviceGetAttribute, int *,
 DEFINE_DISPATCH(ExternLibCuda, streamCreateWithPriority,
                 cuStreamCreateWithPriority, CUstream *, unsigned int, int)
 
+DEFINE_DISPATCH(ExternLibCuda, eventCreate, cuEventCreate, CUevent *,
+                unsigned int)
+
+DEFINE_DISPATCH(ExternLibCuda, eventDestroy, cuEventDestroy, CUevent)
+
+DEFINE_DISPATCH(ExternLibCuda, eventRecord, cuEventRecord, CUevent, CUstream)
+
+DEFINE_DISPATCH(ExternLibCuda, streamWaitEvent, cuStreamWaitEvent, CUstream,
+                CUevent, unsigned int)
+
+DEFINE_DISPATCH(ExternLibCuda, eventQuery, cuEventQuery, CUevent)
+
 DEFINE_DISPATCH(ExternLibCuda, streamSynchronize, cuStreamSynchronize, CUstream)
 
 DEFINE_DISPATCH(ExternLibCuda, streamDestroy, cuStreamDestroy, CUstream)

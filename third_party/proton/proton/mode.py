@@ -73,6 +73,12 @@ class PCSampling(BaseMode):
 class InstrumentationMode(BaseMode):
     """Common base class for instrumentation modes with shared configuration."""
     metric_type: triton_proton.METRIC_TYPE = triton_proton.METRIC_TYPE.CYCLE
+    # Supported trace modes:
+    # - "scope": emit the existing intra-kernel scope trace from proton.record
+    #   intervals inside each Triton launch.
+    # - "kernel": emit one launch-level trace event per Triton kernel using the
+    #   profiling scratch record's start/end timestamps.
+    trace_mode: str = "scope"
     sampling_strategy: triton_proton.SAMPLING_STRATEGY = triton_proton.SAMPLING_STRATEGY.NONE
     sampling_options: str = ""
     granularity: triton_proton.GRANULARITY = triton_proton.GRANULARITY.WARP
@@ -82,6 +88,9 @@ class InstrumentationMode(BaseMode):
     optimizations: List[Optimize] = field(default_factory=list)
 
     def __post_init__(self):
+        if self.trace_mode not in {"scope", "kernel"}:
+            raise ValueError(f"Unknown trace_mode: {self.trace_mode}")
+
         # automatically map string inputs to enums using the global lookup dicts
         mappings = [
             ("metric_type", metric_types),
@@ -107,8 +116,8 @@ class InstrumentationMode(BaseMode):
 
     def __str__(self):
         optimizations_str = ",".join([str(opt) for opt in self.optimizations])
-        return (f"{self.name}:metric_type={self.metric_type}:sampling_strategy={self.sampling_strategy}"
-                f":sampling_options={self.sampling_options}:granularity={self.granularity}"
+        return (f"{self.name}:metric_type={self.metric_type}:trace_mode={self.trace_mode}"
+                f":sampling_strategy={self.sampling_strategy}:sampling_options={self.sampling_options}:granularity={self.granularity}"
                 f":buffer_strategy={self.buffer_strategy}:buffer_type={self.buffer_type}"
                 f":buffer_size={self.buffer_size}:optimizations={optimizations_str}")
 

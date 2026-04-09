@@ -1,5 +1,7 @@
 #include "Proton.h"
 
+#include "Profiler/Instrumentation/InstrumentationProfiler.h"
+
 #include <cstdint>
 #include <map>
 #include <stdexcept>
@@ -152,6 +154,18 @@ static void initProton(pybind11::module &&m) {
     SessionManager::instance().exitInstrumentedOp(
         streamId, functionId, reinterpret_cast<uint8_t *>(buffer), size);
   });
+
+  m.def("mark_step",
+        [](uint64_t streamId, uint64_t stepBufferToken) {
+          SessionManager::instance().markStep(streamId, stepBufferToken);
+        },
+        pybind11::arg("streamId"), pybind11::arg("stepBufferToken"));
+
+  m.def("wait_step_buffer",
+        [](uint64_t streamId, uint64_t stepBufferToken) {
+          SessionManager::instance().waitStepBuffer(streamId, stepBufferToken);
+        },
+        pybind11::arg("streamId"), pybind11::arg("stepBufferToken"));
 
   m.def("enter_state", [](const std::string &state) {
     SessionManager::instance().setState(state);

@@ -1,6 +1,5 @@
 import functools
 import triton
-
 from triton._C.libproton import proton as libproton  # type: ignore
 from triton._C.libtriton import getenv  # type: ignore
 from .flags import flags
@@ -190,8 +189,6 @@ def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -
     Returns:
         None
     """
-    HookManager.unregister(session)
-
     if session is None:
         flags.profiling_on = False
         libproton.finalize_all(output_format)
@@ -199,6 +196,7 @@ def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -
         if flags.command_line and session != 0:
             raise ValueError("Only one session can be finalized when running from the command line.")
         libproton.finalize(session, output_format)
+    HookManager.unregister(session)
 
 
 def _profiling(

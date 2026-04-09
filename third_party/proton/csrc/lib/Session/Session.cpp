@@ -294,6 +294,38 @@ void SessionManager::exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
       /*isReversed=*/true);
 }
 
+void SessionManager::markStep(uint64_t streamId, uint64_t stepBufferToken) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](auto *instrumentationInterface) {
+                     instrumentationInterface->markStep(streamId,
+                                                        stepBufferToken);
+                   });
+  // The public advance_phase() path seals the current instrumentation step via
+  // this helper and immediately schedules any ready async drains, so we flush
+  // each unique profiler here. If the opportunistic parse work in flush()
+  // becomes too expensive on the caller thread, this is the hook point to move
+  // the flush scheduling onto a background C++ thread.
+  std::set<Profiler *> flushedProfilers;
+  for (const auto &[sessionId, session] : sessions) {
+    (void)sessionId;
+    auto *profiler = session->profiler;
+    if (flushedProfilers.insert(profiler).second) {
+      profiler->flush();
+    }
+  }
+}
+
+void SessionManager::waitStepBuffer(uint64_t streamId,
+                                    uint64_t stepBufferToken) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](auto *instrumentationInterface) {
+                     instrumentationInterface->waitStepBuffer(
+                         streamId, stepBufferToken);
+                   });
+}
+
 void SessionManager::addMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
     const std::map<std::string, TensorMetric> &tensorMetrics) {

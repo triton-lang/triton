@@ -1,8 +1,8 @@
 #include "Runtime/CudaRuntime.h"
 
 #include "Driver/GPU/CudaApi.h"
-#include <algorithm>
 #include <cstdint>
+#include <stdexcept>
 
 namespace proton {
 
@@ -80,6 +80,37 @@ void *CudaRuntime::getPriorityStream() {
   return reinterpret_cast<void *>(stream);
 }
 
+void *CudaRuntime::createEvent() {
+  CUevent event;
+  cuda::eventCreate<true>(&event, CU_EVENT_DEFAULT);
+  return reinterpret_cast<void *>(event);
+}
+
+void CudaRuntime::destroyEvent(void *event) {
+  cuda::eventDestroy<true>(reinterpret_cast<CUevent>(event));
+}
+
+void CudaRuntime::recordEvent(void *event, void *stream) {
+  cuda::eventRecord<true>(reinterpret_cast<CUevent>(event),
+                          reinterpret_cast<CUstream>(stream));
+}
+
+void CudaRuntime::waitEvent(void *stream, void *event) {
+  cuda::streamWaitEvent<true>(reinterpret_cast<CUstream>(stream),
+                              reinterpret_cast<CUevent>(event), 0);
+}
+
+bool CudaRuntime::queryEvent(void *event) {
+  auto status = cuda::eventQuery<false>(reinterpret_cast<CUevent>(event));
+  if (status == CUDA_SUCCESS) {
+    return true;
+  }
+  if (status == CUDA_ERROR_NOT_READY) {
+    return false;
+  }
+  throw std::runtime_error("Failed to query CUDA event");
+}
+
 void CudaRuntime::synchronizeStream(void *stream) {
   cuda::streamSynchronize<true>(reinterpret_cast<CUstream>(stream));
 }
@@ -93,29 +124,6 @@ void CudaRuntime::synchronizeDevice() {
   cuda::ctxGetCurrent<false>(&cuContext);
   if (cuContext) {
     cuda::ctxSynchronize<true>();
-  }
-}
-
-void CudaRuntime::processHostBuffer(
-    uint8_t *hostBuffer, size_t hostBufferSize, uint8_t *deviceBuffer,
-    size_t deviceBufferSize, void *stream,
-    std::function<void(uint8_t *, size_t)> callback) {
-  int64_t chunkSize = std::min(hostBufferSize, deviceBufferSize);
-  int64_t sizeLeftOnDevice = deviceBufferSize;
-  while (chunkSize > 0) {
-    cuda::memcpyDToHAsync<true>(reinterpret_cast<void *>(hostBuffer),
-                                reinterpret_cast<CUdeviceptr>(deviceBuffer),
-                                chunkSize, reinterpret_cast<CUstream>(stream));
-    // We should not use synchronization here in general if we want to copy
-    // buffer while the kernel is running. But for the sake of simplicity, we
-    // only copy the buffer after the kernel is finished for now.
-    cuda::streamSynchronize<true>(reinterpret_cast<CUstream>(stream));
-    callback(hostBuffer, chunkSize);
-    hostBuffer += chunkSize;
-    deviceBuffer += chunkSize;
-    sizeLeftOnDevice -= chunkSize;
-    chunkSize =
-        std::min(static_cast<int64_t>(hostBufferSize), sizeLeftOnDevice);
   }
 }
 

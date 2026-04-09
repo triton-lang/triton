@@ -37,6 +37,7 @@ HAS_WARP_SPECIALIZE = supports_ws() and supports_tma()
     [
         "default",
         "default:metric_type=cycle",
+        "default:metric_type=cycle:trace_mode=kernel",
         "default:metric_type=cycle:buffer_size=4096",
         "mma",
     ],
@@ -52,6 +53,7 @@ def test_mode_str(mode, tmp_path: pathlib.Path):
     [
         proton.mode.Default(),
         proton.mode.Default(metric_type="cycle"),
+        proton.mode.Default(metric_type="cycle", trace_mode="kernel"),
         proton.mode.Default(metric_type="cycle", buffer_size=4096),
         proton.mode.MMA(),
     ],
@@ -60,6 +62,35 @@ def test_mode_obj(mode, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_mode_simple.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
     proton.finalize()
+
+
+def test_kernel_trace_profile_scratch_buffer_unit(tmp_path: pathlib.Path):
+
+    @triton.jit
+    def copy_kernel(x_ptr, y_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        tl.store(y_ptr + offsets, tl.load(x_ptr + offsets, mask=mask), mask=mask)
+
+    backend = triton.runtime.driver.active.get_current_target().backend
+    if backend == "cuda":
+        from triton.backends.nvidia.driver import PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH
+    elif backend == "hip":
+        from triton.backends.amd.driver import PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH
+    else:
+        raise AssertionError(f"Unsupported backend: {backend}")
+
+    x = torch.rand(256, device="cuda")
+    y = torch.empty_like(x)
+    temp_file = tmp_path / "test_kernel_trace_profile_scratch_buffer_unit.hatchet"
+    mode = proton.mode.Default(trace_mode="kernel")
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
+    pgm = copy_kernel[(1, 1, 1)](x, y, y.numel(), BLOCK_SIZE=1024, num_warps=1)
+    proton.finalize()
+
+    assert pgm.metadata.profile_scratch_buffer_unit == PROFILE_SCRATCH_BUFFER_UNIT_KERNEL_LAUNCH
 
 
 def test_jit(tmp_path):
@@ -381,6 +412,256 @@ def test_trace(tmp_path: pathlib.Path):
         assert events[2]["cat"] == "sub_kernel"
         assert events[3]["name"] == "load_ops"
         assert events[3]["cat"] == "sub_kernel"
+
+
+def test_trace_kernel_timing(tmp_path: pathlib.Path):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    @triton.jit
+    def sub_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x - y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    temp_file = tmp_path / "test_trace_kernel_timing.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    mode = proton.mode.Default(trace_mode="kernel")
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace", mode=mode)
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    sub_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.finalize()
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+        assert len(events) == 2
+        assert events[0]["name"] == "add_kernel"
+        assert events[0]["cat"] == "kernel"
+        assert events[0]["dur"] > 0
+        assert events[0]["args"]["call_stack"] == ["ROOT", "add_kernel"]
+        assert events[1]["name"] == "sub_kernel"
+        assert events[1]["cat"] == "kernel"
+        assert events[1]["dur"] > 0
+        assert events[1]["args"]["call_stack"] == ["ROOT", "sub_kernel"]
+
+
+def test_trace_kernel_timing_advance_phase_drains(tmp_path: pathlib.Path, fresh_knobs):
+    fresh_knobs.proton.profile_buffer_slots = 1
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    @triton.jit
+    def sub_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x - y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    temp_file = tmp_path / "test_trace_kernel_timing_advance_phase_drains.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    mode = proton.mode.Default(trace_mode="kernel")
+    session = proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace", mode=mode)
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.data.advance_phase(session)
+    sub_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.data.advance_phase(session)
+    proton.finalize()
+
+    phase0_file = temp_file.with_name(f"{temp_file.stem}.part_0{temp_file.suffix}")
+    phase1_file = temp_file.with_name(f"{temp_file.stem}.part_1{temp_file.suffix}")
+    phase2_file = temp_file.with_name(f"{temp_file.stem}.part_2{temp_file.suffix}")
+
+    with open(phase0_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+        assert len(events) == 1
+        assert events[0]["name"] == "add_kernel"
+        assert events[0]["cat"] == "kernel"
+        assert events[0]["dur"] > 0
+        assert events[0]["args"]["call_stack"] == ["ROOT", "add_kernel"]
+
+    with open(phase1_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+        assert len(events) == 1
+        assert events[0]["name"] == "sub_kernel"
+        assert events[0]["cat"] == "kernel"
+        assert events[0]["dur"] > 0
+        assert events[0]["args"]["call_stack"] == ["ROOT", "sub_kernel"]
+
+    assert phase2_file.exists()
+    assert phase2_file.stat().st_size == 0
+
+
+def test_trace_kernel_timing_multi_launch_same_step(tmp_path: pathlib.Path, fresh_knobs):
+    fresh_knobs.proton.profile_buffer_slots = 1
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    @triton.jit
+    def sub_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x - y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    temp_file = tmp_path / "test_trace_kernel_timing_multi_launch_same_step.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    mode = proton.mode.Default(trace_mode="kernel")
+    session = proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace", mode=mode)
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    sub_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.data.advance_phase(session)
+    proton.finalize()
+
+    phase0_file = temp_file.with_name(f"{temp_file.stem}.part_0{temp_file.suffix}")
+    phase1_file = temp_file.with_name(f"{temp_file.stem}.part_1{temp_file.suffix}")
+
+    with open(phase0_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+        assert len(events) == 2
+        assert events[0]["name"] == "add_kernel"
+        assert events[0]["cat"] == "kernel"
+        assert events[0]["dur"] > 0
+        assert events[0]["args"]["call_stack"] == ["ROOT", "add_kernel"]
+        assert events[1]["name"] == "sub_kernel"
+        assert events[1]["cat"] == "kernel"
+        assert events[1]["dur"] > 0
+        assert events[1]["args"]["call_stack"] == ["ROOT", "sub_kernel"]
+
+    assert phase1_file.exists()
+    assert phase1_file.stat().st_size == 0
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
+def test_trace_kernel_timing_rejects_cudagraph_capture(tmp_path: pathlib.Path, fresh_knobs):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    temp_file = tmp_path / "test_trace_kernel_timing_cudagraph_capture.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    mode = proton.mode.Default(trace_mode="kernel")
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace", mode=mode)
+
+    graph = torch.cuda.CUDAGraph()
+    with pytest.raises(RuntimeError, match="trace_mode='kernel' is not supported during CUDA graph capture yet"):
+        with torch.cuda.graph(graph):
+            add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+
+    proton.finalize()
 
 
 def test_multi_session(tmp_path: pathlib.Path):
