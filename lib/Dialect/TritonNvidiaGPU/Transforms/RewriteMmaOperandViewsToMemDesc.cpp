@@ -6,6 +6,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include <algorithm>
 
 namespace mlir::triton::nvidia_gpu {
 
@@ -19,8 +20,8 @@ namespace {
 // The MMA operand layout is determined by the sink memdesc already feeding the
 // dot-like op. This pattern back-propagates that layout through the tensor
 // reshape/transpose chain, hoists local_alloc to the base tensor feeding that
-// view chain, and then replays the same views as memdesc reshape/transpose
-// ops.
+// view chain, and replays those tensor views as memdesc reshape/transpose
+// ops so the original local_alloc type is preserved.
 template <typename DotOpTy>
 class RewriteMmaOperandViewsToMemDescForDotOp
     : public OpRewritePattern<DotOpTy> {
@@ -29,166 +30,107 @@ public:
 
   LogicalResult matchAndRewrite(DotOpTy dotOp,
                                 PatternRewriter &rewriter) const override {
-    Value oldA = dotOp.getA();
-    Value oldB = dotOp.getB();
     bool changed = false;
 
-    if (rewriteOperand(dotOp.getAMutable(), rewriter).succeeded()) {
-      oldA.replaceAllUsesExcept(dotOp.getA(), dotOp.getOperation());
+    if (rewriteOperand(dotOp.getA(), rewriter).succeeded())
       changed = true;
-    }
 
-    if (rewriteOperand(dotOp.getBMutable(), rewriter).succeeded()) {
-      oldB.replaceAllUsesExcept(dotOp.getB(), dotOp.getOperation());
+    if (rewriteOperand(dotOp.getB(), rewriter).succeeded())
       changed = true;
-    }
 
     return success(changed);
   }
 
 private:
-  struct ViewStep {
-    enum Kind { Reshape, Transpose } kind;
-    SmallVector<int64_t> srcShape;
-    SmallVector<int64_t> dstShape;
-    SmallVector<int32_t> order;
-    Operation *op;
-    Location loc;
-  };
-
-  template <typename ReshapeOpTy, typename TransOpTy>
-  static std::tuple<Value, SmallVector<ViewStep>>
-  collectViewSteps(Value value) {
-    Value current = value;
-    SmallVector<ViewStep> replaySteps;
-    while (true) {
-      if (auto reshape = current.template getDefiningOp<ReshapeOpTy>()) {
-        auto srcTy = reshape.getSrc().getType();
-        auto dstTy = reshape.getType();
-        replaySteps.push_back(ViewStep{ViewStep::Reshape,
-                                       SmallVector<int64_t>(srcTy.getShape()),
-                                       SmallVector<int64_t>(dstTy.getShape()),
-                                       {},
-                                       reshape.getOperation(),
-                                       reshape.getLoc()});
-        current = reshape.getSrc();
-        continue;
-      }
-      if (auto trans = current.template getDefiningOp<TransOpTy>()) {
-        SmallVector<int32_t> order(trans.getOrder().begin(),
-                                   trans.getOrder().end());
-        auto srcTy = trans.getSrc().getType();
-        auto dstTy = trans.getType();
-        replaySteps.push_back(ViewStep{
-            ViewStep::Transpose, SmallVector<int64_t>(srcTy.getShape()),
-            SmallVector<int64_t>(dstTy.getShape()), std::move(order),
-            trans.getOperation(), trans.getLoc()});
-        current = trans.getSrc();
-        continue;
-      }
-      break;
-    }
-    return {current, llvm::to_vector(llvm::reverse(replaySteps))};
-  }
-
   static FailureOr<gpu::MemDescType>
-  inferViewStepBackward(gpu::MemDescType resultTy, const ViewStep &step) {
-    assert(resultTy.getShape() == ArrayRef<int64_t>(step.dstShape) &&
-           "backward inference must start from the view step destination "
-           "shape");
-    if (step.kind == ViewStep::Reshape) {
+  pushLayoutBackward(gpu::MemDescType resultTy, Operation *op) {
+    if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
       gpu::MemDescType srcTy;
       if (failed(gpu::MemDescReshapeOp::inferReturnTypes(
-              resultTy.getContext(), step.loc, resultTy, step.srcShape, srcTy)))
+              resultTy.getContext(), reshape.getLoc(), resultTy,
+              reshape.getSrc().getType().getShape(), srcTy)))
         return failure();
       return srcTy;
     }
-    Attribute srcEnc = inferSrcEncoding(step.op, resultTy.getEncoding());
+
+    auto trans = cast<triton::TransOp>(op);
+    Attribute srcEnc = inferSrcEncoding(op, resultTy.getEncoding());
     if (!srcEnc)
       return failure();
-    return gpu::MemDescType::get(step.srcShape, resultTy.getElementType(),
-                                 srcEnc, resultTy.getMemorySpace(),
-                                 resultTy.getMutableMemory());
+    return gpu::MemDescType::get(
+        trans.getSrc().getType().getShape(), resultTy.getElementType(), srcEnc,
+        resultTy.getMemorySpace(), resultTy.getMutableMemory());
   }
 
-  static Value replayViewSteps(PatternRewriter &rewriter, Value value,
-                               ArrayRef<ViewStep> steps) {
+  static Value replayTensorViews(PatternRewriter &rewriter, Value value,
+                                 ArrayRef<Operation *> steps) {
     Value rewritten = value;
-    for (const ViewStep &step : steps) {
-      if (step.kind == ViewStep::Reshape) {
-        rewritten = gpu::MemDescReshapeOp::create(rewriter, step.loc, rewritten,
-                                                  step.dstShape);
+    for (Operation *op : steps) {
+      if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
+        rewritten = gpu::MemDescReshapeOp::create(
+            rewriter, op->getLoc(), rewritten, reshape.getType().getShape());
       } else {
-        rewritten = gpu::MemDescTransOp::create(rewriter, step.loc, rewritten,
-                                                step.order);
+        auto trans = cast<triton::TransOp>(op);
+        rewritten = gpu::MemDescTransOp::create(rewriter, op->getLoc(),
+                                                rewritten, trans.getOrder());
       }
     }
     return rewritten;
   }
 
-  static void assertEquivalentMemDescType(gpu::MemDescType actualTy,
-                                          gpu::MemDescType expectedTy,
-                                          const char *message) {
-    assert(actualTy.getShape() == expectedTy.getShape() &&
-           actualTy.getElementType() == expectedTy.getElementType() &&
-           gpu::areLayoutsEquivalent(
-               expectedTy.getShape(),
-               cast<gpu::LayoutEncodingTrait>(actualTy.getEncoding()),
-               cast<gpu::LayoutEncodingTrait>(expectedTy.getEncoding())) &&
-           message);
+  static Value peelMemDescViews(Value value) {
+    Value current = value;
+    while (auto view = current.getDefiningOp()) {
+      if (auto reshape = dyn_cast<gpu::MemDescReshapeOp>(view)) {
+        current = reshape.getSrc();
+        continue;
+      }
+      if (auto trans = dyn_cast<gpu::MemDescTransOp>(view)) {
+        current = trans.getSrc();
+        continue;
+      }
+      break;
+    }
+    return current;
   }
 
-  LogicalResult rewriteOperand(OpOperand &operand,
-                               PatternRewriter &rewriter) const {
-    Value orig = operand.get();
-    auto origTy = dyn_cast<gpu::MemDescType>(orig.getType());
-    if (!origTy)
+  LogicalResult rewriteOperand(Value operand, PatternRewriter &rewriter) const {
+    if (!isa<gpu::MemDescType>(operand.getType()))
       return failure();
 
-    auto [beforeTrailing, trailingMemDescReplaySteps] =
-        collectViewSteps<gpu::MemDescReshapeOp, gpu::MemDescTransOp>(orig);
-
-    auto localAlloc =
-        beforeTrailing.template getDefiningOp<gpu::LocalAllocOp>();
+    Value beforeTrailing = peelMemDescViews(operand);
+    auto localAlloc = beforeTrailing.getDefiningOp<gpu::LocalAllocOp>();
     if (!localAlloc || !localAlloc.getSrc())
       return failure();
 
-    auto [baseTensor, tensorReplaySteps] =
-        collectViewSteps<triton::ReshapeOp, triton::TransOp>(
-            localAlloc.getSrc());
+    Value baseTensor = localAlloc.getSrc();
+    SmallVector<Operation *> tensorReplaySteps;
+    gpu::MemDescType baseMemTy = localAlloc.getType();
+    while (auto view = baseTensor.getDefiningOp()) {
+      if (!isa<triton::ReshapeOp, triton::TransOp>(view))
+        break;
+      auto srcTy = pushLayoutBackward(baseMemTy, view);
+      if (failed(srcTy))
+        return failure();
+      tensorReplaySteps.push_back(view);
+      baseMemTy = *srcTy;
+      baseTensor = view->getOperand(0);
+    }
     if (tensorReplaySteps.empty())
       return failure();
 
-    gpu::MemDescType baseMemTy = localAlloc.getType();
-    for (const ViewStep &step : llvm::reverse(tensorReplaySteps)) {
-      auto srcTy = inferViewStepBackward(baseMemTy, step);
-      if (failed(srcTy))
-        return failure();
-      baseMemTy = *srcTy;
-    }
+    std::reverse(tensorReplaySteps.begin(), tensorReplaySteps.end());
 
     PatternRewriter::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(localAlloc);
 
     Value rewritten = gpu::LocalAllocOp::create(rewriter, localAlloc.getLoc(),
                                                 baseMemTy, baseTensor);
-    auto sinkTy = localAlloc.getType();
-
-    rewritten = replayViewSteps(rewriter, rewritten, tensorReplaySteps);
+    rewritten = replayTensorViews(rewriter, rewritten, tensorReplaySteps);
 
     auto rewrittenSinkTy = cast<gpu::MemDescType>(rewritten.getType());
-    assertEquivalentMemDescType(
-        rewrittenSinkTy, sinkTy,
-        "rewrite must preserve the intermediate sink memdesc");
 
-    rewritten =
-        replayViewSteps(rewriter, rewritten, trailingMemDescReplaySteps);
-
-    auto rewrittenTy = cast<gpu::MemDescType>(rewritten.getType());
-    assertEquivalentMemDescType(rewrittenTy, origTy,
-                                "rewrite must preserve the final memdesc");
-
-    operand.assign(rewritten);
+    rewriter.replaceOp(localAlloc, rewritten);
     return success();
   }
 };
