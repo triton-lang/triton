@@ -1118,20 +1118,19 @@ struct CanonicalizeIntToPtrWithConstantOffset
       return failure();
 
     // Find which operand is ptr_to_int and which is the offset
-    Value ptrToIntValue = nullptr;
+    PtrToIntOp ptrToIntOp = nullptr;
     Value offsetValue = nullptr;
 
     if (auto lhsPtrToInt = addOp.getLhs().getDefiningOp<PtrToIntOp>()) {
-      ptrToIntValue = addOp.getLhs();
+      ptrToIntOp = lhsPtrToInt;
       offsetValue = addOp.getRhs();
     } else if (auto rhsPtrToInt = addOp.getRhs().getDefiningOp<PtrToIntOp>()) {
-      ptrToIntValue = addOp.getRhs();
+      ptrToIntOp = rhsPtrToInt;
       offsetValue = addOp.getLhs();
     } else {
       return failure();
     }
 
-    auto ptrToIntOp = ptrToIntValue.getDefiningOp<PtrToIntOp>();
     Value originalPtr = ptrToIntOp.getSrc();
 
     // Get the element size from the pointer type
@@ -1168,18 +1167,26 @@ struct CanonicalizeIntToPtrWithConstantOffset
     auto resultType = intToPtrOp.getType();
     Value elementOffsetValue;
 
+    // Get the integer type from the offset value to match its type
+    Type offsetElemType;
+    if (auto tensorType = dyn_cast<RankedTensorType>(offsetValue.getType())) {
+      offsetElemType = tensorType.getElementType();
+    } else {
+      offsetElemType = offsetValue.getType();
+    }
+
     if (auto tensorType = dyn_cast<RankedTensorType>(resultType)) {
-      // Create a splat constant for tensor types
-      auto i32Type = rewriter.getI32Type();
-      auto offsetAttr = rewriter.getI32IntegerAttr(elementOffset);
-      auto splatType = RankedTensorType::get(tensorType.getShape(), i32Type,
-                                             tensorType.getEncoding());
+      // Create a splat constant for tensor types, matching the offset's type
+      auto offsetAttr = rewriter.getIntegerAttr(offsetElemType, elementOffset);
+      auto splatType = RankedTensorType::get(
+          tensorType.getShape(), offsetElemType, tensorType.getEncoding());
       auto splatAttr = SplatElementsAttr::get(splatType, offsetAttr);
       elementOffsetValue = arith::ConstantOp::create(rewriter, loc, splatAttr);
     } else {
       // Scalar case
       elementOffsetValue = arith::ConstantOp::create(
-          rewriter, loc, rewriter.getI32IntegerAttr(elementOffset));
+          rewriter, loc,
+          rewriter.getIntegerAttr(offsetElemType, elementOffset));
     }
 
     // Replace with addptr

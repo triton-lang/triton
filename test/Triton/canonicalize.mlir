@@ -179,8 +179,8 @@ tt.func @fold_transpose_constant() -> tensor<128x16xf32> {
 // Test: int_to_ptr(addi(ptr_to_int(ptr), constant)) -> addptr(ptr, element_offset)
 // For f32 (4 bytes): 16 bytes = 4 elements
 tt.func @canonicalize_int_to_ptr_with_constant_offset_f32(%base: tensor<128x!tt.ptr<f32>>) -> tensor<128x!tt.ptr<f32>> {
-  // CHECK: %[[OFFSET:.*]] = arith.constant dense<4> : tensor<128xi32>
-  // CHECK-NEXT: %[[RESULT:.*]] = tt.addptr %{{.*}}, %[[OFFSET]] : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
+  // CHECK: %[[OFFSET:.*]] = arith.constant dense<4> : tensor<128xi64>
+  // CHECK-NEXT: %[[RESULT:.*]] = tt.addptr %{{.*}}, %[[OFFSET]] : tensor<128x!tt.ptr<f32>>, tensor<128xi64>
   %byte_offset = arith.constant dense<16> : tensor<128xi64>
   %ptr_as_int = tt.ptr_to_int %base : tensor<128x!tt.ptr<f32>> -> tensor<128xi64>
   %offset_ptr_int = arith.addi %ptr_as_int, %byte_offset : tensor<128xi64>
@@ -194,8 +194,8 @@ tt.func @canonicalize_int_to_ptr_with_constant_offset_f32(%base: tensor<128x!tt.
 // CHECK-LABEL: @canonicalize_int_to_ptr_with_constant_offset_f16
 // Test: For f16 (2 bytes): 32 bytes = 16 elements
 tt.func @canonicalize_int_to_ptr_with_constant_offset_f16(%base: tensor<1024x!tt.ptr<f16>>) -> tensor<1024x!tt.ptr<f16>> {
-  // CHECK: %[[OFFSET:.*]] = arith.constant dense<16> : tensor<1024xi32>
-  // CHECK-NEXT: %[[RESULT:.*]] = tt.addptr %{{.*}}, %[[OFFSET]] : tensor<1024x!tt.ptr<f16>>, tensor<1024xi32>
+  // CHECK: %[[OFFSET:.*]] = arith.constant dense<16> : tensor<1024xi64>
+  // CHECK-NEXT: %[[RESULT:.*]] = tt.addptr %{{.*}}, %[[OFFSET]] : tensor<1024x!tt.ptr<f16>>, tensor<1024xi64>
   %byte_offset = arith.constant dense<32> : tensor<1024xi64>
   %ptr_as_int = tt.ptr_to_int %base : tensor<1024x!tt.ptr<f16>> -> tensor<1024xi64>
   %offset_ptr_int = arith.addi %ptr_as_int, %byte_offset : tensor<1024xi64>
@@ -209,8 +209,8 @@ tt.func @canonicalize_int_to_ptr_with_constant_offset_f16(%base: tensor<1024x!tt
 // CHECK-LABEL: @canonicalize_int_to_ptr_commutative
 // Test: addi is commutative, offset can be on either side
 tt.func @canonicalize_int_to_ptr_commutative(%base: tensor<64x!tt.ptr<i32>>) -> tensor<64x!tt.ptr<i32>> {
-  // CHECK: %[[OFFSET:.*]] = arith.constant dense<2> : tensor<64xi32>
-  // CHECK-NEXT: %[[RESULT:.*]] = tt.addptr %{{.*}}, %[[OFFSET]] : tensor<64x!tt.ptr<i32>>, tensor<64xi32>
+  // CHECK: %[[OFFSET:.*]] = arith.constant dense<2> : tensor<64xi64>
+  // CHECK-NEXT: %[[RESULT:.*]] = tt.addptr %{{.*}}, %[[OFFSET]] : tensor<64x!tt.ptr<i32>>, tensor<64xi64>
   %byte_offset = arith.constant dense<8> : tensor<64xi64>
   %ptr_as_int = tt.ptr_to_int %base : tensor<64x!tt.ptr<i32>> -> tensor<64xi64>
   // Offset on the left side of add
