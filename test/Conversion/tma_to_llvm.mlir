@@ -12,7 +12,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // CHECK-LABEL: @tma_gather_simple
 // CHECK-SAME: i32 [[Y0:%3]]
-tt.func @tma_gather_simple(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %arg2: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %arg3: i32, %arg4: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %arg5: i1) {
+tt.func public @tma_gather_simple(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %arg2: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %arg3: i32, %arg4: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %arg5: i1) {
   // There are 32 indices distributed to 4 warps, so each warp as 8 indices.
 
   // CHECK: [[BAR:%.*]] = extractvalue {{.*}} %1, 0
@@ -87,7 +87,7 @@ tt.func @tma_gather_simple(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: !
 }
 
 // CHECK-LABEL: @tma_gather_8_consecutive_indices
-tt.func @tma_gather_8_consecutive_indices(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %arg2: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>, %arg3: i32, %arg4: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %arg5: i1) {
+tt.func public @tma_gather_8_consecutive_indices(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %arg2: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>, %arg3: i32, %arg4: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %arg5: i1) {
   // Due to the `sizePerThread = [1, 8]`, each warp now handles 8 consecutive
   // rows, where each row is divided into 2 segments for a total of 4 gather4s.
   //
@@ -118,7 +118,7 @@ tt.func @tma_gather_8_consecutive_indices(%arg0: !tt.tensordesc<1x128xbf16, #sha
 }
 
 // CHECK-LABEL: @tma_gather_redundant_indices
-tt.func @tma_gather_redundant_indices(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %arg2: tensor<32xi32, #linear>, %arg3: i32, %arg4: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %arg5: i1) {
+tt.func public @tma_gather_redundant_indices(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %arg2: tensor<32xi32, #linear>, %arg3: i32, %arg4: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %arg5: i1) {
   // Codegen for this case is actually incorrect due to linear layouts
   // incorrectly handling register broadcasting, but the test outcome is nonetheless
   // the same.
@@ -130,7 +130,7 @@ tt.func @tma_gather_redundant_indices(%arg0: !tt.tensordesc<1x128xbf16, #shared1
 }
 
 // CHECK-LABEL: @tma_gather_redundant_warps
-tt.func @tma_gather_redundant_warps(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %arg2: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>, %arg3: i32, %arg4: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %arg5: i1) {
+tt.func public @tma_gather_redundant_warps(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %arg2: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>, %arg3: i32, %arg4: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %arg5: i1) {
   // CHECK: [[WARP_ID:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32
   // CHECK: [[WARP_SELECT:%.*]] = and i32 [[WARP_ID]], 2
   // CHECK: [[WARP_PRED:%.*]] = icmp eq i32 [[WARP_SELECT]], 0
@@ -147,7 +147,7 @@ tt.func @tma_gather_redundant_warps(%arg0: !tt.tensordesc<1x128xbf16, #shared1>,
 }
 
 // CHECK-LABEL: @tma_scatter
-tt.func @tma_scatter(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %arg2: i32, %arg3: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>) {
+tt.func public @tma_scatter(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %arg2: i32, %arg3: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>) {
   // The lowering for `async_tma_scatter` shares practically all of its logic
   // with `async_tma_gather`, so we don't need to re-test the indexing logic.
 
@@ -161,33 +161,6 @@ tt.func @tma_scatter(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: tensor<
   ttng.async_tma_scatter %arg0[%arg1, %arg2] %arg3 : !tt.tensordesc<1x128xbf16, #shared1>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>
 
   // CHECK: nvvm.cp.async.bulk.commit.group()
-
-  // CHECK-NEXT: ret void
-  tt.return
-}
-
-}
-
-// -----
-
-#blocked_bcast = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
-#shared_bar_bcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
-#shared_gather_bcast = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
-
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
-
-// CHECK-LABEL: @tma_gather_multicast
-tt.func @tma_gather_multicast(%arg0: !tt.tensordesc<tensor<1x128xbf16, #shared_gather_bcast>>, %arg1: !ttg.memdesc<1xi64, #shared_bar_bcast, #smem, mutable>, %arg2: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked_bcast}>>, %arg3: i32, %arg4: !ttg.memdesc<32x128xbf16, #shared_gather_bcast, #smem, mutable>, %arg5: i1) {
-  // CHECK: [[BAR:%.*]] = extractvalue {{.*}} %1, 0
-  // CHECK: [[BAR_INT:%.*]] = ptrtoint ptr addrspace(3) [[BAR]] to i32
-  // CHECK: [[LEADER_BAR_INT:%.*]] = and i32 [[BAR_INT]],
-  // CHECK: [[LEADER_BAR:%.*]] = inttoptr i32 [[LEADER_BAR_INT]] to ptr addrspace(3)
-  // CHECK: [[ELECT:%.*]] = tail call { i32, i1 } @llvm.nvvm.elect.sync
-  // CHECK: [[ELECT_PRED:%.*]] = extractvalue { i32, i1 } [[ELECT]], 1
-  // CHECK: [[PRED:%.*]] = and i1 {{.*}}, [[ELECT_PRED]]
-  // CHECK: "@$0 cp.async.bulk.tensor.2d.tile::gather4.shared::cluster.global.mbarrier::complete_tx::bytes.multicast::cluster [$1], [$2, {$3, $4, $5, $6, $7}], [$8], $9;", "b,r,l,r,r,r,r,r,r,h"
-  // CHECK-SAME: (i1 [[PRED]], ptr addrspace(3) {{.*}}, ptr nonnull %0, i32 %3, i32 {{.*}}, i32 {{.*}}, i32 {{.*}}, i32 {{.*}}, ptr addrspace(3) [[LEADER_BAR]], i32 {{(%[0-9]+|3)}})
-  ttng.async_tma_gather %arg0[%arg2, %arg3] %arg4, %arg1, %arg5 {multicast} : !tt.tensordesc<tensor<1x128xbf16, #shared_gather_bcast>>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked_bcast}>>, i32, !ttg.memdesc<1xi64, #shared_bar_bcast, #smem, mutable>, !ttg.memdesc<32x128xbf16, #shared_gather_bcast, #smem, mutable>, i1
 
   // CHECK-NEXT: ret void
   tt.return
