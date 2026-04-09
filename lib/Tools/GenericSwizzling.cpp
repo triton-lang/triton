@@ -268,18 +268,19 @@ std::pair<int, int> bankConflicts(ArrayRef<int32_t> tileSrc,
 SmallVector<int32_t> getLaneTile(ArrayRef<int32_t> lane,
                                  ArrayRef<LocalMemOpTile> tiles,
                                  int32_t log2Vec, int32_t log2Phase) {
-  ArrayRef<int32_t> tile;
   if (!tiles.empty()) {
     assert(log2Vec < tiles.size() && "tiles.size() should be >= log2Vec");
-    tile = tiles[log2Vec].laneAddr;
-  }
-  if (!tile.empty()) {
-    SmallVector<int32_t> ret;
-    for (int32_t id : tile) {
-      assert(id < lane.size() && "id should be < lane.size()");
-      ret.push_back(lane[id]);
+    const auto tile = tiles[log2Vec].laneAddr;
+    if (!tile.empty()) {
+      SmallVector<int32_t> ret;
+      for (int32_t idx : tile) {
+        assert(idx < lane.size() && "idx should be < lane.size()");
+        ret.push_back(lane[idx]);
+      }
+      if (llvm::all_of(ret, [](int32_t v) { return v != 0; })) {
+        return ret;
+      }
     }
-    return ret;
   }
   return to_vector(lane.drop_back(log2Phase));
 }
