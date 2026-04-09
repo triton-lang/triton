@@ -298,17 +298,6 @@ def make_default_opt_flags_nvidia(
     elif can_use_split_k and not enforce_bitwise_invariance:
         estimated_actual_grid_size = opt_flags_nvidia.compute_grid_size(None, batch_size, m, n, block_m, block_n)
         split_k = opt_flags_nvidia.compute_split_k(block_k, k, estimated_actual_grid_size)
-        if constraints.get("block_n", None) is None and block_n == 256 and split_k > 1:
-            alternative_block_n = 128
-            alternative_estimated_actual_grid_size = opt_flags_nvidia.compute_grid_size(
-                None, batch_size, m, n, block_m, alternative_block_n
-            )
-            alternative_split_k = opt_flags_nvidia.compute_split_k(
-                block_k, k, alternative_estimated_actual_grid_size
-            )
-            if alternative_split_k == 1:
-                block_n = alternative_block_n
-                split_k = alternative_split_k
     compute_num_stages_args = (
         precision_config,
         is_persistent,
