@@ -60,9 +60,9 @@ def main():
     for s1 in _csv_ints(args.s1s):
         for k in _csv_ints(args.ks):
             for s0 in _csv_ints(args.s0s):
-                block_s0, block_s1, _, _ = _select_reduce_forward_config(s0, s1, 1, k, False)
+                opt_flags = _select_reduce_forward_config(s0, s1, 1, k, False)
                 median_ms, mean_ms, p90_ms = bench_reduce(k, s0, s1, args.iters, cache_killer)
-                print(f"{k},{s0},{s1},{block_s0},{block_s1},{median_ms:.6f},{mean_ms:.6f},{p90_ms:.6f}", flush=True)
+                print(f"{k},{s0},{s1},{opt_flags.block_s0},{opt_flags.block_x_s1},{median_ms:.6f},{mean_ms:.6f},{p90_ms:.6f}", flush=True)
 
 
 if __name__ == "__main__":

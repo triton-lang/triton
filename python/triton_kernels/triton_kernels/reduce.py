@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
 import torch
 import triton
 import triton.language as tl
@@ -14,6 +16,27 @@ from .specialize import SpecializationModule, ClosureArg, FnSpecs
 class PostprocessFn:
     specs: FnSpecs = FnSpecs.default()
     fn_args: tuple[object] = tuple()
+
+
+@dataclass(frozen=True)
+class OptFlags:
+    block_s0: int
+    block_x_s1: int
+    block_y_s1: int
+    num_warps: int
+    use_static_loop: bool
+
+
+_opt_flags: ContextVar[OptFlags | None] = ContextVar("reduce_opt_flags", default=None)
+
+
+@contextmanager
+def scoped_opt_flags(opt_flags: OptFlags):
+    token = _opt_flags.set(opt_flags)
+    try:
+        yield
+    finally:
+        _opt_flags.reset(token)
 
 
 # Return strides in this order: (reduction dim, non-reduction dim #0, non-reduction dim #1).
@@ -58,7 +81,8 @@ def _select_reduce_forward_config(
     reduction_n: int,
     K: int,
     has_mx: bool,
-) -> tuple[int, int, int, int]:
+) -> OptFlags:
+    use_static_loop = K <= 8
     if K in (2, 3, 4) and S0 <= 256 and Y_S1 >= 4096 and reduction_n == 1 and not has_mx:
         if K >= 3:
             # K>=3 does more loads than K=2, so keep its tile area
@@ -85,10 +109,10 @@ def _select_reduce_forward_config(
             if min_s0_programs <= S0:
                 max_occupancy_block_s0 = max(1, S0 // min_s0_programs)
                 block_s0 = min(max_block_s0, max_occupancy_block_s0)
-                return block_s0, block_s1, block_s1, 4
+                return OptFlags(block_s0, block_s1, block_s1, 4, use_static_loop)
             block_s1 //= 2
 
-    return 32, 128, 128 // reduction_n, 4
+    return OptFlags(32, 128, 128 // reduction_n, 4, use_static_loop)
 
 
 @triton.jit(launch_metadata=reduce_launch_metadata)
@@ -309,10 +333,12 @@ def reduce_forward(
     stride_sr, stride_s0, stride_s1 = _get_strides(scale, dim)
     K = x.shape[dim]
     # Always use the 2D tiled kernel with constexpr metaprogramming for mask broadcasting
-    BLOCK_S0, BLOCK_X_S1, BLOCK_Y_S1, num_warps = _select_reduce_forward_config(
-        S0, Y_S1, postprocess_fn1.specs.reduction_n, K, x_mxscale is not None or y_has_mx
-    )
-    grid = (triton.cdiv(S0, BLOCK_S0), triton.cdiv(Y_S1, BLOCK_Y_S1))
+    opt_flags = _opt_flags.get()
+    if opt_flags is None:
+        opt_flags = _select_reduce_forward_config(
+            S0, Y_S1, postprocess_fn1.specs.reduction_n, K, x_mxscale is not None or y_has_mx
+        )
+    grid = (triton.cdiv(S0, opt_flags.block_s0), triton.cdiv(Y_S1, opt_flags.block_y_s1))
     if y_has_mx:
         if y_dtype == torch.float8_e4m3fn:
             postprocess_mx_fn = FnSpecs("quantize_mxfp8", quantize_mxfp8_fn, tuple(), tuple())
@@ -345,14 +371,14 @@ def reduce_forward(
         SCALE_BROADCAST_R=(stride_sr == 0),  #
         SCALE_BROADCAST_S0=(stride_s0 == 0),  #
         SCALE_BROADCAST_S1=(stride_s1 == 0),  #
-        USE_STATIC_LOOP=(K <= 8),  #
-        BLOCK_S0=BLOCK_S0,  #
-        BLOCK_X_S1=BLOCK_X_S1,  #
-        BLOCK_Y_S1=BLOCK_Y_S1,  #
+        USE_STATIC_LOOP=opt_flags.use_static_loop,  #
+        BLOCK_S0=opt_flags.block_s0,  #
+        BLOCK_X_S1=opt_flags.block_x_s1,  #
+        BLOCK_Y_S1=opt_flags.block_y_s1,  #
         Y_MX_BLOCK_SIZE=y_microblock_size,  #
         Y_VALUE_PACK_FACTOR=y_value_pack_factor,  #
         DIM=dim,  #
-        num_warps=num_warps  #
+        num_warps=opt_flags.num_warps  #
     )
     return y, y_mxscale
 

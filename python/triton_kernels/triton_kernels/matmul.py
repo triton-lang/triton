@@ -21,7 +21,14 @@ from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .tensor_details.layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
-from .matmul_details.opt_flags import InapplicableConstraint, make_opt_flags, update_opt_flags_constraints
+from .matmul_details.opt_flags import (
+    InapplicableConstraint,
+    OptFlags as OptFlags,
+    make_opt_flags,
+    scoped_opt_flags as scoped_opt_flags,
+    scoped_opt_flags_constraints as scoped_opt_flags_constraints,
+    update_opt_flags_constraints,
+)
 from .matmul_details.opt_flags_details import opt_flags_nvidia
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
 from .tensor import Storage, Tensor, FP4, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, convert_layout

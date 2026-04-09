@@ -1,6 +1,7 @@
 # isort: off
 # fmt: off
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 import triton
@@ -373,36 +374,46 @@ def make_default_opt_flags_nvidia(
 # User Interface
 # --------------
 
-_opt_flags_constraints: dict = dict()
-_opt_flags: OptFlags | None = None
+_opt_flags_constraints: ContextVar[dict | None] = ContextVar("opt_flags_constraints", default=None)
+_opt_flags: ContextVar[OptFlags | None] = ContextVar("opt_flags", default=None)
+
+def _get_opt_flags_constraints() -> dict:
+    constraints = _opt_flags_constraints.get()
+    return {} if constraints is None else constraints
 
 def update_opt_flags_constraints(constraints: dict[str, int]):
-    global _opt_flags_constraints
-    _opt_flags_constraints.update(constraints)
+    updated = _get_opt_flags_constraints().copy()
+    updated.update(constraints)
+    _opt_flags_constraints.set(updated)
 
 def reset_opt_flags_constraints():
-    global _opt_flags_constraints
-    _opt_flags_constraints = dict()
+    _opt_flags_constraints.set(None)
 
 @contextmanager
 def scoped_opt_flags_constraints(constraints):
-    saved = dict(_opt_flags_constraints)
-    _opt_flags_constraints.update(constraints)
+    updated = _get_opt_flags_constraints().copy()
+    updated.update(constraints)
+    token = _opt_flags_constraints.set(updated)
     try:
         yield
     finally:
-        _opt_flags_constraints.clear()
-        _opt_flags_constraints.update(saved)
+        _opt_flags_constraints.reset(token)
 
 def reset_opt_flags():
-    global _opt_flags
-    _opt_flags = None
+    _opt_flags.set(None)
 
 def set_opt_flags(opt_flags: OptFlags):
-    global _opt_flags
-    assert not _opt_flags_constraints, "setting constraints is incompatible with manual flags override"
-    assert not _opt_flags, "opt_flags already set; please reset to None first"
-    _opt_flags = opt_flags
+    assert not _get_opt_flags_constraints(), "setting constraints is incompatible with manual flags override"
+    assert _opt_flags.get() is None, "opt_flags already set; please reset to None first"
+    _opt_flags.set(opt_flags)
+
+@contextmanager
+def scoped_opt_flags(opt_flags: OptFlags):
+    token = _opt_flags.set(opt_flags)
+    try:
+        yield
+    finally:
+        _opt_flags.reset(token)
 
 class InapplicableConstraint(Exception):
     pass
@@ -426,19 +437,20 @@ def make_opt_flags(
     mx_block_size=None,
     x_uses_tma_when_persistent=True,
 ):
-    if _opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
+    opt_flags_constraints = _get_opt_flags_constraints()
+    if opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
-    if _opt_flags_constraints.get("split_k") is not None and _opt_flags_constraints.get("split_k") > 1 and not can_use_split_k:
+    if opt_flags_constraints.get("split_k") is not None and opt_flags_constraints.get("split_k") > 1 and not can_use_split_k:
         raise InapplicableConstraint("cannot enforce `split_k=True` constraint")
-    if _opt_flags_constraints.get("max_allowable_mn"):
-        if not _opt_flags_constraints.get("split_k"):
+    if opt_flags_constraints.get("max_allowable_mn"):
+        if not opt_flags_constraints.get("split_k"):
             raise InapplicableConstraint("split_k also needs to be provided with max_allowable_mn")
     enforce_bitwise_invariance = precision_config.enforce_bitwise_invariance
-    if _opt_flags is not None:
-        assert not _opt_flags_constraints
+    opt_flags = _opt_flags.get()
+    if opt_flags is not None:
+        assert not opt_flags_constraints
         assert block_k is None
-        return _opt_flags
-    opt_flags_constraints = _opt_flags_constraints
+        return opt_flags
     if block_k is not None:
         opt_flags_constraints = opt_flags_constraints.copy()
         opt_flags_constraints.update(block_k=block_k, split_k=1)

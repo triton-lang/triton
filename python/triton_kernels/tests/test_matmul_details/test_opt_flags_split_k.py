@@ -133,7 +133,7 @@ def test_make_default_opt_flags_nvidia_split_k_constraint(monkeypatch):
 def test_max_allowable_mn_and_split_k_constraints(monkeypatch):
     setup_nvidia(monkeypatch)
 
-    opt_flags._opt_flags = None
+    opt_flags.reset_opt_flags()
     opt_flags.reset_opt_flags_constraints()
     opt_flags.update_opt_flags_constraints(
         {
@@ -167,7 +167,7 @@ def test_max_allowable_mn(monkeypatch):
     batch_size, m, n, k = 1, 256, 256, 256
 
     def get_flags(split_k, max_mn):
-        opt_flags._opt_flags = None
+        opt_flags.reset_opt_flags()
         opt_flags.reset_opt_flags_constraints()
         opt_flags.update_opt_flags_constraints(
             {
