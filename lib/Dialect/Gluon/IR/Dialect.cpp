@@ -74,7 +74,7 @@ struct GluonInferLayoutInterface : public triton::DialectInferLayoutInterface {
 
   LogicalResult
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
-                         ArrayRef<int64_t> dstShape, Attribute &dstEnc, bool,
+                         ArrayRef<int64_t> dstShape, Attribute &dstEnc,
                          std::optional<Location> loc) const override {
     return inferAutoEncoding(srcEnc, dstEnc);
   }
