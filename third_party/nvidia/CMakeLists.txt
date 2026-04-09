@@ -6,9 +6,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   set(GSAN_RUNTIME_SRC "${triton_SOURCE_DIR}/python/triton/experimental/gsan/src/GSanLibrary.cu")
   set(GSAN_RUNTIME_HDRS
     "${triton_SOURCE_DIR}/python/triton/experimental/gsan/src/GSan.h"
-    "${triton_SOURCE_DIR}/python/triton/experimental/gsan/src/Hash.cuh"
-    "${CMAKE_CURRENT_SOURCE_DIR}/clang_cuda_shims/assert.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/clang_cuda_shims/curand_mtgp32_kernel.h")
+    "${triton_SOURCE_DIR}/python/triton/experimental/gsan/src/Hash.cuh")
   set(GSAN_RUNTIME_IR "${CMAKE_CURRENT_SOURCE_DIR}/backend/lib/gsan.ll")
 
   find_program(TRITON_GSAN_CLANGXX NAMES clang++
@@ -18,34 +16,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     message(FATAL_ERROR "clang++ is required to build gsan.ll")
   endif()
 
-  set(GSAN_RUNTIME_PLATFORM_FLAGS
-      "--cuda-path=${CMAKE_CURRENT_SOURCE_DIR}/backend")
-  if(APPLE AND CMAKE_OSX_SYSROOT)
-    list(APPEND GSAN_RUNTIME_PLATFORM_FLAGS -isysroot "${CMAKE_OSX_SYSROOT}")
-  endif()
-
-  set(GSAN_RUNTIME_TOOLCHAIN_FLAGS)
-  # Detect the right include directory for C++ stdlib.
-  # The way this is currently done is GCC specific.
-  # TODO: Support libc++-based systems.
-  set(GSAN_HOST_GNU_CXX "${CMAKE_CXX_COMPILER}")
-  if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    # Force g++ to be used for querying -print-file-name on libstdc++.so
-    # clang++ does not print an absolute path in this case.
-    find_program(GSAN_HOST_GNU_CXX NAMES g++ c++)
-  endif()
-  if(GSAN_HOST_GNU_CXX)
-    execute_process(
-      COMMAND "${GSAN_HOST_GNU_CXX}" -print-file-name=libstdc++.so
-      OUTPUT_VARIABLE LIBSTDCXX_PATH
-      OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-    if(IS_ABSOLUTE "${LIBSTDCXX_PATH}")
-      get_filename_component(GCC_INSTALL_DIR "${LIBSTDCXX_PATH}" DIRECTORY)
-      list(APPEND GSAN_RUNTIME_TOOLCHAIN_FLAGS "--gcc-install-dir=${GCC_INSTALL_DIR}")
-    endif()
-  endif()
-
+  # Keep the device runtime freestanding: do not pull in Clang's CUDA wrapper,
+  # vendored CUDA headers, host SDK headers, or the host C++ standard library.
   add_custom_command(
       OUTPUT "${GSAN_RUNTIME_IR}"
       COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -54,16 +26,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
               -x cuda
               -std=c++17 -O3 -S -emit-llvm
               --cuda-device-only
+              -nocudainc
               -nocudalib
-              --no-cuda-version-check
+              -nostdinc
               -fno-exceptions
               -fcuda-flush-denormals-to-zero
               --cuda-gpu-arch=sm_80
-              -Wno-unknown-cuda-version
-              ${GSAN_RUNTIME_TOOLCHAIN_FLAGS}
-              ${GSAN_RUNTIME_PLATFORM_FLAGS}
-              -isystem "${CMAKE_CURRENT_SOURCE_DIR}/clang_cuda_shims"
-              -isystem "${CMAKE_CURRENT_SOURCE_DIR}/backend/include"
               "${GSAN_RUNTIME_SRC}" -o "${GSAN_RUNTIME_IR}"
       DEPENDS "${GSAN_RUNTIME_SRC}" ${GSAN_RUNTIME_HDRS}
       COMMENT "Building GSan runtime"

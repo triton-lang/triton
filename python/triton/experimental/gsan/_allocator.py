@@ -70,3 +70,27 @@ def get_global_state_pointer() -> int:
 def get_runtime_state_layout(device: int) -> dict[str, int]:
     module = _load_gsan_module()
     return module.get_runtime_state_layout(device)
+
+
+def export_allocation_handles(ptr: int) -> tuple[int, int, int]:
+    module = _load_gsan_module()
+    return module.export_allocation_handles(ptr)
+
+
+def import_allocation_handles(real_fd: int, shadow_fd: int, alloc_size: int, device: int) -> int:
+    module = _load_gsan_module()
+    return module.import_allocation_handles(real_fd, shadow_fd, alloc_size, device)
+
+
+def export_runtime_state_handle(device: int) -> tuple[int, int]:
+    module = _load_gsan_module()
+    return module.export_runtime_state_handle(device)
+
+
+def import_runtime_state_handle(fd: int, alloc_size: int, peer_device: int, device: int) -> None:
+    module = _load_gsan_module()
+    module.import_runtime_state_handle(fd, alloc_size, peer_device, device)
+
+
+def free_allocation(ptr: int, device: int) -> None:
+    gsan_free(ptr, device, size=0, stream=0)

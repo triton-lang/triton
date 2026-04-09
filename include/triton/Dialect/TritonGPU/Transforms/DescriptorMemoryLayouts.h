@@ -25,6 +25,7 @@ SharedEncodingTrait updateEncodingForShape(Operation *op,
 class AssignDescriptorMemoryLayouts {
 public:
   AssignDescriptorMemoryLayouts() = default;
+  virtual ~AssignDescriptorMemoryLayouts() = default;
   void assignMemoryLayouts(ModuleOp &mod);
 
 private:

@@ -126,8 +126,8 @@ TensorDescType getTensorDescTypeWithEncoding(Operation *op,
                                              Attribute encoding) {
   auto sharedEnc = cast<SharedEncodingTrait>(encoding);
   encoding = updateEncodingForShape(op, sharedEnc, existingTy);
-  auto blockTy = existingTy.cloneWithEncoding(encoding);
-  return TensorDescType::get(existingTy.getContext(), blockTy);
+  return TensorDescType::get(existingTy.getShape(), existingTy.getElementType(),
+                             encoding);
 }
 
 struct UseInfo {
@@ -296,7 +296,7 @@ AssignDescriptorMemoryLayouts::getUseInfo(Operation *op) {
                                                : load.getType().getEncoding();
     info.cgaLayout = getCGALayout(encoding);
     auto shape = load.getResult().getType().getShape();
-    auto rank = load.getDesc().getType().getBlockType().getRank();
+    auto rank = load.getDesc().getType().getShape().size();
     info.shape = expandToRank(shape, rank);
     return info;
   }
@@ -307,7 +307,7 @@ AssignDescriptorMemoryLayouts::getUseInfo(Operation *op) {
                                                : gather.getType().getEncoding();
     info.cgaLayout = getCGALayout(encoding);
     auto shape = gather.getResult().getType().getShape();
-    auto rank = gather.getDesc().getType().getBlockType().getRank();
+    auto rank = gather.getDesc().getType().getShape().size();
     info.shape = expandToRank(shape, rank);
     return info;
   }
@@ -316,7 +316,7 @@ AssignDescriptorMemoryLayouts::getUseInfo(Operation *op) {
     auto encoding = store.getSrc().getType().getEncoding();
     info.cgaLayout = getCGALayout(encoding);
     auto shape = store.getSrc().getType().getShape();
-    auto rank = store.getDesc().getType().getBlockType().getRank();
+    auto rank = store.getDesc().getType().getShape().size();
     info.shape = expandToRank(shape, rank);
     return info;
   }
@@ -366,7 +366,7 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
       auto itr = valueToEncodingInfo.find(typedVal);
       if (itr != valueToEncodingInfo.end())
         info = combineEncodings(*itr->second, info,
-                                typedVal.getType().getBlockType().getRank());
+                                typedVal.getType().getShape().size());
     }
 
     auto einfo = internEncoding(encodings, info);

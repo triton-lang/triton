@@ -31,7 +31,7 @@ All types are generated on-demand (per partition) based on:
 - readVisibility (scratch, <B x 64 x i64>): Per-buffer, per-thread lanes. Each lane stores a 64-bit mask of other threads whose reads are visible to that lane’s thread
 - writeTracking (scratch, <B x K x i8>): Map buffers → barriers tracking writes (boolean stored in i8)
 - readTracking (scratch, <B x K x i64>): Map buffers → barriers tracking reads (bitmask of threads)
-- barrierStates (scratch, <K x i32>): Packed barrier metadata. Bit 0 stores the current phase, bits [1..10] the initial arrival count, bits [11..20] the current arrival count. The verifier checks underflow before updating, and flips the phase when the current count reaches zero.
+- barrierStates (scratch, <K x i64>): Packed barrier metadata. Bit 0 stores the current phase, bits [1..20] the initial arrival count, bits [21..40] the current arrival count, and bits [41..61] the signed tx-count. The verifier checks underflow before updating, and flips the phase when both the current count and tx-count reach zero.
 - waiting (scratch, <K x i32>): Per-barrier bitfield describing waiting threads. Each base thread gets two bits: bit (2 * thread + 0) is the waiting flag, bit (2 * thread + 1) stores the phase the thread is waiting on.
 - outstandingCommits (scratch, <B x 16 x i8>): Per-buffer, per-base-thread commit counters for cp.async and wgmma
 
@@ -58,8 +58,8 @@ ConSan separates “tracking” from “visibility transfer”:
 ### Barrier phase/count tracking
 
 - experimental_init_barrier_state(barrier, count, barrierStates) initializes the per-barrier state with phase = 0 and both initial/current arrival counts = `count`.
-- experimental_verify_barrier_arrive(barrier, count, barrierStates) checks that subtracting `count` from the current arrival count would not underflow. The codegen emits an assert if it would.
-- experimental_update_barrier_state(barrier, count, barrierStates) applies the arrive: subtracts `count`, flips the phase when the count reaches zero, and reloads the current count from the initial count.
+- experimental_verify_barrier_arrive(barrier, count, txCount, barrierStates) checks that subtracting `count` from the current arrival count would not underflow and that applying `txCount` keeps the tx-count in range. The codegen emits an assert if it would not.
+- experimental_update_barrier_state(barrier, count, txCount, barrierStates) applies the arrive and tx-count delta, flips the phase when both counts reach zero, and reloads the current count from the initial count.
 
 ### Deadlock detection
 

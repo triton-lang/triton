@@ -570,7 +570,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tdm_gather_scatter_multiple_instructions
   tt.func public @tdm_gather_scatter_multiple_instructions(
     %memDesc: !ttg.memdesc<256x128xf16, #shared, #smem, mutable>,
-    %tensorDesc: !tt.tensordesc<tensor<64x128xf16>>,
+    %tensorDesc: !tt.tensordesc<64x128xf16>,
     %row_indices_i32: tensor<64xi32>,
     %row_indices_i16: tensor<256xi16>,
     %pred: i32
@@ -578,13 +578,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
 
     // Gather with 64xi32 indices: 64/8 = 8 instructions
-    amdg.async_tdm_gather %tensorDesc[%row_indices_i32, %c0_i32] to %memDesc, pred = %pred : tensor<64xi32>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    amdg.async_tdm_gather %tensorDesc[%row_indices_i32, %c0_i32] to %memDesc, pred = %pred : tensor<64xi32>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
     // Scatter with 64xi32 indices: 64/8 = 8 instructions
-    amdg.async_tdm_scatter %tensorDesc[%row_indices_i32, %c0_i32] from %memDesc : tensor<64xi32>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    amdg.async_tdm_scatter %tensorDesc[%row_indices_i32, %c0_i32] from %memDesc : tensor<64xi32>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
     // Gather with 128xi16 indices: 256/16 = 16 instructions
-    amdg.async_tdm_gather %tensorDesc[%row_indices_i16, %c0_i32] to %memDesc, pred = %pred : tensor<256xi16>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    amdg.async_tdm_gather %tensorDesc[%row_indices_i16, %c0_i32] to %memDesc, pred = %pred : tensor<256xi16>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
     // Scatter with 128xi16 indices: 256/16 = 16 instructions
-    amdg.async_tdm_scatter %tensorDesc[%row_indices_i16, %c0_i32] from %memDesc : tensor<256xi16>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    amdg.async_tdm_scatter %tensorDesc[%row_indices_i16, %c0_i32] from %memDesc : tensor<256xi16>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
 
     // CHECK: amdg.async_tdm_intrinsic_wait {count = 0
     amdg.async_tdm_wait {num = 0 : i32}
@@ -610,15 +610,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tdm_load_store_single_instruction
   tt.func public @tdm_load_store_single_instruction(
     %memDesc: !ttg.memdesc<64x128xf16, #shared, #smem, mutable>,
-    %tensorDesc: !tt.tensordesc<tensor<64x128xf16>>,
+    %tensorDesc: !tt.tensordesc<64x128xf16>,
     %pred: i32
   ) {
     %c0_i32 = arith.constant 0 : i32
 
-    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %pred : !tt.tensordesc<tensor<64x128xf16>> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
-    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc : !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
-    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %pred : !tt.tensordesc<tensor<64x128xf16>> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
-    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc : !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %pred : !tt.tensordesc<64x128xf16> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
+    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc : !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %pred : !tt.tensordesc<64x128xf16> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
+    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc : !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
 
     // CHECK: amdg.async_tdm_intrinsic_wait {count = 0
     amdg.async_tdm_wait {num = 0 : i32}
