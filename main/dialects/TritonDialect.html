@@ -193,14 +193,11 @@
 <section id="tensordesctype">
 <h3>TensorDescType<a class="headerlink" href="#tensordesctype" title="Link to this heading">¶</a></h3>
 <p><em>Tensor descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::TensorDescType</span></code>) in Triton IR type system</em></p>
-<p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>!tt.tensordesc&lt;
-  RankedTensorType   # blockType
-&gt;
-</pre></div>
-</div>
 <p>A portable abstraction for TMA descriptors.
 This is the base tensor descriptor type for tiled tensor memory access.</p>
+<p>Shape and elementType describe the block dimensions and data type.
+The optional sharedLayout attribute carries the shared memory encoding
+(e.g. swizzle pattern) that is assigned during lowering.</p>
 <p>For specialized access patterns like im2col, see TensorDescIm2ColType
 in the TritonNvidiaGPU dialect.</p>
 <section id="id1">
@@ -213,8 +210,16 @@ in the TritonNvidiaGPU dialect.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td class="text-center"><p>blockType</p></td>
-<td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">RankedTensorType</span></code></p></td>
+<tr class="row-even"><td class="text-center"><p>shape</p></td>
+<td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">::llvm::ArrayRef&lt;int64_t&gt;</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p>elementType</p></td>
+<td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">Type</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p>sharedLayout</p></td>
+<td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">Attribute</span></code></p></td>
 <td><p></p></td>
 </tr>
 </tbody>

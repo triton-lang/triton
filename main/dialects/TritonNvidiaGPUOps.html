@@ -1366,15 +1366,11 @@ This is similar to ttg.local_alloc except the buffer is allocated in tensor memo
 <h2><code class="docutils literal notranslate"><span class="pre">ttng.tmem_copy</span></code> (triton::nvidia_gpu::TMEMCopyOp)<a class="headerlink" href="#ttng-tmem-copy-triton-nvidia-gpu-tmemcopyop" title="Link to this heading">¶</a></h2>
 <p><em>Initiate an asynchronous copy operation from shared memory to the Tensor Memory.</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tmem_copy` $src `,` $dst (`,` $barrier^)? attr-dict `:` qualified(type(operands))
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tmem_copy` $src `,` $dst attr-dict `:` qualified(type(operands))
 </pre></div>
 </div>
 <p>2D blocks stored contiguously in SMEM are copied into TMEM as specified by the destination address.
-The completion of the copy can be observed by waiting on the optional barrier. If this op is used
-together with an MMA op, one barrier can be used to wait for both copy and MMA. We do not need to wait
-for the completion of the copy before MMA, since tcgen05.cp followed by tcgen05.mma is guaranteed to
-execute in that order.</p>
-<p>This op lowers to the PTX instruction tcgen05.cp. This supports writing either to scales tmem layout as well as default tmem layout.
+This op lowers to the PTX instruction tcgen05.cp. This supports writing either to scales tmem layout as well as default tmem layout.
 Currently the semantic is different when writing to tmem scale layout.</p>
 <p>In case of default layout the copy doesn’t change the logical elements between the source and destination memdesc.</p>
 <p>In case of scale layout:
@@ -1408,7 +1404,6 @@ registers is now understood to be incorporated into tmem_copy itself. Ideally, w
 the SMEM memdesc, making tmem_copy a straightforward 2D copy operation: (BLOCK_MN, BLOCK_K / scale_vec_size) -&gt; (BLOCK_MN, BLOCK_K / scale_vec_size).
 In the absence of such operations on memdesc, we resort to implicitly encoding the reshape/transpose semantics in tmem_copy.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
 <section id="id41">
 <h3>Operands:<a class="headerlink" href="#id41" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -1422,9 +1417,6 @@ In the absence of such operations on memdesc, we resort to implicitly encoding t
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">dst</span></code></p></td>
-<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
-</tr>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 </tbody>
