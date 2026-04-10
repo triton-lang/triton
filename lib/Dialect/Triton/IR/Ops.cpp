@@ -1521,7 +1521,7 @@ static LogicalResult verifyGatherScatterResultType(Operation *op,
 LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
                                     ShapedType resultType,
                                     ShapedType indicesType) {
-  // Gather from `!tt.tensordesc<tensor<1xMxdtype>>`.
+  // Gather from `!tt.tensordesc<1xMxdtype>`.
   if (blockType.getRank() != 2) {
     return op->emitOpError("descriptor block must be a 2D tensor, but got ")
            << blockType;
