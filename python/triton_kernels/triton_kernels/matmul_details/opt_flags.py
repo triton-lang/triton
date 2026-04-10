@@ -301,6 +301,10 @@ def make_default_opt_flags_nvidia(
     elif can_use_split_k and not enforce_bitwise_invariance:
         estimated_actual_grid_size = opt_flags_nvidia.compute_grid_size(None, batch_size, m, n, block_m, block_n)
         split_k = opt_flags_nvidia.compute_split_k(block_k, k, estimated_actual_grid_size)
+    if split_k > 1:
+        # Split-K writes full-N fp32 scratch and applies fused reductions in the
+        # reduce kernel, not in the matmul epilogue.
+        epilogue_reduction_n = 1
     compute_num_stages_args = (
         precision_config,
         is_persistent,
