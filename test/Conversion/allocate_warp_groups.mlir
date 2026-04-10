@@ -111,3 +111,35 @@ tt.func @steal_from_default() {
 }
 
 }
+
+// -----
+
+// Test that user-provided warpGroupStartIds are preserved and padding
+// partitions are assigned IDs after the real partitions. This prevents
+// padding warps from displacing real task warps to higher IDs.
+module attributes {"ttg.num-warps" = 8 : i32} {
+
+// CHECK-LABEL: tt.func @respect_user_start_ids
+tt.func @respect_user_start_ids() {
+  // User provided [8, 12, 13] for 3 real partitions (4+1+1 = 6 warps).
+  // Padding adds 2 warps to reach 8 (next multiple of 4).
+  // Padding partition should get startId=14, after the real partitions.
+  // CHECK: warpGroupStartIds = array<i32: 8, 12, 13, 14>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 88, 24, 24>, warpGroupStartIds = array<i32: 8, 12, 13>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    ttg.warp_return
+  }
+  partition1() num_warps(1) {
+    ttg.warp_return
+  }
+  partition2() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  // CHECK: partition3() num_warps(2)
+  tt.return
+}
+
+}
