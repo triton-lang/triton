@@ -594,16 +594,18 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
 
     for start_n in range(lo, hi, config.BLOCK_N):
         s_tmem, s_bar, s_consumer = s_consumer.acquire()
-        use_tmem_red_for_max: gl.constexpr = use_tmem_red and STAGE != 2
-        qk, qk_max = _subtiled_qk_load(config, s_tmem, use_tmem_red_for_max)
+        qk, qk_max = _subtiled_qk_load(config, s_tmem, use_tmem_red)
 
         if STAGE == 2:
             col_limit_right = (offs_m - start_n + 1)[:, None]
             qk = _apply_causal_mask(qk, col_limit_right)
 
-        if use_tmem_red_for_max:
-            qk_max = gl.convert_layout(qk_max, m_i.type.layout)
-            m_ij = gl.maximum(m_i, qk_max * config.qk_scale)
+        if use_tmem_red:
+            if STAGE != 2:
+                qk_max = gl.convert_layout(qk_max, m_i.type.layout)
+                m_ij = gl.maximum(m_i, qk_max * config.qk_scale)
+            else:
+                m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
         else:
             m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
         alpha = gl.exp2(m_i - m_ij)
