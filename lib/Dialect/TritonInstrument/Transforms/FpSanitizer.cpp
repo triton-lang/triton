@@ -1722,9 +1722,6 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     if (!createStoreScratchMemory(rewriter, loc, info->ptr, srcReg, srcRegTy))
       return failure();
 
-    if (Value barrier = op.getBarrier()) {
-      ttng::ArriveBarrierOp::create(rewriter, loc, barrier, 1, Value());
-    }
     rewriter.eraseOp(op);
     return success();
   }

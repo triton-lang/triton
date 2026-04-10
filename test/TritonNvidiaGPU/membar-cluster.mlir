@@ -666,18 +666,19 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @insert_fence_and_relaxed_cluster_barrier_before_tmem_copy
+  // CHECK-LABEL: @insert_fence_and_relaxed_cluster_barrier_before_wait_after_tmem_copy
   // CHECK: ttng.init_barrier
+  // CHECK: ttng.tmem_copy
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
-  // CHECK: ttng.tmem_copy
-  tt.func @insert_fence_and_relaxed_cluster_barrier_before_tmem_copy() {
+  // CHECK-NEXT: ttng.wait_barrier
+  tt.func @insert_fence_and_relaxed_cluster_barrier_before_wait_after_tmem_copy() {
     %c0 = arith.constant 0 : i32
     %src = ttg.local_alloc : () -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
     %dst = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrierEnc, #smem, mutable>
     ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrierEnc, #smem, mutable>
-    ttng.tmem_copy %src, %dst, %barrier : !ttg.memdesc<128x128xf32, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #barrierEnc, #smem, mutable>
+    ttng.tmem_copy %src, %dst : !ttg.memdesc<128x128xf32, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #barrierEnc, #smem, mutable>
     tt.return
   }
