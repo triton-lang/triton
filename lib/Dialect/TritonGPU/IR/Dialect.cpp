@@ -384,9 +384,9 @@ unsigned getNumCTAs(Attribute layout) {
   return product<unsigned>(getCTAsPerCGA(layout));
 }
 
-SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
-                                      StringAttr dimName,
-                                      ArrayRef<unsigned> defaultOrder) {
+static SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
+                                             StringAttr dimName,
+                                             ArrayRef<unsigned> defaultOrder) {
   assert(ll.getBases().contains(dimName));
   const auto &bases = ll.getBases().find(dimName)->second;
   llvm::SetVector<unsigned> order;
@@ -603,9 +603,9 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
   return encoding;
 }
 
-LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
-                            LinearLayout &outLl, bool fwdInference, int axis,
-                            std::optional<Location> loc) {
+static LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
+                                   LinearLayout &outLl, bool fwdInference,
+                                   int axis, std::optional<Location> loc) {
   auto kRegister = StringAttr::get(ctx, "register");
   auto outDims = llvm::to_vector(inLl.getOutDimNames());
   if (fwdInference) {
@@ -718,10 +718,9 @@ static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
   return parseBoolAttrValue(parser, attr.getValue(), value, desc);
 };
 
-std::optional<LinearLayout> parseLinearLayout(const DictionaryAttr &dict,
-                                              AsmParser &parser,
-                                              ArrayRef<std::string> inDimNames,
-                                              int serializedRank = 0) {
+static std::optional<LinearLayout>
+parseLinearLayout(const DictionaryAttr &dict, AsmParser &parser,
+                  ArrayRef<std::string> inDimNames, int serializedRank = 0) {
   LinearLayout::BasesT bases;
 
   // Parse the basis names in order (the order is relevant)
@@ -1099,8 +1098,9 @@ LinearEncodingAttr::basesPerDim(StringAttr dimName, bool skipBroadcast) const {
   return basesPerDimImpl(ll.getBases(), dimName, rank, skipBroadcast);
 }
 
-CGAEncodingAttr linearToCGAEncodingAttr(const LinearLayout &ll,
-                                        ArrayRef<unsigned> cgaLogicalShape) {
+static CGAEncodingAttr
+linearToCGAEncodingAttr(const LinearLayout &ll,
+                        ArrayRef<unsigned> cgaLogicalShape) {
   // Compute the shapePerCTA
   auto shape = ll.getOutDims();
   for (int i = 0; i < shape.size(); ++i) {
@@ -1657,7 +1657,7 @@ template SmallVector<int64_t>
 SliceEncodingAttr::paddedShape<int64_t>(ArrayRef<int64_t> shape) const;
 
 template <typename SpecificEncoding>
-Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
+static Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
   // Parse the data as a dictionary

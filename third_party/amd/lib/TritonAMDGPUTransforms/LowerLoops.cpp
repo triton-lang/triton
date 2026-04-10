@@ -50,8 +50,8 @@ using StreamOpVariant =
     std::variant<StreamCopyChainOps, AsyncCopyChainOps, TDMCopyChainOps>;
 using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 
-TDMCopyChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
-                                   Value extractIdx) {
+static TDMCopyChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp,
+                                          Value alloc, Value extractIdx) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
@@ -75,13 +75,14 @@ TDMCopyChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
   return {copyOp, commitOp, waitOp, maybeSharedLoad};
 }
 
-bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
-                               ttg::SharedEncodingTrait sharedEnc,
-                               tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                               const tt::AMD::TargetInfo &targetInfo);
+static bool
+canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
+                          ttg::SharedEncodingTrait sharedEnc,
+                          tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                          const tt::AMD::TargetInfo &targetInfo);
 
-AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
-                                  Value extractIdx, int contiguity) {
+static AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
+                                         Value extractIdx, int contiguity) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
@@ -104,9 +105,9 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   return {copyOp, commitOp, waitOp, maybeSharedLoad};
 }
 
-void scheduleLocalLoad(ttg::LocalLoadOp localLoadOp,
-                       tt::CoarseSchedule &schedule, int stage,
-                       const tt::CoarseSchedule::Cluster &cluster) {
+static void scheduleLocalLoad(ttg::LocalLoadOp localLoadOp,
+                              tt::CoarseSchedule &schedule, int stage,
+                              const tt::CoarseSchedule::Cluster &cluster) {
   schedule.insert(localLoadOp, stage, cluster);
   // If its only user is a ConvertLayout, we place it into the same stage so
   // it can be folded by a later pass
@@ -118,8 +119,8 @@ void scheduleLocalLoad(ttg::LocalLoadOp localLoadOp,
   }
 }
 
-StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
-                                    Value extractIdx) {
+static StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
+                                           Value extractIdx) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
@@ -143,7 +144,7 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return true and get the shared encoding that
 // needs to be used to be compatible with users' layouts.
-std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
+static std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
     Operation *loadOp, tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
     const tt::AMD::TargetInfo &targetInfo, bool useAsyncCopy) {
   assert(loadOp);
@@ -355,7 +356,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
 
 // Convert load ops into shared memory allocation loads and apply
 // multi-buffering based on the required number of buffers.
-LoadToStreamOpMap
+static LoadToStreamOpMap
 createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
                 const int &numBuffers, bool useAsyncCopy,
                 tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
@@ -433,7 +434,7 @@ namespace SingleDotSchedule {
 using namespace mlir::SingleDotSchedule;
 using ClusterMap = DenseMap<tt::CoarseSchedule::ClusterHash, int>;
 
-ClusterMap createClusterMap(tt::CoarseSchedule &schedule) {
+static ClusterMap createClusterMap(tt::CoarseSchedule &schedule) {
   DenseMap<tt::CoarseSchedule::ClusterHash, int> clusterMap;
   for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster) {
     auto [stage, cluster] = stageAndCluster;
@@ -446,8 +447,8 @@ ClusterMap createClusterMap(tt::CoarseSchedule &schedule) {
 }
 
 // Remap global and compute clusters to the right place
-void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
-                   Clusters &clusters) {
+static void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
+                          Clusters &clusters) {
   for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster) {
     tt::CoarseSchedule::ClusterHash clusterHash =
         tt::CoarseSchedule::hashCluster(stageAndCluster.second);
@@ -467,10 +468,11 @@ void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
 // scheduling.
 //   WARNING: Changing the order of schedule.clusters.newAtBack() calls
 //            can cause invalid schedules to be produced.
-LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
-                           int &numBuffers, bool useAsyncCopy, bool hasTDMLoad,
-                           bool waitAtTail, Clusters &clusters,
-                           tt::CoarseSchedule &schedule) {
+static LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
+                                  int &numBuffers, bool useAsyncCopy,
+                                  bool hasTDMLoad, bool waitAtTail,
+                                  Clusters &clusters,
+                                  tt::CoarseSchedule &schedule) {
   LDBG("Init SingleDotSchedule");
   int lastStage = numStages - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
@@ -577,9 +579,10 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   return success();
 }
 
-void scheduleTDMCopy(const TDMCopyChainOps &asyncOps,
-                     tt::DescriptorLoadOp loadOp, tt::CoarseSchedule &schedule,
-                     const Stages &stages, const Clusters &clusters) {
+static void scheduleTDMCopy(const TDMCopyChainOps &asyncOps,
+                            tt::DescriptorLoadOp loadOp,
+                            tt::CoarseSchedule &schedule, const Stages &stages,
+                            const Clusters &clusters) {
   auto [copyOp, commitOp, waitOp, maybeLocalLoadOp] = asyncOps;
   auto [loadStage, loadCluster] = schedule[loadOp];
   schedule.insert(copyOp, loadStage, loadCluster);
@@ -602,9 +605,9 @@ void scheduleTDMCopy(const TDMCopyChainOps &asyncOps,
   }
 }
 
-void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
-                       tt::CoarseSchedule &schedule, const Stages &stages,
-                       const Clusters &clusters) {
+static void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps,
+                              tt::LoadOp loadOp, tt::CoarseSchedule &schedule,
+                              const Stages &stages, const Clusters &clusters) {
   auto [copyOp, commitOp, waitOp, maybeLocalLoadOp] = asyncOps;
   auto [loadStage, loadCluster] = schedule[loadOp];
   schedule.insert(copyOp, loadStage, loadCluster);
@@ -627,9 +630,10 @@ void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
   }
 }
 
-void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
-                        tt::LoadOp oldLoadOp, tt::CoarseSchedule &schedule,
-                        const Stages &stages, const Clusters &clusters) {
+static void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
+                               tt::LoadOp oldLoadOp,
+                               tt::CoarseSchedule &schedule,
+                               const Stages &stages, const Clusters &clusters) {
   auto [newLoadOp, subviewOp, localStoreOp, maybeLocalLoadOp] = streamOps;
   auto [loadStage, loadCluster] = schedule[oldLoadOp];
 
@@ -644,9 +648,9 @@ void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
   }
 }
 
-void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
-                       tt::CoarseSchedule &schedule, const Stages &stages,
-                       const Clusters &clusters) {
+static void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
+                              tt::CoarseSchedule &schedule,
+                              const Stages &stages, const Clusters &clusters) {
   for (auto [l, streamOps] : loadToStreamOp) {
     auto loadOp = dyn_cast<tt::LoadOp>(l);
     auto descLoadOp = dyn_cast<tt::DescriptorLoadOp>(l);
@@ -663,10 +667,11 @@ void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
   }
 }
 
-void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
-                    tt::CoarseSchedule &schedule,
-                    triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                    bool useAsyncCopy, bool hasTDMLoad, bool waitAtTail) {
+static void
+updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
+               tt::CoarseSchedule &schedule,
+               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+               bool useAsyncCopy, bool hasTDMLoad, bool waitAtTail) {
   LDBG("SingleDotSchedule::updateSchedule");
   Stages stages;
   Clusters clusters;
@@ -709,9 +714,9 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
 namespace ChainedDotSchedule {
 using namespace mlir::ChainedDotSchedule;
 
-void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
-                       tt::CoarseSchedule &schedule,
-                       const ChainedDotClusters &clusters) {
+static void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps,
+                              tt::LoadOp loadOp, tt::CoarseSchedule &schedule,
+                              const ChainedDotClusters &clusters) {
   auto [loadStage, loadCluster] = schedule[loadOp];
   auto [copyOp, commitOp, waitOp, maybeLocalLoadOp] = asyncOps;
 
@@ -733,9 +738,9 @@ void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
   }
 }
 
-void scheduleStreamCopy(const StreamCopyChainOps &streamOps, tt::LoadOp loadOp,
-                        tt::CoarseSchedule &schedule,
-                        const ChainedDotClusters &clusters) {
+static void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
+                               tt::LoadOp loadOp, tt::CoarseSchedule &schedule,
+                               const ChainedDotClusters &clusters) {
   auto [loadStage, loadCluster] = schedule[loadOp];
   auto [copyOp, subviewOp, localStoreOp, maybeLocalLoadOp] = streamOps;
   schedule.insert(copyOp, loadStage, loadCluster);
@@ -768,9 +773,9 @@ void scheduleStreamCopy(const StreamCopyChainOps &streamOps, tt::LoadOp loadOp,
   }
 }
 
-void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
-                       tt::CoarseSchedule &schedule,
-                       const ChainedDotClusters &clusters) {
+static void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
+                              tt::CoarseSchedule &schedule,
+                              const ChainedDotClusters &clusters) {
   for (auto [l, streamOps] : loadToStreamOp) {
     auto loadOp = dyn_cast<tt::LoadOp>(l);
     if (!loadOp)
@@ -784,10 +789,11 @@ void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
   }
 }
 
-void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
-                    tt::CoarseSchedule &schedule,
-                    triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                    bool useAsyncCopy) {
+static void
+updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
+               tt::CoarseSchedule &schedule,
+               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+               bool useAsyncCopy) {
   LDBG("ChainedDotSchedule::updateSchedule");
   ChainedDotClusters clusters;
   int cnt = clusters.size() - schedule.clusters.size();
@@ -825,9 +831,9 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
 }
 } // namespace ChainedDotSchedule
 
-void lowerLoop(scf::ForOp forOp,
-               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-               bool useAsyncCopy, bool usePingpong) {
+static void lowerLoop(scf::ForOp forOp,
+                      triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                      bool useAsyncCopy, bool usePingpong) {
   tt::CoarseSchedule schedule;
   if (failed(schedule.deSerialize(forOp, /*normalizeClusterId=*/false))) {
     return;

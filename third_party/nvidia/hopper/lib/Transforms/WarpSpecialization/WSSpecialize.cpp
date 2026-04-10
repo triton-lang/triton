@@ -51,12 +51,12 @@ static void invalidateBarrierAlloc(OpBuilder &builder, Value barrierAlloc) {
   }
 }
 
-Operation *SpecializeOp(Operation *op, IRMapping &mapping,
-                        OpBuilderWithAsyncTaskIds &builder,
-                        AsyncTaskId asyncTaskId);
+static Operation *SpecializeOp(Operation *op, IRMapping &mapping,
+                               OpBuilderWithAsyncTaskIds &builder,
+                               AsyncTaskId asyncTaskId);
 
-unsigned scanRegUsage(Block *block, AsyncTaskId asyncTaskId,
-                      unsigned requestedRegisters) {
+static unsigned scanRegUsage(Block *block, AsyncTaskId asyncTaskId,
+                             unsigned requestedRegisters) {
   assert(asyncTaskId != 0 && "producer group should not request registers");
   // TODO: scan ops to estimate register usage
   return requestedRegisters == 0 ? 232 : requestedRegisters;
@@ -160,9 +160,9 @@ static SmallVector<unsigned> collectBlockArgsForTask(scf::ForOp forOp,
   return args;
 }
 
-Operation *SpecializeIfOp(scf::IfOp ifOp, IRMapping &mapping,
-                          OpBuilderWithAsyncTaskIds &builder,
-                          AsyncTaskId asyncTaskId) {
+static Operation *SpecializeIfOp(scf::IfOp ifOp, IRMapping &mapping,
+                                 OpBuilderWithAsyncTaskIds &builder,
+                                 AsyncTaskId asyncTaskId) {
   LLVM_DEBUG({
     LDBG("specialize ifOp ");
     ifOp.dump();
@@ -259,9 +259,9 @@ Operation *SpecializeIfOp(scf::IfOp ifOp, IRMapping &mapping,
   return newIfOp;
 }
 
-Operation *SpecializeForOp(scf::ForOp forOp, IRMapping &mapping,
-                           OpBuilderWithAsyncTaskIds &builder,
-                           AsyncTaskId asyncTaskId) {
+static Operation *SpecializeForOp(scf::ForOp forOp, IRMapping &mapping,
+                                  OpBuilderWithAsyncTaskIds &builder,
+                                  AsyncTaskId asyncTaskId) {
   // Create newForOp for each task Id.
   auto usedArgs = collectBlockArgsForTask(forOp, asyncTaskId);
 

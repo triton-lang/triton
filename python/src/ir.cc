@@ -1979,7 +1979,7 @@ void init_triton_ir(py::module &&m) {
           py::call_guard<py::gil_scoped_release>());
 }
 
-bool str_eq_ignore_case(const char *s1, const char *s2, int n) {
+static bool str_eq_ignore_case(const char *s1, const char *s2, int n) {
   for (int i = 0; i < n; ++i) {
     if (tolower(s1[i]) != s2[i])
       return false;
@@ -1987,7 +1987,7 @@ bool str_eq_ignore_case(const char *s1, const char *s2, int n) {
   return true;
 }
 
-int strlen_max(const char *str, int max) {
+static int strlen_max(const char *str, int max) {
   for (int i = 0; i <= max; ++i) {
     if (str[i] == '\0') {
       return i;
@@ -1996,7 +1996,7 @@ int strlen_max(const char *str, int max) {
   return 0;
 }
 
-bool is_truthy(char *str) {
+static bool is_truthy(char *str) {
   int len = strlen_max(str, 4);
   switch (len) {
   case 1:
@@ -2012,7 +2012,8 @@ bool is_truthy(char *str) {
   }
 }
 
-PyObject *py_getenv(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+static PyObject *py_getenv(PyObject *self, PyObject *const *args,
+                           Py_ssize_t nargs) {
   if (!(nargs == 1 || nargs == 2)) {
     PyErr_SetString(PyExc_TypeError, "getenv expected 1 or 2 arguments");
     return NULL;
@@ -2031,8 +2032,8 @@ PyObject *py_getenv(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
   return PyUnicode_FromString(env_val);
 }
 
-PyObject *py_getenv_bool(PyObject *self, PyObject *const *args,
-                         Py_ssize_t nargs) {
+static PyObject *py_getenv_bool(PyObject *self, PyObject *const *args,
+                                Py_ssize_t nargs) {
   if (nargs != 2) {
     PyErr_SetString(PyExc_TypeError, "getenv_bool expected 2 arguments");
     return NULL;

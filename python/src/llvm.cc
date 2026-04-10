@@ -124,7 +124,7 @@ public:
   ScopedLLVMOption &operator=(const ScopedLLVMOption &) = delete;
 };
 
-std::unique_ptr<TargetMachine>
+static std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
                     bool enable_fp_fusion, const std::string &features) {
   std::string error;
@@ -145,10 +145,12 @@ createTargetMachine(llvm::Module *module, std::string proc,
   return machine;
 }
 
-void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
-                       const std::string &proc, const std::string &features,
-                       const std::vector<std::string> &flags,
-                       bool enable_fp_fusion, const std::string &dumpFileId) {
+static void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
+                              const std::string &proc,
+                              const std::string &features,
+                              const std::vector<std::string> &flags,
+                              bool enable_fp_fusion,
+                              const std::string &dumpFileId) {
   using namespace mlir;
 
   // Check if we should dump sched DAG
@@ -234,7 +236,7 @@ void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
   // LLVM options are automatically restored when scope exits via RAII
 }
 
-std::string
+static std::string
 translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
                      const std::string &proc, const std::string &features,
                      const std::vector<std::string> &flags,
@@ -323,12 +325,12 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   return result;
 }
 
-std::string translateLLVMIRToASM(llvm::Module &module,
-                                 const std::string &triple,
-                                 const std::string &proc,
-                                 const std::string &features,
-                                 const std::vector<std::string> &flags,
-                                 bool enable_fp_fusion, bool isObject) {
+static std::string translateLLVMIRToASM(llvm::Module &module,
+                                        const std::string &triple,
+                                        const std::string &proc,
+                                        const std::string &features,
+                                        const std::vector<std::string> &flags,
+                                        bool enable_fp_fusion, bool isObject) {
   using namespace mlir;
 
   // Apply flags
@@ -405,7 +407,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   return result;
 }
 
-std::string
+static std::string
 translateMIRToASM(const std::string &mirPath, const std::string &triple,
                   const std::string &proc, const std::string &features,
                   const std::vector<std::string> &flags, bool enable_fp_fusion,
@@ -916,7 +918,7 @@ void init_triton_llvm(py::module &&m) {
   });
 }
 
-void triton_stacktrace_signal_handler(void *) {
+static void triton_stacktrace_signal_handler(void *) {
   llvm::sys::PrintStackTrace(llvm::errs());
   raise(SIGABRT);
 }

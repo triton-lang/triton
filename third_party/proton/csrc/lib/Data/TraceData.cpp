@@ -155,7 +155,7 @@ private:
 thread_local std::unordered_map<const TraceData *, std::vector<size_t>>
     traceDataToActiveEventStack;
 
-uint64_t getCurrentCpuTimestampNs() {
+static uint64_t getCurrentCpuTimestampNs() {
   using Clock = std::chrono::system_clock;
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              Clock::now().time_since_epoch())

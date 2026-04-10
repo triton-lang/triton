@@ -194,11 +194,11 @@ static bool isConvertLayoutTrivial(RankedTensorType dstTy, Value value) {
 }
 
 template <typename R>
-std::vector<llvm::ValueTypeFromRangeType<R>> toStdVector(R &&range) {
+static std::vector<llvm::ValueTypeFromRangeType<R>> toStdVector(R &&range) {
   return {range.begin(), range.end()};
 }
 
-py::object layoutToGluon(Attribute layout) {
+static py::object layoutToGluon(Attribute layout) {
   static GluonLayouts layouts;
   if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(blocked.getCGALayout());

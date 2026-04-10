@@ -233,8 +233,8 @@ static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
 
 // Split the LHS of a RSWGMMADot operation into multiple
 // tensors of size MxnewK via SplitOps
-SmallVector<Value> splitLhs(OpBuilder &builder,
-                            TypedValue<RankedTensorType> lhs, int64_t newK) {
+static SmallVector<Value>
+splitLhs(OpBuilder &builder, TypedValue<RankedTensorType> lhs, int64_t newK) {
   auto loc = lhs.getLoc();
   auto type = lhs.getType();
   auto rank = type.getRank();
@@ -282,8 +282,8 @@ SmallVector<Value> splitLhs(OpBuilder &builder,
 
 // Split the RHS of a RSWGMMADot operation into multiple multiple
 // tensors of size newKxN via MemDescSubslice
-SmallVector<Value> splitRhs(OpBuilder &builder,
-                            TypedValue<ttg::MemDescType> rhs, int64_t newK) {
+static SmallVector<Value>
+splitRhs(OpBuilder &builder, TypedValue<ttg::MemDescType> rhs, int64_t newK) {
   auto loc = rhs.getLoc();
   auto type = rhs.getType();
   auto rank = type.getRank();
@@ -305,7 +305,8 @@ SmallVector<Value> splitRhs(OpBuilder &builder,
   return ret;
 }
 
-std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
+static std::vector<ttng::WarpGroupDotOp>
+splitRSDot(ttng::WarpGroupDotOp dotOp) {
   // Splits wgmma(tensor, shmem, acc) into
   //   wgmma(tensor[:, :K//2], shmem[:K//2, :], acc)
   //   wgmma(tensor[:, K//2:], shmem[K//2:, :], acc)
@@ -363,7 +364,7 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
 }
 
 // Apply splitRSDot to all dots in the input list.
-llvm::MapVector<Operation *, int>
+static llvm::MapVector<Operation *, int>
 splitRSDots(const llvm::MapVector<Operation *, int> &dots) {
   llvm::MapVector<Operation *, int> ret;
   for (auto [dot, iterArgIdx] : dots) {

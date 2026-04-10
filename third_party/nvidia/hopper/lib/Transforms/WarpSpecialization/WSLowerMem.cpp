@@ -149,9 +149,9 @@ static int getTMALoadSize(tt::DescriptorLoadOp &tmaLoad) {
   return loadSize * tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
 }
 
-Value getBufferForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
-                                Type loadType, Value buffer, Value bufferIdx,
-                                bool mutableMem) {
+static Value getBufferForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
+                                       Type loadType, Value buffer,
+                                       Value bufferIdx, bool mutableMem) {
   auto context = buffer.getContext();
   auto tensorType = dyn_cast<RankedTensorType>(loadType);
   assert(tensorType);

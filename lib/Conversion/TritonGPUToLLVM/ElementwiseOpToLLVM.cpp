@@ -18,8 +18,8 @@ Type getElementType(Value value) {
   return type;
 }
 
-int getNumElementsPerThreads(Type type,
-                             const LLVMTypeConverter *typeConverter) {
+static int getNumElementsPerThreads(Type type,
+                                    const LLVMTypeConverter *typeConverter) {
   int numElemsPerThread = 1;
   if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
     auto structType =

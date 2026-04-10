@@ -444,7 +444,7 @@ Value getLaneId(OpBuilder &rewriter, Location loc) {
 }
 
 // Helper function: applies linear layout vectorized over register indices
-SmallVector<SmallVector<std::pair<StringAttr, Value>>>
+static SmallVector<SmallVector<std::pair<StringAttr, Value>>>
 applyLinearLayoutVec(Location loc, RewriterBase &rewriter,
                      const LinearLayout &layout,
                      ArrayRef<std::pair<StringAttr, Value>> indices,
@@ -1442,7 +1442,8 @@ SmallVector<Value> getSharedMemoryBases(Location loc, RewriterBase &rewriter,
 }
 
 // Extract the bits of `a` that are set in `mask`
-Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
+static Value pext_i32(RewriterBase &rewriter, Location loc, Value a,
+                      uint32_t mask) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(a.getType() == i32_ty && "a must be i32");
   // Handle width = 32 to avoid doing 1 << 32
@@ -1471,7 +1472,8 @@ Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
 }
 
 // Puts the bits of `a` that are set in `mask` into the bits of `result`
-Value pdep_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
+static Value pdep_i32(RewriterBase &rewriter, Location loc, Value a,
+                      uint32_t mask) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(a.getType() == i32_ty && "a must be i32");
 

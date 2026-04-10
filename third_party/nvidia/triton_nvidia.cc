@@ -127,7 +127,7 @@ public:
 
 } // namespace
 
-void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
+static void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
   // nvidia-specificontext
@@ -158,7 +158,7 @@ createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
   return ttng::createTritonGPUProxyFenceInsertion(options);
 }
 
-void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
+static void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass);
   ADD_PASS_WRAPPER_1("add_fence_insertion",
                      createTritonGPUFenceInsertionWrapper, int32_t);
@@ -189,7 +189,7 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   ttng::registerConSanNVIDIAHooks();
 }
 
-void init_triton_nvidia_passes_nvws(py::module &&m) {
+static void init_triton_nvidia_passes_nvws(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_lower_warp_group",
                      mlir::triton::createNVWSLowerWarpGroup);
   ADD_PASS_WRAPPER_0("add_lower_aref", mlir::triton::createNVWSLowerAref);
@@ -199,7 +199,7 @@ void init_triton_nvidia_passes_nvws(py::module &&m) {
                      mlir::triton::createNVWSInsertTmemAref);
 }
 
-void init_triton_hopper_passes(py::module &&m) {
+static void init_triton_hopper_passes(py::module &&m) {
   // Meta's autoWS
   ADD_PASS_OPTION_WRAPPER_2("add_hopper_warpspec",
                             mlir::createNVGPUWarpSpecialization, int, bool);

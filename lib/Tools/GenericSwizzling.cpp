@@ -24,8 +24,8 @@ static int __builtin_ctzll(unsigned long long x) {
 
 #endif
 
-void printBasis(const llvm::SmallVector<int32_t> &basis,
-                const std::string &name) {
+static void printBasis(const llvm::SmallVector<int32_t> &basis,
+                       const std::string &name) {
   llvm::errs() << name << ": ";
   for (int32_t b : basis)
     llvm::errs() << b << " ";
@@ -220,8 +220,8 @@ SmallVector<int32_t> complementBasis(ArrayRef<int32_t> basis, int32_t dim) {
 
 namespace mlir::triton::gpu {
 
-SmallVector<int32_t> intersectionBasis(ArrayRef<int32_t> b1,
-                                       ArrayRef<int32_t> b2, int32_t dim) {
+static SmallVector<int32_t>
+intersectionBasis(ArrayRef<int32_t> b1, ArrayRef<int32_t> b2, int32_t dim) {
   // If needed to be generic, this can be done computing
   // nullspaceBasis(concat(nullspaceBasis(b1), nullspaceBasis(b2)))
   // but doing this returns the bases in an arbitrary order!
@@ -311,7 +311,7 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
       .first;
 }
 
-std::optional<SmallVector<int32_t>> optimalSwizzlingTile(
+static std::optional<SmallVector<int32_t>> optimalSwizzlingTile(
     const LinearLayout &a, const LinearLayout &b, int32_t nRegA, int32_t nRegB,
     ArrayRef<int32_t> laneIdTileA, ArrayRef<int32_t> laneIdTileB) {
   // For now se just implement the .v4 variants for all the instructions

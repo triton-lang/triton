@@ -13,13 +13,15 @@ namespace tt = triton;
 namespace ttg = triton::gpu;
 
 namespace deduceMin {
-int deduceMinCountInBlock(Block &block,
-                          const std::function<int(Operation *)> &countFunc);
+static int
+deduceMinCountInBlock(Block &block,
+                      const std::function<int(Operation *)> &countFunc);
 
 // Returns the minimum found when accumulating countFunc(op) between begin and
 // end (inclusive)
-int deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
-                            const std::function<int(Operation *)> &countFunc) {
+static int
+deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
+                        const std::function<int(Operation *)> &countFunc) {
   assert(beginOp && endOp);
   assert(beginOp == endOp || beginOp->isBeforeInBlock(endOp));
   int count = 0;
@@ -61,9 +63,10 @@ int deduceMinCountInBlock(Block &block,
 }
 } // namespace deduceMin
 
-int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
-                             const std::function<int(Operation *)> &countFunc,
-                             int pathSum, int foundMin) {
+static int
+deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
+                         const std::function<int(Operation *)> &countFunc,
+                         int pathSum, int foundMin) {
   using namespace deduceMin;
   // If the value is not defined in the same region as the consumer we need to
   // peel the parent region of consumer until we arrive at value's region

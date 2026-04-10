@@ -50,21 +50,12 @@ enclosingAChannel(Operation *ctrlOp,
   return false;
 }
 
-unsigned getLoopDepth(Operation *op) {
-  unsigned depth = 0;
-  auto pOp = op->getParentOfType<scf::ForOp>();
-  while (pOp) {
-    ++depth;
-    pOp = pOp->getParentOfType<scf::ForOp>();
-  }
-  return depth;
-}
-
 // Update preOrderOps with a list of region Ops nested under ctrlOp that will
 // need accumCnt. The list is in pre-order.
-void getAccumCntsPreOrder(Operation *ctrlOp,
-                          const DenseSet<Operation *> &regionsWithChannels,
-                          SmallVector<Operation *> &preOrderOps) {
+static void
+getAccumCntsPreOrder(Operation *ctrlOp,
+                     const DenseSet<Operation *> &regionsWithChannels,
+                     SmallVector<Operation *> &preOrderOps) {
   ctrlOp->walk<WalkOrder::PreOrder>([&](Operation *subOp) {
     // This will walk ctrlOp itself.
     if (auto forOp = dyn_cast<scf::ForOp>(subOp)) {
@@ -86,21 +77,22 @@ void getAccumCntsPreOrder(Operation *ctrlOp,
 
 // Go through all the regions in opList and correctly add accumCnt. taskTopOps
 // will be updated if it is replaced in the process.
-Value updateAccumLoopCount(SmallVector<Operation *> &opList,
-                           SmallVector<Operation *> &taskTopOps,
-                           DenseSet<Operation *> &regionsWithChannels,
-                           Value prevAccum);
+static Value updateAccumLoopCount(SmallVector<Operation *> &opList,
+                                  SmallVector<Operation *> &taskTopOps,
+                                  DenseSet<Operation *> &regionsWithChannels,
+                                  Value prevAccum);
 
 // prevAccum is the accumCnt prior to the forOp. This function goes through
 // the forOp and insert accumCnt when necessary.
-scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
-                                SmallVector<Operation *> &taskTopOps,
-                                DenseSet<Operation *> &regionsWithChannels,
-                                Value prevAccum);
+static scf::ForOp
+createNewLoopWrapper(scf::ForOp origForOp, SmallVector<Operation *> &taskTopOps,
+                     DenseSet<Operation *> &regionsWithChannels,
+                     Value prevAccum);
 
-scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
-                      DenseSet<Operation *> &regionsWithChannels,
-                      Value prevAccum) {
+static scf::IfOp rewriteIfOp(scf::IfOp ifOp,
+                             SmallVector<Operation *> &taskTopOps,
+                             DenseSet<Operation *> &regionsWithChannels,
+                             Value prevAccum) {
   OpBuilderWithAsyncTaskIds ifBuilder(ifOp.getContext());
   ifBuilder.setAsynTaskIdsFromArray(getNestedAsyncTaskIds(ifOp));
   ifBuilder.setInsertionPoint(ifOp);
@@ -299,9 +291,9 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
 }
 
 // Handle the forOp given initial accumCnts.
-scf::ForOp createNewLoop(scf::ForOp forOp, scf::ForOp &parentForOp,
-                         SmallVector<Value> &initialAccums,
-                         Value accumulatedLoopCount) {
+static scf::ForOp createNewLoop(scf::ForOp forOp, scf::ForOp &parentForOp,
+                                SmallVector<Value> &initialAccums,
+                                Value accumulatedLoopCount) {
   auto loc = forOp.getLoc();
   Block *body = forOp.getBody();
 

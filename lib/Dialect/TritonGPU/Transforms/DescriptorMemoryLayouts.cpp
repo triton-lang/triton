@@ -21,8 +21,8 @@ static SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
   return result;
 }
 
-CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
-                                        ArrayRef<int64_t> shape) {
+static CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
+                                               ArrayRef<int64_t> shape) {
   auto rank = shape.size();
   if (cgaLayout.getRank() == rank)
     return cgaLayout;
@@ -121,9 +121,9 @@ SharedEncodingTrait updateEncodingForShape(Operation *op,
 
 // Build shared encoding for a tensor descriptor by applying callback to adjust
 // for block shape of the descriptor
-TensorDescType getTensorDescTypeWithEncoding(Operation *op,
-                                             RankedTensorType existingTy,
-                                             Attribute encoding) {
+static TensorDescType getTensorDescTypeWithEncoding(Operation *op,
+                                                    RankedTensorType existingTy,
+                                                    Attribute encoding) {
   auto sharedEnc = cast<SharedEncodingTrait>(encoding);
   encoding = updateEncodingForShape(op, sharedEnc, existingTy);
   return TensorDescType::get(existingTy.getShape(), existingTy.getElementType(),

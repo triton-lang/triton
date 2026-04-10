@@ -43,7 +43,7 @@ static unsigned getNumBuffersOrDefault(scf::ForOp forOp, unsigned numBuffers) {
 }
 
 // Get the bufferIdx and phase for the last iteration of the immediate scope.
-std::pair<Value, Value> getOutOfScopeBufferIdxAndPhase(
+static std::pair<Value, Value> getOutOfScopeBufferIdxAndPhase(
     OpBuilderWithAsyncTaskIds &builder, Operation *op, unsigned numBuffers,
     const DenseSet<Operation *> &regionsWithChannels) {
   // Get the current in-scope accumulation count for op.
@@ -71,8 +71,9 @@ std::pair<Value, Value> getOutOfScopeBufferIdxAndPhase(
 
 // Find transitive users of the root op. Track through control flow ops (such as
 // yield) to get to the real users.
-void getTransitiveUsers(Value root,
-                        SetVector<std::pair<Operation *, unsigned>> &users) {
+static void
+getTransitiveUsers(Value root,
+                   SetVector<std::pair<Operation *, unsigned>> &users) {
   for (Operation *userOp : root.getUsers()) {
     if (auto yieldOp = dyn_cast<scf::YieldOp>(userOp)) {
       for (OpOperand &operand : yieldOp->getOpOperands()) {
@@ -161,8 +162,9 @@ static void createChannel(Operation *producerOp, Operation *op,
 // Loads will be in producer warp groups. For now, we only allow a single
 // warp group/task for a producer. For each LoadOp, create a channel from it
 // to any direct user which belongs to a different taskId.
-void collectAsyncChannels(SmallVector<std::unique_ptr<Channel>> &channels,
-                          triton::FuncOp &funcOp, unsigned numBuffers) {
+static void
+collectAsyncChannels(SmallVector<std::unique_ptr<Channel>> &channels,
+                     triton::FuncOp &funcOp, unsigned numBuffers) {
   mlir::DominanceInfo dom(funcOp);
   funcOp.walk([&](Operation *op) {
     // FIXME: It is possible that a local_alloc can start a channel, when a
@@ -282,7 +284,7 @@ static Operation *getUniqueActualConsumer(Operation *consumerOp,
 //  grouping will be used to create barriers per shared consumer.
 // Also compute orderedChannels, which will be keyed by getDstOp() of channels,
 // to enforce deterministic order for map.
-void groupChannels(
+static void groupChannels(
     SmallVector<Channel *> &channels,
     DenseMap<Channel *, SmallVector<Channel *>> &channelsGroupedByProducers,
     DenseMap<Channel *, SmallVector<Channel *>> &channelsGroupedByConsumers,
@@ -417,7 +419,7 @@ void groupChannels(
 }
 
 // Reorder producer ops to unblock consumers interleavingly.
-void reorderProducerOps(SmallVector<Channel *> &channels) {
+static void reorderProducerOps(SmallVector<Channel *> &channels) {
   if (channels.size() <= 1)
     return;
 
@@ -568,7 +570,7 @@ static Value createBarrierAlloc(triton::FuncOp funcOp, unsigned distance) {
 // for each consumer taskId. Return a map that maps each channel + consumer
 // taskId to a token. Also update barrierAllocMap that maps each channel +
 // consumer taskId to a BarrierAlloc.
-void createToken(
+static void createToken(
     const DenseMap<Channel *, SmallVector<Channel *>>
         &channelsGroupedByConsumers,
     const SmallVector<Channel *> &orderedChannels, triton::FuncOp funcOp,
@@ -706,7 +708,7 @@ static ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
 
 // Create a buffer array for each producer op, if the producer is in a ForOp,
 // the buffer array will contain numBuffers.
-DenseMap<Channel *, Value> createBuffer(
+static DenseMap<Channel *, Value> createBuffer(
     DenseMap<Channel *, SmallVector<Channel *>> &channelsGroupedByProducers,
     const SmallVector<Channel *> &orderedChannels, triton::FuncOp funcOp) {
 
@@ -814,7 +816,7 @@ DenseMap<Channel *, Value> createBuffer(
 // its inline barrier to synchronize with both the producer (TMA load) and the
 // consumer (TMEM load). Return the WaitBarrierOp inserted before the consumer
 // (TMEM load).
-ttng::WaitBarrierOp
+static ttng::WaitBarrierOp
 desyncTCGen5MMAOp(OpBuilderWithAsyncTaskIds &builder, ttng::TCGen5MMAOp mmaOp,
                   Value barrierAlloc, Value bufferIdx, Value inPhase,
                   unsigned numBuffers, Operation *headProducer,
@@ -904,7 +906,7 @@ desyncTCGen5MMAOp(OpBuilderWithAsyncTaskIds &builder, ttng::TCGen5MMAOp mmaOp,
 // Lower producers for channels. Here channels are grouped in
 // "channelsGroupedByConsumers". tokenMap tracks the set of tokens for each
 // channel.
-void insertAsyncComm(
+static void insertAsyncComm(
     triton::FuncOp funcOp,
     const DenseMap<Channel *, SmallVector<Channel *>>
         &channelsGroupedByConsumers,
@@ -1198,7 +1200,7 @@ void insertAsyncComm(
   }
 }
 
-void foldLocalLoads(triton::FuncOp funcOp) {
+static void foldLocalLoads(triton::FuncOp funcOp) {
   // If loadResult has a single use which is LocalAlloc, we can get rid of
   // sharedLoad and replace all uses of LocalAlloc with viewLoad.
   DenseMap<Operation *, Value> opsToReplace;
