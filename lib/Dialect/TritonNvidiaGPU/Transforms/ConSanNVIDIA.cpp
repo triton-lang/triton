@@ -91,6 +91,13 @@ public:
       mask = getBarrierMask(waitOp.getAlloc());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
       mask = getBarrierMask(invalOp.getAlloc());
+    if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+      if (copyOp.getMulticast()) {
+        auto dstTy = cast<ttg::MemDescType>(copyOp.getResult().getType());
+        auto kBlock = StringAttr::get(op->getContext(), "block");
+        mask = toLinearLayout(dstTy).getFreeVariableMasks().lookup(kBlock);
+      }
+    }
 
     // In 2CTA tcgen05 and tmem_copy, only the even CTA in each (i, i^1) pair
     // issues the op.
@@ -201,10 +208,23 @@ public:
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = copyOp.getPred();
+      int txCount = tti::getMemDescLength(copyOp.getResult());
+      if (copyOp.getMulticast()) {
+        auto resultTy = copyOp.getResult().getType();
+        auto barrierTy = copyOp.getBarrier().getType();
+        auto kBlock = StringAttr::get(op->getContext(), "block");
+        uint16_t resultMask =
+            toLinearLayout(resultTy).getFreeVariableMasks().lookup(kBlock);
+        uint16_t barrierMask =
+            toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
+        uint16_t collapsedMask = resultMask & barrierMask;
+        for (; collapsedMask; collapsedMask &= collapsedMask - 1)
+          txCount *= 2;
+      }
       info->barriers.push_back(
           {copyOp.getBarrier(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
-           /*txCount=*/-(int)tti::getMemDescLength(copyOp.getResult())});
+           /*txCount=*/-txCount});
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         copyOp.getResult());
     }

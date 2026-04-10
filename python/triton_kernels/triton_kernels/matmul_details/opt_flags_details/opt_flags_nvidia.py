@@ -13,6 +13,20 @@ def is_x_scale_swizzled(precision_config):
             and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout))
 
 
+def compute_swap_xw(precision_config, block_m, is_persistent):
+    if target_info.cuda_capability_geq(10, 0):
+        if precision_config.b_mx_scale is not None:
+            return block_m <= 64 and is_persistent
+        else:
+            return block_m < 64 and is_persistent
+    elif target_info.cuda_capability_geq(9, 0):
+        layout = None if not isinstance(precision_config.b_mx_scale,
+                                        Tensor) else precision_config.b_mx_scale.storage.layout
+        return isinstance(layout, HopperMXScaleLayout)
+
+    return False
+
+
 def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
     if routing_data is not None and batch_size == 1:
         grid_m = routing_data.n_blocks(routing_data.n_slices, m, block_m)
@@ -146,7 +160,17 @@ def compute_num_stages(
         # pipelined TMA store local to global, or
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
-        smem_capacity -= int((block_m + 4) * acc_block_n * acc_size)
+        epilogue_smem = int((block_m + 4) * acc_block_n * acc_size)
+        if compute_swap_xw(precision_config, block_m, is_persistent):
+            # SWAP_XW Blackwell kernels stage the full transposed TMEM
+            # accumulator tile through fp32 smem before converting/storing it.
+            # If the output is narrower, the final TMA-store tile is a separate
+            # smem allocation.
+            acc_smem = block_m * block_n * (FP32.bitwidth // 8)
+            if out_itemsize < (FP32.bitwidth // 8):
+                acc_smem += int(block_m * acc_block_n * out_itemsize)
+            epilogue_smem = max(epilogue_smem, acc_smem)
+        smem_capacity -= epilogue_smem
         if x_transpose:
             smem_capacity -= block_m * block_k * (max(8, lhs_dtype.bitwidth) // 8)
 
@@ -155,7 +179,8 @@ def compute_num_stages(
     if is_persistent and (lhs_dtype == FP32 or rhs_dtype == FP32):
         smem_capacity -= 32 * 1024
     smem_capacity = max(smem_capacity, 0)
-    num_stages = min(smem_capacity // int(stage_size), 4)
+    max_stages = 5 if rhs_dtype == FP4 else 4  # maybe 5 everywhere; just haven't tested
+    num_stages = min(smem_capacity // int(stage_size), max_stages)
     # Keep one stage of headroom for persistent fp32 to avoid launch-time OOR.
     if is_persistent and (lhs_dtype == FP32 or rhs_dtype == FP32):
         num_stages = min(num_stages, 3)

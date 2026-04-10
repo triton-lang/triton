@@ -139,7 +139,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
         ctx, [&](Diagnostic &diag) { diags.push_back("  - " + diag.str()); });
     result = inferLayout->inferReshapeOpEncoding(
         srcTy.getShape(), srcTy.getEncoding(), dstTy.getShape(), inferredEnc,
-        /*allowReorder=*/false, UnknownLoc::get(ctx));
+        UnknownLoc::get(ctx));
   }
 
   // We expect the reshape to succeed as long as the inputs have the same
@@ -164,7 +164,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
     Attribute inferredSrcEnc;
     auto result = inferLayout->inferReshapeOpEncoding(
         dstTy.getShape(), inferredEnc, srcTy.getShape(), inferredSrcEnc,
-        /*allowReorder=*/false, UnknownLoc::get(ctx));
+        UnknownLoc::get(ctx));
     EXPECT_TRUE(succeeded(result))
         << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
         << " " << stringifyLLVMType(inferredEnc) << " -> "
@@ -439,8 +439,7 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       }
       Attribute reshapedEnc;
       result = inferLayout->inferReshapeOpEncoding(
-          transShape, transEnc, newShape, reshapedEnc,
-          /*allowReorder=*/false, std::nullopt);
+          transShape, transEnc, newShape, reshapedEnc, std::nullopt);
       assert(succeeded(result));
       // The layouts should be structurally the same
       // but reshapeEnc will likely be a LinearEncodingAttr
