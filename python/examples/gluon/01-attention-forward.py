@@ -226,7 +226,10 @@ class AttentionConfig:
         self.num_warps = gl.constexpr(num_warps)
 
         self.SPLIT_D_FACTOR = gl.constexpr(2)
-        self.SPLIT_EXP_FACTOR = gl.constexpr(256 // HEAD_DIM)
+        if STAGE == 1 and HEAD_DIM == 128:
+            self.SPLIT_EXP_FACTOR = gl.constexpr(4)
+        else:
+            self.SPLIT_EXP_FACTOR = gl.constexpr(256 // HEAD_DIM)
         self.SPLIT_QK_LOAD_FACTOR = gl.constexpr(2 if STAGE == 1 else 1)
         self.SPLIT_M = gl.constexpr(self.BLOCK_M // 2)
         self.SPLIT_D = gl.constexpr(self.HEAD_DIM // self.SPLIT_D_FACTOR)
@@ -588,13 +591,14 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
 
     for start_n in range(lo, hi, config.BLOCK_N):
         s_tmem, s_bar, s_consumer = s_consumer.acquire()
-        qk, qk_max = _subtiled_qk_load(config, s_tmem, use_tmem_red)
+        use_tmem_red_for_max: gl.constexpr = use_tmem_red and STAGE != 2
+        qk, qk_max = _subtiled_qk_load(config, s_tmem, use_tmem_red_for_max)
 
         if STAGE == 2:
             col_limit_right = (offs_m - start_n + 1)[:, None]
             qk = _apply_causal_mask(qk, col_limit_right)
 
-        if use_tmem_red:
+        if use_tmem_red_for_max:
             qk_max = gl.convert_layout(qk_max, m_i.type.layout)
             m_ij = gl.maximum(m_i, qk_max * config.qk_scale)
         else:
@@ -943,8 +947,8 @@ def is_blackwell_ultra():
 @pytest.mark.parametrize("N_CTX", [1024])
 @pytest.mark.parametrize("HEAD_DIM", [128])
 @pytest.mark.parametrize("causal", [True])
-@pytest.mark.parametrize("dtype", [torch.bfloat16])
-@pytest.mark.parametrize("use_tmem_red", [False])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("use_tmem_red", [False, True])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, profile=False):
     device = "cuda"
