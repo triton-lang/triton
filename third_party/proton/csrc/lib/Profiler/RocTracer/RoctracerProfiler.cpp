@@ -16,7 +16,6 @@
 #include <iostream>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -195,6 +194,57 @@ std::tuple<bool, bool> matchKernelCbId(uint32_t cbId) {
   return std::make_pair(isRuntimeApi, isDriverApi);
 }
 
+const char *getKernelName(uint32_t cbId, const hip_api_data_t *data) {
+  switch (cbId) {
+  case HIP_API_ID_hipExtLaunchKernel:
+    return hip::getKernelNameRefByPtr(
+        data->args.hipExtLaunchKernel.function_address,
+        data->args.hipExtLaunchKernel.stream);
+  case HIP_API_ID_hipExtLaunchMultiKernelMultiDevice: {
+    const hipLaunchParams *launchParams =
+        data->args.hipExtLaunchMultiKernelMultiDevice.launchParamsList;
+    if (launchParams == nullptr ||
+        data->args.hipExtLaunchMultiKernelMultiDevice.numDevices == 0)
+      return nullptr;
+    return hip::getKernelNameRefByPtr(launchParams->func, launchParams->stream);
+  }
+  case HIP_API_ID_hipExtModuleLaunchKernel:
+    return hip::getKernelNameRef(data->args.hipExtModuleLaunchKernel.f);
+  case HIP_API_ID_hipHccModuleLaunchKernel:
+    return hip::getKernelNameRef(data->args.hipHccModuleLaunchKernel.f);
+  case HIP_API_ID_hipLaunchCooperativeKernel:
+    return hip::getKernelNameRefByPtr(
+        data->args.hipLaunchCooperativeKernel.f,
+        data->args.hipLaunchCooperativeKernel.stream);
+  case HIP_API_ID_hipLaunchCooperativeKernelMultiDevice: {
+    const hipLaunchParams *launchParams =
+        data->args.hipLaunchCooperativeKernelMultiDevice.launchParamsList;
+    if (launchParams == nullptr ||
+        data->args.hipLaunchCooperativeKernelMultiDevice.numDevices == 0)
+      return nullptr;
+    return hip::getKernelNameRefByPtr(launchParams->func, launchParams->stream);
+  }
+  case HIP_API_ID_hipLaunchKernel:
+    return hip::getKernelNameRefByPtr(
+        data->args.hipLaunchKernel.function_address,
+        data->args.hipLaunchKernel.stream);
+  case HIP_API_ID_hipModuleLaunchKernel:
+    return hip::getKernelNameRef(data->args.hipModuleLaunchKernel.f);
+  case HIP_API_ID_hipModuleLaunchCooperativeKernel:
+    return hip::getKernelNameRef(data->args.hipModuleLaunchCooperativeKernel.f);
+  case HIP_API_ID_hipModuleLaunchCooperativeKernelMultiDevice: {
+    const hipFunctionLaunchParams *launchParams =
+        data->args.hipModuleLaunchCooperativeKernelMultiDevice.launchParamsList;
+    if (launchParams == nullptr ||
+        data->args.hipModuleLaunchCooperativeKernelMultiDevice.numDevices == 0)
+      return nullptr;
+    return hip::getKernelNameRef(launchParams->function);
+  }
+  default:
+    return nullptr;
+  }
+}
+
 } // namespace
 
 struct RoctracerProfiler::RoctracerProfilerPimpl
@@ -248,8 +298,8 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         static_cast<const hip_api_data_t *>(callbackData);
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
-      // TODO: Get kernel name from hip_api_data_t
-      threadState.enterOp(Scope(""));
+      const char *kernelName = getKernelName(cid, data);
+      threadState.enterOp(Scope(kernelName ? kernelName : ""));
       auto &dataToEntry = threadState.dataToEntry;
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {

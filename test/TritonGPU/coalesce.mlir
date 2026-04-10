@@ -207,12 +207,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @descriptor_store
-  tt.func public @descriptor_store(%arg0: !tt.tensordesc<tensor<2x64xf16>>) {
+  tt.func public @descriptor_store(%arg0: !tt.tensordesc<2x64xf16>) {
     %c0_i32 = arith.constant 0 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<2x64xf16, #blocked>
     // CHECK: %[[C:.+]] = ttg.convert_layout %{{.+}} : tensor<2x64xf16, #{{.+}}> -> tensor<2x64xf16, #[[$LAYOUT]]>
-    // CHECK: tt.descriptor_store {{.*}}, %[[C]] : !tt.tensordesc<tensor<2x64xf16>>, tensor<2x64xf16, #[[$LAYOUT]]>
-    tt.descriptor_store %arg0[%c0_i32, %c0_i32], %cst : !tt.tensordesc<tensor<2x64xf16>>, tensor<2x64xf16, #blocked>
+    // CHECK: tt.descriptor_store {{.*}}, %[[C]] : !tt.tensordesc<2x64xf16>, tensor<2x64xf16, #[[$LAYOUT]]>
+    tt.descriptor_store %arg0[%c0_i32, %c0_i32], %cst : !tt.tensordesc<2x64xf16>, tensor<2x64xf16, #blocked>
     tt.return
   }
 }

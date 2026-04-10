@@ -26,30 +26,35 @@ Value convertScaleElemType(PatternRewriter &rewriter, Location loc, Value scale,
                            FloatType dstElemTy) {
   auto scaleTy = cast<RankedTensorType>(scale.getType());
   auto elemTy = scaleTy.getElementType();
-  unsigned dstWidth = dstElemTy.getIntOrFloatBitWidth();
-  auto intTy = rewriter.getIntegerType(dstWidth);
 
-  if (isa<BFloat16Type>(elemTy)) {
-    // Hack to align ScaledUpcast*Op sanitization with that of DotScaledOp.
-    // Original i8 scale was zext to i16 then shl by 7. We recover the input.
-    auto i16Ty = rewriter.getI16Type();
-    auto scaleI16Ty = scaleTy.clone(i16Ty);
-    Value scaleI = tt::BitcastOp::create(rewriter, loc, scaleI16Ty, scale);
-    Value shift = arith::ConstantOp::create(
-        rewriter, loc, scaleI16Ty,
-        DenseElementsAttr::get(scaleI16Ty, rewriter.getIntegerAttr(i16Ty, 7)));
-    Value shifted = arith::ShRUIOp::create(rewriter, loc, scaleI, shift);
-    auto ext =
-        arith::ExtUIOp::create(rewriter, loc, scaleTy.clone(intTy), shifted);
-    return tt::BitcastOp::create(rewriter, loc, scaleTy.clone(dstElemTy), ext);
+  if (isa<FloatType>(elemTy)) {
+    if (elemTy == dstElemTy)
+      return scale;
+    return tt::FpToFpOp::create(rewriter, loc, scaleTy.clone(dstElemTy), scale);
   }
 
   auto elemIntTy = dyn_cast<IntegerType>(elemTy);
   if (!elemIntTy || elemIntTy.getWidth() != 8)
     return {};
 
-  auto ext = arith::ExtUIOp::create(rewriter, loc, scaleTy.clone(intTy), scale);
-  return tt::BitcastOp::create(rewriter, loc, scaleTy.clone(dstElemTy), ext);
+  FloatType largeFpType = dstElemTy.isF16() ? rewriter.getF32Type() : dstElemTy;
+  int intWidth = largeFpType.getIntOrFloatBitWidth();
+  auto largeIntTy = rewriter.getIntegerType(intWidth);
+
+  auto ext =
+      arith::ExtUIOp::create(rewriter, loc, scaleTy.clone(largeIntTy), scale);
+  int shiftValue = largeFpType.getFPMantissaWidth() - 1;
+  Value shift = arith::ConstantOp::create(
+      rewriter, loc, scaleTy.clone(largeIntTy),
+      DenseElementsAttr::get(scaleTy.clone(largeIntTy),
+                             rewriter.getIntegerAttr(largeIntTy, shiftValue)));
+  Value shifted = arith::ShLIOp::create(rewriter, loc, ext, shift);
+  Value scaleFP =
+      tt::BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), shifted);
+  if (largeFpType != dstElemTy)
+    scaleFP = arith::TruncFOp::create(rewriter, loc, scaleTy.clone(dstElemTy),
+                                      scaleFP);
+  return scaleFP;
 }
 
 //----------------------------------------

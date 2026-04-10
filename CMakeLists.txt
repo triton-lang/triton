@@ -22,9 +22,9 @@ option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
-option(LLVM_BUILD_SHARED_LIBS
-  "Build all libraries as shared libraries instead of static" OFF)
+option(TRITON_EXT_ENABLED "Build with default visibility for Triton+LLVM symbol exposure to plugin extensions" OFF)
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
+set(TRITON_VERSION "" CACHE STRING "Triton version string (passed from setup.py)")
 
 set(TRITON_CACHE_PATH "" CACHE PATH "Path to triton cache")
 set(TRITON_LLVM_SYSTEM_SUFFIX "" CACHE STRING "Path to LLVM system suffix")
@@ -38,7 +38,6 @@ set(TRITON_CUDACRT_PATH "" CACHE PATH "Path to CUDA CRT headers.")
 set(TRITON_CUDART_PATH "" CACHE PATH "Path to CUDA Runtime headers")
 set(TRITON_CUPTI_INCLUDE_PATH "" CACHE PATH "Path to CUPTI headers")
 set(TRITON_CUPTI_LIB_PATH "" CACHE PATH "Path to CUPTI libraries")
-set(TRITON_CUDA_STDLIB_PATH "" CACHE PATH "Path to CUDA standard library headers")
 
 if(NOT TRITON_CACHE_PATH)
   message(FATAL_ERROR "TRITON_CACHE_PATH must be set or derivable from TRITON_HOME/HOME/USERPROFILE/HOMEPATH.")
@@ -81,9 +80,6 @@ endif()
 if(NOT "${TRITON_CUPTI_LIB_PATH}" STREQUAL "")
   list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cupti-lib-path "${TRITON_CUPTI_LIB_PATH}")
 endif()
-if(NOT "${TRITON_CUDA_STDLIB_PATH}" STREQUAL "")
-  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cuda-stdlib-path "${TRITON_CUDA_STDLIB_PATH}")
-endif()
 
 # Resolve third-party package paths in CMake so direct CMake builds don't rely on setup.py.
 set(TRITON_HAS_LLVM_SYSPATH OFF)
@@ -100,6 +96,13 @@ endif()
 if(NOT "${JSON_SYSPATH}" STREQUAL "" AND NOT DEFINED JSON_INCLUDE_DIR)
   set(JSON_INCLUDE_DIR "${JSON_SYSPATH}/include")
 endif()
+
+# Regenerate Triton Version Header
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/triton/Version.h.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/include/triton/Version.h"
+  @ONLY
+)
 
 # Regenerate configure outputs during `cmake --build` when helper inputs change.
 set_property(
@@ -183,7 +186,6 @@ else()
   set(CMAKE_EXE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
   set(CMAKE_MODULE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
   set(CMAKE_SHARED_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
-  set(LLVM_BUILD_SHARED_LIBS "0")
 endif()
 
 # Default build type
@@ -264,7 +266,17 @@ endfunction()
 # Disable warnings that show up in external code (gtest;pybind11)
 if(NOT MSVC)
   set(TRITON_DISABLE_EH_RTTI_FLAGS "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti>")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
+
+  if(NOT TRITON_EXT_ENABLED)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
+  else()
+    # Inform plugin loader if that libtriton is compiled with visibility
+    # so that they will not proceed with loading plugins if that will
+    # crash a Triton not compiled with visibility due to missing symbols.
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRITON_EXT_ENABLED=1")
+  endif()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default ")
+
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4244 /wd4624 /wd4715 /wd4530")
 endif()
@@ -335,15 +347,11 @@ if(TRITON_BUILD_PYTHON_MODULE)
     ${triton_plugins}
 
     # mlir
-    MLIRAMDGPUDialect
     MLIRNVVMDialect
     MLIRNVVMToLLVMIRTranslation
     MLIRGPUToNVVMTransforms
-    MLIRGPUToGPURuntimeTransforms
-    MLIRGPUTransforms
     MLIRIR
     MLIRControlFlowToLLVM
-    MLIRBytecodeWriter
     MLIRPass
     MLIRTransforms
     MLIRLLVMDialect
@@ -356,7 +364,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRIndexToLLVM
     MLIRGPUToROCDLTransforms
     MLIRUBToLLVM
-    MLIRPluginsLib
 
     # LLVM
     LLVMPasses
@@ -413,6 +420,13 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
+
+
+  # Do not propagate libraries that libtriton depends on. This ensures that
+  # targets that link against libtriton do not accidentally link in their own
+  # copies of core Triton code and LLVM.
+  set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
+
   if(WIN32)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
@@ -441,9 +455,11 @@ if(TRITON_BUILD_PYTHON_MODULE)
     "${TRITON_WHEEL_DIR}/FileCheck"
     COPYONLY)
 
+  # Build plugins when building libtriton since they depend on libtriton.
+  add_subdirectory(examples/plugins)
 endif()
 
-if (UNIX AND NOT APPLE)
+if (UNIX AND NOT APPLE AND NOT TRITON_EXT_ENABLED)
   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
 endif()
 
@@ -470,7 +486,6 @@ find_package(Threads REQUIRED)
 add_subdirectory(third_party/f2reduce)
 add_subdirectory(bin)
 add_subdirectory(test)
-add_subdirectory(examples)
 
 if(TRITON_BUILD_UT)
   add_subdirectory(unittest)

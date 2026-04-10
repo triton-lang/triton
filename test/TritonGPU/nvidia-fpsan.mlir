@@ -76,8 +76,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: @tcgen05_mma
   tt.func public @tcgen05_mma() {
     // CHECK: ttg.global_scratch_alloc
-    // CHECK: scf.for
-    // CHECK: ttng.arrive_barrier
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NEXT: scf.for
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NEXT: ttng.arrive_barrier
     // CHECK-NOT: ttng.tc_gen5_mma
     %true = arith.constant true
     %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
@@ -99,8 +101,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: @tcgen05_mma_pred
   tt.func public @tcgen05_mma_pred() {
     // CHECK: ttg.global_scratch_alloc
-    // CHECK: scf.for
-    // CHECK: ttng.arrive_barrier
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NEXT: scf.for
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NEXT: ttng.arrive_barrier
     // CHECK-NOT: ttng.tc_gen5_mma
     %false = arith.constant false
     %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
@@ -124,8 +128,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: @tcgen05_mma_scaled
   tt.func public @tcgen05_mma_scaled() {
     // CHECK: ttg.global_scratch_alloc
-    // CHECK: scf.for
-    // CHECK: ttng.arrive_barrier
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NEXT: scf.for
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NEXT: ttng.arrive_barrier
     // CHECK-NOT: ttng.tc_gen5_mma_scaled
     %true = arith.constant true
     %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x256xi8, #shared, #ttg.shared_memory, mutable>

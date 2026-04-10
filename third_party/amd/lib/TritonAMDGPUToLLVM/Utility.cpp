@@ -174,9 +174,15 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
             ret, val, 8 + static_cast<uint32_t>(DppCtrl::ROW_SHL0), allRows,
             0x3);
       }
-      default:
-        assert(false &&
-               "bfly shfl with stride >= 16 should not be handled by dpp.");
+      default: {
+        // Non-power-of-2 strides (e.g. 3, 5, 6) arise from layout conversions
+        // that combine multiple lane bits into a single XOR mask. DPP can only
+        // express single-bit strides (1, 2, 4, 8); fall back to bpermute for
+        // the rest.
+        Value stride = b.i32_val(strideInt);
+        Value lineId = b.xor_(laneId, stride);
+        return bpermute(lineId);
+      }
       }
     }
     break;
