@@ -252,8 +252,10 @@ private:
 class PCSamplingMetric : public Metric {
 public:
   enum PCSamplingMetricKind : int {
+    // Common
     NumSamples,
     NumStalledSamples,
+    // NVIDIA stall reasons (matched by name in CUPTI backend)
     StalledBranchResolving,
     StalledNoInstruction,
     StalledShortScoreboard,
@@ -272,6 +274,16 @@ public:
     StalledDispatchStall,
     StalledSleeping,
     StalledSelected,
+    // AMD stall reasons (from rocprofiler-sdk pc_sampling.h)
+    StalledAMDNoInstructionAvailable,
+    StalledAMDALUDependency,
+    StalledAMDWaitcnt,
+    StalledAMDInternalInstruction,
+    StalledAMDBarrierWait,
+    StalledAMDArbiterNotWin,
+    StalledAMDArbiterWinExStall,
+    StalledAMDOtherWait,
+    StalledAMDSleepWait,
     Count,
   };
 
@@ -305,6 +317,7 @@ public:
   static constexpr std::string_view VALUE_NAMES[PCSamplingMetricKind::Count] = {
       "num_samples",
       "num_stalled_samples",
+      // NVIDIA
       "stalled_branch_resolving",
       "stalled_no_instruction",
       "stalled_short_scoreboard",
@@ -323,6 +336,16 @@ public:
       "stalled_dispatch_stall",
       "stalled_sleeping",
       "stalled_selected",
+      // AMD
+      "stalled_amd_no_instruction_available",
+      "stalled_amd_alu_dependency",
+      "stalled_amd_waitcnt",
+      "stalled_amd_internal_instruction",
+      "stalled_amd_barrier_wait",
+      "stalled_amd_arbiter_not_win",
+      "stalled_amd_arbiter_win_ex_stall",
+      "stalled_amd_other_wait",
+      "stalled_amd_sleep_wait",
   };
   const static inline std::string name = "PCSamplingMetric";
 };
