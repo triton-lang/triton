@@ -141,6 +141,10 @@ def compute_num_stages(
             # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
             stage_size += block_k * block_n * weight_size
 
+    if precision_config.a_mx_scale is not None:
+        scale_block_size = mx_block_size or int(MXFP_BLOCK_SIZE)
+        stage_size += block_m * (block_k // scale_block_size)
+
     if precision_config.b_mx_scale is not None:
         # mx scales
         scale_block_size = mx_block_size or int(MXFP_BLOCK_SIZE)
