@@ -138,7 +138,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
         num_warps = 4 if batch <= 512 else 8
         value_layout = layout.make_default_matmul_mxfp4_w_layout(
             mx_axis=1,
-            allow_blackwell_value_shuffle=shuffle_mx4 and x_dtype.itemsize == 1,
+            allow_blackwell_value_shuffle=shuffle_mx4,
         )
         scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
         opt1 = {
