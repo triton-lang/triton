@@ -12,6 +12,7 @@ import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.strided import StridedLayout
 from triton_kernels.tensor_details.layout_details.base import Layout
+from triton_kernels.tensor_details.layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 
 @dataclass
@@ -436,6 +437,7 @@ def make_opt_flags(
     block_k,
     mx_block_size=None,
     x_uses_tma_when_persistent=True,
+    rhs_layout=None,
 ):
     opt_flags_constraints = _get_opt_flags_constraints()
     if opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
@@ -451,6 +453,11 @@ def make_opt_flags(
         assert not opt_flags_constraints
         assert block_k is None
         return opt_flags
+    if isinstance(rhs_layout, BlackwellMX4ValueShuffledLayout):
+        opt_flags_constraints = opt_flags_constraints.copy()
+        opt_flags_constraints.setdefault("block_k", rhs_layout.block_k)
+        opt_flags_constraints.setdefault("block_n", rhs_layout.block_n)
+        opt_flags_constraints.setdefault("disable_mx4_block_swap", True)
     if block_k is not None:
         opt_flags_constraints = opt_flags_constraints.copy()
         opt_flags_constraints.update(block_k=block_k, split_k=1)
