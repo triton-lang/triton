@@ -252,8 +252,9 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
   RoctracerProfilerPimpl(RoctracerProfiler &profiler)
       : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {
     auto runtime = &HipRuntime::instance();
-    profiler.metricBuffer =
-        std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
+    profiler.metricBuffer = std::make_unique<MetricBuffer>(
+        getIntEnv("TRITON_PROFILE_METRIC_BUFFER_SIZE", 64 * 1024 * 1024),
+        runtime);
   }
   virtual ~RoctracerProfilerPimpl() = default;
 

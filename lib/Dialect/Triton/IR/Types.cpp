@@ -27,6 +27,7 @@ void TritonDialect::registerTypes() {
 // Format: !tt.tensordesc<128x64xf16>
 //         !tt.tensordesc<128x64xf16, #shared>
 Type TensorDescType::parse(AsmParser &parser) {
+  Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
   if (failed(parser.parseLess()))
     return Type();
 
@@ -47,7 +48,8 @@ Type TensorDescType::parse(AsmParser &parser) {
   if (failed(parser.parseGreater()))
     return Type();
 
-  return TensorDescType::get(shape, elementType, sharedLayout);
+  return TensorDescType::getChecked(loc, parser.getContext(), shape,
+                                    elementType, sharedLayout);
 }
 
 void TensorDescType::print(AsmPrinter &printer) const {
@@ -86,6 +88,18 @@ void PointerType::print(AsmPrinter &printer) const {
   } else {
     printer << "<" << getPointeeType() << ", " << getAddressSpace() << ">";
   }
+}
+
+LogicalResult
+TensorDescType::verify(function_ref<InFlightDiagnostic()> emitError,
+                       ArrayRef<int64_t> shape, Type elementType,
+                       Attribute sharedLayout) {
+  if (isa<RankedTensorType>(elementType)) {
+    return emitError()
+           << "tensor descriptors must not wrap tensor types; use "
+              "!tt.tensordesc<shape x element-type[, layout]> instead";
+  }
+  return success();
 }
 
 LogicalResult PointerType::verify(function_ref<InFlightDiagnostic()> emitError,
