@@ -2,8 +2,10 @@
 #define PROTON_DRIVER_DISPATCH_H_
 
 #include <dlfcn.h>
+#include <link.h>
 
 #include "Utility/Env.h"
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -89,6 +91,51 @@ struct ExternLibBase {
   static inline void *lib{nullptr};
 };
 
+namespace detail {
+
+struct FindLibCtx {
+  const char *prefix;
+  size_t prefixLen;
+  const char *foundPath;
+};
+
+inline int findLibCallback(struct dl_phdr_info *info, size_t, void *data) {
+  auto *ctx = static_cast<FindLibCtx *>(data);
+  if (!info->dlpi_name || info->dlpi_name[0] == '\0')
+    return 0;
+  const char *slash = std::strrchr(info->dlpi_name, '/');
+  const char *basename = slash ? slash + 1 : info->dlpi_name;
+  if (std::strncmp(basename, ctx->prefix, ctx->prefixLen) == 0) {
+    char after = basename[ctx->prefixLen];
+    if (after == '\0' || after == '.') {
+      ctx->foundPath = info->dlpi_name;
+      return 1;
+    }
+  }
+  return 0;
+}
+
+} // namespace detail
+
+inline std::string findLoadedLibPath(const char *name) {
+  const char *slash = std::strrchr(name, '/');
+  const char *basename = slash ? slash + 1 : name;
+  detail::FindLibCtx ctx{basename, std::strlen(basename), nullptr};
+  dl_iterate_phdr(detail::findLibCallback, &ctx);
+  return ctx.foundPath ? std::string(ctx.foundPath) : std::string();
+}
+
+inline void *findLoadedLib(const char *name) {
+  auto path = findLoadedLibPath(name);
+  if (!path.empty()) {
+    // Use RTLD_LAZY to get a handle. The library is already resident
+    // (found via dl_iterate_phdr) so this won't load a second copy;
+    // dlopen deduplicates by resolved inode.
+    return dlopen(path.c_str(), RTLD_LOCAL | RTLD_LAZY);
+  }
+  return nullptr;
+}
+
 template <typename ExternLib> class Dispatch {
 public:
   Dispatch() = delete;
@@ -101,19 +148,7 @@ public:
         auto fullPath = dir + "/" + name;
         *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
       } else {
-        // Try to reuse an already-loaded library matching this name.
-        *lib = dlopen(name, RTLD_NOLOAD);
-        if (*lib == nullptr) {
-          // RTLD_NOLOAD matches by SONAME. If the library was loaded under
-          // a versioned SONAME (e.g. "libfoo.so.7" vs "libfoo.so") the
-          // unversioned name won't match. Probe common major versions
-          // to reuse the resident copy instead of loading a duplicate
-          // from a different installation.
-          for (int major = 9; major >= 1 && *lib == nullptr; --major) {
-            auto versioned = std::string(name) + "." + std::to_string(major);
-            *lib = dlopen(versioned.c_str(), RTLD_NOLOAD);
-          }
-        }
+        *lib = findLoadedLib(name);
         if (*lib == nullptr) {
           *lib = dlopen(name, RTLD_LOCAL | RTLD_LAZY);
         }

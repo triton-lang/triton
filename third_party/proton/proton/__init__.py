@@ -11,10 +11,6 @@ from .profile import (
 )
 from . import context, specs, mode, data
 
-import sys
-
-print("[PROTON_DEBUG __init__] eager_init=YES", file=sys.stderr, flush=True)
-
 
 def _eager_rocprofiler_init():
     try:
@@ -23,9 +19,8 @@ def _eager_rocprofiler_init():
             return
         from triton._C.libproton import proton as _libproton
         _libproton.ensure_rocprofiler_configured()
-        print("[PROTON_DEBUG __init__] eager_init CALLED force_configure", file=sys.stderr, flush=True)
-    except Exception as e:
-        print(f"[PROTON_DEBUG __init__] eager_init FAILED: {e}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
 
 
 _eager_rocprofiler_init()

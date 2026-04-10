@@ -59,5 +59,17 @@ DEFINE_DISPATCH(ExternLibRocprofiler, queryAvailableAgents,
                 rocprofiler_query_available_agents, rocprofiler_agent_version_t,
                 rocprofiler_query_available_agents_cb_t, size_t, void *)
 
+DEFINE_DISPATCH(ExternLibRocprofiler, queryPCSamplingAgentConfigurations,
+                rocprofiler_query_pc_sampling_agent_configurations,
+                rocprofiler_agent_id_t,
+                rocprofiler_available_pc_sampling_configurations_cb_t, void *)
+
+DEFINE_DISPATCH(ExternLibRocprofiler, configurePCSamplingService,
+                rocprofiler_configure_pc_sampling_service,
+                rocprofiler_context_id_t, rocprofiler_agent_id_t,
+                rocprofiler_pc_sampling_method_t,
+                rocprofiler_pc_sampling_unit_t, uint64_t,
+                rocprofiler_buffer_id_t, int)
+
 } // namespace rocprofiler
 } // namespace proton

@@ -13,13 +13,10 @@ DEFAULT_PROFILE_NAME = "proton"
 
 
 def _select_backend() -> str:
-    import sys
     from triton.backends import backends
     if "nvidia" in backends and backends["nvidia"].driver.is_active():
-        print("[PROTON_DEBUG _select_backend] NEW path -> cupti", file=sys.stderr, flush=True)
         return "cupti"
     if "amd" in backends:
-        print("[PROTON_DEBUG _select_backend] NEW path -> rocprofiler", file=sys.stderr, flush=True)
         return "rocprofiler"
     raise ValueError("No backend is available for the current target.")
 
@@ -95,7 +92,7 @@ def start(
                                                Can be a string or an instance of BaseMode (or any subclass thereof).
                                                Defaults to None.
                                                For "cupti", available options are [None, "pcsampling", "periodic_flushing"].
-                                               For "rocprofiler", available options are [None, "periodic_flushing"].
+                                               For "rocprofiler", available options are [None, "pcsampling", "periodic_flushing"].
                                                For "roctracer", available options are [None, "periodic_flushing"].
                                                For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.
