@@ -402,6 +402,7 @@ def matmul(a, b, bias,
         mx_block_size = mx_block_size,
         x_uses_tma_when_persistent = a_uses_tma_when_persistent,
         rhs_layout=b.storage.layout,
+        epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
     if b_is_shuffled:
         if b.dtype.bitwidth != 4:
