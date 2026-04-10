@@ -180,34 +180,79 @@ class Autotuner(KernelInterface):
             fn = fn.fn
 
         env_vars = get_cache_invalidating_env_vars()
+        # Cache key does NOT include configs so that adding/removing configs
+        # only requires benchmarking the new ones instead of invalidating the
+        # entire cache.
         cache_key = [
             triton_key(),
             make_backend(driver.active.get_current_target()).hash(),
             fn.cache_key,
             str(sorted(env_vars.items())),
             str(tuning_key),
-        ] + [str(c) for c in configs]
+        ]
         cache_key = hashlib.sha256("-".join(cache_key).encode("utf-8")).hexdigest()
         cache = get_cache_manager(cache_key)
         file_name = f"{fn.__name__[:150]}.autotune.json"
         path = cache.get_file(file_name)
+
         if path:
             with open(path, "r") as cached_configs:
-                timings = json.load(cached_configs)["configs_timings"]
-                timings = {Config(**config): timing for config, timing in timings}
-                self.cache[tuning_key] = builtins.min(timings, key=timings.get)
-                self.configs_timings = timings
-            return True
+                data = json.load(cached_configs)
+
+            # Old format (no "version" field): fall back to full re-benchmark
+            # to avoid mixing incompatible cache layouts.
+            if "version" not in data:
+                bench_fn()
+                self._write_per_config_cache(cache, file_name, tuning_key)
+                return False
+
+            cached_timings = {Config(**config): timing for config, timing in data["configs_timings"]}
+
+            # Partition current configs into cached and uncached sets.
+            configs_set = set(configs)
+            hit_timings = {c: cached_timings[c] for c in configs_set if c in cached_timings}
+            uncached_configs = [c for c in configs if c not in cached_timings]
+
+            if not uncached_configs:
+                # All configs have cached timings -- skip benchmarking entirely.
+                self.configs_timings = hit_timings
+                self.cache[tuning_key] = builtins.min(hit_timings, key=hit_timings.get)
+                return True
+
+            # Benchmark only the uncached configs.
+            bench_fn(uncached_configs)
+
+            # Merge cached timings with newly benchmarked timings.
+            merged = dict(hit_timings)
+            merged.update(self.configs_timings)
+            self.configs_timings = merged
+            self.cache[tuning_key] = builtins.min(merged, key=merged.get)
+
+            # Persist the updated (cached + new) timings back to disk.
+            # Include all previously cached timings for configs not in the
+            # current list so they are not lost.
+            all_timings = dict(cached_timings)
+            all_timings.update(self.configs_timings)
+            self._write_per_config_cache(cache, file_name, tuning_key, all_timings)
+            return False
 
         bench_fn()
+        self._write_per_config_cache(cache, file_name, tuning_key)
+        return False
+
+    def _write_per_config_cache(self, cache, file_name, tuning_key, timings=None):
+        """Write per-config timing data using the v2 cache format."""
+        if timings is None:
+            timings = self.configs_timings
         cache.put(
             json.dumps({
+                "version":
+                2,
                 "key":
                 tuning_key,
                 "configs_timings":
-                [(config.__dict__, timings) for config, timings in self.configs_timings.items() if not config.pre_hook],
+                [(config.__dict__, timing) for config, timing in timings.items() if not config.pre_hook],
             }), file_name, binary=False)
-        return False
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
@@ -224,9 +269,11 @@ class Autotuner(KernelInterface):
                 used_cached_result = False
                 pruned_configs = self.prune_configs(kwargs)
 
-                def benchmark():
+                def benchmark(configs_to_bench=None):
+                    if configs_to_bench is None:
+                        configs_to_bench = pruned_configs
                     bench_start = time.time()
-                    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                    timings = {config: self._bench(*args, config=config, **kwargs) for config in configs_to_bench}
                     bench_end = time.time()
                     self.bench_time = bench_end - bench_start
                     self.cache[key] = builtins.min(timings, key=timings.get)

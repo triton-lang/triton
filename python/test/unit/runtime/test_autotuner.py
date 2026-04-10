@@ -1,3 +1,8 @@
+import json
+import os
+import tempfile
+from unittest import mock
+
 import torch
 
 import triton
@@ -7,6 +12,7 @@ import pytest
 import pathlib
 import uuid
 from triton._internal_testing import is_cuda
+from triton.runtime.autotuner import Autotuner, Config
 
 
 def do_bench(kernel_call, quantiles, use_cuda_graph=False):
@@ -477,3 +483,235 @@ def test_prune_all_configs(device):
         assert e is not None and str(
             e
         ) == "Autotuner error: No valid autotuner configs after pruning. `early_config_prune` should return at least one config."
+
+
+# ---------------------------------------------------------------------------
+# Per-config cache tests (Issue #9822)
+# ---------------------------------------------------------------------------
+
+
+class _TempDirCacheManager:
+    """Cache manager backed by a real temporary directory."""
+
+    def __init__(self):
+        self._dir = tempfile.mkdtemp()
+
+    def get_file(self, filename):
+        path = os.path.join(self._dir, filename)
+        return path if os.path.exists(path) else None
+
+    def put(self, data, filename, binary=True):
+        path = os.path.join(self._dir, filename)
+        with open(path, "w") as f:
+            f.write(data)
+        return path
+
+
+def _make_autotuner_stub(configs):
+    """Build a minimal Autotuner-like object for ``check_disk_cache``."""
+    at = object.__new__(Autotuner)
+    at.configs = configs
+    at.cache = {}
+    at.configs_timings = {}
+    fn_stub = mock.MagicMock()
+    fn_stub.cache_key = "fake_fn_cache_key"
+    fn_stub.__name__ = "test_kernel"
+    fn_stub.fn = fn_stub
+    at.fn = fn_stub
+    return at
+
+
+def _write_cache_file(cache_mgr, fn_name, data):
+    file_name = f"{fn_name[:150]}.autotune.json"
+    cache_mgr.put(json.dumps(data), file_name, binary=False)
+
+
+@pytest.fixture()
+def _patch_cache_deps():
+    """Patch heavy dependencies used inside ``check_disk_cache``."""
+    with mock.patch("triton.runtime.autotuner.triton_key", return_value="test_triton_key"), \
+         mock.patch("triton.runtime.autotuner.get_cache_invalidating_env_vars", return_value={}), \
+         mock.patch("triton.runtime.autotuner.driver") as mock_driver, \
+         mock.patch("triton.runtime.autotuner.JITFunction", new=type(mock.MagicMock())):
+        mock_backend = mock.MagicMock()
+        mock_backend.hash.return_value = "fake_backend_hash"
+        with mock.patch("triton.compiler.compiler.make_backend", return_value=mock_backend):
+            mock_driver.active.get_current_target.return_value = "fake_target"
+            yield
+
+
+@pytest.fixture()
+def cache_mgr():
+    """Yield a ``_TempDirCacheManager`` patched into ``get_cache_manager``."""
+    cm = _TempDirCacheManager()
+    with mock.patch("triton.runtime.autotuner.get_cache_manager", return_value=cm):
+        yield cm
+
+
+class TestPerConfigCache:
+    """Tests for the per-config caching introduced in Issue #9822."""
+
+    @pytest.mark.usefixtures("_patch_cache_deps")
+    def test_add_new_config_only_benchmarks_new(self, cache_mgr):
+        config_a = Config({"BLOCK_SIZE": 32}, num_warps=4, num_stages=3)
+        config_b = Config({"BLOCK_SIZE": 64}, num_warps=4, num_stages=3)
+        config_c = Config({"BLOCK_SIZE": 128}, num_warps=4, num_stages=3)
+
+        _write_cache_file(
+            cache_mgr, "test_kernel", {
+                "version": 2,
+                "key": (1024, ),
+                "configs_timings": [
+                    (config_a.__dict__, [1.0, 0.9, 1.1]),
+                    (config_b.__dict__, [2.0, 1.8, 2.2]),
+                ],
+            })
+
+        at = _make_autotuner_stub([config_a, config_b, config_c])
+        benchmarked = []
+
+        def bench_fn(configs_to_bench=None):
+            if configs_to_bench is None:
+                configs_to_bench = [config_a, config_b, config_c]
+            benchmarked.extend(configs_to_bench)
+            at.configs_timings = {c: [3.0] for c in configs_to_bench}
+            at.cache[(1024, )] = configs_to_bench[0]
+
+        result = at.check_disk_cache((1024, ), [config_a, config_b, config_c], bench_fn)
+        assert result is False
+        assert benchmarked == [config_c]
+        assert at.cache[(1024, )] == config_a
+
+    @pytest.mark.usefixtures("_patch_cache_deps")
+    def test_remove_config_uses_remaining_cache(self, cache_mgr):
+        config_a = Config({"BLOCK_SIZE": 32}, num_warps=4, num_stages=3)
+        config_b = Config({"BLOCK_SIZE": 64}, num_warps=4, num_stages=3)
+
+        _write_cache_file(
+            cache_mgr, "test_kernel", {
+                "version": 2,
+                "key": (1024, ),
+                "configs_timings": [
+                    (config_a.__dict__, [1.0, 0.9, 1.1]),
+                    (config_b.__dict__, [2.0, 1.8, 2.2]),
+                ],
+            })
+
+        at = _make_autotuner_stub([config_b])
+        bench_called = False
+
+        def bench_fn(configs_to_bench=None):
+            nonlocal bench_called
+            bench_called = True
+
+        result = at.check_disk_cache((1024, ), [config_b], bench_fn)
+        assert result is True
+        assert bench_called is False
+        assert at.cache[(1024, )] == config_b
+
+    @pytest.mark.usefixtures("_patch_cache_deps")
+    def test_all_cached_skips_benchmark(self, cache_mgr):
+        config_a = Config({"BLOCK_SIZE": 32}, num_warps=4, num_stages=3)
+        config_b = Config({"BLOCK_SIZE": 64}, num_warps=4, num_stages=3)
+
+        _write_cache_file(
+            cache_mgr, "test_kernel", {
+                "version": 2,
+                "key": (1024, ),
+                "configs_timings": [
+                    (config_a.__dict__, [1.0, 0.9, 1.1]),
+                    (config_b.__dict__, [2.0, 1.8, 2.2]),
+                ],
+            })
+
+        at = _make_autotuner_stub([config_a, config_b])
+        bench_called = False
+
+        def bench_fn(configs_to_bench=None):
+            nonlocal bench_called
+            bench_called = True
+
+        result = at.check_disk_cache((1024, ), [config_a, config_b], bench_fn)
+        assert result is True
+        assert bench_called is False
+        assert at.cache[(1024, )] == config_a
+
+    @pytest.mark.usefixtures("_patch_cache_deps")
+    def test_old_format_fallback(self, cache_mgr):
+        config_a = Config({"BLOCK_SIZE": 32}, num_warps=4, num_stages=3)
+        config_b = Config({"BLOCK_SIZE": 64}, num_warps=4, num_stages=3)
+
+        _write_cache_file(
+            cache_mgr, "test_kernel", {
+                "key": (1024, ),
+                "configs_timings": [
+                    (config_a.__dict__, [1.0, 0.9, 1.1]),
+                    (config_b.__dict__, [2.0, 1.8, 2.2]),
+                ],
+            })
+
+        at = _make_autotuner_stub([config_a, config_b])
+        benched = []
+
+        def bench_fn(configs_to_bench=None):
+            if configs_to_bench is None:
+                configs_to_bench = [config_a, config_b]
+            benched.extend(configs_to_bench)
+            at.configs_timings = {c: [5.0] for c in configs_to_bench}
+            at.cache[(1024, )] = configs_to_bench[0]
+
+        result = at.check_disk_cache((1024, ), [config_a, config_b], bench_fn)
+        assert result is False
+        assert set(benched) == {config_a, config_b}
+
+    @pytest.mark.usefixtures("_patch_cache_deps")
+    def test_no_cache_file_benchmarks_all(self, cache_mgr):
+        config_a = Config({"BLOCK_SIZE": 32}, num_warps=4, num_stages=3)
+        config_b = Config({"BLOCK_SIZE": 64}, num_warps=4, num_stages=3)
+
+        at = _make_autotuner_stub([config_a, config_b])
+        benched = []
+
+        def bench_fn(configs_to_bench=None):
+            if configs_to_bench is None:
+                configs_to_bench = [config_a, config_b]
+            benched.extend(configs_to_bench)
+            at.configs_timings = {c: [1.0] for c in configs_to_bench}
+            at.cache[(1024, )] = configs_to_bench[0]
+
+        result = at.check_disk_cache((1024, ), [config_a, config_b], bench_fn)
+        assert result is False
+        assert set(benched) == {config_a, config_b}
+
+    @pytest.mark.usefixtures("_patch_cache_deps")
+    def test_cached_timings_for_removed_configs_preserved(self, cache_mgr):
+        config_a = Config({"BLOCK_SIZE": 32}, num_warps=4, num_stages=3)
+        config_b = Config({"BLOCK_SIZE": 64}, num_warps=4, num_stages=3)
+        config_c = Config({"BLOCK_SIZE": 128}, num_warps=4, num_stages=3)
+
+        _write_cache_file(
+            cache_mgr, "test_kernel", {
+                "version": 2,
+                "key": (1024, ),
+                "configs_timings": [
+                    (config_a.__dict__, [1.0, 0.9, 1.1]),
+                    (config_b.__dict__, [2.0, 1.8, 2.2]),
+                ],
+            })
+
+        at = _make_autotuner_stub([config_a, config_c])
+
+        def bench_fn(configs_to_bench=None):
+            if configs_to_bench is None:
+                configs_to_bench = [config_a, config_c]
+            at.configs_timings = {c: [3.0] for c in configs_to_bench}
+            at.cache[(1024, )] = configs_to_bench[0]
+
+        at.check_disk_cache((1024, ), [config_a, config_c], bench_fn)
+
+        # Read the cache file and verify config_b is still there.
+        path = cache_mgr.get_file("test_kernel.autotune.json")
+        with open(path) as f:
+            data = json.load(f)
+        cached = {Config(**c): t for c, t in data["configs_timings"]}
+        assert config_b in cached
