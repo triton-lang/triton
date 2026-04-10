@@ -333,7 +333,13 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   // do not support fp4_padded operands.
   if (isFp4Padded(srcEnc))
     return op->emitOpError("does not support fp4_padded operands");
-  return verifyTMAEncoding(op, desc.getType(), srcEnc);
+  if (failed(verifyTMAEncoding(op, desc.getType(), srcEnc)))
+    return failure();
+  if (hasCGABroadcast(srcType) && !hasCoordinateMaskCGABroadcast(srcType)) {
+    return op->emitOpError("broadcasted shared layout requires CTA groups to "
+                           "be given by a coordinate mask on the CTA id");
+  }
+  return success();
 }
 
 static LogicalResult
