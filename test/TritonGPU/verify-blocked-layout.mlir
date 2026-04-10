@@ -101,6 +101,32 @@ module attributes {
 
 // -----
 
+#src = #ttg.blocked<{
+    sizePerThread=[1],
+    threadsPerWarp=[32],
+    warpsPerCTA=[4],
+    order=[0]
+}>
+#dst = #ttg.blocked<{
+    sizePerThread=[1, 1],
+    threadsPerWarp=[32, 1],
+    warpsPerCTA=[4, 1],
+    order=[1, 0]
+}>
+module attributes {
+    "ttg.num-warps" = 4 : i32,
+    "ttg.num-ctas" = 1 : i32,
+    "ttg.threads-per-warp" = 32 : i32
+} {
+    tt.func public @fn(%arg0: tensor<32xf32, #src>) {
+        // expected-error @+1 {{Expected result encoding}}
+        %t = tt.expand_dims %arg0 {axis = 0 : i32} : tensor<32xf32, #src> -> tensor<1x32xf32, #dst>
+        tt.return
+    }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {

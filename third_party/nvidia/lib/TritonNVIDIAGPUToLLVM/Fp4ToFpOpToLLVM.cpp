@@ -12,9 +12,12 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include <array>
+#include <limits>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -81,6 +84,53 @@ static Value createInlineAsmUpcast(Location loc, RewriterBase &rewriter,
   return result;
 }
 
+static size_t linearizeCoords(ArrayRef<unsigned> coords,
+                              ArrayRef<int64_t> shape) {
+  size_t linear = 0;
+  for (auto [coord, dimSize] : llvm::zip_equal(coords, shape))
+    linear = linear * dimSize + coord;
+  return linear;
+}
+
+static SmallVector<unsigned> getFp4ToFpResultOrder(RankedTensorType srcTy,
+                                                   RankedTensorType dstTy,
+                                                   int axis) {
+  auto srcOffsets = emitOffsetForLayout(srcTy.getEncoding(), srcTy);
+  auto dstOffsets = emitOffsetForLayout(dstTy.getEncoding(), dstTy);
+  assert(dstOffsets.size() == srcOffsets.size() * 2 &&
+         "fp4_to_fp should double the number of per-thread elements");
+
+  llvm::SmallDenseMap<size_t, unsigned> dstCoordToIdx;
+  dstCoordToIdx.reserve(dstOffsets.size());
+  for (auto [idx, coord] : llvm::enumerate(dstOffsets)) {
+    bool inserted =
+        dstCoordToIdx.try_emplace(linearizeCoords(coord, dstTy.getShape()), idx)
+            .second;
+    assert(inserted && "duplicate destination element coordinate");
+  }
+
+  SmallVector<unsigned> order(dstOffsets.size(),
+                              std::numeric_limits<unsigned>::max());
+  for (auto [srcIdx, srcCoord] : llvm::enumerate(srcOffsets)) {
+    for (unsigned nibble = 0; nibble < 2; ++nibble) {
+      SmallVector<unsigned> dstCoord(srcCoord);
+      dstCoord[axis] = dstCoord[axis] * 2 + nibble;
+      auto it = dstCoordToIdx.find(linearizeCoords(dstCoord, dstTy.getShape()));
+      assert(it != dstCoordToIdx.end() &&
+             "failed to map fp4_to_fp output coordinate");
+      unsigned packedIdx = srcIdx * 2 + nibble;
+      assert(order[it->second] == std::numeric_limits<unsigned>::max() &&
+             "multiple fp4_to_fp outputs mapped to the same element");
+      order[it->second] = packedIdx;
+    }
+  }
+
+  for (unsigned packedIdx : order)
+    assert(packedIdx != std::numeric_limits<unsigned>::max() &&
+           "missing fp4_to_fp output element mapping");
+  return order;
+}
+
 namespace {
 class Fp4ToFpOpPattern : public ConvertOpToLLVMPattern<Fp4ToFpOp> {
 public:
@@ -93,6 +143,8 @@ public:
 
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+    auto dstTy = cast<RankedTensorType>(op.getType());
     auto elemType = op.getType().getElementType();
     assert(elemType == f16_ty || elemType == bf16_ty);
     bool toFp16 = elemType == f16_ty;
@@ -124,6 +176,12 @@ public:
         results.push_back(b.extract_element(elements, b.i32_val(1)));
       }
     }
+
+    auto order = getFp4ToFpResultOrder(srcTy, dstTy, op.getAxis());
+    SmallVector<Value> reordered(results.size());
+    for (auto [dstIdx, packedIdx] : llvm::enumerate(order))
+      reordered[dstIdx] = results[packedIdx];
+    results = std::move(reordered);
 
     Value result = packLLElements(loc, getTypeConverter(), results, rewriter,
                                   op.getType());

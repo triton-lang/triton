@@ -46,7 +46,8 @@ struct GluonInferLayoutInterface : public triton::DialectInferLayoutInterface {
   }
 
   LogicalResult
-  inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
+  inferExpandDimsOpEncoding(ArrayRef<int64_t> srcShape,
+                            Attribute operandEncoding, unsigned axis,
                             Attribute &resultEncoding,
                             std::optional<Location> location) const override {
     return inferAutoEncoding(operandEncoding, resultEncoding);

@@ -43,10 +43,9 @@ public:
                         Attribute &resultEncoding,
                         std::optional<Location> loc) const = 0;
 
-  virtual LogicalResult
-  inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
-                            Attribute &resultEncoding,
-                            std::optional<Location> loc) const = 0;
+  virtual LogicalResult inferExpandDimsOpEncoding(
+      ArrayRef<int64_t> srcShape, Attribute operandEncoding, unsigned axis,
+      Attribute &resultEncoding, std::optional<Location> loc) const = 0;
 
   // Note: This function only verifies the operand encoding.  It doesn't infer
   // the result encoding.

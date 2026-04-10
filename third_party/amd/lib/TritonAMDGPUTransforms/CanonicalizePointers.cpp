@@ -183,6 +183,8 @@ Value createTruncIOffset(RewriterBase &rewriter, Location loc, Value offset,
 
 using ScalarToSplatMap = llvm::SmallMapVector<std::pair<Value, Type>, Value, 8>;
 
+Value createTensorZero(RewriterBase &rw, Location loc, RankedTensorType type);
+
 // Helper function to determine if the given `op` is a constant tensor and in
 // that case return the scalar value.
 std::optional<Value>
@@ -289,6 +291,34 @@ Value createAddOffsetsOfSameKind(RewriterBase &rewriter, Location loc, Value v1,
   return rewriter.createOrFold<arith::AddIOp>(loc, v1, v2);
 }
 
+// Returns v1 * v2, both v1 and v2 must be of the same kind, i.e. both are
+// scalars or both are tensors.
+Value createMulOffsetsOfSameKind(RewriterBase &rewriter, Location loc, Value v1,
+                                 Value v2) {
+  auto resultTy = getWiderElementIntType(v1, v2);
+
+  if (isIntZero(v1)) {
+    Value castV2 = createCastOffset(rewriter, loc, v2, resultTy);
+    if (auto tensorTy = dyn_cast<RankedTensorType>(castV2.getType()))
+      return createTensorZero(rewriter, loc, tensorTy);
+    return arith::ConstantIntOp::create(rewriter, loc, static_cast<int64_t>(0),
+                                        cast<IntegerType>(resultTy).getWidth());
+  }
+
+  if (isIntZero(v2)) {
+    Value castV1 = createCastOffset(rewriter, loc, v1, resultTy);
+    if (auto tensorTy = dyn_cast<RankedTensorType>(castV1.getType()))
+      return createTensorZero(rewriter, loc, tensorTy);
+    return arith::ConstantIntOp::create(rewriter, loc, static_cast<int64_t>(0),
+                                        cast<IntegerType>(resultTy).getWidth());
+  }
+
+  v1 = createCastOffset(rewriter, loc, v1, resultTy);
+  v2 = createCastOffset(rewriter, loc, v2, resultTy);
+
+  return rewriter.createOrFold<arith::MulIOp>(loc, v1, v2);
+}
+
 Value createAddUniformAndNonUniform(RewriterBase &rewriter, Location loc,
                                     Value uniform, Value nonUniform) {
   auto resultTy = getWiderElementIntType(uniform, nonUniform);
@@ -361,19 +391,19 @@ createDecomposeOffsetFromMul(RewriterBase &rewriter, Location loc, Value expr,
   auto [uniformOffsetR, nonUniformOffsetR] = createDecomposeOffsetFromExpr(
       rewriter, loc, mulOp.getRhs(), bitness, scalarToSplatMap);
   Value uniformMul =
-      arith::MulIOp::create(rewriter, loc, uniformOffsetL, uniformOffsetR);
+      createMulOffsetsOfSameKind(rewriter, loc, uniformOffsetL, uniformOffsetR);
 
   Value uniformOffsetLSplat = tt::SplatOp::create(
-      rewriter, loc, nonUniformOffsetL.getType(), uniformOffsetL);
+      rewriter, loc, nonUniformOffsetR.getType(), uniformOffsetL);
   Value uniformOffsetRSplat = tt::SplatOp::create(
-      rewriter, loc, nonUniformOffsetR.getType(), uniformOffsetR);
+      rewriter, loc, nonUniformOffsetL.getType(), uniformOffsetR);
 
-  Value nonUNonU = arith::MulIOp::create(rewriter, loc, nonUniformOffsetL,
-                                         nonUniformOffsetR);
-  Value nonUU = arith::MulIOp::create(rewriter, loc, uniformOffsetLSplat,
-                                      nonUniformOffsetR);
-  Value uNonU = arith::MulIOp::create(rewriter, loc, nonUniformOffsetL,
-                                      uniformOffsetRSplat);
+  Value nonUNonU = createMulOffsetsOfSameKind(rewriter, loc, nonUniformOffsetL,
+                                              nonUniformOffsetR);
+  Value nonUU = createMulOffsetsOfSameKind(rewriter, loc, uniformOffsetLSplat,
+                                           nonUniformOffsetR);
+  Value uNonU = createMulOffsetsOfSameKind(rewriter, loc, nonUniformOffsetL,
+                                           uniformOffsetRSplat);
 
   Value tmp = arith::AddIOp::create(rewriter, loc, nonUNonU, nonUU);
   Value nonUniformMul = arith::AddIOp::create(rewriter, loc, tmp, uNonU);
@@ -415,8 +445,9 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
           .Case<tt::ExpandDimsOp>([&](auto expandOp) {
             auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
                 rewriter, loc, expandOp.getSrc(), bitness, scalarToSplatMap);
-            auto expandNonUniform = tt::ExpandDimsOp::create(
-                rewriter, loc, nonUniform, expandOp.getAxis());
+            auto expandNonUniform =
+                tt::ExpandDimsOp::create(rewriter, loc, expandOp.getType(),
+                                         nonUniform, expandOp.getAxis());
             return std::make_pair(uniform, expandNonUniform);
           })
           .Case<arith::AddIOp>([&](Operation *op) {

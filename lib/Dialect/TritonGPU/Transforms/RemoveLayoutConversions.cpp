@@ -1235,8 +1235,8 @@ bool LayoutRematerialization::hoistConvertDotOperand(
   // threads We do views and elementwise pure ops for now
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, UpcastFpOpInterface>(
-               op) ||
+           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, UpcastFpOpInterface,
+               ExpandDimsOp>(op) ||
            isView(op);
   };
   // Stop the slice as soon as we find an operation that cannot be done without
@@ -1265,7 +1265,7 @@ bool LayoutRematerialization::hoistConvertDotOperand(
 
     // We expect the leaves of the slice to be Load, DescriptorLoad or
     // arith::Constant This could be generalised if necessary
-    if (!isa<LoadOp, DescriptorLoadOp>(v.getDefiningOp())) {
+    if (!isa<LoadOp, DescriptorLoadOp, LocalLoadOp>(v.getDefiningOp())) {
       auto op = v.getDefiningOp();
       if (isa<arith::ConstantOp>(op) || noDataMovement(op)) {
         innerSlice.insert(v);

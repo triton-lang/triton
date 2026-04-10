@@ -5,6 +5,8 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "llvm/ADT/DenseMap.h"
+#include <limits>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -16,6 +18,51 @@ using mlir::LLVM::AMD::upcast8xMxfp8fp4_HW;
 
 // TODO: using if-then-else to repalce ternary operator on template
 namespace {
+
+static size_t linearizeCoords(ArrayRef<unsigned> coords,
+                              ArrayRef<int64_t> shape) {
+  size_t linear = 0;
+  for (auto [coord, dimSize] : llvm::zip_equal(coords, shape))
+    linear = linear * dimSize + coord;
+  return linear;
+}
+
+static SmallVector<unsigned> getFp4ToFpPackedResultOrder(RankedTensorType srcTy,
+                                                         RankedTensorType dstTy,
+                                                         int axis) {
+  auto srcOffsets = emitOffsetForLayout(srcTy.getEncoding(), srcTy);
+  auto dstOffsets = emitOffsetForLayout(dstTy.getEncoding(), dstTy);
+
+  llvm::SmallDenseMap<size_t, unsigned> dstCoordToIdx;
+  dstCoordToIdx.reserve(dstOffsets.size());
+  for (auto [idx, coord] : llvm::enumerate(dstOffsets)) {
+    bool inserted =
+        dstCoordToIdx.try_emplace(linearizeCoords(coord, dstTy.getShape()), idx)
+            .second;
+    assert(inserted && "duplicate destination element coordinate");
+  }
+
+  SmallVector<unsigned> order(dstOffsets.size(),
+                              std::numeric_limits<unsigned>::max());
+  for (auto [srcIdx, srcCoord] : llvm::enumerate(srcOffsets)) {
+    for (unsigned nibble = 0; nibble < 2; ++nibble) {
+      SmallVector<unsigned> dstCoord(srcCoord);
+      dstCoord[axis] = dstCoord[axis] * 2 + nibble;
+      auto it = dstCoordToIdx.find(linearizeCoords(dstCoord, dstTy.getShape()));
+      if (it == dstCoordToIdx.end())
+        continue;
+      unsigned packedIdx = srcIdx * 2 + nibble;
+      assert(order[it->second] == std::numeric_limits<unsigned>::max() &&
+             "multiple fp4 outputs mapped to the same destination element");
+      order[it->second] = packedIdx;
+    }
+  }
+
+  for (unsigned packedIdx : order)
+    assert(packedIdx != std::numeric_limits<unsigned>::max() &&
+           "missing fp4 output element mapping");
+  return order;
+}
 
 struct ScaledUpcastFp4OpPattern
     : ConvertOpToLLVMPattern<amdgpu::ScaledUpcastFp4Op> {
@@ -29,6 +76,8 @@ struct ScaledUpcastFp4OpPattern
   matchAndRewrite(amdgpu::ScaledUpcastFp4Op upcastOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = upcastOp.getLoc();
+    auto srcTy = cast<RankedTensorType>(upcastOp.getInput().getType());
+    auto dstTy = cast<RankedTensorType>(upcastOp.getType());
     auto elemType = upcastOp.getType().getElementType();
 
     auto inputVals = unpackLLElements(loc, adaptor.getInput(), rewriter);
@@ -72,6 +121,17 @@ struct ScaledUpcastFp4OpPattern
       // Software emulation: upcast fp4 via LUT, then multiply by scale.
       bool toFp16 = elemType.isF16();
       auto isaFamily = targetInfo.getISAFamily();
+      // Generic linear layouts can redistribute the unpacked axis across
+      // threads, so only a subset of the 2x decoded fp4 results may remain
+      // local to the current thread. Reorder by logical coordinates instead of
+      // assuming a flat i*2 relationship between input and output elements.
+      auto order =
+          getFp4ToFpPackedResultOrder(srcTy, dstTy, upcastOp.getAxis());
+      llvm::SmallDenseMap<unsigned, unsigned> packedToDstIdx;
+      packedToDstIdx.reserve(order.size());
+      for (auto [dstIdx, packedIdx] : llvm::enumerate(order))
+        packedToDstIdx.try_emplace(packedIdx, dstIdx);
+      SmallVector<Value> reorderedResults(order.size());
       for (size_t i = 0; i < inputVals.size(); i += 4) {
         Value packedVec = b.undef(vec_ty(i8_ty, 4));
         for (int j : llvm::seq(4))
@@ -81,14 +141,21 @@ struct ScaledUpcastFp4OpPattern
         SmallVector<Value> v8vals =
             upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec, isaFamily);
 
-        // The bf16 scale was left-shifted by 7 (scaleTo16); shift by 16 more
-        // to get f32.
-        Value scaleBf16 = scaleVals[i * 2];
-        Value scaleF32 = b.bitcast(
-            b.shl(b.zext(i32_ty, b.bitcast(scaleBf16, i16_ty)), b.i32_val(16)),
-            f32_ty);
-
         for (int j : llvm::seq(8)) {
+          unsigned packedIdx = i * 2 + j;
+          auto it = packedToDstIdx.find(packedIdx);
+          if (it == packedToDstIdx.end())
+            continue;
+          unsigned dstIdx = it->second;
+
+          // The bf16 scale was left-shifted by 7 (scaleTo16); shift by 16 more
+          // to get f32.
+          Value scaleBf16 = scaleVals[dstIdx];
+          Value scaleF32 =
+              b.bitcast(b.shl(b.zext(i32_ty, b.bitcast(scaleBf16, i16_ty)),
+                              b.i32_val(16)),
+                        f32_ty);
+
           Value vF32;
           if (toFp16) {
             vF32 = b.fpext(f32_ty, v8vals[j]);
@@ -100,14 +167,15 @@ struct ScaledUpcastFp4OpPattern
           }
           Value mulF32 = b.fmul(vF32, scaleF32);
           if (toFp16) {
-            results.push_back(b.fptrunc(f16_ty, mulF32));
+            reorderedResults[dstIdx] = b.fptrunc(f16_ty, mulF32);
           } else {
             Value mulI16 = b.trunc(
                 i16_ty, b.lshr(b.bitcast(mulF32, i32_ty), b.i32_val(16)));
-            results.push_back(b.bitcast(mulI16, bf16_ty));
+            reorderedResults[dstIdx] = b.bitcast(mulI16, bf16_ty);
           }
         }
       }
+      results = std::move(reorderedResults);
     }
 
     Value result = packLLElements(loc, getTypeConverter(), results, rewriter,
