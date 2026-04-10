@@ -180,6 +180,10 @@ def compute_num_stages(
     # that is not fully captured by the simple stage_size model above.
     if is_persistent and (lhs_dtype == FP32 or rhs_dtype == FP32):
         smem_capacity -= 32 * 1024
+    if is_persistent and not has_native_mxfp and epilogue_reduction_n > 1:
+        # Hopper fused reductions materialize an additional reduced-N output
+        # tile in smem.
+        smem_capacity -= int(block_m * acc_block_n * out_itemsize)
     smem_capacity = max(smem_capacity, 0)
     max_stages = 5 if rhs_dtype == FP4 else 4  # maybe 5 everywhere; just haven't tested
     num_stages = min(smem_capacity // int(stage_size), max_stages)
