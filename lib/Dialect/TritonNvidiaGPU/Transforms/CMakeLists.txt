@@ -10,7 +10,6 @@ add_triton_library(TritonNvidiaGPUTransforms
   PlanCTA.cpp
   PromoteLHSToTMem.cpp
   ProxyFenceInsertion.cpp
-  RewriteMmaOperandViewsToMemDesc.cpp
   RemoveTMEMTokens.cpp
   TensorMemoryAllocation.cpp
   TMALowering.cpp

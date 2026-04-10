@@ -142,20 +142,6 @@ def TritonNvidiaGPUOptimizeDescriptorEncodingPass : Pass<"triton-nvidia-optimize
                            "mlir::triton::TritonDialect"];
 }
 
-def TritonNvidiaGPURewriteMmaOperandViewsToMemDescPass : Pass<"triton-nvidia-rewrite-mma-operand-views-to-memdesc", "mlir::ModuleOp"> {
-  let summary = "Rewrite tensor MMA operand views into memdesc views";
-
-  let description = [{
-    Rewrite tensor reshape/transpose chains feeding MMA shared-memory operands
-    into equivalent memdesc reshape/transpose chains once the operand layout is
-    fixed.
-  }];
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                           "mlir::triton::TritonDialect"];
-}
-
 def TritonNvidiaGPUOptimizeTMemLayoutsPass : Pass<"triton-nvidia-optimize-tmem-layouts", "mlir::ModuleOp"> {
   let summary = "Optimize TMEM layouts.";
 

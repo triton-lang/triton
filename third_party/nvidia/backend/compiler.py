@@ -273,7 +273,6 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_accelerate_matmul(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
-        nvidia.passes.ttnvgpuir.add_rewrite_mma_operand_views_to_memdesc(pm)
         nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding(pm)
         passes.ttir.add_loop_aware_cse(pm)
         if capability // 10 in [8, 9]:

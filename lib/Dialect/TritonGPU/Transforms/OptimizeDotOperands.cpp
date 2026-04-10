@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include <algorithm>
 #include <memory>
 
 namespace mlir::triton::gpu {
@@ -183,6 +184,132 @@ public:
   }
 };
 
+// Rewrite
+//   tt.reshape / tt.trans -> local_alloc -> [memdesc views] -> mma
+// into
+//   local_alloc -> memdesc reshape / trans -> [memdesc views] -> mma
+//
+// The MMA operand layout is determined by the sink memdesc already feeding the
+// dot-like op. This pattern back-propagates that layout through the tensor
+// reshape/transpose chain, hoists local_alloc to the base tensor feeding that
+// view chain, and replays those tensor views as memdesc reshape/transpose
+// ops so the original local_alloc type is preserved.
+class RewriteMmaOperandViewsToMemDescForDotOp
+    : public OpInterfaceRewritePattern<triton::DotOpInterface> {
+public:
+  using OpInterfaceRewritePattern<
+      triton::DotOpInterface>::OpInterfaceRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::DotOpInterface dotOp,
+                                PatternRewriter &rewriter) const override {
+    if (!isa<triton::nvidia_gpu::TCGen5MMAOp,
+             triton::nvidia_gpu::TCGen5MMAScaledOp,
+             triton::nvidia_gpu::WarpGroupDotOp>(dotOp))
+      return failure();
+
+    bool changed = false;
+
+    if (rewriteOperand(dotOp.getA(), rewriter).succeeded())
+      changed = true;
+
+    if (rewriteOperand(dotOp.getB(), rewriter).succeeded())
+      changed = true;
+
+    return success(changed);
+  }
+
+private:
+  static FailureOr<MemDescType> pushLayoutBackward(MemDescType resultTy,
+                                                   Operation *op) {
+    if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
+      MemDescType srcTy;
+      if (failed(MemDescReshapeOp::inferReturnTypes(
+              resultTy.getContext(), reshape.getLoc(), resultTy,
+              reshape.getSrc().getType().getShape(), srcTy)))
+        return failure();
+      return srcTy;
+    }
+
+    auto trans = cast<triton::TransOp>(op);
+    Attribute srcEnc = inferSrcEncoding(op, resultTy.getEncoding());
+    if (!srcEnc)
+      return failure();
+    return MemDescType::get(trans.getSrc().getType().getShape(),
+                            resultTy.getElementType(), srcEnc,
+                            resultTy.getMemorySpace(),
+                            resultTy.getMutableMemory());
+  }
+
+  static Value replayTensorViews(PatternRewriter &rewriter, Value value,
+                                 ArrayRef<Operation *> steps) {
+    Value rewritten = value;
+    for (Operation *op : steps) {
+      if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
+        rewritten = MemDescReshapeOp::create(rewriter, op->getLoc(), rewritten,
+                                             reshape.getType().getShape());
+      } else {
+        auto trans = cast<triton::TransOp>(op);
+        rewritten = MemDescTransOp::create(rewriter, op->getLoc(), rewritten,
+                                           trans.getOrder());
+      }
+    }
+    return rewritten;
+  }
+
+  static Value peelMemDescViews(Value value) {
+    Value current = value;
+    while (auto view = current.getDefiningOp()) {
+      if (auto reshape = dyn_cast<MemDescReshapeOp>(view)) {
+        current = reshape.getSrc();
+        continue;
+      }
+      if (auto trans = dyn_cast<MemDescTransOp>(view)) {
+        current = trans.getSrc();
+        continue;
+      }
+      break;
+    }
+    return current;
+  }
+
+  LogicalResult rewriteOperand(Value operand, PatternRewriter &rewriter) const {
+    if (!isa<MemDescType>(operand.getType()))
+      return failure();
+
+    Value beforeTrailing = peelMemDescViews(operand);
+    auto localAlloc = beforeTrailing.getDefiningOp<LocalAllocOp>();
+    if (!localAlloc || !localAlloc.getSrc())
+      return failure();
+
+    Value baseTensor = localAlloc.getSrc();
+    SmallVector<Operation *> tensorReplaySteps;
+    MemDescType baseMemTy = localAlloc.getType();
+    while (auto view = baseTensor.getDefiningOp()) {
+      if (!isa<triton::ReshapeOp, triton::TransOp>(view))
+        break;
+      auto srcTy = pushLayoutBackward(baseMemTy, view);
+      if (failed(srcTy))
+        return failure();
+      tensorReplaySteps.push_back(view);
+      baseMemTy = *srcTy;
+      baseTensor = view->getOperand(0);
+    }
+    if (tensorReplaySteps.empty())
+      return failure();
+
+    std::reverse(tensorReplaySteps.begin(), tensorReplaySteps.end());
+
+    PatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(localAlloc);
+
+    Value rewritten = LocalAllocOp::create(rewriter, localAlloc.getLoc(),
+                                           baseMemTy, baseTensor);
+    rewritten = replayTensorViews(rewriter, rewritten, tensorReplaySteps);
+    rewriter.replaceOp(localAlloc, rewritten);
+    return success();
+  }
+};
+
 // Inject TMEM copy instructions into IR to efficiently load blocked scales for
 // scaled dot
 class UseShmemForScales
@@ -344,6 +471,7 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);
     patterns.add<FuseTransMMAV3Plus, ReshapeMemDesc>(context);
+    patterns.add<RewriteMmaOperandViewsToMemDescForDotOp>(context);
     patterns.add<UseShmemForScales>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
