@@ -37,7 +37,12 @@ def get_msgpack(session: Optional[int] = 0, phase: int = 0):
     return libproton.get_data_msgpack(session, phase)
 
 
-def get_buffered_profiles(session: Optional[int] = 0, clear: bool = False):
+def get_buffered_profiles(
+    session: Optional[int] = 0,
+    clear: bool = False,
+    max_profiles: int = 0,
+    min_phase: int = 0,
+):
     """
     Retrieves phase-tagged serialized profiles buffered in Proton's native
     in-memory ring buffer.
@@ -45,6 +50,8 @@ def get_buffered_profiles(session: Optional[int] = 0, clear: bool = False):
     Args:
         session (Optional[int]): The session ID of the profiling session, or None if profiling is inactive.
         clear (bool): Whether to clear buffered profiles after retrieval.
+        max_profiles (int): Maximum number of profiles to return. A value of 0 means unlimited.
+        min_phase (int): Minimum phase to return. Older profiles are removed when ``clear`` is true.
 
     Returns:
         list[tuple[int, bytes]]: A list of ``(phase, payload)`` tuples in FIFO order.
@@ -53,7 +60,29 @@ def get_buffered_profiles(session: Optional[int] = 0, clear: bool = False):
         return []
     if flags.command_line and session != 0:
         raise ValueError("Only one session can retrieve buffered profiles when running from the command line.")
-    return list(libproton.get_buffered_profiles(session, clear))
+    return list(libproton.get_buffered_profiles(session, clear, max_profiles, min_phase))
+
+
+def get_buffered_profile_serialized_up_to_phase(session: Optional[int] = 0):
+    """
+    Returns the newest completed phase serialized into Proton's native buffer.
+    """
+    if session is None:
+        return None
+    if flags.command_line and session != 0:
+        raise ValueError("Only one session can retrieve buffered profiles when running from the command line.")
+    return libproton.get_buffered_profile_serialized_up_to_phase(session)
+
+
+def get_buffered_profile_stats(session: Optional[int] = 0):
+    """
+    Returns ``(profile_count, byte_count)`` for Proton's native profile buffer.
+    """
+    if session is None:
+        return (0, 0)
+    if flags.command_line and session != 0:
+        raise ValueError("Only one session can retrieve buffered profile stats when running from the command line.")
+    return libproton.get_buffered_profile_stats(session)
 
 
 def advance_phase(session: Optional[int] = 0) -> Optional[int]:

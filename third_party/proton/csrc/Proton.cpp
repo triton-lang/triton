@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <variant>
 #include <vector>
@@ -217,10 +218,11 @@ static void initProton(pybind11::module &&m) {
       pybind11::arg("sessionId"), pybind11::arg("phase"));
   m.def(
       "get_buffered_profiles",
-      [](size_t sessionId, bool clear) {
+      [](size_t sessionId, bool clear, size_t maxProfiles, size_t minPhase) {
         pybind11::list bufferedProfiles;
         for (auto &profile :
-             SessionManager::instance().getBufferedProfiles(sessionId, clear)) {
+             SessionManager::instance().getBufferedProfiles(
+                 sessionId, clear, maxProfiles, minPhase)) {
           bufferedProfiles.append(pybind11::make_tuple(
               profile.first,
               pybind11::bytes(
@@ -229,7 +231,23 @@ static void initProton(pybind11::module &&m) {
         }
         return bufferedProfiles;
       },
-      pybind11::arg("sessionId"), pybind11::arg("clear") = false);
+      pybind11::arg("sessionId"), pybind11::arg("clear") = false,
+      pybind11::arg("maxProfiles") = 0, pybind11::arg("minPhase") = 0);
+  m.def(
+      "get_buffered_profile_serialized_up_to_phase",
+      [](size_t sessionId) -> std::optional<size_t> {
+        return SessionManager::instance().getBufferedProfileSerializedUpToPhase(
+            sessionId);
+      },
+      pybind11::arg("sessionId"));
+  m.def(
+      "get_buffered_profile_stats",
+      [](size_t sessionId) {
+        const auto [profileCount, byteCount] =
+            SessionManager::instance().getBufferedProfileStats(sessionId);
+        return pybind11::make_tuple(profileCount, byteCount);
+      },
+      pybind11::arg("sessionId"));
   m.def(
       "clear_data",
       [](size_t sessionId, size_t phase, bool clearUpToPhase) {

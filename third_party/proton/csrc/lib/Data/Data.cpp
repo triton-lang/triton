@@ -184,19 +184,44 @@ void Data::appendBufferedProfile(size_t phase, const std::string &payload) {
   appendBufferedProfile(phase, std::vector<uint8_t>(payload.begin(), payload.end()));
 }
 
-std::vector<Data::BufferedProfile> Data::getBufferedProfiles(bool clear) {
+std::vector<Data::BufferedProfile> Data::getBufferedProfiles(bool clear,
+                                                             size_t maxProfiles,
+                                                             size_t minPhase) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  auto reachedMaxProfiles = [maxProfiles](size_t count) {
+    return maxProfiles != 0 && count >= maxProfiles;
+  };
+
   if (!clear) {
-    return {bufferedProfiles.begin(), bufferedProfiles.end()};
+    std::vector<BufferedProfile> profiles;
+    profiles.reserve(bufferedProfiles.size());
+    for (const auto &profile : bufferedProfiles) {
+      if (profile.phase < minPhase) {
+        continue;
+      }
+      if (reachedMaxProfiles(profiles.size())) {
+        break;
+      }
+      profiles.push_back(profile);
+    }
+    return profiles;
   }
 
   std::vector<BufferedProfile> profiles;
   profiles.reserve(bufferedProfiles.size());
+  while (!bufferedProfiles.empty() &&
+         bufferedProfiles.front().phase < minPhase) {
+    bufferedProfileBytes -= bufferedProfiles.front().payload.size();
+    bufferedProfiles.pop_front();
+  }
   while (!bufferedProfiles.empty()) {
+    if (reachedMaxProfiles(profiles.size())) {
+      break;
+    }
+    bufferedProfileBytes -= bufferedProfiles.front().payload.size();
     profiles.push_back(std::move(bufferedProfiles.front()));
     bufferedProfiles.pop_front();
   }
-  bufferedProfileBytes = 0;
   return profiles;
 }
 

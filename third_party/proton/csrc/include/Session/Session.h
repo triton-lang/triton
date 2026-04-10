@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -98,7 +99,13 @@ public:
   std::string getData(size_t sessionId, size_t phase);
 
   std::vector<std::pair<size_t, std::vector<uint8_t>>>
-  getBufferedProfiles(size_t sessionId, bool clear);
+  getBufferedProfiles(size_t sessionId, bool clear, size_t maxProfiles = 0,
+                      size_t minPhase = 0);
+
+  std::optional<size_t>
+  getBufferedProfileSerializedUpToPhase(size_t sessionId);
+
+  std::pair<size_t, size_t> getBufferedProfileStats(size_t sessionId);
 
   void clearData(size_t sessionId, size_t phase, bool clearUpToPhase = false);
 

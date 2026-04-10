@@ -357,7 +357,8 @@ std::string SessionManager::getData(size_t sessionId, size_t phase) {
 }
 
 std::vector<std::pair<size_t, std::vector<uint8_t>>>
-SessionManager::getBufferedProfiles(size_t sessionId, bool clear) {
+SessionManager::getBufferedProfiles(size_t sessionId, bool clear,
+                                    size_t maxProfiles, size_t minPhase) {
   std::lock_guard<std::mutex> lock(mutex);
   auto *session = getSessionOrThrow(sessionId);
   auto *data = session->data.get();
@@ -387,13 +388,33 @@ SessionManager::getBufferedProfiles(size_t sessionId, bool clear) {
       }
     }
   }
-  auto profiles = data->getBufferedProfiles(clear);
+  auto profiles = data->getBufferedProfiles(clear, maxProfiles, minPhase);
   std::vector<std::pair<size_t, std::vector<uint8_t>>> serializedProfiles;
   serializedProfiles.reserve(profiles.size());
   for (auto &profile : profiles) {
     serializedProfiles.emplace_back(profile.phase, std::move(profile.payload));
   }
   return serializedProfiles;
+}
+
+std::optional<size_t>
+SessionManager::getBufferedProfileSerializedUpToPhase(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  auto *session = getSessionOrThrow(sessionId);
+  const auto serializedUpToPhase =
+      session->data->getBufferedProfileSerializedUpToPhase();
+  if (serializedUpToPhase == Data::kNoCompletePhase) {
+    return std::nullopt;
+  }
+  return serializedUpToPhase;
+}
+
+std::pair<size_t, size_t>
+SessionManager::getBufferedProfileStats(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  auto *session = getSessionOrThrow(sessionId);
+  const auto stats = session->data->getBufferedProfileStats();
+  return {stats.profileCount, stats.byteCount};
 }
 
 void SessionManager::clearData(size_t sessionId, size_t phase,

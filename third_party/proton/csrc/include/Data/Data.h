@@ -150,8 +150,12 @@ public:
   void appendBufferedProfile(size_t phase, const std::string &payload);
 
   /// Return buffered serialized phase profiles. If `clear` is true, the
-  /// returned profiles are removed from the in-memory buffer.
-  std::vector<BufferedProfile> getBufferedProfiles(bool clear = false);
+  /// returned profiles are removed from the in-memory buffer. If `maxProfiles`
+  /// is non-zero, return at most that many profiles. Profiles older than
+  /// `minPhase` are skipped, and are also removed when `clear` is true.
+  std::vector<BufferedProfile> getBufferedProfiles(bool clear = false,
+                                                   size_t maxProfiles = 0,
+                                                   size_t minPhase = 0);
 
   /// Return the current buffered profile count and payload byte total.
   BufferedProfileStats getBufferedProfileStats() const;

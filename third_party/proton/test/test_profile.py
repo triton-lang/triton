@@ -1309,15 +1309,19 @@ def test_periodic_flushing_buffers_profiles_in_memory(fresh_knobs, device: str):
 
     try:
         _run_buffered_periodic_phase(session, kernel, x, y, "phase_zero")
-        buffered_profiles = proton.data.get_buffered_profiles(session=session)
+        buffered_profiles = proton.data.get_buffered_profiles(session=session, max_profiles=1)
         assert [phase for phase, _ in buffered_profiles] == [0]
         assert "phase_zero" in _child_names_from_msgpack_payload(buffered_profiles[0][1])
 
         proton.activate(session)
         _run_buffered_periodic_phase(session, kernel, x, y, "phase_one")
-        drained_profiles = proton.data.get_buffered_profiles(session=session, clear=True)
-        assert [phase for phase, _ in drained_profiles] == [0, 1]
-        assert "phase_one" in _child_names_from_msgpack_payload(drained_profiles[1][1])
+        drained_profiles = proton.data.get_buffered_profiles(session=session, clear=True, max_profiles=1)
+        assert [phase for phase, _ in drained_profiles] == [0]
+        assert "phase_zero" in _child_names_from_msgpack_payload(drained_profiles[0][1])
+
+        remaining_profiles = proton.data.get_buffered_profiles(session=session, clear=True, max_profiles=1, min_phase=1)
+        assert [phase for phase, _ in remaining_profiles] == [1]
+        assert "phase_one" in _child_names_from_msgpack_payload(remaining_profiles[0][1])
         assert proton.data.get_buffered_profiles(session=session) == []
     finally:
         proton.finalize(session, output_format="hatchet_msgpack")
