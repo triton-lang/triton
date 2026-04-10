@@ -234,10 +234,9 @@ private:
     Attribute srcEnc = inferSrcEncoding(op, resultTy.getEncoding());
     if (!srcEnc)
       return failure();
-    return MemDescType::get(trans.getSrc().getType().getShape(),
-                            resultTy.getElementType(), srcEnc,
-                            resultTy.getMemorySpace(),
-                            resultTy.getMutableMemory());
+    return MemDescType::get(
+        trans.getSrc().getType().getShape(), resultTy.getElementType(), srcEnc,
+        resultTy.getMemorySpace(), resultTy.getMutableMemory());
   }
 
   static Value replayTensorViews(PatternRewriter &rewriter, Value value,
