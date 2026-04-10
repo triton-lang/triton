@@ -169,15 +169,7 @@ struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
     for (Value v : rhsVals)
       retVals.push_back(v);
 
-    if (retVals.size() != strippedDstLayout.getInDimSize(kReg)) {
-      return op->emitError()
-             << "tt.cat lowering expected "
-             << strippedDstLayout.getInDimSize(kReg)
-             << " (non-broadcast) register values for the result, but got "
-             << retVals.size()
-             << ". (hint: this usually means the operands/result encodings are "
-                "incompatible for the current CatOp lowering)";
-    }
+    assert(retVals.size() == strippedDstLayout.getInDimSize(kReg));
 
     // Re-introduce broadcasting if the destination expects it.
     if (!removeBroadcastDst.isIdentity())
