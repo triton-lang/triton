@@ -3,8 +3,6 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
-#include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -13,7 +11,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include <algorithm>
-#include <memory>
+#include <cassert>
 
 namespace mlir::triton::gpu {
 
@@ -219,63 +217,23 @@ public:
   }
 
 private:
-  static FailureOr<MemDescType> pushLayoutBackward(MemDescType resultTy,
-                                                   Operation *op) {
-    if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
-      MemDescType srcTy;
-      if (failed(MemDescReshapeOp::inferReturnTypes(
-              resultTy.getContext(), reshape.getLoc(), resultTy,
-              reshape.getSrc().getType().getShape(), srcTy)))
-        return failure();
-      return srcTy;
-    }
-
-    auto trans = cast<triton::TransOp>(op);
-    Attribute srcEnc = inferSrcEncoding(op, resultTy.getEncoding());
-    if (!srcEnc)
-      return failure();
-    return MemDescType::get(
-        trans.getSrc().getType().getShape(), resultTy.getElementType(), srcEnc,
-        resultTy.getMemorySpace(), resultTy.getMutableMemory());
-  }
-
-  static Value replayTensorViews(PatternRewriter &rewriter, Value value,
-                                 ArrayRef<Operation *> steps) {
-    Value rewritten = value;
-    for (Operation *op : steps) {
-      if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
-        rewritten = MemDescReshapeOp::create(rewriter, op->getLoc(), rewritten,
-                                             reshape.getType().getShape());
-      } else {
-        auto trans = cast<triton::TransOp>(op);
-        rewritten = MemDescTransOp::create(rewriter, op->getLoc(), rewritten,
-                                           trans.getOrder());
-      }
-    }
-    return rewritten;
-  }
-
-  static Value peelMemDescViews(Value value) {
-    Value current = value;
-    while (auto view = current.getDefiningOp()) {
-      if (auto reshape = dyn_cast<MemDescReshapeOp>(view)) {
-        current = reshape.getSrc();
-        continue;
-      }
-      if (auto trans = dyn_cast<MemDescTransOp>(view)) {
-        current = trans.getSrc();
-        continue;
-      }
-      break;
-    }
-    return current;
-  }
-
   LogicalResult rewriteOperand(Value operand, PatternRewriter &rewriter) const {
     if (!isa<MemDescType>(operand.getType()))
       return failure();
 
-    Value beforeTrailing = peelMemDescViews(operand);
+    Value beforeTrailing = operand;
+    while (auto view = beforeTrailing.getDefiningOp()) {
+      if (auto reshape = dyn_cast<MemDescReshapeOp>(view)) {
+        beforeTrailing = reshape.getSrc();
+        continue;
+      }
+      if (auto trans = dyn_cast<MemDescTransOp>(view)) {
+        beforeTrailing = trans.getSrc();
+        continue;
+      }
+      break;
+    }
+
     auto localAlloc = beforeTrailing.getDefiningOp<LocalAllocOp>();
     if (!localAlloc || !localAlloc.getSrc())
       return failure();
@@ -284,13 +242,26 @@ private:
     SmallVector<Operation *> tensorReplaySteps;
     MemDescType baseMemTy = localAlloc.getType();
     while (auto view = baseTensor.getDefiningOp()) {
-      if (!isa<triton::ReshapeOp, triton::TransOp>(view))
+      if (auto reshape = dyn_cast<triton::ReshapeOp>(view)) {
+        MemDescType srcTy;
+        auto inferred = MemDescReshapeOp::inferReturnTypes(
+            getContext(), reshape.getLoc(), baseMemTy,
+            reshape.getSrc().getType().getShape(), srcTy);
+        assert(succeeded(inferred) && "backward memdesc reshape inference "
+                                      "must succeed");
+        (void)inferred;
+        baseMemTy = srcTy;
+      } else if (auto trans = dyn_cast<triton::TransOp>(view)) {
+        Attribute srcEnc = inferSrcEncoding(view, baseMemTy.getEncoding());
+        if (!srcEnc)
+          return failure();
+        baseMemTy = MemDescType::get(
+            trans.getSrc().getType().getShape(), baseMemTy.getElementType(),
+            srcEnc, baseMemTy.getMemorySpace(), baseMemTy.getMutableMemory());
+      } else {
         break;
-      auto srcTy = pushLayoutBackward(baseMemTy, view);
-      if (failed(srcTy))
-        return failure();
+      }
       tensorReplaySteps.push_back(view);
-      baseMemTy = *srcTy;
       baseTensor = view->getOperand(0);
     }
     if (tensorReplaySteps.empty())
@@ -303,7 +274,16 @@ private:
 
     Value rewritten = LocalAllocOp::create(rewriter, localAlloc.getLoc(),
                                            baseMemTy, baseTensor);
-    rewritten = replayTensorViews(rewriter, rewritten, tensorReplaySteps);
+    for (Operation *op : tensorReplaySteps) {
+      if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
+        rewritten = MemDescReshapeOp::create(rewriter, op->getLoc(), rewritten,
+                                             reshape.getType().getShape());
+      } else {
+        auto trans = cast<triton::TransOp>(op);
+        rewritten = MemDescTransOp::create(rewriter, op->getLoc(), rewritten,
+                                           trans.getOrder());
+      }
+    }
     rewriter.replaceOp(localAlloc, rewritten);
     return success();
   }
