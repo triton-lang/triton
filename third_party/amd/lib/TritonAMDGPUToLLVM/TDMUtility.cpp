@@ -239,7 +239,6 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   assert(blockShape.size() == tensorStride.size() &&
          blockShape.size() == numDims &&
          "Block/tensor/stride dim count must all be equal.");
-  auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   if (!isRowMajor) {
@@ -251,8 +250,6 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   // Define common values for better readability
   Value v16 = b.i32_val(16);
   Value v32 = b.i64_val(32);
-  Value mask16 = b.i32_val(0xFFFF);
-  Value mask31 = b.i32_val(0x7FFFFFFF);
 
   auto elementBitWidth = elementType.getIntOrFloatBitWidth();
   auto elementSizeInBytes = elementBitWidth / 8;

@@ -24,8 +24,6 @@ using mlir::triton::BufferRegion;
 
 namespace {
 
-constexpr unsigned kMaxVectorLengthBits = 128;
-
 DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
                                               ArrayRef<int64_t> shape,
                                               unsigned warps, unsigned numCTAs,
@@ -44,7 +42,6 @@ DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
   // vector length to reduce the number of instructions, speeding up
   // compilation.
   // unsigned vecLen = kMaxVectorLengthBits / bitwidth;
-  unsigned vecLen = 1;
 
   // Broadcast along blocks and warps. Use the innermost dimension for the
   // lane/register mapping and keep the outer dimensions replicated.

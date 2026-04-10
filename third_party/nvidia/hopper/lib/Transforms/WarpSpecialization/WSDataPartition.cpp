@@ -552,7 +552,6 @@ static bool computePartitionScheme(triton::FuncOp &funcOp,
     return true;
 
   // Checking if all dots can be partitioned in the same way
-  int numWarps = mlir::triton::gpu::lookupNumWarps(funcOp);
   for (auto op : dots) {
     if (partitionScheme.isPartitioned(op) || partitionScheme.isSkipped(op)) {
       continue;
@@ -864,7 +863,6 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
       sliceOp(operand, offset, mappings, reverseMappings, partitionScheme);
     auto srcTy = mappings.lookupOrNull(tmemLdOp.getSrc()).getType();
     auto type = cast<MemDescType>(srcTy);
-    auto tmem = cast<nvidia_gpu::TensorMemoryEncodingAttr>(type.getEncoding());
 
     RankedTensorType oldRetType = tmemLdOp.getType();
     auto retShapePerCTA = getShapePerCTA(oldRetType);

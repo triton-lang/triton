@@ -182,8 +182,6 @@ public:
     int numWarps = ttg::lookupNumWarps(storeOp);
     Value truePred = arith::ConstantOp::create(b, loc, b.getBoolAttr(true));
 
-    auto *ctx = joinOp.getContext();
-
     auto createSlice = [&](TypedValue<RankedTensorType> input, int offset) {
       auto subSlice = TMEMSubSliceOp::create(b, loc, tmem, offset, splitNSize);
       auto distLayout =
@@ -195,8 +193,8 @@ public:
       return store;
     };
 
-    auto store0 = createSlice(joinOp.getLhs(), 0);
-    auto store1 = createSlice(joinOp.getRhs(), splitNSize);
+    createSlice(joinOp.getLhs(), 0);
+    createSlice(joinOp.getRhs(), splitNSize);
     b.eraseOp(storeOp);
     return success();
   }

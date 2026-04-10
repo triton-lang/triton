@@ -449,7 +449,6 @@ ClusterMap createClusterMap(tt::CoarseSchedule &schedule) {
 void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
                    Clusters &clusters) {
   for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster) {
-    auto [stage, cluster] = stageAndCluster;
     tt::CoarseSchedule::ClusterHash clusterHash =
         tt::CoarseSchedule::hashCluster(stageAndCluster.second);
     int oldClusterId = clusterMap[clusterHash];

@@ -55,7 +55,6 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // D = A * B + C
-    Value A = op.getA();
     Value D = op.getResult();
 
     NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(

@@ -102,9 +102,6 @@ struct ConvertTritonAMDGPUToLLVM
     TritonAMDGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
 
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod, AMD::AMDAllocationAnalysisScratchSizeFn,
                                 targetInfo.getSharedMemoryPartitionSize());
@@ -150,7 +147,6 @@ struct ConvertTritonAMDGPUToLLVM
     // currently implemented via inline asm, and thus cannot be CSEed.
     // clusterCTAId will be emitted only when numCTAs is larger than 1, and
     // other values will be DCEed if not used hereafter.
-    OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
     int commonBenefit = patternBenefitPrioritizeOverLLVMConversions;
@@ -266,7 +262,6 @@ private:
   void initSharedMemory(LLVMTypeConverter &typeConverter) {
     ModuleOp mod = getOperation();
     OpBuilder b(mod.getBodyRegion());
-    auto ctx = mod.getContext();
     auto loc = mod.getLoc();
     auto elemTy = typeConverter.convertType(b.getIntegerType(8));
     // Set array size 0 and external linkage indicates that we use dynamic

@@ -46,7 +46,6 @@ std::string mangleType(Type t) {
 namespace {
 
 namespace BarrierBits {
-constexpr unsigned phaseBit = 0;
 constexpr unsigned initCountLsb = 1;
 constexpr unsigned currentCountLsb = 21;
 constexpr unsigned txCountLsb = 41;

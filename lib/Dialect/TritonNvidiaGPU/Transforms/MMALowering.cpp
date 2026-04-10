@@ -83,7 +83,6 @@ struct TCGen5MMAScaleSharedToTmemConversion
 
   LogicalResult matchAndRewrite(TCGen5MMAScaledOp op,
                                 PatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
     MLIRContext *context = op->getContext();
     auto aScaleType = op.getAScale().getType();
     auto bScaleType = op.getBScale().getType();

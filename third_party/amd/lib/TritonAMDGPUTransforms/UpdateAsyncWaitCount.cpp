@@ -162,7 +162,7 @@ int computeMinCountBackward(Operation *cursor, Operation *cameFrom,
   assert(cameFrom != nullptr);
   // Step to the previous op within the current block; if none, step to
   // the parent op. Stop at the module since it asserts on ->getPrevNode().
-  auto getPredecessor = [&cameFrom](Operation *op) {
+  auto getPredecessor = [](Operation *op) {
     auto prevOp = op->getPrevNode();
     if (!prevOp) {
       prevOp = op->getParentOp();

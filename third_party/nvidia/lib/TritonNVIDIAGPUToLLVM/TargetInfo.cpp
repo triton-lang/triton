@@ -275,7 +275,6 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
     assert(elemBitwidth == 32 || elemBitwidth == 64);
     int maxVec = 128 / elemBitwidth;
 
-    auto newVecTy = vec_ty(elemTy, maxVec);
     SmallVector<Value> vals = unpackLLVector(loc, val, rewriter);
     for (int i = 0; i < vec / maxVec; i++) {
       auto newPtr = b.gep(ptr.getType(), elemTy, ptr, b.i32_val(i * maxVec),
@@ -541,7 +540,6 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
                         ArrayRef<bool> isSigned) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto funcOp = getVprintfDeclaration(rewriter);
   auto loc = UnknownLoc::get(ctx);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -598,7 +596,6 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             int line) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto funcOp = getAssertfailDeclaration(rewriter);
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   llvm::SmallString<64> messageString(message), fileString(file),
       funcString(func);
   messageString.push_back('\0');
