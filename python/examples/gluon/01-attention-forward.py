@@ -228,9 +228,12 @@ class AttentionConfig:
         self.SPLIT_D_FACTOR = gl.constexpr(2)
         if STAGE == 1 and HEAD_DIM == 128:
             self.SPLIT_EXP_FACTOR = gl.constexpr(4)
+        elif STAGE == 4:
+            # Stage 4 is noncausal stage 1 with a larger exp2 split.
+            self.SPLIT_EXP_FACTOR = gl.constexpr(8)
         else:
             self.SPLIT_EXP_FACTOR = gl.constexpr(256 // HEAD_DIM)
-        self.SPLIT_QK_LOAD_FACTOR = gl.constexpr(2 if STAGE == 1 else 1)
+        self.SPLIT_QK_LOAD_FACTOR = gl.constexpr(2 if STAGE == 1 or STAGE == 4 else 1)
         self.SPLIT_M = gl.constexpr(self.BLOCK_M // 2)
         self.SPLIT_D = gl.constexpr(self.HEAD_DIM // self.SPLIT_D_FACTOR)
 
@@ -850,14 +853,24 @@ def attention_kernel(  #
 
     chnls = (q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile)
     descs = (desc_q, desc_k, desc_v, desc_o)
-    gl.warp_specialize([
-        (_attn_fwd_correction, (config, chnls, descs, M, STAGE)),
-        (_attn_fwd_softmax0, (config, chnls, descs, M, STAGE, use_tmem_red)),
-        (_attn_fwd_softmax1, (config, chnls, descs, M, STAGE, use_tmem_red)),
-        (_attn_fwd_mma, (config, chnls, descs, M, STAGE)),
-        (_attn_fwd_load, (config, chnls, descs, M, STAGE)),
-        (_attn_fwd_epilogue, (config, chnls, descs, M, STAGE)),
-    ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
+    if STAGE == 4:
+        gl.warp_specialize([
+            (_attn_fwd_correction, (config, chnls, descs, M, 1)),
+            (_attn_fwd_softmax0, (config, chnls, descs, M, 1, use_tmem_red)),
+            (_attn_fwd_softmax1, (config, chnls, descs, M, 1, use_tmem_red)),
+            (_attn_fwd_mma, (config, chnls, descs, M, 1)),
+            (_attn_fwd_load, (config, chnls, descs, M, 1)),
+            (_attn_fwd_epilogue, (config, chnls, descs, M, 1)),
+        ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
+    else:
+        gl.warp_specialize([
+            (_attn_fwd_correction, (config, chnls, descs, M, STAGE)),
+            (_attn_fwd_softmax0, (config, chnls, descs, M, STAGE, use_tmem_red)),
+            (_attn_fwd_softmax1, (config, chnls, descs, M, STAGE, use_tmem_red)),
+            (_attn_fwd_mma, (config, chnls, descs, M, STAGE)),
+            (_attn_fwd_load, (config, chnls, descs, M, STAGE)),
+            (_attn_fwd_epilogue, (config, chnls, descs, M, STAGE)),
+        ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
 
     q_chnl.release()
     kv_chnl.release()
@@ -893,6 +906,9 @@ def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
     assert HEAD_DIM_K in {16, 32, 64, 128, 256}
 
     stage = 3 if causal else 1
+    if not causal and HEAD_DIM_K == 64 and q.shape[2] >= 8192:
+        # Compile as a noncausal stage-1 kernel with split-by-8 exp2 partitioning.
+        stage = 4
 
     o = torch.empty_like(q)
     M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
