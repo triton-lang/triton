@@ -8,31 +8,14 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton.tools.triton_to_gluon_translator.translator import convert_triton_to_gluon
 from triton.tools.triton_to_gluon_translator.translator_helpers import convert_host_descriptor
-from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda, is_hip_gfx1250, is_hip_cdna3, is_hip_cdna4
-
-_all_targets = {
-    "nvidia": is_cuda,
-    "gfx1250": is_hip_gfx1250,
-    "gfx942": is_hip_cdna3,
-    "gfx950": is_hip_cdna4,
-}
-
-_dot_targets = {
-    "nvidia": is_blackwell,
-    "gfx1250": is_hip_gfx1250,
-    "gfx942": is_hip_cdna3,
-    "gfx950": is_hip_cdna4,
-}
+from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda, is_hip_gfx1250, is_hip_cdna3_or_newer
+from triton.language.target_info import current_target
 
 
-def _skip_unless_target(target, targets=_all_targets):
-    """Skip test if the required hardware for the given target is not available.
-    Use _dot_targets for dot tests (Blackwell on NVIDIA), _descriptor_targets for descriptor tests."""
-    if not targets[target]():
-        pytest.skip(f"Requires {target}")
-
-
-def convert_kernel(kernel, kernel_name, tmp_path, target="nvidia"):
+def convert_kernel(kernel, kernel_name, tmp_path, target=None):
+    if target is None:
+        t = current_target()
+        target = "nvidia" if t.backend == "cuda" else t.arch
     converted = convert_triton_to_gluon([kernel], target=target)
 
     # Write converted kernel to a file so @gluon.jit can retrieve source
@@ -57,10 +40,8 @@ def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK: tl.constexpr):
     tl.store(out_ptr + offsets, x + y)
 
 
-@pytest.mark.parametrize("target", _all_targets.keys())
-def test_simple_kernel(tmp_path, target):
-    _skip_unless_target(target)
-    kernel = convert_kernel(add_kernel, "add_kernel", tmp_path, target=target)
+def test_simple_kernel(tmp_path):
+    kernel = convert_kernel(add_kernel, "add_kernel", tmp_path)
 
     n = 1024
     BLOCK = 128
@@ -92,10 +73,10 @@ def matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.c
     impl_matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M, BLOCK_N, BLOCK_K)
 
 
-@pytest.mark.parametrize("target", _dot_targets.keys())
-def test_triton_to_gluon_dot_minimal(tmp_path, target):
-    _skip_unless_target(target, _dot_targets)
-    kernel = convert_kernel(matmul_tile_kernel, "matmul_tile_kernel", tmp_path, target=target)
+def test_triton_to_gluon_dot_minimal(tmp_path):
+    if not (is_blackwell() or is_hip_cdna3_or_newer() or is_hip_gfx1250()):
+        pytest.skip("Requires Blackwell, CDNA3+, or gfx1250")
+    kernel = convert_kernel(matmul_tile_kernel, "matmul_tile_kernel", tmp_path)
     M, N, K = 128, 128, 128
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
@@ -153,8 +134,9 @@ def matmul_kernel(  #
 @pytest.mark.parametrize("dtype_dst_str", ["float32"])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES", [(128, 128, 64, 1)])
 @pytest.mark.parametrize("NUM_WARPS", [4])
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, NUM_WARPS, tmp_path):
+    if not (is_blackwell() or is_hip_cdna3_or_newer() or is_hip_gfx1250()):
+        pytest.skip("Requires Blackwell, CDNA3+, or gfx1250")
     device = "cuda"
     M, N, K = 1024, 512, 256
     torch.manual_seed(42)
@@ -183,17 +165,16 @@ def descriptor_store_kernel(desc, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, 
     desc.store([0, 0], tile)
 
 
-_descriptor_targets = {
-    "nvidia": is_hopper_or_newer,
-    "gfx1250": is_hip_gfx1250,
-}
+def _skip_unless_descriptor_target():
+    if is_cuda() and not is_hopper_or_newer():
+        pytest.skip("Requires Hopper+")
+    elif not is_cuda() and not is_hip_gfx1250():
+        pytest.skip("Requires descriptor support")
 
 
-@pytest.mark.parametrize("target", _descriptor_targets.keys())
-def test_triton_to_gluon_descriptor_roundtrip(tmp_path, target):
-    if not _descriptor_targets[target]():
-        pytest.skip(f"Requires {target} with descriptor support")
-    kernel = convert_kernel(descriptor_store_kernel, "descriptor_store_kernel", tmp_path, target=target)
+def test_triton_to_gluon_descriptor_roundtrip(tmp_path):
+    _skip_unless_descriptor_target()
+    kernel = convert_kernel(descriptor_store_kernel, "descriptor_store_kernel", tmp_path)
 
     M = N = 64
     y = torch.zeros((M, N), device="cuda", dtype=torch.float16)
@@ -215,11 +196,9 @@ def descriptor_copy_kernel(in_desc, out_desc, BLOCK_M: tl.constexpr, BLOCK_N: tl
     out_desc.store([0, 0], tile)
 
 
-@pytest.mark.parametrize("target", _descriptor_targets.keys())
-def test_triton_to_gluon_descriptor_load_roundtrip(tmp_path, target):
-    if not _descriptor_targets[target]():
-        pytest.skip(f"Requires {target} with descriptor support")
-    kernel = convert_kernel(descriptor_copy_kernel, "descriptor_copy_kernel", tmp_path, target=target)
+def test_triton_to_gluon_descriptor_load_roundtrip(tmp_path):
+    _skip_unless_descriptor_target()
+    kernel = convert_kernel(descriptor_copy_kernel, "descriptor_copy_kernel", tmp_path)
 
     M = N = 64
     x = torch.ones((M, N), device="cuda", dtype=torch.float16) * 3.0
@@ -256,13 +235,9 @@ def make_tensor_descriptor_copy_kernel(x_ptr, y_ptr, M, N, BLOCK_M: tl.constexpr
     out_desc.store([0, 0], tile)
 
 
-# Parametrized over _descriptor_targets: tests tl.make_tensor_descriptor translation
-# for both NVIDIA TMA (Hopper+) and AMD TDM (gfx1250).
-@pytest.mark.parametrize("target", _descriptor_targets.keys())
-def test_triton_to_gluon_make_tensor_descriptor(tmp_path, target, with_allocator):
-    _skip_unless_target(target, _descriptor_targets)
-    kernel = convert_kernel(make_tensor_descriptor_copy_kernel, "make_tensor_descriptor_copy_kernel", tmp_path,
-                            target=target)
+def test_triton_to_gluon_make_tensor_descriptor(tmp_path, with_allocator):
+    _skip_unless_descriptor_target()
+    kernel = convert_kernel(make_tensor_descriptor_copy_kernel, "make_tensor_descriptor_copy_kernel", tmp_path)
 
     M = N = 64
     x = torch.randn((M, N), device="cuda", dtype=torch.float16)
@@ -294,10 +269,8 @@ def reshape_trans_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK: tl.constexpr,
 
 
 @pytest.mark.parametrize("TRANS_KIND", ["trans_method", "tl_trans_separate", "tl_trans_tuple", "tl_trans"])
-@pytest.mark.parametrize("target", _all_targets.keys())
-def test_triton_reshape_trans(tmp_path, TRANS_KIND, target):
-    _skip_unless_target(target)
-    kernel = convert_kernel(reshape_trans_kernel, "reshape_trans_kernel", tmp_path, target=target)
+def test_triton_reshape_trans(tmp_path, TRANS_KIND):
+    kernel = convert_kernel(reshape_trans_kernel, "reshape_trans_kernel", tmp_path)
 
     n = 1024
     BLOCK = 256
@@ -326,10 +299,8 @@ def split_kernel(x_ptr, out_ptr):
     tl.store(p, a)
 
 
-@pytest.mark.parametrize("target", _all_targets.keys())
-def test_split(tmp_path, target):
-    _skip_unless_target(target)
-    kernel = convert_kernel(split_kernel, "split_kernel", tmp_path, target=target)
+def test_split(tmp_path):
+    kernel = convert_kernel(split_kernel, "split_kernel", tmp_path)
 
     n = 1024
     x = torch.randn(2 * n, device="cuda", dtype=torch.float32)
@@ -377,10 +348,8 @@ def reduce_to_scalar_kernel(out_ptr):
     tl.store(out_ptr, x)
 
 
-@pytest.mark.parametrize("target", _all_targets.keys())
-def test_reduce_to_scalar(tmp_path, target):
-    _skip_unless_target(target)
-    kernel = convert_kernel(reduce_to_scalar_kernel, "reduce_to_scalar_kernel", tmp_path, target=target)
+def test_reduce_to_scalar(tmp_path):
+    kernel = convert_kernel(reduce_to_scalar_kernel, "reduce_to_scalar_kernel", tmp_path)
     grid = (1, )
 
     out = torch.empty((1, ), device="cuda", dtype=torch.int32)
@@ -442,10 +411,8 @@ def atomic_add_kernel(out_ptr, BLOCK: tl.constexpr):
     tl.atomic_add(out_ptr + idx, idx, mask=scalar_mask, sem="release", scope="cta")
 
 
-@pytest.mark.parametrize("target", _all_targets.keys())
-def test_atomic_add(tmp_path, target):
-    _skip_unless_target(target)
-    kernel = convert_kernel(atomic_add_kernel, "atomic_add_kernel", tmp_path, target=target)
+def test_atomic_add(tmp_path):
+    kernel = convert_kernel(atomic_add_kernel, "atomic_add_kernel", tmp_path)
 
     block = 32 * 4
     ref = torch.zeros((block, ), device="cuda")
@@ -468,10 +435,8 @@ def cat_kernel(x_ptr, y_ptr, out_ptr, BLOCK: tl.constexpr):
     tl.store(out_ptr + tl.arange(0, 2 * BLOCK), z)
 
 
-@pytest.mark.parametrize("target", _all_targets.keys())
-def test_cat(tmp_path, target):
-    _skip_unless_target(target)
-    kernel = convert_kernel(cat_kernel, "cat_kernel", tmp_path, target=target)
+def test_cat(tmp_path):
+    kernel = convert_kernel(cat_kernel, "cat_kernel", tmp_path)
 
     BLOCK = 256
     x = torch.randn(BLOCK, device="cuda", dtype=torch.float32)
