@@ -152,31 +152,31 @@ void periodicFlushDataPhases(Data &data,
         msgPack = data.toMsgPack(startPhase);
       }
 
+      if (writeOutputs) {
+        if (timingEnabled) {
+          const auto t0 = Clock::now();
+          std::ofstream ofs(pathWithPhase,
+                            std::ios::out | std::ios::binary |
+                                std::ios::trunc);
+          ofs.write(reinterpret_cast<const char *>(msgPack.data()),
+                    msgPack.size());
+          ofs.flush();
+          const auto t1 = Clock::now();
+          stats.totalMsgPackWriteUs +=
+              std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                  .count();
+          ++stats.msgPackWriteCalls;
+        } else {
+          std::ofstream ofs(pathWithPhase,
+                            std::ios::out | std::ios::binary |
+                                std::ios::trunc);
+          ofs.write(reinterpret_cast<const char *>(msgPack.data()),
+                    msgPack.size());
+        }
+      }
+
       if (bufferProfiles) {
-        data.appendBufferedProfile(startPhase, msgPack);
-      }
-
-      if (!writeOutputs) {
-        continue;
-      }
-
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        std::ofstream ofs(pathWithPhase,
-                          std::ios::out | std::ios::binary | std::ios::trunc);
-        ofs.write(reinterpret_cast<const char *>(msgPack.data()),
-                  msgPack.size());
-        ofs.flush();
-        const auto t1 = Clock::now();
-        stats.totalMsgPackWriteUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        ++stats.msgPackWriteCalls;
-      } else {
-        std::ofstream ofs(pathWithPhase,
-                          std::ios::out | std::ios::binary | std::ios::trunc);
-        ofs.write(reinterpret_cast<const char *>(msgPack.data()),
-                  msgPack.size());
+        data.appendBufferedProfile(startPhase, std::move(msgPack));
       }
     }
   }
