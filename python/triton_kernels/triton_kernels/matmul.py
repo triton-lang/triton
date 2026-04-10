@@ -21,7 +21,15 @@ from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .tensor_details.layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
-from .matmul_details.opt_flags import InapplicableConstraint, make_opt_flags, update_opt_flags_constraints
+from .matmul_details.opt_flags import (
+    InapplicableConstraint,
+    OptFlags as OptFlags,
+    make_opt_flags,
+    scoped_opt_flags as scoped_opt_flags,
+    scoped_opt_flags_constraints as scoped_opt_flags_constraints,
+    update_opt_flags_constraints,
+)
+from .matmul_details.opt_flags_details import opt_flags_nvidia
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
 from .tensor import Storage, Tensor, FP4, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, convert_layout
 from .tensor import dtype_to_torch_dtype, torch_dtype_to_dtype
@@ -131,16 +139,9 @@ class PrecisionConfig:
 
 # TODO: merge in opt_flags
 def get_swap_xw(precision_config, opt_flags):
-    if target_info.cuda_capability_geq(10, 0):
-        if precision_config.b_mx_scale is not None:
-            return opt_flags.block_m <= 64 and opt_flags.is_persistent
-        else:
-            return opt_flags.block_m < 64 and opt_flags.is_persistent
-    elif target_info.cuda_capability_geq(9, 0):
-        b_scale_layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
-        return isinstance(b_scale_layout, HopperMXScaleLayout)
-
-    return False
+    if triton.runtime.driver.active.get_current_target().backend != "cuda":
+        return False
+    return opt_flags_nvidia.compute_swap_xw(precision_config, opt_flags.block_m, opt_flags.is_persistent)
 
 # ---------------------
 # Allocation
@@ -385,7 +386,8 @@ def matmul(a, b, bias,
         # which is too big.
         can_use_tma = False
     has_gather_tma = has_gather and target_info.has_tma_gather()
-    can_use_split_k = scatter_indx is None and not a_has_mx and not b_has_mx and ragged_dimension != "K"
+    is_ragged_mx = (a_has_mx or b_has_mx) and (is_a_ragged or is_b_ragged)
+    can_use_split_k = scatter_indx is None and not is_ragged_mx and ragged_dimension != "K" and c_acc_in is None and precision_config.c_mx_scale is None
     block_k = None
     if ragged_dimension == "K":
         block_k = a_ragged_metadata.slice_sizes_divisibility or b_ragged_metadata.slice_sizes_divisibility
