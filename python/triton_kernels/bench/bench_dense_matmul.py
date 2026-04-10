@@ -3,6 +3,7 @@
 # This is not meant to be a comprehensive benchmark of triton_kernels.
 
 import argparse
+import json
 from pathlib import Path
 
 import torch
@@ -55,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         "--profile-dir",
         type=Path,
         default=None,
-        help="If set, also emit Proton .hatchet profiles for each benchmark case into this directory.",
+        help="If set, use Proton as the measurement path and emit .hatchet profiles into this directory.",
     )
     parser.add_argument(
         "--profile-reps",
@@ -82,6 +83,28 @@ def make_batched_weight(k: int, n: int, dtype: torch.dtype, device: torch.device
 
 def tflops(m: int, n: int, k: int, ms: float) -> float:
     return 2.0 * m * n * k / (ms * 1e9)
+
+
+def read_proton_matmul_avg_ms(profile_path: Path) -> float:
+    profile = json.loads(profile_path.read_text())
+    candidates = []
+
+    def collect(node: dict) -> None:
+        frame = node.get("frame", {})
+        metrics = node.get("metrics", {})
+        if "_p_matmul" in frame.get("name", ""):
+            candidates.append(metrics)
+        for child in node.get("children", []):
+            collect(child)
+
+    for node in profile:
+        collect(node)
+
+    if not candidates:
+        raise RuntimeError(f"No matmul kernel found in Proton profile {profile_path}")
+
+    matmul_metrics = max(candidates, key=lambda metrics: metrics.get("flops16", 0))
+    return matmul_metrics["time (ns)"] / matmul_metrics["count"] / 1e6
 
 
 def make_inputs(
@@ -153,6 +176,8 @@ def benchmark_case(
     torch.cuda.synchronize(device)
 
     if profile_dir is not None:
+        if profile_reps <= 0:
+            raise ValueError("--profile-reps must be positive")
         profile_dir.mkdir(parents=True, exist_ok=True)
         profile_name = profile_dir / f"{semantic_mode}_{dtype_name}_wt_{str(transpose_w).lower()}"
         proton.start(str(profile_name), hook="triton")
@@ -160,6 +185,8 @@ def benchmark_case(
             run()
         torch.cuda.synchronize(device)
         proton.finalize()
+        ms = read_proton_matmul_avg_ms(profile_name.with_suffix(".hatchet"))
+        return ms, tflops(m, n, k, ms), b_stride
 
     if benchmark_mode == "cuda_graph":
         ms = triton.testing.do_bench_cudagraph(run, rep=rep)
@@ -180,10 +207,11 @@ def main() -> None:
     torch.cuda.set_device(args.device)
     device = torch.device("cuda", args.device)
     dtype = getattr(torch, args.dtype)
+    measurement_mode = "proton" if args.profile_dir is not None else args.benchmark_mode
 
     print(f"Benchmarking dense triton_kernels.matmul with M={args.m}, N={args.n}, K={args.k}, "
           f"dtype={args.dtype}, device={device}, semantic_mode={args.semantic_mode}, "
-          f"benchmark_mode={args.benchmark_mode}")
+          f"measurement_mode={measurement_mode}")
     print("transpose_w  b.stride()      time_ms   tflops")
     print("-----------  -------------  --------  -------")
 
