@@ -8,7 +8,7 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton.tools.triton_to_gluon_translator.translator import convert_triton_to_gluon
 from triton.tools.triton_to_gluon_translator.translator_helpers import convert_host_descriptor
-from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda, is_hip_gfx1250, is_hip_cdna3_or_newer
+from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda, is_hip_cdna4, is_hip_gfx1250, is_hip_cdna3_or_newer
 from triton.language.target_info import current_target
 
 
@@ -135,8 +135,8 @@ def matmul_kernel(  #
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES", [(128, 128, 64, 1)])
 @pytest.mark.parametrize("NUM_WARPS", [4])
 def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, NUM_WARPS, tmp_path):
-    if not (is_blackwell() or is_hip_cdna3_or_newer() or is_hip_gfx1250()):
-        pytest.skip("Requires Blackwell, CDNA3+, or gfx1250")
+    if not (is_blackwell() or is_hip_cdna4() or is_hip_gfx1250()):
+        pytest.skip("Requires Blackwell, CDNA4, or gfx1250")
     device = "cuda"
     M, N, K = 1024, 512, 256
     torch.manual_seed(42)
