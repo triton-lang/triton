@@ -855,6 +855,26 @@ def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
 # -----------------------
 
 
+def _pow_impl(base, exp, _semantic):
+    """x**y via exp2(log2(x) * y) for Triton tensors (bug triton-auto-017).
+
+    Requires x > 0. Negative base with a runtime tensor exponent does not
+    arise in practice (signed activations use constexpr integer exponents
+    which go through constexpr.__pow__, not this path). Undefined behavior
+    for x <= 0 matches libm pow() with a non-integer exponent: NaN or -inf.
+    """
+    exp = _unwrap_if_constexpr(exp)
+    b = _semantic
+    builder = b.builder
+
+    base_f = b.cast(b.to_tensor(base), float32)
+    exp_f = b.cast(b.to_tensor(exp), float32)
+
+    log2_base = tensor(builder.create_log2(base_f.handle), base_f.type)
+    product = b.mul(log2_base, exp_f, False)
+    return tensor(builder.create_exp2(product.handle), product.type)
+
+
 class tensor(base_value):
     """Represents an N-dimensional array of values or pointers.
 
@@ -951,6 +971,14 @@ class tensor(base_value):
     def __rmod__(self, other, _semantic=None):
         other = _unwrap_if_constexpr(other)
         return _semantic.mod(other, self)
+
+    @builtin
+    def __pow__(self, other, _semantic=None):
+        return _pow_impl(self, other, _semantic)
+
+    @builtin
+    def __rpow__(self, other, _semantic=None):
+        return _pow_impl(other, self, _semantic)
 
     # unary operators
     @builtin

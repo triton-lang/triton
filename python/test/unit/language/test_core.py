@@ -478,6 +478,44 @@ def test_floordiv(dtype_x, dtype_y, num_ctas, device):
     _test_binary(dtype_x, dtype_y, expr, numpy_expr, filter_y=filter_y, device=device, num_ctas=num_ctas)
 
 
+@pytest.mark.interpreter
+def test_pow(device):
+    # tensor.__pow__ and __rpow__ were previously undefined, causing a
+    # CompilationError for any x**y expression with a runtime tensor exponent.
+    SIZE = 256
+
+    @triton.jit
+    def pow_kernel(x_ptr, exp_ptr, out_ptr, SIZE: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        x = tl.load(x_ptr + offs).to(tl.float32)
+        e = tl.load(exp_ptr + offs).to(tl.float32)
+        tl.store(out_ptr + offs, x**e)
+
+    @triton.jit
+    def rpow_kernel(x_ptr, out_ptr, SIZE: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        x = tl.load(x_ptr + offs).to(tl.float32)
+        tl.store(out_ptr + offs, 2.0**x)
+
+    rs = RandomState(42)
+    x = np.abs(rs.randn(SIZE).astype(np.float32)).clip(min=0.01)
+    x_tri = to_triton(x, device=device, dst_type='float32')
+    out = to_triton(np.empty(SIZE, dtype=np.float32), device=device)
+
+    # x**y with various runtime exponents
+    for exp_val in [2.0, 0.5, -1.0, 2.5]:
+        e = np.full(SIZE, exp_val, dtype=np.float32)
+        e_tri = to_triton(e, device=device, dst_type='float32')
+        pow_kernel[(1, )](x_tri, e_tri, out, SIZE=SIZE)
+        np.testing.assert_allclose(to_numpy(out), x**exp_val, rtol=1e-3, atol=1e-3, err_msg=f'x**{exp_val}')
+
+    # 2.0**x (rpow: scalar base, tensor exponent)
+    x_signed = rs.randn(SIZE).astype(np.float32)
+    x_signed_tri = to_triton(x_signed, device=device, dst_type='float32')
+    rpow_kernel[(1, )](x_signed_tri, out, SIZE=SIZE)
+    np.testing.assert_allclose(to_numpy(out), 2.0**x_signed, rtol=1e-3, atol=1e-3, err_msg='2.0**x')
+
+
 def test_unsigned_name_mangling(device):
     # Test that uint32 and int32 are mangled differently by the compiler
     SIZE = 128
