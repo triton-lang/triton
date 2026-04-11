@@ -666,18 +666,6 @@ struct TensorMemoryAllocOpConversion
   }
 };
 
-static void createCommit(ConversionPatternRewriter &rewriter, Location loc,
-                         Value barrier, Value pred, bool twoCTAs) {
-  PTXBuilder ptxBuilder;
-  auto *barrierOperand = ptxBuilder.newAddrOperand(barrier, "r");
-  std::string opcode =
-      "tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-      ".mbarrier::arrive::one.shared::cluster.b64";
-  auto &barrierOp = *ptxBuilder.create(opcode);
-  barrierOp(barrierOperand).predicate(pred);
-  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
-}
-
 static void createTcgen05Cp(ConversionPatternRewriter &rewriter, Location loc,
                             Value tmem_address, Value src_desc, Value pred,
                             TMemCopyAtom atom, bool twoCTAs) {
@@ -789,12 +777,6 @@ struct TensorMemoryCopyOpConversion
     if (failed(copySharedToTmem(rewriter, loc, typeConverter, op,
                                 adaptor.getSrc(), adaptor.getDst(), pred)))
       return failure();
-
-    if (op.getBarrier()) {
-      auto barrier = LLVM::getSharedMemoryObjectFromStruct(
-          op.getLoc(), adaptor.getBarrier(), i64_ty, rewriter);
-      createCommit(rewriter, loc, barrier.getBase(), pred, twoCTAs);
-    }
 
     rewriter.eraseOp(op);
     return success();

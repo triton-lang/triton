@@ -85,10 +85,19 @@ public:
     };
     if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op))
       mask = getBarrierMask(initOp.getAlloc());
+    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
+      mask = getBarrierMask(expectOp.getAlloc());
     if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op))
       mask = getBarrierMask(waitOp.getAlloc());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
       mask = getBarrierMask(invalOp.getAlloc());
+    if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+      if (copyOp.getMulticast()) {
+        auto dstTy = cast<ttg::MemDescType>(copyOp.getResult().getType());
+        auto kBlock = StringAttr::get(op->getContext(), "block");
+        mask = toLinearLayout(dstTy).getFreeVariableMasks().lookup(kBlock);
+      }
+    }
 
     // In 2CTA tcgen05 and tmem_copy, only the even CTA in each (i, i^1) pair
     // issues the op.
@@ -107,19 +116,16 @@ public:
     if (info)
       return info;
     if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
-      // TODO: For async TMA barriers, the barrier "arrive" corresponding to the
-      // completion mechanism is modeled by barrier_expect. Individual
-      // async_tma_copy ops should not decrement the barrier state, otherwise
-      // multiple copies using the same barrier would incorrectly advance the
-      // phase multiple times. This should be improved bu tracking the barrier
-      // expected byte count, and "arriving" the barrier when the expected byte
-      // count is reached.
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = expectOp.getPred();
+      auto barrierTy = expectOp.getAlloc().getType();
+      int txCount = expectOp.getSize() * ttg::lookupNumCTAs(op) /
+                    barrierTy.getNumElements();
       info->barriers.push_back({expectOp.getBarrier(), nullptr,
                                 /*count=*/1,
-                                MemEffectsOpInfo::BarrierTrackingMode::None});
+                                MemEffectsOpInfo::BarrierTrackingMode::Frontier,
+                                /*txCount=*/txCount});
     }
     if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
       info.emplace();
@@ -148,8 +154,6 @@ public:
                                         copyOp.getSrc(), "Src");
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         copyOp.getDst(), "Dst");
-      if (copyOp.getBarrier())
-        info->barriers.push_back({copyOp.getBarrier(), nullptr, 1});
     }
     if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
       info.emplace();
@@ -202,9 +206,23 @@ public:
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = copyOp.getPred();
+      int txCount = tti::getMemDescLength(copyOp.getResult());
+      if (copyOp.getMulticast()) {
+        auto resultTy = copyOp.getResult().getType();
+        auto barrierTy = copyOp.getBarrier().getType();
+        auto kBlock = StringAttr::get(op->getContext(), "block");
+        uint16_t resultMask =
+            toLinearLayout(resultTy).getFreeVariableMasks().lookup(kBlock);
+        uint16_t barrierMask =
+            toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
+        uint16_t collapsedMask = resultMask & barrierMask;
+        for (; collapsedMask; collapsedMask &= collapsedMask - 1)
+          txCount *= 2;
+      }
       info->barriers.push_back(
           {copyOp.getBarrier(), nullptr, /*count=*/0,
-           MemEffectsOpInfo::BarrierTrackingMode::EffectWrites});
+           MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
+           /*txCount=*/-txCount});
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         copyOp.getResult());
     }
@@ -222,7 +240,8 @@ public:
       info->pred = gatherOp.getPred();
       info->barriers.push_back(
           {gatherOp.getBarrier(), nullptr, /*count=*/0,
-           MemEffectsOpInfo::BarrierTrackingMode::EffectWrites});
+           MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
+           /*txCount=*/-(int)tti::getMemDescLength(gatherOp.getResult())});
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         gatherOp.getResult());
     }

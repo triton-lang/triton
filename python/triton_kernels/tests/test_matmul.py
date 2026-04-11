@@ -91,6 +91,7 @@ class Case:
     split_k: int = 1
     a_hbm_swizzling: bool = False
     b_hbm_swizzling: bool = False
+    shuffle_mxfp4_w_layout: bool = False
     epilogue_subtile: Union[int, None] = None
     a_transpose: bool = False
     b_transpose: bool = False
@@ -127,6 +128,10 @@ def _build_test_op_cases():
         Case(*even_shape, "ragged", "float8_e5m2", "float8_e5m2", epilogue_subtile=val)
         for val in (1, 2, 4)
     ])
+    # fp32
+    test_cases.extend([
+        Case(1024, 1000, 2048, "ragged", "float32", "float32", b_transpose=True)
+    ])
     # bfloat16 x mx
     for shape in [odd_shape2, even_shape]:
         test_cases.extend([
@@ -144,12 +149,16 @@ def _build_test_op_cases():
     # float8 x mxfloat
     test_cases.extend([
         Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True),
+        Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True, shuffle_mxfp4_w_layout=True),
         Case(1024, 1024, 1024, "batched", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True),
+        Case(1024, 1024, 1024, "batched", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True, shuffle_mxfp4_w_layout=True),
         Case(1024, 1024, 1024, "batched", "float8_e5m2", "mxfloat4_e2m1"),
         Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9),
         Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True),
+        Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True, shuffle_mxfp4_w_layout=True),
         Case(300, 400, 416, "ragged", "float8_e5m2", "mxfloat8_e4m3fn"),
         Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1"),
+        Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True, shuffle_mxfp4_w_layout=True),
         Case(300, 400, 416, "batched", "float8_e5m2", "mxfloat8_e4m3fn"),
     ])
     # mxfloat x mxfloat
@@ -232,7 +241,7 @@ def _build_test_op_cases():
 @pytest.mark.parametrize("is_persistent", [False,True])
 @pytest.mark.parametrize("num_warps", [4, 8] if is_hopper() else [None])
 def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
-            mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
+            mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
             swiglu_opts, device, opt_flags_scope):
     # We catch and re-invoke pytest.skip(), because otherwise pytest may hold a reference to
@@ -240,7 +249,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, i
     skip_message = None
     try:
         _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
-                 mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
+                 mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
                  a_transpose, b_transpose, c_transpose,
                  swiglu_opts, device, opt_flags_scope)
     except pytest.skip.Exception as e:
@@ -250,7 +259,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, i
         pytest.skip(skip_message)
 
 def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
-            mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
+            mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
             swiglu_opts, device, opt_flags_scope):
     act_uses_mx = act_dtype_str.startswith("mx") or act_dtype_str == "nvfp4_e2m1"
@@ -281,6 +290,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("NYI: gamma and swiglu not supported together on AMD GPU")
         if split_k is not None and split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
+        if "float32" in act_dtype_str:
+            pytest.skip("float32 not fully tested on AMD GPU")
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
@@ -343,6 +354,20 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     # set opt flags constraints
     constraints = make_constraints(block_m, split_k, is_persistent, epilogue_subtile, b_hbm_swizzling, weight_dtype_str, num_warps)
+    use_blackwell_shuffled_w_layout = shuffle_mxfp4_w_layout and b_hbm_swizzling
+    if shuffle_mxfp4_w_layout:
+        if not b_hbm_swizzling:
+            pytest.skip("Shuffled MXFP4 weight layout only applies with b_hbm_swizzling")
+        if is_hip() or torch.cuda.get_device_capability()[0] < 10:
+            pytest.skip("Shuffled MXFP4 weight layout requires Blackwell or newer")
+        if weight_dtype_str != "mxfloat4_e2m1":
+            pytest.skip("Shuffled MXFP4 weight layout only supports mxfloat4_e2m1 weights")
+        if not act_dtype_str.startswith("float8"):
+            pytest.skip("Shuffled MXFP4 weight layout is only tested with FP8 activations")
+        if not colmajor_mxfp_weight:
+            pytest.skip("Shuffled MXFP4 weight layout requires column-major MXFP weights")
+        if not is_persistent:
+            pytest.skip("Shuffled MXFP4 weight layout requires the persistent TMA kernel")
     opt_flags.update_opt_flags_constraints(constraints)
 
     a_dtype = DType(act_dtype_str)
@@ -353,6 +378,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     do_bias = inner_expt_opt is None
     do_gather = do_gather and mode != "batched"
     do_scatter = do_scatter and mode != "batched"
+    b_value_hbm_swizzling = None
+    if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4:
+        b_value_hbm_swizzling = layout.make_default_matmul_mxfp4_w_layout(
+            mx_axis=-2,
+            allow_blackwell_value_shuffle=use_blackwell_shuffled_w_layout,
+        )
 
     # --- create inputs ---
     a, a_scales, a_ragged_metadata = make_random_tensor(
@@ -378,9 +409,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         ragged_padding = inner_expt_opt is not None and "pad_b" in inner_expt_opt,
         squeeze_batch_dim = mode == "plain",
         is_mx_rowmajor = not colmajor_mxfp_weight,
-        value_hbm_swizzling = layout.make_default_matmul_mxfp4_w_layout(mx_axis=-2) if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4 else None,
+        value_hbm_swizzling = b_value_hbm_swizzling,
         scale_hbm_swizzling = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2, num_warps=num_warps) if b_hbm_swizzling and colmajor_mxfp_weight and b_dtype.is_mxfloat4 else None,
     )
+    if use_blackwell_shuffled_w_layout:
+        assert isinstance(b.storage.layout, layout.BlackwellMX4ValueShuffledLayout)
     gather_indx  = None if not do_gather  else torch.randint(0, max(m, 1), (m, ), dtype=torch.int32, device=device)
     scatter_indx = None if not do_scatter else torch.randperm(m, dtype=torch.int32, device=device)
     bias         = None if not do_bias    else torch.randn(b.shape[:-2] + b.shape[-1:], dtype=torch.float32, device=device)

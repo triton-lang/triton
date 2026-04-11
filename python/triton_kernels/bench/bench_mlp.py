@@ -1,4 +1,3 @@
-from itertools import chain
 from pathlib import Path
 from copy import deepcopy
 import os
@@ -8,12 +7,14 @@ import argparse
 import triton_kernels.roofline as roofline
 from triton_kernels.swiglu import swiglu_fn
 from triton_kernels.matmul import matmul, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
+from triton_kernels.matmul_details.opt_flags import scoped_opt_flags_constraints
 from triton_kernels.target_info import get_cdna_version
 from triton_kernels.tensor_details import layout
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata  # ragged tensor
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_assignment, SymmetricMemoryPool
+from triton_kernels.distributed_details.mesh import Mesh
 # quantization
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4
 from triton_kernels.numerics import InFlexData
@@ -45,8 +46,14 @@ def quantize_weight(w, dtype, **opt):
         assert dtype == FP4, f"{dtype=}"
         w, w_scale = downcast_to_mxfp(w.to(torch.bfloat16), torch.uint8, axis=1)
         if opt:
-            w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"], **opt["value_layout_opts"])
-            w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"], **opt["scale_layout_opts"])
+            w = wrap_torch_tensor(w, dtype=FP4)
+            value_layout = opt.get("value_layout")
+            if value_layout is not None:
+                w = convert_layout(w, value_layout)
+            w_scale = wrap_torch_tensor(w_scale)
+            scale_layout = opt.get("scale_layout")
+            if scale_layout is not None:
+                w_scale = convert_layout(w_scale, scale_layout)
         return w, InFlexData(), w_scale
 
 
@@ -57,6 +64,7 @@ def run_mlp(x_dp_local_bf16, x_dp_local_fp8,  # activations
             n_expts_act, expt_assignment,  # expert assignment
             rank,  # distributed context
             symm_mem_pool,  # symmetric memory pool
+            fc1_constraints=None, fc2_constraints=None,  # per-kernel opt_flags constraints
             ):
     # gate matrix multiplication
     l_dp_local = matmul(x_dp_local_bf16, wg_global, bg_global, precision_config=pcg)
@@ -73,11 +81,13 @@ def run_mlp(x_dp_local_bf16, x_dp_local_fp8,  # activations
     y_ep_local = convert_dp_to_ep(x_dp_local_fp8, expt_assignment, active_indx, dispatch_indx, symm_mem_pool)
     y_ep_local_metadata = remap_ragged_tensor_metadata(x_global_metadata, expt_assignment.expt_map[rank, :])
     # first matmul + swiglu
-    y_ep_local = matmul(y_ep_local, w1_ep_local, b1_ep_local, a_ragged_metadata=y_ep_local_metadata,
-                        precision_config=pc1, fused_activation=act1)
+    with scoped_opt_flags_constraints(fc1_constraints or {}):
+        y_ep_local = matmul(y_ep_local, w1_ep_local, b1_ep_local, a_ragged_metadata=y_ep_local_metadata,
+                            precision_config=pc1, fused_activation=act1)
     # second matmul
-    y_ep_local = matmul(y_ep_local, w2_ep_local, b2_ep_local, a_ragged_metadata=y_ep_local_metadata,
-                        precision_config=pc2)
+    with scoped_opt_flags_constraints(fc2_constraints or {}):
+        y_ep_local = matmul(y_ep_local, w2_ep_local, b2_ep_local, a_ragged_metadata=y_ep_local_metadata,
+                            precision_config=pc2)
     # convert x from expert-sorted, ep-local to token-sorted, dp-local
     y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, active_indx, combine_indx, symm_mem_pool)
     # weighted average of the output token from experts
@@ -86,7 +96,8 @@ def run_mlp(x_dp_local_bf16, x_dp_local_fp8,  # activations
     return z_dp_local
 
 
-def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, EP):
+def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, EP, shuffle_mx4=False,
+              num_stages_fc1=None, num_stages_fc2=None, epilogue_subtile_fc1=None):
     assert n_expts_tot % EP == 0
     rank = torch.distributed.get_rank()
     n_ranks = torch.distributed.get_world_size()
@@ -97,16 +108,14 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     assert EP == n_ranks, f"{EP=}, {n_ranks=}"
 
     #-- init memory pool --
-    symm_mem_pool = SymmetricMemoryPool()
+    symm_mem_pool = SymmetricMemoryPool(Mesh(torch.distributed.group.WORLD))
     symm_mem_pool.initialize_matmul(
         n_tokens_global=batch_per_expt * n_expts_tot // n_expts_act,
         d_input=dim1,
         d_model=dim2,
         n_expts_act=n_expts_act,
         n_expts_tot=n_expts_tot,
-        n_ranks=world_size,
         dtype=x_dtype,
-        group=torch.distributed.group.WORLD,
         device=torch.cuda.current_device(),
     )
 
@@ -127,14 +136,14 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     opt2 = dict()
     if w_dtype == FP4:
         num_warps = 4 if batch <= 512 else 8
-        value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
-        scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
-            mx_axis=1, num_warps=num_warps)
+        value_layout = layout.make_default_matmul_mxfp4_w_layout(
+            mx_axis=1,
+            allow_blackwell_value_shuffle=shuffle_mx4,
+        )
+        scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
         opt1 = {
             "value_layout": value_layout,
-            "value_layout_opts": value_layout_opts,
             "scale_layout": scale_layout,
-            "scale_layout_opts": scale_layout_opts,
         }
         opt2 = deepcopy(opt1)
     wg_global, wg_flex, wg_scale = quantize_weight(wg_global, torch.bfloat16)
@@ -166,33 +175,56 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     # -- run benchmark --
     expt_dict = make_expt_dict_uniform(EP, n_expts_tot)
     expt_assignment = make_expt_assignment(EP, n_expts_tot, expt_dict, torch.device(dev))
+
+    # Build per-kernel constraints
+    fc1_constraints = {}
+    if num_stages_fc1 is not None:
+        fc1_constraints["num_stages"] = num_stages_fc1
+    if epilogue_subtile_fc1 is not None:
+        fc1_constraints["epilogue_subtile"] = epilogue_subtile_fc1
+    fc2_constraints = {}
+    if num_stages_fc2 is not None:
+        fc2_constraints["num_stages"] = num_stages_fc2
+
     fpath = Path(f"profile_{rank}")
+    # warmup
+    run_mlp(x_dp_local_bf16, x_dp_local_fp8,  #
+            wg_global, bg_global, pcg,  #
+            w1_ep_local, b1_ep_local, pc1, act1,  #
+            w2_ep_local, b2_ep_local, pc2,  #
+            n_expts_act, expt_assignment, rank, symm_mem_pool, fc1_constraints=fc1_constraints,
+            fc2_constraints=fc2_constraints)
+    torch.cuda.synchronize()
     proton.start(str(fpath), hook="triton")
-    g = torch.cuda.CUDAGraph()
-    stream = torch.cuda.Stream()
-    with torch.cuda.stream(stream):
-        with torch.cuda.graph(g):
-            run_mlp(x_dp_local_bf16, x_dp_local_fp8,  #
-                    wg_global, bg_global, pcg,  #
-                    w1_ep_local, b1_ep_local, pc1, act1,  #
-                    w2_ep_local, b2_ep_local, pc2,  #
-                    n_expts_act, expt_assignment, rank, symm_mem_pool)
     for i in range(100):
-        g.replay()
+        run_mlp(x_dp_local_bf16, x_dp_local_fp8,  #
+                wg_global, bg_global, pcg,  #
+                w1_ep_local, b1_ep_local, pc1, act1,  #
+                w2_ep_local, b2_ep_local, pc2,  #
+                n_expts_act, expt_assignment, rank, symm_mem_pool, fc1_constraints=fc1_constraints,
+                fc2_constraints=fc2_constraints)
     torch.cuda.synchronize()
     torch.distributed.barrier()
     proton.finalize()
-    symm_mem_pool.release()
     return roofline.parse_profile(fpath.with_suffix(".hatchet"), useful_op_regex=".*matmul.*")
 
 
 def roofline_mlp(batch_sizes, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, EP, \
-                  name="", verbose=True):
-    out_path = Path(f"logs/{name}/{x_dtype}x-{w_dtype}w-EP{EP}/")
+                  name="", verbose=True, shuffle_mx4=False, num_stages_fc1=None,
+                  num_stages_fc2=None, epilogue_subtile_fc1=None):
+    suffix = "-shuffled" if shuffle_mx4 else ""
+    suffix += f"-fc1stages{num_stages_fc1}" if num_stages_fc1 is not None else ""
+    suffix += f"-fc2stages{num_stages_fc2}" if num_stages_fc2 is not None else ""
+    suffix += f"-fc1subtile{epilogue_subtile_fc1}" if epilogue_subtile_fc1 is not None else ""
+    out_path = Path(f"logs/{name}/{x_dtype}x-{w_dtype}w-EP{EP}{suffix}/")
     out_path.mkdir(parents=True, exist_ok=True)
     torch.cuda.set_device(torch.distributed.get_rank())
     csv_path = roofline.compute_roofline(dim1, dim2, n_expts_tot, n_expts_act, parse_dtype(x_dtype),
                                          parse_dtype(w_dtype), EP,  # fixed args
+                                         shuffle_mx4=shuffle_mx4,  # weight shuffling option
+                                         num_stages_fc1=num_stages_fc1,  # override num_stages for FC1 kernel
+                                         num_stages_fc2=num_stages_fc2,  # override num_stages for FC2 kernel
+                                         epilogue_subtile_fc1=epilogue_subtile_fc1,  # override epilogue subtile for FC1
                                          bench_fn=bench_mlp,  # function to benchmark
                                          intensity_proxy_name="batch_per_expt",  # intensity proxy name
                                          intensity_proxy_values=batch_sizes,  # intensity proxy values to sweep
@@ -203,7 +235,6 @@ def roofline_mlp(batch_sizes, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
                                       xlabel="batch_per_expt", title=out_path,  # plot option
                                       out_path=out_path.with_suffix(".png"),  # output path
                                       max_tbps="memset", max_tflops="cublas")  # hardware limits
-
     return png_path
 
 
@@ -219,14 +250,33 @@ if __name__ == "__main__":
     parser.add_argument("--quantized", action="store_true", default=True)
     args = parser.parse_args()
     # set dtypes
-    if args.quantized:
-        dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
-    else:
-        dtypes = ["fp8", "fp8"]
+    dense_dtypes = ["fp8", "fp8"]
+    quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
     # set model type
-    batch_ranges = [(2**(2 + k), 2**(3 + k), min(2**k, 32)) for k in range(8)]
-    batch_sizes = list(chain(*[range(*r) for r in batch_ranges]))
+    batch_sizes = [1, 2, 4, 8, 16, 32, 64]
     ep = torch.distributed.get_world_size()
-    roofline_mlp(batch_sizes, 5760, 5760, 128, 4, dtypes[0], dtypes[1], ep, name="mlp_moe")
+
+    # Common args for all MoE scenarios
+    moe_args = dict(dim1=5760, dim2=5760, n_expts_tot=128, n_expts_act=4, EP=ep, name="gpt-oss-x2")
+
+    # Run 5 scenarios to isolate 3 optimization categories:
+    #   Shuffling: scenario 2 → 3
+    #   FC2 5stg:  scenario 3 → 4
+    #   FC1 5stg:  scenario 4 → 5
+
+    # 1. FP8 baseline
+    roofline_mlp(batch_sizes, x_dtype=dense_dtypes[0], w_dtype=dense_dtypes[1], **moe_args)
+    # 2. MX4 baseline
+    roofline_mlp(batch_sizes, x_dtype=quantized_dtypes[0], w_dtype=quantized_dtypes[1], **moe_args)
+    # 3. MX4 shuffled
+    roofline_mlp(batch_sizes, x_dtype=quantized_dtypes[0], w_dtype=quantized_dtypes[1], shuffle_mx4=True, **moe_args)
+    # 4. MX4 shuffled + FC2 5stg
+    roofline_mlp(batch_sizes, x_dtype=quantized_dtypes[0], w_dtype=quantized_dtypes[1], shuffle_mx4=True,
+                 num_stages_fc2=5, **moe_args)
+    # 5. MX4 shuffled + FC1 subtile2+5stg + FC2 5stg
+    #    block_k=128 (swap disabled) + subtile=2 frees enough smem for 5 stages
+    roofline_mlp(batch_sizes, x_dtype=quantized_dtypes[0], w_dtype=quantized_dtypes[1], shuffle_mx4=True,
+                 epilogue_subtile_fc1=2, num_stages_fc1=5, num_stages_fc2=5, **moe_args)
+
     torch.distributed.barrier()
     torch.distributed.destroy_process_group()
