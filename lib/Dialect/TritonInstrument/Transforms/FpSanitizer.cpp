@@ -756,16 +756,16 @@ FpSanCosSin fpsanCosSinPayload(PatternRewriter &rewriter, Location loc,
 Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {
   if (!isa<FloatType>(getElementType(input.getType())))
     return Value();
-  auto cosSin = fpsanCosSinPayload(rewriter, loc,
-                                   embedToInt(rewriter, loc, input));
+  auto cosSin =
+      fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
   return unembedToFloat(rewriter, loc, cosSin.cos, input.getType());
 }
 
 Value fpsanSin(PatternRewriter &rewriter, Location loc, Value input) {
   if (!isa<FloatType>(getElementType(input.getType())))
     return Value();
-  auto cosSin = fpsanCosSinPayload(rewriter, loc,
-                                   embedToInt(rewriter, loc, input));
+  auto cosSin =
+      fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
   return unembedToFloat(rewriter, loc, cosSin.sin, input.getType());
 }
 
@@ -2187,8 +2187,8 @@ public:
                  BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
                  DivFOpPattern, PreciseDivFOpPattern, RemFOpPattern, FmaPattern,
                  ExpOpPattern, Exp2OpPattern, CosOpPattern, SinOpPattern,
-                 ExtFOpPattern, TruncFOpPattern, FpToFpPattern,
-                 Fp4ToFpPattern, DotPattern, DotScaledPattern>(&getContext());
+                 ExtFOpPattern, TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
+                 DotPattern, DotScaledPattern>(&getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);
