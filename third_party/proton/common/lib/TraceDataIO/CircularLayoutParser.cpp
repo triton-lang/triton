@@ -199,7 +199,7 @@ proton::readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift) {
   assert(version == 1 && "Version mismatch");
   buffer.skip(8);
   uint32_t payloadOffset = decoder.decode<I32Entry>()->value;
-  (void)decoder.decode<I32Entry>();
+  [[maybe_unused]] uint32_t payloadSize = decoder.decode<I32Entry>()->value;
   uint32_t device = decoder.decode<I32Entry>()->value;
   config.device = decodeDevice(device);
   config.numBlocks = decoder.decode<I32Entry>()->value;

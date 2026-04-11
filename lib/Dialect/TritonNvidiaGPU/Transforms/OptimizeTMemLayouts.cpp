@@ -188,9 +188,7 @@ public:
           nvidia_gpu::getDefaultLayoutForTmemLdSt(subSlice.getType(), numWarps);
       auto newType = input.getType().cloneWithEncoding(distLayout);
       auto cvt = ttg::ConvertLayoutOp::create(b, loc, newType, input);
-      auto store =
-          TMEMStoreOp::create(b, loc, subSlice, cvt.getResult(), truePred);
-      return store;
+      TMEMStoreOp::create(b, loc, subSlice, cvt.getResult(), truePred);
     };
 
     createSlice(joinOp.getLhs(), 0);

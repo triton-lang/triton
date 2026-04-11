@@ -133,7 +133,6 @@ LogicalResult WarpGroupOp::verify() {
 }
 
 ParseResult WarpGroupOp::parse(OpAsmParser &p, OperationState &result) {
-
   if (p.parseOptionalAttrDictWithKeyword(result.attributes))
     return failure();
 

@@ -36,8 +36,8 @@ DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
   auto kRegister = StringAttr::get(ctx, "register");
 
   // A warp-local layout ensures each warp has a copy of the whole tensor, so
-  // reductions, layout conversions, etc. don't require shared memory. Attempt
-  // to pick a decent coalesced layout, assuming the inner dimension is
+  // reductions, layout conversions, etc. don't require shared memory. TODO:
+  // attempt to pick a decent coalesced layout, assuming the inner dimension is
   // contiguous and the tensor is 16-byte aligned. However, pick the widest
   // vector length to reduce the number of instructions, speeding up
   // compilation.

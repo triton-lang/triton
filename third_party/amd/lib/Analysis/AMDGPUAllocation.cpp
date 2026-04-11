@@ -11,8 +11,6 @@
 
 namespace mlir::triton::AMD {
 
-// Max shmem instruction in bits
-
 unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
                                         RankedTensorType dstTy) {
   if (!cvtNeedsSharedMemory(srcTy, dstTy))

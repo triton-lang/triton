@@ -21,11 +21,6 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::nvidia_gpu;
 using namespace mlir::triton::NVIDIA;
 
-// The maximum number of tensor memory registers that can be accessed
-// by a single message regardless of shape or repetitions
-// The maximum number of thread registers that can be populated by
-// multiple messages
-
 namespace {
 
 struct TMemCopyAtom {
