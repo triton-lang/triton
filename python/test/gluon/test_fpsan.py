@@ -14,7 +14,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
     mbarrier,
-    tcgen05_commit,
     tcgen05_mma,
     tcgen05_mma_scaled,
 )
@@ -1518,8 +1517,8 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
 
         bar = gl.allocate_shared_memory(gl.int64, [1], gl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
-        tcgen05_mma_scaled(a_smem, b_mma, acc_tmem, a_scale_tmem, b_scale_tmem, TYPE, TYPE, use_acc=True)
-        tcgen05_commit(bar)
+        tcgen05_mma_scaled(a_smem, b_mma, acc_tmem, a_scale_tmem, b_scale_tmem, TYPE, TYPE, use_acc=True,
+                           mbarriers=[bar])
         mbarrier.wait(bar, phase=0)
         mbarrier.invalidate(bar)
 
