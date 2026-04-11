@@ -303,6 +303,8 @@ class CudaLauncher(object):
                 grid_size = gridX * gridY * gridZ
                 alloc_size = grid_size * self.num_ctas * size
                 alloc_fn = allocator.get()
+                if isinstance(alloc_fn, _allocation.NullAllocator):
+                    return active_driver.allocate_default_global_scratch(alloc_size, align, stream)
                 return alloc_fn(alloc_size, align, stream)
             return None
 

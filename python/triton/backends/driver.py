@@ -146,6 +146,14 @@ class DriverBase(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
+    def allocate_default_global_scratch(self, size: int, alignment: int, stream):
+        """
+        Allocate global scratch when no explicit allocator was installed via set_allocator().
+        Kernels on Blackwell (SM 12.0+) may require global scratch memory for cooperative
+        operations. This fallback prevents RuntimeError when no allocator is configured.
+        """
+        raise NotImplementedError
+
     def allocate_default_profile_scratch(self, size: int, alignment: int, stream):
         """
         Allocate profile scratch when no explicit profile allocator override was installed.
@@ -173,6 +181,18 @@ class GPUDriver(DriverBase):
     # TODO: remove once TMA is cleaned up
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
         return args
+
+    def allocate_default_global_scratch(self, size: int, alignment: int, stream):
+        import torch
+        device = self.get_active_torch_device()
+        device_interface = self.get_device_interface()
+        if stream is None:
+            return torch.empty(size, dtype=torch.uint8, device=device).data_ptr()
+        launch_stream = device_interface.ExternalStream(stream, device=device)
+        with device_interface.stream(launch_stream):
+            scratch = torch.empty(size, dtype=torch.uint8, device=device)
+        scratch.record_stream(launch_stream)
+        return scratch.data_ptr()
 
     def allocate_default_profile_scratch(self, size: int, alignment: int, stream):
         import torch
