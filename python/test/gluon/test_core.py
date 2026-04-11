@@ -381,8 +381,9 @@ def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
 @gluon.jit
 def tcgen05_mma_scaled_direct_multicast_kernel(a_desc, b_desc, out_ptr, BLOCK_M: ttgl.constexpr,
                                                BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
-                                               cga_layout_a: ttgl.constexpr, cga_layout_b: ttgl.constexpr,
-                                               cga_layout_c: ttgl.constexpr, blocked_c: ttgl.constexpr):
+                                               NUM_K_TILES: ttgl.constexpr, cga_layout_a: ttgl.constexpr,
+                                               cga_layout_b: ttgl.constexpr, cga_layout_c: ttgl.constexpr,
+                                               blocked_c: ttgl.constexpr):
     smem_a = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
     smem_b = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
 
@@ -401,14 +402,21 @@ def tcgen05_mma_scaled_direct_multicast_kernel(a_desc, b_desc, out_ptr, BLOCK_M:
     mma_bar = mbarrier.allocate_mbarrier()
     mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True))
 
-    mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
-    tma.async_copy_global_to_shared(a_desc, [0, 0], tma_bar, smem_a, multicast=True)
-    tma.async_copy_global_to_shared(b_desc, [0, 0], tma_bar, smem_b, multicast=True)
-    mbarrier.wait(tma_bar, phase=0, deps=[smem_a, smem_b])
-    mbarrier.invalidate(tma_bar)
+    phase_tma = 0
+    phase_mma = 0
+    for k in range(NUM_K_TILES):
+        offs_k = k * BLOCK_K
+        mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
+        tma.async_copy_global_to_shared(a_desc, [0, offs_k], tma_bar, smem_a, multicast=True)
+        tma.async_copy_global_to_shared(b_desc, [offs_k, 0], tma_bar, smem_b, multicast=True)
+        mbarrier.wait(tma_bar, phase_tma, deps=[smem_a, smem_b])
+        tcgen05_mma_scaled(smem_a, smem_b, acc, a_scale, b_scale, "e5m2", "e5m2", use_acc=k != 0, multicast=True,
+                           mbarriers=[mma_bar])
+        mbarrier.wait(mma_bar, phase_mma, deps=[smem_a, smem_b])
+        phase_tma ^= 1
+        phase_mma ^= 1
 
-    tcgen05_mma_scaled(smem_a, smem_b, acc, a_scale, b_scale, "e5m2", "e5m2", multicast=True, mbarriers=[mma_bar])
-    mbarrier.wait(mma_bar, phase=0, deps=[smem_a, smem_b])
+    mbarrier.invalidate(tma_bar)
     mbarrier.invalidate(mma_bar)
 
     out = ttgl.convert_layout(acc.load(), blocked_c)
@@ -423,6 +431,7 @@ def test_tcgen05_mma_scaled_direct_multicast_barrier():
     BLOCK_M = 256
     BLOCK_N = 256
     BLOCK_K = 128
+    NUM_K_TILES = 4
     cga_layout_a = ((1, 0), (0, 0))
     cga_layout_b = ((0, 1), (0, 2))
     cga_layout_c = ((1, 0), (0, 1))
@@ -430,16 +439,18 @@ def test_tcgen05_mma_scaled_direct_multicast_barrier():
     shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], ttgl.float8e5, cga_layout=cga_layout_b)
     blocked_c = ttgl.BlockedLayout([1, 2], [2, 16], [4, 1], [1, 0], cga_layout=cga_layout_c)
 
-    a = torch.randint(20, 40, (BLOCK_M, BLOCK_K), device="cuda", dtype=torch.uint8).view(torch.float8_e5m2)
-    b = torch.randint(20, 40, (BLOCK_K, BLOCK_N), device="cuda", dtype=torch.uint8).view(torch.float8_e5m2)
+    a = torch.randint(20, 40, (BLOCK_M, NUM_K_TILES * BLOCK_K), device="cuda",
+                      dtype=torch.uint8).view(torch.float8_e5m2)
+    b = torch.randint(20, 40, (NUM_K_TILES * BLOCK_K, BLOCK_N), device="cuda",
+                      dtype=torch.uint8).view(torch.float8_e5m2)
     out = torch.empty((BLOCK_M, BLOCK_N), device="cuda", dtype=torch.float32)
     a_desc = TensorDescriptor.from_tensor(a, [BLOCK_M, BLOCK_K], shared_layout_a)
     b_desc = TensorDescriptor.from_tensor(b, [BLOCK_K, BLOCK_N], shared_layout_b)
 
-    tcgen05_mma_scaled_direct_multicast_kernel[(1, )](a_desc, b_desc, out, BLOCK_M, BLOCK_N, BLOCK_K, cga_layout_a,
-                                                      cga_layout_b, cga_layout_c, blocked_c, num_warps=4,
+    tcgen05_mma_scaled_direct_multicast_kernel[(1, )](a_desc, b_desc, out, BLOCK_M, BLOCK_N, BLOCK_K, NUM_K_TILES,
+                                                      cga_layout_a, cga_layout_b, cga_layout_c, blocked_c, num_warps=4,
                                                       num_ctas=num_ctas)
-    torch.testing.assert_close(out, torch.matmul(a.to(torch.float32), b.to(torch.float32)), atol=2e-2, rtol=1e-3)
+    torch.testing.assert_close(out, torch.matmul(a.to(torch.float32), b.to(torch.float32)), atol=5e-2, rtol=1e-3)
 
 
 @gluon.jit
