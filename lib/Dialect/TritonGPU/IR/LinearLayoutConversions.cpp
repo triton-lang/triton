@@ -273,11 +273,10 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
 }
 
 /// Function to generate lane and warp layout for dot operands.
-static LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
-                                                ArrayRef<unsigned> shape,
-                                                ArrayRef<unsigned> order,
-                                                unsigned kDim,
-                                                StringAttr inDimName) {
+LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
+                                         ArrayRef<unsigned> shape,
+                                         ArrayRef<unsigned> order,
+                                         unsigned kDim, StringAttr inDimName) {
   // Let warpsPerCTAMma = {2, 2}, then
   // warpsPerCTA = {2, 1} for opA and warpsPerCTA = {1, 2} for opB
   // assume warpOrder = {1, 0}
@@ -441,8 +440,7 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(tileLayout, getCGALayout(), shape);
 }
 
-static LinearLayout projectAwayOutDim(const LinearLayout &layout,
-                                      StringAttr dim) {
+LinearLayout projectAwayOutDim(const LinearLayout &layout, StringAttr dim) {
   auto ctx = layout.getOutDimNames().begin()->getContext();
   auto bases = layout.getBases();
   auto idx = layout.getOutDimIndex(dim);
@@ -473,7 +471,7 @@ LinearLayout chooseWmmaCTALinearLayout(MLIRContext *ctx, unsigned rank,
   return ret.transposeOuts(dims);
 }
 
-static std::optional<LinearLayout>
+std::optional<LinearLayout>
 chooseDotDsReadTrLayout(DotOperandEncodingAttr dotMfmaLayout,
                         ArrayRef<int64_t> shape, int32_t elemBitWidth,
                         unsigned instBitWidth,
@@ -572,8 +570,8 @@ chooseDotDsReadTrLayout(DotOperandEncodingAttr dotMfmaLayout,
   return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCGALayout(), shape);
 }
 
-static LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
-                                          ArrayRef<int64_t> shape) {
+LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
+                                   ArrayRef<int64_t> shape) {
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
 
   auto rank = shape.size();
@@ -760,9 +758,8 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(wmmaLayout, getCGALayout(), shape);
 }
 
-static LinearLayout
-wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
-                             ArrayRef<int64_t> shape) {
+LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
+                                          ArrayRef<int64_t> shape) {
   auto wmmaLayout = llvm::cast<AMDWmmaEncodingAttr>(dotWmmaLayout.getParent());
   unsigned version = wmmaLayout.getVersion();
   assert(version >= 1 && version <= 3 && "unexpected wmma version");
@@ -856,8 +853,8 @@ BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
 }
 
-static LinearLayout fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
-                                         ArrayRef<int64_t> shape) {
+LinearLayout fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
+                                  ArrayRef<int64_t> shape) {
   int rank = shape.size();
   auto blocked = cast<BlockedEncodingAttr>(operandLayout.getParent());
   MLIRContext *ctx = operandLayout.getContext();
@@ -964,8 +961,8 @@ NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
 }
 
-static LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
-                                            DotOperandEncodingAttr dot) {
+LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
+                                     DotOperandEncodingAttr dot) {
   int rank = shape.size();
   auto mma = cast<NvidiaMmaEncodingAttr>(dot.getParent());
   int kWidth = dot.getKWidth();
@@ -1035,9 +1032,8 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
                       llvm::to_vector(sliceLL.getOutDimNames()));
 }
 
-static LinearLayout
-tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
-                           TensorMemoryEncodingAttr encoding) {
+LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
+                                        TensorMemoryEncodingAttr encoding) {
   // [Zeros in TMEM LinearLayouts]
   // If there is a zero in bases rows=32,64 this means that there is
   // broadcasting, i.e. the same tensor element is duplicated in different
@@ -1100,7 +1096,7 @@ tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   return tile;
 }
 
-static LinearLayout
+LinearLayout
 tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
                                  TensorMemoryScalesEncodingAttr encoding) {
   assert(shape.size() == 2);
@@ -1150,7 +1146,7 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
 //
 // LinearLayout inputs: "offset", "partition"
 // LinearLayout outputs: dim0, dim1, ... (tensor coordinates)
-static LinearLayout
+LinearLayout
 partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
                                 PartitionedSharedEncodingAttr partitioned) {
   unsigned numLogicalPieces = partitioned.getNumLogicalPieces();

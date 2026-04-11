@@ -1,5 +1,6 @@
 #include "ir.h"
 
+#include <cstring>
 #include <optional>
 #include <pybind11/cast.h>
 #include <pybind11/functional.h>
@@ -1979,7 +1980,9 @@ void init_triton_ir(py::module &&m) {
           py::call_guard<py::gil_scoped_release>());
 }
 
-static bool str_eq_ignore_case(const char *s1, const char *s2, int n) {
+namespace {
+
+bool str_eq_ignore_case(const char *s1, const char *s2, int n) {
   for (int i = 0; i < n; ++i) {
     if (tolower(s1[i]) != s2[i])
       return false;
@@ -1987,17 +1990,10 @@ static bool str_eq_ignore_case(const char *s1, const char *s2, int n) {
   return true;
 }
 
-static int strlen_max(const char *str, int max) {
-  for (int i = 0; i <= max; ++i) {
-    if (str[i] == '\0') {
-      return i;
-    }
-  }
-  return 0;
-}
-
-static bool is_truthy(char *str) {
-  int len = strlen_max(str, 4);
+bool is_truthy(char *str) {
+  int len = strnlen(str, 5);
+  if (len > 4)
+    return false;
   switch (len) {
   case 1:
     return str[0] == '1' || tolower(str[0]) == 'y';
@@ -2012,8 +2008,7 @@ static bool is_truthy(char *str) {
   }
 }
 
-static PyObject *py_getenv(PyObject *self, PyObject *const *args,
-                           Py_ssize_t nargs) {
+PyObject *py_getenv(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
   if (!(nargs == 1 || nargs == 2)) {
     PyErr_SetString(PyExc_TypeError, "getenv expected 1 or 2 arguments");
     return NULL;
@@ -2032,8 +2027,8 @@ static PyObject *py_getenv(PyObject *self, PyObject *const *args,
   return PyUnicode_FromString(env_val);
 }
 
-static PyObject *py_getenv_bool(PyObject *self, PyObject *const *args,
-                                Py_ssize_t nargs) {
+PyObject *py_getenv_bool(PyObject *self, PyObject *const *args,
+                         Py_ssize_t nargs) {
   if (nargs != 2) {
     PyErr_SetString(PyExc_TypeError, "getenv_bool expected 2 arguments");
     return NULL;
@@ -2053,11 +2048,13 @@ static PyObject *py_getenv_bool(PyObject *self, PyObject *const *args,
   return res;
 }
 
-static PyMethodDef ModuleMethods[] = {
+PyMethodDef ModuleMethods[] = {
     {"getenv", (PyCFunction)py_getenv, METH_FASTCALL, NULL},
     {"getenv_bool", (PyCFunction)py_getenv_bool, METH_FASTCALL, NULL},
     {NULL, NULL, 0, NULL} // sentinel
 };
+
+} // namespace
 
 void init_triton_env_vars(py::module &m) {
   m.def("get_cache_invalidating_env_vars",

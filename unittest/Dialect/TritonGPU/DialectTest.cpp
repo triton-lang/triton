@@ -18,14 +18,6 @@ template <typename T> std::string stringifyLLVMType(const T &t) {
 }
 } // namespace
 
-namespace mlir {
-// gtest printer for mlir::Attribute.  This must live in namespace mlir in order
-// for it to be found via ADL.
-static void PrintTo(const Attribute &attr, std::ostream *os) {
-  *os << stringifyLLVMType(attr);
-}
-} // namespace mlir
-
 namespace mlir::triton::gpu {
 namespace {
 

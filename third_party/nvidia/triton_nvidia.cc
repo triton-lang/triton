@@ -125,9 +125,7 @@ public:
   void synchronize() { check(cuCtxSynchronize(), "cuCtxSynchronize"); }
 };
 
-} // namespace
-
-static void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
+void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
   // nvidia-specificontext
@@ -144,21 +142,21 @@ static void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
         });
 }
 
-static std::unique_ptr<mlir::Pass>
+std::unique_ptr<mlir::Pass>
 createTritonGPUFenceInsertionWrapper(int32_t capability) {
   ttng::TritonGPUFenceInsertionOptions options;
   options.computeCapability = capability;
   return ttng::createTritonGPUFenceInsertion(options);
 }
 
-static std::unique_ptr<mlir::Pass>
+std::unique_ptr<mlir::Pass>
 createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
   ttng::TritonGPUProxyFenceInsertionOptions options;
   options.computeCapability = capability;
   return ttng::createTritonGPUProxyFenceInsertion(options);
 }
 
-static void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
+void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass);
   ADD_PASS_WRAPPER_1("add_fence_insertion",
                      createTritonGPUFenceInsertionWrapper, int32_t);
@@ -189,7 +187,7 @@ static void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   ttng::registerConSanNVIDIAHooks();
 }
 
-static void init_triton_nvidia_passes_nvws(py::module &&m) {
+void init_triton_nvidia_passes_nvws(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_lower_warp_group",
                      mlir::triton::createNVWSLowerWarpGroup);
   ADD_PASS_WRAPPER_0("add_lower_aref", mlir::triton::createNVWSLowerAref);
@@ -199,18 +197,18 @@ static void init_triton_nvidia_passes_nvws(py::module &&m) {
                      mlir::triton::createNVWSInsertTmemAref);
 }
 
-static void init_triton_hopper_passes(py::module &&m) {
+void init_triton_hopper_passes(py::module &&m) {
   // Meta's autoWS
   ADD_PASS_OPTION_WRAPPER_2("add_hopper_warpspec",
                             mlir::createNVGPUWarpSpecialization, int, bool);
 }
 
-static void checkMatmulConstraints(const std::string &A_dtype,
-                                   const std::string &B_dtype,
-                                   const std::string &C_dtype,
-                                   const std::vector<int> &A_shape,
-                                   const std::vector<int> &B_shape,
-                                   const std::vector<int> &C_shape) {
+void checkMatmulConstraints(const std::string &A_dtype,
+                            const std::string &B_dtype,
+                            const std::string &C_dtype,
+                            const std::vector<int> &A_shape,
+                            const std::vector<int> &B_shape,
+                            const std::vector<int> &C_shape) {
   if (A_dtype != B_dtype || A_dtype != C_dtype) {
     throw std::runtime_error("Data types do not match.");
   }
@@ -252,6 +250,8 @@ static void checkMatmulConstraints(const std::string &A_dtype,
         "that B needs to be transposed.");
   }
 }
+
+} // namespace
 
 void init_triton_nvidia(py::module &&m) {
   auto passes = m.def_submodule("passes");

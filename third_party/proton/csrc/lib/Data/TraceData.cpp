@@ -152,15 +152,19 @@ private:
   std::map<size_t, TraceContext> traceContextMap;
 };
 
+namespace {
+
 thread_local std::unordered_map<const TraceData *, std::vector<size_t>>
     traceDataToActiveEventStack;
 
-static uint64_t getCurrentCpuTimestampNs() {
+uint64_t getCurrentCpuTimestampNs() {
   using Clock = std::chrono::system_clock;
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              Clock::now().time_since_epoch())
       .count();
 }
+
+} // namespace
 
 void TraceData::enterScope(const Scope &scope) {
   // enterOp and addMetric maybe called from different threads

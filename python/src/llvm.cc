@@ -50,6 +50,8 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 
 using namespace llvm;
 
+namespace {
+
 // Set an LLVM command-line option using addOccurrence (simulates command-line)
 // and return its original value. Using addOccurrence instead of setValue is
 // necessary because some LLVM passes (like schedulers) check whether the option
@@ -124,7 +126,7 @@ public:
   ScopedLLVMOption &operator=(const ScopedLLVMOption &) = delete;
 };
 
-static std::unique_ptr<TargetMachine>
+std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
                     bool enable_fp_fusion, const std::string &features) {
   std::string error;
@@ -145,12 +147,10 @@ createTargetMachine(llvm::Module *module, std::string proc,
   return machine;
 }
 
-static void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
-                              const std::string &proc,
-                              const std::string &features,
-                              const std::vector<std::string> &flags,
-                              bool enable_fp_fusion,
-                              const std::string &dumpFileId) {
+void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
+                       const std::string &proc, const std::string &features,
+                       const std::vector<std::string> &flags,
+                       bool enable_fp_fusion, const std::string &dumpFileId) {
   using namespace mlir;
 
   // Check if we should dump sched DAG
@@ -236,7 +236,7 @@ static void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
   // LLVM options are automatically restored when scope exits via RAII
 }
 
-static std::string
+std::string
 translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
                      const std::string &proc, const std::string &features,
                      const std::vector<std::string> &flags,
@@ -325,12 +325,12 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   return result;
 }
 
-static std::string translateLLVMIRToASM(llvm::Module &module,
-                                        const std::string &triple,
-                                        const std::string &proc,
-                                        const std::string &features,
-                                        const std::vector<std::string> &flags,
-                                        bool enable_fp_fusion, bool isObject) {
+std::string translateLLVMIRToASM(llvm::Module &module,
+                                 const std::string &triple,
+                                 const std::string &proc,
+                                 const std::string &features,
+                                 const std::vector<std::string> &flags,
+                                 bool enable_fp_fusion, bool isObject) {
   using namespace mlir;
 
   // Apply flags
@@ -407,7 +407,7 @@ static std::string translateLLVMIRToASM(llvm::Module &module,
   return result;
 }
 
-static std::string
+std::string
 translateMIRToASM(const std::string &mirPath, const std::string &triple,
                   const std::string &proc, const std::string &features,
                   const std::vector<std::string> &flags, bool enable_fp_fusion,
@@ -508,6 +508,8 @@ translateMIRToASM(const std::string &mirPath, const std::string &triple,
 }
 
 using ret = py::return_value_policy;
+
+} // namespace
 
 void init_triton_llvm(py::module &&m) {
 
@@ -918,10 +920,14 @@ void init_triton_llvm(py::module &&m) {
   });
 }
 
-static void triton_stacktrace_signal_handler(void *) {
+namespace {
+
+void triton_stacktrace_signal_handler(void *) {
   llvm::sys::PrintStackTrace(llvm::errs());
   raise(SIGABRT);
 }
+
+} // namespace
 
 void init_triton_stacktrace_hook(pybind11::module &m) {
   if (mlir::triton::tools::getBoolEnv("TRITON_ENABLE_PYTHON_STACKTRACE")) {
