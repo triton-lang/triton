@@ -612,9 +612,11 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
 
     def visit_FunctionDef(self, node):
-        arg_names, kwarg_names = self.visit(node.args)
         if self.fn:
-            raise self._unsupported(node, "nested function definition is not supported.")
+            raise self._unsupported(
+                node, "nested function definitions are not allowed inside a @triton.jit kernel. "
+                "Move the helper function to module level and decorate it with @triton.jit.")
+        arg_names, kwarg_names = self.visit(node.args)
         # initialize defaults
         for i, default_value in enumerate(node.args.defaults[::-1]):
             arg_node = node.args.args[-i - 1]
