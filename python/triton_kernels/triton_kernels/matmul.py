@@ -401,6 +401,8 @@ def matmul(a, b, bias,
         block_k = block_k,
         mx_block_size = mx_block_size,
         x_uses_tma_when_persistent = a_uses_tma_when_persistent,
+        rhs_layout=b.storage.layout,
+        epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
     if b_is_shuffled:
         if b.dtype.bitwidth != 4:
@@ -701,7 +703,7 @@ def apply_precision(x_tri, w_tri, precision_config):
 
     if precision_config.a_mx_scale is not None:
         a_scale = precision_config.a_mx_scale
-        mx_axis = x_tri.storage.data.ndim -1
+        mx_axis = x_tri.ndim - 1
         canonical_layout = layout.StridedLayout(major_dim=mx_axis)
         x_tri = convert_layout(x_tri, canonical_layout)
         x_tri_scale = convert_layout(a_scale, canonical_layout)
@@ -711,7 +713,7 @@ def apply_precision(x_tri, w_tri, precision_config):
 
     if precision_config.b_mx_scale is not None:
         b_scale = precision_config.b_mx_scale
-        mx_axis = w_tri.storage.data.ndim - 2
+        mx_axis = w_tri.ndim - 2
         canonical_layout = layout.StridedLayout(major_dim=mx_axis)
         w_tri = convert_layout(w_tri, canonical_layout)
         w_tri_scale = convert_layout(b_scale, canonical_layout)
