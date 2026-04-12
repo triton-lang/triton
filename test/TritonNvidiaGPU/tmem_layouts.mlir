@@ -183,16 +183,58 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100"} {
-  // CHECK-LABEL: @subtile_tmem_load_256
-  // CHECK-NOT: ttng.tmem_subslice
-  // CHECK: tt.return
-  tt.func public @subtile_tmem_load_256(%arg0: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> (tensor<256x64xf32, #blocked>, tensor<256x64xf32, #blocked>) {
+  // The tensor M dim is 256 (two stacked blockM=128 tiles); the helper is
+  // responsible for picking a layout whose warp basis spans the second tile.
+  // CHECK-LABEL: @subtile_tmem_load_m256
+  tt.func public @subtile_tmem_load_m256(%arg0: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> (tensor<256x64xf32, #blocked>, tensor<256x64xf32, #blocked>) {
+    // CHECK: %[[S0:.+]] = ttng.tmem_subslice %{{.+}} {N = 0 : i32}
+    // CHECK: %[[L0:.+]] = ttng.tmem_load %[[S0]] : !ttg.memdesc<256x64xf32
+    // CHECK: %[[C0:.+]] = ttg.convert_layout %[[L0]]
+    // CHECK: %[[S1:.+]] = ttng.tmem_subslice %{{.+}} {N = 64 : i32}
+    // CHECK: %[[L1:.+]] = ttng.tmem_load %[[S1]] : !ttg.memdesc<256x64xf32
+    // CHECK: %[[C1:.+]] = ttg.convert_layout %[[L1]]
+    // CHECK: tt.return %[[C0]], %[[C1]]
     %0 = ttng.tmem_load %arg0 : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #linear>
     %1 = tt.reshape %0 : tensor<256x128xf32, #linear> -> tensor<256x2x64xf32, #blocked2>
     %2 = tt.trans %1 {order = array<i32: 0, 2, 1>} : tensor<256x2x64xf32, #blocked2> -> tensor<256x64x2xf32, #blocked3>
     %3 = ttg.convert_layout %2 : tensor<256x64x2xf32, #blocked3> -> tensor<256x64x2xf32, #blocked4>
     %outLHS, %outRHS = tt.split %3 : tensor<256x64x2xf32, #blocked4> -> tensor<256x64xf32, #blocked>
     tt.return %outLHS, %outRHS : tensor<256x64xf32, #blocked>, tensor<256x64xf32, #blocked>
+  }
+}
+
+// -----
+
+// Same join-store optimization as @subtile_tmem_store, but with the tensor M
+// dim spanning two stacked blockM=128 tiles (mDim=256) under 8 warps.
+
+#blocked5 = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1]}>
+#blocked6 = #ttg.blocked<{sizePerThread = [1, 64, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [8, 1, 1], order = [2, 0, 1]}>
+#blocked7 = #ttg.blocked<{sizePerThread = [1, 2, 64], threadsPerWarp = [32, 1, 1], warpsPerCTA = [8, 1, 1], order = [1, 0, 2]}>
+#linear = #ttg.linear<{register = [[0, 64], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0], [128, 0]], block = []}>
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100"} {
+
+  // CHECK-LABEL: @subtile_tmem_store_m256
+  tt.func public @subtile_tmem_store_m256(
+    %arg0: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+    %arg1: tensor<256x64xf32, #blocked5>,
+    %arg2: tensor<256x64xf32, #blocked5>
+  ) {
+    // CHECK: [[S0:%.+]] = ttng.tmem_subslice %arg0 {N = 0 : i32}
+    // CHECK: [[V0:%.+]] = ttg.convert_layout %arg1
+    // CHECK: ttng.tmem_store [[V0]], [[S0]]
+    // CHECK: [[S1:%.+]] = ttng.tmem_subslice %arg0 {N = 64 : i32}
+    // CHECK: [[V1:%.+]] = ttg.convert_layout %arg2
+    // CHECK: ttng.tmem_store [[V1]], [[S1]]
+    %true = arith.constant true
+    %joined = tt.join %arg1, %arg2 : tensor<256x64xf32, #blocked5> -> tensor<256x64x2xf32, #blocked6>
+    %trans = tt.trans %joined {order = array<i32: 0, 2, 1>} : tensor<256x64x2xf32, #blocked6> -> tensor<256x2x64xf32, #blocked7>
+    %reshaped = tt.reshape %trans : tensor<256x2x64xf32, #blocked7> -> tensor<256x128xf32, #linear>
+    ttng.tmem_store %reshaped, %arg0, %true : tensor<256x128xf32, #linear> -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
   }
 }
 

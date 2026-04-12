@@ -98,7 +98,7 @@ public:
     if (shape[0] != cast<RankedTensorType>(reshapeSrc.getType()).getShape()[0])
       return failure();
     int mDim = getShapePerCTA(tmemLoad.getSrc().getType())[0];
-    if (mDim != 128 && mDim != 64)
+    if (mDim != 128 && mDim != 64 && mDim != 256)
       return failure();
     int splitNSize = shape[2];
     if (splitNSize < 8)
@@ -169,7 +169,7 @@ public:
     // We found a tmem_store that is joined on the N dimension. We can split it
     // into multiple tmem_stores.
     int mDim = getShapePerCTA(storeOp.getDst().getType())[0];
-    if (mDim != 128 && mDim != 64)
+    if (mDim != 128 && mDim != 64 && mDim != 256)
       return failure();
     int splitNSize = shape[2];
     if (splitNSize < 8)
