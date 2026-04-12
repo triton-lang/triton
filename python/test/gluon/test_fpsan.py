@@ -237,6 +237,36 @@ def _expected_exp_i32(x_i32: np.ndarray) -> np.ndarray:
     return _expected_exp2_i32(_unmix_payload_u32_to_f32_bits_i32(scaled))
 
 
+def _expected_cossin_payload_u32(x_u32: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    mask = np.uint64(0xFFFFFFFF)
+    rcp5 = int(_inv_odd_u64(np.uint64(5)) & mask)
+    a = np.uint64((-3 * rcp5) & 0xFFFFFFFF)
+    b = np.uint64((4 * rcp5) & 0xFFFFFFFF)
+    x = x_u32.astype(np.uint64)
+    c = np.ones_like(x, dtype=np.uint64)
+    s = np.zeros_like(x, dtype=np.uint64)
+    with np.errstate(over="ignore"):
+        for i in range(32):
+            c_double = (c * c - s * s) & mask
+            s_double = (np.uint64(2) * c * s) & mask
+            c_inc = (a * c_double - b * s_double) & mask
+            s_inc = (a * s_double + b * c_double) & mask
+            inc = (x & np.uint64(1 << (31 - i))) != 0
+            c = np.where(inc, c_inc, c_double) & mask
+            s = np.where(inc, s_inc, s_double) & mask
+    return c.astype(np.uint32), s.astype(np.uint32)
+
+
+def _expected_cos_i32(x_i32: np.ndarray) -> np.ndarray:
+    c, _ = _expected_cossin_payload_u32(_mix_f32_bits_to_payload_u32(x_i32))
+    return _unmix_payload_u32_to_f32_bits_i32(c)
+
+
+def _expected_sin_i32(x_i32: np.ndarray) -> np.ndarray:
+    _, s = _expected_cossin_payload_u32(_mix_f32_bits_to_payload_u32(x_i32))
+    return _unmix_payload_u32_to_f32_bits_i32(s)
+
+
 def _expected_unary_tag_i32(x_i32: np.ndarray, op: str) -> np.ndarray:
     # Keep this mapping in sync with UnaryOpId in FpSanitizer.cpp.
     out_u32 = _expected_unary_tag_payload_u32(_mix_f32_bits_to_payload_u32(x_i32), op)
@@ -619,6 +649,43 @@ def _exp_inverse_identity_kernel(x_ptr, out_ptr, n_elements, MODE: gl.constexpr,
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@gluon.jit
+def _cossin_identity_kernel(x_ptr, y_ptr, lhs_ptr, rhs_ptr, n_elements, MODE: gl.constexpr, BLOCK: gl.constexpr,
+                            THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offs, mask=mask, other=0.0)
+    sx = gl.sin(x)
+    sy = gl.sin(y)
+    cx = gl.cos(x)
+    cy = gl.cos(y)
+
+    if MODE == "sin_add":
+        lhs = gl.sin(x + y)
+        rhs = sx * cy + cx * sy
+    elif MODE == "sin_sub":
+        lhs = gl.sin(x - y)
+        rhs = sx * cy - cx * sy
+    elif MODE == "cos_add":
+        lhs = gl.cos(x + y)
+        rhs = cx * cy - sx * sy
+    elif MODE == "cos_sub":
+        lhs = gl.cos(x - y)
+        rhs = cx * cy + sx * sy
+    elif MODE == "unit":
+        lhs = cx * cx + sx * sx
+        rhs = x * 0.0 + 1.0
+    else:
+        gl.static_assert(False, "unsupported MODE")
+
+    gl.store(lhs_ptr + offs, lhs, mask=mask)
+    gl.store(rhs_ptr + offs, rhs, mask=mask)
+
+
 @pytest.mark.parametrize(
     "op",
     [
@@ -665,6 +732,10 @@ def test_unary_math_identity(device, op, fresh_knobs):
         exp_bits = _expected_exp_i32(x_bits)
     elif op == "exp2":
         exp_bits = _expected_exp2_i32(x_bits)
+    elif op == "cos":
+        exp_bits = _expected_cos_i32(x_bits)
+    elif op == "sin":
+        exp_bits = _expected_sin_i32(x_bits)
     else:
         exp_bits = _expected_unary_tag_i32(x_bits, op)
     _assert_payload_equal(out, exp_bits)
@@ -751,6 +822,34 @@ def test_exp_neg_reciprocal_identity(device, fresh_knobs):
                                        THREADS_PER_WARP=THREADS_PER_WARP)
 
     _assert_payload_equal(out_neg, out_recip)
+
+
+@pytest.mark.parametrize("mode", ["sin_add", "sin_sub", "cos_add", "cos_sub", "unit"])
+def test_cossin_angle_identities(device, mode, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device="cuda")
+    g.manual_seed(5)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    lhs = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    rhs = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    yw = triton.TensorWrapper(y, dtype=torch.float32)
+    lhsw = triton.TensorWrapper(lhs, dtype=torch.float32)
+    rhsw = triton.TensorWrapper(rhs, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _cossin_identity_kernel[grid](xw, yw, lhsw, rhsw, n_elements, MODE=mode, BLOCK=BLOCK,
+                                  THREADS_PER_WARP=THREADS_PER_WARP)
+
+    _assert_payload_equal(lhs, rhs)
 
 
 @gluon.jit

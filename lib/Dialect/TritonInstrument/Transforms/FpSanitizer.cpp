@@ -705,6 +705,70 @@ Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
   return fpsanExp2FromI32(rewriter, loc, scaledI, input.getType());
 }
 
+struct FpSanCosSin {
+  Value cos;
+  Value sin;
+};
+
+FpSanCosSin fpsanCosSinPayload(PatternRewriter &rewriter, Location loc,
+                               Value xI) {
+  Type intTy = xI.getType();
+  unsigned bitWidth = getIntBitwidth(intTy);
+  uint64_t mask = getLowBitsMask(bitWidth);
+  uint64_t rcp5 = invOddU64(5) & mask;
+  uint64_t aValue = (uint64_t{0} - ((uint64_t{3} * rcp5) & mask)) & mask;
+  uint64_t bValue = (uint64_t{4} * rcp5) & mask;
+
+  auto zero = getUIntConstantLike(rewriter, loc, intTy, 0);
+  auto one = getUIntConstantLike(rewriter, loc, intTy, 1);
+  auto two = getUIntConstantLike(rewriter, loc, intTy, 2);
+  auto a = getUIntConstantLike(rewriter, loc, intTy, aValue);
+  auto b = getUIntConstantLike(rewriter, loc, intTy, bValue);
+
+  Value c = one;
+  Value s = zero;
+  for (int bit = static_cast<int>(bitWidth) - 1; bit >= 0; --bit) {
+    Value cc = arith::MulIOp::create(rewriter, loc, c, c);
+    Value ss = arith::MulIOp::create(rewriter, loc, s, s);
+    Value cDouble = arith::SubIOp::create(rewriter, loc, cc, ss);
+    Value cs = arith::MulIOp::create(rewriter, loc, c, s);
+    Value sDouble = arith::MulIOp::create(rewriter, loc, two, cs);
+
+    Value ac = arith::MulIOp::create(rewriter, loc, a, cDouble);
+    Value bs = arith::MulIOp::create(rewriter, loc, b, sDouble);
+    Value cInc = arith::SubIOp::create(rewriter, loc, ac, bs);
+    Value as = arith::MulIOp::create(rewriter, loc, a, sDouble);
+    Value bc = arith::MulIOp::create(rewriter, loc, b, cDouble);
+    Value sInc = arith::AddIOp::create(rewriter, loc, as, bc);
+
+    auto bitMask =
+        getUIntConstantLike(rewriter, loc, intTy, uint64_t{1} << bit);
+    auto masked = arith::AndIOp::create(rewriter, loc, xI, bitMask);
+    auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                        masked, zero);
+    c = arith::SelectOp::create(rewriter, loc, isZero, cDouble, cInc);
+    s = arith::SelectOp::create(rewriter, loc, isZero, sDouble, sInc);
+  }
+
+  return {c, s};
+}
+
+Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {
+  if (!isa<FloatType>(getElementType(input.getType())))
+    return Value();
+  auto cosSin =
+      fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
+  return unembedToFloat(rewriter, loc, cosSin.cos, input.getType());
+}
+
+Value fpsanSin(PatternRewriter &rewriter, Location loc, Value input) {
+  if (!isa<FloatType>(getElementType(input.getType())))
+    return Value();
+  auto cosSin =
+      fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
+  return unembedToFloat(rewriter, loc, cosSin.sin, input.getType());
+}
+
 bool isIntLike(Type ty) { return isa<IntegerType>(getElementType(ty)); }
 
 bool isNumericLike(Type ty) {
@@ -1311,6 +1375,36 @@ struct Exp2OpPattern : public OpRewritePattern<math::Exp2Op> {
     if (!result)
       result = fpsanUnaryTagged(rewriter, op.getLoc(), op.getOperand(),
                                 UnaryOpId::Exp2);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct CosOpPattern : public OpRewritePattern<math::CosOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(math::CosOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isFloatLike(op.getType()))
+      return failure();
+    Value result = fpsanCos(rewriter, op.getLoc(), op.getOperand());
+    if (!result)
+      result = fpsanUnaryTagged(rewriter, op.getLoc(), op.getOperand(),
+                                UnaryOpId::Cos);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct SinOpPattern : public OpRewritePattern<math::SinOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(math::SinOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isFloatLike(op.getType()))
+      return failure();
+    Value result = fpsanSin(rewriter, op.getLoc(), op.getOperand());
+    if (!result)
+      result = fpsanUnaryTagged(rewriter, op.getLoc(), op.getOperand(),
+                                UnaryOpId::Sin);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -2092,13 +2186,11 @@ public:
                  BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
                  BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
                  DivFOpPattern, PreciseDivFOpPattern, RemFOpPattern, FmaPattern,
-                 ExpOpPattern, Exp2OpPattern, ExtFOpPattern, TruncFOpPattern,
-                 FpToFpPattern, Fp4ToFpPattern, DotPattern, DotScaledPattern>(
-        &getContext());
+                 ExpOpPattern, Exp2OpPattern, CosOpPattern, SinOpPattern,
+                 ExtFOpPattern, TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
+                 DotPattern, DotScaledPattern>(&getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
-    patterns.add<UnaryPattern<math::CosOp>>(&getContext(), UnaryOpId::Cos);
-    patterns.add<UnaryPattern<math::SinOp>>(&getContext(), UnaryOpId::Sin);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);
     patterns.add<UnaryPattern<math::RsqrtOp>>(&getContext(), UnaryOpId::Rsqrt);
     patterns.add<UnaryPattern<math::ErfOp>>(&getContext(), UnaryOpId::Erf);
