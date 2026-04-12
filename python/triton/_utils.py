@@ -107,6 +107,7 @@ type_canonicalisation_dict = {
     "uint16": "u16",
     "uint32": "u32",
     "uint64": "u64",
+    "float8_e8m0fnu": "u8",
     "void": "void",
 }
 
