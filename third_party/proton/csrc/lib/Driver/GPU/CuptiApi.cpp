@@ -16,6 +16,13 @@ DEFINE_DISPATCH(ExternLibCupti, activityRegisterCallbacks,
                 CUpti_BuffersCallbackRequestFunc,
                 CUpti_BuffersCallbackCompleteFunc)
 
+#if CUPTI_API_VERSION >= 130200
+DEFINE_DISPATCH(ExternLibCupti, activityRegisterCallbacksV2,
+                cuptiActivityRegisterCallbacks_v2, CUpti_SubscriberHandle,
+                CUpti_BuffersCallbackRequestFunc_v2,
+                CUpti_BuffersCallbackCompleteFunc_v2)
+#endif
+
 DEFINE_DISPATCH(ExternLibCupti, subscribe, cuptiSubscribe,
                 CUpti_SubscriberHandle *, CUpti_CallbackFunc, void *)
 
@@ -30,6 +37,16 @@ DEFINE_DISPATCH(ExternLibCupti, activityEnable, cuptiActivityEnable,
 
 DEFINE_DISPATCH(ExternLibCupti, activityDisable, cuptiActivityDisable,
                 CUpti_ActivityKind)
+
+#if CUPTI_API_VERSION >= 130200
+DEFINE_DISPATCH(ExternLibCupti, activityEnableV2, cuptiActivityEnable_v2,
+                CUpti_SubscriberHandle, CUpti_ActivityKind,
+                CUpti_ActivityConfig *)
+
+DEFINE_DISPATCH(ExternLibCupti, activityDisableV2, cuptiActivityDisable_v2,
+                CUpti_SubscriberHandle, CUpti_ActivityKind,
+                CUpti_ActivityConfig *)
+#endif
 
 DEFINE_DISPATCH(ExternLibCupti, activityEnableContext,
                 cuptiActivityEnableContext, CUcontext, CUpti_ActivityKind)

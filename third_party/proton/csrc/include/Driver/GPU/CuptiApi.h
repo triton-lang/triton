@@ -29,6 +29,14 @@ CUptiResult activityRegisterCallbacks(
     CUpti_BuffersCallbackRequestFunc funcBufferRequested,
     CUpti_BuffersCallbackCompleteFunc funcBufferCompleted);
 
+#if CUPTI_API_VERSION >= 130200
+template <bool CheckSuccess>
+CUptiResult activityRegisterCallbacksV2(
+    CUpti_SubscriberHandle subscriber,
+    CUpti_BuffersCallbackRequestFunc_v2 funcBufferRequested,
+    CUpti_BuffersCallbackCompleteFunc_v2 funcBufferCompleted);
+#endif
+
 template <bool CheckSuccess>
 CUptiResult subscribe(CUpti_SubscriberHandle *subscriber,
                       CUpti_CallbackFunc callback, void *userdata);
@@ -52,6 +60,18 @@ CUptiResult activityEnable(CUpti_ActivityKind kind);
 
 template <bool CheckSuccess>
 CUptiResult activityDisable(CUpti_ActivityKind kind);
+
+#if CUPTI_API_VERSION >= 130200
+template <bool CheckSuccess>
+CUptiResult activityEnableV2(CUpti_SubscriberHandle subscriber,
+                             CUpti_ActivityKind kind,
+                             CUpti_ActivityConfig *config);
+
+template <bool CheckSuccess>
+CUptiResult activityDisableV2(CUpti_SubscriberHandle subscriber,
+                              CUpti_ActivityKind kind,
+                              CUpti_ActivityConfig *config);
+#endif
 
 template <bool CheckSuccess> CUptiResult activityFlushAll(uint32_t flag);
 
