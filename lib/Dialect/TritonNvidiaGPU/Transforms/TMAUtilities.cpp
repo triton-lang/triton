@@ -1,32 +1,12 @@
-#include <triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h>
 #include <triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h>
 #include <triton/Dialect/TritonNvidiaGPU/IR/Dialect.h>
 #include <triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h>
 #include <triton/Tools/LayoutUtils.h>
 
-#include "llvm/Support/MathExtras.h"
-
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
 namespace mlir::triton::nvidia_gpu {
-
-namespace {
-
-LinearLayout getTMAUnswizzledLayout(ttg::MemDescType type) {
-  auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(type.getEncoding());
-  if (!mmaEncoding) {
-    assert(isa<ttg::SwizzledSharedEncodingAttr>(type.getEncoding()));
-    return ttg::toLinearLayout(type);
-  }
-  assert(type.getShape() == type.getAllocShape().take_back(type.getRank()));
-  // TMA gather/scatter only supports tiled mode.
-  return ttg::nvmmaSharedToLinearLayout(
-      type.getShape(), cast<ttg::NVMMASharedEncodingAttr>(type.getEncoding()),
-      ttg::TMAMode::Tiled, /*disableSwizzle=*/true);
-}
-
-} // namespace
 
 ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
                                                    RankedTensorType tensorType,
@@ -52,46 +32,6 @@ bool hasCGABroadcast(ttg::MemDescType memDescType) {
   return ttg::toLinearLayout(memDescType)
              .getFreeVariableMasks()
              .lookup(kBlock) != 0;
-}
-
-LinearLayout getTMAMsgToPackedOffsetLayout(ttg::MemDescType ty,
-                                           ttg::TMAMode mode) {
-  auto ctx = ty.getContext();
-  auto kMsg = StringAttr::get(ctx, "msg");
-  auto shapePerCTA = ttg::getShapePerCTA(ty);
-  int rank = shapePerCTA.size();
-  auto blockShape = getTMABlockShape(ty, /*packedSize=*/true, mode);
-  auto outDimNames = standardOutDimNames(ctx, rank);
-  LinearLayout msgToOffset;
-  for (int dim = 0; dim < rank; ++dim) {
-    msgToOffset *=
-        LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
-                                blockShape[dim], kMsg, outDimNames[dim]);
-  }
-  msgToOffset *= ttg::getCGALayout(ty.getEncoding()).getLinearLayout();
-  return msgToOffset;
-}
-
-LinearLayout getTMAGatherScatterMsgToSharedLayout(RankedTensorType xCoordsType,
-                                                  ttg::MemDescType smemType) {
-  auto ctx = smemType.getContext();
-  auto kDim1 = StringAttr::get(ctx, "dim1");
-  auto kMsg = StringAttr::get(ctx, "msg");
-
-  LinearLayout xCoordsLayout = ttg::toLinearLayout(xCoordsType);
-  auto shapePerCTA = ttg::getShapePerCTA(smemType);
-  auto tmaBlockShape =
-      getTMABlockShape(smemType, /*packedSize=*/true, ttg::TMAMode::Tiled);
-  unsigned innerBlockSize = shapePerCTA.back();
-  unsigned contigDimSize = tmaBlockShape.back();
-  unsigned numMessagesPerRow = llvm::divideCeil(innerBlockSize, contigDimSize);
-  assert(innerBlockSize % numMessagesPerRow == 0);
-  assert(llvm::isPowerOf2_32(numMessagesPerRow));
-  unsigned msgSize = innerBlockSize / numMessagesPerRow;
-  LinearLayout msgToCol =
-      LinearLayout::strided1D(numMessagesPerRow, msgSize, kMsg, kDim1);
-  LinearLayout msgLayout = xCoordsLayout * msgToCol;
-  return msgLayout.invertAndCompose(getTMAUnswizzledLayout(smemType));
 }
 
 FailureOr<int> getTMASwizzleMode(Location loc, tt::TensorDescInterface ty) {

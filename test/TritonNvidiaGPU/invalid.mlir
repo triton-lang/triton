@@ -674,16 +674,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 
-  tt.func public @async_tma_gather_requires_local_shared_offsets(%arg0: !tt.tensordesc<1x128xf16, #nvmma_broadcast>) {
-    %true = arith.constant true
-    %c0_i32 = arith.constant 0 : i32
-    %x_offsets = arith.constant dense<0> : tensor<32xi32, #blocked_split>
-    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared_bar, #smem, mutable>
-    %result = ttg.local_alloc : () -> !ttg.memdesc<32x128xf16, #nvmma_broadcast, #smem, mutable>
-    // expected-error @below {{requires the shared layout to place each TMA message at the same local shared-memory offset in every CTA}}
-    ttng.async_tma_gather %arg0[%x_offsets, %c0_i32] %result, %bar, %true : !tt.tensordesc<1x128xf16, #nvmma_broadcast>, tensor<32xi32, #blocked_split>, i32, !ttg.memdesc<1xi64, #shared_bar, #smem, mutable>, !ttg.memdesc<32x128xf16, #nvmma_broadcast, #smem, mutable>, i1
-    tt.return
-  }
 }
 
 // -----

@@ -22,8 +22,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 
-#include "llvm/ADT/Twine.h"
-
 #include <cassert>
 
 using namespace mlir;
@@ -1103,19 +1101,53 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
-static LinearLayout
-getTMAMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
-                                ttg::MemDescType ty) {
-  auto mmaEncoding = cast<NVMMASharedEncodingAttr>(ty.getEncoding());
-  if (!mmaEncoding.getFp4Padded())
-    return packedLayout;
-
+static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
+                                               ttg::TMAMode mode) {
   auto ctx = ty.getContext();
   auto kMsg = str_attr("msg");
-  auto kLastDim = str_attr("dim" + Twine(ty.getRank() - 1));
-  // Multiply to offset by 2 in the last dimension.
+  auto shapePerCTA = ttg::getShapePerCTA(ty);
+  int rank = shapePerCTA.size();
+  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true, mode);
+  auto outDimNames = standardOutDimNames(ctx, rank);
+  LinearLayout msgToOffset;
+  for (int dim = 0; dim < rank; ++dim) {
+    msgToOffset *=
+        LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
+                                blockShape[dim], kMsg, outDimNames[dim]);
+  }
+  msgToOffset *= ttg::getCGALayout(ty.getEncoding()).getLinearLayout();
+  return msgToOffset;
+}
+
+static LinearLayout
+getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
+                             ttg::MemDescType ty) {
+  auto isFp4Padded =
+      cast<NVMMASharedEncodingAttr>(ty.getEncoding()).getFp4Padded();
+  if (!isFp4Padded) {
+    return packedLayout;
+  }
+
+  auto ctx = ty.getContext();
+  auto rank = ty.getRank();
+  auto kMsg = str_attr("msg");
+  auto kLastDim = str_attr("dim" + Twine(rank - 1));
+  // Multiply to offset by 2 in the last dimension
   auto unpackLayout = LinearLayout::zeros1D(1, kMsg, kLastDim, 2);
   return unpackLayout * packedLayout;
+}
+
+static LinearLayout getUnswizzledLayout(ttg::MemDescType type) {
+  auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(type.getEncoding());
+  if (!mmaEncoding) {
+    assert(isa<ttg::SwizzledSharedEncodingAttr>(type.getEncoding()));
+    return ttg::toLinearLayout(type);
+  }
+  assert(type.getShape() == type.getAllocShape().take_back(type.getRank()));
+  // TMA gather/scatter only supports tiled mode.
+  return ttg::nvmmaSharedToLinearLayout(
+      type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
+      ttg::TMAMode::Tiled, /*disableSwizzle=*/true);
 }
 
 struct AsyncTMACopyGlobalToLocalOpConversion
@@ -1168,12 +1200,10 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     int rank = op.getCoord().size();
 
-    auto msgToPackedOffset =
-        ttng::getTMAMsgToPackedOffsetLayout(smemTy, tmaMode);
+    auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
     auto smemLayout = ttg::toLinearLayout(smemTy);
     auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
-    auto msgToOffset =
-        getTMAMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
+    auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
 
     auto ctx = op.getContext();
     auto kMsg = str_attr("msg");
@@ -1228,7 +1258,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
       Value shMemOffset =
           applyLinearLayout(loc, rewriter, msgToShared,
-                            {{kMsg, copyIdxVal}, {kBlock, zero}})[0]
+                            {{kMsg, copyIdxVal}, {kBlock, ctaId}})[0]
               .second;
       Value shMemPtr = b.gep(elemPtrTy, llvmElemTy, dstBase, shMemOffset);
       SmallVector<PTXBuilder::Operand *> operands = {
@@ -1321,10 +1351,10 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   auto rank = coords.size();
 
   auto msgToPackedOffset =
-      ttng::getTMAMsgToPackedOffsetLayout(srcTy, ttg::TMAMode::Tiled);
+      getMsgToPackedOffsetLayout(srcTy, ttg::TMAMode::Tiled);
   auto smemLayout = ttg::toLinearLayout(srcTy);
   auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
-  auto msgToOffset = getTMAMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
+  auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
 
   auto ctx = op->getContext();
   auto kMsg = str_attr("msg");
@@ -1352,7 +1382,7 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
     Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
     Value shMemOffset =
         applyLinearLayout(loc, rewriter, msgToShared,
-                          {{kMsg, copyIdxVal}, {kBlock, zero}})[0]
+                          {{kMsg, copyIdxVal}, {kBlock, ctaId}})[0]
             .second;
     Value shMemPtr = b.gep(elemPtrTy, llvmElemTy, dstBase, shMemOffset);
     SmallVector<PTXBuilder::Operand *> operands = {
@@ -1458,6 +1488,7 @@ static LogicalResult iterateGatherScatterIndices(
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
+  StringAttr kDim1 = str_attr("dim1");
 
   // Each warp can issue a distinct `gather4` instruction that loads 4 rows into
   // consecutive shared memory. Thus, the layout of the x offsets must be such
@@ -1505,13 +1536,19 @@ static LogicalResult iterateGatherScatterIndices(
   assert(llvm::isPowerOf2_32(numMessagesPerRow));
   unsigned msgSize = innerBlockSize / numMessagesPerRow;
 
+  // `xCoordsLayout` maps the register ID into dim0. Tile dim1 by adding a new
+  // dimension representing the TMA message ID.
+  LinearLayout msgToCol =
+      LinearLayout::strided1D(numMessagesPerRow, msgSize, kMsg, kDim1);
+  LinearLayout msgLayout = xCoordsLayout * msgToCol;
+
   // `gather4` will put the segments of the 4 rows consecutively in
   // shared memory. However, if the 4 rows are smaller than the shared memory
   // swizzle tile size, e.g. [4, 32] vs. [8, 32], then, for example, the address
   // of the 0th element of row 4 will not be at the start of the segment.
   LinearLayout smemLayout = ttg::toLinearLayout(smemType);
-  LinearLayout msgToShared =
-      ttng::getTMAGatherScatterMsgToSharedLayout(xCoords.getType(), smemType);
+  LinearLayout sharedLayout = getUnswizzledLayout(smemType);
+  LinearLayout msgToShared = msgLayout.invertAndCompose(sharedLayout);
 
   // If there are too few rows, warps will have redundant data. An individual
   // thread might also have redundant indices if there is register broadcasting.
@@ -1553,7 +1590,7 @@ static LogicalResult iterateGatherScatterIndices(
                                       {{kRegister, regIdVal},
                                        {kLane, laneId},
                                        {kWarp, warpId},
-                                       {kBlock, b.i32_val(0)},
+                                       {kBlock, blockId},
                                        {kMsg, msgIdVal}});
       assert(result.size() == 2 && result.front().first == "offset" &&
              result.back().first == "block");

@@ -333,22 +333,7 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   // do not support fp4_padded operands.
   if (isFp4Padded(srcEnc))
     return op->emitOpError("does not support fp4_padded operands");
-  if (failed(verifyTMAEncoding(op, desc.getType(), srcEnc)))
-    return failure();
-  return success();
-}
-
-static LogicalResult
-verifyTMAMsgToSharedHasLocalOffsets(Operation *op,
-                                    const LinearLayout &msgToShared) {
-  auto kBlock = StringAttr::get(op->getContext(), "block");
-  auto kOffset = StringAttr::get(op->getContext(), "offset");
-  if (!msgToShared.sublayoutIsZero({kBlock}, {kOffset})) {
-    return op->emitOpError("requires the shared layout to place each TMA "
-                           "message at the same local shared-memory offset "
-                           "in every CTA");
-  }
-  return success();
+  return verifyTMAEncoding(op, desc.getType(), srcEnc);
 }
 
 static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
@@ -388,10 +373,6 @@ static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
     unsigned threadsPerWarp = xCoordsLayout.getInDimSize(kLane);
     if (xCoordsLayout.getFreeVariableMasks()[kLane] != (threadsPerWarp - 1))
       return op->emitOpError("x offsets must be broadcasted across each warp");
-
-    auto msgToShared =
-        getTMAGatherScatterMsgToSharedLayout(xOffsetsType, memDescType);
-    return verifyTMAMsgToSharedHasLocalOffsets(op, msgToShared);
   }
   return success();
 }
@@ -452,24 +433,6 @@ static LogicalResult verifyTMAMode(Operation *op, bool isIm2Col,
   return success();
 }
 
-static LogicalResult
-verifyTMAMsgToSharedHasLocalOffsets(Operation *op, MemDescType memDescType,
-                                    TMAMode mode) {
-  auto msgToPackedOffset = getTMAMsgToPackedOffsetLayout(memDescType, mode);
-  auto msgToShared =
-      msgToPackedOffset.invertAndCompose(toLinearLayout(memDescType));
-  return verifyTMAMsgToSharedHasLocalOffsets(op, msgToShared);
-}
-
-static LogicalResult verifyTMAMulticastLayout(Operation *op,
-                                              MemDescType memDescType) {
-  if (!hasCGABroadcast(memDescType)) {
-    return op->emitOpError(
-        "multicast requires the shared layout to broadcast across CTAs");
-  }
-  return success();
-}
-
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   auto descType = getDesc().getType();
@@ -486,11 +449,9 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
     return failure();
   if (failed(verifyTMAMode(*this, isIm2Col, getCoord(), getOffsets())))
     return failure();
-  if (failed(verifyTMAMsgToSharedHasLocalOffsets(
-          *this, resultType, isIm2Col ? TMAMode::Im2Col : TMAMode::Tiled)))
-    return failure();
-  if (getMulticast() && failed(verifyTMAMulticastLayout(*this, resultType)))
-    return failure();
+  if (getMulticast() && !hasCGABroadcast(resultType))
+    return emitOpError(
+        "multicast requires the shared layout to broadcast across CTAs");
   return success();
 }
 
@@ -515,7 +476,7 @@ LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
     return failure();
   if (failed(verifyAsyncTMAStoreOp(*this, getDesc(), srcType)))
     return failure();
-  return verifyTMAMsgToSharedHasLocalOffsets(*this, srcType, TMAMode::Tiled);
+  return success();
 }
 
 // -- AsyncTMAReduceOp --
@@ -529,7 +490,7 @@ LogicalResult AsyncTMAReduceOp::verify() {
     return failure();
   if (failed(verifyAsyncTMAStoreOp(*this, getDesc(), srcType)))
     return failure();
-  return verifyTMAMsgToSharedHasLocalOffsets(*this, srcType, TMAMode::Tiled);
+  return success();
 }
 
 // -- AsyncTMAGatherOp --
@@ -543,8 +504,9 @@ LogicalResult AsyncTMAGatherOp::verify() {
   if (isFp4Padded(getResult().getType().getEncoding()))
     return emitOpError("does not support fp4_padded operands");
   if (getMulticast()) {
-    if (failed(verifyTMAMulticastLayout(*this, resultType)))
-      return failure();
+    if (!hasCGABroadcast(resultType))
+      return emitOpError(
+          "multicast requires the shared layout to broadcast across CTAs");
     if (auto xOffsetsEncoding = dyn_cast_if_present<LayoutEncodingTrait>(
             xOffsetsType.getEncoding())) {
       auto resultCGA = getCGALayout(resultType.getEncoding()).getLinearLayout();

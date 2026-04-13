@@ -5,7 +5,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Tools/LinearLayout.h"
 
 namespace mlir::triton::nvidia_gpu {
 
@@ -22,11 +21,6 @@ getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
                           Value desc);
 
 bool hasCGABroadcast(gpu::MemDescType memDescType);
-
-LinearLayout getTMAMsgToPackedOffsetLayout(gpu::MemDescType ty,
-                                           gpu::TMAMode mode);
-LinearLayout getTMAGatherScatterMsgToSharedLayout(RankedTensorType xCoordsType,
-                                                  gpu::MemDescType smemType);
 
 inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
                                              ArrayRef<int64_t> shapePerCTA,
