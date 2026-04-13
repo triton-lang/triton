@@ -22,7 +22,6 @@ getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
                           Value desc);
 
 bool hasCGABroadcast(gpu::MemDescType memDescType);
-bool hasCoordinateMaskCGABroadcast(gpu::MemDescType memDescType);
 
 LinearLayout getTMAMsgToPackedOffsetLayout(gpu::MemDescType ty,
                                            gpu::TMAMode mode);

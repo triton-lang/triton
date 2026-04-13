@@ -335,10 +335,6 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
     return op->emitOpError("does not support fp4_padded operands");
   if (failed(verifyTMAEncoding(op, desc.getType(), srcEnc)))
     return failure();
-  if (hasCGABroadcast(srcType) && !hasCoordinateMaskCGABroadcast(srcType)) {
-    return op->emitOpError("broadcasted shared layout requires CTA groups to "
-                           "be given by a coordinate mask on the CTA id");
-  }
   return success();
 }
 
@@ -470,11 +466,6 @@ static LogicalResult verifyTMAMulticastLayout(Operation *op,
   if (!hasCGABroadcast(memDescType)) {
     return op->emitOpError(
         "multicast requires the shared layout to broadcast across CTAs");
-  }
-  if (!hasCoordinateMaskCGABroadcast(memDescType)) {
-    return op->emitOpError(
-        "multicast requires CTA groups to be given by a coordinate mask on "
-        "the CTA id");
   }
   return success();
 }

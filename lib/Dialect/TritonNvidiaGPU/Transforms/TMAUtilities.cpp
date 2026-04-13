@@ -54,24 +54,6 @@ bool hasCGABroadcast(ttg::MemDescType memDescType) {
              .lookup(kBlock) != 0;
 }
 
-bool hasCoordinateMaskCGABroadcast(ttg::MemDescType memDescType) {
-  auto kBlock = StringAttr::get(memDescType.getContext(), "block");
-  auto cgaLayout =
-      ttg::getCGALayout(memDescType.getEncoding()).getLinearLayout();
-  uint32_t broadcastBits = cgaLayout.getFreeVariableMasks().lookup(kBlock);
-  // The PTX multicast mask is built by clearing a coordinate mask from the CTA
-  // id. Check that doing exactly that preserves the layout's CTA grouping:
-  // Build the projection that keeps non-broadcast CTA-id bits and clears the
-  // rest. The broadcast is a coordinate mask exactly when P * CGA == CGA.
-  std::vector<std::vector<int32_t>> bases;
-  for (int i = 0; i < llvm::Log2_32(cgaLayout.getInDimSize(kBlock)); ++i)
-    bases.push_back({broadcastBits & (1u << i) ? 0 : (1 << i)});
-  auto projection = LinearLayout({{kBlock, std::move(bases)}},
-                                 {{kBlock, cgaLayout.getInDimSize(kBlock)}},
-                                 /*requireSurjective=*/false);
-  return projection.compose(cgaLayout) == cgaLayout;
-}
-
 LinearLayout getTMAMsgToPackedOffsetLayout(ttg::MemDescType ty,
                                            ttg::TMAMode mode) {
   auto ctx = ty.getContext();
