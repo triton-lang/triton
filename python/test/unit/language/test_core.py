@@ -2588,6 +2588,10 @@ def test_sum_dtype(device):
     kernel_default_int[(1, )](out)
     assert out[0] == 32 * 32
 
+    out = torch.empty(1, dtype=torch.bool, device=device)
+    kernel_default_int[(1, )](out)
+    assert out[0] == True
+
     out = torch.empty(1, dtype=torch.bfloat16, device=device)
     kernel_default_float[(1, )](out)
     torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device=device))
