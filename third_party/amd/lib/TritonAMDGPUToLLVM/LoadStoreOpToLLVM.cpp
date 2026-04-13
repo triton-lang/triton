@@ -1407,11 +1407,8 @@ struct AsyncTDMScatterOpConversion
     // Get the destination column offset
     Value dstColOffset = adaptor.getDstColOffset();
 
-    // Determine index size from the element type of dst_row_indices
     auto dstRowIndicesType =
         cast<RankedTensorType>(op.getDstRowIndices().getType());
-    bool use32BitIndices =
-        dstRowIndicesType.getElementType().getIntOrFloatBitWidth() == 32;
 
     // Create the CGA layout
     auto sharedLayout = triton::gpu::toLinearLayout(smemTy);
@@ -1423,10 +1420,10 @@ struct AsyncTDMScatterOpConversion
     // Predicate must be i32 (not i1) to match other elements in group0
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
     mlir::LLVM::AMD::emitTDMGatherScatter(
-        rewriter, loc, getTypeConverter(), desc, shapePerCTA, /*padInterval=*/0,
-        /*padAmount=*/0, srcPtr, pred, elementType, barrierPtr, cgaLayout,
-        ctaId, dstRowIndices, dstColOffset, use32BitIndices,
-        /*isGather=*/false);
+        rewriter, loc, getTypeConverter(), desc, shapePerCTA,
+        /*padInterval=*/0, /*padAmount=*/0, srcPtr, pred, elementType,
+        barrierPtr, cgaLayout, ctaId, dstRowIndices, dstColOffset,
+        /*isGather=*/false, numWarps, dstRowIndicesType);
 
     rewriter.eraseOp(op);
     return success();
@@ -1493,11 +1490,8 @@ struct AsyncTDMGatherOpConversion
     // Get the source column offset
     Value srcColOffset = adaptor.getSrcColOffset();
 
-    // Determine index size from the element type of src_row_indices
     auto srcRowIndicesType =
         cast<RankedTensorType>(op.getSrcRowIndices().getType());
-    bool use32BitIndices =
-        srcRowIndicesType.getElementType().getIntOrFloatBitWidth() == 32;
 
     // Create the CGA layout
     triton::LinearLayout sharedLayout;
@@ -1521,8 +1515,8 @@ struct AsyncTDMGatherOpConversion
     mlir::LLVM::AMD::emitTDMGatherScatter(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
         padAmount, dstPtr, op.getPred(), elementType, barrierPtr, cgaLayout,
-        ctaId, srcRowIndices, srcColOffset, use32BitIndices,
-        /*isGather=*/true);
+        ctaId, srcRowIndices, srcColOffset,
+        /*isGather=*/true, numWarps, srcRowIndicesType);
 
     rewriter.eraseOp(op);
     return success();
