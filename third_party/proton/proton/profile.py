@@ -13,13 +13,10 @@ DEFAULT_PROFILE_NAME = "proton"
 
 
 def _select_backend() -> str:
-    import sys
     from triton.backends import backends
     if "nvidia" in backends and backends["nvidia"].driver.is_active():
-        print("[PROTON_DEBUG _select_backend] NEW path -> cupti", file=sys.stderr, flush=True)
         return "cupti"
     if "amd" in backends:
-        print("[PROTON_DEBUG _select_backend] NEW path -> rocprofiler", file=sys.stderr, flush=True)
         return "rocprofiler"
     raise ValueError("No backend is available for the current target.")
 
