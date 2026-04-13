@@ -1550,8 +1550,9 @@ class TritonSemantic(Generic[TensorTy]):
                 N, K // scale_factor
             ], f"rhs_scale must be a tensor of shape [..., {N}, {K // scale_factor}]. Got {rhs_scale_shape}"
 
-    def dot_scaled(self, lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, fast_math=False, lhs_k_pack=False, rhs_k_pack=False, out_dtype=tl.float32) -> TensorTy:
-
+        def dot_scaled(self, lhs: TensorTy, lhs_scale: TensorTy, lhs_format: str, rhs: TensorTy,
+                   rhs_scale: Optional[TensorTy], rhs_format: str, acc: TensorTy | None, fast_math: bool,
+                                          lhs_k_pack: bool, rhs_k_pack: bool, out_dtype: tl.dtype) -> TensorTy:
 
         assert lhs.type.is_block() and rhs.type.is_block()
         #TODO: validate types.
