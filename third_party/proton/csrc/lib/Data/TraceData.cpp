@@ -366,14 +366,6 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
             std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime)),
             timestampOffsetNs);
         auto launchEventId = events.at(eventId).parentEventId;
-        if (isGraphLinked) {
-          // Graph-linked kernels are nested under the <captured_at> tag.
-          launchEventId = events.at(launchEventId).parentEventId;
-        }
-        while (launchEventId != Trace::Event::DummyId &&
-               !events.at(launchEventId).hasCpuTimeRange()) {
-          launchEventId = events.at(launchEventId).parentEventId;
-        }
         kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
                                             contexts, startTimeNs, endTimeNs,
                                             launchEventId, isGraphLinked);
