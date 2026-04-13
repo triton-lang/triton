@@ -1219,6 +1219,7 @@ class TritonSemantic(Generic[TensorTy]):
             elt_ty = tl.int8
             ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
             ptr = self.cast(ptr, ptr_ty)
+            val = self.cast(val, tl.int1)
 
         # Cast to target data type
         val = self.cast(val, elt_ty)
