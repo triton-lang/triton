@@ -53,7 +53,6 @@ LogicalResult validateStridesAndSharedOrder(triton::MakeTensorDescOp op,
   }
 
   if (strideOneDims.size() > 1) {
-    unsigned k = strideOneDims.size();
     unsigned numStride1Dims = strideOneDims.size();
     for (unsigned i = 0; i < numStride1Dims; ++i) {
       if (strideOneDims[i] != rank - numStride1Dims + i)

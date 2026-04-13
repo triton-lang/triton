@@ -203,7 +203,6 @@ LogicalResult inferLayout(
   }
 
   // Transfer propagated encodings into the graph
-  auto ctx = func.getContext();
   for (auto &[val, info] : valueToEncoding) {
     assert(typeCheck(val.getType()));
     auto existingTy = cast<RankedTensorType>(val.getType());

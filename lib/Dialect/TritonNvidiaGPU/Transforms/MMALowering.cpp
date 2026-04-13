@@ -75,15 +75,13 @@ struct TCGen5MMAScaleSharedToTmemConversion
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);
     auto tmemAlloc = TMEMAllocOp::create(rewriter, loc, scaleAType, Value());
-    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc,
-                       /*barrier*/ Value());
+    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc);
     operand.set(tmemAlloc);
     return true;
   }
 
   LogicalResult matchAndRewrite(TCGen5MMAScaledOp op,
                                 PatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
     MLIRContext *context = op->getContext();
     auto aScaleType = op.getAScale().getType();
     auto bScaleType = op.getBScale().getType();

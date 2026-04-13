@@ -354,9 +354,9 @@ struct CuptiProfiler::CuptiProfilerPimpl
   CuptiProfilerPimpl(CuptiProfiler &profiler)
       : GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface(profiler) {
     auto runtime = &CudaRuntime::instance();
-    profiler.metricBuffer =
-        std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime,
-                                       /*mapped=*/true);
+    profiler.metricBuffer = std::make_unique<MetricBuffer>(
+        getIntEnv("TRITON_PROFILE_METRIC_BUFFER_SIZE", 64 * 1024 * 1024),
+        runtime, /*mapped=*/true);
     profiler.pendingGraphPool =
         std::make_unique<PendingGraphPool>(profiler.metricBuffer.get());
   }

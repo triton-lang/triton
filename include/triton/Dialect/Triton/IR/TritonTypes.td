@@ -158,6 +158,7 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", [TT_TensorDesc
 
   let hasCustomAssemblyFormat = 1;
   let skipDefaultBuilders = 1;
+  let genVerifyDecl = 1;
 }
 
 #endif

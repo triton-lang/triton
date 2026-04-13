@@ -347,7 +347,6 @@ LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
       zeroLaneBases.push_back(i);
   }
 
-  auto axisSize = to_vector(layout.getOutDimSizes())[axis];
   auto totalAxisBases = warpAxisBases.size() + blockAxisBases.size();
 
   // First try to place all warp/block axis bases into lane bases that are
@@ -414,7 +413,6 @@ LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
   auto *ctx = srcTy.getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
-  auto kWarp = StringAttr::get(ctx, "warp");
 
   auto reduced = toLinearLayout(srcTy);
   reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);
