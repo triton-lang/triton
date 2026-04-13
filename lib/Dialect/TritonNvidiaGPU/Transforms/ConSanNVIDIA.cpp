@@ -28,6 +28,12 @@ Value getLeaderCTAPredicate(ImplicitLocOpBuilder &b, uint32_t broadcastMask) {
                                arith::ConstantIntOp::create(b, 0, 32));
 }
 
+uint32_t getBlockBroadcastMask(Type type) {
+  auto memDescTy = cast<ttg::MemDescType>(type);
+  auto kBlock = StringAttr::get(type.getContext(), "block");
+  return toLinearLayout(memDescTy).getFreeVariableMasks().lookup(kBlock);
+}
+
 } // namespace
 
 class NVIDIAConSanHooks : public tti::ConSanTargetHooks {
@@ -89,13 +95,12 @@ public:
       mask = getBarrierMask(waitOp.getAlloc());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
       mask = getBarrierMask(invalOp.getAlloc());
-    if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-      if (copyOp.getMulticast()) {
-        auto dstTy = cast<ttg::MemDescType>(copyOp.getResult().getType());
-        auto kBlock = StringAttr::get(op->getContext(), "block");
-        mask = toLinearLayout(dstTy).getFreeVariableMasks().lookup(kBlock);
-      }
+    if (auto loadOp = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+      if (loadOp.getMulticast())
+        mask = getBlockBroadcastMask(loadOp.getResult().getType());
     }
+    if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op))
+      mask = getBlockBroadcastMask(storeOp.getSrc().getType());
 
     // In 2CTA tcgen05 and tmem_copy, only the even CTA in each (i, i^1) pair
     // issues the op.
@@ -205,16 +210,12 @@ public:
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = loadOp.getPred();
       int txCount = tti::getMemDescLength(loadOp.getResult());
-      if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op);
-          copyOp && copyOp.getMulticast()) {
-        auto resultTy = cast<ttg::MemDescType>(loadOp.getResult().getType());
-        auto barrierTy = cast<ttg::MemDescType>(loadOp.getBarrier().getType());
-        auto kBlock = StringAttr::get(op->getContext(), "block");
-        uint16_t resultMask =
-            toLinearLayout(resultTy).getFreeVariableMasks().lookup(kBlock);
-        uint16_t barrierMask =
-            toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-        uint16_t collapsedMask = resultMask & barrierMask;
+      if (loadOp.getMulticast()) {
+        uint32_t resultMask =
+            getBlockBroadcastMask(loadOp.getResult().getType());
+        uint32_t barrierMask =
+            getBlockBroadcastMask(loadOp.getBarrier().getType());
+        uint32_t collapsedMask = resultMask & barrierMask;
         for (; collapsedMask; collapsedMask &= collapsedMask - 1)
           txCount *= 2;
       }
