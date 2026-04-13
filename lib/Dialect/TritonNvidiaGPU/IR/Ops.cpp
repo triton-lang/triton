@@ -501,7 +501,6 @@ LogicalResult AsyncTMAReduceOp::verify() {
 
 // -- AsyncTMAGatherOp --
 LogicalResult AsyncTMAGatherOp::verify() {
-  auto xOffsetsType = getXOffsets().getType();
   auto resultType = getResult().getType();
   if (failed(verifyAsyncTMALoadOp(*this, getDesc().getType(), getBarrier(),
                                   resultType)))
@@ -509,14 +508,12 @@ LogicalResult AsyncTMAGatherOp::verify() {
   // `tile::gather4` does not support fp4_padded operands.
   if (isFp4Padded(getResult().getType().getEncoding()))
     return emitOpError("does not support fp4_padded operands");
-  if (getMulticast()) {
-    if (!hasCGABroadcast(resultType))
-      return emitOpError(
-          "multicast requires the shared layout to broadcast across CTAs");
-  }
+  if (getMulticast() && !hasCGABroadcast(resultType))
+    return emitOpError(
+        "multicast requires the shared layout to broadcast across CTAs");
   return verifyAsyncTMAGatherScatterOp(
       *this, getDesc().getType().getSignlessBlockType(), resultType,
-      xOffsetsType);
+      getXOffsets().getType());
 }
 
 Value AsyncTMAGatherOp::getPredicateOperand() { return getPred(); }
