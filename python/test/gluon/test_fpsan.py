@@ -1728,31 +1728,33 @@ def test_reduction(device, fresh_knobs):
     _require_cuda_backend(device)
 
     @triton.jit
-    def reduce_kernel(a_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,
-                      ORDER: tl.constexpr):
-        a_ptrs = a_ptr + (tl.arange(0, M)[:, None] * stride_am + (tl.arange(0, N)[None, :]) * stride_ak)
+    def reduce_kernel(a_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, stride_ak: tl.constexpr, stride_am: tl.constexpr,
+                      stride_an: tl.constexpr, ORDER: tl.constexpr):
+
+        a_ptr += tl.program_id(0).to(tl.int64) * stride_ak
+        c_ptr += tl.program_id(0).to(tl.int64)
+        a_ptrs = a_ptr + (tl.arange(0, M)[:, None] * stride_am + (tl.arange(0, N)[None, :]) * stride_an)
         a = tl.load(a_ptrs)
         r1 = tl.sum(a, axis=ORDER)
-        r2 = tl.sum(r1, axis=ORDER - 1)
+        r2 = tl.sum(r1, axis=0)
         tl.store(c_ptr, r2)
 
-    M, N = 128, 128
+    # we run K parallel tests so as to make non-associativity much more
+    # likely to manifest:
+    K, M, N = 100, 128, 128
     torch.manual_seed(0)
-    a = torch.randn((M, N), dtype=torch.float32, device="cuda")
-    # Make non-associativity visible and deterministic: large + tiny magnitudes.
-    a[:, :64] *= 1e10
-    a[:, 64:] *= 1e-10
-    c1 = torch.empty((1, ), dtype=torch.float32).to('cuda')
-    c2 = torch.empty((1, ), dtype=torch.float32).to('cuda')
+    a = torch.randn((K, M, N), dtype=torch.float32, device="cuda")
+    c1 = torch.empty((K, ), dtype=torch.float32).to('cuda')
+    c2 = torch.empty((K, ), dtype=torch.float32).to('cuda')
 
-    reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
-    reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
+    reduce_kernel[(K, )](a, c1, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=0)
+    reduce_kernel[(K, )](a, c2, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=1)
     assert not _payload_equal(c1, c2)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
-    reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
-    reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
+    reduce_kernel[(K, )](a, c1, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=0)
+    reduce_kernel[(K, )](a, c2, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=1)
     assert _payload_equal(c1, c2)
 
 
