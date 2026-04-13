@@ -89,6 +89,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
+  // CHECK-LABEL: @async_tma_reduce
+  // CHECK-SAME: [[DESC:%arg[0-9]+]]:
+  // CHECK-SAME: [[X:%arg[0-9]+]]:
+  // CHECK-SAME: [[Y:%arg[0-9]+]]:
+  // CHECK-SAME: [[SRC:%arg[0-9]+]]:
+  tt.func @async_tma_reduce(%desc: !tt.tensordesc<32x32xf32, #shared>, %x: i32, %y: i32,
+                            %src: !ttg.memdesc<32x32xf32, #shared, #ttg.shared_memory, mutable>) {
+    // CHECK-NEXT: ttng.async_tma_reduce add, [[DESC]][[[X]], [[Y]]] [[SRC]] : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    ttng.async_tma_reduce add, %desc[%x, %y] %src : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<32x32xf32, #shared, #ttg.shared_memory, mutable>
+    tt.return
+  }
+
   // CHECK-LABEL: @wait_barrier
   // CHECK-SAME: [[ALLOC:%arg[0-9]+]]:
   // CHECK-SAME: [[PHASE:%arg[0-9]+]]:
