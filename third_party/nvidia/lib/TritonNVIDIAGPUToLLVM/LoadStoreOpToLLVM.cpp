@@ -188,6 +188,23 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       otherElems = unpackLLElements(loc, llOther, rewriter);
     }
 
+    // Validate cache_modifier + eviction_policy combinations that the PTX ISA
+    // forbids. This check belongs here (PTX codegen) rather than in the
+    // frontend semantic layer, which is backend-agnostic.
+    auto cache = op.getCache();
+    auto evict = op.getEvict();
+    if ((evict == triton::EvictionPolicy::EVICT_FIRST ||
+         evict == triton::EvictionPolicy::EVICT_LAST) &&
+        cache == triton::CacheModifier::CA)
+      return op.emitOpError(
+          "cache_modifier '.ca' is incompatible with eviction_policy "
+          "'evict_first'/'evict_last': .ca overrides L1 eviction policy");
+    if (evict == triton::EvictionPolicy::EVICT_FIRST &&
+        cache == triton::CacheModifier::CG)
+      return op.emitOpError(
+          "cache_modifier '.cg' is incompatible with eviction_policy "
+          "'evict_first': .cg bypasses L1 cache");
+
     // vectorized iteration through all the pointer/mask/other elements
     const int valueElemNBits =
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
@@ -398,6 +415,23 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                        << " elemsPerThread = " << elemsPerThread << " mask is "
                        << mask << "\n";
     }
+
+    // Validate cache_modifier + eviction_policy combinations that the PTX ISA
+    // forbids. This check belongs here (PTX codegen) rather than in the
+    // frontend semantic layer, which is backend-agnostic.
+    auto cache = op.getCache();
+    auto evict = op.getEvict();
+    if ((evict == triton::EvictionPolicy::EVICT_FIRST ||
+         evict == triton::EvictionPolicy::EVICT_LAST) &&
+        cache == triton::CacheModifier::CS)
+      return op.emitOpError(
+          "cache_modifier '.cs' is incompatible with eviction_policy "
+          "'evict_first'/'evict_last': .cs bypasses L1 cache");
+    if (evict == triton::EvictionPolicy::EVICT_FIRST &&
+        cache == triton::CacheModifier::CG)
+      return op.emitOpError(
+          "cache_modifier '.cg' is incompatible with eviction_policy "
+          "'evict_first': .cg bypasses L1 cache");
 
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);

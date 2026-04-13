@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm -reconcile-unrealized-casts --verify-diagnostics 2>/dev/null | FileCheck %s --dump-input-context 20
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1> {tt.pointee_type = f16}, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -122,6 +122,80 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "@$3 st.global.L1::evict_last.L2::cache_hint.b32 [ $1 + 0 ], { $0 }, $2;"
       tt.store %a_ptr_init, %cst_0, %cst evictionPolicy = evict_last : tensor<256x!tt.ptr<f32>, #blocked0>
       tt.return
+  }
+}
+
+// -----
+
+// PTX-illegal combinations of cache_modifier and eviction_policy.
+// Before this check, ptxas would fail with an opaque assembler error
+// (e.g. "Modifier '.evict_first' cannot be combined with modifier '.cs'").
+// The NVIDIA backend now emits a clear op error before PTX generation.
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @store_cs_evict_first(%ptrs : tensor<256x!tt.ptr<f32>, #blocked0>,
+                                %vals : tensor<256xf32, #blocked0>) {
+    // expected-error @+1 {{cache_modifier '.cs' is incompatible with eviction_policy 'evict_first'/'evict_last'}}
+    tt.store %ptrs, %vals evictionPolicy = evict_first cacheModifier = cs : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @store_cs_evict_last(%ptrs : tensor<256x!tt.ptr<f32>, #blocked0>,
+                               %vals : tensor<256xf32, #blocked0>) {
+    // expected-error @+1 {{cache_modifier '.cs' is incompatible with eviction_policy 'evict_first'/'evict_last'}}
+    tt.store %ptrs, %vals evictionPolicy = evict_last cacheModifier = cs : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @store_cg_evict_first(%ptrs : tensor<256x!tt.ptr<f32>, #blocked0>,
+                                %vals : tensor<256xf32, #blocked0>) {
+    // expected-error @+1 {{cache_modifier '.cg' is incompatible with eviction_policy 'evict_first'}}
+    tt.store %ptrs, %vals evictionPolicy = evict_first cacheModifier = cg : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @load_ca_evict_first(%ptrs : tensor<256x!tt.ptr<f32>, #blocked0>) {
+    // expected-error @+1 {{cache_modifier '.ca' is incompatible with eviction_policy 'evict_first'/'evict_last'}}
+    %0 = tt.load %ptrs evictionPolicy = evict_first cacheModifier = ca : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @load_ca_evict_last(%ptrs : tensor<256x!tt.ptr<f32>, #blocked0>) {
+    // expected-error @+1 {{cache_modifier '.ca' is incompatible with eviction_policy 'evict_first'/'evict_last'}}
+    %0 = tt.load %ptrs evictionPolicy = evict_last cacheModifier = ca : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @load_cg_evict_first(%ptrs : tensor<256x!tt.ptr<f32>, #blocked0>) {
+    // expected-error @+1 {{cache_modifier '.cg' is incompatible with eviction_policy 'evict_first'}}
+    %0 = tt.load %ptrs evictionPolicy = evict_first cacheModifier = cg : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.return
   }
 }
 
