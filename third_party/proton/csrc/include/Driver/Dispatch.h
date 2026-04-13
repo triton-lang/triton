@@ -2,8 +2,10 @@
 #define PROTON_DRIVER_DISPATCH_H_
 
 #include <dlfcn.h>
+#include <link.h>
 
 #include "Utility/Env.h"
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -89,25 +91,65 @@ struct ExternLibBase {
   static inline void *lib{nullptr};
 };
 
+namespace detail {
+
+struct FindLibCtx {
+  const char *prefix;
+  size_t prefixLen;
+  const char *foundPath;
+};
+
+inline int findLibCallback(struct dl_phdr_info *info, size_t, void *data) {
+  auto *ctx = static_cast<FindLibCtx *>(data);
+  if (!info->dlpi_name || info->dlpi_name[0] == '\0')
+    return 0;
+  const char *slash = std::strrchr(info->dlpi_name, '/');
+  const char *basename = slash ? slash + 1 : info->dlpi_name;
+  if (std::strncmp(basename, ctx->prefix, ctx->prefixLen) == 0) {
+    char after = basename[ctx->prefixLen];
+    if (after == '\0' || after == '.') {
+      ctx->foundPath = info->dlpi_name;
+      return 1;
+    }
+  }
+  return 0;
+}
+
+} // namespace detail
+
+inline std::string findLoadedLibPath(const char *name) {
+  const char *slash = std::strrchr(name, '/');
+  const char *basename = slash ? slash + 1 : name;
+  detail::FindLibCtx ctx{basename, std::strlen(basename), nullptr};
+  dl_iterate_phdr(detail::findLibCallback, &ctx);
+  return ctx.foundPath ? std::string(ctx.foundPath) : std::string();
+}
+
+inline void *findLoadedLib(const char *name) {
+  auto path = findLoadedLibPath(name);
+  if (!path.empty()) {
+    // Use RTLD_LAZY to get a handle. The library is already resident
+    // (found via dl_iterate_phdr) so this won't load a second copy;
+    // dlopen deduplicates by resolved inode.
+    return dlopen(path.c_str(), RTLD_LOCAL | RTLD_LAZY);
+  }
+  return nullptr;
+}
+
 template <typename ExternLib> class Dispatch {
 public:
   Dispatch() = delete;
 
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
-      // If not found, try to load it from the default path
       auto dir =
           ExternLib::pathEnv == nullptr ? "" : getStrEnv(ExternLib::pathEnv);
       if (!dir.empty()) {
         auto fullPath = dir + "/" + name;
         *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
       } else {
-        // Only if the default path is not set, we try to load it from the
-        // system.
-        // First reuse the existing handle
-        *lib = dlopen(name, RTLD_NOLOAD);
+        *lib = findLoadedLib(name);
         if (*lib == nullptr) {
-          // If not found, try to load it from LD_LIBRARY_PATH
           *lib = dlopen(name, RTLD_LOCAL | RTLD_LAZY);
         }
       }

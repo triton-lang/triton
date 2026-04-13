@@ -2,6 +2,7 @@
 
 #include "Context/Context.h"
 #include "Data/Metric.h"
+#include "Driver/Dispatch.h"
 #include "Driver/GPU/HipApi.h"
 #include "Driver/GPU/RocprofApi.h"
 #include "Profiler/GPUProfiler.h"
@@ -142,6 +143,64 @@ std::unique_ptr<Metric> convertDispatchToMetric(
       static_cast<uint64_t>(record->end_timestamp), 1, deviceId,
       static_cast<uint64_t>(DeviceType::HIP),
       static_cast<uint64_t>(record->dispatch_info.queue_id.handle));
+}
+
+// ---- Kernel name resolution at API ENTER time ----
+
+const char *resolveKernelNameAtEnter(
+    rocprofiler_tracing_operation_t op,
+    const rocprofiler_callback_tracing_hip_api_data_t *payload) {
+  switch (op) {
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchKernel:
+    return hip::getKernelNameRefByPtr(
+        payload->args.hipLaunchKernel.function_address,
+        payload->args.hipLaunchKernel.stream);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchKernel:
+    return hip::getKernelNameRefByPtr(
+        payload->args.hipExtLaunchKernel.function_address,
+        payload->args.hipExtLaunchKernel.stream);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchCooperativeKernel:
+    return hip::getKernelNameRefByPtr(
+        payload->args.hipLaunchCooperativeKernel.func,
+        payload->args.hipLaunchCooperativeKernel.stream);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchKernel:
+    return hip::getKernelNameRef(payload->args.hipModuleLaunchKernel.func);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtModuleLaunchKernel:
+    return hip::getKernelNameRef(payload->args.hipExtModuleLaunchKernel.func);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipHccModuleLaunchKernel:
+    return hip::getKernelNameRef(payload->args.hipHccModuleLaunchKernel.func);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernel:
+    return hip::getKernelNameRef(
+        payload->args.hipModuleLaunchCooperativeKernel.func);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchMultiKernelMultiDevice: {
+    const auto *params =
+        payload->args.hipExtLaunchMultiKernelMultiDevice.launchParamsList;
+    if (params &&
+        payload->args.hipExtLaunchMultiKernelMultiDevice.numDevices > 0)
+      return hip::getKernelNameRefByPtr(params->func, params->stream);
+    return nullptr;
+  }
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchCooperativeKernelMultiDevice: {
+    const auto *params =
+        payload->args.hipLaunchCooperativeKernelMultiDevice.launchParamsList;
+    if (params &&
+        payload->args.hipLaunchCooperativeKernelMultiDevice.numDevices > 0)
+      return hip::getKernelNameRefByPtr(params->func, params->stream);
+    return nullptr;
+  }
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernelMultiDevice: {
+    const auto *params =
+        payload->args.hipModuleLaunchCooperativeKernelMultiDevice
+            .launchParamsList;
+    if (params &&
+        payload->args.hipModuleLaunchCooperativeKernelMultiDevice.numDevices >
+            0)
+      return hip::getKernelNameRef(params->function);
+    return nullptr;
+  }
+  default:
+    return nullptr;
+  }
 }
 
 // ---- Operation classification ----
@@ -317,7 +376,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
   if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
     if (!isKernelOp)
       return;
-    threadState.enterOp(Scope(""));
+
+    const char *resolvedName = resolveKernelNameAtEnter(operation, payload);
+    threadState.enterOp(
+        Scope(resolvedName ? std::string(resolvedName) : std::string()));
     auto &dataToEntry = threadState.dataToEntry;
     size_t numInstances = 1;
     if (operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch) {
@@ -700,6 +762,44 @@ RocprofSDKProfiler::RocprofSDKProfiler() {
   auto &state = getRuntimeState();
   std::lock_guard<std::mutex> lock(state.mutex);
   if (!state.configured) {
+    // Promote both librocprofiler-register and librocprofiler-sdk to
+    // RTLD_GLOBAL so that (a) the SDK's late-start mechanism can find
+    // rocprofiler_register_invoke_all_registrations via dlsym(RTLD_DEFAULT),
+    // and (b) rocprofiler-register resolves the weak rocprofiler_set_api_table
+    // to the SDK's strong definition when HSA registers its API tables.
+    //
+    // Derive the library directory from the already-loaded register library
+    // to avoid accidentally pulling in a system installation from
+    // /opt/rocm-*/lib/ when a pip-installed copy exists in .venv.
+    std::string libDir;
+    auto regPath = findLoadedLibPath("librocprofiler-register.so");
+    if (!regPath.empty()) {
+      auto pos = regPath.rfind('/');
+      if (pos != std::string::npos)
+        libDir = regPath.substr(0, pos + 1);
+    }
+
+    for (const char *lib :
+         {"librocprofiler-register.so", "librocprofiler-sdk.so"}) {
+      void *h = nullptr;
+      if (!libDir.empty()) {
+        auto path = findLoadedLibPath(lib);
+        if (!path.empty())
+          h = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+        if (!h)
+          h = dlopen((libDir + lib).c_str(), RTLD_NOW | RTLD_GLOBAL);
+      }
+      if (!h)
+        h = dlopen(lib, RTLD_NOW | RTLD_GLOBAL);
+      if (h) {
+        if (std::string(lib) == "librocprofiler-sdk.so") {
+          rocprofiler::ExternLibRocprofiler::lib = h;
+        } else {
+          dlclose(h);
+        }
+      }
+    }
+
     rocprofiler::forceConfigure<true>(&protonConfigure);
   }
   if (!state.codeObjectStarted) {
