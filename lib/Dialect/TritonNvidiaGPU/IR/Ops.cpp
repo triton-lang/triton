@@ -474,9 +474,7 @@ LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
   MemDescType srcType = getSrc().getType();
   if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
     return failure();
-  if (failed(verifyAsyncTMAStoreOp(*this, getDesc(), srcType)))
-    return failure();
-  return success();
+  return verifyAsyncTMAStoreOp(*this, getDesc(), srcType);
 }
 
 // -- AsyncTMAReduceOp --
@@ -488,9 +486,7 @@ LogicalResult AsyncTMAReduceOp::verify() {
   MemDescType srcType = getSrc().getType();
   if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
     return failure();
-  if (failed(verifyAsyncTMAStoreOp(*this, getDesc(), srcType)))
-    return failure();
-  return success();
+  return verifyAsyncTMAStoreOp(*this, getDesc(), srcType);
 }
 
 // -- AsyncTMAGatherOp --
