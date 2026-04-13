@@ -290,6 +290,62 @@ LogicalResult ClusterBarrierOp::verify() {
 }
 
 // -- TMA operation verifiers --
+static std::string formatCGALayout(CGAEncodingAttr cgaLayout) {
+  std::string str;
+  llvm::raw_string_ostream os(str);
+  auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
+  os << "[";
+  llvm::interleaveComma(cgaLayout.getLinearLayout().getBases().lookup(kBlock),
+                        os, [&](const auto &basis) {
+                          os << "[";
+                          llvm::interleaveComma(basis, os);
+                          os << "]";
+                        });
+  os << "]";
+  return os.str();
+}
+
+static LogicalResult verifyBarrierCGALayout(Operation *op, Value barrier,
+                                            CGAEncodingAttr expectedCGALayout,
+                                            StringRef barrierName) {
+  auto barrierTy = cast<MemDescType>(barrier.getType());
+  auto actualCGALayout = getCGALayout(barrierTy.getEncoding());
+  if (actualCGALayout != expectedCGALayout)
+    return op->emitOpError() << barrierName << " cga_layout must be "
+                             << formatCGALayout(expectedCGALayout) << ", got "
+                             << formatCGALayout(actualCGALayout);
+  return success();
+}
+
+static LogicalResult verifyCompletionBarrierLayout(Operation *op,
+                                                   Value barrier) {
+  auto expectedCGALayout =
+      CGAEncodingAttr::get1DLayout(op->getContext(), gpu::lookupNumCTAs(op));
+  return verifyBarrierCGALayout(op, barrier, expectedCGALayout,
+                                "completion barrier");
+}
+
+static LogicalResult verifyTMABarrierLayout(Operation *op, Value barrier) {
+  auto twoCTAsAttr =
+      op->getParentOfType<ModuleOp>()->getAttrOfType<BoolAttr>(AttrTwoCTAsName);
+  if (!twoCTAsAttr)
+    return success();
+
+  auto ctx = op->getContext();
+  int numCTAs = gpu::lookupNumCTAs(op);
+  CGAEncodingAttr expectedCGALayout;
+  if (twoCTAsAttr.getValue()) {
+    auto kBlock = StringAttr::get(ctx, "block");
+    auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
+    auto layout = LinearLayout::zeros1D(2, kBlock, dim) *
+                  LinearLayout::identity1D(numCTAs / 2, kBlock, dim);
+    expectedCGALayout = CGAEncodingAttr::get(ctx, std::move(layout));
+  } else {
+    expectedCGALayout = CGAEncodingAttr::get1DLayout(ctx, numCTAs);
+  }
+  return verifyBarrierCGALayout(op, barrier, expectedCGALayout, "TMA barrier");
+}
+
 static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
                                        Attribute enc) {
   auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(enc);
@@ -317,6 +373,8 @@ static LogicalResult verifyAsyncTMALoadOp(Operation *op,
                                           TypedValue<MemDescType> barrier,
                                           MemDescType resultType) {
   if (failed(verifyBarrierType(op, barrier.getType())))
+    return failure();
+  if (failed(verifyTMABarrierLayout(op, barrier)))
     return failure();
   if (!resultType.getMutableMemory())
     return op->emitOpError("cannot store into immutable memory");
@@ -596,34 +654,6 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
     diag << "]";
     return diag;
   }
-  return success();
-}
-
-static std::string formatCGALayout(CGAEncodingAttr cgaLayout) {
-  std::string str;
-  llvm::raw_string_ostream os(str);
-  auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
-  os << "[";
-  llvm::interleaveComma(cgaLayout.getLinearLayout().getBases().lookup(kBlock),
-                        os, [&](const auto &basis) {
-                          os << "[";
-                          llvm::interleaveComma(basis, os);
-                          os << "]";
-                        });
-  os << "]";
-  return os.str();
-}
-
-static LogicalResult verifyCompletionBarrierLayout(Operation *op,
-                                                   Value barrier) {
-  auto barrierTy = cast<MemDescType>(barrier.getType());
-  auto expectedCGALayout =
-      CGAEncodingAttr::get1DLayout(op->getContext(), gpu::lookupNumCTAs(op));
-  auto actualCGALayout = getCGALayout(barrierTy.getEncoding());
-  if (actualCGALayout != expectedCGALayout)
-    return op->emitOpError("completion barrier cga_layout must be ")
-           << formatCGALayout(expectedCGALayout) << ", got "
-           << formatCGALayout(actualCGALayout);
   return success();
 }
 
@@ -1113,7 +1143,6 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
   if (!type.getEncoding())
     return success();
 
-  auto maxnreg = getContextualMaxNReg(op);
   if (isDistributedLayoutTMemCompatible(op, type, memdesc))
     return success();
 
@@ -1257,10 +1286,6 @@ LogicalResult TMEMCopyOp::verify() {
            << srcTy.getShape() << " must match destination shape "
            << dstTy.getShape();
 
-  if (getBarrier() && !isa<triton::gpu::SharedMemorySpaceAttr>(
-                          getBarrier().getType().getMemorySpace())) {
-    return emitOpError("The optional barrier should be a shared memory buffer");
-  }
   if (!getDst().getType().getMutableMemory()) {
     return emitOpError("Cannot copy into an immutable alloc");
   }

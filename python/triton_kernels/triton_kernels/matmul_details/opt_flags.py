@@ -1,6 +1,7 @@
 # isort: off
 # fmt: off
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 import triton
@@ -11,6 +12,7 @@ import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.strided import StridedLayout
 from triton_kernels.tensor_details.layout_details.base import Layout
+from triton_kernels.tensor_details.layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 
 @dataclass
@@ -193,6 +195,7 @@ def make_default_opt_flags_nvidia(
     constraints,
     x_uses_tma_when_persistent=True,
     mx_block_size=None,
+    epilogue_reduction_n=1,
 ):
     constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap"}
     unsupported = set(constraints.keys()) - constraints_supported
@@ -298,6 +301,10 @@ def make_default_opt_flags_nvidia(
     elif can_use_split_k and not enforce_bitwise_invariance:
         estimated_actual_grid_size = opt_flags_nvidia.compute_grid_size(None, batch_size, m, n, block_m, block_n)
         split_k = opt_flags_nvidia.compute_split_k(block_k, k, estimated_actual_grid_size)
+    if split_k > 1:
+        # Split-K writes full-N fp32 scratch and applies fused reductions in the
+        # reduce kernel, not in the matmul epilogue.
+        epilogue_reduction_n = 1
     compute_num_stages_args = (
         precision_config,
         is_persistent,
@@ -311,6 +318,7 @@ def make_default_opt_flags_nvidia(
         epilogue_effective_itemsize,
         has_y_acc_in,
         mx_block_size,
+        epilogue_reduction_n,
     )
 
     num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
@@ -373,36 +381,46 @@ def make_default_opt_flags_nvidia(
 # User Interface
 # --------------
 
-_opt_flags_constraints: dict = dict()
-_opt_flags: OptFlags | None = None
+_opt_flags_constraints: ContextVar[dict | None] = ContextVar("opt_flags_constraints", default=None)
+_opt_flags: ContextVar[OptFlags | None] = ContextVar("opt_flags", default=None)
+
+def _get_opt_flags_constraints() -> dict:
+    constraints = _opt_flags_constraints.get()
+    return {} if constraints is None else constraints
 
 def update_opt_flags_constraints(constraints: dict[str, int]):
-    global _opt_flags_constraints
-    _opt_flags_constraints.update(constraints)
+    updated = _get_opt_flags_constraints().copy()
+    updated.update(constraints)
+    _opt_flags_constraints.set(updated)
 
 def reset_opt_flags_constraints():
-    global _opt_flags_constraints
-    _opt_flags_constraints = dict()
+    _opt_flags_constraints.set(None)
 
 @contextmanager
 def scoped_opt_flags_constraints(constraints):
-    saved = dict(_opt_flags_constraints)
-    _opt_flags_constraints.update(constraints)
+    updated = _get_opt_flags_constraints().copy()
+    updated.update(constraints)
+    token = _opt_flags_constraints.set(updated)
     try:
         yield
     finally:
-        _opt_flags_constraints.clear()
-        _opt_flags_constraints.update(saved)
+        _opt_flags_constraints.reset(token)
 
 def reset_opt_flags():
-    global _opt_flags
-    _opt_flags = None
+    _opt_flags.set(None)
 
 def set_opt_flags(opt_flags: OptFlags):
-    global _opt_flags
-    assert not _opt_flags_constraints, "setting constraints is incompatible with manual flags override"
-    assert not _opt_flags, "opt_flags already set; please reset to None first"
-    _opt_flags = opt_flags
+    assert not _get_opt_flags_constraints(), "setting constraints is incompatible with manual flags override"
+    assert _opt_flags.get() is None, "opt_flags already set; please reset to None first"
+    _opt_flags.set(opt_flags)
+
+@contextmanager
+def scoped_opt_flags(opt_flags: OptFlags):
+    token = _opt_flags.set(opt_flags)
+    try:
+        yield
+    finally:
+        _opt_flags.reset(token)
 
 class InapplicableConstraint(Exception):
     pass
@@ -425,20 +443,28 @@ def make_opt_flags(
     block_k,
     mx_block_size=None,
     x_uses_tma_when_persistent=True,
+    rhs_layout=None,
+    epilogue_reduction_n=1,
 ):
-    if _opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
+    opt_flags_constraints = _get_opt_flags_constraints()
+    if opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
-    if _opt_flags_constraints.get("split_k") is not None and _opt_flags_constraints.get("split_k") > 1 and not can_use_split_k:
+    if opt_flags_constraints.get("split_k") is not None and opt_flags_constraints.get("split_k") > 1 and not can_use_split_k:
         raise InapplicableConstraint("cannot enforce `split_k=True` constraint")
-    if _opt_flags_constraints.get("max_allowable_mn"):
-        if not _opt_flags_constraints.get("split_k"):
+    if opt_flags_constraints.get("max_allowable_mn"):
+        if not opt_flags_constraints.get("split_k"):
             raise InapplicableConstraint("split_k also needs to be provided with max_allowable_mn")
     enforce_bitwise_invariance = precision_config.enforce_bitwise_invariance
-    if _opt_flags is not None:
-        assert not _opt_flags_constraints
+    opt_flags = _opt_flags.get()
+    if opt_flags is not None:
+        assert not opt_flags_constraints
         assert block_k is None
-        return _opt_flags
-    opt_flags_constraints = _opt_flags_constraints
+        return opt_flags
+    if isinstance(rhs_layout, BlackwellMX4ValueShuffledLayout):
+        opt_flags_constraints = opt_flags_constraints.copy()
+        opt_flags_constraints.setdefault("block_k", rhs_layout.block_k)
+        opt_flags_constraints.setdefault("block_n", rhs_layout.block_n)
+        opt_flags_constraints.setdefault("disable_mx4_block_swap", True)
     if block_k is not None:
         opt_flags_constraints = opt_flags_constraints.copy()
         opt_flags_constraints.update(block_k=block_k, split_k=1)
@@ -454,5 +480,6 @@ def make_opt_flags(
             *args,
             x_uses_tma_when_persistent=x_uses_tma_when_persistent,
             mx_block_size=mx_block_size,
+            epilogue_reduction_n=epilogue_reduction_n,
         )
     assert False

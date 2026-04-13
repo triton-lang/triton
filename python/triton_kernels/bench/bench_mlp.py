@@ -7,74 +7,18 @@ import argparse
 import triton_kernels.roofline as roofline
 from triton_kernels.swiglu import swiglu_fn
 from triton_kernels.matmul import matmul, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
-from triton_kernels.matmul_details.opt_flags import make_opt_flags, scoped_opt_flags_constraints
+from triton_kernels.matmul_details.opt_flags import scoped_opt_flags_constraints
 from triton_kernels.target_info import get_cdna_version
 from triton_kernels.tensor_details import layout
-from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata  # ragged tensor
-from triton_kernels.tensor import is_tma_compliant, Tensor, torch_dtype_to_dtype
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_assignment, SymmetricMemoryPool
 from triton_kernels.distributed_details.mesh import Mesh
 # quantization
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4
 from triton_kernels.numerics import InFlexData
 from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
-
-
-def _shuffle_mx4_weights(tensor, block_k, block_n):
-    """
-    Convert MX4 weights from BlackwellMXValueLayout to BlackwellMX4ValueShuffledLayout.
-
-    Works directly with the column-major storage data, bypassing the canonical format
-    round-trip which uses a different byte-level packing convention.
-    """
-    from triton_kernels.tensor import Storage, Tensor as TKTensor
-    storage = tensor.storage
-    # The stored data is column-major [E, K_packed_padded, N] with stride(-2)==1
-    data = storage.data
-    E = tensor.shape[0]
-    K_logical = tensor.shape[-2]
-    N = tensor.shape[-1]
-    K_packed = K_logical // 2  # 2 FP4 values per byte
-    # Trim any padding from the BlackwellMXValueLayout
-    data = data[:, :K_packed, :N].contiguous()
-    # Now apply the shuffled layout's tiling
-    shuffled_layout = BlackwellMX4ValueShuffledLayout(block_k=block_k, block_n=block_n)
-    transformation = shuffled_layout.make_transformation([E, K_logical, N], True)
-    shuffled_data = transformation.swizzle_data(data)
-    return TKTensor(Storage(shuffled_data, shuffled_layout), shape=list(tensor.shape), dtype=tensor.dtype)
-
-
-def _infer_opt_flags(x, w, ragged_metadata, pc):
-    """
-    Infer opt_flags by calling make_opt_flags with the same parameters matmul would use.
-    This ensures the block shapes match what the kernel will actually select.
-    """
-    if not isinstance(w, Tensor):
-        raise TypeError("w must be a Tensor for block shape inference")
-    K = w.shape[-2]
-    N = w.shape[-1]
-    M = x.shape[-2]
-    batch_size = 1
-    if not isinstance(x, Tensor):
-        x = wrap_torch_tensor(x)
-    # Convert out_dtype from torch.dtype to triton dtype (make_opt_flags expects .bitwidth)
-    out_dtype = pc.out_dtype or x.dtype
-    out_dtype = torch_dtype_to_dtype(out_dtype)
-    x_transpose = x.stride(-1) != 1
-    b_scale = pc.b_mx_scale
-    can_use_tma = (x.numel() > 0 and is_tma_compliant(x) and w.numel() > 0 and is_tma_compliant(w)
-                   and (b_scale is None or is_tma_compliant(b_scale)))
-    # Respects any constraints set by the caller via scoped_opt_flags_constraints
-    opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, pc, batch_size, M, N, K, ragged_metadata, can_use_tma,
-                               False,  # can_use_split_k=False for MoE
-                               None,  # epilogue_effective_itemsize
-                               x_transpose, False,  # has_y_acc_in
-                               None,  # block_k
-                               )
-    return opt_flags
 
 
 def was_launched_with_torchrun():
@@ -102,8 +46,14 @@ def quantize_weight(w, dtype, **opt):
         assert dtype == FP4, f"{dtype=}"
         w, w_scale = downcast_to_mxfp(w.to(torch.bfloat16), torch.uint8, axis=1)
         if opt:
-            w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"])
-            w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"])
+            w = wrap_torch_tensor(w, dtype=FP4)
+            value_layout = opt.get("value_layout")
+            if value_layout is not None:
+                w = convert_layout(w, value_layout)
+            w_scale = wrap_torch_tensor(w_scale)
+            scale_layout = opt.get("scale_layout")
+            if scale_layout is not None:
+                w_scale = convert_layout(w_scale, scale_layout)
         return w, InFlexData(), w_scale
 
 
@@ -186,7 +136,10 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     opt2 = dict()
     if w_dtype == FP4:
         num_warps = 4 if batch <= 512 else 8
-        value_layout = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
+        value_layout = layout.make_default_matmul_mxfp4_w_layout(
+            mx_axis=1,
+            allow_blackwell_value_shuffle=shuffle_mx4,
+        )
         scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
         opt1 = {
             "value_layout": value_layout,
@@ -223,58 +176,13 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     expt_dict = make_expt_dict_uniform(EP, n_expts_tot)
     expt_assignment = make_expt_assignment(EP, n_expts_tot, expt_dict, torch.device(dev))
 
-    # For MX4 shuffling: run one dry-run iteration to collect routing data, then infer block shapes
-    if shuffle_mx4 and w_dtype == FP4:
-        # Disable block swap: with shuffled weights, tile loads are already contiguous,
-        # so the swap's cacheline optimization is unnecessary. More importantly, disabling
-        # the swap gives block_k=128 (vs 256), halving per-stage smem footprint, which
-        # enables fitting 5 pipeline stages instead of 4 — a bigger win than the swap.
-        dry_run_constraints = {"disable_mx4_block_swap": True}
-        if epilogue_subtile_fc1 is not None:
-            dry_run_constraints["epilogue_subtile"] = epilogue_subtile_fc1
-        with scoped_opt_flags_constraints(dry_run_constraints):
-            # Dry-run routing to get ragged metadata and dispatched activations
-            l_dry = matmul(x_dp_local_bf16, wg_global, bg_global, precision_config=pcg)
-            l_active_dry = topk(l_dry, n_expts_act, apply_softmax=True, all_gather=True, symm_mem_pool=symm_mem_pool)
-            active_indx_dry = l_active_dry.indx
-            expt_sizes_dry = l_active_dry.mask_metadata.col_sum
-            dispatch_indx_dry = l_active_dry.mask_metadata.row_sorted_indx
-            x_global_meta_dry = make_ragged_tensor_metadata(expt_sizes_dry, dispatch_indx_dry.shape[0])
-            y_dry = convert_dp_to_ep(x_dp_local_fp8, expt_assignment, active_indx_dry, dispatch_indx_dry, symm_mem_pool)
-            y_meta_dry = remap_ragged_tensor_metadata(x_global_meta_dry, expt_assignment.expt_map[rank, :])
-
-            if y_dry.nelement() > 0:
-                # Infer block shapes for W1 (includes the block swap)
-                opt_flags_w1 = _infer_opt_flags(y_dry, w1_ep_local, y_meta_dry, pc1)
-                w1_block_k, w1_block_n = opt_flags_w1.block_k, opt_flags_w1.block_n
-                w1_ep_local = _shuffle_mx4_weights(w1_ep_local, w1_block_k, w1_block_n)
-
-                # Run W1 once to get intermediate for W2 block shape inference
-                y_fc1_dry = matmul(y_dry, w1_ep_local, b1_ep_local, a_ragged_metadata=y_meta_dry, precision_config=pc1,
-                                   fused_activation=act1)
-
-                # Infer block shapes for W2 (includes the block swap)
-                opt_flags_w2 = _infer_opt_flags(y_fc1_dry, w2_ep_local, y_meta_dry, pc2)
-                w2_block_k, w2_block_n = opt_flags_w2.block_k, opt_flags_w2.block_n
-                w2_ep_local = _shuffle_mx4_weights(w2_ep_local, w2_block_k, w2_block_n)
-
-                print(f"Shuffled layout: FC1 block_k={w1_block_k}, block_n={w1_block_n}, "
-                      f"stages={opt_flags_w1.num_stages}, subtile={opt_flags_w1.epilogue_subtile}; "
-                      f"FC2 block_k={w2_block_k}, block_n={w2_block_n}, "
-                      f"stages={opt_flags_w2.num_stages}, subtile={opt_flags_w2.epilogue_subtile}")
-        torch.cuda.synchronize()
-
     # Build per-kernel constraints
     fc1_constraints = {}
-    if shuffle_mx4:
-        fc1_constraints["disable_mx4_block_swap"] = True
     if num_stages_fc1 is not None:
         fc1_constraints["num_stages"] = num_stages_fc1
     if epilogue_subtile_fc1 is not None:
         fc1_constraints["epilogue_subtile"] = epilogue_subtile_fc1
     fc2_constraints = {}
-    if shuffle_mx4:
-        fc2_constraints["disable_mx4_block_swap"] = True
     if num_stages_fc2 is not None:
         fc2_constraints["num_stages"] = num_stages_fc2
 

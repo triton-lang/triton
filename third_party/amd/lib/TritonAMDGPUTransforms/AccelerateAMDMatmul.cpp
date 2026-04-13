@@ -1041,7 +1041,6 @@ public:
     a = convertInputLayout(a, 0);
     b = convertInputLayout(b, 1);
 
-    StringAttr kWarp = StringAttr::get(ctx, "warp");
     auto convertScaleLayout = [&](TensorValue scale,
                                   llvm::ArrayRef<int64_t> valShape,
                                   LinearLayout dotLL, int idx) -> Value {
@@ -1171,11 +1170,6 @@ public:
     auto newAcc = ttg::ConvertLayoutOp::create(rewriter, dotOp.getC().getLoc(),
                                                newRetType, dotOp.getC());
 
-    StringAttr kRegister = StringAttr::get(ctx, "register");
-    StringAttr kLane = StringAttr::get(ctx, "lane");
-    StringAttr kWarp = StringAttr::get(ctx, "warp");
-    StringAttr kBlock = StringAttr::get(ctx, "block");
-
     auto order = ttg::getMatrixOrder(rank, /*rowMajor=*/true);
     auto standardOutDims = standardOutDimNames(ctx, rank);
 
@@ -1289,7 +1283,6 @@ public:
         newBScale, aElemType, bElemType, dotOp.getFastMath(),
         dotOp.getLhsKPack(), dotOp.getRhsKPack());
 
-    auto m = dotOp->getParentOfType<ModuleOp>();
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
                                                       newDot);
 
@@ -1385,8 +1378,6 @@ FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
 
   auto resShape = cType.getShape();
   auto rank = resShape.size();
-  auto M = resShape[rank - 2];
-  auto N = resShape[rank - 1];
 
   unsigned mDim = 16;
   unsigned nDim = 16;
@@ -1470,7 +1461,7 @@ public:
     // get WMMA encoding for the given number of warps
     int numWarps = ttg::lookupNumWarps(dotOp);
 
-    ttg::AMDWmmaEncodingAttr wmmaEnc, wmmaEncA, wmmaEncB;
+    ttg::AMDWmmaEncodingAttr wmmaEnc;
 
     auto CGALayout = ttg::getCGALayout(oldRetEncoding);
 

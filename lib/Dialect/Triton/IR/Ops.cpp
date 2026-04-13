@@ -870,10 +870,9 @@ void ReshapeOp::build(OpBuilder &builder, OperationState &state,
   auto srcEnc = srcTy.getEncoding();
   Attribute dstEnc;
   if (srcEnc) {
-    auto result =
-        cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape, dstEnc,
-                                     allowReorder, state.location);
+    auto result = cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+                      ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape,
+                                               dstEnc, state.location);
     assert(succeeded(result));
   }
   auto dstTy = RankedTensorType::get(shape, srcTy.getElementType(), dstEnc);
@@ -933,20 +932,17 @@ LogicalResult ReshapeOp::verify() {
                      "encodings, or (b) neither does.");
   }
 
-  if (!srcEnc) {
+  if (!srcEnc || getAllowReorder()) {
     return success();
   }
 
-  // Check that we can infer the dst encoding from the src encoding and that the
-  // inferred dst encoding is the same as the given dst encoding. We pass the
-  // current dst encoding as a hint so that allowReorder reshapes are guaranteed
-  // to produce the current encoding iff it is valid.
-  Attribute inferredDstEnc = dstEnc;
+  // Check that we can infer the dst encoding from the src encoding
+  // and that the inferred dst encoding is the same as the given dst encoding
+  Attribute inferredDstEnc;
   auto layoutInterface =
       cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
   auto result = layoutInterface->inferReshapeOpEncoding(
-      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc,
-      getAllowReorder(), getLoc());
+      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc, getLoc());
   if (failed(result))
     return failure();
   return layoutInterface->verifyLayoutsAreEqual(
@@ -1097,6 +1093,113 @@ void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
   auto descTy = TensorDescType::get(blockShape64, elemTy, isSignedInteger);
   auto paddingAttr = PaddingOptionAttr::get(builder.getContext(), padding);
   return build(builder, state, descTy, base, shape, strides, paddingAttr);
+}
+
+//-- IntToPtrOp --
+// Pattern 1: int_to_ptr(ptr_to_int(ptr)) -> ptr
+// Eliminates round-trip pointer conversions
+struct CanonicalizeIntToPtrOfPtrToInt : public OpRewritePattern<IntToPtrOp> {
+  CanonicalizeIntToPtrOfPtrToInt(MLIRContext *context)
+      : OpRewritePattern<IntToPtrOp>(context, 1) {}
+
+  LogicalResult matchAndRewrite(IntToPtrOp intToPtrOp,
+                                PatternRewriter &rewriter) const override {
+    // Match: int_to_ptr(ptr_to_int(ptr))
+    auto ptrToIntOp = intToPtrOp.getSrc().getDefiningOp<PtrToIntOp>();
+    if (!ptrToIntOp)
+      return failure();
+
+    // Replace with the original pointer
+    rewriter.replaceOp(intToPtrOp, ptrToIntOp.getSrc());
+    return success();
+  }
+};
+
+// Pattern 2: int_to_ptr(addi(val, constant_offset)) -> addptr(int_to_ptr(val),
+// element_offset). Only when offset is constant and divisible by element size
+struct CanonicalizeIntToPtrWithAdd : public OpRewritePattern<IntToPtrOp> {
+  CanonicalizeIntToPtrWithAdd(MLIRContext *context)
+      : OpRewritePattern<IntToPtrOp>(context, 1) {}
+
+  LogicalResult matchAndRewrite(IntToPtrOp intToPtrOp,
+                                PatternRewriter &rewriter) const override {
+    // Match: int_to_ptr(addi(val, constant_offset))
+    auto addOp = intToPtrOp.getSrc().getDefiningOp<arith::AddIOp>();
+    if (!addOp)
+      return failure();
+
+    Value intValue = addOp.getLhs();
+    Value offsetValue = addOp.getRhs();
+
+    // Get the element size from the result pointer type
+    auto resultType = intToPtrOp.getType();
+    auto ptrType = cast<PointerType>(getElementTypeOrSelf(resultType));
+    int64_t elemSizeBits = triton::getPointeeBitWidth(ptrType);
+    int64_t elemSizeBytes = std::max<int64_t>(1, elemSizeBits / 8);
+
+    // Check if offset is a constant (either directly or via splat)
+    // Only apply canonicalization for constant offsets
+    std::optional<int64_t> constantByteOffset;
+    if (auto constOp = offsetValue.getDefiningOp<arith::ConstantOp>()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+        constantByteOffset = intAttr.getValue().getSExtValue();
+      } else if (auto splatAttr =
+                     dyn_cast<SplatElementsAttr>(constOp.getValue())) {
+        constantByteOffset =
+            splatAttr.getSplatValue<IntegerAttr>().getValue().getSExtValue();
+      }
+    }
+
+    if (!constantByteOffset.has_value())
+      return failure(); // Only handle constant offsets
+
+    // Check if the byte offset is divisible by element size
+    if (constantByteOffset.value() % elemSizeBytes != 0)
+      return failure();
+
+    // Compute element offset at compile time
+    int64_t elementOffset = constantByteOffset.value() / elemSizeBytes;
+
+    // Create int_to_ptr(val) for the base
+    auto loc = intToPtrOp.getLoc();
+    Value basePtr = IntToPtrOp::create(rewriter, loc, resultType, intValue);
+
+    // Create the element offset constant
+    Value elementOffsetValue;
+
+    // Get the integer type from the offset value to match its type
+    Type offsetElemType;
+    if (auto tensorType = dyn_cast<RankedTensorType>(offsetValue.getType())) {
+      offsetElemType = tensorType.getElementType();
+    } else {
+      offsetElemType = offsetValue.getType();
+    }
+
+    if (auto tensorType = dyn_cast<RankedTensorType>(resultType)) {
+      // Create a splat constant for tensor types, matching the offset's type
+      auto offsetAttr = rewriter.getIntegerAttr(offsetElemType, elementOffset);
+      auto splatType = RankedTensorType::get(
+          tensorType.getShape(), offsetElemType, tensorType.getEncoding());
+      auto splatAttr = SplatElementsAttr::get(splatType, offsetAttr);
+      elementOffsetValue = arith::ConstantOp::create(rewriter, loc, splatAttr);
+    } else {
+      // Scalar case
+      elementOffsetValue = arith::ConstantOp::create(
+          rewriter, loc,
+          rewriter.getIntegerAttr(offsetElemType, elementOffset));
+    }
+
+    // Replace with addptr(int_to_ptr(val), element_offset)
+    rewriter.replaceOpWithNewOp<AddPtrOp>(intToPtrOp, resultType, basePtr,
+                                          elementOffsetValue);
+    return success();
+  }
+};
+
+void IntToPtrOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                             MLIRContext *context) {
+  results.add<CanonicalizeIntToPtrOfPtrToInt, CanonicalizeIntToPtrWithAdd>(
+      context);
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and
@@ -1418,7 +1521,7 @@ static LogicalResult verifyGatherScatterResultType(Operation *op,
 LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
                                     ShapedType resultType,
                                     ShapedType indicesType) {
-  // Gather from `!tt.tensordesc<tensor<1xMxdtype>>`.
+  // Gather from `!tt.tensordesc<1xMxdtype>`.
   if (blockType.getRank() != 2) {
     return op->emitOpError("descriptor block must be a 2D tensor, but got ")
            << blockType;

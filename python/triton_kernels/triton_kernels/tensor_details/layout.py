@@ -24,8 +24,15 @@ __all__ = [
 ]
 
 
-def make_default_matmul_mxfp4_w_layout(mx_axis: int):
+def make_default_matmul_mxfp4_w_layout(
+    mx_axis: int,
+    allow_blackwell_value_shuffle: bool = False,
+    block_k: int = 128,
+    block_n: int = 256,
+):
     if cuda_capability_geq(10):
+        if allow_blackwell_value_shuffle:
+            return BlackwellMX4ValueShuffledLayout(block_k=block_k, block_n=block_n)
         return BlackwellMXValueLayout()
     elif cuda_capability_geq(9):
         return HopperMXValueLayout(mx_axis=mx_axis, mma_version=3)

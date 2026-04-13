@@ -95,6 +95,11 @@ struct ScratchInfo {
   RankedTensorType tensorType;
 };
 
+struct ScratchState {
+  std::optional<ScratchInfo> canonical;
+  DenseMap<Region *, ScratchInfo> byScope;
+};
+
 class TmemScratchManager {
 public:
   ttg::BlockedEncodingAttr getScratchEncoding(PatternRewriter &rewriter,
@@ -143,14 +148,19 @@ public:
     }
 
     if (auto alloc = memdesc.getDefiningOp<ttng::TMEMAllocOp>()) {
-      auto it = scratchMap.find(memdesc);
-      if (it != scratchMap.end()) {
-        auto itRegion = it->second.find(scope);
-        if (itRegion != it->second.end()) {
-          if (itRegion->second.ptr && itRegion->second.ptr.getType())
-            return itRegion->second;
-          it->second.erase(itRegion);
-        }
+      ScratchState &state = scratchMap[memdesc];
+      auto itRegion = state.byScope.find(scope);
+      if (itRegion != state.byScope.end()) {
+        if (itRegion->second.ptr && itRegion->second.ptr.getType())
+          return itRegion->second;
+        state.byScope.erase(itRegion);
+      }
+      if (state.canonical) {
+        Value ptr =
+            remapToScope(state.canonical->ptr, rewriter, scope, alloc.getLoc());
+        ScratchInfo info{ptr, state.canonical->tensorType};
+        state.byScope[scope] = info;
+        return info;
       }
 
       OpBuilder::InsertionGuard guard(rewriter);
@@ -176,10 +186,11 @@ public:
           return std::nullopt;
       }
 
-      ptr = remapToScope(ptr, rewriter, scope, loc);
+      state.canonical = ScratchInfo{ptr, tensorTy};
 
+      ptr = remapToScope(ptr, rewriter, scope, loc);
       ScratchInfo info{ptr, tensorTy};
-      scratchMap[memdesc][scope] = info;
+      state.byScope[scope] = info;
       return info;
     }
 
@@ -303,7 +314,7 @@ private:
     return scope->getArgument(captureIdx);
   }
 
-  DenseMap<Value, DenseMap<Region *, ScratchInfo>> scratchMap;
+  DenseMap<Value, ScratchState> scratchMap;
 };
 
 Value createScratchAndStore(PatternRewriter &rewriter, Location loc, Value val,
@@ -488,7 +499,6 @@ struct PayloadMixConfig {
 PayloadMixConfig getPayloadMixConfig(FloatType floatTy) {
   unsigned bitWidth = floatTy.getWidth();
   assert(bitWidth > 1 && bitWidth <= 64);
-  uint64_t fullMask = getLowBitsMask(bitWidth);
   uint64_t signMask = uint64_t{1} << (bitWidth - 1);
   uint64_t magMask = signMask - 1;
 
@@ -703,6 +713,70 @@ Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
       getU32ConstantLike(rewriter, loc, inputI.getType(), 0x236ee9bfu);
   auto scaledI = arith::MulIOp::create(rewriter, loc, inputI, rcpLog2);
   return fpsanExp2FromI32(rewriter, loc, scaledI, input.getType());
+}
+
+struct FpSanCosSin {
+  Value cos;
+  Value sin;
+};
+
+FpSanCosSin fpsanCosSinPayload(PatternRewriter &rewriter, Location loc,
+                               Value xI) {
+  Type intTy = xI.getType();
+  unsigned bitWidth = getIntBitwidth(intTy);
+  uint64_t mask = getLowBitsMask(bitWidth);
+  uint64_t rcp5 = invOddU64(5) & mask;
+  uint64_t aValue = (uint64_t{0} - ((uint64_t{3} * rcp5) & mask)) & mask;
+  uint64_t bValue = (uint64_t{4} * rcp5) & mask;
+
+  auto zero = getUIntConstantLike(rewriter, loc, intTy, 0);
+  auto one = getUIntConstantLike(rewriter, loc, intTy, 1);
+  auto two = getUIntConstantLike(rewriter, loc, intTy, 2);
+  auto a = getUIntConstantLike(rewriter, loc, intTy, aValue);
+  auto b = getUIntConstantLike(rewriter, loc, intTy, bValue);
+
+  Value c = one;
+  Value s = zero;
+  for (int bit = static_cast<int>(bitWidth) - 1; bit >= 0; --bit) {
+    Value cc = arith::MulIOp::create(rewriter, loc, c, c);
+    Value ss = arith::MulIOp::create(rewriter, loc, s, s);
+    Value cDouble = arith::SubIOp::create(rewriter, loc, cc, ss);
+    Value cs = arith::MulIOp::create(rewriter, loc, c, s);
+    Value sDouble = arith::MulIOp::create(rewriter, loc, two, cs);
+
+    Value ac = arith::MulIOp::create(rewriter, loc, a, cDouble);
+    Value bs = arith::MulIOp::create(rewriter, loc, b, sDouble);
+    Value cInc = arith::SubIOp::create(rewriter, loc, ac, bs);
+    Value as = arith::MulIOp::create(rewriter, loc, a, sDouble);
+    Value bc = arith::MulIOp::create(rewriter, loc, b, cDouble);
+    Value sInc = arith::AddIOp::create(rewriter, loc, as, bc);
+
+    auto bitMask =
+        getUIntConstantLike(rewriter, loc, intTy, uint64_t{1} << bit);
+    auto masked = arith::AndIOp::create(rewriter, loc, xI, bitMask);
+    auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                        masked, zero);
+    c = arith::SelectOp::create(rewriter, loc, isZero, cDouble, cInc);
+    s = arith::SelectOp::create(rewriter, loc, isZero, sDouble, sInc);
+  }
+
+  return {c, s};
+}
+
+Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {
+  if (!isa<FloatType>(getElementType(input.getType())))
+    return Value();
+  auto cosSin =
+      fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
+  return unembedToFloat(rewriter, loc, cosSin.cos, input.getType());
+}
+
+Value fpsanSin(PatternRewriter &rewriter, Location loc, Value input) {
+  if (!isa<FloatType>(getElementType(input.getType())))
+    return Value();
+  auto cosSin =
+      fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
+  return unembedToFloat(rewriter, loc, cosSin.sin, input.getType());
 }
 
 bool isIntLike(Type ty) { return isa<IntegerType>(getElementType(ty)); }
@@ -1024,7 +1098,6 @@ struct DotScaleConfig {
 
 Value loadScaleSlice(PatternRewriter &rewriter, Location loc, bool isLhs,
                      const DotScaleConfig &scale, Value tileIdx, Value kI32) {
-  auto i32Ty = rewriter.getI32Type();
   Value ptr = isLhs ? scale.aScalePtr : scale.bScalePtr;
   int64_t sFactor = isLhs ? scale.aScaleFactor : scale.bScaleFactor;
   int64_t sStride = isLhs ? scale.aScaleStride : scale.bScaleStride;
@@ -1311,6 +1384,36 @@ struct Exp2OpPattern : public OpRewritePattern<math::Exp2Op> {
     if (!result)
       result = fpsanUnaryTagged(rewriter, op.getLoc(), op.getOperand(),
                                 UnaryOpId::Exp2);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct CosOpPattern : public OpRewritePattern<math::CosOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(math::CosOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isFloatLike(op.getType()))
+      return failure();
+    Value result = fpsanCos(rewriter, op.getLoc(), op.getOperand());
+    if (!result)
+      result = fpsanUnaryTagged(rewriter, op.getLoc(), op.getOperand(),
+                                UnaryOpId::Cos);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct SinOpPattern : public OpRewritePattern<math::SinOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(math::SinOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isFloatLike(op.getType()))
+      return failure();
+    Value result = fpsanSin(rewriter, op.getLoc(), op.getOperand());
+    if (!result)
+      result = fpsanUnaryTagged(rewriter, op.getLoc(), op.getOperand(),
+                                UnaryOpId::Sin);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -1722,9 +1825,6 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     if (!createStoreScratchMemory(rewriter, loc, info->ptr, srcReg, srcRegTy))
       return failure();
 
-    if (Value barrier = op.getBarrier()) {
-      ttng::ArriveBarrierOp::create(rewriter, loc, barrier, 1, Value());
-    }
     rewriter.eraseOp(op);
     return success();
   }
@@ -2095,13 +2195,11 @@ public:
                  BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
                  BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
                  DivFOpPattern, PreciseDivFOpPattern, RemFOpPattern, FmaPattern,
-                 ExpOpPattern, Exp2OpPattern, ExtFOpPattern, TruncFOpPattern,
-                 FpToFpPattern, Fp4ToFpPattern, DotPattern, DotScaledPattern>(
-        &getContext());
+                 ExpOpPattern, Exp2OpPattern, CosOpPattern, SinOpPattern,
+                 ExtFOpPattern, TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
+                 DotPattern, DotScaledPattern>(&getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
-    patterns.add<UnaryPattern<math::CosOp>>(&getContext(), UnaryOpId::Cos);
-    patterns.add<UnaryPattern<math::SinOp>>(&getContext(), UnaryOpId::Sin);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);
     patterns.add<UnaryPattern<math::RsqrtOp>>(&getContext(), UnaryOpId::Rsqrt);
     patterns.add<UnaryPattern<math::ErfOp>>(&getContext(), UnaryOpId::Erf);

@@ -41,7 +41,6 @@ struct DescriptorInfo {
 
 static void setTMAPtrAxisHints(OpBuilder &builder, Value ptr) {
   auto ptrTy = cast<RankedTensorType>(ptr.getType());
-  auto elemTy = cast<tt::PointerType>(ptrTy.getElementType()).getPointeeType();
 
   Operation *def = ptr.getDefiningOp();
   if (!def)

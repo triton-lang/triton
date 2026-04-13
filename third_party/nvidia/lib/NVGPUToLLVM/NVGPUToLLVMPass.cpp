@@ -531,7 +531,6 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
   allocOp(
       {ptxBuilder.newOperand(pred, "b"), ptxBuilder.newOperand(sharedMem, "r")},
       /*onlyAttachMLIRArgs=*/true);
-  auto voidTy = void_ty(func->getContext());
   ptxBuilder.launch(rewriter, loc, void_ty(func->getContext()));
   NVVM::Barrier0Op::create(rewriter, loc);
   Value address = b.load(i32_ty, sharedMem);
@@ -556,7 +555,6 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     OpBuilder b(ret);
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
-    auto voidTy = void_ty(ctx);
     if (twoCTAs) {
       NVVM::ClusterArriveOp::create(b, loc, UnitAttr::get(ctx));
       NVVM::ClusterWaitOp::create(b, loc, UnitAttr::get(ctx));
