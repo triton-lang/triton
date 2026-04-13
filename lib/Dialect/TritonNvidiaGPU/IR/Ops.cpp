@@ -384,6 +384,15 @@ static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
 
   auto xOffsetsType = cast<RankedTensorType>(indicesType);
   if (xOffsetsType.getEncoding()) {
+    auto xCoordsLayout = triton::gpu::toLinearLayout(xOffsetsType);
+    auto kLane = StringAttr::get(op->getContext(), "lane");
+    if (getContigPerThread(xOffsetsType).front() < 4)
+      return op->emitOpError(
+          "x offsets must have at least 4 contiguous elements per thread");
+    unsigned threadsPerWarp = xCoordsLayout.getInDimSize(kLane);
+    if (xCoordsLayout.getFreeVariableMasks()[kLane] != (threadsPerWarp - 1))
+      return op->emitOpError("x offsets must be broadcasted across each warp");
+
     auto msgToShared =
         getTMAGatherScatterMsgToSharedLayout(xOffsetsType, memDescType);
     return verifyTMAMsgToSharedHasLocalOffsets(op, msgToShared);
