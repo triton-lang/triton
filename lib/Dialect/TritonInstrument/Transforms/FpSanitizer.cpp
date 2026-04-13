@@ -683,8 +683,8 @@ Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
 
   auto lower =
       arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
-  auto upper = arith::ConstantOp::create(
-      rewriter, loc, rewriter.getI32IntegerAttr(bitWidth));
+  auto upper = arith::ConstantOp::create(rewriter, loc,
+                                         rewriter.getI32IntegerAttr(bitWidth));
   auto step =
       arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(1));
   auto topBit = arith::ConstantOp::create(
@@ -752,8 +752,8 @@ FpSanCosSin fpsanCosSinPayload(PatternRewriter &rewriter, Location loc,
 
   auto lower =
       arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
-  auto upper = arith::ConstantOp::create(
-      rewriter, loc, rewriter.getI32IntegerAttr(bitWidth));
+  auto upper = arith::ConstantOp::create(rewriter, loc,
+                                         rewriter.getI32IntegerAttr(bitWidth));
   auto step =
       arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(1));
   auto topBit = arith::ConstantOp::create(
@@ -778,8 +778,8 @@ FpSanCosSin fpsanCosSinPayload(PatternRewriter &rewriter, Location loc,
   Value bc = arith::MulIOp::create(rewriter, loc, b, cDouble);
   Value sInc = arith::AddIOp::create(rewriter, loc, as, bc);
 
-  Value bitIndex = arith::SubIOp::create(rewriter, loc, rewriter.getI32Type(),
-                                         topBit, bit);
+  Value bitIndex =
+      arith::SubIOp::create(rewriter, loc, rewriter.getI32Type(), topBit, bit);
   Value shift = castScalarIntToIntLike(rewriter, loc, bitIndex, intTy);
   Value bitMask = arith::ShLIOp::create(rewriter, loc, one, shift);
   auto masked = arith::AndIOp::create(rewriter, loc, xI, bitMask);
