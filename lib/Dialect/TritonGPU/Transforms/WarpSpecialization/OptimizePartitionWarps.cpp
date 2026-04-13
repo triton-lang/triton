@@ -270,6 +270,35 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   }
   wsOp.setRequestedRegisters(estRegUsage);
   wsOp.setPartitionNumWarps(partitionNumWarps);
+
+  // Resolve InitBarrierOps that use dependentPartitionIds to concrete warp
+  // counts now that partition warp counts are finalized.
+  for (auto [partitionIdx, partition] :
+       llvm::enumerate(wsOp.getPartitionRegions())) {
+    partition->walk([&](ttng::InitBarrierOp initOp) {
+      auto partitionIdsAttr = initOp.getDependentPartitionIds();
+      // Only barriers where arrivals are done per warp will have a non-null
+      // dependentPartitionIds attribute.
+      if (!partitionIdsAttr)
+        return;
+
+      // Calculate total warp count for the specified partition IDs.
+      int32_t numWarps = 0;
+      for (int32_t partitionId : *partitionIdsAttr) {
+        if (partitionId == 0) {
+          numWarps += defaultNumWarps;
+        } else {
+          numWarps += partitionNumWarps[partitionId - 1];
+        }
+      }
+
+      // Replace dependentPartitionIds with the resolved warp count.
+      initOp.removeDependentPartitionIdsAttr();
+      initOp.setCountAttr(IntegerAttr::get(
+          IntegerType::get(initOp.getContext(), 32), numWarps));
+    });
+  }
+
   return success();
 }
 
