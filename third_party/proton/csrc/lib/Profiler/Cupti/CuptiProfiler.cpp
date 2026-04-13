@@ -69,10 +69,10 @@ convertCustomKernelActivity(const CUpti_Activity *activity,
   KernelActivityRecord kernel;
   const auto *recordData = reinterpret_cast<const uint8_t *>(activity);
   bool success = true;
-  success &= readActivityField(layout, recordData, KERNEL_FIELD_START,
-                               kernel.start);
-  success &= readActivityField(layout, recordData, KERNEL_FIELD_END,
-                               kernel.end);
+  success &=
+      readActivityField(layout, recordData, KERNEL_FIELD_START, kernel.start);
+  success &=
+      readActivityField(layout, recordData, KERNEL_FIELD_END, kernel.end);
   success &= readActivityField(layout, recordData, KERNEL_FIELD_DEVICE_ID,
                                kernel.deviceId);
   success &= readActivityField(layout, recordData, KERNEL_FIELD_STREAM_ID,
@@ -83,8 +83,8 @@ convertCustomKernelActivity(const CUpti_Activity *activity,
                                kernel.graphId);
   success &= readActivityField(layout, recordData, KERNEL_FIELD_GRAPH_NODE_ID,
                                kernel.graphNodeId);
-  success &= readActivityField(layout, recordData, KERNEL_FIELD_NAME,
-                               kernel.name);
+  success &=
+      readActivityField(layout, recordData, KERNEL_FIELD_NAME, kernel.name);
   if (!success) {
     throw std::runtime_error(
         "[PROTON] Missing required CUPTI kernel activity field");
@@ -126,12 +126,10 @@ convertKernelActivityToMetric(const KernelActivityRecord &kernel,
                               bool isMetricKernel = false) {
   std::unique_ptr<Metric> metric;
   if (kernel.start < kernel.end) {
-    metric =
-        std::make_unique<KernelMetric>(kernel.start, kernel.end, 1,
-                                       static_cast<uint64_t>(kernel.deviceId),
-                                       static_cast<uint64_t>(DeviceType::CUDA),
-                                       kernel.streamId,
-                                       static_cast<uint64_t>(isMetricKernel));
+    metric = std::make_unique<KernelMetric>(
+        kernel.start, kernel.end, 1, static_cast<uint64_t>(kernel.deviceId),
+        static_cast<uint64_t>(DeviceType::CUDA), kernel.streamId,
+        static_cast<uint64_t>(isMetricKernel));
   } // else: not a valid kernel activity
   return metric;
 }
@@ -473,11 +471,11 @@ struct CuptiProfiler::CuptiProfilerPimpl
 
   static void allocBufferImpl(uint8_t **buffer, size_t *bufferSize,
                               size_t *maxNumRecords);
-  static void completeBufferImpl(
-      uint8_t *buffer, size_t validSize
+  static void
+  completeBufferImpl(uint8_t *buffer, size_t validSize
 #if CUPTI_API_VERSION >= 130200
-      ,
-      const CUpti_BufferCallbackCompleteInfo *bufferCompleteInfo
+                     ,
+                     const CUpti_BufferCallbackCompleteInfo *bufferCompleteInfo
 #endif
   );
 
@@ -489,9 +487,9 @@ struct CuptiProfiler::CuptiProfilerPimpl
   static void allocBufferV2(uint8_t **buffer, size_t *bufferSize,
                             size_t *maxNumRecords,
                             CUpti_BufferCallbackRequestInfo *bufferRequestInfo);
-  static void completeBufferV2(
-      uint8_t *buffer, size_t size, size_t validSize,
-      CUpti_BufferCallbackCompleteInfo *bufferCompleteInfo);
+  static void
+  completeBufferV2(uint8_t *buffer, size_t size, size_t validSize,
+                   CUpti_BufferCallbackCompleteInfo *bufferCompleteInfo);
 #endif
   static void callbackFn(void *userData, CUpti_CallbackDomain domain,
                          CUpti_CallbackId cbId, const void *cbData);
@@ -527,8 +525,9 @@ private:
                           const void *cbData);
 };
 
-void CuptiProfiler::CuptiProfilerPimpl::allocBufferImpl(
-    uint8_t **buffer, size_t *bufferSize, size_t *maxNumRecords) {
+void CuptiProfiler::CuptiProfilerPimpl::allocBufferImpl(uint8_t **buffer,
+                                                        size_t *bufferSize,
+                                                        size_t *maxNumRecords) {
   const auto envBufferSize =
       getIntEnv("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024);
   *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, envBufferSize));
@@ -635,10 +634,10 @@ void CuptiProfiler::CuptiProfilerPimpl::enableKernelActivity(
 #if CUPTI_API_VERSION >= 130200
   if (userDefinedActivityRecordsEnabled) {
     static std::array<int, 9> namedKernelFields = {
-        KERNEL_FIELD_KIND,         KERNEL_FIELD_START,
-        KERNEL_FIELD_END,          KERNEL_FIELD_DEVICE_ID,
-        KERNEL_FIELD_STREAM_ID,    KERNEL_FIELD_CORRELATION_ID,
-        KERNEL_FIELD_GRAPH_ID,     KERNEL_FIELD_GRAPH_NODE_ID,
+        KERNEL_FIELD_KIND,      KERNEL_FIELD_START,
+        KERNEL_FIELD_END,       KERNEL_FIELD_DEVICE_ID,
+        KERNEL_FIELD_STREAM_ID, KERNEL_FIELD_CORRELATION_ID,
+        KERNEL_FIELD_GRAPH_ID,  KERNEL_FIELD_GRAPH_NODE_ID,
         KERNEL_FIELD_NAME,
     };
     auto &selectedFields = namedKernelFields;
