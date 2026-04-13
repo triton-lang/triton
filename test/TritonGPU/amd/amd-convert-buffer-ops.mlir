@@ -1,5 +1,6 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx942 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX942-ONLY
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx950 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX950-ONLY
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx942 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX942-ONLY,CDNA
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx950 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX950-PLUS,CDNA
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx1250 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX950-PLUS
 
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
@@ -703,7 +704,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %4 = tt.splat %3 : !tt.ptr<bf16> -> tensor<512x!tt.ptr<bf16>, #blocked>
     %5 = tt.addptr %4, %2 : tensor<512x!tt.ptr<bf16>, #blocked>, tensor<512xi32, #blocked>
     // GFX942-ONLY-NOT: amdg.buffer_atomic_rmw
-    // GFX950-ONLY: amdg.buffer_atomic_rmw
+    // GFX950-PLUS: amdg.buffer_atomic_rmw
     %6 = tt.atomic_rmw fadd, acq_rel, gpu, %5, %cst_0, %cst : (tensor<512x!tt.ptr<bf16>, #blocked>, tensor<512xbf16, #blocked>, tensor<512xi1, #blocked>) -> tensor<512xbf16, #blocked>
     tt.return
   }
@@ -780,28 +781,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %cmp2 = arith.cmpi slt, %arg6, %arg6_up : i32
     llvm.intr.assume %cmp2 : i1
 
-    // COMMON: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] stride = %arg[[#stride]] into %arg10
+    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] stride = %arg[[#stride]] into %arg10
     %12 = ttg.async_copy_global_to_local %11, %arg10 : tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
-    // COMMON: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] other = %arg12 stride = %arg[[#stride]] into %arg10
+    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] other = %arg12 stride = %arg[[#stride]] into %arg10
     %13 = ttg.async_copy_global_to_local %11, %arg10 other %arg12: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
-    // COMMON: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 stride = %arg[[#stride]] into %arg10
+    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 stride = %arg[[#stride]] into %arg10
     %14 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
-    // COMMON: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] into %arg10
+    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] into %arg10
     %15 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 : tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
-    // COMMON: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = ca into %arg10
+    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = ca into %arg10
     %16 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 cacheModifier = ca: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
-    // COMMONx: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = cg into %arg10
+    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = cg into %arg10
     %17 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 cacheModifier = cg: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
-    // COMMONx: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = cv into %arg10
+    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = cv into %arg10
     %18 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 cacheModifier = cv: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
-    // COMMON: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] stride = %arg[[#stride]] into %arg10 {contiguity = 8 : i32
+    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] stride = %arg[[#stride]] into %arg10 {contiguity = 8 : i32
     %19 = ttg.async_copy_global_to_local %11, %arg10 {contiguity = 8 : i32} : tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
     tt.return
   }

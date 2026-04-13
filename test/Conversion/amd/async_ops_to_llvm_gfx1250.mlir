@@ -275,3 +275,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: async_copy_masking
+  tt.func public @async_copy_masking(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                %arg1: i32 {tt.divisibility = 16 : i32},
+                                %arg2: !ttg.memdesc<4x32xf32, #shared, #smem, mutable>,
+                                %arg3: i32 {tt.divisibility = 16 : i32}) {
+    // We need the splat to allow the AxisAnalysis to work during lowering
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<4x32xf32, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c31_i32 = arith.constant 31 : i32
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<4x32x!tt.ptr<f32>, #blocked>
+    %29 = arith.addi %arg3, %c31_i32 : i32
+    %30 = arith.divsi %29, %c32_i32 : i32
+    %31 = arith.cmpi sgt, %30, %c0_i32 : i32
+
+    %51 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %52 = tt.expand_dims %51 {axis = 1 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xi32, #blocked>
+    %65 = tt.splat %arg3 : i32 -> tensor<4x1xi32, #blocked>
+    %66 = arith.cmpi slt, %52, %65 : tensor<4x1xi32, #blocked>
+    %67 = tt.broadcast %66 : tensor<4x1xi1, #blocked> -> tensor<4x32xi1, #blocked>
+
+    %70 = tt.splat %31 : i1 -> tensor<4x32xi1, #blocked>
+    %71 = arith.andi %70, %67 : tensor<4x32xi1, #blocked>
+
+    // CHECK: %[[NEG1:.*]] = llvm.mlir.constant(2147483647 : i32)
+    // CHECK-NEXT: %[[OOB_LDS:.*]] = llvm.inttoptr %[[NEG1]] :
+    // CHECK-NEXT: %[[LDS_PTR:.*]] = llvm.select %{{.*}}, %{{.*}}, %[[OOB_LDS]]
+    // CHECK-NEXT: rocdl.global.load.async.to.lds{{.*}} %{{.*}}, %[[LDS_PTR]],
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.store
+    // CHECK-NEXT: llvm.br
+    %2 = ttg.async_copy_global_to_local %1, %arg2 mask %67 other %cst_0 : tensor<4x32x!tt.ptr<f32>, #blocked> -> <4x32xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}

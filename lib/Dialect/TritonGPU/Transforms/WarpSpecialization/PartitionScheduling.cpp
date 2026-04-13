@@ -228,6 +228,7 @@ SmallVector<OutputPort> initialDataValues(Graph *graph) {
         node->setDataValue(1);
         values.push_back({node, 1});
       }
+      // TODO: Support TCGen5MMAScaledOp
       if (isa<nvidia_gpu::TCGen5MMAOp>(op)) {
         node->setDataValue(0);
         values.push_back({node, 0});
@@ -377,6 +378,19 @@ bool isTMEM(Node *node) {
   return flags & Flags::TMEM;
 }
 
+bool hasEligibleMemoryOps(Graph *graph) {
+  bool found = false;
+  graph->walk([&](Node *node) {
+    if (!node->isOp() || found)
+      return;
+    auto flags = getNodeFlags(node);
+    // We cannot handle none descriptor memory operations
+    if (flags & (Flags::LOAD | Flags::STORE))
+      found = true;
+  });
+  return found;
+}
+
 bool isSFU(Node *node) {
   auto partition = node->getPartition();
   auto flags = partition->getFlags();
@@ -447,7 +461,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        if (!isView(edge.getToNode())) {
          return false;
        }
-       auto from = getNodeFlags(edge.getFromNode());
        auto to = getNodeFlags(edge.getToNode());
        if (!(to & Flags::VIEW)) {
          return false;
@@ -472,7 +485,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
          return false;
        }
        auto from = getNodeFlags(edge.getFromNode());
-       auto to = getNodeFlags(edge.getToNode());
        if (!(from & Flags::VIEW)) {
          return false;
        }
@@ -502,7 +514,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
     {"for_op_iter_arg_token",
      [](Edge edge) {
        auto from = edge.getFromNode();
-       auto to = edge.getToNode();
        if (!isForIterArg(from))
          // skip if not from an iter arg
          return false;
@@ -564,7 +575,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
     {"tmem_load",
      [](Edge edge) {
        auto from = edge.getFromNode();
-       auto to = edge.getToNode();
        return node_isa<ttng::TMEMLoadOp>(from);
      }},
 
@@ -647,7 +657,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
     {"load_epilog",
      [](Edge edge) {
        auto from = edge.getFromNode();
-       auto to = edge.getToNode();
        if (!isLoad(from))
          return false;
 
@@ -990,7 +999,6 @@ void propagatePartitions(Graph *graph, std::string funcName,
     while (!nodes.empty()) {
       // try propagating partitions forward to nodes with no partition
       int start_size = nodes.size();
-      bool changed = false;
       for (auto node : nodes) {
         for (auto edge : node->getInEdges()) {
           if (!edge.getFromNode())
@@ -1444,7 +1452,8 @@ struct PartitionScheduling
     size_t idx = 0;
     for (auto op : ops) {
       analyze(idx, op);
-      cloneMultiPartitionDataOps(op);
+      if (hasPartition(op))
+        cloneMultiPartitionDataOps(op);
       idx++;
     }
   }
@@ -1496,6 +1505,9 @@ private:
       for (auto &partition : graph->getPartitions())
         partition->dump();
     });
+
+    if (!hasEligibleMemoryOps(graph.get()))
+      return;
 
     serialize(idx, op, graph.get());
   }

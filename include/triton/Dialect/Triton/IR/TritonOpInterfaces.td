@@ -114,5 +114,32 @@ def TT_DescriptorStoreLikeOpInterface : OpInterface<"DescriptorStoreLikeOpInterf
   ];
 }
 
+def PredicatedOpInterface : OpInterface<"PredicatedOpInterface"> {
+  let description = [{
+    Common interface for operations that carry a predicate or mask operand that
+    can be combined with a pipeline predicate.
+  }];
+
+  let cppNamespace = "::mlir::triton";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Return the current predicate or mask operand.",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getPredicateOperand",
+      /*args=*/(ins)>,
+    InterfaceMethod<
+      /*desc=*/"Update the predicate or mask operand.",
+      /*retType=*/"void",
+      /*methodName=*/"setPredicateOperand",
+      /*args=*/(ins "::mlir::Value":$pred)>,
+    InterfaceMethod<
+      /*desc=*/"Return a type whose shape determines the predicate operand type.",
+      /*retType=*/"::mlir::Type",
+      /*methodName=*/"getPredicateOperandTypeLike",
+      /*args=*/(ins)>
+  ];
+}
+
 
 #endif // TRITON_OP_INTERFACES

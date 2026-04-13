@@ -158,7 +158,6 @@ struct LLVMDILocalVariablePass
       if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(inTy)) {
         auto pointeeTy =
             funcOp.getArgAttrOfType<TypeAttr>(idx, "tt.pointee_type");
-        auto sizeInBits = dl.getTypeSizeInBits(ptrTy);
         // If no valid pointee type for this function argument, skip it.
         mlir::Type elTy =
             pointeeTy ? pointeeTy.getValue() : builder.getNoneType();

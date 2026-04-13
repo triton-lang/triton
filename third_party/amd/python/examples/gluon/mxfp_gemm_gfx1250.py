@@ -1,9 +1,3 @@
-# ruff: noqa: E402
-import hip
-
-# Needed for internal dev flow for now; will remove later
-hip.hip.hipInit(0)
-
 import torch
 import pytest
 import triton
@@ -137,28 +131,26 @@ class MXFPGEMMConfig:
                                                  [BLOCK_N // NUM_SUBTILES_N, BLOCK_K_SCALE // NUM_SUBTILES_K]))
         self.acc_layout = gl.constexpr(WMMA_LAYOUT)
 
-        BLOCK_K_PACKED_A = BLOCK_K // self.DIV_FACTOR_A // NUM_SUBTILES_K
-        BLOCK_K_PACKED_B = BLOCK_K // self.DIV_FACTOR_B // NUM_SUBTILES_K
+        BLOCK_K_PACKED_A = BLOCK_K // self.DIV_FACTOR_A
+        BLOCK_K_PACKED_B = BLOCK_K // self.DIV_FACTOR_B
+        PAD_INTERVAL_A = 256 if BLOCK_K_PACKED_A <= 256 else BLOCK_K_PACKED_A
+        PAD_INTERVAL_B = 256 if BLOCK_K_PACKED_B <= 256 else BLOCK_K_PACKED_B
+
         self.shared_layout_a = gl.constexpr(
-            gl.PaddedSharedLayout.with_identity_for([[BLOCK_K_PACKED_A, 16]],
-                                                    [BLOCK_M // NUM_SUBTILES_M, BLOCK_K_PACKED_A], [1, 0]))
+            gl.PaddedSharedLayout.with_identity_for([[PAD_INTERVAL_A, 16]], [BLOCK_M, BLOCK_K_PACKED_A], [1, 0]))
         if TRANSPOSE_B:
             self.shared_layout_b = gl.constexpr(
-                gl.PaddedSharedLayout.with_identity_for([[BLOCK_K_PACKED_B, 16]],
-                                                        [BLOCK_N // NUM_SUBTILES_N, BLOCK_K_PACKED_B], [1, 0]))
+                gl.PaddedSharedLayout.with_identity_for([[PAD_INTERVAL_B, 16]], [BLOCK_N, BLOCK_K_PACKED_B], [1, 0]))
         else:
             self.shared_layout_b = gl.constexpr(
-                gl.PaddedSharedLayout.with_identity_for([[BLOCK_N // NUM_SUBTILES_N, 16]],
-                                                        [BLOCK_K_PACKED_B, BLOCK_N // NUM_SUBTILES_N], [1, 0]))
+                gl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 16]], [BLOCK_K_PACKED_B, BLOCK_N], [1, 0]))
 
         self.shared_layout_a_scale = gl.constexpr(
-            gl.PaddedSharedLayout.with_identity_for(
-                [[256, 16]],
-                [self.BLOCK_M_PRESHUFFLED // NUM_SUBTILES_M, self.BLOCK_K_SCALE_PRESHUFFLED // NUM_SUBTILES_K], [1, 0]))
+            gl.PaddedSharedLayout.with_identity_for([[256, 8]],
+                                                    [self.BLOCK_M_PRESHUFFLED, self.BLOCK_K_SCALE_PRESHUFFLED], [1, 0]))
         self.shared_layout_b_scale = gl.constexpr(
-            gl.PaddedSharedLayout.with_identity_for(
-                [[256, 16]],
-                [self.BLOCK_N_PRESHUFFLED // NUM_SUBTILES_N, self.BLOCK_K_SCALE_PRESHUFFLED // NUM_SUBTILES_K], [1, 0]))
+            gl.PaddedSharedLayout.with_identity_for([[256, 8]],
+                                                    [self.BLOCK_N_PRESHUFFLED, self.BLOCK_K_SCALE_PRESHUFFLED], [1, 0]))
 
 
 @aggregate
@@ -183,18 +175,17 @@ class ScaleAsyncCopyDescriptor:
         self.step_k = step_k
         BLOCK_NONK = cfg.BLOCK_M_PRESHUFFLED if op_idx == 0 else cfg.BLOCK_N_PRESHUFFLED
         self.dtype = gl.constexpr(ptr.dtype.element_ty)
-        self.block_shape = gl.constexpr(
-            [BLOCK_NONK // cfg.NUM_SUBTILES[op_idx], cfg.BLOCK_K_SCALE_PRESHUFFLED // cfg.NUM_SUBTILES[2]])
+        self.block_shape = gl.constexpr([BLOCK_NONK, cfg.BLOCK_K_SCALE_PRESHUFFLED])
         self.layout = gl.constexpr(layout)
 
     @gluon.jit
     def initialize(cfg: MXFPGEMMConfig, op_idx: gl.constexpr, ptr, off, stride, layout):
         gl.static_assert(op_idx == 0 or op_idx == 1)
         if op_idx == 0:
-            BLOCK_NONK: gl.constexpr = cfg.BLOCK_M_PRESHUFFLED // cfg.NUM_SUBTILES[op_idx]
+            BLOCK_NONK: gl.constexpr = cfg.BLOCK_M_PRESHUFFLED
         else:
-            BLOCK_NONK: gl.constexpr = cfg.BLOCK_N_PRESHUFFLED // cfg.NUM_SUBTILES[op_idx]
-        BLOCK_K: gl.constexpr = cfg.BLOCK_K_SCALE_PRESHUFFLED // cfg.NUM_SUBTILES[2]
+            BLOCK_NONK: gl.constexpr = cfg.BLOCK_N_PRESHUFFLED
+        BLOCK_K: gl.constexpr = cfg.BLOCK_K_SCALE_PRESHUFFLED
 
         blocked_layout: gl.constexpr = get_scale_blocked_layout(cfg.NUM_WARPS)
         offs_non_k = gl.arange(0, BLOCK_NONK, gl.SliceLayout(1, blocked_layout))
@@ -207,11 +198,8 @@ class ScaleAsyncCopyDescriptor:
 
     @gluon.jit
     def issue_async_load(self, idx: int, buffer, pred=1):
-        NUM_SUBTILES_NONK: gl.constexpr = self.cfg.NUM_SUBTILES[self.op_idx]
         if pred:
-            cp.global_to_shared(
-                buffer, self.ptr + (idx % NUM_SUBTILES_NONK) * self.step_nonk +
-                (idx // NUM_SUBTILES_NONK) * self.step_k + self.offs)
+            cp.global_to_shared(buffer, self.ptr + idx * self.step_k + self.offs)
             cp.commit_group()
 
 
@@ -225,32 +213,31 @@ class MXFPGEMMProgramBase:
     @gluon.jit
     def issue_loads(self, load_idx, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, pred=1):
         cfg = self.cfg
-        NUM_SUBTILES_K = cfg.NUM_SUBTILES[2]
-        BLOCK_K_PACKED_A: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A // NUM_SUBTILES_K
-        BLOCK_K_PACKED_B: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_B // NUM_SUBTILES_K
+        BLOCK_K_PACKED_A: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A
+        BLOCK_K_PACKED_B: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_B
 
         gl.amd.gfx1250.tdm.async_load(self.a_desc,  #
                                       [0, load_idx * BLOCK_K_PACKED_A],  #
-                                      a_buffer.index((load_idx // NUM_SUBTILES_K) % cfg.NUM_BUFFERS),  #
+                                      a_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
                                       pred=pred)
         if cfg.TRANSPOSE_B:
             gl.amd.gfx1250.tdm.async_load(self.b_desc,  #
                                           [0, load_idx * BLOCK_K_PACKED_B],  #
-                                          b_buffer.index((load_idx // NUM_SUBTILES_K) % cfg.NUM_BUFFERS),  #
+                                          b_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
                                           pred=pred)
         else:
             gl.amd.gfx1250.tdm.async_load(self.b_desc,  #
                                           [load_idx * BLOCK_K_PACKED_B, 0],  #
-                                          b_buffer.index((load_idx // NUM_SUBTILES_K) % cfg.NUM_BUFFERS),  #
+                                          b_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
                                           pred=pred)
         if cfg.WITH_A_SCALE:
             gl.amd.gfx1250.tdm.async_load(self.a_scale_desc,  #
-                                          [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED // NUM_SUBTILES_K],  #
-                                          a_scale_buffer.index((load_idx // NUM_SUBTILES_K) % cfg.NUM_BUFFERS),  #
+                                          [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED],  #
+                                          a_scale_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
                                           pred=pred)
         gl.amd.gfx1250.tdm.async_load(self.b_scale_desc,  #
-                                      [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED // NUM_SUBTILES_K],  #
-                                      b_scale_buffer.index((load_idx // NUM_SUBTILES_K) % cfg.NUM_BUFFERS),  #
+                                      [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED],  #
+                                      b_scale_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
                                       pred=pred)
 
         return load_idx + 1
@@ -258,8 +245,7 @@ class MXFPGEMMProgramBase:
     @gluon.jit
     def issue_local_loads(self, wmma_idx, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer):
         cfg = self.cfg
-        NUM_SUBTILES_K: gl.constexpr = cfg.NUM_SUBTILES[2]
-        BLOCK_K_SCALE: gl.constexpr = cfg.BLOCK_K // cfg.SCALE_BLOCK // NUM_SUBTILES_K
+        BLOCK_K_SCALE: gl.constexpr = cfg.BLOCK_K // cfg.SCALE_BLOCK
         a = a_buffer.index(wmma_idx % cfg.NUM_BUFFERS).load(layout=cfg.dot_layout_a)
         if cfg.TRANSPOSE_B:
             b = b_buffer.index(wmma_idx % cfg.NUM_BUFFERS).permute([1, 0]).load(layout=cfg.dot_layout_b)
@@ -403,15 +389,15 @@ class MXFPGEMMPipelinedProgram:
         gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2) * self.cfg.NUM_LOADS_IN_BATCH)
         gl.assume(loop_ub >= 0)
         for _ in range(0, loop_ub):
-            with gl.amd.warp_pipeline_stage("lds", priority=1):
+            with gl.amd.warp_pipeline_stage("tdm+lds", priority=1):
                 a, b, scale_a, scale_b = self.issue_local_loads(wmma_idx, self.a_buffer, self.b_buffer,
                                                                 self.a_scale_buffer, self.b_scale_buffer)
                 wmma_idx += 1
-
-            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 3) * self.cfg.NUM_LOADS_IN_BATCH)
-            with gl.amd.warp_pipeline_stage("tdm+wmma", priority=0):
                 load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
                                             self.b_scale_buffer)
+
+            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2) * self.cfg.NUM_LOADS_IN_BATCH)
+            with gl.amd.warp_pipeline_stage("wmma", priority=0):
                 accumulator = gl.amd.gfx1250.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
 
         # epilogue
@@ -431,14 +417,10 @@ class MXFPGEMMSliceKProgram:
     base: MXFPGEMMProgramBase
 
     cfg: MXFPGEMMConfig
-    a_buffer0: gl.shared_memory_descriptor
-    a_buffer1: gl.shared_memory_descriptor
-    b_buffer0: gl.shared_memory_descriptor
-    b_buffer1: gl.shared_memory_descriptor
-    a_scale_buffer0: gl.shared_memory_descriptor | gl.constexpr
-    a_scale_buffer1: gl.shared_memory_descriptor | gl.constexpr
-    b_scale_buffer0: gl.shared_memory_descriptor
-    b_scale_buffer1: gl.shared_memory_descriptor
+    a_buffer: gl.shared_memory_descriptor
+    b_buffer: gl.shared_memory_descriptor
+    a_scale_buffer: gl.shared_memory_descriptor | gl.constexpr
+    b_scale_buffer: gl.shared_memory_descriptor
 
     a_desc: tdm.tensor_descriptor
     b_desc: tdm.tensor_descriptor
@@ -450,23 +432,17 @@ class MXFPGEMMSliceKProgram:
     c_mask: gl.tensor
 
     @gluon.constexpr_function
-    def __init__(self, cfg: MXFPGEMMConfig, a_buffer0, a_buffer1, b_buffer0, b_buffer1, a_scale_buffer0,
-                 a_scale_buffer1, b_scale_buffer0, b_scale_buffer1, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr,
-                 c_offs, c_mask):
+    def __init__(self, cfg: MXFPGEMMConfig, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, a_desc, b_desc,
+                 a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
         self.cfg = cfg
-        self.a_buffer0 = a_buffer0
-        self.a_buffer1 = a_buffer1
-        self.b_buffer0 = b_buffer0
-        self.b_buffer1 = b_buffer1
+        self.a_buffer = a_buffer
+        self.b_buffer = b_buffer
         # Have to use constexpr to workaround a compiler issue with optional scale
         if cfg.WITH_A_SCALE:
-            self.a_scale_buffer0 = a_scale_buffer0
-            self.a_scale_buffer1 = a_scale_buffer1
+            self.a_scale_buffer = a_scale_buffer
         else:
-            self.a_scale_buffer0 = gl.constexpr(a_scale_buffer0)
-            self.a_scale_buffer1 = gl.constexpr(a_scale_buffer1)
-        self.b_scale_buffer0 = b_scale_buffer0
-        self.b_scale_buffer1 = b_scale_buffer1
+            self.a_scale_buffer = gl.constexpr(a_scale_buffer)
+        self.b_scale_buffer = b_scale_buffer
         self.a_desc = a_desc
         self.b_desc = b_desc
         if cfg.WITH_A_SCALE:
@@ -483,270 +459,32 @@ class MXFPGEMMSliceKProgram:
     @gluon.jit
     def initialize(cfg: MXFPGEMMConfig, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
         NUM_BUFFERS: gl.constexpr = cfg.NUM_BUFFERS
-        a_buffer0 = gl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape,
-                                              layout=a_desc.layout)
-        a_buffer1 = gl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape,
-                                              layout=a_desc.layout)
-        b_buffer0 = gl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape,
-                                              layout=b_desc.layout)
-        b_buffer1 = gl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape,
-                                              layout=b_desc.layout)
+        a_buffer = gl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape,
+                                             layout=a_desc.layout)
+        b_buffer = gl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape,
+                                             layout=b_desc.layout)
         if cfg.WITH_A_SCALE:
-            a_scale_buffer0 = gl.allocate_shared_memory(a_scale_desc.dtype,
-                                                        shape=[NUM_BUFFERS] + a_scale_desc.block_shape,
-                                                        layout=a_scale_desc.layout)
-            a_scale_buffer1 = gl.allocate_shared_memory(a_scale_desc.dtype,
-                                                        shape=[NUM_BUFFERS] + a_scale_desc.block_shape,
-                                                        layout=a_scale_desc.layout)
+            a_scale_buffer = gl.allocate_shared_memory(a_scale_desc.dtype,
+                                                       shape=[NUM_BUFFERS] + a_scale_desc.block_shape,
+                                                       layout=a_scale_desc.layout)
         else:
-            a_scale_buffer0 = gl.constexpr(0)
-            a_scale_buffer1 = gl.constexpr(0)
+            a_scale_buffer = gl.constexpr(0)
 
-        b_scale_buffer0 = gl.allocate_shared_memory(b_scale_desc.dtype, shape=[NUM_BUFFERS] + b_scale_desc.block_shape,
-                                                    layout=b_scale_desc.layout)
-        b_scale_buffer1 = gl.allocate_shared_memory(b_scale_desc.dtype, shape=[NUM_BUFFERS] + b_scale_desc.block_shape,
-                                                    layout=b_scale_desc.layout)
+        b_scale_buffer = gl.allocate_shared_memory(b_scale_desc.dtype, shape=[NUM_BUFFERS] + b_scale_desc.block_shape,
+                                                   layout=b_scale_desc.layout)
 
-        return MXFPGEMMSliceKProgram(cfg, a_buffer0, a_buffer1, b_buffer0, b_buffer1, a_scale_buffer0, a_scale_buffer1,
-                                     b_scale_buffer0, b_scale_buffer1, a_desc, b_desc, a_scale_desc, b_scale_desc,
-                                     c_ptr, c_offs, c_mask)
+        return MXFPGEMMSliceKProgram(cfg, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, a_desc, b_desc,
+                                     a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask)
 
     @gluon.jit
-    def pipeline(self, K):
+    def issue_subtile_local_loads(self, wmma_idx, subtile_start_idx: gl.constexpr, a_buffer, b_buffer, a_scale_buffer,
+                                  b_scale_buffer):
         cfg = self.cfg
-        load_idx = 0
-        wmma_idx = 0
-
         NUM_SUBTILES_K: gl.constexpr = cfg.NUM_SUBTILES[2]
-
-        # prologue
-        # iter 0
-        load_idx = self.issue_loads(load_idx, self.a_buffer0, self.b_buffer0, self.a_scale_buffer0,
-                                    self.b_scale_buffer0)
-        load_idx = self.issue_loads(load_idx, self.a_buffer1, self.b_buffer1, self.a_scale_buffer1,
-                                    self.b_scale_buffer1)
-
-        # iter 1
-        load_idx = self.issue_loads(load_idx, self.a_buffer0, self.b_buffer0, self.a_scale_buffer0,
-                                    self.b_scale_buffer0)
-        load_idx = self.issue_loads(load_idx, self.a_buffer1, self.b_buffer1, self.a_scale_buffer1,
-                                    self.b_scale_buffer1)
-        # iter 0
-        gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1) * cfg.NUM_LOADS_IN_BATCH * NUM_SUBTILES_K)
-        a0, b0, scale_a0, scale_b0 = self.issue_local_loads(wmma_idx, self.a_buffer0, self.b_buffer0,
-                                                            self.a_scale_buffer0, self.b_scale_buffer0)
-
-        accumulator = gl.zeros((cfg.BLOCK_M, cfg.BLOCK_N), dtype=gl.float32, layout=self.cfg.acc_layout)
-        loop_ub = gl.cdiv(K, cfg.BLOCK_K) - 1
-        for _ in range(0, loop_ub - 1):
-            # iter i
-            accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
-
-            # iter i
-            a1, b1, scale_a1, scale_b1 = self.issue_local_loads(wmma_idx, self.a_buffer1, self.b_buffer1,
-                                                                self.a_scale_buffer1, self.b_scale_buffer1)
-            wmma_idx += 1
-
-            # iter i + 2
-            load_idx = self.issue_loads(load_idx, self.a_buffer0, self.b_buffer0, self.a_scale_buffer0,
-                                        self.b_scale_buffer0)
-            load_idx = self.issue_loads(load_idx, self.a_buffer1, self.b_buffer1, self.a_scale_buffer1,
-                                        self.b_scale_buffer1)
-
-            # iter i
-            accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
-
-            # iter i + 1
-            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1) * cfg.NUM_LOADS_IN_BATCH * NUM_SUBTILES_K)
-            a0, b0, scale_a0, scale_b0 = self.issue_local_loads(wmma_idx, self.a_buffer0, self.b_buffer0,
-                                                                self.a_scale_buffer0, self.b_scale_buffer0)
-
-        # epilogue
-        # iter end - 2
-        accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
-
-        # iter end - 2
-        a1, b1, scale_a1, scale_b1 = self.issue_local_loads(wmma_idx, self.a_buffer1, self.b_buffer1,
-                                                            self.a_scale_buffer1, self.b_scale_buffer1)
-        wmma_idx += 1
-
-        # iter end - 2
-        accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
-        # iter end - 1
-        gl.amd.gfx1250.tdm.async_wait(0)
-        a0, b0, scale_a0, scale_b0 = self.issue_local_loads(wmma_idx, self.a_buffer0, self.b_buffer0,
-                                                            self.a_scale_buffer0, self.b_scale_buffer0)
-        # iter end - 1
-        accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
-
-        # iter end - 1
-        a1, b1, scale_a1, scale_b1 = self.issue_local_loads(wmma_idx, self.a_buffer1, self.b_buffer1,
-                                                            self.a_scale_buffer1, self.b_scale_buffer1)
-        wmma_idx += 1
-
-        accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
-
-        gl.amd.gfx1250.buffer_store(accumulator, self.c_ptr, self.c_offs, mask=self.c_mask)
-
-    @gluon.jit
-    def warp_pipeline(self, K):
-        cfg = self.cfg
-        load_idx = 0
-        wmma_idx = 0
-        gl.static_assert(cfg.NUM_BUFFERS == 3)
-
-        NUM_SUBTILES_K: gl.constexpr = cfg.NUM_SUBTILES[2]
-
-        # prologue
-        for _ in gl.static_range(cfg.NUM_BUFFERS - 1):
-            load_idx = self.issue_loads(load_idx, self.a_buffer0, self.b_buffer0, self.a_scale_buffer0,
-                                        self.b_scale_buffer0)
-            load_idx = self.issue_loads(load_idx, self.a_buffer1, self.b_buffer1, self.a_scale_buffer1,
-                                        self.b_scale_buffer1)
-
-        accumulator = gl.zeros((cfg.BLOCK_M, cfg.BLOCK_N), dtype=gl.float32, layout=self.cfg.acc_layout)
-        loop_ub = gl.cdiv(K, cfg.BLOCK_K) - (cfg.NUM_BUFFERS - 1)
-        gl.assume(loop_ub >= 0)
-        # wait for the first prefetch
-        gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2) * self.cfg.NUM_LOADS_IN_BATCH * NUM_SUBTILES_K)
-        for _ in range(0, loop_ub):
-            with gl.amd.warp_pipeline_stage("lds0", priority=1):
-                a0, b0, scale_a0, scale_b0 = self.issue_local_loads(wmma_idx, self.a_buffer0, self.b_buffer0,
-                                                                    self.a_scale_buffer0, self.b_scale_buffer0)
-
-            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 3) * self.cfg.NUM_LOADS_IN_BATCH * NUM_SUBTILES_K)
-            with gl.amd.warp_pipeline_stage("tdm+wmma+lds1", priority=0):
-                load_idx = self.issue_loads(load_idx, self.a_buffer0, self.b_buffer0, self.a_scale_buffer0,
-                                            self.b_scale_buffer0)
-                load_idx = self.issue_loads(load_idx, self.a_buffer1, self.b_buffer1, self.a_scale_buffer1,
-                                            self.b_scale_buffer1)
-                accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B,
-                                                         accumulator)
-                a1, b1, scale_a1, scale_b1 = self.issue_local_loads(wmma_idx, self.a_buffer1, self.b_buffer1,
-                                                                    self.a_scale_buffer1, self.b_scale_buffer1)
-                wmma_idx += 1
-                accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B,
-                                                         accumulator)
-
-        # epilogue
-        for i in gl.static_range(cfg.NUM_BUFFERS - 1):
-            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1 - i) * self.cfg.NUM_LOADS_IN_BATCH * NUM_SUBTILES_K)
-            a0, b0, scale_a0, scale_b0 = self.issue_local_loads(wmma_idx, self.a_buffer0, self.b_buffer0,
-                                                                self.a_scale_buffer0, self.b_scale_buffer0)
-            accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
-
-            a1, b1, scale_a1, scale_b1 = self.issue_local_loads(wmma_idx, self.a_buffer1, self.b_buffer1,
-                                                                self.a_scale_buffer1, self.b_scale_buffer1)
-            accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
-            wmma_idx += 1
-
-        gl.amd.gfx1250.buffer_store(accumulator, self.c_ptr, self.c_offs, mask=self.c_mask)
-
-
-@aggregate
-class MXFPGEMMSliceNKProgram:
-    cfg: MXFPGEMMConfig
-    a_buffer0: gl.shared_memory_descriptor
-    a_buffer1: gl.shared_memory_descriptor
-    b_buffer00: gl.shared_memory_descriptor
-    b_buffer01: gl.shared_memory_descriptor
-    b_buffer10: gl.shared_memory_descriptor
-    b_buffer11: gl.shared_memory_descriptor
-    a_scale_buffer0: gl.shared_memory_descriptor | gl.constexpr
-    a_scale_buffer1: gl.shared_memory_descriptor | gl.constexpr
-    b_scale_buffer00: gl.shared_memory_descriptor
-    b_scale_buffer01: gl.shared_memory_descriptor
-    b_scale_buffer10: gl.shared_memory_descriptor
-    b_scale_buffer11: gl.shared_memory_descriptor
-
-    a_desc: tdm.tensor_descriptor
-    b_desc: tdm.tensor_descriptor
-    a_scale_desc: tdm.tensor_descriptor | ScaleAsyncCopyDescriptor | gl.constexpr
-    b_scale_desc: tdm.tensor_descriptor | ScaleAsyncCopyDescriptor
-
-    c_ptr: gl.tensor
-    c_offs: gl.tensor
-    c_mask: gl.tensor
-
-    @gluon.constexpr_function
-    def __init__(self, cfg: MXFPGEMMConfig, a_buffer0, a_buffer1, b_buffer00, b_buffer01, b_buffer10, b_buffer11,
-                 a_scale_buffer0, a_scale_buffer1, b_scale_buffer00, b_scale_buffer01, b_scale_buffer10,
-                 b_scale_buffer11, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
-        self.cfg = cfg
-        self.a_buffer0 = a_buffer0
-        self.a_buffer1 = a_buffer1
-        self.b_buffer00 = b_buffer00
-        self.b_buffer01 = b_buffer01
-        self.b_buffer10 = b_buffer10
-        self.b_buffer11 = b_buffer11
-        if cfg.WITH_A_SCALE:
-            self.a_scale_buffer0 = a_scale_buffer0
-            self.a_scale_buffer1 = a_scale_buffer1
-        else:
-            self.a_scale_buffer0 = gl.constexpr(a_scale_buffer0)
-            self.a_scale_buffer1 = gl.constexpr(a_scale_buffer1)
-
-        self.b_scale_buffer00 = b_scale_buffer00
-        self.b_scale_buffer01 = b_scale_buffer01
-        self.b_scale_buffer10 = b_scale_buffer10
-        self.b_scale_buffer11 = b_scale_buffer11
-        self.a_desc = a_desc
-        self.b_desc = b_desc
-        if cfg.WITH_A_SCALE:
-            self.a_scale_desc = a_scale_desc
-        else:
-            self.a_scale_desc = gl.constexpr(a_scale_desc)
-        self.b_scale_desc = b_scale_desc
-        self.c_ptr = c_ptr
-        self.c_offs = c_offs
-        self.c_mask = c_mask
-
-    @gluon.jit
-    def initialize(cfg: MXFPGEMMConfig, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
-        NUM_BUFFERS: gl.constexpr = cfg.NUM_BUFFERS
-        a_buffer0 = gl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape,
-                                              layout=a_desc.layout)
-        a_buffer1 = gl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape,
-                                              layout=a_desc.layout)
-        b_buffer00 = gl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape,
-                                               layout=b_desc.layout)
-        b_buffer01 = gl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape,
-                                               layout=b_desc.layout)
-        b_buffer10 = gl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape,
-                                               layout=b_desc.layout)
-        b_buffer11 = gl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape,
-                                               layout=b_desc.layout)
-        if cfg.WITH_A_SCALE:
-            a_scale_buffer0 = gl.allocate_shared_memory(a_scale_desc.dtype,
-                                                        shape=[NUM_BUFFERS] + a_scale_desc.block_shape,
-                                                        layout=a_scale_desc.layout)
-            a_scale_buffer1 = gl.allocate_shared_memory(a_scale_desc.dtype,
-                                                        shape=[NUM_BUFFERS] + a_scale_desc.block_shape,
-                                                        layout=a_scale_desc.layout)
-        else:
-            a_scale_buffer0 = gl.constexpr(0)
-            a_scale_buffer1 = gl.constexpr(0)
-
-        b_scale_buffer00 = gl.allocate_shared_memory(b_scale_desc.dtype, shape=[NUM_BUFFERS] + b_scale_desc.block_shape,
-                                                     layout=b_scale_desc.layout)
-        b_scale_buffer01 = gl.allocate_shared_memory(b_scale_desc.dtype, shape=[NUM_BUFFERS] + b_scale_desc.block_shape,
-                                                     layout=b_scale_desc.layout)
-        b_scale_buffer10 = gl.allocate_shared_memory(b_scale_desc.dtype, shape=[NUM_BUFFERS] + b_scale_desc.block_shape,
-                                                     layout=b_scale_desc.layout)
-        b_scale_buffer11 = gl.allocate_shared_memory(b_scale_desc.dtype, shape=[NUM_BUFFERS] + b_scale_desc.block_shape,
-                                                     layout=b_scale_desc.layout)
-
-        return MXFPGEMMSliceNKProgram(cfg, a_buffer0, a_buffer1, b_buffer00, b_buffer01, b_buffer10, b_buffer11,
-                                      a_scale_buffer0, a_scale_buffer1, b_scale_buffer00, b_scale_buffer01,
-                                      b_scale_buffer10, b_scale_buffer11, a_desc, b_desc, a_scale_desc, b_scale_desc,
-                                      c_ptr, c_offs, c_mask)
-
-    @gluon.jit
-    def issue_subtile_local_loads(self, wmma_idx, subtile_start, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer,
-                                  SUBTILE_LEN: gl.constexpr):
-        cfg = self.cfg
+        SUBTILE_LEN: gl.constexpr = cfg.BLOCK_K // NUM_SUBTILES_K
         BLOCK_K_SCALE: gl.constexpr = cfg.BLOCK_K // cfg.SCALE_BLOCK
         SUBTILE_LEN_SCALE: gl.constexpr = SUBTILE_LEN // cfg.SCALE_BLOCK
+        subtile_start: gl.constexpr = subtile_start_idx * SUBTILE_LEN
         a = a_buffer.index(wmma_idx % cfg.NUM_BUFFERS).slice(subtile_start // cfg.DIV_FACTOR_A,
                                                              SUBTILE_LEN // cfg.DIV_FACTOR_A,
                                                              1).load(layout=cfg.dot_layout_a)
@@ -784,21 +522,202 @@ class MXFPGEMMSliceNKProgram:
         return a, b, scale_a, scale_b
 
     @gluon.jit
-    def issue_local_load_a(self, wmma_idx, a_buffer, a_scale_buffer):
+    def pipeline(self, K):
         cfg = self.cfg
-        NUM_SUBTILES_M: gl.constexpr = cfg.NUM_SUBTILES[0]
+        load_idx = 0
+        wmma_idx = 0
+
+        # prologue
+        # iter 0
+        load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer, self.b_scale_buffer)
+
+        # iter 1
+        load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer, self.b_scale_buffer)
+        # iter 0
+        gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1) * cfg.NUM_LOADS_IN_BATCH)
+        a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
+                                                                    self.a_scale_buffer, self.b_scale_buffer)
+
+        accumulator = gl.zeros((cfg.BLOCK_M, cfg.BLOCK_N), dtype=gl.float32, layout=self.cfg.acc_layout)
+        loop_ub = gl.cdiv(K, cfg.BLOCK_K) - 1
+        for _ in range(0, loop_ub - 1):
+            # iter i
+            accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
+
+            # iter i
+            a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
+                                                                        self.a_scale_buffer, self.b_scale_buffer)
+            wmma_idx += 1
+
+            # iter i + 2
+            load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
+                                        self.b_scale_buffer)
+
+            # iter i
+            accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
+
+            # iter i + 1
+            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1) * cfg.NUM_LOADS_IN_BATCH)
+            a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
+                                                                        self.a_scale_buffer, self.b_scale_buffer)
+
+        # epilogue
+        # iter end - 2
+        accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
+
+        # iter end - 2
+        a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
+                                                                    self.a_scale_buffer, self.b_scale_buffer)
+        wmma_idx += 1
+
+        # iter end - 2
+        accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
+        # iter end - 1
+        gl.amd.gfx1250.tdm.async_wait(0)
+        a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
+                                                                    self.a_scale_buffer, self.b_scale_buffer)
+        # iter end - 1
+        accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
+
+        # iter end - 1
+        a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
+                                                                    self.a_scale_buffer, self.b_scale_buffer)
+        wmma_idx += 1
+
+        accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
+
+        gl.amd.gfx1250.buffer_store(accumulator, self.c_ptr, self.c_offs, mask=self.c_mask)
+
+    @gluon.jit
+    def warp_pipeline(self, K):
+        cfg = self.cfg
+        load_idx = 0
+        wmma_idx = 0
+        gl.static_assert(cfg.NUM_BUFFERS == 3)
+
+        # prologue
+        for _ in gl.static_range(cfg.NUM_BUFFERS - 1):
+            load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
+                                        self.b_scale_buffer)
+
+        accumulator = gl.zeros((cfg.BLOCK_M, cfg.BLOCK_N), dtype=gl.float32, layout=self.cfg.acc_layout)
+        loop_ub = gl.cdiv(K, cfg.BLOCK_K) - (cfg.NUM_BUFFERS - 1)
+        gl.assume(loop_ub >= 0)
+        # wait for the first prefetch
+        gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2) * self.cfg.NUM_LOADS_IN_BATCH)
+        for _ in range(0, loop_ub):
+            with gl.amd.warp_pipeline_stage("lds0", priority=1):
+                a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
+                                                                            self.a_scale_buffer, self.b_scale_buffer)
+
+            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 3) * self.cfg.NUM_LOADS_IN_BATCH)
+            with gl.amd.warp_pipeline_stage("tdm+wmma+lds1", priority=0):
+                load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
+                                            self.b_scale_buffer)
+                accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B,
+                                                         accumulator)
+                a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
+                                                                            self.a_scale_buffer, self.b_scale_buffer)
+                wmma_idx += 1
+                accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B,
+                                                         accumulator)
+
+        # epilogue
+        for i in gl.static_range(cfg.NUM_BUFFERS - 1):
+            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1 - i) * self.cfg.NUM_LOADS_IN_BATCH)
+            a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
+                                                                        self.a_scale_buffer, self.b_scale_buffer)
+            accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
+
+            a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
+                                                                        self.a_scale_buffer, self.b_scale_buffer)
+            accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
+            wmma_idx += 1
+
+        gl.amd.gfx1250.buffer_store(accumulator, self.c_ptr, self.c_offs, mask=self.c_mask)
+
+
+@aggregate
+class MXFPGEMMSliceNKProgram:
+    cfg: MXFPGEMMConfig
+    a_buffer: gl.shared_memory_descriptor
+    b_buffer: gl.shared_memory_descriptor
+    a_scale_buffer: gl.shared_memory_descriptor | gl.constexpr
+    b_scale_buffer: gl.shared_memory_descriptor
+
+    a_desc: tdm.tensor_descriptor
+    b_desc: tdm.tensor_descriptor
+    a_scale_desc: tdm.tensor_descriptor | ScaleAsyncCopyDescriptor | gl.constexpr
+    b_scale_desc: tdm.tensor_descriptor | ScaleAsyncCopyDescriptor
+
+    c_ptr: gl.tensor
+    c_offs: gl.tensor
+    c_mask: gl.tensor
+
+    @gluon.constexpr_function
+    def __init__(self, cfg: MXFPGEMMConfig, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, a_desc, b_desc,
+                 a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
+        self.cfg = cfg
+        self.a_buffer = a_buffer
+        self.b_buffer = b_buffer
+        if cfg.WITH_A_SCALE:
+            self.a_scale_buffer = a_scale_buffer
+        else:
+            self.a_scale_buffer = gl.constexpr(a_scale_buffer)
+
+        self.b_scale_buffer = b_scale_buffer
+        self.a_desc = a_desc
+        self.b_desc = b_desc
+        if cfg.WITH_A_SCALE:
+            self.a_scale_desc = a_scale_desc
+        else:
+            self.a_scale_desc = gl.constexpr(a_scale_desc)
+        self.b_scale_desc = b_scale_desc
+        self.c_ptr = c_ptr
+        self.c_offs = c_offs
+        self.c_mask = c_mask
+
+    @gluon.jit
+    def initialize(cfg: MXFPGEMMConfig, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
+        NUM_BUFFERS: gl.constexpr = cfg.NUM_BUFFERS
+        a_buffer = gl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape,
+                                             layout=a_desc.layout)
+        b_buffer = gl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape,
+                                             layout=b_desc.layout)
+        if cfg.WITH_A_SCALE:
+            a_scale_buffer = gl.allocate_shared_memory(a_scale_desc.dtype,
+                                                       shape=[NUM_BUFFERS] + a_scale_desc.block_shape,
+                                                       layout=a_scale_desc.layout)
+        else:
+            a_scale_buffer = gl.constexpr(0)
+
+        b_scale_buffer = gl.allocate_shared_memory(b_scale_desc.dtype, shape=[NUM_BUFFERS] + b_scale_desc.block_shape,
+                                                   layout=b_scale_desc.layout)
+
+        return MXFPGEMMSliceNKProgram(cfg, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, a_desc, b_desc,
+                                      a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask)
+
+    @gluon.jit
+    def issue_local_load_a(self, wmma_idx, subtile_start_idx: gl.constexpr, a_buffer, a_scale_buffer):
+        cfg = self.cfg
         NUM_SUBTILES_K: gl.constexpr = cfg.NUM_SUBTILES[2]
-        BLOCK_K_SCALE: gl.constexpr = cfg.BLOCK_K // cfg.SCALE_BLOCK // NUM_SUBTILES_K
-        a = a_buffer.index(wmma_idx % cfg.NUM_BUFFERS).load(layout=cfg.dot_layout_a)
+        SUBTILE_LEN: gl.constexpr = cfg.BLOCK_K // NUM_SUBTILES_K
+        BLOCK_K_SCALE: gl.constexpr = cfg.BLOCK_K // cfg.SCALE_BLOCK
+        subtile_start: gl.constexpr = subtile_start_idx * SUBTILE_LEN
+        a = a_buffer.index(wmma_idx % cfg.NUM_BUFFERS).slice(subtile_start // cfg.DIV_FACTOR_A,
+                                                             SUBTILE_LEN // cfg.DIV_FACTOR_A,
+                                                             1).load(layout=cfg.dot_layout_a)
         if cfg.WITH_A_SCALE:
             a_scale_buffer_slice = a_scale_buffer.index(wmma_idx % cfg.NUM_BUFFERS)
             if cfg.SCALE_PRESHUFFLE:
                 a_scale_buffer_slice = a_scale_buffer_slice.reshape((
-                    cfg.BLOCK_M_PRESHUFFLED // NUM_SUBTILES_M,  #
+                    cfg.BLOCK_M_PRESHUFFLED,  #
                     BLOCK_K_SCALE // cfg.SCALE_KWIDTH,  #
                     cfg.PRESHUFFLE_FACTOR // 4,  #
                     4,  #
-                    cfg.SCALE_KWIDTH)).permute((0, 3, 2, 1, 4)).reshape((cfg.BLOCK_M // NUM_SUBTILES_M, BLOCK_K_SCALE))
+                    cfg.SCALE_KWIDTH)).permute((0, 3, 2, 1, 4)).reshape((cfg.BLOCK_M, BLOCK_K_SCALE))
+            a_scale_buffer_slice = a_scale_buffer_slice.slice(subtile_start // cfg.SCALE_BLOCK,
+                                                              SUBTILE_LEN // cfg.SCALE_BLOCK, 1)
             scale_a = a_scale_buffer_slice.load(layout=cfg.layout_a_scale)
         else:
             scale_a = 0
@@ -806,42 +725,53 @@ class MXFPGEMMSliceNKProgram:
         return a, scale_a
 
     @gluon.jit
-    def issue_local_load_b(self, wmma_idx, b_buffer, b_scale_buffer):
+    def issue_local_load_b(self, wmma_idx, subtile_start_idx_k: gl.constexpr, subtile_start_idx_n: gl.constexpr,
+                           b_buffer, b_scale_buffer):
         cfg = self.cfg
         NUM_SUBTILES_N: gl.constexpr = cfg.NUM_SUBTILES[1]
         NUM_SUBTILES_K: gl.constexpr = cfg.NUM_SUBTILES[2]
-        BLOCK_K_SCALE: gl.constexpr = cfg.BLOCK_K // cfg.SCALE_BLOCK // NUM_SUBTILES_K
+        SUBTILE_LEN_K: gl.constexpr = cfg.BLOCK_K // NUM_SUBTILES_K
+        SUBTILE_LEN_N: gl.constexpr = cfg.BLOCK_N // NUM_SUBTILES_N
+        BLOCK_K_SCALE: gl.constexpr = cfg.BLOCK_K // cfg.SCALE_BLOCK
+        subtile_start_k: gl.constexpr = subtile_start_idx_k * SUBTILE_LEN_K
+        subtile_start_n: gl.constexpr = subtile_start_idx_n * SUBTILE_LEN_N
         if cfg.TRANSPOSE_B:
-            b = b_buffer.index(wmma_idx % cfg.NUM_BUFFERS).permute([1, 0]).load(layout=cfg.dot_layout_b)
+            b = b_buffer.index(wmma_idx % cfg.NUM_BUFFERS).slice(subtile_start_n, SUBTILE_LEN_N, 0) \
+            .slice(subtile_start_k // cfg.DIV_FACTOR_B, SUBTILE_LEN_K // cfg.DIV_FACTOR_B, 1) \
+            .permute([1, 0]).load(layout=cfg.dot_layout_b)
         else:
-            b = b_buffer.index(wmma_idx % cfg.NUM_BUFFERS).load(layout=cfg.dot_layout_b)
+            b = b_buffer.index(wmma_idx % cfg.NUM_BUFFERS).slice(subtile_start_k // cfg.DIV_FACTOR_B,
+                                                                 SUBTILE_LEN_K // cfg.DIV_FACTOR_B, 0) \
+            .slice(subtile_start_n, SUBTILE_LEN_N, 1) \
+            .load(layout=cfg.dot_layout_b)
         b_scale_buffer_slice = b_scale_buffer.index(wmma_idx % cfg.NUM_BUFFERS)
         if cfg.SCALE_PRESHUFFLE:
             b_scale_buffer_slice = b_scale_buffer_slice.reshape((
-                cfg.BLOCK_N_PRESHUFFLED // NUM_SUBTILES_N,  #
+                cfg.BLOCK_N_PRESHUFFLED,  #
                 BLOCK_K_SCALE // cfg.SCALE_KWIDTH,  #
                 cfg.PRESHUFFLE_FACTOR // 4,  #
                 4,  #
-                cfg.SCALE_KWIDTH)).permute((0, 3, 2, 1, 4)).reshape((cfg.BLOCK_N // NUM_SUBTILES_N, BLOCK_K_SCALE))
+                cfg.SCALE_KWIDTH)).permute((0, 3, 2, 1, 4)).reshape((cfg.BLOCK_N, BLOCK_K_SCALE))
+        b_scale_buffer_slice = b_scale_buffer_slice.slice(subtile_start_n, SUBTILE_LEN_N, 0) \
+            .slice(subtile_start_k // cfg.SCALE_BLOCK, SUBTILE_LEN_K // cfg.SCALE_BLOCK, 1)
         scale_b = b_scale_buffer_slice.load(layout=cfg.layout_b_scale)
         return b, scale_b
 
     @gluon.jit
     def issue_load_a(self, load_idx, a_buffer, a_scale_buffer, pred=1):
         cfg = self.cfg
-        NUM_SUBTILES_K: gl.constexpr = cfg.NUM_SUBTILES[2]
-        BLOCK_K: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A // NUM_SUBTILES_K
+        BLOCK_K: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A
         gl.amd.gfx1250.tdm.async_load(self.a_desc,  #
                                       [0, load_idx * BLOCK_K],  #
-                                      a_buffer.index((load_idx // NUM_SUBTILES_K) % cfg.NUM_BUFFERS),  #
+                                      a_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
                                       pred=pred)
         if cfg.WITH_A_SCALE:
-            a_scale_buffer_slice = a_scale_buffer.index((load_idx // NUM_SUBTILES_K) % cfg.NUM_BUFFERS)
+            a_scale_buffer_slice = a_scale_buffer.index(load_idx % cfg.NUM_BUFFERS)
             if cfg.ASYNC_COPY_SCALE:
                 self.a_scale_desc.issue_async_load(load_idx, a_scale_buffer_slice, pred=pred)
             else:
                 gl.amd.gfx1250.tdm.async_load(self.a_scale_desc,  #
-                                              [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED // NUM_SUBTILES_K],  #
+                                              [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED],  #
                                               a_scale_buffer_slice,  #
                                               pred=pred)
         return load_idx + 1
@@ -849,45 +779,35 @@ class MXFPGEMMSliceNKProgram:
     @gluon.jit
     def issue_load_b(self, load_idx, b_buffer, b_scale_buffer, pred=1):
         cfg = self.cfg
-        NUM_SUBTILES_N: gl.constexpr = cfg.NUM_SUBTILES[1]
-        NUM_SUBTILES_K: gl.constexpr = cfg.NUM_SUBTILES[2]
-        NUM_SUBTILES_NK: gl.constexpr = cfg.NUM_SUBTILES[1] * cfg.NUM_SUBTILES[2]
-        BLOCK_N: gl.constexpr = cfg.BLOCK_N // NUM_SUBTILES_N
-        BLOCK_K: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_B // NUM_SUBTILES_K
+        BLOCK_K: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_B
         if cfg.TRANSPOSE_B:
             gl.amd.gfx1250.tdm.async_load(self.b_desc,  #
-                                          [(load_idx % NUM_SUBTILES_N) * BLOCK_N,
-                                           (load_idx // NUM_SUBTILES_N) * BLOCK_K],  #
-                                          b_buffer.index((load_idx // NUM_SUBTILES_NK) % cfg.NUM_BUFFERS),  #
+                                          [0, load_idx * BLOCK_K],  #
+                                          b_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
                                           pred=pred)
         else:
             gl.amd.gfx1250.tdm.async_load(self.b_desc,  #
-                                          [(load_idx // NUM_SUBTILES_K) * BLOCK_K,
-                                           (load_idx % NUM_SUBTILES_N) * BLOCK_N],  #
-                                          b_buffer.index((load_idx // NUM_SUBTILES_NK) % cfg.NUM_BUFFERS),  #
+                                          [load_idx * BLOCK_K, 0],  #
+                                          b_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
                                           pred=pred)
-        b_scale_buffer_slice = b_scale_buffer.index((load_idx // NUM_SUBTILES_NK) % cfg.NUM_BUFFERS)
+        b_scale_buffer_slice = b_scale_buffer.index(load_idx % cfg.NUM_BUFFERS)
         if cfg.ASYNC_COPY_SCALE:
             self.b_scale_desc.issue_async_load(load_idx, b_scale_buffer_slice, pred=pred)
         else:
-            gl.amd.gfx1250.tdm.async_load(
-                self.b_scale_desc,  #
-                [(load_idx % NUM_SUBTILES_N) * (cfg.BLOCK_N_PRESHUFFLED // NUM_SUBTILES_N),  #
-                 (load_idx // NUM_SUBTILES_N) * cfg.BLOCK_K_SCALE_PRESHUFFLED // NUM_SUBTILES_K],  #
-                b_scale_buffer_slice,  #
-                pred=pred)
+            gl.amd.gfx1250.tdm.async_load(self.b_scale_desc,  #
+                                          [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED],  #
+                                          b_scale_buffer_slice,  #
+                                          pred=pred)
         return load_idx + 1
 
     @gluon.jit
-    def async_wait(self, waitcnt_a: int, waitcnt_b: int):
+    def async_wait(self, waitcnt: int):
         cfg = self.cfg
         if cfg.ASYNC_COPY_SCALE:
-            gl.amd.gfx1250.tdm.async_wait(int(waitcnt_a + waitcnt_b))
-            cp.wait_group(waitcnt_b if cfg.WITH_A_SCALE else (waitcnt_a + waitcnt_b))
+            gl.amd.gfx1250.tdm.async_wait(waitcnt)
+            cp.wait_group(waitcnt if cfg.WITH_A_SCALE else (waitcnt // 2))
         else:
-            gl.amd.gfx1250.tdm.async_wait((waitcnt_a + waitcnt_b) * 2 \
-                                           if cfg.WITH_A_SCALE \
-                                           else (waitcnt_a + waitcnt_b * 2))
+            gl.amd.gfx1250.tdm.async_wait((waitcnt * 2) if cfg.WITH_A_SCALE else (waitcnt + waitcnt // 2))
 
     @gluon.jit
     def pipeline(self, K):
@@ -898,16 +818,12 @@ class MXFPGEMMSliceNKProgram:
 
         # prologue
         # iter 0
-        load_a_idx = self.issue_load_a(load_a_idx, self.a_buffer0, self.a_scale_buffer0)
-        load_b_idx = self.issue_load_b(load_b_idx, self.b_buffer00, self.b_scale_buffer00)
-        load_b_idx = self.issue_load_b(load_b_idx, self.b_buffer01, self.b_scale_buffer01)
-        load_a_idx = self.issue_load_a(load_a_idx, self.a_buffer1, self.a_scale_buffer1)
-        load_b_idx = self.issue_load_b(load_b_idx, self.b_buffer10, self.b_scale_buffer10)
-        load_b_idx = self.issue_load_b(load_b_idx, self.b_buffer11, self.b_scale_buffer11)
+        load_a_idx = self.issue_load_a(load_a_idx, self.a_buffer, self.a_scale_buffer)
+        load_b_idx = self.issue_load_b(load_b_idx, self.b_buffer, self.b_scale_buffer)
 
-        self.async_wait(1, 3)
-        a0, scale_a0 = self.issue_local_load_a(wmma_idx, self.a_buffer0, self.a_scale_buffer0)
-        b00, scale_b00 = self.issue_local_load_b(wmma_idx, self.b_buffer00, self.b_scale_buffer00)
+        self.async_wait(0)
+        a0, scale_a0 = self.issue_local_load_a(wmma_idx, 0, self.a_buffer, self.a_scale_buffer)
+        b00, scale_b00 = self.issue_local_load_b(wmma_idx, 0, 0, self.b_buffer, self.b_scale_buffer)
 
         c0 = gl.zeros((cfg.BLOCK_M // cfg.NUM_SUBTILES[0], cfg.BLOCK_N // cfg.NUM_SUBTILES[1]), dtype=gl.float32,
                       layout=cfg.acc_layout)
@@ -922,40 +838,30 @@ class MXFPGEMMSliceNKProgram:
             pred = (pred >> 31) & 1
 
             # iter i + 1
-            load_a_idx = self.issue_load_a(load_a_idx, self.a_buffer0, self.a_scale_buffer0, pred=pred)
-            load_b_idx = self.issue_load_b(load_b_idx, self.b_buffer00, self.b_scale_buffer00, pred=pred)
+            load_a_idx = self.issue_load_a(load_a_idx, self.a_buffer, self.a_scale_buffer, pred=pred)
+            load_b_idx = self.issue_load_b(load_b_idx, self.b_buffer, self.b_scale_buffer, pred=pred)
 
-            self.async_wait(2, 3)
             # iter i
             c0 = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b00, scale_b00, cfg.DTYPE_B, c0)
-            b01, scale_b01 = self.issue_local_load_b(wmma_idx, self.b_buffer01, self.b_scale_buffer01)
+            b01, scale_b01 = self.issue_local_load_b(wmma_idx, 0, 1, self.b_buffer, self.b_scale_buffer)
 
-            # iter i + 1
-            load_b_idx = self.issue_load_b(load_b_idx, self.b_buffer01, self.b_scale_buffer01, pred=pred)
-            self.async_wait(1, 3)
             # iter i
             c1 = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b01, scale_b01, cfg.DTYPE_B, c1)
-            a1, scale_a1 = self.issue_local_load_a(wmma_idx, self.a_buffer1, self.a_scale_buffer1)
-            b10, scale_b10 = self.issue_local_load_b(wmma_idx, self.b_buffer10, self.b_scale_buffer10)
+            a1, scale_a1 = self.issue_local_load_a(wmma_idx, 1, self.a_buffer, self.a_scale_buffer)
+            b10, scale_b10 = self.issue_local_load_b(wmma_idx, 1, 0, self.b_buffer, self.b_scale_buffer)
 
-            # iter i + 1
-            load_a_idx = self.issue_load_a(load_a_idx, self.a_buffer1, self.a_scale_buffer1, pred=pred)
-            load_b_idx = self.issue_load_b(load_b_idx, self.b_buffer10, self.b_scale_buffer10, pred=pred)
-
-            self.async_wait(2, 3)
             # iter i
             c0 = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b10, scale_b10, cfg.DTYPE_B, c0)
-            b11, scale_b11 = self.issue_local_load_b(wmma_idx, self.b_buffer11, self.b_scale_buffer11)
+            b11, scale_b11 = self.issue_local_load_b(wmma_idx, 1, 1, self.b_buffer, self.b_scale_buffer)
+
+            # iter i
+            wmma_idx += 1
+            c1 = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b11, scale_b11, cfg.DTYPE_B, c1)
 
             # iter i + 1
-            load_b_idx = self.issue_load_b(load_b_idx, self.b_buffer11, self.b_scale_buffer11, pred=pred)
-            # iter i + 1
-            self.async_wait(1, 3)
-            wmma_idx += 1
-            # iter i
-            c1 = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b11, scale_b11, cfg.DTYPE_B, c1)
-            a0, scale_a0 = self.issue_local_load_a(wmma_idx, self.a_buffer0, self.a_scale_buffer0)
-            b00, scale_b00 = self.issue_local_load_b(wmma_idx, self.b_buffer00, self.b_scale_buffer00)
+            self.async_wait(0)
+            a0, scale_a0 = self.issue_local_load_a(wmma_idx, 0, self.a_buffer, self.a_scale_buffer)
+            b00, scale_b00 = self.issue_local_load_b(wmma_idx, 0, 0, self.b_buffer, self.b_scale_buffer)
 
         accumulator = gl.join(c0, c1)
         accumulator = accumulator.permute(0, 2, 1).reshape((cfg.BLOCK_M, cfg.BLOCK_N))
@@ -969,30 +875,26 @@ def create_tensor_descriptor(cfg: MXFPGEMMConfig, a_ptr, a_offs, b_ptr, b_offs, 
                              b_scale_offs, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_scale):
     SCALE_BLOCK: gl.constexpr = cfg.SCALE_BLOCK
     PRESHUFFLE_FACTOR: gl.constexpr = cfg.PRESHUFFLE_FACTOR
-    NUM_SUBTILES_M: gl.constexpr = cfg.NUM_SUBTILES[0]
-    NUM_SUBTILES_N: gl.constexpr = cfg.NUM_SUBTILES[1]
-    NUM_SUBTILES_K: gl.constexpr = cfg.NUM_SUBTILES[2]
-    a_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
-        base=a_ptr + a_offs,  #
-        shape=(M, K // cfg.DIV_FACTOR_A),  #
-        strides=(stride_am, stride_ak),  #
-        block_shape=(cfg.BLOCK_M // NUM_SUBTILES_M, cfg.BLOCK_K // cfg.DIV_FACTOR_A // NUM_SUBTILES_K),  #
-        layout=cfg.shared_layout_a)
+    a_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr + a_offs,  #
+                                                       shape=(M, K // cfg.DIV_FACTOR_A),  #
+                                                       strides=(stride_am, stride_ak),  #
+                                                       block_shape=(cfg.BLOCK_M, cfg.BLOCK_K // cfg.DIV_FACTOR_A),  #
+                                                       layout=cfg.shared_layout_a)
 
     if cfg.TRANSPOSE_B:
-        b_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
-            base=b_ptr + b_offs,  #
-            shape=(N, K // cfg.DIV_FACTOR_B),  #
-            strides=(stride_bn, stride_bk),  #
-            block_shape=(cfg.BLOCK_N // NUM_SUBTILES_N, cfg.BLOCK_K // cfg.DIV_FACTOR_B // NUM_SUBTILES_K),  #
-            layout=cfg.shared_layout_b)
+        b_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr + b_offs,  #
+                                                           shape=(N, K // cfg.DIV_FACTOR_B),  #
+                                                           strides=(stride_bn, stride_bk),  #
+                                                           block_shape=(cfg.BLOCK_N,
+                                                                        cfg.BLOCK_K // cfg.DIV_FACTOR_B),  #
+                                                           layout=cfg.shared_layout_b)
     else:
-        b_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
-            base=b_ptr + b_offs,  #
-            shape=(K // cfg.DIV_FACTOR_B, N),  #
-            strides=(stride_bk, stride_bn),  #
-            block_shape=(cfg.BLOCK_K // cfg.DIV_FACTOR_B // NUM_SUBTILES_K, cfg.BLOCK_N // NUM_SUBTILES_N),  #
-            layout=cfg.shared_layout_b)
+        b_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr + b_offs,  #
+                                                           shape=(K // cfg.DIV_FACTOR_B, N),  #
+                                                           strides=(stride_bk, stride_bn),  #
+                                                           block_shape=(cfg.BLOCK_K // cfg.DIV_FACTOR_B,
+                                                                        cfg.BLOCK_N),  #
+                                                           layout=cfg.shared_layout_b)
 
     if cfg.ASYNC_COPY_SCALE:
         if cfg.WITH_A_SCALE:
@@ -1008,8 +910,7 @@ def create_tensor_descriptor(cfg: MXFPGEMMConfig, a_ptr, a_offs, b_ptr, b_offs, 
                 base=a_scale_ptr + a_scale_offs,  #
                 shape=(M // PRESHUFFLE_FACTOR, K // SCALE_BLOCK * PRESHUFFLE_FACTOR),  #
                 strides=(stride_scale, 1),  #
-                block_shape=(cfg.BLOCK_M_PRESHUFFLED // NUM_SUBTILES_M,
-                             cfg.BLOCK_K_SCALE_PRESHUFFLED // NUM_SUBTILES_K),  #
+                block_shape=(cfg.BLOCK_M_PRESHUFFLED, cfg.BLOCK_K_SCALE_PRESHUFFLED),  #
                 layout=cfg.shared_layout_a_scale)
         else:
             # Use a placeholder to make compiler happy
@@ -1019,7 +920,7 @@ def create_tensor_descriptor(cfg: MXFPGEMMConfig, a_ptr, a_offs, b_ptr, b_offs, 
             base=b_scale_ptr + b_scale_offs,  #
             shape=(N // PRESHUFFLE_FACTOR, K // SCALE_BLOCK * PRESHUFFLE_FACTOR),  #
             strides=(stride_scale, 1),  #
-            block_shape=(cfg.BLOCK_N_PRESHUFFLED // NUM_SUBTILES_N, cfg.BLOCK_K_SCALE_PRESHUFFLED // NUM_SUBTILES_K),  #
+            block_shape=(cfg.BLOCK_N_PRESHUFFLED, cfg.BLOCK_K_SCALE_PRESHUFFLED),  #
             layout=cfg.shared_layout_b_scale)
 
     return a_desc, b_desc, a_scale_desc, b_scale_desc
@@ -1372,7 +1273,7 @@ if __name__ == '__main__':
         assert (args.num_warps == 8 and (args.schedule == 'baseline' or args.schedule == 'sliceK'))
 
     if args.num_warps == 8:
-        assert (args.num_buffers == 3 and not args.async_copy_scale)
+        assert (args.num_buffers in (3, 4) and not args.async_copy_scale)
         test_runtime_mxgemm_tdm_8warps_pipeline(args.dtype_a, args.dtype_b,  #
                                                 args.M, args.N, args.K,  #
                                                 args.BM, args.BN, args.BK,  #
@@ -1385,7 +1286,7 @@ if __name__ == '__main__':
                                                 GROUP_SIZE_M=args.group_size_m,  #
                                                 PINGPONG=args.pingpong)
     else:
-        assert (args.num_buffers in (2, 4))
+        assert (args.num_buffers in (2, 3, 4))
         test_runtime_mxgemm_tdm_pipelined(args.dtype_a, args.dtype_b,  #
                                           args.M, args.N, args.K,  #
                                           args.BM, args.BN, args.BK,  #

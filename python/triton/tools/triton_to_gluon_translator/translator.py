@@ -80,7 +80,6 @@ def add_translator_helper_rewrites(rewrites: list[RewriteFn]) -> None:
         (tl.make_tensor_descriptor, "tl_make_tensor_descriptor"),
         (tl.load_tensor_descriptor, "tl_load_tensor_descriptor"),
         (tl.store_tensor_descriptor, "tl_store_tensor_descriptor"),
-        (tl.atomic_add, "tl_atomic_add"),
     ]
     if (tl_cuda := getattr(tl.extra, "cuda", None)) is not None:
         remap.append((tl_cuda.num_threads, "get_num_threads_per_program"))
@@ -178,7 +177,7 @@ class Translator(ReferenceRewriter):
 
         node = self.uncanonicalize_call(node, canonicalized)
         new_node = self.generic_visit(node)
-        if value in [tl.reshape, tl.trans, tl.permute, tl.join, tl.split, tl.reduce, tl.sum]:
+        if value in [tl.reshape, tl.trans, tl.permute, tl.join, tl.split, tl.reduce, tl.sum, tl.max, tl.min]:
             new_node = cast(ast.Call, parse_expr(f"helpers.reset_to_default_layout({ast.unparse(new_node)})"))
         return new_node
 

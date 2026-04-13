@@ -30,6 +30,14 @@ namespace gpu {
 
 namespace {
 
+static bool isUnsupportedMMAv5Int8Dot(int computeCapability, DotOp op) {
+  if (computeCapability != 103)
+    return false;
+  auto aElemTy = op.getA().getType().getElementType();
+  auto bElemTy = op.getB().getType().getElementType();
+  return aElemTy.isInteger(8) && bElemTy.isInteger(8);
+}
+
 // Get the highest version supported for the hardware and the dot.
 static int getMMAVersionSafe(int computeCapability, DotOp op) {
   // List supported mma version in order of preference.
@@ -42,7 +50,11 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
     versionsSupported = {3, 2};
   } else if (computeCapability < 120) {
     // Exclude consumer Blackwell (sm120)
-    versionsSupported = {5, 2};
+    if (isUnsupportedMMAv5Int8Dot(computeCapability, op)) {
+      versionsSupported = {2};
+    } else {
+      versionsSupported = {5, 2};
+    }
   } else if (computeCapability < 130) {
     versionsSupported = {2};
   } else {
@@ -406,7 +418,6 @@ public:
 
     Operation *newDot = nullptr;
     bool aFromLoad = comesFromLoadOrBlockArg(a);
-    bool bFromLoad = comesFromLoadOrBlockArg(b);
 
     if (mmaResult.versionMajor == 3) {
       auto eltType = cast<RankedTensorType>(a.getType()).getElementType();
@@ -550,7 +561,6 @@ public:
         dotOp.getInputPrecision() != InputPrecision::TF32)
       return failure();
     auto oldAType = dotOp.getA().getType();
-    auto oldBType = dotOp.getB().getType();
     // NYI: PTX 13+ requires all tcgen instructions in a kernel to have a
     // consistent CTA mode, disabling 2CTA mode for now. To re-enable,
     // change the line below to: bool useTwoCTAs = canUseTwoCTAs(dotOp);
@@ -665,7 +675,7 @@ public:
   mlir::LogicalResult
   matchAndRewrite(triton::DotScaledOp dotOp,
                   mlir::PatternRewriter &rewriter) const override {
-    if (computeCapability != 120)
+    if (computeCapability / 10 != 12)
       return failure();
 
     auto numCTAs = lookupNumCTAs(rewriter);
@@ -912,7 +922,7 @@ static bool mmav2SupportsFp8Operands(int computeCapability) {
   // although PTX instructions for mma v2 w/ fp8 operands exist for sm90 and
   // sm100, they are emulated as fp16 upcasts + fp16 HMMA in SASS. sm120 has
   // hardware support for fp8 operands w/ mmav2.
-  return computeCapability == 89 || computeCapability == 120;
+  return computeCapability == 89 || computeCapability / 10 == 12;
 }
 
 // promote operands of dot op if the existing combination is not natively
@@ -1013,9 +1023,8 @@ public:
     patterns.add<BlockedToMMAv5, ScaledBlockedToMMAv5>(
         context, computeCapability, benefitMMAv5);
 
-    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
-      signalPassFailure();
-    }
+    if (applyPatternsGreedily(m, std::move(patterns)).failed())
+      return signalPassFailure();
     // Now that we have picked the mma type, decompose dot that are not natively
     // supported.
     decomposeMixedModeDotOp(m, computeCapability);

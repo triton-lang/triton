@@ -18,7 +18,6 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using mlir::LLVM::NVIDIA::lowerLdStMatrix;
 
-constexpr int kPtrBitWidth = 64;
 struct ConvertLayoutOpSwizzlingConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
   const NVIDIA::TargetInfo &targetInfo;

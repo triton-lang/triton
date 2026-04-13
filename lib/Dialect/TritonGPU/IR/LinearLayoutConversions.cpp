@@ -492,7 +492,6 @@ chooseDotDsReadTrLayout(DotOperandEncodingAttr dotMfmaLayout,
 
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
-  int32_t kWidthDot = dotMfmaLayout.getKWidth();
   auto kDim = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
 
   int32_t kSize = shape[kDim];
@@ -579,7 +578,6 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
 
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
-  int mIndex = 0 + hasBatchDim;
 
   int32_t kWidth = dotMfmaLayout.getKWidth();
   auto nonKDimIndex = dotMfmaLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
@@ -680,7 +678,6 @@ LinearLayout AMDWmmaEncodingAttr::getTileLayout(unsigned rank) const {
 
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
-  StringAttr kWarp = S("warp");
 
   // https://github.com/ROCm/amd_matrix_instruction_calculator can print the
   // register and lane layout for mfma instructions.
@@ -733,17 +730,7 @@ LinearLayout AMDWmmaEncodingAttr::getTileLayout(unsigned rank) const {
 
 LinearLayout
 AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  auto mnkDim = getInstrShape();
   auto rank = shape.size();
-  bool hasBatchDim = rank == 3;
-  int mIndex = 0 + hasBatchDim;
-  int nIndex = 1 + hasBatchDim;
-  unsigned mDim = mnkDim[0], nDim = mnkDim[1];
-  (void)mDim, (void)nDim;
-
-  assert(((shape[mIndex] == 1 || shape[mIndex] >= mDim) &&
-          (shape[nIndex] == 1 || shape[nIndex] >= nDim)) &&
-         "Unsupported tensor shape for given wmma layout");
 
   auto tileLayout = getTileLayout(rank);
   auto ctaLayout = getCtaLayout();
@@ -768,13 +755,11 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
   assert(version >= 1 && version <= 3 && "unexpected wmma version");
 
   auto rank = shape.size();
-  bool hasBatchDim = rank == 3;
 
   MLIRContext *ctx = dotWmmaLayout.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
-  StringAttr kWarp = S("warp");
 
   // lane order
   // operand A: [1, 0] / [2, 1, 0]
@@ -787,7 +772,6 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
 
   auto mnkDim = wmmaLayout.getInstrShape();
   auto kDim = mnkDim[2];
-  auto nonKDimIndex = dotWmmaLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
   auto kDimIndex = dotWmmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
   unsigned kSize = shape[kDimIndex];
 
@@ -826,7 +810,7 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
       permuteDimNames(standardOutDimNames(ctx, rank), order);
   dotOperanLayout = dotOperanLayout.transposeOuts(repDimNames);
 
-  return combineCtaCgaWithShape(dotOperanLayout, wmmaLayout.getCGALayout(),
+  return combineCtaCgaWithShape(dotOperanLayout, dotWmmaLayout.getCGALayout(),
                                 shape);
 }
 
@@ -990,7 +974,6 @@ DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     return wmmaDotOperandToLinearLayout(*this, shape);
   } else {
-    auto mma = mlir::cast<NvidiaMmaEncodingAttr>(parent);
     return nvidiaDotToLinearLayout(shape, *this);
   }
 }
@@ -1250,8 +1233,7 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
                                                                    layout);
 }
 
-LinearLayout paddedLinearLayout(MemDescType type) {
-  auto encoding = type.getEncoding();
+LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
   assert(isPaddedEncoding(encoding) &&
          "expected padded encoding or partitioned wrapping padded");
 
@@ -1260,8 +1242,12 @@ LinearLayout paddedLinearLayout(MemDescType type) {
   }
 
   auto partitioned = cast<PartitionedSharedEncodingAttr>(encoding);
-  auto shape = type.getAllocShape().take_back(type.getRank());
   return partitionedSharedToLinearLayout(shape, partitioned);
+}
+
+LinearLayout paddedLinearLayout(MemDescType type) {
+  auto shape = type.getAllocShape().take_back(type.getRank());
+  return paddedLinearLayout(shape, type.getEncoding());
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
@@ -1377,8 +1363,6 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
 
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
-  StringAttr kWarp = StringAttr::get(ctx, "warp");
-  StringAttr kBlock = StringAttr::get(ctx, "block");
 
   // In scaled dot, the shapes of operands(without batch dimension) are,
   // respectively:
@@ -1511,7 +1495,6 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
-  StringAttr kBlock = StringAttr::get(ctx, "block");
 
   // Fetch the tilesPerWarp value in the M dimension for operand A, or in the N
   // dimension for operand B.
@@ -1741,8 +1724,9 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
 
   auto order = getMatrixOrder(numDims, /*rowMajor=*/false);
 
-  return identityStandardND(S("message"), messageShape, order) *
-         identityStandardND(S("warp"), warpsPerCTA, order) * cgaLayout;
+  return (identityStandardND(S("message"), messageShape, order) *
+          identityStandardND(S("warp"), warpsPerCTA, order) * cgaLayout)
+      .transposeOuts(standardOutDimNames(ctx, numDims));
 }
 
 } // namespace mlir::triton::gpu

@@ -413,7 +413,6 @@ struct FpToFpOpConversion
     auto F16TyID = TypeID::get<Float16Type>();
     auto BF16TyID = TypeID::get<BFloat16Type>();
     auto F32TyID = TypeID::get<Float32Type>();
-    auto F64TyID = TypeID::get<Float64Type>();
 
     auto undefRounding = static_cast<RoundingMode>(-1);
 
@@ -626,7 +625,6 @@ struct FPToSIOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    auto inElemTy = getElementType(op.getIn());
     return {LLVM::FPToSIOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
 };
@@ -690,7 +688,7 @@ struct ClampFOpConversion
     //   %160 = tt.clamp %158, %cst_6, %cst_7
 
     auto getSplatInitializer = [](Value v) -> std::optional<double> {
-      DenseIntOrFPElementsAttr denseAttr;
+      DenseTypedElementsAttr denseAttr;
       if (matchPattern(v, m_Constant(&denseAttr))) {
         if (denseAttr.isSplat()) {
           return denseAttr.getSplatValue<APFloat>().convertToDouble();

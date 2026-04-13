@@ -26,6 +26,63 @@ LLVM::LLVMFuncOp getOrInsertFunction(T &moduleOp, const Location loc,
   return ret;
 }
 
+// Create (or look up) a noinline function that prints an assertion message
+// via ockl hostcall. Isolating the printf code in a separate noinline
+// function keeps VGPR pressure low when using instrumentation.
+LLVM::LLVMFuncOp getOrCreateAssertFailFunc(ModuleOp moduleOp, Location loc,
+                                           RewriterBase &rewriter) {
+  auto *ctx = rewriter.getContext();
+  StringRef funcName = "__triton_assert_fail";
+
+  if (auto existing = moduleOp.lookupSymbol<LLVM::LLVMFuncOp>(funcName))
+    return existing;
+
+  RewriterBase::InsertionGuard guard(rewriter);
+
+  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+  auto i64Ty = IntegerType::get(ctx, 64);
+  auto i32Ty = IntegerType::get(ctx, 32);
+  auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+  // Ensure ockl function declarations exist at module scope.
+  auto printBeginFn = getOrInsertFunction(
+      moduleOp, loc, rewriter, "__ockl_fprintf_stderr_begin",
+      LLVM::LLVMFunctionType::get(i64Ty, {}));
+  auto printStrFn = getOrInsertFunction(
+      moduleOp, loc, rewriter, "__ockl_printf_append_string_n",
+      LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, ptrTy, i64Ty, i32Ty}));
+
+  // Create the noinline function: void @__triton_assert_fail(ptr, i64)
+  rewriter.setInsertionPointToStart(moduleOp.getBody());
+  auto funcType = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i64Ty});
+  auto funcOp = LLVM::LLVMFuncOp::create(rewriter, loc, funcName, funcType,
+                                         LLVM::Linkage::Internal);
+  funcOp.setPassthroughAttr(
+      ArrayAttr::get(ctx, {
+                              StringAttr::get(ctx, "noinline"),
+                              StringAttr::get(ctx, "cold"),
+                              StringAttr::get(ctx, "convergent"),
+                              StringAttr::get(ctx, "nounwind"),
+                          }));
+  if (auto numWarps = moduleOp->getAttrOfType<IntegerAttr>("ttg.num-warps"))
+    funcOp->setAttr("ws_num_warps", numWarps);
+
+  // Build the function body.
+  Block *entry =
+      rewriter.createBlock(&funcOp.getBody(), {}, {ptrTy, i64Ty}, {loc, loc});
+  Value msg = entry->getArgument(0);
+  Value len = entry->getArgument(1);
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value beginResult = b.call(printBeginFn, ValueRange()).getResult();
+  Value oneI32 = b.i32_val(1);
+  SmallVector<Value> printArgs = {beginResult, msg, len, oneI32};
+  b.call(printStrFn, printArgs);
+  LLVM::ReturnOp::create(rewriter, loc, ValueRange());
+
+  return funcOp;
+}
+
 // Extend all values to 64-bit per printf call requirements.
 Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
   auto *context = rewriter.getContext();
@@ -639,6 +696,9 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto *ctx = rewriter.getContext();
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+
   // Compose and print an assert message.
   llvm::SmallString<256> msgBuffer;
   llvm::Twine("device assertion failed: '" + message + "', in " + func +
@@ -646,14 +706,30 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
       .toStringRef(msgBuffer);
   Value msgValue =
       LLVM::addStringToModule(loc, rewriter, "printfFormat_", msgBuffer);
-  printfImpl(msgValue, msgBuffer.size_in_bytes(), /*args=*/ValueRange(),
-             /*isSigned=*/{}, rewriter, /*useStdError=*/true);
+
+  // Call the noinline assert handler to print the message via hostcall.
+  auto assertFailFunc = getOrCreateAssertFailFunc(moduleOp, loc, rewriter);
+  Value msgLen = LLVM::ConstantOp::create(
+      rewriter, loc, IntegerType::get(ctx, 64), msgBuffer.size_in_bytes());
+  SmallVector<Value> callArgs = {msgValue, msgLen};
+  b.call(assertFailFunc, callArgs);
 
   // Set block barrier before aborting kernel, give a chance for all
   // the threads in a block to check/print the assert failure.
   b.barrier(triton::gpu::AddrSpace::All);
   // Perform the trap to abort the kernel.
-  LLVM::Trap::create(rewriter, loc);
+  // Use inline asm "s_trap 2" instead of LLVM::Trap because llvm.trap is
+  // noreturn, inserting 'unreachable' which causes StructurizeCFG to defer
+  // the block past convergence points, making ConSan lock releases
+  // unreachable and causing deadlocks. The noinline helper above prevents
+  // the printf code from being inlined and bloating the kernel.
+  LLVM::InlineAsmOp::create(
+      rewriter, loc, LLVM::LLVMVoidType::get(ctx), /*operands=*/ValueRange{},
+      "s_trap 2", /*constraints=*/"",
+      /*has_side_effects=*/true, /*is_align_stack=*/false,
+      LLVM::TailCallKind::None,
+      LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
+      /*operand_attrs=*/ArrayAttr::get(ctx, {}));
 }
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }
@@ -677,7 +753,25 @@ bool TargetInfo::supportVectorizedAtomics() const {
 bool TargetInfo::supportBitwidth16Elementwise() const { return true; }
 
 bool TargetInfo::supportBitwidth32Elementwise() const {
-  return getISAFamily() == ISAFamily::GFX1250;
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+  case ISAFamily::GFX1250:
+    return true;
+  default:
+    return false;
+  }
+}
+
+unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
+  // AMD has native ternary max/min instructions: v_max3/v_min3 on all GFX9+,
+  // and v_maximum3/v_minimum3 additionally on GFX950 and GFX1250.
+  // Use a ternary reduction tree so these map 1:1 to hardware.
+  if (isa<arith::MaximumFOp, arith::MinimumFOp, arith::MaxNumFOp,
+          arith::MinNumFOp>(combinerOp))
+    return 3;
+  return 2;
 }
 
 bool TargetInfo::supportsDirectToLDSScattering() const {
@@ -745,6 +839,32 @@ bool TargetInfo::supportsBufferLoadToLocal() const {
                             getISAFamily());
 }
 
+bool TargetInfo::supportsBufferAtomicRMW() const {
+  return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4,
+                             ISAFamily::RDNA4, ISAFamily::GFX1250},
+                            getISAFamily());
+}
+
+bool TargetInfo::supportsBufferAtomicFadd(mlir::Type elementType) const {
+  auto isaFamily = getISAFamily();
+  if (isaFamily == ISAFamily::CDNA3 && elementType.isBF16())
+    return false;
+  if (isaFamily == ISAFamily::RDNA4 && elementType.isF64())
+    return false;
+  return true;
+}
+
+int32_t TargetInfo::getBufferAtomicCachePolicy(bool hasUsers) const {
+  const int sc0Bit = 0b1;          // TH_ATOMIC_RETURN (cpol bit 0)
+  const int scopeDevBit = 0b10000; // SCOPE_DEV = 2 << 3 (cpol bits [4:3])
+  int32_t aux = 0;
+  if (hasUsers)
+    aux |= sc0Bit;
+  if (getISAFamily() == ISAFamily::GFX1250)
+    aux |= scopeDevBit;
+  return aux;
+}
+
 bool TargetInfo::supportsWaveId() const {
   return getISAFamily() == ISAFamily::RDNA4 ||
          getISAFamily() == ISAFamily::GFX1250;
@@ -757,6 +877,11 @@ bool TargetInfo::supportsPermlaneSwap() const {
 
 bool TargetInfo::supportsCvtPkScalePk8() const {
   return getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetInfo::supportsHwScaledUpcast() const {
+  return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::GFX1250;
 }
 
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,

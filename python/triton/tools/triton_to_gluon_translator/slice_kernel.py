@@ -17,6 +17,7 @@ from pathlib import Path
 from types import BuiltinFunctionType, FunctionType, ModuleType
 from typing import Any, Callable, TypeAlias
 
+import triton  # type: ignore[import-untyped]
 from triton import language as tl  # type: ignore[import-untyped]
 from triton.runtime.jit import JITCallable, JITFunction  # type: ignore[import-untyped]
 from triton.tools.ragged_tma import create_ragged_descriptor  # type: ignore[import-untyped]
@@ -132,15 +133,55 @@ def get_assign_target(stmt: ast.Assign | ast.AnnAssign) -> ast.Name | None:
 
 
 def resolve_module_alias(stmt: ast.ImportFrom, cur_module: ModuleType) -> ModuleType:
-    assert stmt.module is not None, "import statement with no module"
-    assert cur_module.__file__ is not None
+    package_name = cur_module.__package__
+    assert package_name is not None, "module is missing package metadata"
     if stmt.level > 0:
-        parts = cur_module.__name__.split(".")
-        parent_name = parts[:len(parts) - stmt.level + cur_module.__file__.endswith("__init__.py")]
-        module_name = ".".join(parent_name) + "." + stmt.module
+        module_name = importlib.util.resolve_name("." * stmt.level + (stmt.module or ""), package_name)
     else:
+        assert stmt.module is not None, "import statement with no module"
         module_name = stmt.module
-    return sys.modules[module_name]
+    return sys.modules.get(module_name) or importlib.import_module(module_name)
+
+
+def bind_import_aliases(
+    context: scoped_dict[str, Any],
+    aliases: list[ast.alias],
+    get_binding: Callable[[ast.alias], tuple[str, Any] | None],
+) -> bool:
+    for alias in aliases:
+        binding = get_binding(alias)
+        if binding is None:
+            return False
+        name, value = binding
+        context[name] = value
+    return True
+
+
+def get_import_from_binding(module: ModuleType, alias: ast.alias) -> tuple[str, Any] | None:
+    if alias.name == "*":
+        return None
+    try:
+        value = getattr(module, alias.name)
+    except AttributeError:
+        value = importlib.import_module(f"{module.__name__}.{alias.name}")
+    return alias.asname or alias.name, value
+
+
+def get_import_binding(alias: ast.alias) -> tuple[str, ModuleType]:
+    module = importlib.import_module(alias.name)
+    bound_name = alias.asname or alias.name.split(".")[0]
+    if alias.asname is None and "." in alias.name:
+        module = sys.modules.get(bound_name) or importlib.import_module(bound_name)
+    return bound_name, module
+
+
+def bind_import_from_stmt(context: scoped_dict[str, Any], cur_module: ModuleType, stmt: ast.ImportFrom) -> bool:
+    module = resolve_module_alias(stmt, cur_module)
+    return bind_import_aliases(context, stmt.names, lambda alias: get_import_from_binding(module, alias))
+
+
+def bind_import_stmt(context: scoped_dict[str, Any], stmt: ast.Import) -> bool:
+    return bind_import_aliases(context, stmt.names, get_import_binding)
 
 
 def get_name_ref_module(name: str, cur_module: ModuleType, filter: FilterFn) -> ModuleType:
@@ -279,6 +320,28 @@ class ReferenceScanner(ast.NodeVisitor):
                     self.context[arg.arg] = LocalMarker()
             return self.generic_visit(node)
 
+    def visit_Assign(self, node: ast.Assign) -> None:
+        target = get_assign_target(node)
+        if target is not None:
+            self.context[target.id] = LocalMarker()
+        return self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        target = get_assign_target(node)
+        if target is not None:
+            self.context[target.id] = LocalMarker()
+        return self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if bind_import_from_stmt(self.context, self.cur_module, node):
+            return None
+        return self.generic_visit(node)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        if bind_import_stmt(self.context, node):
+            return None
+        return self.generic_visit(node)
+
 
 def match_regex(path: str) -> bool:
     identifier = r"[a-zA-Z_][a-zA-Z0-9_]*"
@@ -348,6 +411,14 @@ def add_sugar_rewrites(rewrites: list[RewriteFn], translate_to_gluon: bool) -> N
         return None
 
     rewrites.append(sugar_tensor_descriptor)
+
+    def sugar_set_allocator(global_value: GlobalValue, imports: ordered_set[str]) -> ast.AST | None:
+        if global_value.original_value is triton.set_allocator:
+            imports.add("import triton")
+            return ast.Attribute(value=ast.Name(id="triton", ctx=ast.Load()), attr="set_allocator", ctx=ast.Load())
+        return None
+
+    rewrites.append(sugar_set_allocator)
 
 
 @dataclass
@@ -422,11 +493,34 @@ class ReferenceRewriter(ast.NodeTransformer):
                     self.context[arg.arg] = LocalMarker()
             return self.generic_visit(node)
 
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        target = get_assign_target(node)
+        if target is not None:
+            self.context[target.id] = LocalMarker()
+        return self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> ast.AST:
+        target = get_assign_target(node)
+        if target is not None:
+            self.context[target.id] = LocalMarker()
+        return self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> ast.AST | None:
+        if bind_import_from_stmt(self.context, self.cur_module, node):
+            return None
+        return self.generic_visit(node)
+
+    def visit_Import(self, node: ast.Import) -> ast.AST | None:
+        if bind_import_stmt(self.context, node):
+            return None
+        return self.generic_visit(node)
+
 
 @dataclass
 class SliceRewriter(ReferenceRewriter):
     translate_to_gluon: bool = False
     inline_helpers: ordered_set[str] = field(default_factory=ordered_set[str])
+    cvt_context: list[bool] = field(default_factory=lambda: [False])
 
     def __post_init__(self) -> None:
         # Special rules for sugaring imports.
@@ -478,8 +572,12 @@ class SliceRewriter(ReferenceRewriter):
 
         # Rewrite host code when translating to Gluon.
         callee = self.emit_reference(node.func)
+        is_cvt = isinstance(node.func, ast.Name) and node.func.id == "convert_host_descriptor"
+        self.cvt_context.append(is_cvt)
         new_node = self.generic_visit(node)
-        if callee in [TensorDescriptor, TensorDescriptor.from_tensor, create_ragged_descriptor]:
+        self.cvt_context.pop()
+        if callee in [TensorDescriptor, TensorDescriptor.from_tensor, create_ragged_descriptor
+                      ] and not self.cvt_context[-1]:
             self.inline_helpers.add("convert_host_descriptor")
             new_node = parse_expr(f"convert_host_descriptor({ast.unparse(new_node)})")
         return new_node
@@ -637,6 +735,7 @@ def slice_kernel(
             filter,
             ignored_decorator_matchers=ignored_decorator_matchers,
         )
+        jit_functions = [fn for fn in jit_functions if not fn.original_value.is_gluon()]
         converted_functions = translate_kernels(jit_functions)
         module_file = tempfile.NamedTemporaryFile(delete=False, prefix="translated_", suffix=".py")
         module_path = Path(module_file.name)
