@@ -193,6 +193,99 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
   return success();
 }
 
+// Create a pipelined region from flat (non-loop) border markers in a block.
+// This handles the case where a loop was unrolled at the Python level
+// (e.g. via static_range) but the body still has warp_pipeline_stage
+// annotations producing border markers.  The grouping logic mirrors
+// createPipeline but without a loop wrapper.
+static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
+  auto isIgnorable = [](Operation *op) {
+    return isa<ttg::AsyncWaitOp, gpu::BarrierOp, triton::gpu::BarrierOp,
+               tt::amdgpu::AsyncTDMWait>(op);
+  };
+  auto isBorder = [](Operation *op) {
+    return op->hasAttr("triton.warp_pipeline.border");
+  };
+
+  SmallVector<Operation *> allBorders;
+  for (auto &op : block)
+    if (isBorder(&op))
+      allBorders.push_back(&op);
+
+  if (allBorders.size() < 2)
+    return failure();
+
+  Location loc = allBorders.front()->getLoc();
+  Operation *firstBorder = allBorders.front();
+  Operation *lastBorder = allBorders.back();
+
+  // Walk backwards from the first border to find the start of the first
+  // stage.  Stop at control-flow boundaries (scf.for, cond_barrier) or
+  // ignorable ops that logically belong to a previous pipeline.
+  Operation *regionStart = firstBorder;
+  for (Operation *op = firstBorder->getPrevNode(); op; op = op->getPrevNode()) {
+    if (isa<scf::ForOp>(op) || isa<tt::amdgpu::CondBarrierOp>(op))
+      break;
+    if (isIgnorable(op))
+      break;
+    regionStart = op;
+  }
+
+  SmallVector<Operation *> cluster;
+  SmallVector<std::pair<StringAttr, int>> clusterMarkers;
+  SmallVector<SmallVector<Operation *>> clusters;
+
+  for (auto it = Block::iterator(regionStart); it != block.end();) {
+    Operation *op = &*it;
+    ++it;
+
+    if (isBorder(op)) {
+      StringAttr clusterStr =
+          op->getAttrOfType<StringAttr>("triton.warp_pipeline.border");
+      int priority = -1;
+      if (auto intAttr =
+              op->getAttrOfType<IntegerAttr>("triton.warp_pipeline.priority"))
+        priority = intAttr.getInt();
+      clusterMarkers.push_back({clusterStr, priority});
+
+      if (cluster.empty()) {
+        b.setInsertionPoint(op);
+        auto dummyOp = ROCDL::SchedBarrier::create(b, loc, 0);
+        dummyOp->setAttr("triton.warp_pipeline.empty_cluster", b.getUnitAttr());
+        cluster.push_back(dummyOp);
+      }
+      clusters.push_back(std::move(cluster));
+      cluster.clear();
+
+      bool isLast = (op == lastBorder);
+      op->erase();
+      if (isLast)
+        break;
+      continue;
+    }
+
+    if (isIgnorable(op)) {
+      if (!cluster.empty())
+        return failure();
+      continue;
+    }
+
+    cluster.push_back(op);
+  }
+
+  if (clusters.size() < 2)
+    return failure();
+
+  for (auto &&[stageOps, marker] : llvm::zip(clusters, clusterMarkers)) {
+    if (stageOps.empty())
+      continue;
+    createClusterOp(b, loc, stageOps, marker);
+  }
+
+  LDBG("[warp-pipeline] flat pipeline with " << clusters.size() << " stages");
+  return success();
+}
+
 struct TritonAMDGPUWarpPipelinePass
     : impl::TritonAMDGPUWarpPipelineBase<TritonAMDGPUWarpPipelinePass> {
   using Base::Base;
@@ -206,6 +299,12 @@ struct TritonAMDGPUWarpPipelinePass
         if (createPipeline(builder, loc, forOp).failed())
           LDBG("Failed warp-pipelining");
       });
+
+      // Process remaining border markers in flat (non-loop) code.
+      for (Block &block : funcOp.getBody()) {
+        if (createFlatPipeline(builder, block).failed())
+          LDBG("No flat warp-pipeline in block");
+      }
     }
   }
 };

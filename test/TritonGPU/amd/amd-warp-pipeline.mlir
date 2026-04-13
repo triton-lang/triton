@@ -143,6 +143,54 @@ tt.func public @triple_buf_two_stages(%arg0: i32, %arg1: i32, %arg2: i32, %arg3:
   tt.return
 }
 
+// -- Flat (unrolled) pipeline: borders outside scf.for ----
+//
+// Simulates a static_range epilogue that was unrolled at the Python level.
+// The border markers sit in the function body, not inside a loop.
+
+tt.func @flat_pipeline_example(%n: index) {
+  %c0  = arith.constant 0 : index
+  %c1  = arith.constant 1 : index
+
+  scf.for %i = %c0 to %n step %c1 {
+    scf.yield
+  }
+
+  // Stage 0 (ops before the first border)
+  %a  = arith.addi %c0, %c1 : index
+  %a2 = arith.muli %a, %c1 : index
+
+  rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage0_epi", triton.warp_pipeline.priority = 1 : i32}
+
+  // Stage 1
+  %b  = arith.addi %a2, %c0 : index
+  %b2 = arith.muli %b, %c1 : index
+
+  rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage1_epi", triton.warp_pipeline.priority = 0 : i32}
+
+  tt.return
+}
+
+// CHECK-LABEL: tt.func @flat_pipeline_example(
+// CHECK: scf.for
+// Flat execute_regions created from the borders:
+// CHECK: scf.execute_region
+// CHECK:   arith.addi
+// CHECK:   arith.muli
+// CHECK:   scf.yield
+// CHECK: triton.warp_pipeline.priority = 1
+// CHECK-SAME: triton.warp_pipeline.stage = "stage0_epi"
+// CHECK: scf.execute_region
+// CHECK:   arith.addi
+// CHECK:   arith.muli
+// CHECK:   scf.yield
+// CHECK: triton.warp_pipeline.priority = 0
+// CHECK-SAME: triton.warp_pipeline.stage = "stage1_epi"
+// Border markers must be erased:
+// CHECK-NOT: rocdl.sched.barrier
+// CHECK: tt.return
+
+
 // -- Negative: no border → no structuring ----
 tt.func @no_split_example(%n: index) {
   %c0  = arith.constant 0 : index

@@ -4,6 +4,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include <cstdlib>
 #include <numeric>
 #include <optional>
 
@@ -673,7 +674,13 @@ void fillTDMDescriptor(
   // preserving the original tensor shape if smaller. Note that the pre
   // conditions are checked in the verifier already
   bool adjustedBlockShape = false;
-  if (isStore && padInterval > 0 && padAmount > 0) {
+  // TRITON_AMDGPU_WA_STORE_PAD: skip PR #9360's tile_dim0 adjustment for
+  // tensor_store_from_lds and rely on HW pad_enable instead.
+  static const bool storePadWA = [] {
+    const char *env = std::getenv("TRITON_AMDGPU_WA_STORE_PAD");
+    return env && std::string(env) == "1";
+  }();
+  if (!storePadWA && isStore && padInterval > 0 && padAmount > 0) {
     adjustedBlockShape = true;
     Value originalTileDim0 = decodedBlockShape[numDims - 1];
 
