@@ -20,6 +20,7 @@
 #include "rocprofiler-sdk/pc_sampling.h"
 #include "rocprofiler-sdk/registration.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <dlfcn.h>
 #include <iostream>
@@ -294,32 +295,79 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
     kernelNames[kernelId] = std::string(name);
   }
 
-  // code_object_id → first kernel name seen for that code object.
-  // One code object may contain multiple kernels; this gives a best-effort
-  // label for PC samples that only carry code_object_id.
-  using CodeObjNameMap =
-      ThreadSafeMap<uint64_t, std::string,
-                    std::unordered_map<uint64_t, std::string>>;
-  CodeObjNameMap codeObjNames;
+  // dispatch_id → kernel_id, populated from kernel dispatch buffer records.
+  // Used by PC sampling to resolve dispatch_id → kernel name.
+  using DispatchToKernelMap =
+      ThreadSafeMap<uint64_t, uint64_t, std::unordered_map<uint64_t, uint64_t>>;
+  DispatchToKernelMap dispatchToKernelId;
 
-  void setCodeObjKernelName(uint64_t codeObjId, const char *name) {
+  // code_object_id → sorted vector of (kernel_address, kernel_name).
+  // Built from code object symbol registrations. Used as a fallback when
+  // dispatch_id is unknown: given a PC offset we binary-search for the
+  // kernel whose entry address is <= the sampled address.
+  struct KernelAddrEntry {
+    uint64_t addr; // kernel_address (first instruction)
+    std::string name;
+  };
+  using CodeObjKernelMap =
+      ThreadSafeMap<uint64_t, std::vector<KernelAddrEntry>,
+                    std::unordered_map<uint64_t, std::vector<KernelAddrEntry>>>;
+  CodeObjKernelMap codeObjKernels;
+
+  void addCodeObjKernel(uint64_t codeObjId, uint64_t kernelAddr,
+                        const char *name) {
     if (name == nullptr)
       return;
-    // Keep the first kernel name registered for this code object.
-    if (!codeObjNames.contain(codeObjId))
-      codeObjNames[codeObjId] = std::string(name);
+    std::string nameStr(name);
+    const std::string suffix = ".kd";
+    if (nameStr.size() > suffix.size() &&
+        nameStr.compare(nameStr.size() - suffix.size(), suffix.size(),
+                        suffix) == 0)
+      nameStr.resize(nameStr.size() - suffix.size());
+    codeObjKernels.upsert(codeObjId, [&](std::vector<KernelAddrEntry> &v) {
+      v.push_back({kernelAddr, std::move(nameStr)});
+    });
   }
 
-  std::string getCodeObjKernelName(uint64_t codeObjId) {
-    std::string name;
-    if (!codeObjNames.withRead(codeObjId,
-                               [&](const std::string &v) { name = v; }))
-      return UnknownKernelName;
-    const std::string suffix = ".kd";
-    if (name.size() > suffix.size() &&
-        name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
-      name.resize(name.size() - suffix.size());
-    return name;
+  // Resolve a PC sample to a kernel name.
+  // Prefer dispatch_id → kernel_id (exact). Fall back to
+  // code_object_id + code_object_offset (address-based binary search).
+  std::string resolvePCSampleKernel(uint64_t dispatchId, uint64_t codeObjId,
+                                    uint64_t codeObjOffset) {
+    // Fast path: dispatch_id → kernel_id → name.
+    uint64_t kernelId = 0;
+    if (dispatchId != 0 &&
+        dispatchToKernelId.withRead(
+            dispatchId, [&](const uint64_t &kid) { kernelId = kid; })) {
+      return getKernelName(kernelId);
+    }
+    // Fallback: binary-search the code object's kernel address table.
+    std::string result = UnknownKernelName;
+    codeObjKernels.withRead(
+        codeObjId, [&](const std::vector<KernelAddrEntry> &entries) {
+          if (entries.empty())
+            return;
+          // entries are sorted by addr (maintained at insertion time via
+          // the sorted insert in the code object callback, or sorted here
+          // on first lookup — for simplicity we sort on every lookup since
+          // the vector is small).
+          auto sorted = entries; // copy to avoid mutating under read lock
+          std::sort(sorted.begin(), sorted.end(),
+                    [](const KernelAddrEntry &a, const KernelAddrEntry &b) {
+                      return a.addr < b.addr;
+                    });
+          // Find the last entry whose addr <= codeObjOffset.
+          auto it =
+              std::upper_bound(sorted.begin(), sorted.end(), codeObjOffset,
+                               [](uint64_t off, const KernelAddrEntry &e) {
+                                 return off < e.addr;
+                               });
+          if (it != sorted.begin()) {
+            --it;
+            result = it->name;
+          }
+        });
+    return result;
   }
 
   ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
@@ -367,8 +415,8 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
         for (int i = 0; i < PCSamplingMetric::PCSamplingMetricKind::Count; ++i)
           metric->updateValue(
               i, MetricValueType(static_cast<uint64_t>(accum.values[i])));
-        auto entry = data->addOp(phase, Data::kRootEntryId,
-                                 {Context(kernelName)});
+        auto entry =
+            data->addOp(phase, Data::kRootEntryId, {Context(kernelName)});
         entry.upsertMetric(std::move(metric));
       }
     }
@@ -569,7 +617,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::codeObjectCallback(
       rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t *>(
       record.payload);
   impl->setKernelName(payload->kernel_id, payload->kernel_name);
-  impl->setCodeObjKernelName(payload->code_object_id, payload->kernel_name);
+  impl->addCodeObjKernel(payload->code_object_id, payload->kernel_address.value,
+                         payload->kernel_name);
 }
 
 // ---- Kernel dispatch buffer callback ----
@@ -602,6 +651,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
             header->payload);
     maxCorrelationId =
         std::max(maxCorrelationId, record->correlation_id.internal);
+    impl->dispatchToKernelId[record->dispatch_info.dispatch_id] =
+        record->dispatch_info.kernel_id;
     auto kernelName = impl->getKernelName(record->dispatch_info.kernel_id);
     processKernelRecord(profiler, correlation.corrIdToExternId,
                         correlation.externIdToState, impl->corrIdToIsHipGraph,
@@ -646,10 +697,9 @@ PCSamplingMetric::PCSamplingMetricKind mapNotIssuedReason(
   }
 }
 
-void accumulatePCSample(
-    RocprofSDKProfiler::RocprofSDKProfilerPimpl *impl,
-    PCSamplingMetric::PCSamplingMetricKind stallKind, bool isStalled,
-    const std::string &kernelName) {
+void accumulatePCSample(RocprofSDKProfiler::RocprofSDKProfilerPimpl *impl,
+                        PCSamplingMetric::PCSamplingMetricKind stallKind,
+                        bool isStalled, const std::string &kernelName) {
   std::lock_guard<std::mutex> lock(impl->pcSamplingMutex);
   auto &accum = impl->pcSamplingAccum[kernelName];
   accum.values[PCSamplingMetric::NumSamples]++;
@@ -674,33 +724,34 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::pcSamplingBufferCallback(
 
   for (size_t i = 0; i < numHeaders; ++i) {
     auto *header = headers[i];
-    if (!header ||
-        header->category != ROCPROFILER_BUFFER_CATEGORY_PC_SAMPLING)
+    if (!header || header->category != ROCPROFILER_BUFFER_CATEGORY_PC_SAMPLING)
       continue;
 
     if (header->kind == ROCPROFILER_PC_SAMPLING_RECORD_STOCHASTIC_V0_SAMPLE) {
       auto *sample =
           static_cast<rocprofiler_pc_sampling_record_stochastic_v0_t *>(
               header->payload);
-      auto kernelName =
-          impl->getCodeObjKernelName(sample->pc.code_object_id);
+      auto kernelName = impl->resolvePCSampleKernel(
+          sample->dispatch_id, sample->pc.code_object_id,
+          sample->pc.code_object_offset);
       bool isStalled = !sample->wave_issued;
-      auto stallKind = isStalled
-                           ? mapNotIssuedReason(
-                                 static_cast<
-                                     rocprofiler_pc_sampling_instruction_not_issued_reason_t>(
-                                     sample->snapshot.reason_not_issued))
-                           : PCSamplingMetric::StalledSelected;
+      auto stallKind =
+          isStalled
+              ? mapNotIssuedReason(
+                    static_cast<
+                        rocprofiler_pc_sampling_instruction_not_issued_reason_t>(
+                        sample->snapshot.reason_not_issued))
+              : PCSamplingMetric::StalledSelected;
       accumulatePCSample(impl, stallKind, isStalled, kernelName);
     } else if (header->kind ==
                ROCPROFILER_PC_SAMPLING_RECORD_HOST_TRAP_V0_SAMPLE) {
       auto *sample =
           static_cast<rocprofiler_pc_sampling_record_host_trap_v0_t *>(
               header->payload);
-      auto kernelName =
-          impl->getCodeObjKernelName(sample->pc.code_object_id);
-      accumulatePCSample(impl, PCSamplingMetric::NumSamples, false,
-                         kernelName);
+      auto kernelName = impl->resolvePCSampleKernel(
+          sample->dispatch_id, sample->pc.code_object_id,
+          sample->pc.code_object_offset);
+      accumulatePCSample(impl, PCSamplingMetric::NumSamples, false, kernelName);
     }
   }
 }
@@ -819,8 +870,7 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
 
         auto configCb =
             [](const rocprofiler_pc_sampling_configuration_t *configs,
-               size_t numConfig,
-               void *ud) -> rocprofiler_status_t {
+               size_t numConfig, void *ud) -> rocprofiler_status_t {
           auto *vec = static_cast<
               std::vector<rocprofiler_pc_sampling_configuration_t> *>(ud);
           for (size_t j = 0; j < numConfig; ++j)
@@ -836,10 +886,9 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       return ROCPROFILER_STATUS_SUCCESS;
     };
 
-    rocprofiler::queryAvailableAgents<true>(ROCPROFILER_AGENT_INFO_VERSION_0,
-                                            agentQueryCb,
-                                            sizeof(rocprofiler_agent_t),
-                                            &agentsWithPCS);
+    rocprofiler::queryAvailableAgents<true>(
+        ROCPROFILER_AGENT_INFO_VERSION_0, agentQueryCb,
+        sizeof(rocprofiler_agent_t), &agentsWithPCS);
 
     for (auto &agent : agentsWithPCS) {
       const rocprofiler_pc_sampling_configuration_t *picked = nullptr;
@@ -871,12 +920,13 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       rocprofiler::createBuffer<true>(
           state->pcSamplingContext, PCSamplingBufferSize, pcsWatermark,
           ROCPROFILER_BUFFER_POLICY_LOSSLESS,
-          &RocprofSDKProfiler::RocprofSDKProfilerPimpl::pcSamplingBufferCallback,
+          &RocprofSDKProfiler::RocprofSDKProfilerPimpl::
+              pcSamplingBufferCallback,
           nullptr, &pcsBuf);
 
       auto cfgStatus = rocprofiler::configurePCSamplingService<false>(
-          state->pcSamplingContext, agent.agentId, picked->method,
-          picked->unit, interval, pcsBuf, 0);
+          state->pcSamplingContext, agent.agentId, picked->method, picked->unit,
+          interval, pcsBuf, 0);
 
       if (cfgStatus == ROCPROFILER_STATUS_SUCCESS) {
         rocprofiler_callback_thread_t pcsThread{};
@@ -928,9 +978,9 @@ void protonToolFini(void *toolData) {
       state->codeObjectStarted = false;
     }
   }
+  rocprofiler::flushBuffer<false>(state->kernelBuffer);
   for (auto &buf : state->pcSamplingBuffers)
     rocprofiler::flushBuffer<false>(buf);
-  rocprofiler::flushBuffer<false>(state->kernelBuffer);
   if (state->finalizeFunc && state->clientId) {
     state->finalizeFunc(*state->clientId);
   }
@@ -970,12 +1020,14 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doFlush() {
   auto &state = getRuntimeState();
   std::ignore = hip::deviceSynchronize<true>();
-  for (auto &buf : state.pcSamplingBuffers)
-    rocprofiler::flushBuffer<true>(buf);
-  flushPCSamplingAccum();
+  // Flush kernel dispatch buffer first so dispatch_id → kernel_id map is
+  // populated before PC sampling records are processed.
   profiler.correlation.flush(
       /*maxRetries=*/100, /*sleepUs=*/10,
       [&state]() { rocprofiler::flushBuffer<true>(state.kernelBuffer); });
+  for (auto &buf : state.pcSamplingBuffers)
+    rocprofiler::flushBuffer<true>(buf);
+  flushPCSamplingAccum();
 }
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
