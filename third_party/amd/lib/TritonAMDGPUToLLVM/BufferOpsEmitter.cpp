@@ -130,7 +130,6 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
   SmallVector<Value, 6> commonArgs;
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
                  commonArgs);
-  Type bufferType = getBufferOpType(type, false);
   return ROCDL::RawPtrBufferLoadLdsOp::create(
       rewriter, loc, TypeRange{},
       ValueRange{

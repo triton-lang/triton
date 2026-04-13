@@ -24,7 +24,6 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
   DotIntrinsic chooseIntrinsic(DotOp op) {
     auto aOpTy = cast<RankedTensorType>(op.getA().getType());
     auto aElemTy = aOpTy.getElementType();
-    auto bOpTy = cast<RankedTensorType>(op.getA().getType());
     auto bElemTy = aOpTy.getElementType();
     assert(aElemTy == bElemTy);
     auto dOpTy = cast<RankedTensorType>(op.getD().getType());
@@ -97,7 +96,6 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
     SmallVector<Type> argTypes;
     for (auto arg : args)
       argTypes.push_back(arg.getType());
-    auto funcType = LLVM::LLVMFunctionType::get(intrinsic.outElemTy, argTypes);
     auto d = LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, intrinsic.intrinsicName, intrinsic.outElemTy, args);
     return d.getResult(0);

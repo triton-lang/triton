@@ -418,7 +418,6 @@ public:
 
     Operation *newDot = nullptr;
     bool aFromLoad = comesFromLoadOrBlockArg(a);
-    bool bFromLoad = comesFromLoadOrBlockArg(b);
 
     if (mmaResult.versionMajor == 3) {
       auto eltType = cast<RankedTensorType>(a.getType()).getElementType();
@@ -562,7 +561,6 @@ public:
         dotOp.getInputPrecision() != InputPrecision::TF32)
       return failure();
     auto oldAType = dotOp.getA().getType();
-    auto oldBType = dotOp.getB().getType();
     // NYI: PTX 13+ requires all tcgen instructions in a kernel to have a
     // consistent CTA mode, disabling 2CTA mode for now. To re-enable,
     // change the line below to: bool useTwoCTAs = canUseTwoCTAs(dotOp);
@@ -677,7 +675,7 @@ public:
   mlir::LogicalResult
   matchAndRewrite(triton::DotScaledOp dotOp,
                   mlir::PatternRewriter &rewriter) const override {
-    if (computeCapability != 120)
+    if (computeCapability / 10 != 12)
       return failure();
 
     auto numCTAs = lookupNumCTAs(rewriter);
@@ -924,7 +922,7 @@ static bool mmav2SupportsFp8Operands(int computeCapability) {
   // although PTX instructions for mma v2 w/ fp8 operands exist for sm90 and
   // sm100, they are emulated as fp16 upcasts + fp16 HMMA in SASS. sm120 has
   // hardware support for fp8 operands w/ mmav2.
-  return computeCapability == 89 || computeCapability == 120;
+  return computeCapability == 89 || computeCapability / 10 == 12;
 }
 
 // promote operands of dot op if the existing combination is not natively

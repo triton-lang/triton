@@ -1708,6 +1708,53 @@ def test_tmem_index_subslice(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_store_in_warp_specialize_partition_visible_to_parent(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    B = 64
+    BLOCK = gl.constexpr(B)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def store_one_partition(tmem):
+        reg_layout: gl.constexpr = tmem.get_reg_layout()
+        one = gl.full((BLOCK, BLOCK), 1.0, gl.float32, reg_layout)
+        tmem.store(one)
+
+    @gluon.jit
+    def default_partition():
+        pass
+
+    @gluon.jit
+    def kernel(out_ptr):
+        layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
+        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
+        offs = offs_m * BLOCK + offs_n
+
+        tmem_layout: gl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
+        tmem = allocate_tensor_memory(gl.float32, [BLOCK, BLOCK], layout=tmem_layout)
+        reg_layout: gl.constexpr = tmem.get_reg_layout()
+        zero = gl.full((BLOCK, BLOCK), 0.0, gl.float32, reg_layout)
+        tmem.store(zero)
+
+        gl.warp_specialize([
+            (default_partition, ()),
+            (store_one_partition, (tmem, )),
+        ], [4], [32])
+
+        out = tmem.load()
+        out = gl.convert_layout(out, layout)
+        gl.store(out_ptr + offs, out)
+
+    out = torch.empty((B, B), device=device, dtype=torch.float32)
+    kernel[(1, )](out, num_warps=4)
+
+    torch.testing.assert_close(out, torch.ones_like(out), rtol=0, atol=0)
+
+
 def test_reduction(device, fresh_knobs):
     _require_cuda_backend(device)
 

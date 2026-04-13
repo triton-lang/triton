@@ -174,7 +174,7 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
   } else {
     // Create an empty yield
     auto b = newIfOp.getElseBodyBuilder();
-    auto yieldOp = scf::YieldOp::create(b, ifOp.getLoc());
+    scf::YieldOp::create(b, ifOp.getLoc());
   }
 
   SmallVector<Value> elseYieldOperands = newIfOp.elseYield().getOperands();

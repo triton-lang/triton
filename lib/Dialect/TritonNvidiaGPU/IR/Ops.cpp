@@ -1143,7 +1143,6 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
   if (!type.getEncoding())
     return success();
 
-  auto maxnreg = getContextualMaxNReg(op);
   if (isDistributedLayoutTMemCompatible(op, type, memdesc))
     return success();
 

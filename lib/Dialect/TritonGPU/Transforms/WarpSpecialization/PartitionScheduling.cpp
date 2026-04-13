@@ -461,7 +461,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        if (!isView(edge.getToNode())) {
          return false;
        }
-       auto from = getNodeFlags(edge.getFromNode());
        auto to = getNodeFlags(edge.getToNode());
        if (!(to & Flags::VIEW)) {
          return false;
@@ -486,7 +485,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
          return false;
        }
        auto from = getNodeFlags(edge.getFromNode());
-       auto to = getNodeFlags(edge.getToNode());
        if (!(from & Flags::VIEW)) {
          return false;
        }
@@ -516,7 +514,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
     {"for_op_iter_arg_token",
      [](Edge edge) {
        auto from = edge.getFromNode();
-       auto to = edge.getToNode();
        if (!isForIterArg(from))
          // skip if not from an iter arg
          return false;
@@ -578,7 +575,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
     {"tmem_load",
      [](Edge edge) {
        auto from = edge.getFromNode();
-       auto to = edge.getToNode();
        return node_isa<ttng::TMEMLoadOp>(from);
      }},
 
@@ -661,7 +657,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
     {"load_epilog",
      [](Edge edge) {
        auto from = edge.getFromNode();
-       auto to = edge.getToNode();
        if (!isLoad(from))
          return false;
 
@@ -1004,7 +999,6 @@ void propagatePartitions(Graph *graph, std::string funcName,
     while (!nodes.empty()) {
       // try propagating partitions forward to nodes with no partition
       int start_size = nodes.size();
-      bool changed = false;
       for (auto node : nodes) {
         for (auto edge : node->getInEdges()) {
           if (!edge.getFromNode())

@@ -95,6 +95,11 @@ struct ScratchInfo {
   RankedTensorType tensorType;
 };
 
+struct ScratchState {
+  std::optional<ScratchInfo> canonical;
+  DenseMap<Region *, ScratchInfo> byScope;
+};
+
 class TmemScratchManager {
 public:
   ttg::BlockedEncodingAttr getScratchEncoding(PatternRewriter &rewriter,
@@ -143,14 +148,19 @@ public:
     }
 
     if (auto alloc = memdesc.getDefiningOp<ttng::TMEMAllocOp>()) {
-      auto it = scratchMap.find(memdesc);
-      if (it != scratchMap.end()) {
-        auto itRegion = it->second.find(scope);
-        if (itRegion != it->second.end()) {
-          if (itRegion->second.ptr && itRegion->second.ptr.getType())
-            return itRegion->second;
-          it->second.erase(itRegion);
-        }
+      ScratchState &state = scratchMap[memdesc];
+      auto itRegion = state.byScope.find(scope);
+      if (itRegion != state.byScope.end()) {
+        if (itRegion->second.ptr && itRegion->second.ptr.getType())
+          return itRegion->second;
+        state.byScope.erase(itRegion);
+      }
+      if (state.canonical) {
+        Value ptr =
+            remapToScope(state.canonical->ptr, rewriter, scope, alloc.getLoc());
+        ScratchInfo info{ptr, state.canonical->tensorType};
+        state.byScope[scope] = info;
+        return info;
       }
 
       OpBuilder::InsertionGuard guard(rewriter);
@@ -176,10 +186,11 @@ public:
           return std::nullopt;
       }
 
-      ptr = remapToScope(ptr, rewriter, scope, loc);
+      state.canonical = ScratchInfo{ptr, tensorTy};
 
+      ptr = remapToScope(ptr, rewriter, scope, loc);
       ScratchInfo info{ptr, tensorTy};
-      scratchMap[memdesc][scope] = info;
+      state.byScope[scope] = info;
       return info;
     }
 
@@ -303,7 +314,7 @@ private:
     return scope->getArgument(captureIdx);
   }
 
-  DenseMap<Value, DenseMap<Region *, ScratchInfo>> scratchMap;
+  DenseMap<Value, ScratchState> scratchMap;
 };
 
 Value createScratchAndStore(PatternRewriter &rewriter, Location loc, Value val,
@@ -488,7 +499,6 @@ struct PayloadMixConfig {
 PayloadMixConfig getPayloadMixConfig(FloatType floatTy) {
   unsigned bitWidth = floatTy.getWidth();
   assert(bitWidth > 1 && bitWidth <= 64);
-  uint64_t fullMask = getLowBitsMask(bitWidth);
   uint64_t signMask = uint64_t{1} << (bitWidth - 1);
   uint64_t magMask = signMask - 1;
 
@@ -1088,7 +1098,6 @@ struct DotScaleConfig {
 
 Value loadScaleSlice(PatternRewriter &rewriter, Location loc, bool isLhs,
                      const DotScaleConfig &scale, Value tileIdx, Value kI32) {
-  auto i32Ty = rewriter.getI32Type();
   Value ptr = isLhs ? scale.aScalePtr : scale.bScalePtr;
   int64_t sFactor = isLhs ? scale.aScaleFactor : scale.bScaleFactor;
   int64_t sStride = isLhs ? scale.aScaleStride : scale.bScaleStride;
