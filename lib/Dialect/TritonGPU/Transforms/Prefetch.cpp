@@ -404,7 +404,10 @@ LogicalResult Prefetcher::initialize() {
       dotsInFor.push_back(dotOp);
     }
     if (isa<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
-            triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(op)) {
+            triton::nvidia_gpu::AsyncTMAGatherOp,
+            triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp,
+            triton::nvidia_gpu::AsyncTMAScatterOp,
+            triton::nvidia_gpu::AsyncTMAReduceOp>(op)) {
       // Don't rewrite if syncTMACopy or asyncTMACopy is found since they may
       // have dependencies with the dot op that are not handled by the current
       // implementation.
