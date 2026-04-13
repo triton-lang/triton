@@ -367,9 +367,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
   auto operation =
       static_cast<rocprofiler_tracing_operation_t>(record.operation);
   bool isKernelOp = isKernelLaunchOperation(operation);
-  auto &profiler = RocprofSDKProfiler::instance();
-  auto *impl = static_cast<RocprofSDKProfiler::RocprofSDKProfilerPimpl *>(
-      profiler.pImpl.get());
+  auto &profiler = threadState.profiler;
+  auto *impl = static_cast<RocprofSDKProfilerPimpl *>(profiler.pImpl.get());
   auto *payload = static_cast<rocprofiler_callback_tracing_hip_api_data_t *>(
       record.payload);
 
@@ -564,9 +563,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
     std::cerr << "[PROTON] ROCProfiler-SDK dropped " << dropCount
               << " kernel dispatch records" << std::endl;
   }
-  auto &profiler = RocprofSDKProfiler::instance();
-  auto *impl = static_cast<RocprofSDKProfiler::RocprofSDKProfilerPimpl *>(
-      profiler.pImpl.get());
+  auto &profiler = threadState.profiler;
+  auto *impl = static_cast<RocprofSDKProfilerPimpl *>(profiler.pImpl.get());
   auto &correlation = profiler.correlation;
 
   static thread_local std::map<Data *, size_t> dataFlushedPhases;
@@ -762,44 +760,6 @@ RocprofSDKProfiler::RocprofSDKProfiler() {
   auto &state = getRuntimeState();
   std::lock_guard<std::mutex> lock(state.mutex);
   if (!state.configured) {
-    // Promote both librocprofiler-register and librocprofiler-sdk to
-    // RTLD_GLOBAL so that (a) the SDK's late-start mechanism can find
-    // rocprofiler_register_invoke_all_registrations via dlsym(RTLD_DEFAULT),
-    // and (b) rocprofiler-register resolves the weak rocprofiler_set_api_table
-    // to the SDK's strong definition when HSA registers its API tables.
-    //
-    // Derive the library directory from the already-loaded register library
-    // to avoid accidentally pulling in a system installation from
-    // /opt/rocm-*/lib/ when a pip-installed copy exists in .venv.
-    std::string libDir;
-    auto regPath = findLoadedLibPath("librocprofiler-register.so");
-    if (!regPath.empty()) {
-      auto pos = regPath.rfind('/');
-      if (pos != std::string::npos)
-        libDir = regPath.substr(0, pos + 1);
-    }
-
-    for (const char *lib :
-         {"librocprofiler-register.so", "librocprofiler-sdk.so"}) {
-      void *h = nullptr;
-      if (!libDir.empty()) {
-        auto path = findLoadedLibPath(lib);
-        if (!path.empty())
-          h = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL);
-        if (!h)
-          h = dlopen((libDir + lib).c_str(), RTLD_NOW | RTLD_GLOBAL);
-      }
-      if (!h)
-        h = dlopen(lib, RTLD_NOW | RTLD_GLOBAL);
-      if (h) {
-        if (std::string(lib) == "librocprofiler-sdk.so") {
-          rocprofiler::ExternLibRocprofiler::lib = h;
-        } else {
-          dlclose(h);
-        }
-      }
-    }
-
     rocprofiler::forceConfigure<true>(&protonConfigure);
   }
   if (!state.codeObjectStarted) {
