@@ -373,6 +373,16 @@ static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
     unsigned threadsPerWarp = xCoordsLayout.getInDimSize(kLane);
     if (xCoordsLayout.getFreeVariableMasks()[kLane] != (threadsPerWarp - 1))
       return op->emitOpError("x offsets must be broadcasted across each warp");
+    auto kBlock = StringAttr::get(op->getContext(), "block");
+    auto kDim0 = StringAttr::get(op->getContext(), "dim0");
+    auto rowsCGA = getCGALayout(memDescType.getEncoding())
+                       .getLinearLayout()
+                       .sublayout({kBlock}, {kDim0});
+    auto xOffsetsCGA =
+        getCGALayout(xOffsetsType.getEncoding()).getLinearLayout();
+    if (rowsCGA != xOffsetsCGA)
+      return op->emitOpError(
+          "x offsets must have the same row CGA layout as the memdesc");
   }
   return success();
 }
@@ -503,21 +513,6 @@ LogicalResult AsyncTMAGatherOp::verify() {
     if (!hasCGABroadcast(resultType))
       return emitOpError(
           "multicast requires the shared layout to broadcast across CTAs");
-    if (auto xOffsetsEncoding = dyn_cast_if_present<LayoutEncodingTrait>(
-            xOffsetsType.getEncoding())) {
-      auto resultCGA = getCGALayout(resultType.getEncoding()).getLinearLayout();
-      auto xOffsetsCGA = getCGALayout(xOffsetsEncoding).getLinearLayout();
-      // AA^{-1}B = B, where A^{-1} is the pseudoinverse of A
-      // In other words, ker(A) \subseteq ker(B)
-      // This means that the x offsets are CTA-uniform within each result
-      // multicast group where the multicast group is given by the result.
-      auto xOffsetsFactoredThroughResult =
-          resultCGA.compose(resultCGA.pseudoinvert().compose(xOffsetsCGA));
-      if (xOffsetsFactoredThroughResult != xOffsetsCGA) {
-        return emitOpError("multicast requires x offsets to be CTA-uniform "
-                           "within each result multicast group");
-      }
-    }
   }
   return verifyAsyncTMAGatherScatterOp(
       *this, getDesc().getType().getSignlessBlockType(), resultType,
