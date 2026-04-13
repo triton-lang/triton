@@ -499,9 +499,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   let hasVerifier = 1;
 }
 
-def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [
-    MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,
-    TMAStoreLikeOpInterface]> {
+def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [TMAStoreLikeOpInterface]> {
   let summary = "reduce result in gmem based on a TMA descriptor";
 
   let description = [{
@@ -513,7 +511,7 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [
 
   let arguments = (ins
     TT_DescriptorReduceKindAttr:$kind,
-    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
   );
@@ -521,6 +519,10 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [
   let assemblyFormat = [{
     $kind `,` $desc `[` $coord `]` $src
     attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
+  }];
+  let extraClassDeclaration = [{
+    static bool isSupportedReduceKind(::mlir::triton::DescriptorReduceKind kind,
+                                      ::mlir::Type elementType);
   }];
   let hasVerifier = 1;
 }
