@@ -1596,7 +1596,7 @@ class TritonSemantic(Generic[TensorTy]):
             acc_handle = acc.handle
             assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
         rhs_scale_handle = None if rhs_scale_is_none else rhs_scale.handle
-                       lhs_scale_handle = None if lhs_scale_is_none else lhs_scale.handle
+        lhs_scale_handle = None if lhs_scale_is_none else lhs_scale.handle
 
         scale_factor = self.deduce_scale_factor(lhs, lhs_scale, lhs_format, lhs_k_pack, rhs, rhs_scale, rhs_format,
                                                 rhs_k_pack)
