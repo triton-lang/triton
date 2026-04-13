@@ -21,12 +21,6 @@ static SmallVector<TMAStore> getTMAStores(scf::ForOp forOp) {
 
   forOp.getBody()->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
     if (auto storeOp = dyn_cast<tt::DescriptorStoreLikeOpInterface>(op)) {
-      if (auto reduceOp = dyn_cast<tt::DescriptorReduceOp>(op)) {
-        if (!ttng::AsyncTMAReduceOp::isSupportedReduceKind(
-                reduceOp.getKind(),
-                reduceOp.getSrc().getType().getElementType()))
-          return WalkResult::advance();
-      }
       tmaStores.push_back({storeOp, storeOp.getDesc(), storeOp.getSrc()});
       // Don't walk into nested loops.
     } else if (isa<scf::ForOp>(op)) {

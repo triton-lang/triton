@@ -471,25 +471,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 64}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tma_reduce_unsupported_pipeline_falls_back
-  tt.func public @tma_reduce_unsupported_pipeline_falls_back(%arg0: tensor<128x128xf64, #blocked>, %arg1: !tt.tensordesc<128x128xf64, #shared>, %arg2: i32, %arg3: i32) {
-    %c0_i32 = arith.constant 0 : i32
-    // CHECK: scf.for
-    scf.for %arg4 = %c0_i32 to %arg3 step %arg2  : i32 {
-      %1 = arith.divsi %arg4, %arg2 : i32
-      // CHECK-NOT: ttng.async_tma_reduce
-      // CHECK: tt.descriptor_reduce add
-      tt.descriptor_reduce add, %arg1[%1, %1], %arg0 : !tt.tensordesc<128x128xf64, #shared>, tensor<128x128xf64, #blocked>
-    }
-    tt.return
-  }
-}
-
-// -----
-
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>

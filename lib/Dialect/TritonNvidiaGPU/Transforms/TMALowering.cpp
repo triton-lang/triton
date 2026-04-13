@@ -133,9 +133,6 @@ struct TMAReduceLowering : public OpRewritePattern<DescriptorReduceOp> {
 
   LogicalResult matchAndRewrite(DescriptorReduceOp op,
                                 PatternRewriter &rewriter) const override {
-    if (!triton::nvidia_gpu::AsyncTMAReduceOp::isSupportedReduceKind(
-            op.getKind(), op.getSrc().getType().getElementType()))
-      return failure();
     auto createStore = [&](Value desc, Value alloc) {
       triton::nvidia_gpu::AsyncTMAReduceOp::create(
           rewriter, op.getLoc(), op.getKind(), desc, op.getIndices(), alloc);
