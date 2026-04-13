@@ -161,6 +161,64 @@ std::unique_ptr<Metric> convertDispatchToMetric(
       static_cast<uint64_t>(record->dispatch_info.queue_id.handle));
 }
 
+// ---- Kernel name resolution at API ENTER time ----
+
+const char *resolveKernelNameAtEnter(
+    rocprofiler_tracing_operation_t op,
+    const rocprofiler_callback_tracing_hip_api_data_t *payload) {
+  switch (op) {
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchKernel:
+    return hip::getKernelNameRefByPtr(
+        payload->args.hipLaunchKernel.function_address,
+        payload->args.hipLaunchKernel.stream);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchKernel:
+    return hip::getKernelNameRefByPtr(
+        payload->args.hipExtLaunchKernel.function_address,
+        payload->args.hipExtLaunchKernel.stream);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchCooperativeKernel:
+    return hip::getKernelNameRefByPtr(
+        payload->args.hipLaunchCooperativeKernel.func,
+        payload->args.hipLaunchCooperativeKernel.stream);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchKernel:
+    return hip::getKernelNameRef(payload->args.hipModuleLaunchKernel.func);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtModuleLaunchKernel:
+    return hip::getKernelNameRef(payload->args.hipExtModuleLaunchKernel.func);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipHccModuleLaunchKernel:
+    return hip::getKernelNameRef(payload->args.hipHccModuleLaunchKernel.func);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernel:
+    return hip::getKernelNameRef(
+        payload->args.hipModuleLaunchCooperativeKernel.func);
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchMultiKernelMultiDevice: {
+    const auto *params =
+        payload->args.hipExtLaunchMultiKernelMultiDevice.launchParamsList;
+    if (params &&
+        payload->args.hipExtLaunchMultiKernelMultiDevice.numDevices > 0)
+      return hip::getKernelNameRefByPtr(params->func, params->stream);
+    return nullptr;
+  }
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchCooperativeKernelMultiDevice: {
+    const auto *params =
+        payload->args.hipLaunchCooperativeKernelMultiDevice.launchParamsList;
+    if (params &&
+        payload->args.hipLaunchCooperativeKernelMultiDevice.numDevices > 0)
+      return hip::getKernelNameRefByPtr(params->func, params->stream);
+    return nullptr;
+  }
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernelMultiDevice: {
+    const auto *params =
+        payload->args.hipModuleLaunchCooperativeKernelMultiDevice
+            .launchParamsList;
+    if (params &&
+        payload->args.hipModuleLaunchCooperativeKernelMultiDevice.numDevices >
+            0)
+      return hip::getKernelNameRef(params->function);
+    return nullptr;
+  }
+  default:
+    return nullptr;
+  }
+}
+
 // ---- Operation classification ----
 
 bool isKernelLaunchOperation(rocprofiler_tracing_operation_t op) {
@@ -444,7 +502,9 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
   if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
     if (!isKernelOp)
       return;
-    threadState.enterOp(Scope(""));
+    const char *resolvedName = resolveKernelNameAtEnter(operation, payload);
+    threadState.enterOp(
+        Scope(resolvedName ? std::string(resolvedName) : std::string()));
     auto &dataToEntry = threadState.dataToEntry;
     size_t numInstances = 1;
     if (operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch) {
