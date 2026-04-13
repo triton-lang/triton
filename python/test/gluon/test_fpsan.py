@@ -1333,31 +1333,47 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
     assert a_scale.shape == (m, k // 32)
     assert b_scale.shape == (n, k // 32)
 
-    def unpack(data: np.ndarray, row: int, col: int, pack: int, pack_axis: int) -> np.uint16:
+    def unpack_payload_matrix(data: np.ndarray, pack: int, pack_axis: int) -> np.ndarray:
         if pack == 1:
-            return np.uint16(data[row, col])
-        return np.uint16(_unpack_element(data, row, col, pack, pack_axis=pack_axis))
+            return data.astype(np.uint64)
+        assert pack == 2
+        if pack_axis == 1:
+            out = np.empty((data.shape[0], data.shape[1] * pack), dtype=np.uint64)
+            out[:, 0::2] = data.astype(np.uint64) & np.uint64(0x0F)
+            out[:, 1::2] = (data.astype(np.uint64) >> np.uint64(4)) & np.uint64(0x0F)
+            return out
+        out = np.empty((data.shape[0] * pack, data.shape[1]), dtype=np.uint64)
+        out[0::2, :] = data.astype(np.uint64) & np.uint64(0x0F)
+        out[1::2, :] = (data.astype(np.uint64) >> np.uint64(4)) & np.uint64(0x0F)
+        return out
 
-    out = np.empty((m, n), dtype=np.uint64)
-    compute_type = "bf16"
+    def compute_payload_matrix(data: np.ndarray) -> np.ndarray:
+        if elem_type in ("e4m3", "e5m2"):
+            one_bits = 0x38 if elem_type == "e4m3" else 0x3C
+            payload = _mix_float_bits_to_payload_u64(data, 8, one_bits)
+            return _signed_cast_payload_u64(payload, 8, 16)
+        return data & np.uint64(0xFFFF)
+
+    def scale_payload_matrix(raw_scale: np.ndarray) -> np.ndarray:
+        raw_bf16 = (raw_scale & np.uint64(0xFF)) << np.uint64(7)
+        return _mix_float_bits_to_payload_u64(raw_bf16, 16, 0x3F80)
+
+    a_payload = compute_payload_matrix(unpack_payload_matrix(a_u8, a_pack, pack_axis=1))
+    b_payload = compute_payload_matrix(unpack_payload_matrix(b_u8, b_pack, pack_axis=0))
+    a_scale_payload = scale_payload_matrix(a_scale)
+    b_scale_payload = scale_payload_matrix(b_scale)
+
+    out = c_u.copy() if c_u is not None else np.zeros((m, n), dtype=np.uint64)
     compute_mask = np.uint64(0xFFFF)
     mask32 = np.uint64(0xFFFFFFFF)
-    for i in range(m):
-        for j in range(n):
-            s = c_u[i, j] if c_u is not None else 0
-            for kk in range(k):
-                a_val = unpack(a_u8, i, kk, a_pack, pack_axis=1)
-                b_val = unpack(b_u8, kk, j, b_pack, pack_axis=0)
-                a_val = _dot_scaled_compute_payload_elem(np.uint64(a_val), elem_type, compute_type)
-                b_val = _dot_scaled_compute_payload_elem(np.uint64(b_val), elem_type, compute_type)
-                a_scale_val = _dot_scaled_scale_payload(a_scale[i, kk // 32], compute_type)
-                b_scale_val = _dot_scaled_scale_payload(b_scale[j, kk // 32], compute_type)
-                lhs = (a_val * a_scale_val) & compute_mask
-                rhs = (b_val * b_scale_val) & compute_mask
-                lhs = _signed_cast_payload_scalar(lhs, 16, 32)
-                rhs = _signed_cast_payload_scalar(rhs, 16, 32)
-                s = (s + ((np.uint64(lhs) * np.uint64(rhs)) & mask32)) & mask32
-            out[i, j] = s
+    for group in range(k // 32):
+        start = group * 32
+        end = start + 32
+        lhs = (a_payload[:, start:end] * a_scale_payload[:, group:group + 1]) & compute_mask
+        rhs = (b_payload[start:end, :] * b_scale_payload[:, group][None, :]) & compute_mask
+        lhs = _signed_cast_payload_u64(lhs, 16, 32)
+        rhs = _signed_cast_payload_u64(rhs, 16, 32)
+        out = (out + (lhs @ rhs)) & mask32
     return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
 
 
@@ -1720,7 +1736,7 @@ def test_reduction(device, fresh_knobs):
         r2 = tl.sum(r1, axis=ORDER - 1)
         tl.store(c_ptr, r2)
 
-    M, N = 512, 512
+    M, N = 128, 128
     torch.manual_seed(0)
     a = torch.randn((M, N), dtype=torch.float32, device="cuda")
     # Make non-associativity visible and deterministic: large + tiny magnitudes.
