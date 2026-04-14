@@ -65,6 +65,10 @@ struct GluonInferLayoutInterface : public triton::DialectInferLayoutInterface {
     return success();
   }
 
+  LogicalResult verifyCatOpEncodingCompatibility(Operation *op) const override {
+    return success();
+  }
+
   LogicalResult
   verifyLayoutsAreEqual(ArrayRef<int64_t> shape, Attribute expected,
                         Attribute got,

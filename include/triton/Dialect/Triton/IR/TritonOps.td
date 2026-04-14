@@ -491,6 +491,8 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
+
+    let hasVerifier = 1;
 }
 
 def TT_JoinOp : TT_Op<"join", [
