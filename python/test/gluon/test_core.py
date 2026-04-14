@@ -379,6 +379,81 @@ def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
 
 
 @gluon.jit
+def tcgen05_mma_scaled_direct_multicast_kernel(a_desc, b_desc, out_ptr, BLOCK_M: ttgl.constexpr,
+                                               BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                               NUM_K_TILES: ttgl.constexpr, cga_layout_a: ttgl.constexpr,
+                                               cga_layout_b: ttgl.constexpr, cga_layout_c: ttgl.constexpr,
+                                               blocked_c: ttgl.constexpr):
+    smem_a = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+    smem_b = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
+
+    a_scale_layout: ttgl.constexpr = TensorMemoryScalesLayout(cga_layout=cga_layout_a)
+    b_scale_layout: ttgl.constexpr = TensorMemoryScalesLayout(cga_layout=cga_layout_b)
+    a_scale = allocate_tensor_memory(ttgl.uint8, [BLOCK_M, BLOCK_K // 32], a_scale_layout)
+    b_scale = allocate_tensor_memory(ttgl.uint8, [BLOCK_N, BLOCK_K // 32], b_scale_layout)
+    a_scale.store(ttgl.full([BLOCK_M, BLOCK_K // 32], 127, ttgl.uint8, a_scale.get_reg_layout()))
+    b_scale.store(ttgl.full([BLOCK_N, BLOCK_K // 32], 127, ttgl.uint8, b_scale.get_reg_layout()))
+
+    acc_layout: ttgl.constexpr = TensorMemoryLayout([128, 128], col_stride=1, cga_layout=cga_layout_c, two_ctas=True)
+    acc = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_layout)
+
+    tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
+    mbarrier.init(tma_bar, count=1)
+    mma_bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True))
+
+    phase_tma = 0
+    phase_mma = 0
+    for k in range(NUM_K_TILES):
+        offs_k = k * BLOCK_K
+        mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
+        tma.async_copy_global_to_shared(a_desc, [0, offs_k], tma_bar, smem_a, multicast=True)
+        tma.async_copy_global_to_shared(b_desc, [offs_k, 0], tma_bar, smem_b, multicast=True)
+        mbarrier.wait(tma_bar, phase_tma, deps=[smem_a, smem_b])
+        tcgen05_mma_scaled(smem_a, smem_b, acc, a_scale, b_scale, "e5m2", "e5m2", use_acc=k != 0, multicast=True,
+                           mbarriers=[mma_bar])
+        mbarrier.wait(mma_bar, phase_mma, deps=[smem_a, smem_b])
+        phase_tma ^= 1
+        phase_mma ^= 1
+
+    mbarrier.invalidate(tma_bar)
+    mbarrier.invalidate(mma_bar)
+
+    out = ttgl.convert_layout(acc.load(), blocked_c)
+    out_offs_m = ttgl.arange(0, BLOCK_M)[:, None]
+    out_offs_n = ttgl.arange(0, BLOCK_N)[None, :]
+    ttgl.store(out_ptr + out_offs_m * BLOCK_N + out_offs_n, out)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tcgen05_mma_scaled_direct_multicast_barrier():
+    num_ctas = 4
+    BLOCK_M = 256
+    BLOCK_N = 256
+    BLOCK_K = 128
+    NUM_K_TILES = 4
+    cga_layout_a = ((1, 0), (0, 0))
+    cga_layout_b = ((0, 1), (0, 2))
+    cga_layout_c = ((1, 0), (0, 1))
+    shared_layout_a = ttgl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], ttgl.float8e5, cga_layout=cga_layout_a)
+    shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], ttgl.float8e5, cga_layout=cga_layout_b)
+    blocked_c = ttgl.BlockedLayout([1, 2], [2, 16], [4, 1], [1, 0], cga_layout=cga_layout_c)
+
+    a = torch.randint(20, 40, (BLOCK_M, NUM_K_TILES * BLOCK_K), device="cuda",
+                      dtype=torch.uint8).view(torch.float8_e5m2)
+    b = torch.randint(20, 40, (NUM_K_TILES * BLOCK_K, BLOCK_N), device="cuda",
+                      dtype=torch.uint8).view(torch.float8_e5m2)
+    out = torch.empty((BLOCK_M, BLOCK_N), device="cuda", dtype=torch.float32)
+    a_desc = TensorDescriptor.from_tensor(a, [BLOCK_M, BLOCK_K], shared_layout_a)
+    b_desc = TensorDescriptor.from_tensor(b, [BLOCK_K, BLOCK_N], shared_layout_b)
+
+    tcgen05_mma_scaled_direct_multicast_kernel[(1, )](a_desc, b_desc, out, BLOCK_M, BLOCK_N, BLOCK_K, NUM_K_TILES,
+                                                      cga_layout_a, cga_layout_b, cga_layout_c, blocked_c, num_warps=4,
+                                                      num_ctas=num_ctas)
+    torch.testing.assert_close(out, torch.matmul(a.to(torch.float32), b.to(torch.float32)), atol=5e-2, rtol=1e-3)
+
+
+@gluon.jit
 def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [XBLOCK, YBLOCK],
                                        ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]))
@@ -1995,11 +2070,11 @@ def test_tcgen05_mma_scaled_minimal():
         a_scale_tmem.store(a_scale_init)
         b_scale_tmem.store(b_scale_init)
 
-        # Issue a single scaled MMA and commit
+        # Issue a single scaled MMA with a completion barrier.
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
-        tcgen05_mma_scaled(a_smem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, "e5m2", "e5m2", use_acc=True)
-        tcgen05_commit(bar)
+        tcgen05_mma_scaled(a_smem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, "e5m2", "e5m2", use_acc=True,
+                           mbarriers=[bar])
         mbarrier.wait(bar, phase=0)
 
         # Load result from TMEM and store to global
@@ -3655,9 +3730,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         a_format: ttgl.constexpr = "e2m1" if A_IS_FP4 else "e4m3"
         b_format: ttgl.constexpr = "e2m1" if B_IS_FP4 else "e4m3"
         tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
-                           use_acc=(k != 0))
-        mma_descs: ttgl.constexpr = (a_smem, b_smem) if multicast else ()
-        tcgen05_commit(mma_bar, descs=mma_descs)
+                           use_acc=(k != 0), multicast=multicast, mbarriers=[mma_bar])
         mbarrier.wait(mma_bar, phase_mma)
         phase_mma ^= 1
 

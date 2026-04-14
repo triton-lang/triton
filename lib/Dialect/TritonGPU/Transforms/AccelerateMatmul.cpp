@@ -418,7 +418,6 @@ public:
 
     Operation *newDot = nullptr;
     bool aFromLoad = comesFromLoadOrBlockArg(a);
-    bool bFromLoad = comesFromLoadOrBlockArg(b);
 
     if (mmaResult.versionMajor == 3) {
       auto eltType = cast<RankedTensorType>(a.getType()).getElementType();
@@ -562,7 +561,6 @@ public:
         dotOp.getInputPrecision() != InputPrecision::TF32)
       return failure();
     auto oldAType = dotOp.getA().getType();
-    auto oldBType = dotOp.getB().getType();
     // NYI: PTX 13+ requires all tcgen instructions in a kernel to have a
     // consistent CTA mode, disabling 2CTA mode for now. To re-enable,
     // change the line below to: bool useTwoCTAs = canUseTwoCTAs(dotOp);

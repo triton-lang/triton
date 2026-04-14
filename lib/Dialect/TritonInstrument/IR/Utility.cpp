@@ -24,8 +24,6 @@ using mlir::triton::BufferRegion;
 
 namespace {
 
-constexpr unsigned kMaxVectorLengthBits = 128;
-
 DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
                                               ArrayRef<int64_t> shape,
                                               unsigned warps, unsigned numCTAs,
@@ -38,13 +36,12 @@ DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
   auto kRegister = StringAttr::get(ctx, "register");
 
   // A warp-local layout ensures each warp has a copy of the whole tensor, so
-  // reductions, layout conversions, etc. don't require shared memory. Attempt
-  // to pick a decent coalesced layout, assuming the inner dimension is
+  // reductions, layout conversions, etc. don't require shared memory. TODO:
+  // attempt to pick a decent coalesced layout, assuming the inner dimension is
   // contiguous and the tensor is 16-byte aligned. However, pick the widest
   // vector length to reduce the number of instructions, speeding up
   // compilation.
   // unsigned vecLen = kMaxVectorLengthBits / bitwidth;
-  unsigned vecLen = 1;
 
   // Broadcast along blocks and warps. Use the innermost dimension for the
   // lane/register mapping and keep the outer dimensions replicated.

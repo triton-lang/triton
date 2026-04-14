@@ -585,7 +585,6 @@ struct ScheduleLoops : impl::TritonAMDGPUScheduleLoopsBase<ScheduleLoops> {
   using Base::Base;
 
   void runOnOperation() override {
-    ModuleOp moduleOp = getOperation();
     // check numStages
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) {

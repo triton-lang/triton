@@ -250,7 +250,6 @@ std::pair<int, int> bankConflicts(ArrayRef<int32_t> tileSrc,
                                   const LinearLayout &smem) {
   auto *ctx = smem.getOutDimNames().begin()->getContext();
   auto smemFlat = smem.flattenOuts();
-  auto inDim = *smem.getInDimNames().begin();
   // Look at the intersection between the segment bases and the tile bases
   // We don't need to intersect with the bases that covert the bank (as in
   // the first 32 / bitwidth bases) because if we hit any of those broadcasting

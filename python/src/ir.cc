@@ -220,8 +220,6 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
           intervalPaddingPairs.append(pair);
         }
         metadata["interval_padding_pairs"] = intervalPaddingPairs;
-
-        auto blockShape = descTy.getShape();
       }
     }
     result.append(std::move(metadata));

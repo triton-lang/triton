@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-update-async-wait-count=arch-generation-name=gfx950 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-update-async-wait-count=arch-generation-name=gfx1250 | FileCheck %s
 
 // Simple case without any branching
 
@@ -17,10 +17,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = ttg.async_copy_global_to_local %arg4, %arg2 : tensor<16x256x!tt.ptr<f16>, #blocked1> -> <16x256xf16, #shared1, #smem, mutable>
     %3 = ttg.async_commit_group tokens %2
 
-    // Do not wait on the second async_copy => waitcnt 2
+    // Wait on token %1: 2 instructions outstanding (second async_copy emits 2)
     // CHECK: amdg.async_wait {{.*}} {num_inst = 2
     %9 = ttg.async_wait %1 {num = 0 : i32}
-    // No async_copies in between => waitcnt 0
+    // Wait on token %3: 0 instructions outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 0
     %10 = ttg.async_wait %3 {num = 0 : i32}
     tt.return
@@ -44,11 +44,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %1 = ttg.async_commit_group tokens %0
     // Emits 2 direct to lds instructions
     %2 = amdg.buffer_load_to_local %arg2[%arg3] into %arg5 : <f16>[tensor<16x256xi32, #blocked1>]  -> <16x256xf16, #shared1, #smem, mutable>
-    // Do not wait on the second buffer_load_to_local => waitcnt 2
-    // CHECK: amdg.async_wait {{.*}} {num_inst = 2
     %3 = ttg.async_commit_group tokens %2
+    // Wait on token %1: 2 instructions outstanding (second buffer_load emits 2)
+    // CHECK: amdg.async_wait {{.*}} {num_inst = 2
     %4 = ttg.async_wait %1 {num = 0 : i32}
-    // No buffer_load_to_local in between => waitcnt 0
+    // Wait on token %3: 0 instructions outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 0
     %5 = ttg.async_wait %3 {num = 0 : i32}
     tt.return
@@ -74,10 +74,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = ttg.async_copy_global_to_local %arg4, %arg2 : tensor<16x256x!tt.ptr<f16>, #blocked1> -> <16x256xf16, #shared1, #smem, mutable>
     %3 = ttg.async_commit_group tokens %2
 
-    // Do not wait on the second async_copy => waitcnt 2
+    // Wait on token %3: 0 instructions outstanding (nothing after %3)
     // CHECK: amdg.async_wait {{.*}} {num_inst = 0
     %9 = ttg.async_wait %3 {num = 0 : i32}
-    // No async_copies in between => waitcnt 0
+    // Wait on token %1: 2 instructions outstanding (second async_copy emits 2)
     // CHECK: amdg.async_wait {{.*}} {num_inst = 2
     %10 = ttg.async_wait %1 {num = 0 : i32}
     tt.return
@@ -105,8 +105,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     %4 = tt.load %arg3 : tensor<128x16x!tt.ptr<f16>, #blocked>
 
+    // Wait on token %1: 2 instructions outstanding (tt.load ignored, second async_copy emits 2)
     // CHECK: amdg.async_wait {{.*}} {num_inst = 2
     %9 = ttg.async_wait %1 {num = 0 : i32}
+    // Wait on token %3: 0 instructions outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 0
     %10 = ttg.async_wait %3 {num = 0 : i32}
     tt.return
@@ -134,6 +136,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = ttg.async_copy_global_to_local %arg4, %arg2 : tensor<16x256x!tt.ptr<f16>, #blocked1> -> <16x256xf16, #shared1, #smem, mutable>
     %3 = ttg.async_commit_group tokens %2
     %8:2 = scf.for %arg14 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg15 = %1, %arg16 = %3) -> (!ttg.async.token, !ttg.async.token)  : i32 {
+      // min over tokens: %arg16 has 0 outstanding → overall 0
       // CHECK: amdg.async_wait {{.*}}, {{.*}} {num_inst = 0
       %10 = ttg.async_wait %arg15, %arg16 {num = 2 : i32}
       %11 = ttg.async_copy_global_to_local %arg3, %arg1 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
@@ -173,6 +176,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %6 = ttg.async_copy_global_to_local %arg4, %arg2 : tensor<16x256x!tt.ptr<f16>, #blocked1> -> <16x256xf16, #shared1, #smem, mutable>
     %7 = ttg.async_commit_group tokens %6
     %8:4 = scf.for %arg14 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg15 = %1, %arg16 = %5, %arg17 = %3, %arg18 = %7) -> (!ttg.async.token, !ttg.async.token, !ttg.async.token, !ttg.async.token)  : i32 {
+      // 2 loads per buffer: first emits 1, second emits 2 → 3 per iteration
       // CHECK: amdg.async_wait {{.*}}, {{.*}} {num_inst = 3
       %10 = ttg.async_wait %arg15, %arg17 {num = 2 : i32}
       %11 = ttg.async_copy_global_to_local %arg3, %arg1 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
@@ -212,12 +216,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %7 = ttg.async_commit_group tokens %6
     %8:4 = scf.for %arg14 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg15 = %1, %arg16 = %5, %arg17 = %3, %arg18 = %7) -> (!ttg.async.token, !ttg.async.token, !ttg.async.token, !ttg.async.token) : i32 {
       %103 = scf.if %cond -> (!ttg.async.token) {
-        // We wait on both tokens so we interleave with one iteration => 3
         // CHECK: amdg.async_wait {{.*}}, {{.*}} {num_inst = 3
         %token1 = ttg.async_wait %arg15, %arg17 {num = 2 : i32}
         scf.yield %token1 : !ttg.async.token
       } else {
-        // We only wait on the token of the first load so we can interleave one more load => 3 + 2
         // CHECK: amdg.async_wait {{.*}} {num_inst = 5
         %token2 = ttg.async_wait %arg15 {num = 1 : i32}
         scf.yield %token2 : !ttg.async.token
@@ -262,7 +264,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %103 = scf.if %cond -> (!ttg.async.token) {
         %cond_load = ttg.async_copy_global_to_local %arg4, %arg2 : tensor<16x256x!tt.ptr<f16>, #blocked1> -> <16x256xf16, #shared1, #smem, mutable>
         %cond_load_commit = ttg.async_commit_group tokens %cond_load
-        // We wait on both tokens (3) and additionally we should count the load inside our block (+2) => 5
         // CHECK: amdg.async_wait {{.*}}, {{.*}} {num_inst = 5
         %token1 = ttg.async_wait %arg15, %arg17 {num = 2 : i32}
         scf.yield %token1 : !ttg.async.token
@@ -306,7 +307,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %6 = ttg.async_copy_global_to_local %arg4, %arg2 : tensor<16x256x!tt.ptr<f16>, #blocked1> -> <16x256xf16, #shared1, #smem, mutable>
     %7 = ttg.async_commit_group tokens %6
     %8:4 = scf.for %arg14 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg15 = %1, %arg16 = %5, %arg17 = %3, %arg18 = %7) -> (!ttg.async.token, !ttg.async.token, !ttg.async.token, !ttg.async.token)  : i32 {
-      // The then block contains 3 instructions and the else 1 so we expect the count to be 3 (1 + 2) because there are also 2 instructions outside the scf.if in the loop body
       // CHECK: amdg.async_wait {{.*}}, {{.*}} {num_inst = 3
       %token1 = ttg.async_wait %arg15, %arg17 {num = 2 : i32}
 
@@ -349,7 +349,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // Emits 1 direct to lds instruction
     %6 = ttg.async_copy_global_to_local %arg3, %arg1 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     %7 = ttg.async_commit_group tokens %6
-    // Dynamic iteration count so we should not count its body
+    // Dynamic iteration count
     %30 = scf.for %arg21 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg30 = %6) -> (!ttg.async.token) : i32 {
       // CHECK: amdg.async_wait {{.*}} {num_inst = 0
       %31 = ttg.async_wait %arg30 {num = 1 : i32}
@@ -383,7 +383,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // Emits 1 direct to lds instruction
     %6 = ttg.async_copy_global_to_local %arg3, %arg1 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     %7 = ttg.async_commit_group tokens %6
-    // Loop with 4 iterations => 4 instructions
     %30 = scf.for %arg21 = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%arg30 = %6) -> (!ttg.async.token) : i32 {
       // CHECK: amdg.async_wait {{.*}} {num_inst = 0
       %31 = ttg.async_wait %arg30 {num = 1 : i32}
@@ -442,10 +441,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = amdg.async_copy_local_to_global %arg1, %arg2 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
     %3 = ttg.async_commit_group tokens %2
 
-    // Do not wait on the second async_copy => waitcnt 2
+    // Wait on token %1: 2 store instructions outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 2
     %9 = ttg.async_wait %1 {num = 0 : i32}
-    // No async_copies in between => waitcnt 0
+    // Wait on token %3: 0 outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 0
     %10 = ttg.async_wait %3 {num = 0 : i32}
     tt.return
@@ -469,10 +468,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = amdg.async_copy_local_to_global %arg1, %arg2 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
     %3 = ttg.async_commit_group tokens %2
 
-    // Do not wait on the store => waitcnt 2
+    // Wait on token %1: 2 store instructions outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 2
     %9 = ttg.async_wait %1 {num = 0 : i32}
-    // No async_copies in between => waitcnt 0
+    // Wait on token %3: 0 outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 0
     %10 = ttg.async_wait %3 {num = 0 : i32}
     tt.return
@@ -504,11 +503,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %5 = ttg.async_copy_global_to_local %ptr, %memDesc : tensor<128x8x!tt.ptr<f16>, #blocked> -> <128x8xf16, #shared, #smem, mutable>
     %51 = ttg.async_commit_group tokens %4, %5
 
-    // Check that we do not take other load types into account (async_tdm_copy vs async_copy)
-
     // CHECK: amdg.async_tdm_intrinsic_wait {{.*}} {count = 1
     %tw1 = amdg.async_tdm_wait %1 {num = 0 : i32}
 
+    // Wait on token %21: 2 async_copy instructions outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 2
     %cw1 = ttg.async_wait %21 {num = 0 : i32}
 
@@ -543,6 +541,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %inner_commit = ttg.async_commit_group tokens %inner
     }
 
+    // Wait on token %1: if path contributes 1, else (skip) contributes 0 → min = 0
     // CHECK: amdg.async_wait {{.*}} {num_inst = 0
     %10 = ttg.async_wait %1 {num = 0 : i32}
     tt.return
@@ -605,7 +604,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %0 = amdg.buffer_load_to_local %ptr[%offsets] into %dest : <i32>[tensor<64xi32, #linear_warp_free>]  -> <64xi32, #shared_simple, #smem, mutable>
     %1 = ttg.async_commit_group
 
-    // The load above contributes 0 instructions, so waitcnt should be 0
+    // Warp free variable means 0 instructions emitted for this warp config
     // CHECK: amdg.async_wait {num_inst = 0
     %2 = ttg.async_wait {num = 1 : i32}
     tt.return
@@ -627,8 +626,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %dest: !ttg.memdesc<256xi32, #shared_simple2, #smem, mutable>) {
     %0 = amdg.buffer_load_to_local %ptr[%offsets] into %dest : <i32>[tensor<256xi32, #linear_reg_zero>]  -> <256xi32, #shared_simple2, #smem, mutable>
     %1 = ttg.async_commit_group
-    // Without zero-base removal, register dim size is 2 which would give
-    // num_inst = 2. With zero-base removal, it correctly gives num_inst = 1.
+    // Register zero bases should not inflate count: 1 instruction
     // CHECK: amdg.async_wait {num_inst = 1
     %2 = ttg.async_wait {num = 1 : i32}
     tt.return

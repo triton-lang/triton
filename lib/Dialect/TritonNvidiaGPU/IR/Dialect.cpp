@@ -49,8 +49,6 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-static constexpr int numTmemRows = 128;
-
 FailureOr<gpu::CGAEncodingAttr> parseCGALayoutRankTwo(AsmParser &parser) {
   Attribute attr;
   if (parser.parseAttribute(attr).failed())

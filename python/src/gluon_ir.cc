@@ -876,17 +876,14 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_clc_load_result",
            [](GluonOpBuilder &self, Value result) -> Value {
-             auto i64Ty = self.getBuilder().getI64Type();
              return self.create<ttng::CLCLoadResultOp>(result);
            })
       .def("create_clc_is_canceled",
            [](GluonOpBuilder &self, Value clcResult) -> Value {
-             auto i1Ty = self.getBuilder().getI1Type();
              return self.create<ttng::CLCIsCanceledOp>(clcResult);
            })
       .def("create_clc_get_program_id",
            [](GluonOpBuilder &self, Value clcResult, int dim) -> Value {
-             auto i32Ty = self.getBuilder().getI32Type();
              return self.create<ttng::CLCGetProgramIdOp>(clcResult, dim);
            })
       .def("create_tcgen05_mma",
@@ -905,12 +902,13 @@ void init_gluon_ir(py::module &&m) {
               Value bScale, tt::ScaleDotElemType aType,
               tt::ScaleDotElemType bType, Value useAcc, Value pred,
               std::vector<Value> &mbarriers, std::vector<Value> &mbarrier_preds,
-              bool two_ctas) {
+              bool two_ctas, bool multicast) {
              Value accDep;
              auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
              self.create<ttng::TCGen5MMAScaledOp>(
                  tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
-                 useAcc, pred, mbarriers, mbarrier_preds, two_ctas);
+                 useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
+                 /*isAsync=*/false, multicast);
            })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier, Value &pred,

@@ -14,7 +14,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
     mbarrier,
-    tcgen05_commit,
     tcgen05_mma,
     tcgen05_mma_scaled,
 )
@@ -1333,31 +1332,47 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
     assert a_scale.shape == (m, k // 32)
     assert b_scale.shape == (n, k // 32)
 
-    def unpack(data: np.ndarray, row: int, col: int, pack: int, pack_axis: int) -> np.uint16:
+    def unpack_payload_matrix(data: np.ndarray, pack: int, pack_axis: int) -> np.ndarray:
         if pack == 1:
-            return np.uint16(data[row, col])
-        return np.uint16(_unpack_element(data, row, col, pack, pack_axis=pack_axis))
+            return data.astype(np.uint64)
+        assert pack == 2
+        if pack_axis == 1:
+            out = np.empty((data.shape[0], data.shape[1] * pack), dtype=np.uint64)
+            out[:, 0::2] = data.astype(np.uint64) & np.uint64(0x0F)
+            out[:, 1::2] = (data.astype(np.uint64) >> np.uint64(4)) & np.uint64(0x0F)
+            return out
+        out = np.empty((data.shape[0] * pack, data.shape[1]), dtype=np.uint64)
+        out[0::2, :] = data.astype(np.uint64) & np.uint64(0x0F)
+        out[1::2, :] = (data.astype(np.uint64) >> np.uint64(4)) & np.uint64(0x0F)
+        return out
 
-    out = np.empty((m, n), dtype=np.uint64)
-    compute_type = "bf16"
+    def compute_payload_matrix(data: np.ndarray) -> np.ndarray:
+        if elem_type in ("e4m3", "e5m2"):
+            one_bits = 0x38 if elem_type == "e4m3" else 0x3C
+            payload = _mix_float_bits_to_payload_u64(data, 8, one_bits)
+            return _signed_cast_payload_u64(payload, 8, 16)
+        return data & np.uint64(0xFFFF)
+
+    def scale_payload_matrix(raw_scale: np.ndarray) -> np.ndarray:
+        raw_bf16 = (raw_scale & np.uint64(0xFF)) << np.uint64(7)
+        return _mix_float_bits_to_payload_u64(raw_bf16, 16, 0x3F80)
+
+    a_payload = compute_payload_matrix(unpack_payload_matrix(a_u8, a_pack, pack_axis=1))
+    b_payload = compute_payload_matrix(unpack_payload_matrix(b_u8, b_pack, pack_axis=0))
+    a_scale_payload = scale_payload_matrix(a_scale)
+    b_scale_payload = scale_payload_matrix(b_scale)
+
+    out = c_u.copy() if c_u is not None else np.zeros((m, n), dtype=np.uint64)
     compute_mask = np.uint64(0xFFFF)
     mask32 = np.uint64(0xFFFFFFFF)
-    for i in range(m):
-        for j in range(n):
-            s = c_u[i, j] if c_u is not None else 0
-            for kk in range(k):
-                a_val = unpack(a_u8, i, kk, a_pack, pack_axis=1)
-                b_val = unpack(b_u8, kk, j, b_pack, pack_axis=0)
-                a_val = _dot_scaled_compute_payload_elem(np.uint64(a_val), elem_type, compute_type)
-                b_val = _dot_scaled_compute_payload_elem(np.uint64(b_val), elem_type, compute_type)
-                a_scale_val = _dot_scaled_scale_payload(a_scale[i, kk // 32], compute_type)
-                b_scale_val = _dot_scaled_scale_payload(b_scale[j, kk // 32], compute_type)
-                lhs = (a_val * a_scale_val) & compute_mask
-                rhs = (b_val * b_scale_val) & compute_mask
-                lhs = _signed_cast_payload_scalar(lhs, 16, 32)
-                rhs = _signed_cast_payload_scalar(rhs, 16, 32)
-                s = (s + ((np.uint64(lhs) * np.uint64(rhs)) & mask32)) & mask32
-            out[i, j] = s
+    for group in range(k // 32):
+        start = group * 32
+        end = start + 32
+        lhs = (a_payload[:, start:end] * a_scale_payload[:, group:group + 1]) & compute_mask
+        rhs = (b_payload[start:end, :] * b_scale_payload[:, group][None, :]) & compute_mask
+        lhs = _signed_cast_payload_u64(lhs, 16, 32)
+        rhs = _signed_cast_payload_u64(rhs, 16, 32)
+        out = (out + (lhs @ rhs)) & mask32
     return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
 
 
@@ -1617,8 +1632,8 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
 
         bar = gl.allocate_shared_memory(gl.int64, [1], gl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
-        tcgen05_mma_scaled(a_smem, b_mma, acc_tmem, a_scale_tmem, b_scale_tmem, TYPE, TYPE, use_acc=True)
-        tcgen05_commit(bar)
+        tcgen05_mma_scaled(a_smem, b_mma, acc_tmem, a_scale_tmem, b_scale_tmem, TYPE, TYPE, use_acc=True,
+                           mbarriers=[bar])
         mbarrier.wait(bar, phase=0)
         mbarrier.invalidate(bar)
 
@@ -1708,35 +1723,84 @@ def test_tmem_index_subslice(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_store_in_warp_specialize_partition_visible_to_parent(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    B = 64
+    BLOCK = gl.constexpr(B)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def store_one_partition(tmem):
+        reg_layout: gl.constexpr = tmem.get_reg_layout()
+        one = gl.full((BLOCK, BLOCK), 1.0, gl.float32, reg_layout)
+        tmem.store(one)
+
+    @gluon.jit
+    def default_partition():
+        pass
+
+    @gluon.jit
+    def kernel(out_ptr):
+        layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
+        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
+        offs = offs_m * BLOCK + offs_n
+
+        tmem_layout: gl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
+        tmem = allocate_tensor_memory(gl.float32, [BLOCK, BLOCK], layout=tmem_layout)
+        reg_layout: gl.constexpr = tmem.get_reg_layout()
+        zero = gl.full((BLOCK, BLOCK), 0.0, gl.float32, reg_layout)
+        tmem.store(zero)
+
+        gl.warp_specialize([
+            (default_partition, ()),
+            (store_one_partition, (tmem, )),
+        ], [4], [32])
+
+        out = tmem.load()
+        out = gl.convert_layout(out, layout)
+        gl.store(out_ptr + offs, out)
+
+    out = torch.empty((B, B), device=device, dtype=torch.float32)
+    kernel[(1, )](out, num_warps=4)
+
+    torch.testing.assert_close(out, torch.ones_like(out), rtol=0, atol=0)
+
+
 def test_reduction(device, fresh_knobs):
     _require_cuda_backend(device)
 
     @triton.jit
-    def reduce_kernel(a_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,
-                      ORDER: tl.constexpr):
-        a_ptrs = a_ptr + (tl.arange(0, M)[:, None] * stride_am + (tl.arange(0, N)[None, :]) * stride_ak)
+    def reduce_kernel(a_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, stride_ak: tl.constexpr, stride_am: tl.constexpr,
+                      stride_an: tl.constexpr, ORDER: tl.constexpr):
+
+        a_ptr += tl.program_id(0).to(tl.int64) * stride_ak
+        c_ptr += tl.program_id(0).to(tl.int64)
+        a_ptrs = a_ptr + (tl.arange(0, M)[:, None] * stride_am + (tl.arange(0, N)[None, :]) * stride_an)
         a = tl.load(a_ptrs)
         r1 = tl.sum(a, axis=ORDER)
-        r2 = tl.sum(r1, axis=ORDER - 1)
+        r2 = tl.sum(r1, axis=0)
         tl.store(c_ptr, r2)
 
-    M, N = 512, 512
+    # we run K parallel tests so as to make non-associativity much more
+    # likely to manifest:
+    K, M, N = 100, 128, 128
     torch.manual_seed(0)
-    a = torch.randn((M, N), dtype=torch.float32, device="cuda")
-    # Make non-associativity visible and deterministic: large + tiny magnitudes.
-    a[:, :64] *= 1e10
-    a[:, 64:] *= 1e-10
-    c1 = torch.empty((1, ), dtype=torch.float32).to('cuda')
-    c2 = torch.empty((1, ), dtype=torch.float32).to('cuda')
+    a = torch.randn((K, M, N), dtype=torch.float32, device="cuda")
+    c1 = torch.empty((K, ), dtype=torch.float32).to('cuda')
+    c2 = torch.empty((K, ), dtype=torch.float32).to('cuda')
 
-    reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
-    reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
+    reduce_kernel[(K, )](a, c1, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=0)
+    reduce_kernel[(K, )](a, c2, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=1)
     assert not _payload_equal(c1, c2)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
-    reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
-    reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
+    reduce_kernel[(K, )](a, c1, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=0)
+    reduce_kernel[(K, )](a, c2, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=1)
     assert _payload_equal(c1, c2)
 
 
