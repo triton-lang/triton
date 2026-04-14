@@ -891,16 +891,13 @@ def select_attention_tuning(causal, head_dim, n_ctx):
     return stage, split_exp_factor
 
 
-def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
+def prepare_attention_launch(q, k, v, o, causal):
     HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
     HEAD_DIM_V = v.shape[-1]
     assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
     assert HEAD_DIM_K in {16, 32, 64, 128, 256}
 
     stage, split_exp_factor = select_attention_tuning(causal, HEAD_DIM_K, q.shape[2])
-
-    o = torch.empty_like(q)
-    M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
     y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
@@ -920,6 +917,38 @@ def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
     num_pid_n = q.shape[0] * q.shape[1]
     grid = min(NUM_SMS, num_pid_m * num_pid_n)
 
+    return (
+        grid,
+        desc_q,
+        desc_k,
+        desc_v,
+        desc_o,
+        BLOCK_M,
+        BLOCK_N,
+        HEAD_DIM_K,
+        GROUP_SIZE_N,
+        NUM_SMS,
+        stage,
+        split_exp_factor,
+    )
+
+
+def launch_attention_prepared(q, M, prepared, sm_scale, use_tmem_red):
+    (
+        grid,
+        desc_q,
+        desc_k,
+        desc_v,
+        desc_o,
+        BLOCK_M,
+        BLOCK_N,
+        HEAD_DIM_K,
+        GROUP_SIZE_N,
+        NUM_SMS,
+        stage,
+        split_exp_factor,
+    ) = prepared
+
     attention_kernel[(grid, )](
         sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
         desc_q, desc_k, desc_v, desc_o,  #
@@ -927,7 +956,19 @@ def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
         STAGE=stage, SPLIT_EXP_FACTOR=split_exp_factor, dtype=torch_dtype_to_triton(q.dtype),  #
         num_warps=4, maxnreg=128, use_tmem_red=use_tmem_red)
 
+    return M
+
+
+def attention_forward_prealloc(q, k, v, o, M, causal, sm_scale, use_tmem_red):
+    prepared = prepare_attention_launch(q, k, v, o, causal)
+    launch_attention_prepared(q, M, prepared, sm_scale, use_tmem_red)
     return o, M
+
+
+def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
+    o = torch.empty_like(q)
+    M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+    return attention_forward_prealloc(q, k, v, o, M, causal, sm_scale, use_tmem_red)
 
 
 # ===-----------------------------------------------------------------------===#
@@ -1029,17 +1070,20 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, use_tmem_red, provider):
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).requires_grad_()).to(dtype)
     k = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).requires_grad_()).to(dtype)
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).requires_grad_()).to(dtype)
+    o = torch.empty_like(q)
+    m = torch.empty((Z, H, N_CTX), device=device, dtype=torch.float32)
     sm_scale = 1.3
+    prepared = prepare_attention_launch(q, k, v, o, causal)
 
     with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.CUDNN_ATTENTION]):
         if provider == "triton":
-            fn = lambda: attention_forward(q, k, v, causal, sm_scale, use_tmem_red)
+            fn = lambda: launch_attention_prepared(q, m, prepared, sm_scale, use_tmem_red)
         elif provider == "cudnn":
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
-        ms = triton.testing.do_bench(fn)
+        ms = triton.testing.do_bench_cudagraph(fn)
         flops_per_matmul = 2.0 * Z * H * N_CTX * N_CTX * HEAD_DIM
         total_flops = 2 * flops_per_matmul
         if causal:
