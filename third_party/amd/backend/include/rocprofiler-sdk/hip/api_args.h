@@ -228,8 +228,18 @@ typedef union rocprofiler_hip_api_args_t {
     unsigned int flags;
   } hipCtxEnablePeerAccess;
   struct {
+    // In HIP v7.0, apiVersion was changed from int* to unsigned int* to match
+    // CUDA signature. If rocprofiler-sdk is compiled with HIP >= 7.0 and HIP is
+    // < 7.0 at runtime, there is expectation that this will NOT cause issues:
+    // apiVersion should never be negative and should never be >= INT_MAX
     hipCtx_t ctx;
-    int *apiVersion;
+#if ROCPROFILER_SDK_COMPUTE_VERSION(HIP_VERSION_MAJOR, HIP_VERSION_MINOR,      \
+                                    0) >=                                      \
+    ROCPROFILER_SDK_COMPUTE_VERSION(7, 0, 0)
+    unsigned int *apiVersion;
+#else
+    int *apiVersion; // HIP version < 7.0
+#endif
   } hipCtxGetApiVersion;
   struct {
     hipFuncCache_t *cacheConfig;
@@ -329,7 +339,8 @@ typedef union rocprofiler_hip_api_args_t {
     int device;
   } hipDeviceGetMemPool;
   struct {
-    char *name;
+    void *name; // changed to void* (real: char*) to avoid stringify on
+                // stack-allocated output parameter
     int len;
     hipDevice_t device;
   } hipDeviceGetName;
@@ -340,7 +351,8 @@ typedef union rocprofiler_hip_api_args_t {
     int dstDevice;
   } hipDeviceGetP2PAttribute;
   struct {
-    char *pciBusId;
+    void *pciBusId; // changed to void* (real: char*) to avoid stringify on
+                    // stack-allocated output parameter
     int len;
     int device;
   } hipDeviceGetPCIBusId;
@@ -865,7 +877,8 @@ typedef union rocprofiler_hip_api_args_t {
     hipGraphExec_t *pGraphExec;
     hipGraph_t graph;
     hipGraphNode_t *pErrorNode;
-    char *pLogBuffer;
+    void *pLogBuffer; // changed to void* (real: char*) to avoid stringify on
+                      // stack-allocated output parameter
     size_t bufferSize;
   } hipGraphInstantiate;
   struct {
@@ -1496,12 +1509,12 @@ typedef union rocprofiler_hip_api_args_t {
   } hipMemcpyHtoA;
   struct {
     hipDeviceptr_t dst;
-    void *src;
+    const void *src;
     size_t sizeBytes;
   } hipMemcpyHtoD;
   struct {
     hipDeviceptr_t dst;
-    void *src;
+    const void *src;
     size_t sizeBytes;
     hipStream_t stream;
   } hipMemcpyHtoDAsync;
@@ -2645,6 +2658,261 @@ typedef union rocprofiler_hip_api_args_t {
     hipMemRangeHandleType handleType;
     unsigned long long flags;
   } hipMemGetHandleForAddressRange;
+#endif
+#if HIP_RUNTIME_API_TABLE_STEP_VERSION >= 14
+  struct {
+    unsigned int *count;
+    hipModule_t mod;
+  } hipModuleGetFunctionCount;
+  struct {
+    hipDeviceptr_t dst;
+    size_t dstPitch;
+    unsigned char value;
+    size_t width;
+    size_t height;
+  } hipMemsetD2D8;
+  struct {
+    hipDeviceptr_t dst;
+    size_t dstPitch;
+    unsigned char value;
+    size_t width;
+    size_t height;
+    hipStream_t stream;
+  } hipMemsetD2D8Async;
+  struct {
+    hipDeviceptr_t dst;
+    size_t dstPitch;
+    unsigned short value;
+    size_t width;
+    size_t height;
+  } hipMemsetD2D16;
+  struct {
+    hipDeviceptr_t dst;
+    size_t dstPitch;
+    unsigned short value;
+    size_t width;
+    size_t height;
+    hipStream_t stream;
+  } hipMemsetD2D16Async;
+  struct {
+    hipDeviceptr_t dst;
+    size_t dstPitch;
+    unsigned int value;
+    size_t width;
+    size_t height;
+  } hipMemsetD2D32;
+  struct {
+    hipDeviceptr_t dst;
+    size_t dstPitch;
+    unsigned int value;
+    size_t width;
+    size_t height;
+    hipStream_t stream;
+  } hipMemsetD2D32Async;
+  struct {
+    hipStream_t stream;
+    hipLaunchAttributeID attr;
+    const hipLaunchAttributeValue *value_out;
+  } hipStreamGetAttribute;
+  struct {
+    hipStream_t stream;
+    hipLaunchAttributeID attr;
+    const hipLaunchAttributeValue *value;
+  } hipStreamSetAttribute;
+  struct {
+    hipModule_t *module;
+    const void *fatbin;
+  } hipModuleLoadFatBinary;
+  struct {
+    void **dsts;
+    void **srcs;
+    size_t *sizes;
+    size_t count;
+    hipMemcpyAttributes *attrs;
+    size_t *attrsIdxs;
+    size_t numAttrs;
+    size_t *failIdx;
+    hipStream_t stream;
+  } hipMemcpyBatchAsync;
+  struct {
+    size_t numOps;
+    hipMemcpy3DBatchOp *opList;
+    size_t *failIdx;
+    unsigned long long flags;
+    hipStream_t stream;
+  } hipMemcpy3DBatchAsync;
+  struct {
+    hipMemcpy3DPeerParms *p;
+  } hipMemcpy3DPeer;
+  struct {
+    hipMemcpy3DPeerParms *p;
+    hipStream_t stream;
+  } hipMemcpy3DPeerAsync;
+  struct {
+    const char *symbol;
+    void **funcPtr;
+    unsigned long long flags;
+    hipDriverEntryPointQueryResult *driverStatus;
+  } hipGetDriverEntryPoint;
+  struct {
+    const char *symbol;
+    void **funcPtr;
+    unsigned long long flags;
+    hipDriverEntryPointQueryResult *driverStatus;
+  } hipGetDriverEntryPoint_spt;
+  struct {
+    const void *dev_ptr;
+    size_t count;
+    hipMemLocation location;
+    unsigned int flags;
+    hipStream_t stream;
+  } hipMemPrefetchAsync_v2;
+  struct {
+    const void *dev_ptr;
+    size_t count;
+    hipMemoryAdvise advice;
+    hipMemLocation location;
+  } hipMemAdvise_v2;
+  struct {
+    hipStream_t stream;
+    unsigned long long *streamId;
+  } hipStreamGetId;
+#endif
+#if HIP_RUNTIME_API_TABLE_STEP_VERSION >= 15
+  struct {
+    hipLibrary_t *library;
+    const void *code;
+    hipJitOption *jitOptions;
+    void **jitOptionsValues;
+    unsigned int numJitOptions;
+    hipLibraryOption *libraryOptions;
+    void **libraryOptionValues;
+    unsigned int numLibraryOptions;
+  } hipLibraryLoadData;
+  struct {
+    hipLibrary_t *library;
+    const char *fileName;
+    hipJitOption *jitOptions;
+    void **jitOptionsValues;
+    unsigned int numJitOptions;
+    hipLibraryOption *libraryOptions;
+    void **libraryOptionValues;
+    unsigned int numLibraryOptions;
+  } hipLibraryLoadFromFile;
+  struct {
+    hipLibrary_t library;
+  } hipLibraryUnload;
+  struct {
+    hipKernel_t *pKernel;
+    hipLibrary_t library;
+    const char *name;
+  } hipLibraryGetKernel;
+  struct {
+    unsigned int *count;
+    hipLibrary_t library;
+  } hipLibraryGetKernelCount;
+#endif
+#if HIP_RUNTIME_API_TABLE_STEP_VERSION >= 16
+  struct {
+    hipStream_t dst;
+    hipStream_t src;
+  } hipStreamCopyAttributes;
+#endif
+#if HIP_RUNTIME_API_TABLE_STEP_VERSION >= 17
+  struct {
+    hipKernel_t *kernels;
+    unsigned int numKernels;
+    hipLibrary_t library;
+  } hipLibraryEnumerateKernels;
+  struct {
+    hipLibrary_t *library;
+    hipKernel_t kernel;
+  } hipKernelGetLibrary;
+  struct {
+    const char **name;
+    hipKernel_t kernel;
+  } hipKernelGetName;
+#endif
+#if HIP_RUNTIME_API_TABLE_STEP_VERSION >= 18
+  struct {
+    size_t *dynamicSmemSize;
+    const void *f;
+    int numBlocks;
+    int blockSize;
+  } hipOccupancyAvailableDynamicSMemPerBlock;
+#endif
+#if HIP_RUNTIME_API_TABLE_STEP_VERSION >= 19
+  struct {
+    const char *symbol;
+    void **pfn;
+    int hipVersion;
+    uint64_t flags;
+    hipDriverProcAddressQueryResult *symbolStatus;
+  } hipGetProcAddress_spt;
+#endif
+#if HIP_RUNTIME_API_TABLE_STEP_VERSION >= 20
+  struct {
+    hipKernel_t kernel;
+    size_t paramIndex;
+    size_t *paramOffset;
+    size_t *paramSize;
+  } hipKernelGetParamInfo;
+#endif
+#if HIP_RUNTIME_API_TABLE_STEP_VERSION >= 21
+  struct {
+    // Empty struct has a size of 0 in C but size of 1 in C++.
+    // Add the rocprofiler_hip_api_no_args struct to fix this
+    rocprofiler_hip_api_no_args no_args;
+  } hipExtDisableLogging;
+  struct {
+    // Empty struct has a size of 0 in C but size of 1 in C++.
+    // Add the rocprofiler_hip_api_no_args struct to fix this
+    rocprofiler_hip_api_no_args no_args;
+  } hipExtEnableLogging;
+  struct {
+    size_t log_level;
+    size_t log_size;
+    size_t log_mask;
+  } hipExtSetLoggingParams;
+#endif
+#if HIP_RUNTIME_API_TABLE_STEP_VERSION >= 22
+  struct {
+    hipMemLocation *location;
+    hipMemAllocationType type;
+    hipMemPool_t pool;
+  } hipMemSetMemPool;
+  struct {
+    hipMemPool_t *pool;
+    hipMemLocation *location;
+    hipMemAllocationType type;
+  } hipMemGetMemPool;
+#endif
+#if HIP_RUNTIME_API_TABLE_STEP_VERSION >= 23
+  struct {
+    hipArrayMemoryRequirements *memoryRequirements;
+    hipMipmappedArray_t mipmap;
+    hipDevice_t device;
+  } hipMipmappedArrayGetMemoryRequirements;
+#endif
+#if HIP_RUNTIME_API_TABLE_STEP_VERSION >= 24
+  struct {
+    int *pi;
+    hipFunction_attribute attrib;
+    hipKernel_t kernel;
+    hipDevice_t dev;
+  } hipKernelGetAttribute;
+#endif
+#if HIP_RUNTIME_API_TABLE_STEP_VERSION >= 25
+  struct {
+    hipFunction_attribute attrib;
+    int value;
+    hipKernel_t kernel;
+    hipDevice_t dev;
+  } hipKernelSetAttribute;
+  struct {
+    hipFunction_t *pFunc;
+    hipKernel_t kernel;
+  } hipKernelGetFunction;
 #endif
 } rocprofiler_hip_api_args_t;
 

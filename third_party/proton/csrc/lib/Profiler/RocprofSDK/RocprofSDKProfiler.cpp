@@ -1,4 +1,5 @@
 #include "Profiler/RocprofSDK/RocprofSDKProfiler.h"
+#include "Profiler/RocprofSDK/RoctxInterop.h"
 
 #include "Context/Context.h"
 #include "Data/Metric.h"
@@ -67,27 +68,11 @@ RocprofilerRuntimeState &getRuntimeState() {
   return state;
 }
 
-// ROCTx marker interception via libroctx64.so's callback registration.
-// rocprofiler-sdk's own marker tracing requires its replacement roctx library
-// to be loaded, which doesn't happen with late-start (force_configure). Instead
-// we use the standard libroctx64.so's built-in callback mechanism.
-constexpr uint32_t kRoctxPushA = 1;
-constexpr uint32_t kRoctxPop = 2;
-
-struct RoctxApiData {
-  union {
-    struct {
-      const char *message;
-    } roctxRangePushA;
-    struct {
-      const char *message;
-    } roctxRangePop;
-  } args;
-};
-
-using RoctxTracerCallbackFn = int (*)(uint32_t domain, uint32_t operationId,
-                                      void *data);
-using RoctxRegisterTracerCallbackFn = void (*)(RoctxTracerCallbackFn);
+using roctx::ApiData;
+using roctx::kPop;
+using roctx::kPushA;
+using roctx::RegisterTracerCallbackFn;
+using roctx::TracerCallbackFn;
 
 // registerRoctxCallback is defined after the Pimpl class (needs access to
 // the static roctxCallback member).
@@ -389,6 +374,8 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
     if (!kernelNames.withRead(kernelId,
                               [&](const std::string &v) { name = v; }))
       return UnknownKernelName;
+    // AMDGPU ELF objects append ".kd" (kernel descriptor) to symbol names.
+    // Strip it so user-visible kernel names match the source.
     const std::string suffix = ".kd";
     if (name.size() > suffix.size() &&
         name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
@@ -609,10 +596,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::markerCallback(
 // librocprofiler-sdk-roctx.so is not loaded (e.g. bare ROCm without TheRock).
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::roctxCallback(
     uint32_t operationId, void *data) {
-  auto *apiData = static_cast<RoctxApiData *>(data);
-  if (operationId == kRoctxPushA) {
+  auto *apiData = static_cast<ApiData *>(data);
+  if (operationId == kPushA) {
     threadState.enterScope(apiData->args.roctxRangePushA.message);
-  } else if (operationId == kRoctxPop) {
+  } else if (operationId == kPop) {
     threadState.exitScope();
   }
 }
@@ -631,7 +618,7 @@ void registerRoctxCallback(bool enable) {
   }
   if (!roctxLib)
     return;
-  auto *fn = reinterpret_cast<RoctxRegisterTracerCallbackFn>(
+  auto *fn = reinterpret_cast<RegisterTracerCallbackFn>(
       dlsym(roctxLib, "roctxRegisterTracerCallback"));
   dlclose(roctxLib);
   if (!fn)
@@ -727,11 +714,6 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       &RocprofSDKProfiler::RocprofSDKProfilerPimpl::codeObjectCallback,
       static_cast<void *>(state->pimpl));
 
-  int valid = 0;
-  rocprofiler::contextIsValid<true>(state->codeObjectContext, &valid);
-  if (valid == 0)
-    return -1;
-
   // Context 2: on-demand profiling context for HIP callback tracing and
   // kernel dispatch buffer tracing. Started/stopped in doStart()/doStop().
   // Registering BUFFER_TRACING_KERNEL_DISPATCH here causes
@@ -806,11 +788,6 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
   rocprofiler::createCallbackThread<true>(&state->callbackThread);
   rocprofiler::assignCallbackThread<true>(state->kernelBuffer,
                                           state->callbackThread);
-
-  valid = 0;
-  rocprofiler::contextIsValid<true>(state->profilingContext, &valid);
-  if (valid == 0)
-    return -1;
 
   AgentIdMapper::instance().initialize();
 

@@ -15,9 +15,6 @@ DEFINE_DISPATCH(ExternLibRocprofiler, createContext, rocprofiler_create_context,
 DEFINE_DISPATCH(ExternLibRocprofiler, destroyContext,
                 rocprofiler_destroy_context, rocprofiler_context_id_t)
 
-DEFINE_DISPATCH(ExternLibRocprofiler, contextIsValid,
-                rocprofiler_context_is_valid, rocprofiler_context_id_t, int *)
-
 DEFINE_DISPATCH(ExternLibRocprofiler, startContext, rocprofiler_start_context,
                 rocprofiler_context_id_t)
 

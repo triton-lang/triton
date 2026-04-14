@@ -87,6 +87,25 @@
  * developer should be aware that the API and/or ABI is subject to change in
  * subsequent releases.
  * @addtogroup VERSIONING_GROUP
+ *
+ * @def ROCPROFILER_SDK_COMPUTE_VERSION_VALUE
+ * @param[in] MAX_VERSION_VALUE set to +1 of the maximum value for a given
+ * version, e.g. a value of 100 means that the max value of the
+ * major/minor/patch version is 99
+ * @param[in] MAJOR_VERSION major version of library (integral)
+ * @param[in] MINOR_VERSION minor version of library (integral)
+ * @param[in] PATCH_VERSION patch version of library (integral)
+ * @brief Helper macro calculating a generate versioning integer for a library
+ * @addtogroup VERSIONING_GROUP
+ *
+ * @def ROCPROFILER_SDK_COMPUTE_VERSION
+ * @param[in] MAJOR_VERSION major version of library (integral)
+ * @param[in] MINOR_VERSION minor version of library (integral)
+ * @param[in] PATCH_VERSION patch version of library (integral)
+ * @brief Helper macro for users to generate versioning int expected by
+ * rocprofiler-sdk when the library maintains a major, minor, and patch version
+ * numbers
+ * @addtogroup VERSIONING_GROUP
  */
 
 #if !defined(ROCPROFILER_ATTRIBUTE)
@@ -228,3 +247,11 @@
 #if defined(ROCPROFILER_SDK_BETA_COMPAT) && ROCPROFILER_SDK_BETA_COMPAT > 0
 #define ROCPROFILER_SDK_BETA_COMPAT_SUPPORTED 1
 #endif
+
+#define ROCPROFILER_SDK_COMPUTE_VERSION_VALUE(MAX_VERSION_VALUE, MAJOR, MINOR, \
+                                              PATCH)                           \
+  (((MAX_VERSION_VALUE * MAX_VERSION_VALUE) * MAJOR) +                         \
+   (MAX_VERSION_VALUE * MINOR) + (PATCH))
+
+#define ROCPROFILER_SDK_COMPUTE_VERSION(MAJOR, MINOR, PATCH)                   \
+  ROCPROFILER_SDK_COMPUTE_VERSION_VALUE(100, MAJOR, MINOR, PATCH)

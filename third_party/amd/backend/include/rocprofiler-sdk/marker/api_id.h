@@ -51,3 +51,12 @@ typedef enum rocprofiler_marker_name_api_id_t // NOLINT(performance-enum-size)
   ROCPROFILER_MARKER_NAME_API_ID_roctxNameHipStream,
   ROCPROFILER_MARKER_NAME_API_ID_LAST,
 } rocprofiler_marker_name_api_id_t;
+
+typedef enum rocprofiler_marker_core_range_api_id_t // NOLINT(performance-enum-size)
+{ ROCPROFILER_MARKER_CORE_RANGE_API_ID_NONE = -1,
+  ROCPROFILER_MARKER_CORE_RANGE_API_ID_roctxMarkA = 0,
+  ROCPROFILER_MARKER_CORE_RANGE_API_ID_roctxThreadRangeA,
+  ROCPROFILER_MARKER_CORE_RANGE_API_ID_roctxProcessRangeA,
+  ROCPROFILER_MARKER_CORE_RANGE_API_ID_roctxGetThreadId,
+  ROCPROFILER_MARKER_CORE_RANGE_API_ID_LAST,
+} rocprofiler_marker_core_range_api_id_t;

@@ -94,22 +94,22 @@
 
 // clang-format off
 #define ROCTX_VERSION_MAJOR   1
-#define ROCTX_VERSION_MINOR   0
-#define ROCTX_VERSION_PATCH   0
+#define ROCTX_VERSION_MINOR   2
+#define ROCTX_VERSION_PATCH   1
 #define ROCTX_SOVERSION       (10000 * 1)
-#define ROCTX_VERSION_STRING "1.0.0"
+#define ROCTX_VERSION_STRING "1.2.1"
 #define ROCTX_GIT_DESCRIBE   ""
-#define ROCTX_GIT_REVISION   "b590612966dbf678993fa357f21402858e86a88e"
+#define ROCTX_GIT_REVISION   "96e30b429c074f8a3fcf66be9c014df4d7cbc681"
 
 // system info during compilation
-#define ROCTX_LIBRARY_ARCH     "x86_64-linux-gnu"
+#define ROCTX_LIBRARY_ARCH     "x86_64-unknown-linux-gnu"
 #define ROCTX_SYSTEM_NAME      "Linux"
 #define ROCTX_SYSTEM_PROCESSOR "x86_64"
-#define ROCTX_SYSTEM_VERSION   "6.8.0-57-generic"
+#define ROCTX_SYSTEM_VERSION   "5.15.0-1102-azure"
 
 // compiler information
-#define ROCTX_COMPILER_ID      "GNU"
-#define ROCTX_COMPILER_VERSION "11.4.0"
+#define ROCTX_COMPILER_ID      "Clang"
+#define ROCTX_COMPILER_VERSION "23.0.0"
 
 // clang-format on
 

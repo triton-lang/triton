@@ -86,6 +86,13 @@ typedef union rocprofiler_marker_api_args_t {
     const char *name;
     const struct ihipStream_t *stream;
   } roctxNameHipStream;
+  struct {
+    const char *message;
+  } roctxThreadRangeA;
+  struct {
+    const char *message;
+    // roctx_range_id_t id;  // only set when range ends in callback tracing
+  } roctxProcessRangeA;
 } rocprofiler_marker_api_args_t;
 
 ROCPROFILER_EXTERN_C_FINI

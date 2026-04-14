@@ -37,10 +37,6 @@ template <bool CheckSuccess>
 rocprofiler_status_t destroyContext(rocprofiler_context_id_t context);
 
 template <bool CheckSuccess>
-rocprofiler_status_t contextIsValid(rocprofiler_context_id_t context,
-                                    int *valid);
-
-template <bool CheckSuccess>
 rocprofiler_status_t startContext(rocprofiler_context_id_t context);
 
 template <bool CheckSuccess>
