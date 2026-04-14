@@ -1,4 +1,5 @@
 from __future__ import annotations
+import threading
 from typing import Callable, Optional
 from concurrent.futures import Executor, as_completed, Future
 from contextvars import ContextVar
@@ -12,6 +13,7 @@ class FutureKernel:
         self.finalize_compile = finalize_compile
         self.kernel = None
         self.future = future
+        self._lock = threading.Lock()
 
     def result(self, ignore_errors: bool = False):
         if self.kernel is not None:
@@ -24,8 +26,11 @@ class FutureKernel:
                 return
             else:
                 raise
-        self.finalize_compile(kernel)
-        self.kernel = kernel
+        with self._lock:
+            if self.kernel is not None:
+                return self.kernel
+            self.finalize_compile(kernel)
+            self.kernel = kernel
         return kernel
 
     def __getattr__(self, name):
@@ -41,18 +46,20 @@ class AsyncCompileMode:
         self.ignore_errors = ignore_errors
         self.raw_futures = []
         self.future_kernels = {}
+        self._lock = threading.Lock()
 
     def submit(self, key, compile_fn, finalize_fn):
-        future = self.future_kernels.get(key)
-        if future is not None:
-            return future
+        with self._lock:
+            future_kernel = self.future_kernels.get(key)
+            if future_kernel is not None:
+                return future_kernel
 
-        future = self.executor.submit(compile_fn)
-        future._key = key
-        self.raw_futures.append(future)
-        future_kernel = FutureKernel(finalize_fn, future)
-        self.future_kernels[key] = future_kernel
-        return future_kernel
+            future = self.executor.submit(compile_fn)
+            future._key = key
+            self.raw_futures.append(future)
+            future_kernel = FutureKernel(finalize_fn, future)
+            self.future_kernels[key] = future_kernel
+            return future_kernel
 
     def __enter__(self):
         if active_mode.get() is not None:
