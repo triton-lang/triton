@@ -646,8 +646,10 @@ static LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
 } // namespace triton
 } // namespace mlir
 
-static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
-                                       unsigned &value, StringRef desc) {
+namespace {
+
+LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
+                                unsigned &value, StringRef desc) {
   auto intAttr = mlir::dyn_cast<IntegerAttr>(attr);
   if (!intAttr) {
     parser.emitError(parser.getNameLoc(), "expected an integer type in ")
@@ -678,8 +680,8 @@ static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
   return success();
 }
 
-static LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr,
-                                        bool &value, StringRef desc) {
+LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr, bool &value,
+                                 StringRef desc) {
   auto boolAttr = mlir::dyn_cast<BoolAttr>(attr);
   if (!boolAttr) {
     parser.emitError(parser.getNameLoc(), "expected a bool type in ") << desc;
@@ -690,10 +692,8 @@ static LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr,
 }
 
 // parse an array of integers
-static LogicalResult parseIntArrayAttr(AsmParser &parser,
-                                       const NamedAttribute &attr,
-                                       SmallVector<unsigned> &res,
-                                       StringRef desc) {
+LogicalResult parseIntArrayAttr(AsmParser &parser, const NamedAttribute &attr,
+                                SmallVector<unsigned> &res, StringRef desc) {
   auto arrayAttr = mlir::dyn_cast<ArrayAttr>(attr.getValue());
   if (!arrayAttr) {
     parser.emitError(parser.getNameLoc(), "expected an array for ") << desc;
@@ -708,19 +708,20 @@ static LogicalResult parseIntArrayAttr(AsmParser &parser,
   return success();
 };
 
-static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
-                               unsigned &value, StringRef desc) {
+LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
+                        unsigned &value, StringRef desc) {
   return parseIntAttrValue(parser, attr.getValue(), value, desc);
 };
 
-static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
-                               bool &value, StringRef desc) {
+LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
+                        bool &value, StringRef desc) {
   return parseBoolAttrValue(parser, attr.getValue(), value, desc);
 };
 
-static std::optional<LinearLayout>
-parseLinearLayout(const DictionaryAttr &dict, AsmParser &parser,
-                  ArrayRef<std::string> inDimNames, int serializedRank = 0) {
+std::optional<LinearLayout> parseLinearLayout(const DictionaryAttr &dict,
+                                              AsmParser &parser,
+                                              ArrayRef<std::string> inDimNames,
+                                              int serializedRank = 0) {
   LinearLayout::BasesT bases;
 
   // Parse the basis names in order (the order is relevant)
@@ -796,6 +797,8 @@ parseLinearLayout(const DictionaryAttr &dict, AsmParser &parser,
   // Create LinearLayout
   return LinearLayout(std::move(bases), std::move(outDimNames));
 }
+
+} // namespace
 
 // We don't use the default implementation as it's a bit too verbose
 // This prints in the following format that is shape agnostic, in the sense

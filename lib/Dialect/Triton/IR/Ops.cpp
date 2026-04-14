@@ -520,7 +520,9 @@ ReduceOp::inferReturnTypes(MLIRContext *context, std::optional<Location> loc,
 }
 
 // Helpers for Reductions and Scans
-template <class Op> static LogicalResult verifyReduceScan(Op &op) {
+namespace {
+
+template <class Op> LogicalResult verifyReduceScan(Op &op) {
   if (op.getOperands().empty()) {
     return op.emitOpError() << "must have at least 1 operand";
   }
@@ -549,8 +551,7 @@ template <class Op> static LogicalResult verifyReduceScan(Op &op) {
   return success();
 }
 
-template <class ReturnOp, class Op>
-static LogicalResult verifyRegionsImpl(Op &op) {
+template <class ReturnOp, class Op> LogicalResult verifyRegionsImpl(Op &op) {
   auto argElementTypes = op.getElementTypes();
   const auto &operands = op.getOperands();
   const auto numArgs = 2 * operands.size();
@@ -595,7 +596,7 @@ static LogicalResult verifyRegionsImpl(Op &op) {
   return success();
 }
 
-static llvm::SmallVector<RankedTensorType>
+llvm::SmallVector<RankedTensorType>
 getInputTypesImpl(const Operation::operand_range &operands) {
   llvm::SmallVector<RankedTensorType> srcTys;
   srcTys.reserve(operands.size());
@@ -606,7 +607,7 @@ getInputTypesImpl(const Operation::operand_range &operands) {
 }
 
 template <typename ValueRange>
-static llvm::SmallVector<Type> getElementTypesImpl(const ValueRange &operands) {
+llvm::SmallVector<Type> getElementTypesImpl(const ValueRange &operands) {
   llvm::SmallVector<Type> srcElemTys;
   srcElemTys.reserve(operands.size());
   for (const auto &op : operands) {
@@ -614,6 +615,8 @@ static llvm::SmallVector<Type> getElementTypesImpl(const ValueRange &operands) {
   }
   return srcElemTys;
 }
+
+} // namespace
 
 LogicalResult ReduceOp::verify() { return verifyReduceScan(*this); }
 

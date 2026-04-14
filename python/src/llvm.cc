@@ -920,14 +920,10 @@ void init_triton_llvm(py::module &&m) {
   });
 }
 
-namespace {
-
-void triton_stacktrace_signal_handler(void *) {
+static void triton_stacktrace_signal_handler(void *) {
   llvm::sys::PrintStackTrace(llvm::errs());
   raise(SIGABRT);
 }
-
-} // namespace
 
 void init_triton_stacktrace_hook(pybind11::module &m) {
   if (mlir::triton::tools::getBoolEnv("TRITON_ENABLE_PYTHON_STACKTRACE")) {

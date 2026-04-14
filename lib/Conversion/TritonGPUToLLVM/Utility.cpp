@@ -1441,9 +1441,10 @@ SmallVector<Value> getSharedMemoryBases(Location loc, RewriterBase &rewriter,
   return bases;
 }
 
+namespace {
+
 // Extract the bits of `a` that are set in `mask`
-static Value pext_i32(RewriterBase &rewriter, Location loc, Value a,
-                      uint32_t mask) {
+Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(a.getType() == i32_ty && "a must be i32");
   // Handle width = 32 to avoid doing 1 << 32
@@ -1472,8 +1473,7 @@ static Value pext_i32(RewriterBase &rewriter, Location loc, Value a,
 }
 
 // Puts the bits of `a` that are set in `mask` into the bits of `result`
-static Value pdep_i32(RewriterBase &rewriter, Location loc, Value a,
-                      uint32_t mask) {
+Value pdep_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(a.getType() == i32_ty && "a must be i32");
 
@@ -1510,6 +1510,8 @@ static Value pdep_i32(RewriterBase &rewriter, Location loc, Value a,
 
   return result;
 }
+
+} // namespace
 
 std::tuple<SmallVector<Value>, Value>
 delinearize(RewriterBase &rewriter, Location loc,

@@ -18,8 +18,12 @@ Type getElementType(Value value) {
   return type;
 }
 
-static int getNumElementsPerThreads(Type type,
-                                    const LLVMTypeConverter *typeConverter) {
+} // namespace mlir::triton::gpu
+
+namespace {
+
+int getNumElementsPerThreads(Type type,
+                             const LLVMTypeConverter *typeConverter) {
   int numElemsPerThread = 1;
   if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
     auto structType =
@@ -30,9 +34,6 @@ static int getNumElementsPerThreads(Type type,
   return numElemsPerThread;
 }
 
-} // namespace mlir::triton::gpu
-
-namespace {
 struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
   using ConvertOpToLLVMPattern<AddPtrOp>::ConvertOpToLLVMPattern;
 

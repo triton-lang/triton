@@ -34,9 +34,10 @@ namespace mlir {
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-static bool
-enclosingAChannel(Operation *ctrlOp,
-                  const DenseSet<Operation *> &regionsWithChannels) {
+namespace {
+
+bool enclosingAChannel(Operation *ctrlOp,
+                       const DenseSet<Operation *> &regionsWithChannels) {
   for (auto *op : regionsWithChannels) {
     if (ctrlOp == op)
       return true;
@@ -52,10 +53,9 @@ enclosingAChannel(Operation *ctrlOp,
 
 // Update preOrderOps with a list of region Ops nested under ctrlOp that will
 // need accumCnt. The list is in pre-order.
-static void
-getAccumCntsPreOrder(Operation *ctrlOp,
-                     const DenseSet<Operation *> &regionsWithChannels,
-                     SmallVector<Operation *> &preOrderOps) {
+void getAccumCntsPreOrder(Operation *ctrlOp,
+                          const DenseSet<Operation *> &regionsWithChannels,
+                          SmallVector<Operation *> &preOrderOps) {
   ctrlOp->walk<WalkOrder::PreOrder>([&](Operation *subOp) {
     // This will walk ctrlOp itself.
     if (auto forOp = dyn_cast<scf::ForOp>(subOp)) {
@@ -77,22 +77,21 @@ getAccumCntsPreOrder(Operation *ctrlOp,
 
 // Go through all the regions in opList and correctly add accumCnt. taskTopOps
 // will be updated if it is replaced in the process.
-static Value updateAccumLoopCount(SmallVector<Operation *> &opList,
-                                  SmallVector<Operation *> &taskTopOps,
-                                  DenseSet<Operation *> &regionsWithChannels,
-                                  Value prevAccum);
+Value updateAccumLoopCount(SmallVector<Operation *> &opList,
+                           SmallVector<Operation *> &taskTopOps,
+                           DenseSet<Operation *> &regionsWithChannels,
+                           Value prevAccum);
 
 // prevAccum is the accumCnt prior to the forOp. This function goes through
 // the forOp and insert accumCnt when necessary.
-static scf::ForOp
-createNewLoopWrapper(scf::ForOp origForOp, SmallVector<Operation *> &taskTopOps,
-                     DenseSet<Operation *> &regionsWithChannels,
-                     Value prevAccum);
+scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
+                                SmallVector<Operation *> &taskTopOps,
+                                DenseSet<Operation *> &regionsWithChannels,
+                                Value prevAccum);
 
-static scf::IfOp rewriteIfOp(scf::IfOp ifOp,
-                             SmallVector<Operation *> &taskTopOps,
-                             DenseSet<Operation *> &regionsWithChannels,
-                             Value prevAccum) {
+scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
+                      DenseSet<Operation *> &regionsWithChannels,
+                      Value prevAccum) {
   OpBuilderWithAsyncTaskIds ifBuilder(ifOp.getContext());
   ifBuilder.setAsynTaskIdsFromArray(getNestedAsyncTaskIds(ifOp));
   ifBuilder.setInsertionPoint(ifOp);
@@ -291,9 +290,9 @@ static scf::IfOp rewriteIfOp(scf::IfOp ifOp,
 }
 
 // Handle the forOp given initial accumCnts.
-static scf::ForOp createNewLoop(scf::ForOp forOp, scf::ForOp &parentForOp,
-                                SmallVector<Value> &initialAccums,
-                                Value accumulatedLoopCount) {
+scf::ForOp createNewLoop(scf::ForOp forOp, scf::ForOp &parentForOp,
+                         SmallVector<Value> &initialAccums,
+                         Value accumulatedLoopCount) {
   auto loc = forOp.getLoc();
   Block *body = forOp.getBody();
 
@@ -339,6 +338,8 @@ static scf::ForOp createNewLoop(scf::ForOp forOp, scf::ForOp &parentForOp,
   return newForOp;
 }
 
+} // namespace
+
 // Here we assume the source and destination ops are in the same region op.
 // Go through channels, and get a set of region ops containing channels.
 void collectRegionsWithChannels(const SmallVector<Channel *> &channels,
@@ -354,6 +355,8 @@ void collectRegionsWithChannels(const SmallVector<Channel *> &channels,
       regionsWithChannels.insert(pOp);
   }
 }
+
+namespace {
 
 // Go through a list of operations in opList, recursively call into
 // createNewLoopWrapper or rewriteIfOp.
@@ -555,6 +558,8 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
   });
   return newForOp;
 }
+
+} // namespace
 
 void appendAccumCntsForOps(SmallVector<Operation *> &taskTopOps,
                            const SmallVector<Channel *> &channels,

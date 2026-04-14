@@ -13,7 +13,9 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace mlir::triton::gpu {
 
-static SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
+namespace {
+
+SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
   SmallVector<int64_t> result(rank, 1);
   assert(shape.size() <= rank);
   auto rankDiff = rank - shape.size();
@@ -21,8 +23,8 @@ static SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
   return result;
 }
 
-static CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
-                                               ArrayRef<int64_t> shape) {
+CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
+                                        ArrayRef<int64_t> shape) {
   auto rank = shape.size();
   if (cgaLayout.getRank() == rank)
     return cgaLayout;
@@ -57,6 +59,8 @@ static CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
   ll = LinearLayout(ll.getBases(), dimSizes, false);
   return CGAEncodingAttr::get(ctx, std::move(ll));
 }
+
+} // namespace
 
 SharedEncodingTrait updateEncodingForShape(Operation *op,
                                            SharedEncodingTrait encoding,

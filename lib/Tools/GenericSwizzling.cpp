@@ -24,18 +24,18 @@ static int __builtin_ctzll(unsigned long long x) {
 
 #endif
 
-static void printBasis(const llvm::SmallVector<int32_t> &basis,
-                       const std::string &name) {
+using namespace mlir;
+using namespace mlir::triton;
+
+namespace {
+
+void printBasis(const llvm::SmallVector<int32_t> &basis,
+                const std::string &name) {
   llvm::errs() << name << ": ";
   for (int32_t b : basis)
     llvm::errs() << b << " ";
   llvm::errs() << "\n";
 }
-
-using namespace mlir;
-using namespace mlir::triton;
-
-namespace {
 
 // Goes from bases of the form [[1], [2], [4], [8]] to [1, 2, 4, 8]
 SmallVector<int32_t> flatten(const LinearLayout &ll, StringAttr dim) {
@@ -216,12 +216,9 @@ SmallVector<int32_t> complementBasis(ArrayRef<int32_t> basis, int32_t dim) {
 
   return comp;
 }
-} // namespace
 
-namespace mlir::triton::gpu {
-
-static SmallVector<int32_t>
-intersectionBasis(ArrayRef<int32_t> b1, ArrayRef<int32_t> b2, int32_t dim) {
+SmallVector<int32_t> intersectionBasis(ArrayRef<int32_t> b1,
+                                       ArrayRef<int32_t> b2, int32_t dim) {
   // If needed to be generic, this can be done computing
   // nullspaceBasis(concat(nullspaceBasis(b1), nullspaceBasis(b2)))
   // but doing this returns the bases in an arbitrary order!
@@ -244,6 +241,10 @@ intersectionBasis(ArrayRef<int32_t> b1, ArrayRef<int32_t> b2, int32_t dim) {
     return nullspaceBasis(joint, dim);
   }
 }
+
+} // namespace
+
+namespace mlir::triton::gpu {
 
 std::pair<int, int> bankConflicts(ArrayRef<int32_t> tileSrc,
                                   ArrayRef<int32_t> tileDst,

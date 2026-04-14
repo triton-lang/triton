@@ -8,15 +8,20 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Signals.h"
 
-namespace {
-
-template <typename T> std::string stringifyLLVMType(const T &t) {
+template <typename T> static std::string stringifyLLVMType(const T &t) {
   std::string str;
   llvm::raw_string_ostream ros(str);
   ros << t;
   return str;
 }
-} // namespace
+
+namespace mlir {
+// gtest printer for mlir::Attribute.  This must live in namespace mlir in order
+// for it to be found via ADL.
+static void PrintTo(const Attribute &attr, std::ostream *os) {
+  *os << stringifyLLVMType(attr);
+}
+} // namespace mlir
 
 namespace mlir::triton::gpu {
 namespace {

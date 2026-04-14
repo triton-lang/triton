@@ -70,8 +70,9 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 
 namespace mlir::triton::amdgpu {
 
-static std::string
-getStringFromCoords(mlir::triton::AMD::ElemLocationKey coords) {
+namespace {
+
+std::string getStringFromCoords(mlir::triton::AMD::ElemLocationKey coords) {
   std::string result;
   llvm::raw_string_ostream os(result);
   os << "[";
@@ -82,8 +83,7 @@ getStringFromCoords(mlir::triton::AMD::ElemLocationKey coords) {
 }
 
 // Helper function to verify TDM block dimensions
-static LogicalResult verifyTDMBlockSize(Operation *op,
-                                        ArrayRef<int64_t> blockShape) {
+LogicalResult verifyTDMBlockSize(Operation *op, ArrayRef<int64_t> blockShape) {
   constexpr int64_t maxBlockSize = std::numeric_limits<uint16_t>::max();
   for (size_t i = 0; i < blockShape.size(); ++i) {
     if (blockShape[i] > maxBlockSize) {
@@ -94,6 +94,8 @@ static LogicalResult verifyTDMBlockSize(Operation *op,
   }
   return success();
 }
+
+} // namespace
 
 LogicalResult ExtractSliceOp::verify() {
   // Basic type/rank checks.

@@ -35,7 +35,9 @@ using ::mlir::triton::gpu::MemDescType;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingTrait;
 
-static triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
+namespace {
+
+triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
   auto dTy = cast<RankedTensorType>(d.getType()).getElementType();
   if (dTy.isF32()) {
     return triton::nvgpu::WGMMAEltType::f32;
@@ -48,7 +50,7 @@ static triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
   }
 }
 
-static triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
+triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
   auto aTy = cast<triton::gpu::TensorOrMemDesc>(a.getType()).getElementType();
   if (aTy.isF16()) {
     return triton::nvgpu::WGMMAEltType::f16;
@@ -91,11 +93,11 @@ static triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
 // For WGMMA this happens in both SharedToDotOperand and MMAToDotOperand.
 // Thus, both lowerings must obey this above ordering for the below code to be
 // correct.
-static llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
-                                        Location loc,
-                                        const SmallVector<Value> &elements,
-                                        int startIndex, int numElements,
-                                        Operation *insertBefore) {
+llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
+                                 Location loc,
+                                 const SmallVector<Value> &elements,
+                                 int startIndex, int numElements,
+                                 Operation *insertBefore) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(insertBefore);
@@ -127,10 +129,10 @@ static llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
 }
 
 // If the accumulator is fp16 unpack it from 32-bit integers.
-static SmallVector<Value> unpackAccumulator(ConversionPatternRewriter &rewriter,
-                                            Location loc,
-                                            const SmallVector<Value> &packed,
-                                            RankedTensorType tensorTy) {
+SmallVector<Value> unpackAccumulator(ConversionPatternRewriter &rewriter,
+                                     Location loc,
+                                     const SmallVector<Value> &packed,
+                                     RankedTensorType tensorTy) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (!tensorTy.getElementType().isF16())
     return packed;
@@ -147,8 +149,8 @@ static SmallVector<Value> unpackAccumulator(ConversionPatternRewriter &rewriter,
   return results;
 }
 
-static Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc,
-                            Value a, Value b) {
+Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc, Value a,
+                     Value b) {
   int numEl = cast<LLVM::LLVMStructType>(a.getType()).getBody().size();
   Value newStruct = LLVM::UndefOp::create(rewriter, loc, a.getType());
   for (int i = 0; i < numEl; ++i) {
@@ -160,9 +162,8 @@ static Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc,
   return newStruct;
 }
 
-static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
-                                   Location loc, SmallVector<Value> acc,
-                                   int pendings) {
+SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter, Location loc,
+                            SmallVector<Value> acc, int pendings) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Type> types(acc.size(), acc[0].getType());
   auto structTy =
@@ -181,14 +182,13 @@ static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
   return results;
 }
 
-static LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
-                                ConversionPatternRewriter &rewriter,
-                                Location loc, Operation *op, Value a, Value b,
-                                Value c, Value d, Value useCOperand,
-                                Value loadedA, Value loadedB, Value loadedC,
-                                bool allowTF32, bool needsPartialAccumulator,
-                                uint32_t maxNumImpreciseAcc, bool sync,
-                                Value thread) {
+LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
+                         ConversionPatternRewriter &rewriter, Location loc,
+                         Operation *op, Value a, Value b, Value c, Value d,
+                         Value useCOperand, Value loadedA, Value loadedB,
+                         Value loadedC, bool allowTF32,
+                         bool needsPartialAccumulator,
+                         uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
   auto bTensorTy = cast<triton::gpu::MemDescType>(b.getType());
@@ -373,6 +373,8 @@ static LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   rewriter.replaceOp(op, res);
   return success();
 }
+
+} // namespace
 
 LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            triton::nvidia_gpu::WarpGroupDotOp::Adaptor adaptor,

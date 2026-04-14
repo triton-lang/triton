@@ -12,16 +12,15 @@
 namespace tt = triton;
 namespace ttg = triton::gpu;
 
-namespace deduceMin {
-static int
-deduceMinCountInBlock(Block &block,
-                      const std::function<int(Operation *)> &countFunc);
+namespace {
+
+int deduceMinCountInBlock(Block &block,
+                          const std::function<int(Operation *)> &countFunc);
 
 // Returns the minimum found when accumulating countFunc(op) between begin and
 // end (inclusive)
-static int
-deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
-                        const std::function<int(Operation *)> &countFunc) {
+int deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
+                            const std::function<int(Operation *)> &countFunc) {
   assert(beginOp && endOp);
   assert(beginOp == endOp || beginOp->isBeforeInBlock(endOp));
   int count = 0;
@@ -61,18 +60,15 @@ int deduceMinCountInBlock(Block &block,
     return 0;
   return deduceMinCountBetweeOps(&block.front(), &block.back(), countFunc);
 }
-} // namespace deduceMin
 
-static int
-deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
-                         const std::function<int(Operation *)> &countFunc,
-                         int pathSum, int foundMin) {
-  using namespace deduceMin;
+int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
+                             const std::function<int(Operation *)> &countFunc,
+                             int pathSum, int foundMin) {
   // If the value is not defined in the same region as the consumer we need to
   // peel the parent region of consumer until we arrive at value's region
   while (consumerOp->getParentRegion() != defValue.getParentRegion()) {
-    pathSum += deduceMin::deduceMinCountBetweeOps(
-        &consumerOp->getBlock()->front(), consumerOp, countFunc);
+    pathSum += deduceMinCountBetweeOps(&consumerOp->getBlock()->front(),
+                                       consumerOp, countFunc);
     consumerOp = consumerOp->getParentOp();
   }
 
@@ -117,6 +113,8 @@ deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
   // Unsupported value, return 0 conservatively.
   return 0;
 }
+
+} // namespace
 
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
                              llvm::function_ref<int(Operation *)> countFunc) {

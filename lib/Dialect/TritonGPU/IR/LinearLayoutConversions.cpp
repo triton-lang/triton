@@ -273,10 +273,11 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
 }
 
 /// Function to generate lane and warp layout for dot operands.
-LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
-                                         ArrayRef<unsigned> shape,
-                                         ArrayRef<unsigned> order,
-                                         unsigned kDim, StringAttr inDimName) {
+static LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
+                                                ArrayRef<unsigned> shape,
+                                                ArrayRef<unsigned> order,
+                                                unsigned kDim,
+                                                StringAttr inDimName) {
   // Let warpsPerCTAMma = {2, 2}, then
   // warpsPerCTA = {2, 1} for opA and warpsPerCTA = {1, 2} for opB
   // assume warpOrder = {1, 0}
@@ -440,7 +441,8 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(tileLayout, getCGALayout(), shape);
 }
 
-LinearLayout projectAwayOutDim(const LinearLayout &layout, StringAttr dim) {
+static LinearLayout projectAwayOutDim(const LinearLayout &layout,
+                                      StringAttr dim) {
   auto ctx = layout.getOutDimNames().begin()->getContext();
   auto bases = layout.getBases();
   auto idx = layout.getOutDimIndex(dim);

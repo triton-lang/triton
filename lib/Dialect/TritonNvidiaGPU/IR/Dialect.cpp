@@ -49,8 +49,9 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-static FailureOr<gpu::CGAEncodingAttr>
-parseCGALayoutRankTwo(AsmParser &parser) {
+namespace {
+
+FailureOr<gpu::CGAEncodingAttr> parseCGALayoutRankTwo(AsmParser &parser) {
   Attribute attr;
   if (parser.parseAttribute(attr).failed())
     return failure();
@@ -59,10 +60,11 @@ parseCGALayoutRankTwo(AsmParser &parser) {
   return failure();
 }
 
-static void printCGALayoutRankTwo(AsmPrinter &printer,
-                                  gpu::CGAEncodingAttr cgaAttr) {
+void printCGALayoutRankTwo(AsmPrinter &printer, gpu::CGAEncodingAttr cgaAttr) {
   gpu::printCGAAttr(printer, cgaAttr);
 }
+
+} // namespace
 
 TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   auto *ctx = memDescType.getContext();
