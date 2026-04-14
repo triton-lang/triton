@@ -1111,6 +1111,7 @@ def conv2d_dgrad(grad_output_nhwc, weight_nhwc, H_in, W_in, stride=1, padding=0)
 
     return _finalize_dgrad_output(output)
 
+
 def _make_dgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps):
     # Keep the fixed path on a tile shape that is also covered by autotune configs.
     return {

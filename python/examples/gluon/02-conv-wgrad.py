@@ -947,6 +947,7 @@ def conv2d_wgrad(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0):
 
     return _finalize_wgrad_output(grad_weight_flat, Co, R, S, Ci, Ci_orig)
 
+
 def _make_wgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps):
     # Keep the fixed path on a tile shape that is also covered by autotune configs.
     return {
