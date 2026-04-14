@@ -58,7 +58,6 @@ is_cuda = _conv_common.is_cuda
 maybe_pad_ci_for_tma = _conv_common.maybe_pad_channel_dims_for_tma
 normalize_2d = _conv_common.normalize_2d
 
-
 # ===-----------------------------------------------------------------------===#
 # Dgrad GEMM mapping
 # ===-----------------------------------------------------------------------===#
@@ -334,8 +333,8 @@ def epilogue_partition(p):
 
         c_offsets = (c_batch[:, None] * config.output_stride_n + h[:, None] * config.output_stride_h +
                      w[:, None] * config.output_stride_w + offs_n[None, :])
-        c_mask = ((offs_m[:, None] < M_GEMM) & (offs_n[None, :] < N_GEMM) &
-                  (h[:, None] < config.H_full) & (w[:, None] < config.W_full))
+        c_mask = ((offs_m[:, None] < M_GEMM) & (offs_n[None, :] < N_GEMM) & (h[:, None] < config.H_full) &
+                  (w[:, None] < config.W_full))
 
         result = gl.convert_layout(acc, gl.CoalescedLayout())
         if p.store_split_k_partials:
@@ -418,18 +417,35 @@ def conv2d_dgrad_kernel(
     """
     M_GEMM = N * H_sub * W_sub
     config = DgradConfig(
-        N, Co, Ci, R_eff, S_eff,
-        gl.to_tensor(H_sub), gl.to_tensor(W_sub),
-        pad_h, pad_w,
+        N,
+        Co,
+        Ci,
+        R_eff,
+        S_eff,
+        gl.to_tensor(H_sub),
+        gl.to_tensor(W_sub),
+        pad_h,
+        pad_w,
         gl.to_tensor(output_stride_n),
         gl.to_tensor(output_stride_h),
         gl.to_tensor(output_stride_w),
         M_GEMM,
-        sub_a, sub_b,
-        gl.to_tensor(conv_stride_h), gl.to_tensor(conv_stride_w),
-        r0, s0, S_orig,
-        H_full, W_full,
-        BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M, SPLIT_K, num_buffers, num_warps,
+        sub_a,
+        sub_b,
+        gl.to_tensor(conv_stride_h),
+        gl.to_tensor(conv_stride_w),
+        r0,
+        s0,
+        S_orig,
+        H_full,
+        W_full,
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
+        GROUP_SIZE_M,
+        SPLIT_K,
+        num_buffers,
+        num_warps,
     )
 
     a_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], GL_GEMM_DTYPE)
@@ -468,9 +484,9 @@ def conv2d_dgrad_kernel(
     )
 
     gl.warp_specialize([
-        (epilogue_partition, (p,)),
-        (mma_partition, (p,)),
-        (load_partition, (p,)),
+        (epilogue_partition, (p, )),
+        (mma_partition, (p, )),
+        (load_partition, (p, )),
     ], [1, 1], [24, 24])
 
 
@@ -495,12 +511,12 @@ def conv2d_dgrad_get_configs():
         )
         for block_m in (64, 128)
         for block_n in (64, 128, 256)
-        for block_k in (64,)
-        for group_size_m in (4,)
+        for block_k in (64, )
+        for group_size_m in (4, )
         for split_k in (1, 2, 4, 8)
         for num_buffers in (3, 4, 5)
-        for num_acc_buffers in (2,)
-        for num_warps in (4,)
+        for num_acc_buffers in (2, )
+        for num_warps in (4, )
     ]
 
 
@@ -551,11 +567,9 @@ def _prepare_dgrad_inputs(grad_output_nhwc, weight_nhwc, H_in, W_in, stride, pad
     expected_out_h = (H_in + 2 * pad_h - R) // stride_h + 1
     expected_out_w = (W_in + 2 * pad_w - S) // stride_w + 1
     if out_h != expected_out_h or out_w != expected_out_w:
-        raise ValueError(
-            "Grad-output shape mismatch: expected "
-            f"({N}, {expected_out_h}, {expected_out_w}, {Co}) from input/filter geometry, got "
-            f"({N}, {out_h}, {out_w}, {Co})."
-        )
+        raise ValueError("Grad-output shape mismatch: expected "
+                         f"({N}, {expected_out_h}, {expected_out_w}, {Co}) from input/filter geometry, got "
+                         f"({N}, {out_h}, {out_w}, {Co}).")
     if out_h <= 0 or out_w <= 0:
         raise ValueError("Invalid convolution geometry for dgrad")
 
@@ -624,13 +638,14 @@ def _make_dgrad_grad_y_descriptor(grad_output_nhwc, H_sub, W_sub, out_h, out_w, 
 
 
 def _make_grid(num_sms, M_GEMM, Ci, Co, R_eff, S_eff):
+
     def grid(meta):
         total_mn_tiles = triton.cdiv(M_GEMM, meta["BLOCK_M"]) * triton.cdiv(Ci, meta["BLOCK_N"])
         total_k_iters = R_eff * S_eff * triton.cdiv(Co, meta["BLOCK_K"])
         k_iters_per_split = triton.cdiv(total_k_iters, meta["SPLIT_K"])
         active_split_k = triton.cdiv(total_k_iters, k_iters_per_split)
         total_tiles = total_mn_tiles * active_split_k
-        return (min(num_sms, total_tiles),)
+        return (min(num_sms, total_tiles), )
 
     return grid
 
@@ -648,24 +663,19 @@ def _get_dgrad_subproblem_active_split_k(Co, R_eff, S_eff, BLOCK_K, SPLIT_K):
 def _get_max_active_split_k(Co, subproblem_specs, BLOCK_K, SPLIT_K):
     return max(
         _get_dgrad_subproblem_active_split_k(Co, R_eff, S_eff, BLOCK_K, SPLIT_K)
-        for _, _, _, _, R_eff, S_eff, _, _ in subproblem_specs
-    )
+        for _, _, _, _, R_eff, S_eff, _, _ in subproblem_specs)
 
 
 def _get_safe_dgrad_max_active_split_k(Co, subproblem_specs, N, H_in, W_in, Ci, kernel_meta):
     """Return max active split-K across subproblems, or raise if workspace would be too large to index safely."""
-    max_active_split_k = _get_max_active_split_k(
-        Co, subproblem_specs, kernel_meta["BLOCK_K"], kernel_meta["SPLIT_K"]
-    )
+    max_active_split_k = _get_max_active_split_k(Co, subproblem_specs, kernel_meta["BLOCK_K"], kernel_meta["SPLIT_K"])
     if max_active_split_k > 1:
         # Workspace shape: (active_split_k * N, H_in, W_in, Ci); indexed in kernels by batch/row offsets.
         # Very large workspaces can exceed the addressing range supported by the generated code.
         workspace_elems = max_active_split_k * N * H_in * W_in * Ci
         if workspace_elems > (2**31 - 1):
-            raise ValueError(
-                "dgrad split-K workspace exceeds safe indexing range: "
-                f"active_split_k={max_active_split_k}, N={N}, H_in={H_in}, W_in={W_in}, Ci={Ci}"
-            )
+            raise ValueError("dgrad split-K workspace exceeds safe indexing range: "
+                             f"active_split_k={max_active_split_k}, N={N}, H_in={H_in}, W_in={W_in}, Ci={Ci}")
     return max_active_split_k
 
 
@@ -880,9 +890,7 @@ def _make_dgrad_runner(
     num_sms,
     kernel_meta,
 ):
-    max_active_split_k = _get_safe_dgrad_max_active_split_k(
-        Co, subproblem_specs, N, H_in, W_in, Ci, kernel_meta
-    )
+    max_active_split_k = _get_safe_dgrad_max_active_split_k(Co, subproblem_specs, N, H_in, W_in, Ci, kernel_meta)
     uses_split_k_workspace = max_active_split_k > 1
     output = _allocate_dgrad_output(
         grad_output_nhwc.device,
@@ -894,7 +902,8 @@ def _make_dgrad_runner(
     )
     launch_output = output
     if uses_split_k_workspace:
-        launch_output = _allocate_dgrad_split_k_workspace(grad_output_nhwc.device, max_active_split_k, N, H_in, W_in, Ci)
+        launch_output = _allocate_dgrad_split_k_workspace(grad_output_nhwc.device, max_active_split_k, N, H_in, W_in,
+                                                          Ci)
 
     def run():
         _launch_dgrad_subproblems(
@@ -1122,8 +1131,8 @@ def _make_dgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps):
     }
 
 
-def conv2d_dgrad_fixed(grad_output_nhwc, weight_nhwc, H_in, W_in, stride=1, padding=0,
-                       num_buffers=2, num_warps=4, SPLIT_K=1):
+def conv2d_dgrad_fixed(grad_output_nhwc, weight_nhwc, H_in, W_in, stride=1, padding=0, num_buffers=2, num_warps=4,
+                       SPLIT_K=1):
     """Fixed-config dgrad entrypoint used for CI and debugging.
 
     Runs the kernel with a fixed supported tile shape instead of autotuning,
@@ -1181,8 +1190,7 @@ def _assert_dgrad_correct(dgrad_fn, N, Ci, H, W, Co, R, S, stride, padding, **kw
     w_nchw = torch.randn((Co, Ci, R, S), device="cuda", dtype=TORCH_GEMM_DTYPE)
     w_nhwc = w_nchw.permute(0, 2, 3, 1).contiguous()
 
-    triton_dgrad = dgrad_fn(grad_out_nhwc, w_nhwc, H, W,
-                            stride=stride, padding=padding, **kwargs)
+    triton_dgrad = dgrad_fn(grad_out_nhwc, w_nhwc, H, W, stride=stride, padding=padding, **kwargs)
 
     ref_dgrad = torch.ops.aten.convolution_backward(
         grad_out_nchw,
@@ -1266,20 +1274,28 @@ for N, (Ci, Co), (H, W), (R, S), stride_val, pad_val in [(N, ch, sp, f, s, p)
                                                          for f in FILTER
                                                          for s in STRIDE
                                                          for p in PADDING]:
-    bench_configs.append(triton.testing.Benchmark(
-        x_names=["kernel"],
-        x_vals=["autotuned"],
-        line_arg="provider",
-        line_vals=["gluon", "torch"],
-        line_names=["Gluon (autotuned)", "PyTorch"],
-        styles=[("green", "-"), ("blue", "-")],
-        ylabel="TFLOPS",
-        plot_name=f"Dgrad N={N} Ci={Ci} Co={Co} H={H} W={W} R={R} S={S} stride={stride_val} pad={pad_val}",
-        args={
-            "N": N, "H": H, "W": W, "Ci": Ci, "Co": Co,
-            "R": R, "S": S, "stride_val": stride_val, "pad_val": pad_val,
-        },
-    ))
+    bench_configs.append(
+        triton.testing.Benchmark(
+            x_names=["kernel"],
+            x_vals=["autotuned"],
+            line_arg="provider",
+            line_vals=["gluon", "torch"],
+            line_names=["Gluon (autotuned)", "PyTorch"],
+            styles=[("green", "-"), ("blue", "-")],
+            ylabel="TFLOPS",
+            plot_name=f"Dgrad N={N} Ci={Ci} Co={Co} H={H} W={W} R={R} S={S} stride={stride_val} pad={pad_val}",
+            args={
+                "N": N,
+                "H": H,
+                "W": W,
+                "Ci": Ci,
+                "Co": Co,
+                "R": R,
+                "S": S,
+                "stride_val": stride_val,
+                "pad_val": pad_val,
+            },
+        ))
 
 
 @triton.testing.perf_report(bench_configs)

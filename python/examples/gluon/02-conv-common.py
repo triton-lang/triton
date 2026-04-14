@@ -8,7 +8,6 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.hopper import mbarrier
 
-
 TORCH_GEMM_DTYPE = torch.bfloat16
 GL_GEMM_DTYPE = gl.bfloat16
 
@@ -36,9 +35,7 @@ def maybe_pad_channel_dims_for_tma(*tensors, alignment_bytes=16):
 
     elem_bytes = tensors[0].element_size()
     if alignment_bytes % elem_bytes != 0:
-        raise ValueError(
-            f"alignment_bytes={alignment_bytes} must be divisible by element size {elem_bytes}"
-        )
+        raise ValueError(f"alignment_bytes={alignment_bytes} must be divisible by element size {elem_bytes}")
 
     orig_channels = tensors[0].shape[-1]
     for tensor in tensors[1:]:

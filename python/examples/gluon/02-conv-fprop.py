@@ -57,7 +57,6 @@ is_cuda = _conv_common.is_cuda
 maybe_pad_ci_for_tma = _conv_common.maybe_pad_channel_dims_for_tma
 normalize_2d = _conv_common.normalize_2d
 
-
 # ===-----------------------------------------------------------------------===#
 # Convolution Configuration
 # ===-----------------------------------------------------------------------===#
@@ -420,11 +419,11 @@ def conv2d_get_configs(pre_hook=None):
         )
         for block_m in (64, 128)
         for block_n in (8, 32, 128, 256)
-        for block_k in (64,)
-        for group_size_m in (4,)
+        for block_k in (64, )
+        for group_size_m in (4, )
         for num_buffers in (3, 4, 5)
-        for num_acc_buffers in (2,)
-        for num_warps in (4,)
+        for num_acc_buffers in (2, )
+        for num_warps in (4, )
     ]
 
 
@@ -448,7 +447,6 @@ conv2d_im2col_autotuned_kernel = triton.autotune(
     key=["out_h", "out_w", "stride_h", "stride_w"],
 )(conv2d_im2col_kernel)
 
-
 # ===-----------------------------------------------------------------------===#
 # Host-Side Entry Point
 # ===-----------------------------------------------------------------------===#
@@ -460,8 +458,7 @@ def _prepare_conv2d_inputs(input_tensor, weight_tensor, stride, padding):
     assert Ci == Ci_w, "Input and weight channel dimensions must match"
     if input_tensor.dtype != TORCH_GEMM_DTYPE or weight_tensor.dtype != TORCH_GEMM_DTYPE:
         raise ValueError(
-            f"conv2d_im2col expects bfloat16 input/weight tensors, got {input_tensor.dtype} and {weight_tensor.dtype}"
-        )
+            f"conv2d_im2col expects bfloat16 input/weight tensors, got {input_tensor.dtype} and {weight_tensor.dtype}")
     stride_h, stride_w = normalize_2d(stride, "stride")
     pad_h, pad_w = normalize_2d(padding, "padding")
     if stride_h <= 0 or stride_w <= 0:
@@ -527,9 +524,10 @@ def _make_conv2d_descriptors(input_tensor, weight_tensor, out_h, out_w, stride_h
 
 
 def _make_grid(num_sms, M_GEMM, N_GEMM):
+
     def grid(meta):
         num_tiles = triton.cdiv(M_GEMM, meta["BLOCK_M"]) * triton.cdiv(N_GEMM, meta["BLOCK_N"])
-        return (min(num_sms, num_tiles),)
+        return (min(num_sms, num_tiles), )
 
     return grid
 
@@ -651,8 +649,7 @@ def _make_conv2d_im2col_fixed_kernel_meta(num_buffers, num_warps):
     }
 
 
-def conv2d_im2col_fixed(input_tensor, weight_tensor, stride=1, padding=0,
-                        num_buffers=3, num_warps=4):
+def conv2d_im2col_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=3, num_warps=4):
     """Fixed-config fprop entrypoint used for CI and debugging.
 
     Runs the kernel with a fixed supported tile shape instead of autotuning.
@@ -732,9 +729,8 @@ def _assert_conv2d_correct(conv_fn, N, Ci, H, W, Co, R, S, stride, padding, **kw
       for Ci, Co in ((384, 384), (416, 416))
       for R, S in ((3, 3), (4, 4), (5, 5))
       for stride in (1, 2)
-      for padding in (0, 1)],
-    (conv2d_im2col_fixed, 1, 96, 1, 8, 128, 1, 2, (1, 2), 0),  # asymmetric stride
-    (conv2d_im2col_fixed, 16, 5, 32, 32, 96, 3, 3, 1, 1),      # padded channels
+      for padding in (0, 1)], (conv2d_im2col_fixed, 1, 96, 1, 8, 128, 1, 2, (1, 2), 0),  # asymmetric stride
+    (conv2d_im2col_fixed, 16, 5, 32, 32, 96, 3, 3, 1, 1),  # padded channels
 ])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell GPU (SM 10.x)")
 def test_op(conv_fn, N, Ci, H, W, Co, R, S, stride, padding):
@@ -779,20 +775,28 @@ for N, (Ci, Co), (H, W), (R, S), stride_val, pad_val in [(N, ch, sp, f, s, p)
                                                          for f in FILTER
                                                          for s in STRIDE
                                                          for p in PADDING]:
-    bench_configs.append(triton.testing.Benchmark(
-        x_names=["kernel"],
-        x_vals=["autotuned"],
-        line_arg="provider",
-        line_vals=["gluon", "torch"],
-        line_names=["Gluon (autotuned)", "PyTorch"],
-        styles=[("green", "-"), ("blue", "-")],
-        ylabel="TFLOPS",
-        plot_name=f"Conv2d N={N} Ci={Ci} Co={Co} H={H} W={W} R={R} S={S} stride={stride_val} pad={pad_val}",
-        args={
-            "N": N, "H": H, "W": W, "Ci": Ci, "Co": Co,
-            "R": R, "S": S, "stride_val": stride_val, "pad_val": pad_val,
-        },
-    ))
+    bench_configs.append(
+        triton.testing.Benchmark(
+            x_names=["kernel"],
+            x_vals=["autotuned"],
+            line_arg="provider",
+            line_vals=["gluon", "torch"],
+            line_names=["Gluon (autotuned)", "PyTorch"],
+            styles=[("green", "-"), ("blue", "-")],
+            ylabel="TFLOPS",
+            plot_name=f"Conv2d N={N} Ci={Ci} Co={Co} H={H} W={W} R={R} S={S} stride={stride_val} pad={pad_val}",
+            args={
+                "N": N,
+                "H": H,
+                "W": W,
+                "Ci": Ci,
+                "Co": Co,
+                "R": R,
+                "S": S,
+                "stride_val": stride_val,
+                "pad_val": pad_val,
+            },
+        ))
 
 
 @triton.testing.perf_report(bench_configs)
@@ -807,8 +811,16 @@ def bench(N, H, W, Ci, Co, R, S, stride_val, pad_val, kernel, provider):
         raise ValueError(f"Unsupported provider: {provider}")
 
     return _benchmark_tflops(
-        fn, N=N, H=H, W=W, Ci=Ci, Co=Co, R=R, S=S,
-        stride_val=stride_val, pad_val=pad_val,
+        fn,
+        N=N,
+        H=H,
+        W=W,
+        Ci=Ci,
+        Co=Co,
+        R=R,
+        S=S,
+        stride_val=stride_val,
+        pad_val=pad_val,
     )
 
 

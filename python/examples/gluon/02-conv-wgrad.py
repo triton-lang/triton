@@ -82,7 +82,6 @@ normalize_2d = _conv_common.normalize_2d
 #
 # MMA: acc[BLOCK_M, BLOCK_N] += A.permute(1,0) @ B
 
-
 # ===-----------------------------------------------------------------------===#
 # Wgrad Configuration
 # ===-----------------------------------------------------------------------===#
@@ -385,16 +384,25 @@ def conv2d_wgrad_kernel(
     """
     M_spatial = N * out_h * out_w
     config = WgradConfig(
-        N, Ci, Co, R, S,
+        N,
+        Ci,
+        Co,
+        R,
+        S,
         gl.to_tensor(out_h),
         gl.to_tensor(out_w),
-        gl.to_tensor(stride_h), gl.to_tensor(stride_w),
-        pad_h, pad_w,
+        gl.to_tensor(stride_h),
+        gl.to_tensor(stride_w),
+        pad_h,
+        pad_w,
         K_GEMM,
         M_spatial,
-        BLOCK_M, BLOCK_N, BLOCK_K,
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
         SPLIT_K,
-        num_buffers, num_warps,
+        num_buffers,
+        num_warps,
     )
 
     # a_bufs: grad_output tiles [BLOCK_K, BLOCK_M] (spatial × Co)
@@ -436,9 +444,9 @@ def conv2d_wgrad_kernel(
     )
 
     gl.warp_specialize([
-        (epilogue_partition, (p,)),
-        (mma_partition, (p,)),
-        (load_partition, (p,)),
+        (epilogue_partition, (p, )),
+        (mma_partition, (p, )),
+        (load_partition, (p, )),
     ], [1, 1], [24, 24])
 
 
@@ -463,11 +471,11 @@ def conv2d_wgrad_get_configs(pre_hook=None):
         )
         for block_m in (64, 128)
         for block_n in (64, 128, 256)
-        for block_k in (64,)
+        for block_k in (64, )
         for split_k in (1, 2, 4, 8, 16, 32)
         for num_buffers in (3, 4)
-        for num_acc_buffers in (2,)
-        for num_warps in (4,)
+        for num_acc_buffers in (2, )
+        for num_warps in (4, )
     ]
 
 
@@ -497,11 +505,9 @@ def _prepare_wgrad_problem(input_nhwc, grad_output_nhwc, R, S, stride, padding):
     expected_out_h = (H + 2 * pad_h - R) // stride_h + 1
     expected_out_w = (W + 2 * pad_w - S) // stride_w + 1
     if out_h != expected_out_h or out_w != expected_out_w:
-        raise ValueError(
-            "Grad-output shape mismatch: expected "
-            f"({N}, {expected_out_h}, {expected_out_w}, {Co}) from input/filter geometry, got "
-            f"({N2}, {out_h}, {out_w}, {Co})."
-        )
+        raise ValueError("Grad-output shape mismatch: expected "
+                         f"({N}, {expected_out_h}, {expected_out_w}, {Co}) from input/filter geometry, got "
+                         f"({N2}, {out_h}, {out_w}, {Co}).")
     if out_h <= 0 or out_w <= 0:
         raise ValueError("Invalid convolution geometry for wgrad")
 
@@ -516,8 +522,7 @@ def _allocate_wgrad_output(device, Co, K_GEMM):
     return torch.zeros((Co, K_GEMM), device=device, dtype=torch.float32)
 
 
-def _make_wgrad_descriptors(input_nhwc, grad_output_nhwc, Co,
-                            out_h, out_w, stride_h, stride_w, pad_h, pad_w,
+def _make_wgrad_descriptors(input_nhwc, grad_output_nhwc, Co, out_h, out_w, stride_h, stride_w, pad_h, pad_w,
                             input_block_shape, grad_out_block_shape):
     """Create TMA descriptors for wgrad im2col and grad_output."""
     # TMA im2col descriptor for the activation tensor [N, H, W, Ci] in NHWC.
@@ -548,6 +553,7 @@ def _make_wgrad_descriptors(input_nhwc, grad_output_nhwc, Co,
 
 
 def _make_grid(num_sms, M_spatial, Co, Ci, R, S):
+
     def grid(meta):
         co_blocks = triton.cdiv(Co, meta["BLOCK_M"])
         ci_blocks = triton.cdiv(Ci, meta["BLOCK_N"])
@@ -555,7 +561,7 @@ def _make_grid(num_sms, M_spatial, Co, Ci, R, S):
         k_iters_per_split = triton.cdiv(total_k_iters, meta["SPLIT_K"])
         active_split_k = triton.cdiv(total_k_iters, k_iters_per_split)
         total_tiles = co_blocks * R * S * ci_blocks * active_split_k
-        return (min(num_sms, total_tiles),)
+        return (min(num_sms, total_tiles), )
 
     return grid
 
@@ -573,10 +579,8 @@ def _get_safe_wgrad_active_split_k(M_spatial, Co, K_GEMM, kernel_meta):
         # Very large workspaces can exceed the addressing range supported by the generated code.
         workspace_elems = active_split_k * Co * K_GEMM
         if workspace_elems > (2**31 - 1):
-            raise ValueError(
-                "wgrad split-K workspace exceeds safe indexing range: "
-                f"active_split_k={active_split_k}, Co={Co}, K_GEMM={K_GEMM}"
-            )
+            raise ValueError("wgrad split-K workspace exceeds safe indexing range: "
+                             f"active_split_k={active_split_k}, Co={Co}, K_GEMM={K_GEMM}")
     return active_split_k
 
 
@@ -753,9 +757,8 @@ def _select_wgrad_kernel_meta(
     K_GEMM,
     num_sms,
 ):
-    cache_key = _make_wgrad_autotune_key(
-        input_nhwc.device, num_sms, N, Ci, Co, R, S, out_h, out_w, stride_h, stride_w, pad_h, pad_w
-    )
+    cache_key = _make_wgrad_autotune_key(input_nhwc.device, num_sms, N, Ci, Co, R, S, out_h, out_w, stride_h, stride_w,
+                                         pad_h, pad_w)
     cached = _wgrad_autotune_cache.get(cache_key)
     if cached is not None:
         return dict(cached)
@@ -962,8 +965,7 @@ def _make_wgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps):
     }
 
 
-def conv2d_wgrad_fixed(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0,
-                       num_buffers=2, num_warps=4, SPLIT_K=1):
+def conv2d_wgrad_fixed(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, num_buffers=2, num_warps=4, SPLIT_K=1):
     """Fixed-config wgrad entrypoint used for CI and debugging.
 
     Runs the kernel with a fixed supported tile shape instead of autotuning,
@@ -1040,8 +1042,8 @@ def _get_wgrad_launch_metadata_autotune(input_nhwc, grad_output_nhwc, R, S, stri
     }
 
 
-def _get_wgrad_launch_metadata_fixed(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0,
-                                     SPLIT_K=1, num_buffers=2, num_warps=4):
+def _get_wgrad_launch_metadata_fixed(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, SPLIT_K=1, num_buffers=2,
+                                     num_warps=4):
     (input_nhwc, grad_output_nhwc, _Ci_orig, N, _Ci, _Co,
      out_h, out_w, _stride_h, _stride_w, _pad_h, _pad_w, _K_GEMM) = \
         _prepare_wgrad_problem(input_nhwc, grad_output_nhwc, R, S, stride, padding)
@@ -1068,18 +1070,25 @@ def _get_wgrad_launch_metadata_fixed(input_nhwc, grad_output_nhwc, R, S, stride=
     }
 
 
-def get_conv2d_wgrad_profile_metadata(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, *,
-                                      mode="autotune",
+def get_conv2d_wgrad_profile_metadata(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, *, mode="autotune",
                                       SPLIT_K=1, num_buffers=2, num_warps=4):
     if mode == "autotune":
         return _get_wgrad_launch_metadata_autotune(
-            input_nhwc, grad_output_nhwc, R, S,
-            stride=stride, padding=padding,
+            input_nhwc,
+            grad_output_nhwc,
+            R,
+            S,
+            stride=stride,
+            padding=padding,
         )
     if mode == "fixed":
         return _get_wgrad_launch_metadata_fixed(
-            input_nhwc, grad_output_nhwc, R, S,
-            stride=stride, padding=padding,
+            input_nhwc,
+            grad_output_nhwc,
+            R,
+            S,
+            stride=stride,
+            padding=padding,
             SPLIT_K=SPLIT_K,
             num_buffers=num_buffers,
             num_warps=num_warps,
@@ -1088,11 +1097,9 @@ def get_conv2d_wgrad_profile_metadata(input_nhwc, grad_output_nhwc, R, S, stride
 
 
 def format_conv2d_wgrad_profile_metadata(metadata):
-    return (
-        f"selected_split_k={metadata['selected_split_k']}, "
-        f"active_split_k={metadata['active_split_k']}, "
-        f"reduction={'yes' if metadata['uses_reduction'] else 'no'}"
-    )
+    return (f"selected_split_k={metadata['selected_split_k']}, "
+            f"active_split_k={metadata['active_split_k']}, "
+            f"reduction={'yes' if metadata['uses_reduction'] else 'no'}")
 
 
 # ===-----------------------------------------------------------------------===#
@@ -1132,10 +1139,9 @@ def _assert_wgrad_correct(wgrad_fn, N, Ci, H, W, Co, R, S, stride, padding, **kw
       for Ci, Co in ((128, 128), (384, 384), (128, 384))
       for R, S in ((1, 1), (2, 2), (3, 3), (1, 3))
       for stride in (1, 2, 3)
-      for padding in (0, 1)],
-    (conv2d_wgrad_fixed, 16, 5, 32, 32, 96, 3, 3, 1, 1),             # padded channels
-    (conv2d_wgrad_fixed, 16, 96, 1, 8, 128, 1, 2, (1, 2), 0),        # asymmetric stride
-    (conv2d_wgrad_fixed, 16, 512, 2, 2, 768, 2, 2, (2, 2), 0),       # small spatial
+      for padding in (0, 1)], (conv2d_wgrad_fixed, 16, 5, 32, 32, 96, 3, 3, 1, 1),  # padded channels
+    (conv2d_wgrad_fixed, 16, 96, 1, 8, 128, 1, 2, (1, 2), 0),  # asymmetric stride
+    (conv2d_wgrad_fixed, 16, 512, 2, 2, 768, 2, 2, (2, 2), 0),  # small spatial
 ])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell GPU (SM 10.x)")
 def test_op(wgrad_fn, N, Ci, H, W, Co, R, S, stride, padding):
@@ -1145,7 +1151,6 @@ def test_op(wgrad_fn, N, Ci, H, W, Co, R, S, stride, padding):
 # ===-----------------------------------------------------------------------===#
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
-
 
 BATCH = [128]
 CHANNELS = [(384, 384)]
@@ -1182,20 +1187,28 @@ for N, (Ci, Co), (H, W), (R, S), stride_val, pad_val in [(N, ch, sp, f, s, p)
                                                          for f in FILTER
                                                          for s in STRIDE
                                                          for p in PADDING]:
-    bench_configs.append(triton.testing.Benchmark(
-        x_names=["kernel"],
-        x_vals=["autotuned"],
-        line_arg="provider",
-        line_vals=["gluon", "torch"],
-        line_names=["Gluon (autotuned)", "PyTorch"],
-        styles=[("green", "-"), ("blue", "-")],
-        ylabel="TFLOPS",
-        plot_name=f"Wgrad N={N} Ci={Ci} Co={Co} H={H} W={W} R={R} S={S} stride={stride_val} pad={pad_val}",
-        args={
-            "N": N, "H": H, "W": W, "Ci": Ci, "Co": Co,
-            "R": R, "S": S, "stride_val": stride_val, "pad_val": pad_val,
-        },
-    ))
+    bench_configs.append(
+        triton.testing.Benchmark(
+            x_names=["kernel"],
+            x_vals=["autotuned"],
+            line_arg="provider",
+            line_vals=["gluon", "torch"],
+            line_names=["Gluon (autotuned)", "PyTorch"],
+            styles=[("green", "-"), ("blue", "-")],
+            ylabel="TFLOPS",
+            plot_name=f"Wgrad N={N} Ci={Ci} Co={Co} H={H} W={W} R={R} S={S} stride={stride_val} pad={pad_val}",
+            args={
+                "N": N,
+                "H": H,
+                "W": W,
+                "Ci": Ci,
+                "Co": Co,
+                "R": R,
+                "S": S,
+                "stride_val": stride_val,
+                "pad_val": pad_val,
+            },
+        ))
 
 
 @triton.testing.perf_report(bench_configs)
@@ -1208,7 +1221,9 @@ def bench(N, H, W, Ci, Co, R, S, stride_val, pad_val, kernel, provider):
     elif provider == "torch":
         w_nchw = torch.randn((Co, Ci, R, S), device="cuda", dtype=TORCH_GEMM_DTYPE)
         fn = lambda: torch.ops.aten.convolution_backward(
-            grad_out_nchw, x_nchw, w_nchw,
+            grad_out_nchw,
+            x_nchw,
+            w_nchw,
             bias_sizes=None,
             stride=[stride_val, stride_val],
             padding=[pad_val, pad_val],
@@ -1222,8 +1237,16 @@ def bench(N, H, W, Ci, Co, R, S, stride_val, pad_val, kernel, provider):
         raise ValueError(f"Unsupported provider: {provider}")
 
     return _benchmark_tflops(
-        fn, N=N, H=H, W=W, Ci=Ci, Co=Co, R=R, S=S,
-        stride_val=stride_val, pad_val=pad_val,
+        fn,
+        N=N,
+        H=H,
+        W=W,
+        Ci=Ci,
+        Co=Co,
+        R=R,
+        S=S,
+        stride_val=stride_val,
+        pad_val=pad_val,
     )
 
 
