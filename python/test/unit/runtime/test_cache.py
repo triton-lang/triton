@@ -588,7 +588,7 @@ def test_jit_warmup_cache(device) -> None:
         32,
     ]
     device = getattr(torch, device).current_device()
-    assert len(kernel_add.device_caches[device][0]) == 0
+    assert len(kernel_add._get_device_cache(device)[0]) == 0
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.device_caches[device][0]) == 1
     kernel_add.warmup(*args, grid=(1, ))
@@ -605,7 +605,7 @@ def test_jit_debug(device) -> None:
 
     device = getattr(torch, device).current_device()
     tmp = torch.tensor([1], dtype=torch.int32, device=device)
-    assert len(kernel.device_caches[device][0]) == 0
+    assert len(kernel._get_device_cache(device)[0]) == 0
     kernel[(1, )](tmp, debug=False)
     assert len(kernel.device_caches[device][0]) == 1
     kernel[(1, )](tmp, debug=True)
@@ -627,7 +627,7 @@ def test_jit_noinline(device) -> None:
         add_fn(a, b, o, N)
 
     device = getattr(torch, device).current_device()
-    assert len(kernel_add_device.device_caches[device][0]) == 0
+    assert len(kernel_add_device._get_device_cache(device)[0]) == 0
     kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add_device.device_caches[device][0]) == 1
     bins = list(kernel_add_device.device_caches[device][0].values())
@@ -729,7 +729,7 @@ def test_preload_constexpr_tuple_arg(device, fresh_triton_cache, fresh_knobs) ->
         specialization_data = kwargs["compile"]["specialization_data"]
 
     fresh_knobs.runtime.jit_cache_hook = cache_hook
-    tuple_call_kernel.device_caches[device][0].clear()
+    tuple_call_kernel._get_device_cache(device)[0].clear()
     pre_compile = tuple_call_kernel.warmup(torch.int32, offsets, grid=(1, ))
     hash = pre_compile.hash
     assert specialization_data is not None
