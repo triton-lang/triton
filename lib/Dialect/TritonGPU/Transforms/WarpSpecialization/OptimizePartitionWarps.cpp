@@ -200,7 +200,9 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
     region->walk([minWarps = &minWarps](Operation *op) {
       // Some instructions have critical throughput if have low register usage.
       // Make sure there are enough warps for these ops to execute quickly.
-      if (isa<ttng::TMAOpInterface>(op))
+      // Heuristic: We don't add TMAStoreLikeOps so that they stay in the main
+      // partition
+      if (isa<ttng::TMALoadLikeOpInterface>(op))
         *minWarps = 2;
       // TMEM ops require at least 4 warps to be able to read all lanes.
       else if (isa<ttng::TMEMLoadOp, ttng::TMEMStoreOp, ttng::TMEMAllocOp>(op))
