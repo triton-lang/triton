@@ -14,27 +14,6 @@ if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
 endif()
 
-# Auto-detect rocprofiler-sdk: only the SDK profiler needs these headers
-# (HIP and HSA headers are bundled in third_party/amd/backend/include/).
-if(NOT DEFINED PROTON_BUILD_ROCPROFILER_SDK)
-  if(ROCPROFILER_SDK_INCLUDE_DIR AND
-     EXISTS "${ROCPROFILER_SDK_INCLUDE_DIR}/rocprofiler-sdk/agent.h")
-    set(PROTON_BUILD_ROCPROFILER_SDK ON)
-  else()
-    set(PROTON_BUILD_ROCPROFILER_SDK OFF)
-  endif()
-endif()
-
-if(PROTON_BUILD_ROCPROFILER_SDK)
-  if(NOT ROCPROFILER_SDK_INCLUDE_DIR)
-    message(FATAL_ERROR
-      "PROTON_BUILD_ROCPROFILER_SDK is ON but ROCPROFILER_SDK_INCLUDE_DIR is not defined")
-  endif()
-  message(STATUS "Proton: rocprofiler-sdk profiler enabled")
-else()
-  message(STATUS "Proton: rocprofiler-sdk profiler disabled (headers not found)")
-endif()
-
 # ============ Dependencies =============
 find_package(Python3 REQUIRED Interpreter Development.Module)
 find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
@@ -53,15 +32,6 @@ function(add_proton_library name)
     SYSTEM PRIVATE
       "${ROCM_INCLUDE_DIR}"
   )
-
-  if(PROTON_BUILD_ROCPROFILER_SDK)
-    # ROCPROFILER_SDK_INCLUDE_DIR listed first so its headers take priority
-    # over any older versions in ROCM_INCLUDE_DIR.
-    target_include_directories(${name}
-      SYSTEM BEFORE PRIVATE
-        "${ROCPROFILER_SDK_INCLUDE_DIR}"
-    )
-  endif()
 
   target_include_directories(${name}
     PRIVATE

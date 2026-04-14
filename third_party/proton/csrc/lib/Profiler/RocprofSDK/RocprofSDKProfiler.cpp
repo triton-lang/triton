@@ -17,8 +17,10 @@
 #include "rocprofiler-sdk/callback_tracing.h"
 #include "rocprofiler-sdk/hip/api_args.h"
 #include "rocprofiler-sdk/hip/runtime_api_id.h"
+#include "rocprofiler-sdk/marker/api_id.h"
 #include "rocprofiler-sdk/registration.h"
 
+#include <atomic>
 #include <dlfcn.h>
 #include <iostream>
 #include <limits>
@@ -56,6 +58,7 @@ struct RocprofilerRuntimeState {
   bool configured{false};
   bool codeObjectStarted{false};
   bool profilingStarted{false};
+  std::atomic<bool> nvtxEnabled{false};
   RocprofSDKProfiler::RocprofSDKProfilerPimpl *pimpl{nullptr};
 };
 
@@ -366,6 +369,8 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
 
   static void hipRuntimeCallback(rocprofiler_callback_tracing_record_t record,
                                  rocprofiler_user_data_t *userData, void *arg);
+  static void markerCallback(rocprofiler_callback_tracing_record_t record,
+                             rocprofiler_user_data_t *userData, void *arg);
   static void roctxCallback(uint32_t operationId, void *data);
   static void codeObjectCallback(rocprofiler_callback_tracing_record_t record,
                                  rocprofiler_user_data_t *userData, void *arg);
@@ -572,8 +577,36 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
   }
 }
 
-// ---- ROCTx marker callback via libroctx64.so ----
+// ---- ROCTx marker callback via rocprofiler-sdk ----
+//
+// torch preloads both librocprofiler-sdk-roctx.so and libroctx64.so with
+// RTLD_GLOBAL. Because the SDK's roctx is loaded first, the global linker
+// resolves roctxRangePushA to the SDK's version. We therefore intercept
+// markers through the SDK's own callback tracing (MARKER_CORE_API).
 
+void RocprofSDKProfiler::RocprofSDKProfilerPimpl::markerCallback(
+    rocprofiler_callback_tracing_record_t record,
+    rocprofiler_user_data_t *userData, void *arg) {
+  if (record.kind != ROCPROFILER_CALLBACK_TRACING_MARKER_CORE_API)
+    return;
+  if (record.phase != ROCPROFILER_CALLBACK_PHASE_ENTER)
+    return;
+  if (!getRuntimeState().nvtxEnabled.load(std::memory_order_relaxed))
+    return;
+
+  auto op = static_cast<rocprofiler_tracing_operation_t>(record.operation);
+  if (op == ROCPROFILER_MARKER_CORE_API_ID_roctxRangePushA) {
+    auto *payload =
+        static_cast<rocprofiler_callback_tracing_marker_api_data_t *>(
+            record.payload);
+    threadState.enterScope(payload->args.roctxRangePushA.message);
+  } else if (op == ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop) {
+    threadState.exitScope();
+  }
+}
+
+// Legacy libroctx64.so callback — kept as fallback for environments where
+// librocprofiler-sdk-roctx.so is not loaded (e.g. bare ROCm without TheRock).
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::roctxCallback(
     uint32_t operationId, void *data) {
   auto *apiData = static_cast<RoctxApiData *>(data);
@@ -740,10 +773,24 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       &RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback,
       nullptr);
 
-  // Marker tracing (ROCTx) is handled via direct roctxRegisterTracerCallback
-  // in doStart()/doStop(), since rocprofiler-sdk's marker callback tracing
-  // requires its replacement roctx library which isn't available with
-  // late-start (force_configure).
+  // Marker tracing: always configure MARKER_CORE_API so we intercept roctx
+  // calls that go through librocprofiler-sdk-roctx.so (TheRock/torch
+  // environments where the SDK's roctx interposes the global symbol).
+  // This is configured unconditionally because force_configure may run before
+  // torch loads the SDK's roctx library, and we can't add tracing services
+  // after startContext. If the SDK's roctx isn't loaded, these callbacks
+  // simply never fire. The legacy libroctx64.so callback registration in
+  // doStart()/doStop() handles environments where only libroctx64.so is used.
+  {
+    constexpr rocprofiler_tracing_operation_t kMarkerOps[] = {
+        ROCPROFILER_MARKER_CORE_API_ID_roctxRangePushA,
+        ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop,
+    };
+    rocprofiler::configureCallbackTracingService<true>(
+        state->profilingContext, ROCPROFILER_CALLBACK_TRACING_MARKER_CORE_API,
+        kMarkerOps, std::size(kMarkerOps),
+        &RocprofSDKProfiler::RocprofSDKProfilerPimpl::markerCallback, nullptr);
+  }
 
   size_t watermark = BufferSize - (BufferSize / 8);
   rocprofiler::createBuffer<true>(
@@ -826,7 +873,9 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
     // that may have accumulated between the previous doStop() and now.
     rocprofiler::flushBuffer<true>(state.kernelBuffer);
   }
-  if (getBoolEnv("TRITON_ENABLE_NVTX", true))
+  bool nvtx = getBoolEnv("TRITON_ENABLE_NVTX", true);
+  state.nvtxEnabled.store(nvtx, std::memory_order_relaxed);
+  if (nvtx)
     registerRoctxCallback(true);
 }
 
@@ -839,6 +888,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doFlush() {
 }
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
+  auto &state = getRuntimeState();
+  state.nvtxEnabled.store(false, std::memory_order_relaxed);
   registerRoctxCallback(false);
   // Keep the profiling context running. rocprofiler-sdk does not reliably
   // re-intercept HIP runtime API calls after a stopContext→startContext

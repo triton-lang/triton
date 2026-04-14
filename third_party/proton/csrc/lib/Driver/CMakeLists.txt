@@ -1,4 +1,4 @@
-set(_driver_sources
+add_proton_library(ProtonDriver
   Device.cpp
   GPU/CudaApi.cpp
   GPU/CuptiApi.cpp
@@ -6,12 +6,5 @@ set(_driver_sources
   GPU/HsaApi.cpp
   GPU/NvtxApi.cpp
   GPU/RoctracerApi.cpp
+  GPU/RocprofApi.cpp
 )
-
-if(PROTON_BUILD_ROCPROFILER_SDK)
-  list(APPEND _driver_sources
-    GPU/RocprofApi.cpp
-  )
-endif()
-
-add_proton_library(ProtonDriver ${_driver_sources})
