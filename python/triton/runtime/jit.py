@@ -685,6 +685,17 @@ class JITFunction(JITCallable, KernelInterface[T]):
         assert callable(hook)
         self.pre_run_hooks.append(hook)
 
+    def _get_compile_lock(self, device):
+        lock = self._compile_locks.get(device)
+        if lock is not None:
+            return lock
+        with self._compile_locks_lock:
+            lock = self._compile_locks.get(device)
+            if lock is None:
+                lock = threading.Lock()
+                self._compile_locks[device] = lock
+            return lock
+
     def create_binder(self):
         """
         Precompute as much as possible.
@@ -761,12 +772,15 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
         # Kernel is not cached; we have to compile.
         if kernel is None:
-            options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
-                                                                    options)
+            with self._get_compile_lock(device):
+                kernel = kernel_cache.get(key, None)
+                if kernel is None:
+                    options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
+                                                                            options)
 
-            kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
-            if kernel is None:
-                return None
+                    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+                    if kernel is None:
+                        return None
 
         # Check that used global values have not changed.
         not_present = object()
@@ -815,6 +829,11 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # cache of just-in-time compiled kernels
         self.device_caches = {}
         self._device_caches_lock = threading.Lock()
+        # Per-device locks serializing the kernel_cache check-then-compile
+        # sequence in run() so two threads launching the same kernel on the
+        # same device do not both compile and write kernel_cache[key].
+        self._compile_locks = {}
+        self._compile_locks_lock = threading.Lock()
 
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
@@ -836,20 +855,26 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
     def __getstate__(self):
         # JITFunction is pickled into torch.compile's (possibly cross-process)
-        # Inductor static-autotuner cache. _device_caches_lock is not picklable,
-        # and device_caches holds live per-process compiled state (binders,
-        # compiled kernels) that must not be serialized. Drop both here;
-        # __setstate__ rebuilds them. (The upstream _hash_lock is stripped
-        # separately by torch's CachingAutotuner.prepare_for_pickle.)
+        # Inductor static-autotuner cache. The locks (_device_caches_lock,
+        # _compile_locks_lock) and the per-device locks stored in
+        # _compile_locks are not picklable, and device_caches holds live
+        # per-process compiled state (binders, compiled kernels) that must not
+        # be serialized. Drop them here; __setstate__ rebuilds them. (The
+        # upstream _hash_lock is stripped separately by torch's
+        # CachingAutotuner.prepare_for_pickle.)
         state = self.__dict__.copy()
         state["_device_caches_lock"] = None
         state["device_caches"] = {}
+        state["_compile_locks_lock"] = None
+        state["_compile_locks"] = {}
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
         self._device_caches_lock = threading.Lock()
         self.device_caches = {}
+        self._compile_locks_lock = threading.Lock()
+        self._compile_locks = {}
 
     def preload(self, specialization_data):
         import json
@@ -927,7 +952,11 @@ class JITFunction(JITCallable, KernelInterface[T]):
                                 options, [attrs], warmup)
 
             kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
-            kernel_cache[key] = kernel
+            # Use setdefault: if finalize_compile already ran on another
+            # thread between submit() returning and this write, it has
+            # already stored the real kernel and we must not clobber it
+            # with the FutureKernel placeholder.
+            kernel = kernel_cache.setdefault(key, kernel)
         else:
             kernel = self.compile(src, target=target, options=options.__dict__)
             kernel_cache[key] = kernel
