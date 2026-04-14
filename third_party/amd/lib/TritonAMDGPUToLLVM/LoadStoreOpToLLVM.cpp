@@ -820,12 +820,11 @@ struct BufferLoadToLocalOpConversion
 
       auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, cond);
 
-      auto *bufferLoadToLds = bufferEmitter.emitLoadToLds(
+      auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
           vecTy, vecBytesVal, rsrcDesc, offsetElem, shmemAddr,
           hasOther ? b.true_val() : maybeSwizzledMaskElem, op.getCache());
       if (targetInfo.requiresAliasInfoForAsyncOps())
-        AMD::addAsyncCopyAliasScope(
-            cast<LLVM::AliasAnalysisOpInterface>(bufferLoadToLds));
+        AMD::addAsyncCopyAliasScope(bufferLoadToLds);
 
       if (hasOther) {
         emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy, maskElem,

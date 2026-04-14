@@ -122,9 +122,10 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   return data;
 }
 
-Operation *BufferEmitter::emitLoadToLds(Type type, Value byteWidth,
-                                        Value rsrcDesc, Value offset, Value dst,
-                                        Value pred, triton::CacheModifier cm) {
+ROCDL::RawPtrBufferLoadAsyncLdsOp
+BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
+                             Value offset, Value dst, Value pred,
+                             triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
