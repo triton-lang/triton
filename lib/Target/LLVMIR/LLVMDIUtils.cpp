@@ -126,7 +126,6 @@ std::optional<unsigned> LLVMDIUtils::calcBitWidth(mlir::Type type) {
     auto vectorType = dyn_cast<mlir::VectorType>(type);
     llvm::ArrayRef<int64_t> shape = vectorType.getShape();
     mlir::Type elementType = vectorType.getElementType();
-    llvm::ArrayRef<bool> scalableDims = vectorType.getScalableDims();
     unsigned size = 1;
     for (auto i : shape) {
       size *= i;

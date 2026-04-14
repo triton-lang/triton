@@ -1,12 +1,6 @@
 """
 Multi-head attention kernel in Gluon
 """
-# ruff: noqa: E402
-import hip
-
-# Needed for internal dev flow for now; will remove later
-hip.hip.hipInit(0)
-
 import os
 import sys
 import inspect

@@ -843,7 +843,6 @@ TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEM) {
 TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEMSwizzled) {
   int M = 16;
   int KPadded8b = 128;
-  int numFp4Elems = M * KPadded8b;
   int KPacked8b = KPadded8b / 2;
   int elemBitWidth = 8;
   int tileWidthBytes = 128;

@@ -94,7 +94,6 @@ void CircularLayoutParser::parseProfileEvents() {
 void CircularLayoutParser::parseSegment(
     int segmentByteSize, CircularLayoutParserResult::Trace &trace) {
 
-  auto state = ParseState::INIT;
   int idealSize = trace.count * kWordSize;
   int byteSize = std::min(idealSize, segmentByteSize);
   const int maxNumEntries = byteSize / (kWordSize * kWordsPerEntry);
@@ -200,7 +199,7 @@ proton::readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift) {
   assert(version == 1 && "Version mismatch");
   buffer.skip(8);
   uint32_t payloadOffset = decoder.decode<I32Entry>()->value;
-  uint32_t payloadSize = decoder.decode<I32Entry>()->value;
+  [[maybe_unused]] uint32_t payloadSize = decoder.decode<I32Entry>()->value;
   uint32_t device = decoder.decode<I32Entry>()->value;
   config.device = decodeDevice(device);
   config.numBlocks = decoder.decode<I32Entry>()->value;

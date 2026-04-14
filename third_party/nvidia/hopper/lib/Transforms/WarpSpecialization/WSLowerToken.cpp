@@ -27,7 +27,6 @@ namespace mlir {
 
 // Lower to use GetCanonicalWarpIdOp.
 // In Hopper, each task is a warpgroup consisting of 4 warps.
-static const int WARPS_PER_TASK = 4;
 static const int THREADS_PER_TASK = 128;
 
 Value getMBarrierPhaseBit(OpBuilder &builder, Operation *op,
@@ -174,7 +173,6 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
       // We need bufferFullArray and bufferEmptyArray.
       if (auto op = dyn_cast<ttnvws::ProducerAcquireOp>(user)) {
         Value bufferEmpty = extractBufferEmpty(loc, op.getIdx());
-        auto pOp = user->getParentOp();
         assert(user->hasAttr("async_task_id"));
         setAsyncTaskIds(bufferEmpty.getDefiningOp(), getAsyncTaskIds(user));
         processProducerAcquireOp(builder, op, bufferEmpty);
@@ -211,7 +209,6 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
     // and ConsumerReleaseOp.
     for (OpOperand &use : createTokenOp.getResult().getUses()) {
       Operation *user = use.getOwner();
-      auto loc = user->getLoc();
       builder.setInsertionPoint(user);
       bool handled = handleOneUser(user);
       if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(user)) {
