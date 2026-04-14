@@ -452,11 +452,14 @@ static LogicalResult verifyTMAMode(Operation *op, bool isIm2Col,
 
 bool AsyncTMAReduceOp::isSupportedReduceKind(DescriptorReduceKind kind,
                                              Type elementType) {
-  bool isInt32Or64 = elementType.isInteger(32) || elementType.isInteger(64);
+  bool isInt32 = elementType.isInteger(32);
+  bool isInt32Or64 = isInt32 || elementType.isInteger(64);
+  bool isNotSignedInt64 =
+      elementType.isInteger(64) && !elementType.isSignedInteger();
   bool isF16OrBF16 = elementType.isF16() || elementType.isBF16();
   switch (kind) {
   case DescriptorReduceKind::ADD:
-    return isInt32Or64 || elementType.isF32() || isF16OrBF16;
+    return isInt32 || isNotSignedInt64 || elementType.isF32() || isF16OrBF16;
   case DescriptorReduceKind::MIN:
   case DescriptorReduceKind::MAX:
     return isInt32Or64 || isF16OrBF16;
@@ -526,10 +529,11 @@ LogicalResult AsyncTMAReduceOp::verify() {
     return failure();
   if (failed(verifyAsyncTMAStoreOp(*this, getDesc(), srcType)))
     return failure();
-  if (!isSupportedReduceKind(getKind(), srcType.getElementType()))
+  Type elementType = getDesc().getType().getElementType();
+  if (!isSupportedReduceKind(getKind(), elementType))
     return emitOpError("unsupported reduce kind ")
            << stringifyDescriptorReduceKind(getKind()) << " for element type "
-           << srcType.getElementType();
+           << elementType;
   return success();
 }
 
