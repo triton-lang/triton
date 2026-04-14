@@ -1541,12 +1541,13 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
-              CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy) -> Value {
+              CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
+              bool skipBoundaryCheck) -> Value {
              auto descTy = cast<triton::TensorDescType>(desc.getType());
              auto resTy = descTy.getSignlessBlockType();
              return self.create<DescriptorLoadOp>(
-                 resTy, desc, indices, cacheModifier, evictionPolicy);
+                 resTy, desc, indices, cacheModifier, evictionPolicy,
+                 skipBoundaryCheck);
            })
       .def("create_descriptor_gather",
            [](TritonOpBuilder &self, Value desc, Value x_indices, Value y_index,
@@ -1556,8 +1557,10 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_descriptor_store",
            [](TritonOpBuilder &self, Value desc, Value value,
-              std::vector<Value> &indices) -> void {
-             self.create<DescriptorStoreOp>(desc, value, indices);
+              std::vector<Value> &indices,
+              bool skipBoundaryCheck) -> void {
+             self.create<DescriptorStoreOp>(desc, value, indices,
+                                            skipBoundaryCheck);
            })
       .def("create_descriptor_reduce",
            [](TritonOpBuilder &self, DescriptorReduceKind kind, Value desc,

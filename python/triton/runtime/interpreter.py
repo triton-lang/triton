@@ -725,7 +725,7 @@ class InterpreterBuilder:
         return desc
 
     def create_descriptor_load(self, desc: TensorDescHandle, indices: List[TensorHandle], cache_modifier,
-                               eviction_policy):
+                               eviction_policy, skip_boundary_check=False):
         assert isinstance(desc, TensorDescHandle)
         ptrs, mask = desc.materialize_pointers(indices)
         dtype_tt = ptrs.get_element_ty()
@@ -740,7 +740,8 @@ class InterpreterBuilder:
         return self.create_masked_load(ptrs, mask, other, cache_modifier=cache_modifier,
                                        eviction_policy=eviction_policy, is_volatile=False)
 
-    def create_descriptor_store(self, desc: TensorDescHandle, value: TensorHandle, indices: List[TensorHandle]):
+    def create_descriptor_store(self, desc: TensorDescHandle, value: TensorHandle, indices: List[TensorHandle],
+                                skip_boundary_check=False):
         ptrs, mask = desc.materialize_pointers(indices)
         return self.create_masked_store(ptrs, value, mask, None, None)
 

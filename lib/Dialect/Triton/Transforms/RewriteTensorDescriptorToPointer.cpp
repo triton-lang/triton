@@ -25,6 +25,8 @@
 #include <mlir/Pass/Pass.h>
 #include <mlir/Transforms/DialectConversion.h>
 
+#include "mlir/IR/Matchers.h"
+
 #include <iterator>
 
 namespace mlir::triton {
@@ -296,6 +298,27 @@ SmallVector<mlir::Value> castToI64(OpBuilder &builder,
   });
 }
 
+// When all offsets and shapes are compile-time constants and each
+// offset[i] + blockShape[i] <= shape[i], the access is fully in-bounds
+// and we can skip mask generation.
+bool isStaticallyInBounds(ArrayRef<std::int64_t> blockShape,
+                          ValueRange offsets, ValueRange shape) {
+  assert(blockShape.size() == offsets.size() &&
+         blockShape.size() == shape.size());
+  for (size_t i = 0; i < blockShape.size(); ++i) {
+    APInt offsetVal, shapeVal;
+    if (!matchPattern(offsets[i], m_ConstantInt(&offsetVal)) ||
+        !matchPattern(shape[i], m_ConstantInt(&shapeVal))) {
+      return false;
+    }
+    if (offsetVal.getSExtValue() < 0 ||
+        offsetVal.getSExtValue() + blockShape[i] > shapeVal.getSExtValue()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 struct RewriteMakeTensorDesc : OpConversionPattern<triton::MakeTensorDescOp> {
   using OpConversionPattern<triton::MakeTensorDescOp>::OpConversionPattern;
 
@@ -332,10 +355,18 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
     auto descTy = op.getDesc().getType();
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto offsets = castToI64(rewriter, op.getIndices());
-    auto other = generateOther(rewriter, loc, descTy, desc.paddingOption);
+
+    Value mask;
+    Value other;
+    if (!op.getSkipBoundaryCheck() &&
+        !isStaticallyInBounds(blockShape, offsets, desc.shape)) {
+      mask = generateMask(rewriter, loc, blockShape, desc, offsets);
+      other = generateOther(rewriter, loc, descTy, desc.paddingOption);
+    }
+
     auto newLoad = triton::LoadOp::create(
         rewriter, loc, generatePtr(rewriter, loc, blockShape, desc, offsets),
-        generateMask(rewriter, loc, blockShape, desc, offsets), other,
+        mask, other,
         triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL, false);
     newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
 
@@ -371,9 +402,15 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto offsets = castToI64(rewriter, op.getIndices());
 
+    Value mask;
+    if (!op.getSkipBoundaryCheck() &&
+        !isStaticallyInBounds(blockShape, offsets, desc.shape)) {
+      mask = generateMask(rewriter, loc, blockShape, desc, offsets);
+    }
+
     auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
         op, generatePtr(rewriter, loc, blockShape, desc, offsets), op.getSrc(),
-        generateMask(rewriter, loc, blockShape, desc, offsets),
+        mask,
         triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL);
     newStore->setAttrs(filterSegmentSizes(op->getAttrs()));
 

@@ -1422,24 +1422,30 @@ class tensor_descriptor_base(base_value):
         return str(self.type)
 
     @builtin
-    def load(self, offsets: Sequence[constexpr | tensor], _semantic=None) -> tensor:
+    def load(self, offsets: Sequence[constexpr | tensor], skip_boundary_check: bool = False, _semantic=None) -> tensor:
         """Load a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be filled with zeros.
 
+        :param skip_boundary_check: When True, skip generating boundary check masks
+            in backends that lower tensor descriptors to pointer arithmetic.
+            Set this when the caller guarantees the access is in-bounds.
         :note: Offset must be a multiple of 16-bytes
         """
-        return _semantic.descriptor_load(self, offsets, "", "")
+        return _semantic.descriptor_load(self, offsets, "", "", skip_boundary_check=skip_boundary_check)
 
     @builtin
-    def store(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
+    def store(self, offsets: Sequence[constexpr | tensor], value: tensor, skip_boundary_check: bool = False, _semantic=None) -> tensor:
         """Store a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be ignored.
 
+        :param skip_boundary_check: When True, skip generating boundary check masks
+            in backends that lower tensor descriptors to pointer arithmetic.
+            Set this when the caller guarantees the access is in-bounds.
         :note: Offset must be a multiple of 16-bytes
         """
-        return _semantic.descriptor_store(self, value, offsets)
+        return _semantic.descriptor_store(self, value, offsets, skip_boundary_check=skip_boundary_check)
 
     @builtin
     def atomic_add(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:

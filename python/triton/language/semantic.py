@@ -1054,14 +1054,14 @@ class TritonSemantic(Generic[TensorTy]):
         return ret
 
     def descriptor_load(self, desc: tl.tensor_descriptor_base, offsets, cache_modifier: str,
-                        eviction_policy: str) -> TensorTy:
+                        eviction_policy: str, skip_boundary_check: bool = False) -> TensorTy:
         assert isinstance(desc, tl.tensor_descriptor_base)
         ndim = len(desc.block_shape)
         assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
 
         offsets = self._convert_to_ir_values(offsets, require_i64=False)
         x = self.builder.create_descriptor_load(desc.handle, offsets, self._str_to_load_cache_modifier(cache_modifier),
-                                                self._str_to_eviction_policy(eviction_policy))
+                                                self._str_to_eviction_policy(eviction_policy), skip_boundary_check)
         return self.tensor(x, desc.block_type)
 
     def validate_store_like(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets) -> None:
@@ -1070,12 +1070,13 @@ class TritonSemantic(Generic[TensorTy]):
         assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
         assert value.shape == desc.block_shape
 
-    def descriptor_store(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets) -> TensorTy:
+    def descriptor_store(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets,
+                         skip_boundary_check: bool = False) -> TensorTy:
         self.validate_store_like(desc, value, offsets)
         # implicitly cast to the descriptor's type
         value = self.cast(value, desc.dtype)
         offsets = self._convert_to_ir_values(offsets, require_i64=False)
-        return self.tensor(self.builder.create_descriptor_store(desc.handle, value.handle, offsets), tl.void)
+        return self.tensor(self.builder.create_descriptor_store(desc.handle, value.handle, offsets, skip_boundary_check), tl.void)
 
     def descriptor_atomic_add(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets) -> TensorTy:
         self.validate_store_like(desc, value, offsets)
