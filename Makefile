@@ -8,6 +8,7 @@ BUILD_DIR := $(shell PYTHONPATH="$(ROOT_DIR)/python" $(PYTHON) -c 'from build_he
 INSTALL_DIR ?= $(dir $(BUILD_DIR))install
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
+PYTEST_UNIT_TIMING ?= --durations=50 --durations-min=1.0 --timeout=300 --timeout-method=thread
 LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project/build"
 NUM_PROCS ?= 8
 
@@ -33,19 +34,19 @@ test-cpp:
 
 .PHONY: test-unit
 test-unit: all
-	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*' --ignore=test_debug.py
-	$(PYTEST) -n $(NUM_PROCS) python/test/unit/test_debug.py
-	$(PYTEST) -n 6 python/triton_kernels/tests/
+	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) $(PYTEST_UNIT_TIMING) --ignore-glob='plugins/*' --ignore=test_debug.py
+	$(PYTEST) -n $(NUM_PROCS) $(PYTEST_UNIT_TIMING) python/test/unit/test_debug.py
+	$(PYTEST) -n 6 $(PYTEST_UNIT_TIMING) python/triton_kernels/tests/
 	# Run attention separately to avoid out of gpu memory
-	$(PYTEST) python/tutorials/06-fused-attention.py
+	$(PYTEST) $(PYTEST_UNIT_TIMING) python/tutorials/06-fused-attention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
-		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
+		$(PYTEST) $(PYTEST_UNIT_TIMING) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 	TRITON_PLUGIN_PATHS=python/triton/plugins/libTritonPluginsTestLib.so \
-		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
+		$(PYTEST) $(PYTEST_UNIT_TIMING) -vvv python/test/unit/plugins/test_plugin.py
 	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
-		$(PYTEST) -vvv python/test/unit/plugins/test_dialect_plugin.py
+		$(PYTEST) $(PYTEST_UNIT_TIMING) -vvv python/test/unit/plugins/test_dialect_plugin.py
 	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
-		$(PYTEST) -s -vvv python/test/unit/plugins/custom_ops.py
+		$(PYTEST) $(PYTEST_UNIT_TIMING) -s -vvv python/test/unit/plugins/custom_ops.py
 
 .PHONY: test-gluon
 test-gluon: all
