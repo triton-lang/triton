@@ -210,8 +210,8 @@ class AttentionConfig:
     use_exp2_turnstile: gl.constexpr
 
     @gluon.constexpr_function
-    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, dtype,
-                 num_warps):
+    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE,
+                 SPLIT_EXP_FACTOR, dtype, num_warps):
         self.qk_scale = qk_scale
         self.Z = Z
         self.H = H
@@ -226,14 +226,8 @@ class AttentionConfig:
         self.num_warps = gl.constexpr(num_warps)
 
         self.SPLIT_D_FACTOR = gl.constexpr(2)
-        if STAGE == 1 and HEAD_DIM == 128:
-            self.SPLIT_EXP_FACTOR = gl.constexpr(4)
-        elif STAGE == 4:
-            # Stage 4 is noncausal stage 1 with a larger exp2 split.
-            self.SPLIT_EXP_FACTOR = gl.constexpr(8)
-        else:
-            self.SPLIT_EXP_FACTOR = gl.constexpr(256 // HEAD_DIM)
-        self.SPLIT_QK_LOAD_FACTOR = gl.constexpr(2 if STAGE == 1 or STAGE == 4 else 1)
+        self.SPLIT_EXP_FACTOR = gl.constexpr(SPLIT_EXP_FACTOR)
+        self.SPLIT_QK_LOAD_FACTOR = gl.constexpr(2 if STAGE == 1 else 1)
         self.SPLIT_M = gl.constexpr(self.BLOCK_M // 2)
         self.SPLIT_D = gl.constexpr(self.HEAD_DIM // self.SPLIT_D_FACTOR)
 
@@ -837,11 +831,14 @@ def attention_repr(specialization):
 def attention_kernel(  #
         sm_scale, M, Z, H, N_CTX, desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, HEAD_DIM: gl.constexpr,  #
-        GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr, STAGE: gl.constexpr, dtype: gl.constexpr,  #
+        GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr, STAGE: gl.constexpr,  #
+        SPLIT_EXP_FACTOR: gl.constexpr, dtype: gl.constexpr,  #
         num_warps: gl.constexpr, use_tmem_red: gl.constexpr):
     qk_scale = sm_scale * 1.44269504
-    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE,  #
-                             dtype, num_warps)
+    config = AttentionConfig(
+        qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE,
+        SPLIT_EXP_FACTOR, dtype, num_warps
+    )
 
     q_chnl = get_desc_channel(desc_q, num_buffers=2)
     kv_chnl = get_desc_channel(desc_k, num_buffers=config.num_kv_buffers)
@@ -855,24 +852,14 @@ def attention_kernel(  #
 
     chnls = (q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile)
     descs = (desc_q, desc_k, desc_v, desc_o)
-    if STAGE == 4:
-        gl.warp_specialize([
-            (_attn_fwd_correction, (config, chnls, descs, M, 1)),
-            (_attn_fwd_softmax0, (config, chnls, descs, M, 1, use_tmem_red)),
-            (_attn_fwd_softmax1, (config, chnls, descs, M, 1, use_tmem_red)),
-            (_attn_fwd_mma, (config, chnls, descs, M, 1)),
-            (_attn_fwd_load, (config, chnls, descs, M, 1)),
-            (_attn_fwd_epilogue, (config, chnls, descs, M, 1)),
-        ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
-    else:
-        gl.warp_specialize([
-            (_attn_fwd_correction, (config, chnls, descs, M, STAGE)),
-            (_attn_fwd_softmax0, (config, chnls, descs, M, STAGE, use_tmem_red)),
-            (_attn_fwd_softmax1, (config, chnls, descs, M, STAGE, use_tmem_red)),
-            (_attn_fwd_mma, (config, chnls, descs, M, STAGE)),
-            (_attn_fwd_load, (config, chnls, descs, M, STAGE)),
-            (_attn_fwd_epilogue, (config, chnls, descs, M, STAGE)),
-        ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
+    gl.warp_specialize([
+        (_attn_fwd_correction, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_softmax0, (config, chnls, descs, M, STAGE, use_tmem_red)),
+        (_attn_fwd_softmax1, (config, chnls, descs, M, STAGE, use_tmem_red)),
+        (_attn_fwd_mma, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_load, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_epilogue, (config, chnls, descs, M, STAGE)),
+    ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
 
     q_chnl.release()
     kv_chnl.release()
@@ -883,11 +870,6 @@ def attention_kernel(  #
     c0_chnl.release()
     c1_chnl.release()
     exp_turnstile.release()
-
-
-# ===-----------------------------------------------------------------------===#
-# Entry Point
-# ===-----------------------------------------------------------------------===#
 
 
 def torch_dtype_to_triton(dtype):
@@ -901,16 +883,21 @@ def make_tensor_desc(x, shape, strides, block_shape):
     return TensorDescriptor(x, shape=shape, strides=strides, block_shape=block_shape, layout=layout)
 
 
+def select_attention_tuning(causal, head_dim, n_ctx):
+    stage = 3 if causal else 1
+    split_exp_factor = 4 if not causal and head_dim == 128 else 256 // head_dim
+    if not causal and head_dim == 64 and n_ctx >= 8192:
+        split_exp_factor = 8
+    return stage, split_exp_factor
+
+
 def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
     HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
     HEAD_DIM_V = v.shape[-1]
     assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
     assert HEAD_DIM_K in {16, 32, 64, 128, 256}
 
-    stage = 3 if causal else 1
-    if not causal and HEAD_DIM_K == 64 and q.shape[2] >= 8192:
-        # Compile as a noncausal stage-1 kernel with split-by-8 exp2 partitioning.
-        stage = 4
+    stage, split_exp_factor = select_attention_tuning(causal, HEAD_DIM_K, q.shape[2])
 
     o = torch.empty_like(q)
     M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
@@ -936,8 +923,8 @@ def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
     attention_kernel[(grid, )](
         sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
         desc_q, desc_k, desc_v, desc_o,  #
-        BLOCK_M, BLOCK_N, HEAD_DIM_K, GROUP_SIZE_N, NUM_SMS,  #
-        stage, torch_dtype_to_triton(q.dtype),  #
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM_K, GROUP_SIZE_N=GROUP_SIZE_N, NUM_SMS=NUM_SMS,
+        STAGE=stage, SPLIT_EXP_FACTOR=split_exp_factor, dtype=torch_dtype_to_triton(q.dtype),  #
         num_warps=4, maxnreg=128, use_tmem_red=use_tmem_red)
 
     return o, M
@@ -961,11 +948,11 @@ def is_blackwell_ultra():
 
 
 @pytest.mark.parametrize("Z", [4])
-@pytest.mark.parametrize("H", [48])
-@pytest.mark.parametrize("N_CTX", [1024])
-@pytest.mark.parametrize("HEAD_DIM", [128])
-@pytest.mark.parametrize("causal", [True])
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("H", [32])
+@pytest.mark.parametrize("N_CTX", [1024, 2048, 4096, 8192])
+@pytest.mark.parametrize("HEAD_DIM", [64, 128])
+@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16])
 @pytest.mark.parametrize("use_tmem_red", [False, True])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, profile=False):
