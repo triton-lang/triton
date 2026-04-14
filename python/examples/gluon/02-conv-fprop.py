@@ -303,7 +303,7 @@ def epilogue_partition(p):
     "pad_h",
     "pad_w",
 ])
-def conv2d_im2col_kernel(
+def conv_fprop(
     in_desc,
     weight_desc,
     output,
@@ -403,7 +403,7 @@ def conv2d_im2col_kernel(
     ], [1, 1], [24, 24])
 
 
-def conv2d_get_configs(pre_hook=None):
+def conv_fprop_get_configs(pre_hook=None):
     return [
         triton.Config(
             {
@@ -427,7 +427,7 @@ def conv2d_get_configs(pre_hook=None):
     ]
 
 
-def conv2d_tma_set_block_size_hook(nargs):
+def conv_fprop_tma_set_block_size_hook(nargs):
     in_block_shape = [nargs["BLOCK_M"], nargs["BLOCK_K"]]
     weight_block_shape = [nargs["BLOCK_N"], nargs["BLOCK_K"]]
 
@@ -442,23 +442,23 @@ def conv2d_tma_set_block_size_hook(nargs):
 # raw input shape. `out_h/out_w` already encode the impact of H/W/padding on
 # the launch shape, so keeping all of them would only fragment the autotune
 # cache without exposing meaningfully different tile choices.
-conv2d_im2col_autotuned_kernel = triton.autotune(
-    configs=conv2d_get_configs(pre_hook=conv2d_tma_set_block_size_hook),
+conv_fprop_autotuned_kernel = triton.autotune(
+    configs=conv_fprop_get_configs(pre_hook=conv_fprop_tma_set_block_size_hook),
     key=["out_h", "out_w", "stride_h", "stride_w"],
-)(conv2d_im2col_kernel)
+)(conv_fprop)
 
 # ===-----------------------------------------------------------------------===#
 # Host-Side Entry Point
 # ===-----------------------------------------------------------------------===#
 
 
-def _prepare_conv2d_inputs(input_tensor, weight_tensor, stride, padding):
+def _prepare_conv_fprop_inputs(input_tensor, weight_tensor, stride, padding):
     N, H, W, Ci = input_tensor.shape
     Co, R, S, Ci_w = weight_tensor.shape
     assert Ci == Ci_w, "Input and weight channel dimensions must match"
     if input_tensor.dtype != TORCH_GEMM_DTYPE or weight_tensor.dtype != TORCH_GEMM_DTYPE:
         raise ValueError(
-            f"conv2d_im2col expects bfloat16 input/weight tensors, got {input_tensor.dtype} and {weight_tensor.dtype}")
+            f"conv_fprop expects bfloat16 input/weight tensors, got {input_tensor.dtype} and {weight_tensor.dtype}")
     stride_h, stride_w = normalize_2d(stride, "stride")
     pad_h, pad_w = normalize_2d(padding, "padding")
     if stride_h <= 0 or stride_w <= 0:
@@ -484,8 +484,8 @@ def _prepare_conv2d_inputs(input_tensor, weight_tensor, stride, padding):
     return input_tensor, weight_tensor, output, N, H, W, Ci, Co, R, S, out_h, out_w, stride_h, stride_w, pad_h, pad_w
 
 
-def _make_conv2d_descriptors(input_tensor, weight_tensor, out_h, out_w, stride_h, stride_w, pad_h, pad_w,
-                             input_block_shape, weight_block_shape):
+def _make_conv_fprop_descriptors(input_tensor, weight_tensor, out_h, out_w, stride_h, stride_w, pad_h, pad_w,
+                                 input_block_shape, weight_block_shape):
     # TMA im2col descriptor for input: [N, H, W, Ci] in NHWC
     #
     # The pixel_box defines the access boundary per batch:
@@ -581,21 +581,21 @@ def _launch_conv(
     )
 
 
-def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
+def conv_fprop_autotuned(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
     """Production fprop entrypoint.
 
     Selects the best kernel configuration with Triton autotuning for the given
     convolution shape.
     """
     input_tensor, weight_tensor, output, N, H, W, Ci, Co, R, S, out_h, out_w, stride_h, stride_w, pad_h, pad_w = \
-        _prepare_conv2d_inputs(input_tensor, weight_tensor, stride, padding)
+        _prepare_conv_fprop_inputs(input_tensor, weight_tensor, stride, padding)
 
     M_GEMM = N * out_h * out_w
     N_GEMM = Co
     num_sms = torch.cuda.get_device_properties(input_tensor.device).multi_processor_count
 
     dummy_block_shape = [1, 1]
-    in_desc, weight_desc = _make_conv2d_descriptors(
+    in_desc, weight_desc = _make_conv_fprop_descriptors(
         input_tensor,
         weight_tensor,
         out_h,
@@ -609,7 +609,7 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
     )
 
     _launch_conv(
-        conv2d_im2col_autotuned_kernel,
+        conv_fprop_autotuned_kernel,
         _make_grid(num_sms, M_GEMM, N_GEMM),
         in_desc=in_desc,
         weight_desc=weight_desc,
@@ -632,11 +632,10 @@ def conv2d_im2col(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
     return output
 
 
-conv2d_im2col_autotuned = conv2d_im2col
-conv2d_im2col_persistent = conv2d_im2col
+conv_fprop_persistent = conv_fprop_autotuned
 
 
-def _make_conv2d_im2col_fixed_kernel_meta(num_buffers, num_warps):
+def _make_conv_fprop_fixed_kernel_meta(num_buffers, num_warps):
     # Keep the fixed path on a tile shape that is also covered by autotune configs.
     return {
         "BLOCK_M": 128,
@@ -649,15 +648,15 @@ def _make_conv2d_im2col_fixed_kernel_meta(num_buffers, num_warps):
     }
 
 
-def conv2d_im2col_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=3, num_warps=4):
+def conv_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=3, num_warps=4):
     """Fixed-config fprop entrypoint used for CI and debugging.
 
     Runs the kernel with a fixed supported tile shape instead of autotuning.
     """
     input_tensor, weight_tensor, output, N, H, W, Ci, Co, R, S, out_h, out_w, stride_h, stride_w, pad_h, pad_w = \
-        _prepare_conv2d_inputs(input_tensor, weight_tensor, stride, padding)
+        _prepare_conv_fprop_inputs(input_tensor, weight_tensor, stride, padding)
 
-    kernel_meta = _make_conv2d_im2col_fixed_kernel_meta(num_buffers, num_warps)
+    kernel_meta = _make_conv_fprop_fixed_kernel_meta(num_buffers, num_warps)
     BLOCK_M = kernel_meta["BLOCK_M"]
     BLOCK_N = kernel_meta["BLOCK_N"]
     BLOCK_K = kernel_meta["BLOCK_K"]
@@ -666,7 +665,7 @@ def conv2d_im2col_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_bu
     N_GEMM = Co
     num_sms = torch.cuda.get_device_properties(input_tensor.device).multi_processor_count
 
-    in_desc, weight_desc = _make_conv2d_descriptors(
+    in_desc, weight_desc = _make_conv_fprop_descriptors(
         input_tensor,
         weight_tensor,
         out_h,
@@ -680,7 +679,7 @@ def conv2d_im2col_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_bu
     )
 
     _launch_conv(
-        conv2d_im2col_kernel,
+        conv_fprop,
         _make_grid(num_sms, M_GEMM, N_GEMM),
         in_desc=in_desc,
         weight_desc=weight_desc,
@@ -709,32 +708,32 @@ def conv2d_im2col_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_bu
 # ===-----------------------------------------------------------------------===#
 
 
-def _assert_conv2d_correct(conv_fn, N, Ci, H, W, Co, R, S, stride, padding, **kwargs):
-    """Run conv_fn on NHWC tensors and compare against torch.nn.functional.conv2d."""
+def _assert_conv_fprop_correct(fprop_fn, N, Ci, H, W, Co, R, S, stride, padding, **kwargs):
+    """Run fprop_fn on NHWC tensors and compare against torch.nn.functional.conv2d."""
     torch.manual_seed(0)
     x_nchw = torch.randn((N, Ci, H, W), device="cuda", dtype=TORCH_GEMM_DTYPE)
     x_nhwc = x_nchw.permute(0, 2, 3, 1).contiguous()
     w_nchw = torch.randn((Co, Ci, R, S), device="cuda", dtype=TORCH_GEMM_DTYPE)
     w_nhwc = w_nchw.permute(0, 2, 3, 1).contiguous()
 
-    triton_out = conv_fn(x_nhwc, w_nhwc, stride=stride, padding=padding, **kwargs)
+    triton_out = fprop_fn(x_nhwc, w_nhwc, stride=stride, padding=padding, **kwargs)
     torch_out = torch.nn.functional.conv2d(x_nchw, w_nchw, stride=stride, padding=padding)
     torch_out = torch_out.permute(0, 2, 3, 1)
     torch.testing.assert_close(triton_out, torch_out, atol=5e-2, rtol=5e-2)
 
 
-@pytest.mark.parametrize("conv_fn,N,Ci,H,W,Co,R,S,stride,padding", [
-    *[(conv2d_im2col_fixed, N, Ci, 64, 64, Co, R, S, stride, padding)
+@pytest.mark.parametrize("fprop_fn,N,Ci,H,W,Co,R,S,stride,padding", [
+    *[(conv_fprop_fixed, N, Ci, 64, 64, Co, R, S, stride, padding)
       for N in (1, 128)
       for Ci, Co in ((384, 384), (416, 416))
       for R, S in ((3, 3), (4, 4), (5, 5))
       for stride in (1, 2)
-      for padding in (0, 1)], (conv2d_im2col_fixed, 1, 96, 1, 8, 128, 1, 2, (1, 2), 0),  # asymmetric stride
-    (conv2d_im2col_fixed, 16, 5, 32, 32, 96, 3, 3, 1, 1),  # padded channels
+      for padding in (0, 1)], (conv_fprop_fixed, 1, 96, 1, 8, 128, 1, 2, (1, 2), 0),  # asymmetric stride
+    (conv_fprop_fixed, 16, 5, 32, 32, 96, 3, 3, 1, 1),  # padded channels
 ])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell GPU (SM 10.x)")
-def test_op(conv_fn, N, Ci, H, W, Co, R, S, stride, padding):
-    _assert_conv2d_correct(conv_fn, N, Ci, H, W, Co, R, S, stride, padding)
+def test_op(fprop_fn, N, Ci, H, W, Co, R, S, stride, padding):
+    _assert_conv_fprop_correct(fprop_fn, N, Ci, H, W, Co, R, S, stride, padding)
 
 
 # ===-----------------------------------------------------------------------===#
@@ -804,7 +803,7 @@ def bench(N, H, W, Ci, Co, R, S, stride_val, pad_val, kernel, provider):
     x_nchw, x_nhwc, w_nchw, w_nhwc = _make_bench_inputs(N, H, W, Ci, Co, R, S)
 
     if provider == "gluon":
-        fn = lambda: conv2d_im2col(x_nhwc, w_nhwc, stride=stride_val, padding=pad_val)
+        fn = lambda: conv_fprop_autotuned(x_nhwc, w_nhwc, stride=stride_val, padding=pad_val)
     elif provider == "torch":
         fn = lambda: torch.nn.functional.conv2d(x_nchw, w_nchw, stride=stride_val, padding=pad_val)
     else:

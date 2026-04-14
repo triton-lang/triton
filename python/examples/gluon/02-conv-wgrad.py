@@ -53,7 +53,6 @@ TORCH_GEMM_DTYPE = _conv_common.TORCH_GEMM_DTYPE
 init_mbarrier_ring = _conv_common.init_mbarrier_ring
 invalidate_mbarrier_ring = _conv_common.invalidate_mbarrier_ring
 is_blackwell = _conv_common.is_blackwell
-is_cuda = _conv_common.is_cuda
 maybe_pad_ci_for_tma = _conv_common.maybe_pad_channel_dims_for_tma
 normalize_2d = _conv_common.normalize_2d
 
@@ -948,10 +947,6 @@ def conv2d_wgrad(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0):
 
     return _finalize_wgrad_output(grad_weight_flat, Co, R, S, Ci, Ci_orig)
 
-
-conv2d_wgrad_autotuned = conv2d_wgrad
-
-
 def _make_wgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps):
     # Keep the fixed path on a tile shape that is also covered by autotune configs.
     return {
@@ -1000,106 +995,6 @@ def conv2d_wgrad_fixed(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, 
     run()
 
     return _finalize_wgrad_output(grad_weight_flat, Co, R, S, Ci, Ci_orig)
-
-
-def _get_wgrad_launch_metadata_autotune(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0):
-    (input_nhwc, grad_output_nhwc, _Ci_orig, N, Ci, Co,
-     out_h, out_w, stride_h, stride_w, pad_h, pad_w, K_GEMM) = \
-        _prepare_wgrad_problem(input_nhwc, grad_output_nhwc, R, S, stride, padding)
-
-    num_sms = torch.cuda.get_device_properties(input_nhwc.device).multi_processor_count
-    M_spatial = N * out_h * out_w
-    kernel_meta = _select_wgrad_kernel_meta(
-        input_nhwc,
-        grad_output_nhwc,
-        num_sms=num_sms,
-        N=N,
-        Ci=Ci,
-        Co=Co,
-        R=R,
-        S=S,
-        out_h=out_h,
-        out_w=out_w,
-        stride_h=stride_h,
-        stride_w=stride_w,
-        pad_h=pad_h,
-        pad_w=pad_w,
-        K_GEMM=K_GEMM,
-    )
-
-    active_split_k = _get_safe_wgrad_active_split_k(M_spatial, Co, K_GEMM, kernel_meta)
-    return {
-        "mode": "autotune",
-        "selected_split_k": kernel_meta["SPLIT_K"],
-        "active_split_k": active_split_k,
-        "uses_reduction": active_split_k > 1,
-        "BLOCK_M": kernel_meta["BLOCK_M"],
-        "BLOCK_N": kernel_meta["BLOCK_N"],
-        "BLOCK_K": kernel_meta["BLOCK_K"],
-        "num_buffers": kernel_meta["num_buffers"],
-        "num_acc_buffers": kernel_meta["num_acc_buffers"],
-        "num_warps": kernel_meta["num_warps"],
-    }
-
-
-def _get_wgrad_launch_metadata_fixed(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, SPLIT_K=1, num_buffers=2,
-                                     num_warps=4):
-    (input_nhwc, grad_output_nhwc, _Ci_orig, N, _Ci, _Co,
-     out_h, out_w, _stride_h, _stride_w, _pad_h, _pad_w, _K_GEMM) = \
-        _prepare_wgrad_problem(input_nhwc, grad_output_nhwc, R, S, stride, padding)
-
-    kernel_meta = _make_wgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps)
-    M_spatial = N * out_h * out_w
-    active_split_k = _get_safe_wgrad_active_split_k(
-        M_spatial,
-        _Co,
-        _K_GEMM,
-        kernel_meta,
-    )
-    return {
-        "mode": "fixed",
-        "selected_split_k": SPLIT_K,
-        "active_split_k": active_split_k,
-        "uses_reduction": active_split_k > 1,
-        "BLOCK_M": kernel_meta["BLOCK_M"],
-        "BLOCK_N": kernel_meta["BLOCK_N"],
-        "BLOCK_K": kernel_meta["BLOCK_K"],
-        "num_buffers": kernel_meta["num_buffers"],
-        "num_acc_buffers": kernel_meta["num_acc_buffers"],
-        "num_warps": kernel_meta["num_warps"],
-    }
-
-
-def get_conv2d_wgrad_profile_metadata(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, *, mode="autotune",
-                                      SPLIT_K=1, num_buffers=2, num_warps=4):
-    if mode == "autotune":
-        return _get_wgrad_launch_metadata_autotune(
-            input_nhwc,
-            grad_output_nhwc,
-            R,
-            S,
-            stride=stride,
-            padding=padding,
-        )
-    if mode == "fixed":
-        return _get_wgrad_launch_metadata_fixed(
-            input_nhwc,
-            grad_output_nhwc,
-            R,
-            S,
-            stride=stride,
-            padding=padding,
-            SPLIT_K=SPLIT_K,
-            num_buffers=num_buffers,
-            num_warps=num_warps,
-        )
-    raise ValueError(f"Unsupported wgrad profile mode: {mode}")
-
-
-def format_conv2d_wgrad_profile_metadata(metadata):
-    return (f"selected_split_k={metadata['selected_split_k']}, "
-            f"active_split_k={metadata['active_split_k']}, "
-            f"reduction={'yes' if metadata['uses_reduction'] else 'no'}")
 
 
 # ===-----------------------------------------------------------------------===#

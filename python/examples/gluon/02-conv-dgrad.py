@@ -54,7 +54,6 @@ ensure_tma_compatible_strides = _conv_common.ensure_tma_compatible_strides
 init_mbarrier_ring = _conv_common.init_mbarrier_ring
 invalidate_mbarrier_ring = _conv_common.invalidate_mbarrier_ring
 is_blackwell = _conv_common.is_blackwell
-is_cuda = _conv_common.is_cuda
 maybe_pad_ci_for_tma = _conv_common.maybe_pad_channel_dims_for_tma
 normalize_2d = _conv_common.normalize_2d
 
@@ -597,7 +596,6 @@ def _prepare_dgrad_inputs(grad_output_nhwc, weight_nhwc, H_in, W_in, stride, pad
         N,
         Co,
         Ci,
-        R,
         S,
         out_h,
         out_w,
@@ -1065,7 +1063,7 @@ def conv2d_dgrad(grad_output_nhwc, weight_nhwc, H_in, W_in, stride=1, padding=0)
     Selects the best kernel configuration with host-side autotuning, then runs
     deterministic two-pass split-K when reduction is needed.
     """
-    (grad_output_nhwc, W_rot_flat, N, Co, Ci, R, S,
+    (grad_output_nhwc, W_rot_flat, N, Co, Ci, S,
      out_h, out_w, H_in, W_in, H_sub, W_sub,
      stride_h, stride_w, subproblem_specs) = \
         _prepare_dgrad_inputs(grad_output_nhwc, weight_nhwc, H_in, W_in, stride, padding)
@@ -1113,10 +1111,6 @@ def conv2d_dgrad(grad_output_nhwc, weight_nhwc, H_in, W_in, stride=1, padding=0)
 
     return _finalize_dgrad_output(output)
 
-
-conv2d_dgrad_autotuned = conv2d_dgrad
-
-
 def _make_dgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps):
     # Keep the fixed path on a tile shape that is also covered by autotune configs.
     return {
@@ -1138,7 +1132,7 @@ def conv2d_dgrad_fixed(grad_output_nhwc, weight_nhwc, H_in, W_in, stride=1, padd
     Runs the kernel with a fixed supported tile shape instead of autotuning,
     while still using deterministic two-pass split-K when reduction is needed.
     """
-    (grad_output_nhwc, W_rot_flat, N, Co, Ci, R, S,
+    (grad_output_nhwc, W_rot_flat, N, Co, Ci, S,
      out_h, out_w, H_in, W_in, H_sub, W_sub,
      stride_h, stride_w, subproblem_specs) = \
         _prepare_dgrad_inputs(grad_output_nhwc, weight_nhwc, H_in, W_in, stride, padding)
