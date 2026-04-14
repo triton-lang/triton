@@ -762,7 +762,7 @@ void fillTDMDescriptorForGatherScatter(
     SmallVector<Value> &group2, SmallVector<Value> &group3, Value ldsRowOffset,
     Value globalColOffset, Value ldsPtr, Value pred, Value barrierPtr,
     const triton::LinearLayout &cgaLayout, Value ctaId,
-    ArrayRef<Value> rowIndices, bool use32BitIndices) {
+    ArrayRef<Value> rowIndices, bool use32BitIndices, bool isGather) {
   assert(!rowIndices.empty() && "Gather/scatter requires row indices.");
 
   auto ctx = rewriter.getContext();
@@ -804,6 +804,17 @@ void fillTDMDescriptorForGatherScatter(
   // Adjust column tensor shape for OOB handling - subtract column offset to
   // get remaining elements.
   tensorShape[1] = b.smax(b.i32_val(0), b.sub(tensorShape[1], globalColOffset));
+
+  // For scatter with padding (store-from-LDS): clamp tensor_dim0 to the
+  // original column width so OOB checking drops padding elements before they
+  // reach global memory.  We do this before encoding group1 so the clamped
+  // value flows through naturally (matching the fillTDMDescriptor pattern).
+  // tile_dim0 widening is handled later in the tile_dim0 fixup block.
+  if (!isGather && padInterval > 0 && padAmount > 0) {
+    Value originalColWidth = b.i32_val(blockShape.back());
+    Value cmp = b.icmp_ult(tensorShape[1], originalColWidth);
+    tensorShape[1] = b.select(cmp, tensorShape[1], originalColWidth);
+  }
 
   // Update group0 with addresses and enable gather/scatter mode
   Value globalAddr = b.ptrtoint(i64_ty, globalPtr);
@@ -851,9 +862,15 @@ void fillTDMDescriptorForGatherScatter(
   // dimension across warps for regular load/store, but gather and scatter use
   // row indices and need the full undivided column width.
   if (blockShape.size() >= 2) {
-    int64_t fullColWidth = blockShape[blockShape.size() - 1];
+    int64_t tileDim0 = blockShape.back();
+
+    // For scatter with padding: widen tile_dim0 to include padding so the
+    // hardware's LDS read stride matches the padded row width.
+    if (!isGather && padInterval > 0 && padAmount > 0)
+      tileDim0 += padAmount;
+
     group1[3] = b.and_(group1[3], b.i32_val(0xFFFF));
-    group1[3] = b.or_(group1[3], b.i32_val(fullColWidth << 16));
+    group1[3] = b.or_(group1[3], b.i32_val(tileDim0 << 16));
   }
 
   // Fill group2 and group3 with row indices
@@ -1218,7 +1235,8 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     fillTDMDescriptorForGatherScatter(
         rewriter, loc, typeConverter, elementType, to_vector(blockShape),
         padInterval, padAmount, g0, g1, g2, g3, ldsRowOffset, colOffset, ldsPtr,
-        pred, barrierPtr, cgaLayout, ctaId, batchIndices, use32BitIndices);
+        pred, barrierPtr, cgaLayout, ctaId, batchIndices, use32BitIndices,
+        isGather);
 
     // Pack and emit the instruction
     auto group0 = packLLVector(loc, g0, rewriter);

@@ -1008,13 +1008,13 @@ struct AsyncCopyGlobalToLocalOpConversion
         mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
             cacheMod, /*isLoad=*/true, targetInfo);
 
-    if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
-                           targetInfo.getISAFamily())) {
-      auto globalLoadLdsOp = ROCDL::GlobalLoadLDSOp::create(
+    if (targetInfo.useAsyncMarks()) {
+      // Use the async intrinsic so LLVM tracks these via asyncmark
+      auto asyncLoadOp = ROCDL::GlobalLoadAsyncLDSOp::create(
           rewriter, loc, srcPtr, shmemAddr, vecBits / 8,
           /*offset=*/0, cacheModifiers, nullptr, nullptr, nullptr);
       if (targetInfo.requiresAliasInfoForAsyncOps())
-        AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
+        AMD::addAsyncCopyAliasScope(asyncLoadOp);
     } else if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
       if (cacheMod != triton::CacheModifier::NONE) {
         emitRemark(loc) << "cache modifiers not yet implemented on gfx1250";
@@ -1424,8 +1424,25 @@ struct AsyncTDMScatterOpConversion
     auto dstRowIndicesType =
         cast<RankedTensorType>(op.getDstRowIndices().getType());
 
+    // Extract padding information if present
+    auto paddedEnc =
+        llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
+    unsigned padInterval = 0;
+    unsigned padAmount = 0;
+    if (paddedEnc) {
+      assert(paddedEnc.getIntervals().size() == 1 &&
+             paddedEnc.getPaddings().size() == 1);
+      padInterval = paddedEnc.getIntervals()[0];
+      padAmount = paddedEnc.getPaddings()[0];
+    }
+
     // Create the CGA layout
-    auto sharedLayout = triton::gpu::toLinearLayout(smemTy);
+    triton::LinearLayout sharedLayout;
+    if (paddedEnc) {
+      sharedLayout = paddedEnc.getLinearComponent();
+    } else {
+      sharedLayout = triton::gpu::toLinearLayout(smemTy);
+    }
     auto kBlock = rewriter.getStringAttr("block");
     auto cgaLayout = sharedLayout.sublayout(
         {kBlock}, to_vector(sharedLayout.getOutDimNames()));
@@ -1435,9 +1452,9 @@ struct AsyncTDMScatterOpConversion
     // Predicate must be i32 (not i1) to match other elements in group0
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
     mlir::LLVM::AMD::emitTDMGatherScatter(
-        rewriter, loc, getTypeConverter(), desc, shapePerCTA,
-        /*padInterval=*/0, /*padAmount=*/0, srcPtr, pred, elementType,
-        barrierPtr, cgaLayout, ctaId, dstRowIndices, dstColOffset,
+        rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
+        padAmount, srcPtr, pred, elementType, barrierPtr, cgaLayout, ctaId,
+        dstRowIndices, dstColOffset,
         /*isGather=*/false, numWarps, dstRowIndicesType);
 
     rewriter.eraseOp(op);
@@ -2345,6 +2362,40 @@ struct AtomicRMWOpConversion
   }
 };
 
+// Lower ttg.async_wait directly to wait_asyncmark for architectures that use
+// asyncmark-based synchronization (CDNA3/CDNA4). The commit group count from
+// ttg.async_wait is passed through without clamping since LLVM will compute
+// the final waitcnt based on #instructions instead of #commitGroups.
+struct TTGAsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
+  TTGAsyncWaitOpConversion(LLVMTypeConverter &converter,
+                           const AMD::TargetInfo &targetInfo,
+                           PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(AsyncWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!targetInfo.useAsyncMarks())
+      return rewriter.notifyMatchFailure(
+          op, "ttg.async_wait should have been lowered to amdg.async_wait by "
+              "UpdateAsyncWaitCount for non-asyncmark targets");
+
+    auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // Pass through the commit group count. LLVM will compute the correct
+    // vmcnt based on asyncmark/wait_asyncmark markers.
+    ROCDL::WaitAsyncmarkOp::create(rewriter, loc, op.getNum());
+
+    // Drop the result AsyncToken
+    rewriter.replaceOp(op, b.i32_val(0));
+    return success();
+  }
+
+private:
+  const AMD::TargetInfo &targetInfo;
+};
+
 struct AsyncWaitOpConversion
     : public ConvertOpToLLVMPattern<amdgpu::AsyncWaitOp> {
   AsyncWaitOpConversion(LLVMTypeConverter &converter,
@@ -2358,39 +2409,13 @@ struct AsyncWaitOpConversion
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    switch (targetInfo.getISAFamily()) {
-    case ISAFamily::CDNA1:
-    case ISAFamily::CDNA2:
-    case ISAFamily::CDNA3:
-    case ISAFamily::CDNA4: {
-      // global.load.lds uses vmcnt to synchronize
-      // The rocdl op stores all available counters in a single int32 value (v).
-      // The vmcnt (6 bits) is split into a lower 3:0 and higher 5:4 parts.
-      // The lower part is stored in bits 3:0 of v and the higher part in bits
-      // 15:14. We have to set all other bits in v to 1 to signal we are not
-      // interested in those.
-
-      // Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
-      unsigned vmCnt = std::min(63u, op.getNumInst());
-
-      // Extract low and high bits and combine while setting all other bits to 1
-      unsigned lowBits = vmCnt & 0xF;
-      unsigned highBits = vmCnt >> 4 << 14;
-      unsigned otherCnts = ~0xC00F; // C00F has bits 15:14 and 3:0 set
-      unsigned waitValue = lowBits | highBits | otherCnts;
-
-      ROCDL::SWaitcntOp::create(rewriter, loc, waitValue);
-      break;
-    }
-    case ISAFamily::GFX1250: {
-      // Clamp asyncCnt to 6bits(hw imit); lower means conservative
+    if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
+      // Clamp asyncCnt to 6bits(hw limit); lower means conservative
       unsigned asyncCnt = std::min(63u, op.getNumInst());
       ROCDL::WaitAsynccntOp::create(rewriter, loc, asyncCnt);
-      break;
-    }
-    default:
+    } else {
       return rewriter.notifyMatchFailure(
-          op, "Only supported on CDNA target architecture");
+          op, "async wait not supported on this target architecture");
     }
 
     // Drop the result AsyncToken
@@ -2421,17 +2446,28 @@ struct AsyncTDMIntrinsicWaitConversion
 
 struct AsyncCommitGroupOpConversion
     : public ConvertOpToLLVMPattern<AsyncCommitGroupOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  AsyncCommitGroupOpConversion(LLVMTypeConverter &converter,
+                               const AMD::TargetInfo &targetInfo,
+                               PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(AsyncCommitGroupOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Drop the result AsyncToken
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // Emit asyncmark for architectures that use async tracking
+    if (targetInfo.useAsyncMarks())
+      ROCDL::AsyncmarkOp::create(rewriter, loc);
+
+    // Drop the result AsyncToken
     rewriter.replaceOp(op, b.i32_val(0));
     return success();
   }
+
+private:
+  const AMD::TargetInfo &targetInfo;
 };
 
 struct AsyncCopyMbarrierArriveOpConversion
@@ -2526,10 +2562,12 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                AsyncTDMCopyLocalToGlobalOpConversion,
                AsyncTDMScatterOpConversion, AsyncTDMGatherOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
+  patterns.add<TTGAsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<TDMPrefetchConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncTDMIntrinsicWaitConversion>(typeConverter, benefit);
-  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, targetInfo,
+                                             benefit);
   patterns.add<AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
 }
 } // namespace mlir::triton::AMD

@@ -524,13 +524,7 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   MemDescType dTensorTy = op.getD().getType();
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   assert(twoCTAs == op.getTwoCtas());
-  SmallVector<Value> commitDescs;
-  if (op.getMulticast()) {
-    if (isa<SharedEncodingTrait>(aTensorTy.getEncoding())) {
-      commitDescs.push_back(op.getA());
-    }
-    commitDescs.push_back(op.getB());
-  }
+  SmallVector<Value> commitDescs = op.getCompletionDescs();
 
   DotConversion dot;
 
@@ -646,6 +640,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   Value baseScaleA = tb.ptrtoint(i32_ty, adaptor.getAScale());
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
+  SmallVector<Value> commitDescs = op.getCompletionDescs();
 
   int numRows = 128;
   int colSizeInBits = 32;
@@ -695,7 +690,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
                         adaptor.getA(), adaptor.getB(), dTensorTy,
                         adaptor.getUseD(), adaptor.getPred(),
                         adaptor.getBarriers(), adaptor.getBarrierPreds(),
-                        twoCTAs, ValueRange{}, opKindIsMXFP4, dot);
+                        twoCTAs, commitDescs, opKindIsMXFP4, dot);
 }
 
 //===----------------------------------------------------------------------===//

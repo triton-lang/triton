@@ -59,7 +59,7 @@ jobs:
           echo "RELEASE_FILE=${release_file}" >> "$GITHUB_ENV"
       - name: Upload source distribution for release
         if: ${{ github.event_name == 'release' }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/${{env.RELEASE_FILE}}
       - name: Upload source distribution to GHA artifacts for release tags

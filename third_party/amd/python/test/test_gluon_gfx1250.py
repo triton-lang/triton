@@ -3696,6 +3696,71 @@ def test_runtime_tdm_scatter_partial_column_block(N, num_warps, index_dtype):
     torch.testing.assert_close(out_result, ref_out)
 
 
+@gluon.jit
+def _tdm_scatter_padded_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stride_m, BLOCK_M: ttgl.constexpr,
+                               BLOCK_N: ttgl.constexpr, NUM_INDICES: ttgl.constexpr, DST_COL_OFFSET: ttgl.constexpr,
+                               SHARED_LAYOUT: ttgl.constexpr, IDX_LAYOUT: ttgl.constexpr):
+    """TDM scatter kernel using a padded shared layout."""
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+
+    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.gfx1250.tdm.async_load(inp_desc, [0, 0], smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
+    dst_row_indices = ttgl.load(dst_row_indices_ptr + idx_offs)
+
+    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, DST_COL_OFFSET, smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("NUM_INDICES", [4, 8, 16])
+@pytest.mark.parametrize("BLOCK_N", [16, 64, 128])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+def test_runtime_tdm_scatter_padded(NUM_INDICES, BLOCK_N, dtype, index_dtype):
+    """Test TDM scatter with padded shared layout.
+
+    Verifies the tile-widening + OOB workaround: tile_dim0 is widened to
+    include padding so LDS reads use the correct stride, while tensor_dim0
+    is clamped to the original column width so OOB drops padding elements.
+    """
+    torch.manual_seed(42)
+
+    BLOCK_M = NUM_INDICES
+    SHARED_LAYOUT = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N], [1, 0])
+
+    num_warps = 4
+    IDX_BASE = ttgl.BlockedLayout([NUM_INDICES, 1], [1, 32], [1, num_warps], [1, 0])
+    IDX_LAYOUT = ttgl.SliceLayout(1, IDX_BASE)
+
+    M_out = 2048
+    N_out = BLOCK_N
+
+    inp = _create_scatter_test_data((BLOCK_M, BLOCK_N), dtype)
+    out = torch.zeros((M_out, N_out), dtype=dtype)
+    dst_row_indices = torch.arange(NUM_INDICES, dtype=index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = dst_row_indices.cuda()
+
+    _tdm_scatter_padded_kernel[(1, )](inp_d, out_d, indices_d, M_out=M_out, N_out=N_out, stride_m=out_d.stride(0),
+                                      BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_INDICES=NUM_INDICES, DST_COL_OFFSET=0,
+                                      SHARED_LAYOUT=SHARED_LAYOUT, IDX_LAYOUT=IDX_LAYOUT, num_warps=num_warps)
+
+    out_result = out_d.cpu()
+    ref_out = torch.zeros_like(out)
+    for i in range(NUM_INDICES):
+        ref_out[dst_row_indices[i].item()] = inp[i]
+    torch.testing.assert_close(out_result, ref_out)
+
+
 # =============================================================================
 # TDM Gather Mode Tests
 # =============================================================================

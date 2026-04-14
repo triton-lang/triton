@@ -71,7 +71,7 @@ void fillTDMDescriptorForGatherScatter(
     SmallVector<Value> &group2, SmallVector<Value> &group3, Value ldsRowOffset,
     Value globalColOffset, Value ldsPtr, Value pred, Value barrierPtr,
     const triton::LinearLayout &cgaLayout, Value ctaId,
-    ArrayRef<Value> rowIndices, bool use32BitIndices);
+    ArrayRef<Value> rowIndices, bool use32BitIndices, bool isGather);
 
 // Emit a TDM load or store for regular (non-scatter) contiguous transfers.
 //
