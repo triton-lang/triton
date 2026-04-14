@@ -241,14 +241,10 @@ SmallVector<uint16_t> getTensorCoreBarrierBroadcastMasks(Operation *op) {
   SmallVector<Value> commitDescs;
   if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
     llvm::append_range(commitDescs, commitOp.getDescs());
-  } else if (auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-    if (mmaOp.getMulticast()) {
-      if (isa<ttg::SharedEncodingTrait>(mmaOp.getA().getType().getEncoding()))
-        commitDescs.push_back(mmaOp.getA());
-      commitDescs.push_back(mmaOp.getB());
-    }
-  } else if (isa<ttng::TMEMCopyOp, ttng::TCGen5MMAScaledOp>(op)) {
-    // TODO: we should support descs for tc_gen5_mma_scaled.
+  } else if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+    commitDescs = mmaOp.getCompletionDescs();
+  } else if (isa<ttng::TMEMCopyOp>(op)) {
+    // TMEMCopy does not have descs (empty)
   } else {
     llvm_unreachable("unknown tensor-core op");
   }
