@@ -1162,34 +1162,31 @@ struct AsyncCopyLocalToGlobalOpConversion
       emitRemark(loc) << "cache modifiers not yet implemented on gfx1250";
     }
 
-    // On gfx1250, if vecBits is not supported but vecBits/2 is, split into two
+    auto emitStore = [&](int bits, Value dst, Value shmem) {
+      std::string intrinsic =
+          "llvm.amdgcn.global.store.async.from.lds.b" + std::to_string(bits);
+      LLVM::createLLVMIntrinsicCallOp(
+          rewriter, loc, intrinsic, {},
+          {dst, shmem, b.i32_val(0), b.i32_val(cacheModifiers)});
+    };
+
+    // If vecBits is not supported but vecBits/2 is, split into two
     // stores
-    if (targetInfo.getISAFamily() == AMD::ISAFamily::GFX1250 &&
-        !targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits) &&
+    if (!targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits) &&
         targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits / 2)) {
       int halfVecBits = vecBits / 2;
       int halfVecBytes = halfVecBits / 8;
-      std::string intrinsic = "llvm.amdgcn.global.store.async.from.lds.b" +
-                              std::to_string(halfVecBits);
       // First half store
-      LLVM::createLLVMIntrinsicCallOp(
-          rewriter, loc, intrinsic, {},
-          {dstPtr, shmemAddr, b.i32_val(0), b.i32_val(cacheModifiers)});
+      emitStore(halfVecBits, dstPtr, shmemAddr);
       // Second half store (advance pointers by halfVecBytes)
       Value dstPtr2 = b.gep(ptr_ty(rewriter.getContext(), 1), i8_ty, dstPtr,
                             b.i32_val(halfVecBytes));
       Value shmemAddr2 = b.gep(ptr_ty(rewriter.getContext(), 3), i8_ty,
                                shmemAddr, b.i32_val(halfVecBytes));
-      LLVM::createLLVMIntrinsicCallOp(
-          rewriter, loc, intrinsic, {},
-          {dstPtr2, shmemAddr2, b.i32_val(0), b.i32_val(cacheModifiers)});
+      emitStore(halfVecBits, dstPtr2, shmemAddr2);
     } else {
       assert(targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits));
-      std::string intrinsic =
-          "llvm.amdgcn.global.store.async.from.lds.b" + std::to_string(vecBits);
-      LLVM::createLLVMIntrinsicCallOp(
-          rewriter, loc, intrinsic, {},
-          {dstPtr, shmemAddr, b.i32_val(0), b.i32_val(cacheModifiers)});
+      emitStore(vecBits, dstPtr, shmemAddr);
     }
   }
 };
