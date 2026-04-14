@@ -13,7 +13,7 @@ import tempfile
 from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 from types import BuiltinFunctionType, FunctionType, ModuleType
 from typing import Any, Callable, TypeAlias
@@ -31,7 +31,7 @@ from triton.tools.triton_to_gluon_translator.stable_toposort import stable_topos
 logger = logging.getLogger(__name__)
 
 
-class TranslatorTarget(StrEnum):
+class TranslatorTarget(str, Enum):
     """Target architecture for the Triton-to-Gluon translator.
 
     Known targets are listed as explicit members for discoverability.
