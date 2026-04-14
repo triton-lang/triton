@@ -8,6 +8,7 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton.tools.triton_to_gluon_translator.translator import convert_triton_to_gluon
 from triton.tools.triton_to_gluon_translator.translator_helpers import convert_host_descriptor
+from triton.tools.triton_to_gluon_translator.slice_kernel import TranslatorTarget
 from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda, is_hip_cdna4, is_hip_gfx1250, is_hip_cdna3_or_newer
 from triton.language.target_info import current_target
 
@@ -15,7 +16,7 @@ from triton.language.target_info import current_target
 def convert_kernel(kernel, kernel_name, tmp_path, target=None):
     if target is None:
         t = current_target()
-        target = "nvidia" if t.backend == "cuda" else t.arch
+        target = TranslatorTarget("nvidia" if t.backend == "cuda" else t.arch)
     converted = convert_triton_to_gluon([kernel], target=target)
 
     # Write converted kernel to a file so @gluon.jit can retrieve source
@@ -464,7 +465,7 @@ def gather_scatter_roundtrip_kernel(out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
 def test_gather_scatter_roundtrip(tmp_path):
     kernel = convert_kernel(gather_scatter_roundtrip_kernel, "gather_scatter_roundtrip_kernel", tmp_path,
-                            target="gfx1250")
+                            target=TranslatorTarget.GFX1250)
 
     X, Y, BLOCK_X, BLOCK_Y = 64, 64, 8, 64
     inp = torch.arange(X * Y, device="cuda", dtype=torch.float16).reshape(X, Y)

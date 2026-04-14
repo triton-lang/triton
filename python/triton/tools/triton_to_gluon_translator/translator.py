@@ -14,6 +14,7 @@ from triton.tools.triton_to_gluon_translator.slice_kernel import (
     GlobalValue,
     ReferenceRewriter,
     RewriteFn,
+    TranslatorTarget,
     add_sugar_rewrites,
     find_references,
     get_base_value,
@@ -108,7 +109,7 @@ def add_expr_rewrites(rewrites: list[RewriteFn]) -> None:
 @dataclass
 class Translator(ReferenceRewriter):
     tensor_member_match_fns: list[str] = field(default_factory=list)
-    target: str = "nvidia"
+    target: TranslatorTarget = TranslatorTarget.NVIDIA
 
     def __post_init__(self) -> None:
         import triton
@@ -165,9 +166,6 @@ class Translator(ReferenceRewriter):
                 node = ast.Call(func=new_callee, args=[node.func.value] + node.args, keywords=node.keywords)
             return self.generic_visit(node)
         value, _, _ = ref
-        if value is tl.make_tensor_descriptor and self.target.startswith("gfx"):
-            node.func = parse_expr("helpers.tl_make_tensor_descriptor_amd")
-            node.keywords = [kw for kw in node.keywords if kw.arg != "padding_option"]
         if value in [tl.reshape, tl.ravel]:
             node.keywords = [kw for kw in node.keywords if kw.arg != "can_reorder"]
         elif value is tl.split:
@@ -202,7 +200,7 @@ class Translator(ReferenceRewriter):
         return self.generic_visit(node)
 
 
-def translate_kernels(kernels: list[GlobalValue], target: str = "nvidia") -> str:
+def translate_kernels(kernels: list[GlobalValue], target: TranslatorTarget = TranslatorTarget.NVIDIA) -> str:
 
     def filter(value: ModuleType | GlobalValue) -> bool:
         if isinstance(value, ModuleType):
@@ -255,12 +253,12 @@ def translate_kernels(kernels: list[GlobalValue], target: str = "nvidia") -> str
     return output
 
 
-def translate_paths(kernel_paths: list[str], target: str = "nvidia") -> str:
+def translate_paths(kernel_paths: list[str], target: TranslatorTarget = TranslatorTarget.NVIDIA) -> str:
     kernels = [get_base_value(kernel_path) for kernel_path in kernel_paths]
     return translate_kernels(kernels, target=target)
 
 
-def convert_triton_to_gluon(src: list[JITCallable], target: str = "nvidia") -> str:
+def convert_triton_to_gluon(src: list[JITCallable], target: TranslatorTarget = TranslatorTarget.NVIDIA) -> str:
     kernels = [
         GlobalValue.wrap(
             kernel,
@@ -271,7 +269,7 @@ def convert_triton_to_gluon(src: list[JITCallable], target: str = "nvidia") -> s
     return translate_kernels(kernels, target=target)
 
 
-def main(kernels: list[str], output_path: str, target: str = "nvidia") -> None:
+def main(kernels: list[str], output_path: str, target: TranslatorTarget = TranslatorTarget.NVIDIA) -> None:
     output = translate_paths(kernels, target=target)
     with open(output_path, "w") as f:
         f.write(output)
@@ -283,7 +281,7 @@ def _main_cli() -> None:
     parser.add_argument("--output-path", required=True, help="Path to write the translated source.")
     parser.add_argument("--target", default="nvidia", help="Target architecture (e.g. nvidia, amd_gfx1250).")
     args = parser.parse_args()
-    main(args.kernels, args.output_path, target=args.target)
+    main(args.kernels, args.output_path, target=TranslatorTarget(args.target))
 
 
 if __name__ == "__main__":

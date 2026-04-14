@@ -13,6 +13,7 @@ import tempfile
 from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from types import BuiltinFunctionType, FunctionType, ModuleType
 from typing import Any, Callable, TypeAlias
@@ -28,6 +29,41 @@ from triton.tools.triton_to_gluon_translator.scoped_dict import scoped_dict
 from triton.tools.triton_to_gluon_translator.stable_toposort import stable_toposort
 
 logger = logging.getLogger(__name__)
+
+
+class TranslatorTarget(StrEnum):
+    """Target architecture for the Triton-to-Gluon translator.
+
+    Known targets are listed as explicit members for discoverability.
+    Unknown ``gfx*`` strings are accepted via ``_missing_()`` so that
+    new AMD architectures work without adding an enum member.
+    """
+
+    NVIDIA = "nvidia"
+    # AMD targets currently exercised by the translator test suite:
+    GFX1250 = "gfx1250"
+    GFX942 = "gfx942"
+    GFX950 = "gfx950"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "TranslatorTarget | None":
+        """Allow any ``gfx*`` string as a valid AMD target."""
+        if isinstance(value, str) and value.startswith("gfx"):
+            obj = str.__new__(cls, value)
+            obj._value_ = value
+            return obj
+        return None
+
+    @property
+    def is_amd(self) -> bool:
+        return self != TranslatorTarget.NVIDIA
+
+    @property
+    def tensor_descriptor_import(self) -> str:
+        """Return the import statement for the target's tensor descriptor module."""
+        if self.is_amd:
+            return "from triton.experimental.gluon.language.amd.gfx1250.tdm import tensor_descriptor"
+        return "from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor"
 
 
 @dataclass
@@ -521,7 +557,7 @@ class SliceRewriter(ReferenceRewriter):
     translate_to_gluon: bool = False
     inline_helpers: ordered_set[str] = field(default_factory=ordered_set[str])
     cvt_context: list[bool] = field(default_factory=lambda: [False])
-    target: str = "nvidia"
+    target: TranslatorTarget = TranslatorTarget.NVIDIA
 
     def __post_init__(self) -> None:
         # Special rules for sugaring imports.
@@ -552,9 +588,6 @@ class SliceRewriter(ReferenceRewriter):
                 return node
             raise e
 
-    def _is_amd_target(self) -> bool:
-        return self.target.startswith("gfx")
-
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         if not self.translate_to_gluon:
             return super().visit_Attribute(node)
@@ -566,10 +599,7 @@ class SliceRewriter(ReferenceRewriter):
             self.imports.add("import triton.experimental.gluon._runtime as gluon_runtime")
             new_node = parse_expr("gluon_runtime.GluonJITFunction")
         elif value is tl.tensor_descriptor:
-            if self._is_amd_target():
-                self.imports.add("from triton.experimental.gluon.language.amd.gfx1250.tdm import tensor_descriptor")
-            else:
-                self.imports.add("from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor")
+            self.imports.add(self.target.tensor_descriptor_import)
             new_node = ast.Name(id="tensor_descriptor", ctx=ast.Load())
         return new_node
 
@@ -716,7 +746,7 @@ def slice_kernel(
     leaf_paths: list[str] | None = None,
     translate_to_gluon: bool = False,
     ignored_decorator_matchers: Sequence[DecoratorMatcher] | None = None,
-    target: str = "nvidia",
+    target: TranslatorTarget = TranslatorTarget.NVIDIA,
 ) -> str:
     base_values: list[GlobalValue] = [get_base_value(root_path) for root_path in root_paths]
     base_value_ids: set[int] = set()
@@ -816,7 +846,7 @@ def slice_kernel_from_trace(
     translate_to_gluon: bool,
     extra_modules: dict[str, str],
     ignored_decorator_matchers: Sequence[DecoratorMatcher] | None = None,
-    target: str = "nvidia",
+    target: TranslatorTarget = TranslatorTarget.NVIDIA,
 ) -> str:
     module_remap: dict[str, str] = {}
     for name, path in extra_modules.items():
@@ -864,7 +894,7 @@ def main(
     translate_to_gluon: bool = False,
     output_path: str = "/tmp/reference.py",
     ignored_decorator_matchers: Sequence[DecoratorMatcher] | None = None,
-    target: str = "nvidia",
+    target: TranslatorTarget = TranslatorTarget.NVIDIA,
 ) -> None:
     output = slice_kernel(
         root_paths,

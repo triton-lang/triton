@@ -852,16 +852,14 @@ def tl_obj_scatter(obj, value, x_offsets, y_offset):
 
 @gluon.jit
 def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option: ttgl.constexpr = "zero"):
-    layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for(block_shape, base.dtype.element_ty)
-    return tma.make_tensor_descriptor(base, shape, strides, block_shape, layout, padding_option)
-
-
-@gluon.jit
-def tl_make_tensor_descriptor_amd(base, shape, strides, block_shape):
-    ttgl.static_assert(_is_gfx1250(current_target()), "tl_make_tensor_descriptor_amd requires gfx1250 target")
-    layout: ttgl.constexpr = get_default_tdm_layout(*block_shape)
-    desc = amd_tdm.make_tensor_descriptor(base, shape, strides, block_shape, layout)
-    return AMDTensorDescriptorArgs(desc, base)
+    target: ttgl.constexpr = current_target()
+    if _is_gfx1250(target):
+        layout: ttgl.constexpr = get_default_tdm_layout(*block_shape)
+        desc = amd_tdm.make_tensor_descriptor(base, shape, strides, block_shape, layout)
+        return AMDTensorDescriptorArgs(desc, base)
+    else:
+        layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for(block_shape, base.dtype.element_ty)
+        return tma.make_tensor_descriptor(base, shape, strides, block_shape, layout, padding_option)
 
 
 @gluon.jit
