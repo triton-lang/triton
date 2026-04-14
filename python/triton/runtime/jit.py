@@ -748,6 +748,13 @@ class JITFunction(JITCallable, KernelInterface[T]):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
         kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
 
+        # Force used_global_vals to be populated under _hash_lock before
+        # the kernel_cache lookup below. Otherwise a cache hit on this
+        # thread may race with another thread's first cache_key call and
+        # observe the initial empty dict, silently skipping the
+        # global-changed safety check.
+        self.cache_key
+
         # parse options
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
