@@ -303,7 +303,7 @@ def epilogue_partition(p):
     "pad_h",
     "pad_w",
 ])
-def conv_fprop(
+def conv_fprop_kernel(
     in_desc,
     weight_desc,
     output,
@@ -445,7 +445,7 @@ def conv_fprop_tma_set_block_size_hook(nargs):
 conv_fprop_autotuned_kernel = triton.autotune(
     configs=conv_fprop_get_configs(pre_hook=conv_fprop_tma_set_block_size_hook),
     key=["out_h", "out_w", "stride_h", "stride_w"],
-)(conv_fprop)
+)(conv_fprop_kernel)
 
 # ===-----------------------------------------------------------------------===#
 # Host-Side Entry Point
@@ -581,7 +581,7 @@ def _launch_conv(
     )
 
 
-def conv_fprop_autotuned(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
+def conv_fprop(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
     """Production fprop entrypoint.
 
     Selects the best kernel configuration with Triton autotuning for the given
@@ -632,7 +632,7 @@ def conv_fprop_autotuned(input_tensor, weight_tensor, stride=1, padding=0, **kwa
     return output
 
 
-conv_fprop_persistent = conv_fprop_autotuned
+conv_fprop_persistent = conv_fprop
 
 
 def _make_conv_fprop_fixed_kernel_meta(num_buffers, num_warps):
@@ -679,7 +679,7 @@ def conv_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_buffe
     )
 
     _launch_conv(
-        conv_fprop,
+        conv_fprop_kernel,
         _make_grid(num_sms, M_GEMM, N_GEMM),
         in_desc=in_desc,
         weight_desc=weight_desc,
@@ -803,7 +803,7 @@ def bench(N, H, W, Ci, Co, R, S, stride_val, pad_val, kernel, provider):
     x_nchw, x_nhwc, w_nchw, w_nhwc = _make_bench_inputs(N, H, W, Ci, Co, R, S)
 
     if provider == "gluon":
-        fn = lambda: conv_fprop_autotuned(x_nhwc, w_nhwc, stride=stride_val, padding=pad_val)
+        fn = lambda: conv_fprop(x_nhwc, w_nhwc, stride=stride_val, padding=pad_val)
     elif provider == "torch":
         fn = lambda: torch.nn.functional.conv2d(x_nchw, w_nchw, stride=stride_val, padding=pad_val)
     else:
