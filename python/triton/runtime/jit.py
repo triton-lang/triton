@@ -805,8 +805,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
         self._repr = repr
         self.launch_metadata = launch_metadata
-        # Register for simple deserialization of JITFunction constants
-        _triton_jit_function_registry[f"{self.module}:{self.fn.__qualname__}"] = self
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
@@ -831,6 +829,10 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
         # Hooks that will be called prior to executing "run"
         self.pre_run_hooks = []
+
+        # Register for simple deserialization of JITFunction constants.
+        # Done last so other threads never see a partially-initialized instance.
+        _triton_jit_function_registry[f"{self.module}:{self.fn.__qualname__}"] = self
 
     def __getstate__(self):
         # JITFunction is pickled into torch.compile's (possibly cross-process)
