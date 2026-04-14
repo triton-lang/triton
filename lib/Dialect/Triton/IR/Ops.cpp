@@ -895,9 +895,10 @@ void ReshapeOp::build(OpBuilder &builder, OperationState &state,
   auto srcEnc = srcTy.getEncoding();
   Attribute dstEnc;
   if (srcEnc) {
-    auto result = cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-                      ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape,
-                                               dstEnc, state.location);
+    auto result =
+        cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+            ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape, dstEnc,
+                                     allowReorder, state.location);
     assert(succeeded(result));
   }
   auto dstTy = RankedTensorType::get(shape, srcTy.getElementType(), dstEnc);
@@ -967,7 +968,8 @@ LogicalResult ReshapeOp::verify() {
   auto layoutInterface =
       cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
   auto result = layoutInterface->inferReshapeOpEncoding(
-      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc, getLoc());
+      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc,
+      /*allowReorder=*/false, getLoc());
   if (failed(result))
     return failure();
   return layoutInterface->verifyLayoutsAreEqual(
