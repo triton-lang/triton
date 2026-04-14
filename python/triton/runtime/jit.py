@@ -507,7 +507,7 @@ class JITCallable:
     def get_capture_scope(self):
         fn = self.fn
         if fn.__closure__ is None:
-            return self.__globals__
+            return dict(self.__globals__)
         nonlocals = {name: cell.cell_contents for name, cell in zip(fn.__code__.co_freevars, fn.__closure__)}
         return self.__globals__ | nonlocals
 
