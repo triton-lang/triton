@@ -299,7 +299,7 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
     return true;
 
   // wait_barrier will never run ahead of the load it's waiting on
-  if (isa<ttng::AsyncTMACopyGlobalToLocalOp, ttng::AsyncTMAGatherOp>(before) &&
+  if (isa<ttng::TMALoadLikeOpInterface>(before) &&
       isa<ttng::WaitBarrierOp>(after))
     return true;
 

@@ -312,7 +312,7 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
 bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttng::TMEMLoadOp,
           ttng::TMEMStoreOp, ttng::TMEMCopyOp, ttg::AsyncCopyGlobalToLocalOp,
-          ttng::AsyncTMACopyLocalToGlobalOp, ttng::AsyncTMAScatterOp>(op)) {
+          ttng::TMAOpInterface>(op)) {
     return true;
   }
   if (isa<ttg::MBarrierOpInterface>(op)) {
