@@ -12,13 +12,13 @@ if TYPE_CHECKING:
 __all__ = [
     "async_atomic_add",
     "async_atomic_and",
-    "async_copy_global_to_shared",
-    "async_copy_global_to_shared_im2col",
-    "async_copy_shared_to_global",
     "async_atomic_max",
     "async_atomic_min",
     "async_atomic_or",
     "async_atomic_xor",
+    "async_copy_global_to_shared",
+    "async_copy_global_to_shared_im2col",
+    "async_copy_shared_to_global",
     "store_wait",
 ]
 
