@@ -10,7 +10,7 @@ import textwrap
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Callable, Generic, Iterable, Optional, TypeVar, overload, Dict, Any, Tuple
+from typing import Callable, Generic, Iterable, Optional, ParamSpec, TypeVar, overload, Dict, Any, Tuple, TYPE_CHECKING
 
 from triton.backends import BaseBackend
 from types import ModuleType
@@ -27,6 +27,8 @@ GLUON_MODULE = "triton.experimental.gluon.language"
 INDENT_PATTERN = re.compile(r"^(?P<indent>[ \t]*)def\s+\w+\s*\(", re.MULTILINE)
 
 T = TypeVar("T")
+P = ParamSpec("P")
+R = TypeVar("R")
 
 # -----------------------------------------------------------------------------
 # Dependencies Finder
@@ -902,7 +904,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
                             [attrs], warmup)
         return kernel
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self: "JITFunction[Callable[P, R]]", *args: P.args, **kwargs: P.kwargs) -> R:
         raise RuntimeError("Cannot call @triton.jit'd outside of the scope of a kernel")
 
     def __repr__(self):
@@ -1118,7 +1120,7 @@ class BoundConstexprFunction(JITCallable):
         return self.__func__(self.__self__, *args, **kwargs)
 
 
-class ConstexprFunction(JITCallable):
+class ConstexprFunction(JITCallable, Generic[T]):
 
     def __init__(self, fn):
         super().__init__(fn)
@@ -1129,26 +1131,30 @@ class ConstexprFunction(JITCallable):
             return BoundConstexprFunction(obj, self)
         return self
 
-    def __call__(self, *args, _semantic=None, **kwargs):
-        from triton.language.core import _unwrap_if_constexpr, constexpr
-        # de-constexpr arguments and discard the _semantic keyword argument:
-        args = [_unwrap_if_constexpr(x) for x in args]
-        kwargs = {k: _unwrap_if_constexpr(v) for (k, v) in kwargs.items()}
+    if TYPE_CHECKING:
+        def __call__(self: "ConstexprFunction[Callable[P, R]]", *args: P.args, **kwargs: P.kwargs) -> R:
+            ...
+    else:
+        def __call__(self, *args, _semantic=None, **kwargs):
+            from triton.language.core import _unwrap_if_constexpr, constexpr
+            # de-constexpr arguments and discard the _semantic keyword argument:
+            args = [_unwrap_if_constexpr(x) for x in args]
+            kwargs = {k: _unwrap_if_constexpr(v) for (k, v) in kwargs.items()}
 
-        # call the raw Python function f:
-        res = self.fn(*args, **kwargs)
+            # call the raw Python function f:
+            res = self.fn(*args, **kwargs)
 
-        if _semantic is None:
-            # Not called by triton code generator, e.g. in host code, another constexpr function, or even an aggreate's __init__ function
-            return res
+            if _semantic is None:
+                # Not called by triton code generator, e.g. in host code, another constexpr function, or even an aggreate's __init__ function
+                return res
 
-        # convert result back to a Triton constexpr:
-        if knobs.runtime.interpret:
-            return res  # No constexpr in interpreter
-        return constexpr(res)
+            # convert result back to a Triton constexpr:
+            if knobs.runtime.interpret:
+                return res  # No constexpr in interpreter
+            return constexpr(res)
 
 
-def constexpr_function(fn):
+def constexpr_function(fn: T) -> ConstexprFunction[T]:
     """
     Wraps an arbitrary Python function so that it can be called at
     compile-time on constexpr arguments in a Triton function and
