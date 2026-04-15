@@ -272,7 +272,7 @@ def tma_gather_scatter_kernel(in_desc, gather_out_desc, scatter_out_desc, gather
     mbarrier.init(bar, count=1)
 
     gather_offsets = ttgl.load(gather_idx_ptr + ttgl.arange(0, BLOCK_M, layout=x_offsets_layout))
-    mbarrier.expect(bar, blackwell_tma.nbytes_per_cta_gather(in_desc, gather_offsets))
+    mbarrier.expect(bar, smem.nbytes_per_cta)
     blackwell_tma.async_gather(in_desc, gather_offsets, 0, bar, smem, multicast=True)
     mbarrier.wait(bar, phase=0, deps=[smem])
 
@@ -770,9 +770,7 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, out_desc, gather_idx_p
         gather_offsets = ttgl.load(gather_idx_ptr + ttgl.arange(0, BLOCK_M, layout=gather_offsets_layout))
 
     for k in range(NUM_K_TILES):
-        a_nbytes_per_cta: ttgl.constexpr = blackwell_tma.nbytes_per_cta_gather(
-            a_desc, gather_offsets) if use_gather_scatter else a_desc.nbytes_per_cta
-        mbarrier.expect(tma_bar, a_nbytes_per_cta + b_desc.nbytes_per_cta)
+        mbarrier.expect(tma_bar, smem_a.nbytes_per_cta + smem_b.nbytes_per_cta)
         if use_gather_scatter:
             blackwell_tma.async_gather(a_desc, gather_offsets, k * BLOCK_K, tma_bar, smem_a, multicast=multicast)
         else:

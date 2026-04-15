@@ -1,5 +1,4 @@
 import triton.experimental.gluon.language._core as ttgl
-from triton.experimental.gluon._runtime import constexpr_function
 from triton.experimental.gluon.language._core import builtin
 from triton.experimental.gluon.language.nvidia.hopper.tma import (
     async_copy_global_to_shared,
@@ -20,17 +19,7 @@ __all__ = [
     "tensor_descriptor",
     "tensor_descriptor_type",
     "make_tensor_descriptor",
-    "nbytes_per_cta_gather",
 ]
-
-
-@constexpr_function
-def nbytes_per_cta_gather(desc, offsets):
-    num_splits = 1
-    for basis in offsets.type.layout.parent.cga_layout:
-        if basis != [0, 0]:
-            num_splits *= 2
-    return offsets.shape[0] * desc.block_shape[1] * (desc.dtype.primitive_bitwidth // 8) // num_splits
 
 
 @builtin
