@@ -299,6 +299,11 @@ constexpr uint64_t kPerfettoFlowIdBase = 1ULL << 32;
 constexpr uint32_t kPerfettoTracePacketSequenceId = 1;
 constexpr uint32_t kPerfettoSeqIncrementalStateCleared = 1;
 constexpr uint32_t kPerfettoSeqNeedsIncrementalState = 2;
+constexpr int32_t kPerfettoCpuTrackOrderBase = 0;
+constexpr int32_t kPerfettoGraphTrackOrderBase = 100000;
+constexpr int32_t kPerfettoGpuTrackOrderBase = 200000;
+constexpr int32_t kPerfettoCycleTrackOrderBase = 300000;
+constexpr uint32_t kPerfettoChildTracksOrderingExplicit = 3;
 
 struct PerfettoAnnotation {
   enum class Kind { String, Json, UInt64, Int64, Double, Bool };
@@ -327,6 +332,11 @@ struct PerfettoSlicePoint {
   uint64_t timestampNs{};
   bool isBegin{};
   const PerfettoSliceEvent *event{};
+};
+
+struct PerfettoTrack {
+  std::string name;
+  int32_t siblingOrderRank{};
 };
 
 class PerfettoInternedStringTable {
@@ -405,6 +415,72 @@ struct KernelEvent {
         contexts(std::move(contexts)), launchEventId(launchId),
         isGraphLinked(isGraphLinked) {}
 };
+
+uint64_t getKernelEventStartTimeNs(const KernelEvent &event) {
+  return std::get<uint64_t>(
+      event.kernelMetric->getValue(KernelMetric::StartTime));
+}
+
+uint64_t getKernelEventEndTimeNs(const KernelEvent &event) {
+  return std::get<uint64_t>(
+      event.kernelMetric->getValue(KernelMetric::EndTime));
+}
+
+uint64_t getKernelEventDeviceId(const KernelEvent &event) {
+  return std::get<uint64_t>(
+      event.kernelMetric->getValue(KernelMetric::DeviceId));
+}
+
+uint64_t getKernelEventStreamId(const KernelEvent &event) {
+  return std::get<uint64_t>(
+      event.kernelMetric->getValue(KernelMetric::StreamId));
+}
+
+uint64_t getKernelEventIsMetricKernel(const KernelEvent &event) {
+  return std::get<uint64_t>(
+      event.kernelMetric->getValue(KernelMetric::IsMetricKernel));
+}
+
+std::string getKernelEventName(const KernelEvent &event) {
+  if (getKernelEventIsMetricKernel(event)) {
+    return GraphState::metricTag;
+  }
+  return event.contexts.empty() ? "" : event.contexts.back().name;
+}
+
+bool compareKernelEvents(const KernelEvent &a, const KernelEvent &b) {
+  if (getKernelEventStartTimeNs(a) != getKernelEventStartTimeNs(b)) {
+    return getKernelEventStartTimeNs(a) < getKernelEventStartTimeNs(b);
+  }
+  if (getKernelEventEndTimeNs(a) != getKernelEventEndTimeNs(b)) {
+    return getKernelEventEndTimeNs(a) < getKernelEventEndTimeNs(b);
+  }
+  if (getKernelEventIsMetricKernel(a) != getKernelEventIsMetricKernel(b)) {
+    return getKernelEventIsMetricKernel(a) < getKernelEventIsMetricKernel(b);
+  }
+  return getKernelEventName(a) < getKernelEventName(b);
+}
+
+bool isSameKernelEvent(const KernelEvent &a, const KernelEvent &b) {
+  return getKernelEventStartTimeNs(a) == getKernelEventStartTimeNs(b) &&
+         getKernelEventEndTimeNs(a) == getKernelEventEndTimeNs(b) &&
+         getKernelEventDeviceId(a) == getKernelEventDeviceId(b) &&
+         getKernelEventStreamId(a) == getKernelEventStreamId(b) &&
+         getKernelEventIsMetricKernel(a) == getKernelEventIsMetricKernel(b) &&
+         getKernelEventName(a) == getKernelEventName(b);
+}
+
+void pruneDuplicateKernelEvents(std::vector<KernelEvent> &events) {
+  std::vector<KernelEvent> pruned;
+  pruned.reserve(events.size());
+  for (auto &event : events) {
+    if (!pruned.empty() && isSameKernelEvent(pruned.back(), event)) {
+      continue;
+    }
+    pruned.push_back(std::move(event));
+  }
+  events = std::move(pruned);
+}
 
 struct CpuScopeEvent {
   size_t eventId;
@@ -607,7 +683,7 @@ PerfettoAnnotation makeUInt64Annotation(const std::string &name,
 PerfettoAnnotation makeDoubleAnnotation(const std::string &name,
                                         double value);
 void appendPerfettoTrace(std::ostream &os,
-                         const std::map<uint64_t, std::string> &tracks,
+                         const std::map<uint64_t, PerfettoTrack> &tracks,
                          const std::vector<PerfettoSliceEvent> &events);
 
 uint64_t getMinInitTime(const std::vector<KernelTrace> &streamTrace) {
@@ -682,7 +758,7 @@ std::vector<int> assignLineIds(
 void dumpCycleMetricPerfettoTrace(std::vector<CycleEvent> &cycleEvents,
                                   std::ostream &os) {
   auto timeline = convertToTimelineTrace(cycleEvents);
-  std::map<uint64_t, std::string> tracks;
+  std::map<uint64_t, PerfettoTrack> tracks;
   std::vector<PerfettoSliceEvent> events;
   if (timeline.empty()) {
     appendPerfettoTrace(os, tracks, events);
@@ -724,7 +800,11 @@ void dumpCycleMetricPerfettoTrace(std::vector<CycleEvent> &cycleEvents,
               name << metadata->kernelName << " Core" << procId << " CTA"
                    << ctaId << " / warp " << warpId << " (line " << lineId
                    << ")";
-              tracks.emplace(nextTrackUuid, name.str());
+              tracks.emplace(
+                  nextTrackUuid,
+                  PerfettoTrack{name.str(),
+                                kPerfettoCycleTrackOrderBase +
+                                    static_cast<int32_t>(trackUuids.size())});
               ++nextTrackUuid;
             }
 
@@ -866,6 +946,10 @@ uint64_t getGraphLaneId(size_t streamId) { return kGraphLaneBase + streamId; }
 
 uint64_t getGpuLaneId(size_t streamId) { return kGpuLaneBase + streamId; }
 
+uint64_t getGpuLaneId(size_t deviceId, size_t streamId) {
+  return kGpuLaneBase + deviceId * 1000000 + streamId;
+}
+
 uint64_t getPerfettoLaneTrackUuid(uint64_t laneId) {
   return kPerfettoLaneTrackUuidBase + laneId;
 }
@@ -899,16 +983,20 @@ void appendProcessTrackDescriptor(ProtoWriter &trace) {
   track.writeUInt64(1, kPerfettoProcessTrackUuid);
   track.writeString(2, "Trace");
   track.writeMessage(3, process);
+  // TrackDescriptor.child_ordering = 11.
+  track.writeUInt32(11, kPerfettoChildTracksOrderingExplicit);
   appendTrackDescriptorPacket(trace, track);
 }
 
 void appendLaneTrackDescriptor(ProtoWriter &trace, uint64_t trackUuid,
-                               const std::string &name) {
+                               const PerfettoTrack &trackInfo) {
   ProtoWriter track;
-  // TrackDescriptor.uuid = 1, name = 2, parent_uuid = 5.
+  // TrackDescriptor.uuid = 1, name = 2, parent_uuid = 5,
+  // sibling_order_rank = 12.
   track.writeUInt64(1, trackUuid);
-  track.writeString(2, name);
+  track.writeString(2, trackInfo.name);
   track.writeUInt64(5, kPerfettoProcessTrackUuid);
+  track.writeInt32(12, trackInfo.siblingOrderRank);
   appendTrackDescriptorPacket(trace, track);
 }
 
@@ -1055,13 +1143,13 @@ collectPerfettoInternedNames(const std::vector<PerfettoSliceEvent> &events) {
 }
 
 void appendPerfettoTrace(std::ostream &os,
-                         const std::map<uint64_t, std::string> &tracks,
+                         const std::map<uint64_t, PerfettoTrack> &tracks,
                          const std::vector<PerfettoSliceEvent> &events) {
   ProtoWriter trace;
   auto internedNames = collectPerfettoInternedNames(events);
   appendProcessTrackDescriptor(trace);
-  for (const auto &[uuid, name] : tracks) {
-    appendLaneTrackDescriptor(trace, uuid, name);
+  for (const auto &[uuid, track] : tracks) {
+    appendLaneTrackDescriptor(trace, uuid, track);
   }
   appendInternedDataPacket(trace, internedNames);
 
@@ -1582,14 +1670,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     if (hasKernelMetrics) {
       // Sort all kernel events in order
       for (auto &[streamId, events] : kernelEvents) {
-        std::sort(events.begin(), events.end(),
-                  [](const KernelEvent &a, const KernelEvent &b) {
-                    auto aStartTime = std::get<uint64_t>(
-                        a.kernelMetric->getValue(KernelMetric::StartTime));
-                    auto bStartTime = std::get<uint64_t>(
-                        b.kernelMetric->getValue(KernelMetric::StartTime));
-                    return aStartTime < bStartTime;
-                  });
+        std::sort(events.begin(), events.end(), compareKernelEvents);
+        pruneDuplicateKernelEvents(events);
       }
       // Graph scopes are constructed in order
       reconstructGraphScopeEvents(kernelEvents, graphScopeEvents);
@@ -1731,32 +1813,47 @@ void TraceData::dumpPerfettoTrace(std::ostream &os, size_t phase) const {
     if (hasKernelMetrics) {
       for (auto &[streamId, streamKernelEvents] : kernelEvents) {
         std::sort(streamKernelEvents.begin(), streamKernelEvents.end(),
-                  [](const KernelEvent &a, const KernelEvent &b) {
-                    auto aStartTime = std::get<uint64_t>(
-                        a.kernelMetric->getValue(KernelMetric::StartTime));
-                    auto bStartTime = std::get<uint64_t>(
-                        b.kernelMetric->getValue(KernelMetric::StartTime));
-                    return aStartTime < bStartTime;
-                  });
+                  compareKernelEvents);
+        pruneDuplicateKernelEvents(streamKernelEvents);
       }
       reconstructGraphScopeEvents(kernelEvents, graphScopeEvents);
     }
 
-    std::map<uint64_t, std::string> tracks;
+    std::map<uint64_t, PerfettoTrack> tracks;
     for (const auto &[threadId, _] : cpuScopeEvents) {
       const auto laneId = getCpuLaneId(threadId);
       tracks.emplace(getPerfettoLaneTrackUuid(laneId),
-                     "CPU Thread " + std::to_string(threadId));
+                     PerfettoTrack{
+                         "CPU Thread " + std::to_string(threadId),
+                         kPerfettoCpuTrackOrderBase +
+                             static_cast<int32_t>(threadId)});
     }
     for (const auto &[streamId, _] : graphScopeEvents) {
       const auto laneId = getGraphLaneId(streamId);
       tracks.emplace(getPerfettoLaneTrackUuid(laneId),
-                     "Graph: Stream " + std::to_string(streamId));
+                     PerfettoTrack{
+                         "Graph: Stream " + std::to_string(streamId),
+                         kPerfettoGraphTrackOrderBase +
+                             static_cast<int32_t>(streamId)});
     }
     for (const auto &[streamId, _] : kernelEvents) {
-      const auto laneId = getGpuLaneId(streamId);
-      tracks.emplace(getPerfettoLaneTrackUuid(laneId),
-                     "GPU Stream " + std::to_string(streamId));
+      for (const auto &event : kernelEvents.at(streamId)) {
+        const auto deviceId =
+            static_cast<size_t>(getKernelEventDeviceId(event));
+        const auto kernelStreamId =
+            static_cast<size_t>(getKernelEventStreamId(event));
+        const auto laneId = getGpuLaneId(deviceId, kernelStreamId);
+        const auto rank =
+            kPerfettoGpuTrackOrderBase +
+            static_cast<int32_t>(deviceId * 1000000 + kernelStreamId);
+        const auto name =
+            deviceId == 0
+                ? "GPU Stream " + std::to_string(kernelStreamId)
+                : "GPU Device " + std::to_string(deviceId) + " Stream " +
+                      std::to_string(kernelStreamId);
+        tracks.emplace(getPerfettoLaneTrackUuid(laneId),
+                       PerfettoTrack{name, rank});
+      }
     }
 
     std::unordered_map<size_t, const CpuScopeEvent *>
@@ -1861,25 +1958,20 @@ void TraceData::dumpPerfettoTrace(std::ostream &os, size_t phase) const {
     }
 
     for (const auto &[streamId, streamKernelEvents] : kernelEvents) {
-      const auto trackUuid =
-          getPerfettoLaneTrackUuid(getGpuLaneId(streamId));
       for (size_t i = 0; i < streamKernelEvents.size(); ++i) {
         const auto &event = streamKernelEvents[i];
-        auto *kernelMetric = event.kernelMetric;
+        const auto trackUuid = getPerfettoLaneTrackUuid(getGpuLaneId(
+            static_cast<size_t>(getKernelEventDeviceId(event)),
+            static_cast<size_t>(getKernelEventStreamId(event))));
         auto *flexibleMetrics = event.flexibleMetrics;
-        const auto startTimeNs = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::StartTime));
-        const auto endTimeNs = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::EndTime));
-        const bool isMetricKernel = static_cast<bool>(std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::IsMetricKernel)));
+        const auto startTimeNs = getKernelEventStartTimeNs(event);
+        const auto endTimeNs = getKernelEventEndTimeNs(event);
 
         PerfettoSliceEvent slice;
         slice.trackUuid = trackUuid;
         slice.startTimeNs = relativeTimestamp(startTimeNs);
         slice.endTimeNs = relativeTimestamp(endTimeNs);
-        slice.name =
-            isMetricKernel ? GraphState::metricTag : event.contexts.back().name;
+        slice.name = getKernelEventName(event);
         slice.category = "kernel";
         slice.annotations.push_back(makeJsonAnnotation(
             "call_stack", buildCallStackJson(event.contexts).dump()));
