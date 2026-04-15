@@ -10,6 +10,12 @@ if TYPE_CHECKING:
     from triton._C import ir
 
 __all__ = [
+    "async_atomic_add",
+    "async_atomic_and",
+    "async_atomic_max",
+    "async_atomic_min",
+    "async_atomic_or",
+    "async_atomic_xor",
     "async_copy_global_to_shared",
     "async_copy_global_to_shared_im2col",
     "async_copy_shared_to_global",
@@ -257,11 +263,110 @@ def async_copy_global_to_shared_im2col(tensor_desc, coord, offsets, barrier, res
 
 @builtin
 def async_copy_shared_to_global(tensor_desc, coord, src, _semantic=None):
+    """
+    Copy data from shared memory to global memory using TMA.
+
+    Args:
+        tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
+        coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
+        src (ttgl.shared_memory_descriptor): Source memory descriptor.
+    """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_copy_shared_to_global", "innermost coordinate",
                               _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
+
+
+def _async_atomic_shared_to_global(kind, tensor_desc, coord, src, fn_name: str, _semantic=None):
+    if _semantic.builder.options.enable_iisan:
+        _emit_alignment_check(tensor_desc, coord, fn_name, "innermost coordinate", _semantic=_semantic)
+    coord = _semantic._convert_to_ir_values(coord, require_i64=False)
+    _semantic.builder.create_async_tma_reduce(kind, tensor_desc.handle, coord, src.handle)
+
+
+@builtin
+def async_atomic_add(tensor_desc, coord, src, _semantic=None):
+    """
+    Atomically add data from shared memory into global memory using TMA.
+
+    Args:
+        tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
+        coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
+        src (ttgl.shared_memory_descriptor): Source memory descriptor.
+    """
+    _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.ADD, tensor_desc, coord, src, "async_atomic_add",
+                                   _semantic=_semantic)
+
+
+@builtin
+def async_atomic_min(tensor_desc, coord, src, _semantic=None):
+    """
+    Atomically compute the minimum of shared memory data and global memory using TMA.
+
+    Args:
+        tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
+        coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
+        src (ttgl.shared_memory_descriptor): Source memory descriptor.
+    """
+    _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.MIN, tensor_desc, coord, src, "async_atomic_min",
+                                   _semantic=_semantic)
+
+
+@builtin
+def async_atomic_max(tensor_desc, coord, src, _semantic=None):
+    """
+    Atomically compute the maximum of shared memory data and global memory using TMA.
+
+    Args:
+        tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
+        coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
+        src (ttgl.shared_memory_descriptor): Source memory descriptor.
+    """
+    _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.MAX, tensor_desc, coord, src, "async_atomic_max",
+                                   _semantic=_semantic)
+
+
+@builtin
+def async_atomic_and(tensor_desc, coord, src, _semantic=None):
+    """
+    Atomically bitwise-and data from shared memory into global memory using TMA.
+
+    Args:
+        tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
+        coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
+        src (ttgl.shared_memory_descriptor): Source memory descriptor.
+    """
+    _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.AND, tensor_desc, coord, src, "async_atomic_and",
+                                   _semantic=_semantic)
+
+
+@builtin
+def async_atomic_or(tensor_desc, coord, src, _semantic=None):
+    """
+    Atomically bitwise-or data from shared memory into global memory using TMA.
+
+    Args:
+        tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
+        coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
+        src (ttgl.shared_memory_descriptor): Source memory descriptor.
+    """
+    _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.OR, tensor_desc, coord, src, "async_atomic_or",
+                                   _semantic=_semantic)
+
+
+@builtin
+def async_atomic_xor(tensor_desc, coord, src, _semantic=None):
+    """
+    Atomically bitwise-xor data from shared memory into global memory using TMA.
+
+    Args:
+        tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
+        coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
+        src (ttgl.shared_memory_descriptor): Source memory descriptor.
+    """
+    _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.XOR, tensor_desc, coord, src, "async_atomic_xor",
+                                   _semantic=_semantic)
 
 
 @builtin

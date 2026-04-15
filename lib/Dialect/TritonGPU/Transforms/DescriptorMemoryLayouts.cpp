@@ -276,25 +276,15 @@ std::optional<UseInfo>
 AssignDescriptorMemoryLayouts::getUseInfo(Operation *op) {
   UseInfo info;
   info.use = op;
-  if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
+  if (auto load = dyn_cast<DescriptorLoadLikeOpInterface>(op)) {
     info.descriptor = load.getDesc();
     info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
+    auto resultTy = cast<RankedTensorType>(op->getResult(0).getType());
     auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
-                                               : load.getType().getEncoding();
+                                               : resultTy.getEncoding();
     info.cgaLayout = getCGALayout(encoding);
-    auto shape = load.getResult().getType().getShape();
-    auto rank = load.getDesc().getType().getShape().size();
-    info.shape = expandToRank(shape, rank);
-    return info;
-  }
-  if (auto gather = dyn_cast<DescriptorGatherOp>(op)) {
-    info.descriptor = gather.getDesc();
-    info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
-    auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
-                                               : gather.getType().getEncoding();
-    info.cgaLayout = getCGALayout(encoding);
-    auto shape = gather.getResult().getType().getShape();
-    auto rank = gather.getDesc().getType().getShape().size();
+    auto shape = resultTy.getShape();
+    auto rank = info.descriptor.getType().getShape().size();
     info.shape = expandToRank(shape, rank);
     return info;
   }

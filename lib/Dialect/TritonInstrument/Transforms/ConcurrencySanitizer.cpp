@@ -278,8 +278,8 @@ Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
                                               copyOp.getBarrier());
     return getLeaderCTA(b, copyOp.getBarrier());
   }
-  if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op))
-    return getLeaderCTA(b, gatherOp.getBarrier());
+  if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
+    return getLeaderCTA(b, tmaLoad.getBarrier());
 
   if (isTensorCoreOp(op))
     return getRecipientCTAsForBroadcastMasks(

@@ -862,6 +862,31 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
   return foldViewLikeOp(*this, adaptor.getSrc());
 }
 
+//-- CatOp --
+LogicalResult CatOp::verify() {
+  RankedTensorType lhsTy = getLhs().getType();
+  RankedTensorType resultTy = getType();
+
+  int64_t operandElements = lhsTy.getNumElements() * 2;
+  if (resultTy.getNumElements() != operandElements) {
+    return emitOpError("result element count must equal the sum of the "
+                       "operand element counts, expected ")
+           << operandElements << " but got " << resultTy.getNumElements();
+  }
+
+  Attribute operandEnc = lhsTy.getEncoding();
+  Attribute resultEnc = resultTy.getEncoding();
+  if (!!operandEnc != !!resultEnc) {
+    return emitOpError("requires that either (a) operands and result all have "
+                       "encodings, or (b) none do.");
+  }
+  if (!resultEnc)
+    return success();
+
+  auto interface = cast<DialectInferLayoutInterface>(&resultEnc.getDialect());
+  return interface->verifyCatOpEncodingCompatibility(getOperation());
+}
+
 //-- ReshapeOp --
 
 void ReshapeOp::build(OpBuilder &builder, OperationState &state,
@@ -870,9 +895,10 @@ void ReshapeOp::build(OpBuilder &builder, OperationState &state,
   auto srcEnc = srcTy.getEncoding();
   Attribute dstEnc;
   if (srcEnc) {
-    auto result = cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-                      ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape,
-                                               dstEnc, state.location);
+    auto result =
+        cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+            ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape, dstEnc,
+                                     allowReorder, state.location);
     assert(succeeded(result));
   }
   auto dstTy = RankedTensorType::get(shape, srcTy.getElementType(), dstEnc);
@@ -942,7 +968,8 @@ LogicalResult ReshapeOp::verify() {
   auto layoutInterface =
       cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
   auto result = layoutInterface->inferReshapeOpEncoding(
-      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc, getLoc());
+      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc,
+      /*allowReorder=*/false, getLoc());
   if (failed(result))
     return failure();
   return layoutInterface->verifyLayoutsAreEqual(

@@ -1751,10 +1751,11 @@ def test_tmem_store_in_warp_specialize_partition_visible_to_parent(device, fresh
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     @gluon.jit
-    def store_one_partition(tmem):
+    def store_one_partition(tmem, bar):
         reg_layout: gl.constexpr = tmem.get_reg_layout()
         one = gl.full((BLOCK, BLOCK), 1.0, gl.float32, reg_layout)
         tmem.store(one)
+        mbarrier.arrive(bar, count=1)
 
     @gluon.jit
     def default_partition():
@@ -1773,10 +1774,14 @@ def test_tmem_store_in_warp_specialize_partition_visible_to_parent(device, fresh
         zero = gl.full((BLOCK, BLOCK), 0.0, gl.float32, reg_layout)
         tmem.store(zero)
 
+        bar = gl.allocate_shared_memory(gl.int64, [1], gl.constexpr(mbarrier.MBarrierLayout()))
+        mbarrier.init(bar, count=1)
         gl.warp_specialize([
             (default_partition, ()),
-            (store_one_partition, (tmem, )),
+            (store_one_partition, (tmem, bar)),
         ], [4], [32])
+        mbarrier.wait(bar, phase=0, deps=[tmem])
+        mbarrier.invalidate(bar)
 
         out = tmem.load()
         out = gl.convert_layout(out, layout)

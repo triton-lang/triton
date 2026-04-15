@@ -203,6 +203,10 @@ struct BarrierExpectConversion
     auto numCTAs = triton::gpu::lookupNumCTAs(rewriter);
     auto expectedBytes = op.getSize() * (numCTAs / barrierTy.getNumElements());
 
+    // Because this operation can signal other partitions we need to synchronize
+    // the current partition first.
+    ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
+
     auto id = getThreadId(rewriter, loc);
     Value basePred = b.icmp_eq(id, b.i32_val(0));
     basePred = b.and_(basePred, adaptor.getPred());
