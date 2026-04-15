@@ -1,15 +1,11 @@
 # type: ignore
 
-import math
-
-import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 
 # hack to workaround limited dependencies tracking.
 # TODO: fix this by pulling imports into the generated file.
 from triton.language.target_info import current_target  # noqa: F401
-
 
 # ---- layout utilities ----
 

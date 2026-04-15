@@ -22,7 +22,6 @@ from triton.tools.triton_to_gluon_translator.common_helpers import (
     tl_trans,
 )
 
-
 # ---- NVIDIA MMA sync (Ampere) ----
 
 
@@ -358,8 +357,8 @@ def tl_dot_scaled(
     rhs_k_pack=True,
     out_dtype=ttgl.float32,
 ):
-    if (tl_dot_scaled_mmav5_supported(lhs.type, rhs.type, ttgl.num_warps())
-            and lhs_scale is not None and rhs_scale is not None):
+    if (tl_dot_scaled_mmav5_supported(lhs.type, rhs.type, ttgl.num_warps()) and lhs_scale is not None
+            and rhs_scale is not None):
         return tl_dot_scaled_blackwell(
             lhs,
             lhs_scale,
