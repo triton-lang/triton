@@ -264,8 +264,6 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       return true;
     if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
       return barrier.hasLocal();
-    if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(op))
-      return !mmaOp.getCompletionBarriers().empty();
     return false;
   };
 

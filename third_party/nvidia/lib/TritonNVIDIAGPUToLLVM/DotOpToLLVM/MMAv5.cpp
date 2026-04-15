@@ -400,6 +400,10 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   }
   pred = tb.and_(pred, isWarp0);
 
+  // Synchronize the current partition before branching into the MMA block.
+  if (!barriers.empty())
+    BarrierOp::create(rewriter, loc, AddrSpace::Local);
+
   // Wrap the whole mma code sequence within a IF block.
   auto *curBlock = rewriter.getInsertionBlock();
   auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
@@ -504,9 +508,6 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     }
   }
 
-  // Synchronize the current partition before committing.
-  if (!barriers.empty())
-    BarrierOp::create(rewriter, loc, AddrSpace::Local);
   for (auto [barrier, barrierPred] : llvm::zip(barriers, barrierPreds)) {
     Value commitPred = tb.and_(barrierPred, elect);
     auto smemObj =
