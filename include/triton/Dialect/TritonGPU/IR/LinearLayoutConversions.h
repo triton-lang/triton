@@ -72,6 +72,10 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
                                        TMAMode mode,
                                        bool disableSwizzle = false);
+FailureOr<LinearLayout>
+tryNvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
+                             NVMMASharedEncodingAttr shared, TMAMode mode,
+                             bool disableSwizzle = false);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding
