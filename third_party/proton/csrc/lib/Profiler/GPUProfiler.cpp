@@ -65,13 +65,17 @@ computeFlushRangesAndPeekPhases(
 struct PeriodicFlushStats {
   uint64_t totalToJsonUs{0};
   uint64_t totalToMsgPackUs{0};
+  uint64_t totalToPerfettoTraceUs{0};
   uint64_t totalJsonWriteUs{0};
   uint64_t totalMsgPackWriteUs{0};
+  uint64_t totalPerfettoTraceWriteUs{0};
   uint64_t clearUs{0};
   size_t toJsonCalls{0};
   size_t toMsgPackCalls{0};
+  size_t toPerfettoTraceCalls{0};
   size_t jsonWriteCalls{0};
   size_t msgPackWriteCalls{0};
+  size_t perfettoTraceWriteCalls{0};
 };
 
 void periodicFlushDataPhases(Data &data,
@@ -115,6 +119,38 @@ void periodicFlushDataPhases(Data &data,
       } else {
         std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
         ofs << jsonStr;
+      }
+    } else if (periodicFlushingFormat == "perfetto_trace") {
+      std::vector<uint8_t> perfettoTrace;
+      if (timingEnabled) {
+        const auto t0 = Clock::now();
+        perfettoTrace = data.toPerfettoTrace(startPhase);
+        const auto t1 = Clock::now();
+        stats.totalToPerfettoTraceUs +=
+            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                .count();
+        ++stats.toPerfettoTraceCalls;
+      } else {
+        perfettoTrace = data.toPerfettoTrace(startPhase);
+      }
+
+      if (timingEnabled) {
+        const auto t0 = Clock::now();
+        std::ofstream ofs(pathWithPhase,
+                          std::ios::out | std::ios::binary | std::ios::trunc);
+        ofs.write(reinterpret_cast<const char *>(perfettoTrace.data()),
+                  perfettoTrace.size());
+        ofs.flush();
+        const auto t1 = Clock::now();
+        stats.totalPerfettoTraceWriteUs +=
+            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                .count();
+        ++stats.perfettoTraceWriteCalls;
+      } else {
+        std::ofstream ofs(pathWithPhase,
+                          std::ios::out | std::ios::binary | std::ios::trunc);
+        ofs.write(reinterpret_cast<const char *>(perfettoTrace.data()),
+                  perfettoTrace.size());
       }
     } else if (periodicFlushingFormat == "hatchet_msgpack") {
       std::vector<uint8_t> msgPack;
@@ -189,7 +225,7 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                                   ": unsupported option key: " + key);
     }
     if (value != "hatchet_msgpack" && value != "chrome_trace" &&
-        value != "hatchet") {
+        value != "perfetto_trace" && value != "hatchet") {
       throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
                                   ": unsupported format: " + value);
     }
@@ -269,10 +305,16 @@ void flushDataPhasesImpl(
                 << " toJsonString_calls=" << stats.toJsonCalls
                 << " toMsgPack_us=" << stats.totalToMsgPackUs
                 << " toMsgPack_calls=" << stats.toMsgPackCalls
+                << " toPerfettoTrace_us=" << stats.totalToPerfettoTraceUs
+                << " toPerfettoTrace_calls=" << stats.toPerfettoTraceCalls
                 << " json_write_us=" << stats.totalJsonWriteUs
                 << " json_write_calls=" << stats.jsonWriteCalls
                 << " msgpack_write_us=" << stats.totalMsgPackWriteUs
                 << " msgpack_write_calls=" << stats.msgPackWriteCalls
+                << " perfetto_trace_write_us="
+                << stats.totalPerfettoTraceWriteUs
+                << " perfetto_trace_write_calls="
+                << stats.perfettoTraceWriteCalls
                 << " clear_us=" << stats.clearUs << std::endl;
     }
   }

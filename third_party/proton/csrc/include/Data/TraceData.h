@@ -17,6 +17,8 @@ public:
 
   std::vector<uint8_t> toMsgPack(size_t phase) const override;
 
+  std::vector<uint8_t> toPerfettoTrace(size_t phase) const override;
+
   DataEntry addOp(size_t phase, size_t eventId,
                   const std::vector<Context> &contexts) override;
 
@@ -42,6 +44,7 @@ private:
   }
 
   void dumpChromeTrace(std::ostream &os, size_t phase) const;
+  void dumpPerfettoTrace(std::ostream &os, size_t phase) const;
   size_t getCurrentThreadTraceId();
 
   PhaseStore<Trace> tracePhases;

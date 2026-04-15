@@ -22,7 +22,13 @@
 
 namespace proton {
 
-enum class OutputFormat { Hatchet, HatchetMsgPack, ChromeTrace, Count };
+enum class OutputFormat {
+  Hatchet,
+  HatchetMsgPack,
+  ChromeTrace,
+  PerfettoTrace,
+  Count
+};
 
 class Data;
 
@@ -156,6 +162,11 @@ public:
 
   /// To MsgPack
   virtual std::vector<uint8_t> toMsgPack(size_t phase) const = 0;
+
+  /// To Perfetto Trace protobuf
+  virtual std::vector<uint8_t> toPerfettoTrace(size_t phase) const {
+    throw std::logic_error("Output format not supported");
+  }
 
 protected:
   /// The actual implementations

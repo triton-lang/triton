@@ -19,6 +19,58 @@ import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
 
 
+def _read_proto_varint(data: bytes, offset: int) -> tuple[int, int]:
+    value = 0
+    shift = 0
+    while True:
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if byte < 0x80:
+            return value, offset
+        shift += 7
+
+
+def _iter_proto_fields(data: bytes):
+    offset = 0
+    while offset < len(data):
+        key, offset = _read_proto_varint(data, offset)
+        field_id = key >> 3
+        wire_type = key & 0x7
+        if wire_type == 0:
+            value, offset = _read_proto_varint(data, offset)
+        elif wire_type == 1:
+            value = data[offset:offset + 8]
+            offset += 8
+        elif wire_type == 2:
+            size, offset = _read_proto_varint(data, offset)
+            value = data[offset:offset + size]
+            offset += size
+        else:
+            raise AssertionError(f"unsupported protobuf wire type: {wire_type}")
+        yield field_id, wire_type, value
+
+
+def _assert_perfetto_trace_file(path: str):
+    data = pathlib.Path(path).read_bytes()
+    assert data
+    assert data[:1] == b"\x0a"
+    assert not data.lstrip().startswith(b"{")
+
+    has_track_descriptor = False
+    has_track_event = False
+    for field_id, wire_type, packet in _iter_proto_fields(data):
+        assert field_id == 1
+        assert wire_type == 2
+        for packet_field_id, packet_wire_type, _ in _iter_proto_fields(packet):
+            if packet_field_id == 60 and packet_wire_type == 2:
+                has_track_descriptor = True
+            if packet_field_id == 11 and packet_wire_type == 2:
+                has_track_event = True
+    assert has_track_descriptor
+    assert has_track_event
+
+
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_torch.hatchet"
@@ -1486,11 +1538,13 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
-@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
+@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet", "perfetto_trace"])
 def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
     fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
-    session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
+    data_kind = "trace" if data_format == "perfetto_trace" else "tree"
+    session = proton.start(str(temp_file.with_suffix("")), data=data_kind,
+                           mode=f"periodic_flushing:format={data_format}")
 
     for i in range(10000):
         if i != 0 and i % 1000 == 0:
@@ -1507,6 +1561,9 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
     assert len(hatchet_files) == 10
     num_scopes = 0
     for hatchet_file in hatchet_files:
+        if data_format == "perfetto_trace":
+            _assert_perfetto_trace_file(hatchet_file)
+            continue
         if data_format == "hatchet_msgpack":
             with open(hatchet_file, "rb") as f:
                 data = msgpack.load(f, raw=False, strict_map_key=False)
@@ -1518,16 +1575,18 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
         assert data[0]["children"][0]["frame"]["name"].startswith("test_")
         assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
         num_scopes += len(data[0]["children"])
-    assert num_scopes == 10000
+    if data_format != "perfetto_trace":
+        assert num_scopes == 10000
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
-@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
+@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet", "perfetto_trace"])
 def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
     fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
-    session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}",
+    data_kind = "trace" if data_format == "perfetto_trace" else "tree"
+    session = proton.start(str(temp_file.with_suffix("")), data=data_kind, mode=f"periodic_flushing:format={data_format}",
                            hook="triton")
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
@@ -1567,6 +1626,9 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
     hatchet_files = glob.glob(str(tmp_path / f"*.{data_format}"))
     assert len(hatchet_files) == 10
     for hatchet_file in hatchet_files:
+        if data_format == "perfetto_trace":
+            _assert_perfetto_trace_file(hatchet_file)
+            continue
         if data_format == "hatchet_msgpack":
             with open(hatchet_file, "rb") as f:
                 data = msgpack.load(f, raw=False, strict_map_key=False)

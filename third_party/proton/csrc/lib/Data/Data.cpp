@@ -155,7 +155,8 @@ void Data::dump(const std::string &outputFormat) {
       const auto filePath =
           path + suffix + "." + outputFormatToString(outputFormatEnum);
       const auto fileMode =
-          (outputFormatEnum == OutputFormat::HatchetMsgPack)
+          (outputFormatEnum == OutputFormat::HatchetMsgPack ||
+           outputFormatEnum == OutputFormat::PerfettoTrace)
               ? (std::ios::out | std::ios::binary | std::ios::trunc)
               : (std::ios::out | std::ios::trunc);
       out.reset(
@@ -172,6 +173,8 @@ OutputFormat parseOutputFormat(const std::string &outputFormat) {
     return OutputFormat::HatchetMsgPack;
   } else if (toLower(outputFormat) == "chrome_trace") {
     return OutputFormat::ChromeTrace;
+  } else if (toLower(outputFormat) == "perfetto_trace") {
+    return OutputFormat::PerfettoTrace;
   } else {
     throw std::runtime_error("Unknown output format: " + outputFormat);
   }
@@ -184,6 +187,8 @@ const std::string outputFormatToString(OutputFormat outputFormat) {
     return "hatchet_msgpack";
   } else if (outputFormat == OutputFormat::ChromeTrace) {
     return "chrome_trace";
+  } else if (outputFormat == OutputFormat::PerfettoTrace) {
+    return "perfetto_trace";
   }
   throw std::runtime_error("Unknown output format: " +
                            std::to_string(static_cast<int>(outputFormat)));

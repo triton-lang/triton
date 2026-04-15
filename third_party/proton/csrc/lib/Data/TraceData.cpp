@@ -2,6 +2,7 @@
 #include "Profiler/Graph.h"
 #include "TraceDataIO/TraceWriter.h"
 #include "Utility/MsgPackWriter.h"
+#include "Utility/ProtoWriter.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -10,8 +11,10 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
+#include <tuple>
 
 using json = nlohmann::json;
 
@@ -275,12 +278,52 @@ std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
   return std::move(writer).take();
 }
 
+std::vector<uint8_t> TraceData::toPerfettoTrace(size_t phase) const {
+  std::ostringstream os;
+  dumpPerfettoTrace(os, phase);
+  const auto bytes = os.str();
+  return std::vector<uint8_t>(bytes.begin(), bytes.end());
+}
+
 namespace {
 
 constexpr uint64_t kTraceProcessId = 0;
 constexpr uint64_t kCpuLaneBase = 0;
 constexpr uint64_t kGraphLaneBase = 100000;
 constexpr uint64_t kGpuLaneBase = 200000;
+constexpr uint64_t kPerfettoProcessTrackUuid = 1;
+constexpr uint64_t kPerfettoLaneTrackUuidBase = 1000;
+constexpr uint64_t kPerfettoCycleTrackUuidBase = 1000000;
+constexpr uint64_t kPerfettoFlowIdBase = 1ULL << 32;
+
+struct PerfettoAnnotation {
+  enum class Kind { String, Json, UInt64, Int64, Double, Bool };
+
+  std::string name;
+  std::string stringValue;
+  uint64_t uintValue{};
+  int64_t intValue{};
+  double doubleValue{};
+  bool boolValue{};
+  Kind kind{Kind::String};
+};
+
+struct PerfettoSliceEvent {
+  uint64_t trackUuid{};
+  uint64_t startTimeNs{};
+  uint64_t endTimeNs{};
+  std::string name;
+  std::string category;
+  std::vector<PerfettoAnnotation> annotations;
+  std::vector<uint64_t> flowIds;
+  std::vector<uint64_t> terminatingFlowIds;
+};
+
+struct PerfettoSlicePoint {
+  uint64_t timestampNs{};
+  bool isBegin{};
+  const PerfettoSliceEvent *event{};
+};
 
 // Structure to pair CycleMetric with its context for processing
 struct CycleEvent {
@@ -501,6 +544,178 @@ void dumpCycleMetricTrace(std::vector<CycleEvent> &cycleEvents,
   writer.write(os);
 }
 
+PerfettoAnnotation makeJsonAnnotation(const std::string &name,
+                                      const std::string &value);
+PerfettoAnnotation makeUInt64Annotation(const std::string &name,
+                                        uint64_t value);
+PerfettoAnnotation makeDoubleAnnotation(const std::string &name,
+                                        double value);
+void appendPerfettoTrace(std::ostream &os,
+                         const std::map<uint64_t, std::string> &tracks,
+                         const std::vector<PerfettoSliceEvent> &events);
+
+uint64_t getMinInitTime(const std::vector<KernelTrace> &streamTrace) {
+  uint64_t minInitTime = std::numeric_limits<uint64_t>::max();
+  for (const auto &kernelTrace : streamTrace) {
+    for (const auto &blockTrace : kernelTrace.first->blockTraces) {
+      minInitTime = std::min(minInitTime, blockTrace.initTime);
+    }
+  }
+  return minInitTime;
+}
+
+using BlockTraceVec =
+    std::vector<const CircularLayoutParserResult::BlockTrace *>;
+
+void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
+                       std::map<int, uint64_t> &blockToMinCycle,
+                       std::map<int, BlockTraceVec> &procToBlockTraces) {
+  for (auto &blockTrace : result->blockTraces) {
+    uint64_t minCycle = std::numeric_limits<uint64_t>::max();
+    for (auto &trace : blockTrace.traces) {
+      for (auto &event : trace.profileEvents) {
+        minCycle = std::min(minCycle, event.first->cycle);
+      }
+    }
+    blockToMinCycle[blockTrace.blockId] = minCycle;
+    procToBlockTraces[blockTrace.procId].push_back(&blockTrace);
+  }
+}
+
+std::vector<int> assignLineIds(
+    const std::vector<CircularLayoutParserResult::ProfileEvent> &trace) {
+  std::vector<int> result(trace.size());
+  std::vector<std::pair<size_t, CircularLayoutParserResult::ProfileEvent>>
+      indexedEvents;
+  indexedEvents.reserve(trace.size());
+
+  for (size_t i = 0; i < trace.size(); ++i) {
+    indexedEvents.push_back({i, trace[i]});
+  }
+  std::sort(indexedEvents.begin(), indexedEvents.end(),
+            [](const auto &a, const auto &b) {
+              return a.second.first->cycle < b.second.first->cycle;
+            });
+
+  std::vector<std::vector<std::pair<uint64_t, uint64_t>>> lines;
+  for (const auto &[originalIdx, event] : indexedEvents) {
+    const auto startTime = event.first->cycle;
+    const auto endTime = event.second->cycle;
+    size_t lineIdx = 0;
+    for (; lineIdx < lines.size(); ++lineIdx) {
+      bool canPlace = true;
+      for (const auto &[intervalStart, intervalEnd] : lines[lineIdx]) {
+        if (startTime < intervalEnd && endTime > intervalStart) {
+          canPlace = false;
+          break;
+        }
+      }
+      if (canPlace) {
+        break;
+      }
+    }
+    if (lineIdx == lines.size()) {
+      lines.push_back({});
+    }
+    lines[lineIdx].push_back({startTime, endTime});
+    result[originalIdx] = static_cast<int>(lineIdx);
+  }
+  return result;
+}
+
+void dumpCycleMetricPerfettoTrace(std::vector<CycleEvent> &cycleEvents,
+                                  std::ostream &os) {
+  auto timeline = convertToTimelineTrace(cycleEvents);
+  std::map<uint64_t, std::string> tracks;
+  std::vector<PerfettoSliceEvent> events;
+  if (timeline.empty()) {
+    appendPerfettoTrace(os, tracks, events);
+    return;
+  }
+
+  const auto minInitTime = getMinInitTime(timeline);
+  uint64_t nextTrackUuid = kPerfettoCycleTrackUuidBase;
+  std::map<std::tuple<std::string, int, int, int, int>, uint64_t> trackUuids;
+
+  for (const auto &kernelTrace : timeline) {
+    auto result = kernelTrace.first;
+    auto metadata = kernelTrace.second;
+    auto callStack = json::array();
+    for (const auto &frame : metadata->callStack) {
+      callStack.push_back(frame);
+    }
+
+    std::map<int, uint64_t> blockToMinCycle;
+    std::map<int, BlockTraceVec> procToBlockTraces;
+    populateTraceInfo(result, blockToMinCycle, procToBlockTraces);
+
+    for (const auto &[procId, blockVec] : procToBlockTraces) {
+      for (auto *blockTrace : blockVec) {
+        const int ctaId = blockTrace->blockId;
+        for (const auto &trace : blockTrace->traces) {
+          const int warpId = trace.uid;
+          auto lineInfo = assignLineIds(trace.profileEvents);
+          for (size_t eventIdx = 0; eventIdx < trace.profileEvents.size();
+               ++eventIdx) {
+            const auto &event = trace.profileEvents[eventIdx];
+            const int lineId = lineInfo[eventIdx];
+            const auto trackKey = std::make_tuple(
+                metadata->kernelName, procId, ctaId, warpId, lineId);
+            auto [trackIt, inserted] =
+                trackUuids.try_emplace(trackKey, nextTrackUuid);
+            if (inserted) {
+              std::ostringstream name;
+              name << metadata->kernelName << " Core" << procId << " CTA"
+                   << ctaId << " / warp " << warpId << " (line " << lineId
+                   << ")";
+              tracks.emplace(nextTrackUuid, name.str());
+              ++nextTrackUuid;
+            }
+
+            const int scopeId = event.first->scopeId;
+            const auto nameIt = metadata->scopeName.find(scopeId);
+            const auto name = nameIt == metadata->scopeName.end()
+                                  ? "scope_" + std::to_string(scopeId)
+                                  : nameIt->second;
+            const auto cycleAdjust =
+                static_cast<int64_t>(blockTrace->initTime - minInitTime) -
+                static_cast<int64_t>(blockToMinCycle[ctaId]);
+            const auto adjustedStart =
+                static_cast<int64_t>(event.first->cycle) + cycleAdjust;
+            const auto adjustedEnd =
+                static_cast<int64_t>(event.second->cycle) + cycleAdjust;
+            const auto startTimeNs =
+                static_cast<uint64_t>(std::max<int64_t>(0, adjustedStart));
+            const auto endTimeNs = static_cast<uint64_t>(
+                std::max<int64_t>(static_cast<int64_t>(startTimeNs),
+                                  adjustedEnd));
+
+            PerfettoSliceEvent slice;
+            slice.trackUuid = trackIt->second;
+            slice.startTimeNs = startTimeNs;
+            slice.endTimeNs = endTimeNs;
+            slice.name = name;
+            slice.category = metadata->kernelName;
+            slice.annotations.push_back(
+                makeUInt64Annotation("Init Time (ns)", blockTrace->initTime));
+            slice.annotations.push_back(makeUInt64Annotation(
+                "Post Final Time (ns)", blockTrace->postFinalTime));
+            slice.annotations.push_back(makeUInt64Annotation(
+                "Finalization Time (ns)",
+                blockTrace->postFinalTime - blockTrace->preFinalTime));
+            slice.annotations.push_back(
+                makeDoubleAnnotation("Frequency (MHz)", 1000.0));
+            slice.annotations.push_back(
+                makeJsonAnnotation("call_stack", callStack.dump()));
+            events.push_back(std::move(slice));
+          }
+        }
+      }
+    }
+  }
+  appendPerfettoTrace(os, tracks, events);
+}
+
 std::string formatFlexibleMetricValue(const MetricValueType &value) {
   return std::visit(
       [](auto &&v) -> std::string {
@@ -594,6 +809,179 @@ uint64_t getCpuLaneId(size_t threadId) { return kCpuLaneBase + threadId; }
 uint64_t getGraphLaneId(size_t streamId) { return kGraphLaneBase + streamId; }
 
 uint64_t getGpuLaneId(size_t streamId) { return kGpuLaneBase + streamId; }
+
+uint64_t getPerfettoLaneTrackUuid(uint64_t laneId) {
+  return kPerfettoLaneTrackUuidBase + laneId;
+}
+
+void appendTracePacket(ProtoWriter &trace, const ProtoWriter &packet) {
+  // Trace.packet = 1.
+  trace.writeMessage(1, packet);
+}
+
+void appendTrackDescriptorPacket(ProtoWriter &trace, const ProtoWriter &track) {
+  ProtoWriter packet;
+  // TracePacket.track_descriptor = 60.
+  packet.writeMessage(60, track);
+  appendTracePacket(trace, packet);
+}
+
+void appendProcessTrackDescriptor(ProtoWriter &trace) {
+  ProtoWriter process;
+  // ProcessDescriptor.pid = 1, process_name = 6.
+  process.writeInt32(1, static_cast<int32_t>(kTraceProcessId));
+  process.writeString(6, "Trace");
+
+  ProtoWriter track;
+  // TrackDescriptor.uuid = 1, name = 2, process = 3.
+  track.writeUInt64(1, kPerfettoProcessTrackUuid);
+  track.writeString(2, "Trace");
+  track.writeMessage(3, process);
+  appendTrackDescriptorPacket(trace, track);
+}
+
+void appendLaneTrackDescriptor(ProtoWriter &trace, uint64_t trackUuid,
+                               const std::string &name) {
+  ProtoWriter track;
+  // TrackDescriptor.uuid = 1, name = 2, parent_uuid = 5.
+  track.writeUInt64(1, trackUuid);
+  track.writeString(2, name);
+  track.writeUInt64(5, kPerfettoProcessTrackUuid);
+  appendTrackDescriptorPacket(trace, track);
+}
+
+void appendDebugAnnotation(ProtoWriter &event,
+                           const PerfettoAnnotation &annotation) {
+  ProtoWriter message;
+  // DebugAnnotation.name = 10.
+  message.writeString(10, annotation.name);
+  switch (annotation.kind) {
+  case PerfettoAnnotation::Kind::String:
+    // DebugAnnotation.string_value = 6.
+    message.writeString(6, annotation.stringValue);
+    break;
+  case PerfettoAnnotation::Kind::Json:
+    // DebugAnnotation.legacy_json_value = 9.
+    message.writeString(9, annotation.stringValue);
+    break;
+  case PerfettoAnnotation::Kind::UInt64:
+    // DebugAnnotation.uint_value = 3.
+    message.writeUInt64(3, annotation.uintValue);
+    break;
+  case PerfettoAnnotation::Kind::Int64:
+    // DebugAnnotation.int_value = 4.
+    message.writeInt64(4, annotation.intValue);
+    break;
+  case PerfettoAnnotation::Kind::Double:
+    // DebugAnnotation.double_value = 5.
+    message.writeDouble(5, annotation.doubleValue);
+    break;
+  case PerfettoAnnotation::Kind::Bool:
+    // DebugAnnotation.bool_value = 2.
+    message.writeBool(2, annotation.boolValue);
+    break;
+  }
+  // TrackEvent.debug_annotations = 4.
+  event.writeMessage(4, message);
+}
+
+PerfettoAnnotation makeJsonAnnotation(const std::string &name,
+                                      const std::string &value) {
+  PerfettoAnnotation annotation;
+  annotation.name = name;
+  annotation.stringValue = value;
+  annotation.kind = PerfettoAnnotation::Kind::Json;
+  return annotation;
+}
+
+PerfettoAnnotation makeUInt64Annotation(const std::string &name,
+                                        uint64_t value) {
+  PerfettoAnnotation annotation;
+  annotation.name = name;
+  annotation.uintValue = value;
+  annotation.kind = PerfettoAnnotation::Kind::UInt64;
+  return annotation;
+}
+
+PerfettoAnnotation makeDoubleAnnotation(const std::string &name,
+                                        double value) {
+  PerfettoAnnotation annotation;
+  annotation.name = name;
+  annotation.doubleValue = value;
+  annotation.kind = PerfettoAnnotation::Kind::Double;
+  return annotation;
+}
+
+void appendTrackEventPacket(ProtoWriter &trace, uint64_t timestampNs,
+                            uint32_t type, const PerfettoSliceEvent &event) {
+  ProtoWriter trackEvent;
+  // TrackEvent.type = 9, track_uuid = 11.
+  trackEvent.writeUInt32(9, type);
+  trackEvent.writeUInt64(11, event.trackUuid);
+  if (type == 1) {
+    // TrackEvent.categories = 22, name = 23.
+    if (!event.category.empty()) {
+      trackEvent.writeString(22, event.category);
+    }
+    trackEvent.writeString(23, event.name);
+    for (const auto &annotation : event.annotations) {
+      appendDebugAnnotation(trackEvent, annotation);
+    }
+    for (auto flowId : event.flowIds) {
+      // TrackEvent.flow_ids = 36.
+      trackEvent.writeUInt64(36, flowId);
+    }
+    for (auto flowId : event.terminatingFlowIds) {
+      // TrackEvent.terminating_flow_ids = 42.
+      trackEvent.writeUInt64(42, flowId);
+    }
+  }
+
+  ProtoWriter packet;
+  // TracePacket.timestamp = 8, track_event = 11.
+  packet.writeUInt64(8, timestampNs);
+  packet.writeMessage(11, trackEvent);
+  appendTracePacket(trace, packet);
+}
+
+void appendPerfettoTrace(std::ostream &os,
+                         const std::map<uint64_t, std::string> &tracks,
+                         const std::vector<PerfettoSliceEvent> &events) {
+  ProtoWriter trace;
+  appendProcessTrackDescriptor(trace);
+  for (const auto &[uuid, name] : tracks) {
+    appendLaneTrackDescriptor(trace, uuid, name);
+  }
+
+  std::vector<PerfettoSlicePoint> points;
+  points.reserve(events.size() * 2);
+  for (const auto &event : events) {
+    points.push_back({event.startTimeNs, true, &event});
+    points.push_back({event.endTimeNs, false, &event});
+  }
+  std::sort(points.begin(), points.end(),
+            [](const PerfettoSlicePoint &a, const PerfettoSlicePoint &b) {
+              if (a.timestampNs != b.timestampNs) {
+                return a.timestampNs < b.timestampNs;
+              }
+              if (a.isBegin != b.isBegin) {
+                return !a.isBegin;
+              }
+              if (a.isBegin) {
+                return a.event->endTimeNs > b.event->endTimeNs;
+              }
+              return a.event->startTimeNs > b.event->startTimeNs;
+            });
+
+  for (const auto &point : points) {
+    // TrackEvent.Type: TYPE_SLICE_BEGIN = 1, TYPE_SLICE_END = 2.
+    appendTrackEventPacket(trace, point.timestampNs, point.isBegin ? 1 : 2,
+                           *point.event);
+  }
+
+  const auto &data = trace.data();
+  os.write(data.data(), static_cast<std::streamsize>(data.size()));
+}
 
 void appendThreadMetadata(json &traceEvents, uint64_t tid,
                           const std::string &name, uint64_t sortIndex) {
@@ -1105,10 +1493,306 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
   });
 }
 
+void TraceData::dumpPerfettoTrace(std::ostream &os, size_t phase) const {
+  std::set<size_t> targetEntryIds;
+  tracePhases.withPtr(phase, [&](Trace *trace) {
+    for (const auto &[_, event] : trace->getEvents()) {
+      for (const auto &[targetEntryId, _] : event.metricSet.linkedMetrics) {
+        targetEntryIds.insert(targetEntryId);
+      }
+      for (const auto &[targetEntryId, _] :
+           event.metricSet.linkedFlexibleMetrics) {
+        targetEntryIds.insert(targetEntryId);
+      }
+    }
+  });
+
+  std::map<size_t, std::vector<Context>> targetIdToVirtualContexts;
+  if (!targetEntryIds.empty()) {
+    tracePhases.withPtr(Data::kVirtualPhase, [&](Trace *virtualTrace) {
+      for (auto targetEntryId : targetEntryIds) {
+        auto &targetEvent = virtualTrace->getEvent(targetEntryId);
+        auto contexts = virtualTrace->getContexts(targetEvent.contextId);
+        contexts.erase(contexts.begin());
+        targetIdToVirtualContexts.emplace(targetEntryId, std::move(contexts));
+      }
+    });
+  }
+
+  tracePhases.withPtr(phase, [&](Trace *trace) {
+    auto &events = trace->getEvents();
+    std::map</*stream_id=*/size_t, std::vector<KernelEvent>> kernelEvents;
+    std::map</*thread_id=*/size_t, std::vector<CpuScopeEvent>> cpuScopeEvents;
+    std::map</*stream_id=*/size_t, std::vector<GraphScopeEvent>>
+        graphScopeEvents;
+    std::vector<CycleEvent> cycleEvents;
+    cycleEvents.reserve(events.size());
+
+    uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
+    std::unordered_map<size_t, std::vector<Context>> contextIdToContexts(
+        events.size());
+    for (const auto &[_, event] : events) {
+      contextIdToContexts.try_emplace(event.contextId,
+                                      trace->getContexts(event.contextId));
+    }
+    bool hasKernelMetrics = false, hasCycleMetrics = false;
+
+    auto processMetricMaps =
+        [&](size_t eventId, const DataEntry::MetricMap &metrics,
+            const DataEntry::FlexibleMetricMap *flexibleMetrics,
+            const std::vector<Context> &contexts, bool isGraphLinked) {
+          if (auto kernelIt = metrics.find(MetricKind::Kernel);
+              kernelIt != metrics.end()) {
+            auto *kernelMetric =
+                static_cast<KernelMetric *>(kernelIt->second.get());
+            auto streamId = static_cast<size_t>(std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::StreamId)));
+            auto startTimeNs = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::StartTime));
+            auto launchEventId = events.at(eventId).parentEventId;
+            if (isGraphLinked) {
+              launchEventId = events.at(launchEventId).parentEventId;
+            }
+            kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
+                                                contexts, launchEventId,
+                                                isGraphLinked);
+            minTimeStamp = std::min(minTimeStamp, startTimeNs);
+            hasKernelMetrics = true;
+          }
+          if (auto cycleIt = metrics.find(MetricKind::Cycle);
+              cycleIt != metrics.end()) {
+            auto *cycleMetric =
+                static_cast<CycleMetric *>(cycleIt->second.get());
+            cycleEvents.emplace_back(cycleMetric, contexts);
+            hasCycleMetrics = true;
+          }
+        };
+
+    for (const auto &[_, event] : events) {
+      if (event.hasCpuTimeRange()) {
+        cpuScopeEvents[event.threadId].emplace_back(
+            event.id,
+            event.metricSet.flexibleMetrics.empty()
+                ? nullptr
+                : &event.metricSet.flexibleMetrics,
+            contextIdToContexts.at(event.contextId), event.threadId,
+            event.cpuStartTimeNs, event.cpuEndTimeNs);
+        minTimeStamp = std::min(minTimeStamp, event.cpuStartTimeNs);
+      } else {
+        const auto &baseContexts = contextIdToContexts.at(event.contextId);
+        processMetricMaps(event.id, event.metricSet.metrics,
+                          &event.metricSet.flexibleMetrics, baseContexts,
+                          /*isGraphLinked=*/false);
+        for (const auto &[targetEntryId, _] : event.metricSet.linkedMetrics) {
+          const auto &linkedMetrics =
+              event.metricSet.linkedMetrics.at(targetEntryId);
+          auto contexts = baseContexts;
+          auto &virtualContexts = targetIdToVirtualContexts[targetEntryId];
+          contexts.insert(contexts.end(), virtualContexts.begin(),
+                          virtualContexts.end());
+          const DataEntry::FlexibleMetricMap *flexibleMetrics = nullptr;
+          auto iter = event.metricSet.linkedFlexibleMetrics.find(targetEntryId);
+          if (iter != event.metricSet.linkedFlexibleMetrics.end()) {
+            flexibleMetrics = &iter->second;
+          }
+          processMetricMaps(event.id, linkedMetrics, flexibleMetrics, contexts,
+                            /*isGraphLinked=*/true);
+        }
+        if (hasKernelMetrics && hasCycleMetrics) {
+          throw std::runtime_error("only one active metric type is supported");
+        }
+      }
+    }
+
+    if (hasCycleMetrics) {
+      dumpCycleMetricPerfettoTrace(cycleEvents, os);
+      return;
+    }
+
+    for (auto &[threadId, cpuEvents] : cpuScopeEvents) {
+      std::sort(cpuEvents.begin(), cpuEvents.end(),
+                [](const CpuScopeEvent &a, const CpuScopeEvent &b) {
+                  return a.startTimeNs < b.startTimeNs;
+                });
+    }
+
+    if (hasKernelMetrics) {
+      for (auto &[streamId, streamKernelEvents] : kernelEvents) {
+        std::sort(streamKernelEvents.begin(), streamKernelEvents.end(),
+                  [](const KernelEvent &a, const KernelEvent &b) {
+                    auto aStartTime = std::get<uint64_t>(
+                        a.kernelMetric->getValue(KernelMetric::StartTime));
+                    auto bStartTime = std::get<uint64_t>(
+                        b.kernelMetric->getValue(KernelMetric::StartTime));
+                    return aStartTime < bStartTime;
+                  });
+      }
+      reconstructGraphScopeEvents(kernelEvents, graphScopeEvents);
+    }
+
+    std::map<uint64_t, std::string> tracks;
+    for (const auto &[threadId, _] : cpuScopeEvents) {
+      const auto laneId = getCpuLaneId(threadId);
+      tracks.emplace(getPerfettoLaneTrackUuid(laneId),
+                     "CPU Thread " + std::to_string(threadId));
+    }
+    for (const auto &[streamId, _] : graphScopeEvents) {
+      const auto laneId = getGraphLaneId(streamId);
+      tracks.emplace(getPerfettoLaneTrackUuid(laneId),
+                     "Graph: Stream " + std::to_string(streamId));
+    }
+    for (const auto &[streamId, _] : kernelEvents) {
+      const auto laneId = getGpuLaneId(streamId);
+      tracks.emplace(getPerfettoLaneTrackUuid(laneId),
+                     "GPU Stream " + std::to_string(streamId));
+    }
+
+    std::unordered_map<size_t, const CpuScopeEvent *>
+        launchEventIdToCpuScopeEvent;
+    for (const auto &[_, cpuEvents] : cpuScopeEvents) {
+      for (const auto &event : cpuEvents) {
+        launchEventIdToCpuScopeEvent.emplace(event.eventId, &event);
+      }
+    }
+
+    std::unordered_map<size_t, std::vector<uint64_t>> sourceEventToFlowIds;
+    std::map<std::pair<size_t, size_t>, std::vector<uint64_t>>
+        kernelEventToFlowIds;
+    for (const auto &[streamId, streamKernelEvents] : kernelEvents) {
+      auto prevLaunchEventId = Trace::Event::DummyId;
+      for (size_t i = 0; i < streamKernelEvents.size(); ++i) {
+        const auto &event = streamKernelEvents[i];
+        if (event.launchEventId == Trace::Event::DummyId) {
+          continue;
+        }
+        if (prevLaunchEventId == event.launchEventId && event.isGraphLinked) {
+          continue;
+        }
+        auto launchEventIt =
+            launchEventIdToCpuScopeEvent.find(event.launchEventId);
+        if (launchEventIt == launchEventIdToCpuScopeEvent.end()) {
+          throw std::runtime_error(
+              "Cannot find CPU scope event for kernel launch event id: " +
+              std::to_string(event.launchEventId));
+        }
+        const auto flowId = kPerfettoFlowIdBase + event.launchEventId;
+        sourceEventToFlowIds[event.launchEventId].push_back(flowId);
+        kernelEventToFlowIds[{streamId, i}].push_back(flowId);
+        prevLaunchEventId = event.launchEventId;
+      }
+    }
+
+    std::vector<PerfettoSliceEvent> perfettoEvents;
+    perfettoEvents.reserve(cpuScopeEvents.size() + graphScopeEvents.size() +
+                           kernelEvents.size());
+
+    auto relativeTimestamp = [minTimeStamp](uint64_t timestamp) {
+      return minTimeStamp == std::numeric_limits<uint64_t>::max()
+                 ? uint64_t{0}
+                 : timestamp - minTimeStamp;
+    };
+
+    for (const auto &[threadId, cpuEvents] : cpuScopeEvents) {
+      const auto trackUuid =
+          getPerfettoLaneTrackUuid(getCpuLaneId(threadId));
+      for (const auto &event : cpuEvents) {
+        PerfettoSliceEvent slice;
+        slice.trackUuid = trackUuid;
+        slice.startTimeNs = relativeTimestamp(event.startTimeNs);
+        slice.endTimeNs = relativeTimestamp(event.endTimeNs);
+        slice.annotations.push_back(makeJsonAnnotation(
+            "call_stack", buildCallStackJson(event.contexts).dump()));
+        if (event.flexibleMetrics != nullptr &&
+            !event.flexibleMetrics->empty()) {
+          slice.name =
+              buildFlexibleMetricEventName(event.contexts,
+                                           *event.flexibleMetrics);
+          slice.category = "metric";
+          slice.annotations.push_back(makeJsonAnnotation(
+              "metrics", buildFlexibleMetricsJson(*event.flexibleMetrics)
+                             .dump()));
+        } else {
+          slice.name = event.contexts.empty() ? "" : event.contexts.back().name;
+          slice.category = "scope";
+        }
+        if (auto flowIt = sourceEventToFlowIds.find(event.eventId);
+            flowIt != sourceEventToFlowIds.end()) {
+          slice.flowIds = flowIt->second;
+        }
+        perfettoEvents.push_back(std::move(slice));
+      }
+    }
+
+    for (const auto &[streamId, graphEvents] : graphScopeEvents) {
+      const auto trackUuid =
+          getPerfettoLaneTrackUuid(getGraphLaneId(streamId));
+      for (const auto &event : graphEvents) {
+        PerfettoSliceEvent slice;
+        slice.trackUuid = trackUuid;
+        slice.startTimeNs = relativeTimestamp(event.startTimeNs);
+        slice.endTimeNs = relativeTimestamp(event.endTimeNs);
+        if (event.flexibleMetrics != nullptr &&
+            !event.flexibleMetrics->empty()) {
+          slice.name =
+              buildFlexibleMetricEventName(event.context,
+                                           *event.flexibleMetrics);
+          slice.category = "metric";
+          slice.annotations.push_back(makeJsonAnnotation(
+              "metrics", buildFlexibleMetricsJson(*event.flexibleMetrics)
+                             .dump()));
+        } else {
+          slice.name = event.context.name;
+          slice.category = "scope";
+        }
+        perfettoEvents.push_back(std::move(slice));
+      }
+    }
+
+    for (const auto &[streamId, streamKernelEvents] : kernelEvents) {
+      const auto trackUuid =
+          getPerfettoLaneTrackUuid(getGpuLaneId(streamId));
+      for (size_t i = 0; i < streamKernelEvents.size(); ++i) {
+        const auto &event = streamKernelEvents[i];
+        auto *kernelMetric = event.kernelMetric;
+        auto *flexibleMetrics = event.flexibleMetrics;
+        const auto startTimeNs = std::get<uint64_t>(
+            kernelMetric->getValue(KernelMetric::StartTime));
+        const auto endTimeNs = std::get<uint64_t>(
+            kernelMetric->getValue(KernelMetric::EndTime));
+        const bool isMetricKernel = static_cast<bool>(std::get<uint64_t>(
+            kernelMetric->getValue(KernelMetric::IsMetricKernel)));
+
+        PerfettoSliceEvent slice;
+        slice.trackUuid = trackUuid;
+        slice.startTimeNs = relativeTimestamp(startTimeNs);
+        slice.endTimeNs = relativeTimestamp(endTimeNs);
+        slice.name =
+            isMetricKernel ? GraphState::metricTag : event.contexts.back().name;
+        slice.category = "kernel";
+        slice.annotations.push_back(makeJsonAnnotation(
+            "call_stack", buildCallStackJson(event.contexts).dump()));
+        if (flexibleMetrics != nullptr) {
+          slice.annotations.push_back(makeJsonAnnotation(
+              "metrics", buildFlexibleMetricsJson(*flexibleMetrics).dump()));
+        }
+        if (auto flowIt = kernelEventToFlowIds.find({streamId, i});
+            flowIt != kernelEventToFlowIds.end()) {
+          slice.terminatingFlowIds = flowIt->second;
+        }
+        perfettoEvents.push_back(std::move(slice));
+      }
+    }
+
+    appendPerfettoTrace(os, tracks, perfettoEvents);
+  });
+}
+
 void TraceData::doDump(std::ostream &os, OutputFormat outputFormat,
                        size_t phase) const {
   if (outputFormat == OutputFormat::ChromeTrace) {
     dumpChromeTrace(os, phase);
+  } else if (outputFormat == OutputFormat::PerfettoTrace) {
+    dumpPerfettoTrace(os, phase);
   } else {
     throw std::logic_error("Output format not supported");
   }
