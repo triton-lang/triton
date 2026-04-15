@@ -14,7 +14,6 @@ from triton.tools.triton_to_gluon_translator.slice_kernel import (
     GlobalValue,
     ReferenceRewriter,
     RewriteFn,
-    TranslatorTarget,
     add_sugar_rewrites,
     find_references,
     get_base_value,
@@ -22,6 +21,7 @@ from triton.tools.triton_to_gluon_translator.slice_kernel import (
     mangle_reference_names,
     parse_expr,
 )
+from triton.tools.triton_to_gluon_translator.target import TranslatorTarget
 from triton.tools.triton_to_gluon_translator.stable_toposort import stable_toposort
 
 
