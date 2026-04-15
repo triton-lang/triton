@@ -1,6 +1,12 @@
 import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._core import builtin
 from triton.experimental.gluon.language.nvidia.hopper.tma import (
+    async_atomic_add,
+    async_atomic_and,
+    async_atomic_max,
+    async_atomic_min,
+    async_atomic_or,
+    async_atomic_xor,
     async_copy_global_to_shared,
     async_copy_shared_to_global,
     store_wait,
@@ -13,6 +19,12 @@ from triton.experimental.gluon.language.nvidia.hopper.tma import (
 __all__ = [
     "async_gather",
     "async_scatter",
+    "async_atomic_add",
+    "async_atomic_and",
+    "async_atomic_max",
+    "async_atomic_min",
+    "async_atomic_or",
+    "async_atomic_xor",
     "async_copy_global_to_shared",
     "async_copy_shared_to_global",
     "store_wait",

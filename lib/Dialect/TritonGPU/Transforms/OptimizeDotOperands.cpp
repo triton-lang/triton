@@ -255,8 +255,8 @@ private:
     }
     auto localAlloc = getNextOp<LocalAllocOp>(localLoad.getSrc());
     bool usesTMAload =
-        (localAlloc && localAlloc.getSrc() &&
-         (getNextOp<DescriptorLoadOp>(localAlloc.getSrc()) != nullptr));
+        localAlloc && localAlloc.getSrc() &&
+        getNextOp<DescriptorLoadLikeOpInterface>(localAlloc.getSrc());
     if (!isTmemCopyCompatible(localLoad.getSrc().getType(), usesTMAload))
       return failure();
 

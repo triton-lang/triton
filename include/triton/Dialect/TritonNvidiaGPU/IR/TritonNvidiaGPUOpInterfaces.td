@@ -3,6 +3,69 @@
 
 include "mlir/IR/OpBase.td"
 
+def TMAOpInterface : OpInterface<"TMAOpInterface"> {
+  let description = [{
+    Common interface for asynchronous TMA operations.
+  }];
+
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Get the tensor descriptor",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getDesc",
+      /*args=*/(ins)>,
+  ];
+}
+
+def TMALoadLikeOpInterface : OpInterface<"TMALoadLikeOpInterface", [TMAOpInterface]> {
+  let description = [{
+    Common interface for asynchronous TMA operations that write shared memory.
+  }];
+
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Get the destination memory descriptor",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getResult",
+      /*args=*/(ins)>,
+    InterfaceMethod<
+      /*desc=*/"Get the completion barrier",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getBarrier",
+      /*args=*/(ins)>,
+    InterfaceMethod<
+      /*desc=*/"Get the predicate",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getPred",
+      /*args=*/(ins)>,
+  ];
+}
+
+def TMAStoreLikeOpInterface : OpInterface<"TMAStoreLikeOpInterface", [TMAOpInterface]> {
+  let description = [{
+    Common interface for asynchronous TMA operations that read shared memory.
+  }];
+
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Get the source memory descriptor",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getSrc",
+      /*args=*/(ins)>,
+    InterfaceMethod<
+      /*desc=*/"Get mutable source memory descriptor",
+      /*retType=*/"::mlir::OpOperand&",
+      /*methodName=*/"getSrcMutable",
+      /*args=*/(ins)>,
+  ];
+}
+
 def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
   let description = [{
      This interface is implemented by MMAv5 dot and dot scaled ops.
