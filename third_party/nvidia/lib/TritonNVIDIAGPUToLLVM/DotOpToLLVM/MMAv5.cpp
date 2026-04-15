@@ -504,6 +504,9 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     }
   }
 
+  // Synchronize the current partition before committing.
+  if (!barriers.empty())
+    BarrierOp::create(rewriter, loc, AddrSpace::Local);
   for (auto [barrier, barrierPred] : llvm::zip(barriers, barrierPreds)) {
     Value commitPred = tb.and_(barrierPred, elect);
     auto smemObj =
@@ -736,6 +739,10 @@ struct TCGen5CommitOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
+
+    // Because this operation can signal other partitions we need to synchronize
+    // the current partition first.
+    BarrierOp::create(rewriter, loc, AddrSpace::Local);
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getBarrier(), rewriter.getI64Type(), rewriter);
