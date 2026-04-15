@@ -2302,14 +2302,18 @@ tt.func @gather_in_shared(%arg0: tensor<16x4xi32, #blocked1>, %arg1: tensor<8x4x
 
   // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
   // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
-  // CHECK: store [[S0]]
+  // CHECK: [[S0_BITS:%.*]] = llvm.bitcast {{.*}} : f32 to i32
+  // CHECK: [[S0_VEC:%.*]] = llvm.insertelement [[S0_BITS]], {{.*}} : vector<1xi32>
+  // CHECK-NEXT: llvm.store [[S0_VEC]], {{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<3>
   // CHECK-NEXT: nvvm.barrier0
 
   // CHECK: [[I0:%.*]] = llvm.extractvalue %arg0[0]
 
   // CHECK: [[IDX:%.*]] = llvm.add {{.*}}, [[I0]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM]][[[IDX]]]
-  // CHECK-NEXT: [[OUT0:%.*]] = llvm.load [[PTR]]
+  // CHECK: [[OUT0_BITS:%.*]] = llvm.load [[PTR]] {alignment = 4 : i64} : !llvm.ptr<3> -> i32
+  // CHECK: [[OUT0_F32:%.*]] = llvm.bitcast {{.*}} : i32 to f32
+  // CHECK: [[OUT0:%.*]] = llvm.extractelement {{.*}} : vector<1xf32>
 
   // CHECK: insertvalue [[OUT0]], {{.*}}[0]
 
@@ -2337,17 +2341,27 @@ tt.func @gather_in_shared_dot_input(%arg0: tensor<16x4xi32, #blocked>, %arg1: te
 
   // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
   // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
-  // CHECK: store [[S0]]
-  // CHECK: store [[S1]]
-  // CHECK: store [[S2]]
-  // CHECK: store [[S3]]
+  // CHECK: [[S0_BITS:%.*]] = llvm.bitcast {{.*}} : f32 to i32
+  // CHECK: [[S0_VEC:%.*]] = llvm.insertelement [[S0_BITS]], {{.*}} : vector<1xi32>
+  // CHECK-NEXT: llvm.store [[S0_VEC]], {{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK: [[S1_BITS:%.*]] = llvm.bitcast {{.*}} : f32 to i32
+  // CHECK: [[S1_VEC:%.*]] = llvm.insertelement [[S1_BITS]], {{.*}} : vector<1xi32>
+  // CHECK-NEXT: llvm.store [[S1_VEC]], {{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK: [[S2_BITS:%.*]] = llvm.bitcast {{.*}} : f32 to i32
+  // CHECK: [[S2_VEC:%.*]] = llvm.insertelement [[S2_BITS]], {{.*}} : vector<1xi32>
+  // CHECK-NEXT: llvm.store [[S2_VEC]], {{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK: [[S3_BITS:%.*]] = llvm.bitcast {{.*}} : f32 to i32
+  // CHECK: [[S3_VEC:%.*]] = llvm.insertelement [[S3_BITS]], {{.*}} : vector<1xi32>
+  // CHECK-NEXT: llvm.store [[S3_VEC]], {{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<3>
   // CHECK-NEXT: nvvm.barrier0
 
   // CHECK: [[I0:%.*]] = llvm.extractvalue %arg0[0]
 
   // CHECK: [[IDX:%.*]] = llvm.add {{.*}}, [[I0]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM]][[[IDX]]]
-  // CHECK-NEXT: [[OUT0:%.*]] = llvm.load [[PTR]]
+  // CHECK: [[OUT0_BITS:%.*]] = llvm.load [[PTR]] {alignment = 4 : i64} : !llvm.ptr<3> -> i32
+  // CHECK: [[OUT0_F32:%.*]] = llvm.bitcast {{.*}} : i32 to f32
+  // CHECK: [[OUT0:%.*]] = llvm.extractelement {{.*}} : vector<1xf32>
 
   // CHECK: insertvalue [[OUT0]], {{.*}}[0]
 
