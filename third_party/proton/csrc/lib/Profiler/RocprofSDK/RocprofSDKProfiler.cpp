@@ -1,11 +1,11 @@
 #include "Profiler/RocprofSDK/RocprofSDKProfiler.h"
-#include "Profiler/RocprofSDK/RoctxInterop.h"
 
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Driver/Dispatch.h"
 #include "Driver/GPU/HipApi.h"
 #include "Driver/GPU/RocprofApi.h"
+#include "Driver/GPU/RoctxTypes.h"
 #include "Profiler/GPUProfiler.h"
 #include "Runtime/HipRuntime.h"
 #include "Utility/Env.h"
@@ -68,11 +68,9 @@ RocprofilerRuntimeState &getRuntimeState() {
   return state;
 }
 
-using roctx::ApiData;
-using roctx::kPop;
-using roctx::kPushA;
-using roctx::RegisterTracerCallbackFn;
-using roctx::TracerCallbackFn;
+using RoctxTracerCallbackFn = int (*)(uint32_t domain, uint32_t operationId,
+                                      void *data);
+using RoctxRegisterTracerCallbackFn = void (*)(RoctxTracerCallbackFn);
 
 // registerRoctxCallback is defined after the Pimpl class (needs access to
 // the static roctxCallback member).
@@ -596,10 +594,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::markerCallback(
 // librocprofiler-sdk-roctx.so is not loaded (e.g. bare ROCm without TheRock).
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::roctxCallback(
     uint32_t operationId, void *data) {
-  auto *apiData = static_cast<ApiData *>(data);
-  if (operationId == kPushA) {
+  auto *apiData = static_cast<roctx_api_data_t *>(data);
+  if (operationId == ROCTX_API_ID_roctxRangePushA) {
     threadState.enterScope(apiData->args.roctxRangePushA.message);
-  } else if (operationId == kPop) {
+  } else if (operationId == ROCTX_API_ID_roctxRangePop) {
     threadState.exitScope();
   }
 }
@@ -618,7 +616,7 @@ void registerRoctxCallback(bool enable) {
   }
   if (!roctxLib)
     return;
-  auto *fn = reinterpret_cast<RegisterTracerCallbackFn>(
+  auto *fn = reinterpret_cast<RoctxRegisterTracerCallbackFn>(
       dlsym(roctxLib, "roctxRegisterTracerCallback"));
   dlclose(roctxLib);
   if (!fn)
