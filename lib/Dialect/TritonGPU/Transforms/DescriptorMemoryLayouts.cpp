@@ -250,36 +250,23 @@ EncodingInfo AssignDescriptorMemoryLayouts::combineEncodings(
 
 Attribute
 AssignDescriptorMemoryLayouts::findLoadEncodingFromUsers(Operation *op) {
-  auto getCompatibleEncodingForType = [&](Type type) -> Attribute {
-    if (auto memDescTy = dyn_cast<MemDescType>(type)) {
-      return getCompatibleSharedEncoding(memDescTy.getEncoding(),
-                                         memDescTy.getShape(),
-                                         memDescTy.getElementType());
-    }
-    if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
-      return getCompatibleSharedEncoding(tensorTy.getEncoding(),
-                                         tensorTy.getShape(),
-                                         tensorTy.getElementType());
-    }
-    return {};
-  };
-
   // Check if there are any desired encodings available on the op
   if (auto attr = op->getDiscardableAttr("tt.desired_encoding")) {
-    if (auto resultTy = dyn_cast<RankedTensorType>(op->getResult(0).getType()))
-      if (auto compatible = getCompatibleSharedEncoding(
-              attr, resultTy.getShape(), resultTy.getElementType()))
-        return compatible;
+    if (auto enc = dyn_cast<ttg::SharedEncodingTrait>(attr)) {
+      if (isCompatibleSharedEncoding(enc))
+        return enc;
+    }
   }
   // Ignore multiple users and just pick the first compatible layout
   for (auto use : op->getUsers()) {
     if (auto alloc = dyn_cast<ttg::LocalAllocOp>(use)) {
-      if (auto compatible = getCompatibleEncodingForType(alloc.getType()))
-        return compatible;
+      auto enc = alloc.getType().getEncoding();
+      if (isCompatibleSharedEncoding(enc))
+        return enc;
     } else if (auto store = dyn_cast<ttg::LocalStoreOp>(use)) {
-      if (auto compatible =
-              getCompatibleEncodingForType(store.getDst().getType()))
-        return compatible;
+      auto enc = store.getDst().getType().getEncoding();
+      if (isCompatibleSharedEncoding(enc))
+        return enc;
     }
   }
   return {};
@@ -455,9 +442,7 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
   auto ctx = func.getContext();
   auto numCTAs = triton::gpu::lookupNumCTAs(func);
   for (auto &[desc, einfo] : valueToEncodingInfo) {
-    auto descTy = desc.getType();
-    auto existingTy =
-        RankedTensorType::get(descTy.getShape(), descTy.getElementType());
+    auto existingTy = desc.getType().getBlockType();
     Attribute newEncoding;
     if (einfo->desiredEncoding) {
       newEncoding = einfo->desiredEncoding;
@@ -475,11 +460,10 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
   SmallVector<Type> resultTys(func.getResultTypes());
   for (auto [i, resultTy] : llvm::enumerate(resultTys)) {
     if (auto descTy = dyn_cast<TensorDescType>(resultTy)) {
-      auto existingTy =
-          RankedTensorType::get(descTy.getShape(), descTy.getElementType());
-      auto encoding = getFallbackSharedEncoding(existingTy, {}, {}, numCTAs);
-      resultTys[i] =
-          getTensorDescTypeWithEncoding(nullptr, existingTy, encoding);
+      auto encoding =
+          getFallbackSharedEncoding(descTy.getBlockType(), {}, {}, numCTAs);
+      resultTys[i] = getTensorDescTypeWithEncoding(
+          nullptr, descTy.getBlockType(), encoding);
     }
   }
   func.setFunctionType(FunctionType::get(ctx, argTys, resultTys));

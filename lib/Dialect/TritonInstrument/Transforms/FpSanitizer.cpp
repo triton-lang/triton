@@ -443,6 +443,16 @@ Value castSignedIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
   return v;
 }
 
+Value castScalarIntToIntLike(PatternRewriter &rewriter, Location loc,
+                             Value scalar, Type targetTy) {
+  auto elemTy = cast<IntegerType>(getElementType(targetTy));
+  if (scalar.getType() != elemTy)
+    scalar = castSignedIntValueToType(rewriter, loc, scalar, elemTy);
+  if (isa<ShapedType>(targetTy))
+    return tt::SplatOp::create(rewriter, loc, targetTy, scalar);
+  return scalar;
+}
+
 Value selectUIntConstantOnSign(PatternRewriter &rewriter, Location loc,
                                Value signSource, uint64_t signMaskValue,
                                uint64_t nonNegativeValue,
@@ -674,45 +684,60 @@ Value fpsanSRem(PatternRewriter &rewriter, Location loc, Value num, Value den) {
 
 // Modular exponentiation in payload space; this preserves
 // exp2(a + b) = exp2(a) * exp2(b) under the integer rewrite.
-Value fpsanExp2FromI32(PatternRewriter &rewriter, Location loc, Value xI,
+Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
                        Type floatTy) {
+  unsigned bitWidth = getIntBitwidth(xI.getType());
   auto one = getIntConstantLike(rewriter, loc, xI.getType(), 1);
   auto zero = getIntConstantLike(rewriter, loc, xI.getType(), 0);
   auto c = getIntConstantLike(rewriter, loc, xI.getType(), 0xa343836d);
 
-  Value y = one;
-  for (int i = 0; i < 32; ++i) {
-    y = arith::MulIOp::create(rewriter, loc, y, y);
-    auto bit = getIntConstantLike(rewriter, loc, xI.getType(),
-                                  int64_t(1ull << (31 - i)));
-    auto masked = arith::AndIOp::create(rewriter, loc, xI, bit);
-    auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
-                                        masked, zero);
-    auto factor = arith::SelectOp::create(rewriter, loc, isZero, one, c);
-    y = arith::MulIOp::create(rewriter, loc, y, factor);
-  }
+  auto lower =
+      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
+  auto upper = arith::ConstantOp::create(rewriter, loc,
+                                         rewriter.getI32IntegerAttr(bitWidth));
+  auto step =
+      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(1));
+  auto topBit = arith::ConstantOp::create(
+      rewriter, loc, rewriter.getI32IntegerAttr(bitWidth - 1));
+  auto loop = scf::ForOp::create(rewriter, loc, lower, upper, step, one);
+  rewriter.setInsertionPointToStart(loop.getBody());
 
-  return unembedToFloat(rewriter, loc, y, floatTy);
+  Value i = loop.getInductionVar();
+  Value y = loop.getRegionIterArgs()[0];
+  y = arith::MulIOp::create(rewriter, loc, y, y);
+  Value bitIndex =
+      arith::SubIOp::create(rewriter, loc, rewriter.getI32Type(), topBit, i);
+  Value shift = castScalarIntToIntLike(rewriter, loc, bitIndex, xI.getType());
+  Value bit = arith::ShLIOp::create(rewriter, loc, one, shift);
+  auto masked = arith::AndIOp::create(rewriter, loc, xI, bit);
+  auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                      masked, zero);
+  auto factor = arith::SelectOp::create(rewriter, loc, isZero, one, c);
+  y = arith::MulIOp::create(rewriter, loc, y, factor);
+  scf::YieldOp::create(rewriter, loc, y);
+  rewriter.setInsertionPointAfter(loop);
+
+  return unembedToFloat(rewriter, loc, loop.getResult(0), floatTy);
 }
 
 Value fpsanExp2(PatternRewriter &rewriter, Location loc, Value input) {
   auto elemTy = dyn_cast<FloatType>(getElementType(input.getType()));
-  if (!elemTy || elemTy.getWidth() != 32)
+  if (!elemTy)
     return Value();
-  return fpsanExp2FromI32(rewriter, loc, embedToInt(rewriter, loc, input),
+  return fpsanExp2FromInt(rewriter, loc, embedToInt(rewriter, loc, input),
                           input.getType());
 }
 
 Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
   auto elemTy = dyn_cast<FloatType>(getElementType(input.getType()));
-  if (!elemTy || elemTy.getWidth() != 32)
+  if (!elemTy)
     return Value();
 
   auto inputI = embedToInt(rewriter, loc, input);
   auto rcpLog2 =
       getU32ConstantLike(rewriter, loc, inputI.getType(), 0x236ee9bfu);
   auto scaledI = arith::MulIOp::create(rewriter, loc, inputI, rcpLog2);
-  return fpsanExp2FromI32(rewriter, loc, scaledI, input.getType());
+  return fpsanExp2FromInt(rewriter, loc, scaledI, input.getType());
 }
 
 struct FpSanCosSin {
@@ -735,32 +760,47 @@ FpSanCosSin fpsanCosSinPayload(PatternRewriter &rewriter, Location loc,
   auto a = getUIntConstantLike(rewriter, loc, intTy, aValue);
   auto b = getUIntConstantLike(rewriter, loc, intTy, bValue);
 
-  Value c = one;
-  Value s = zero;
-  for (int bit = static_cast<int>(bitWidth) - 1; bit >= 0; --bit) {
-    Value cc = arith::MulIOp::create(rewriter, loc, c, c);
-    Value ss = arith::MulIOp::create(rewriter, loc, s, s);
-    Value cDouble = arith::SubIOp::create(rewriter, loc, cc, ss);
-    Value cs = arith::MulIOp::create(rewriter, loc, c, s);
-    Value sDouble = arith::MulIOp::create(rewriter, loc, two, cs);
+  auto lower =
+      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
+  auto upper = arith::ConstantOp::create(rewriter, loc,
+                                         rewriter.getI32IntegerAttr(bitWidth));
+  auto step =
+      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(1));
+  auto topBit = arith::ConstantOp::create(
+      rewriter, loc, rewriter.getI32IntegerAttr(bitWidth - 1));
+  SmallVector<Value> initArgs{one, zero};
+  auto loop = scf::ForOp::create(rewriter, loc, lower, upper, step, initArgs);
+  rewriter.setInsertionPointToStart(loop.getBody());
 
-    Value ac = arith::MulIOp::create(rewriter, loc, a, cDouble);
-    Value bs = arith::MulIOp::create(rewriter, loc, b, sDouble);
-    Value cInc = arith::SubIOp::create(rewriter, loc, ac, bs);
-    Value as = arith::MulIOp::create(rewriter, loc, a, sDouble);
-    Value bc = arith::MulIOp::create(rewriter, loc, b, cDouble);
-    Value sInc = arith::AddIOp::create(rewriter, loc, as, bc);
+  Value bit = loop.getInductionVar();
+  Value c = loop.getRegionIterArgs()[0];
+  Value s = loop.getRegionIterArgs()[1];
+  Value cc = arith::MulIOp::create(rewriter, loc, c, c);
+  Value ss = arith::MulIOp::create(rewriter, loc, s, s);
+  Value cDouble = arith::SubIOp::create(rewriter, loc, cc, ss);
+  Value cs = arith::MulIOp::create(rewriter, loc, c, s);
+  Value sDouble = arith::MulIOp::create(rewriter, loc, two, cs);
 
-    auto bitMask =
-        getUIntConstantLike(rewriter, loc, intTy, uint64_t{1} << bit);
-    auto masked = arith::AndIOp::create(rewriter, loc, xI, bitMask);
-    auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
-                                        masked, zero);
-    c = arith::SelectOp::create(rewriter, loc, isZero, cDouble, cInc);
-    s = arith::SelectOp::create(rewriter, loc, isZero, sDouble, sInc);
-  }
+  Value ac = arith::MulIOp::create(rewriter, loc, a, cDouble);
+  Value bs = arith::MulIOp::create(rewriter, loc, b, sDouble);
+  Value cInc = arith::SubIOp::create(rewriter, loc, ac, bs);
+  Value as = arith::MulIOp::create(rewriter, loc, a, sDouble);
+  Value bc = arith::MulIOp::create(rewriter, loc, b, cDouble);
+  Value sInc = arith::AddIOp::create(rewriter, loc, as, bc);
 
-  return {c, s};
+  Value bitIndex =
+      arith::SubIOp::create(rewriter, loc, rewriter.getI32Type(), topBit, bit);
+  Value shift = castScalarIntToIntLike(rewriter, loc, bitIndex, intTy);
+  Value bitMask = arith::ShLIOp::create(rewriter, loc, one, shift);
+  auto masked = arith::AndIOp::create(rewriter, loc, xI, bitMask);
+  auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                      masked, zero);
+  c = arith::SelectOp::create(rewriter, loc, isZero, cDouble, cInc);
+  s = arith::SelectOp::create(rewriter, loc, isZero, sDouble, sInc);
+  scf::YieldOp::create(rewriter, loc, ValueRange{c, s});
+  rewriter.setInsertionPointAfter(loop);
+
+  return {loop.getResult(0), loop.getResult(1)};
 }
 
 Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {

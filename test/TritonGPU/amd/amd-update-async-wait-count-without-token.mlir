@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-update-async-wait-count=arch-generation-name=gfx950 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-update-async-wait-count=arch-generation-name=gfx1250 | FileCheck %s
 
 // The number in SSA symbolic names represents the number of generated async load operation at assembly level a ttg.async_copy_global_to_local will generate, which is counted by this pass.
 // For example `ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst ..` will generate two global_load_async_to_lds_b128 assembly instruction
@@ -25,11 +25,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     // CHECK: amdg.async_wait {num_inst = 0
     ttg.async_wait {num = 0 : i32}
+    // 1 outstanding commit group (2nd): 2 instructions
     // CHECK: amdg.async_wait {num_inst = 2
     ttg.async_wait {num = 1 : i32}
-    // Check we stop at function boundary
+    // 2 outstanding commit groups: 2 + 1 = 3 instructions
     // CHECK: amdg.async_wait {num_inst = 3
     ttg.async_wait {num = 2 : i32}
+    // Only 2 commit groups exist, stop at function boundary
     // CHECK: amdg.async_wait {num_inst = 3
     ttg.async_wait {num = 3 : i32}
 
@@ -47,10 +49,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // Emit 1 instruction
     ttg.async_copy_global_to_local %ptr1Inst, %memDesc1Inst : tensor<64x16x!tt.ptr<f16>, #blocked> -> <64x16xf16, #shared, #smem, mutable>
 
-    // We expect 1 because the async copy above has not been committed yet
+    // No commit groups found, walk to function boundary: 1 instruction
     // CHECK: amdg.async_wait {num_inst = 1
     ttg.async_wait {num = 0 : i32}
-    // -1 can be used to wait on all, even non committed async ops
+    // -1 means wait on all — immediate stop → conservative 0
     // CHECK: amdg.async_wait {num_inst = 0
     ttg.async_wait {num = -1 : i32}
 
@@ -216,6 +218,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttg.async_commit_group
     ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     ttg.async_commit_group
+    // 3 outstanding commit groups, each ptr2Inst emits 2 instr → 6
     // CHECK: amdg.async_wait {num_inst = 6
     ttg.async_wait {num = 3: i32}
 
