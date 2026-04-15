@@ -65,6 +65,14 @@ class TranslatorTarget(str, Enum):
             return "from triton.experimental.gluon.language.amd.gfx1250.tdm import tensor_descriptor"
         return "from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor"
 
+    @property
+    def helpers_module(self) -> str:
+        """Return the helpers module path for this target."""
+        base = "triton.tools.triton_to_gluon_translator"
+        if self.is_amd:
+            return f"{base}.amd_helpers"
+        return f"{base}.nvidia_helpers"
+
 
 @dataclass
 class GlobalVariable:

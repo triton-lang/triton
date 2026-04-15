@@ -125,7 +125,7 @@ class Translator(ReferenceRewriter):
 
         self.imports.add("import triton.experimental.gluon as gluon")
         self.imports.add("import triton.experimental.gluon.language as gl")
-        self.imports.add("import triton.tools.triton_to_gluon_translator.translator_helpers as helpers")
+        self.imports.add(f"import {self.target.helpers_module} as helpers")
 
         self.tensor_member_match_fns = ["reshape", "trans", "permute", "split", "reduce", "sum"]
 
