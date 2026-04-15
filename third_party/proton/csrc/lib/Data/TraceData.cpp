@@ -15,6 +15,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <tuple>
+#include <unordered_map>
 
 using json = nlohmann::json;
 
@@ -323,6 +324,58 @@ struct PerfettoSlicePoint {
   uint64_t timestampNs{};
   bool isBegin{};
   const PerfettoSliceEvent *event{};
+};
+
+class PerfettoInternedStringTable {
+public:
+  uint64_t intern(const std::string &name) {
+    if (auto it = nameToIid.find(name); it != nameToIid.end()) {
+      return it->second;
+    }
+
+    const auto iid = nextIid++;
+    nameToIid.emplace(name, iid);
+    iidToName.emplace(iid, name);
+    return iid;
+  }
+
+  uint64_t get(const std::string &name) const {
+    auto it = nameToIid.find(name);
+    if (it == nameToIid.end()) {
+      throw std::logic_error("Perfetto name was not interned: " + name);
+    }
+    return it->second;
+  }
+
+  bool empty() const { return iidToName.empty(); }
+
+  const std::map<uint64_t, std::string> &entries() const { return iidToName; }
+
+private:
+  uint64_t nextIid = 1;
+  std::unordered_map<std::string, uint64_t> nameToIid;
+  std::map<uint64_t, std::string> iidToName;
+};
+
+struct PerfettoInternedNames {
+  PerfettoInternedStringTable eventCategories;
+  PerfettoInternedStringTable eventNames;
+  PerfettoInternedStringTable debugAnnotationNames;
+
+  bool empty() const {
+    return eventCategories.empty() && eventNames.empty() &&
+           debugAnnotationNames.empty();
+  }
+
+  void intern(const PerfettoSliceEvent &event) {
+    eventNames.intern(event.name);
+    if (!event.category.empty()) {
+      eventCategories.intern(event.category);
+    }
+    for (const auto &annotation : event.annotations) {
+      debugAnnotationNames.intern(annotation.name);
+    }
+  }
 };
 
 // Structure to pair CycleMetric with its context for processing
@@ -851,10 +904,12 @@ void appendLaneTrackDescriptor(ProtoWriter &trace, uint64_t trackUuid,
 }
 
 void appendDebugAnnotation(ProtoWriter &event,
-                           const PerfettoAnnotation &annotation) {
+                           const PerfettoAnnotation &annotation,
+                           const PerfettoInternedNames &internedNames) {
   ProtoWriter message;
-  // DebugAnnotation.name = 10.
-  message.writeString(10, annotation.name);
+  // DebugAnnotation.name_iid = 1.
+  message.writeUInt64(1,
+                      internedNames.debugAnnotationNames.get(annotation.name));
   switch (annotation.kind) {
   case PerfettoAnnotation::Kind::String:
     // DebugAnnotation.string_value = 6.
@@ -913,19 +968,21 @@ PerfettoAnnotation makeDoubleAnnotation(const std::string &name,
 }
 
 void appendTrackEventPacket(ProtoWriter &trace, uint64_t timestampNs,
-                            uint32_t type, const PerfettoSliceEvent &event) {
+                            uint32_t type, const PerfettoSliceEvent &event,
+                            const PerfettoInternedNames &internedNames) {
   ProtoWriter trackEvent;
   // TrackEvent.type = 9, track_uuid = 11.
   trackEvent.writeUInt32(9, type);
   trackEvent.writeUInt64(11, event.trackUuid);
   if (type == 1) {
-    // TrackEvent.categories = 22, name = 23.
+    // TrackEvent.category_iids = 3, name_iid = 10.
     if (!event.category.empty()) {
-      trackEvent.writeString(22, event.category);
+      trackEvent.writeUInt64(3,
+                             internedNames.eventCategories.get(event.category));
     }
-    trackEvent.writeString(23, event.name);
+    trackEvent.writeUInt64(10, internedNames.eventNames.get(event.name));
     for (const auto &annotation : event.annotations) {
-      appendDebugAnnotation(trackEvent, annotation);
+      appendDebugAnnotation(trackEvent, annotation, internedNames);
     }
     for (auto flowId : event.flowIds) {
       // TrackEvent.flow_ids = 36.
@@ -944,14 +1001,57 @@ void appendTrackEventPacket(ProtoWriter &trace, uint64_t timestampNs,
   appendTracePacket(trace, packet);
 }
 
+void appendInternedStringEntries(
+    ProtoWriter &internedData, uint32_t fieldId,
+    const PerfettoInternedStringTable &internedStrings) {
+  for (const auto &[iid, name] : internedStrings.entries()) {
+    ProtoWriter entry;
+    // Interned string messages use iid = 1, name = 2.
+    entry.writeUInt64(1, iid);
+    entry.writeString(2, name);
+    internedData.writeMessage(fieldId, entry);
+  }
+}
+
+void appendInternedDataPacket(ProtoWriter &trace,
+                              const PerfettoInternedNames &internedNames) {
+  if (internedNames.empty()) {
+    return;
+  }
+
+  ProtoWriter internedData;
+  // InternedData.event_categories = 1, event_names = 2,
+  // debug_annotation_names = 3.
+  appendInternedStringEntries(internedData, 1, internedNames.eventCategories);
+  appendInternedStringEntries(internedData, 2, internedNames.eventNames);
+  appendInternedStringEntries(internedData, 3,
+                              internedNames.debugAnnotationNames);
+
+  ProtoWriter packet;
+  // TracePacket.interned_data = 12.
+  packet.writeMessage(12, internedData);
+  appendTracePacket(trace, packet);
+}
+
+PerfettoInternedNames
+collectPerfettoInternedNames(const std::vector<PerfettoSliceEvent> &events) {
+  PerfettoInternedNames internedNames;
+  for (const auto &event : events) {
+    internedNames.intern(event);
+  }
+  return internedNames;
+}
+
 void appendPerfettoTrace(std::ostream &os,
                          const std::map<uint64_t, std::string> &tracks,
                          const std::vector<PerfettoSliceEvent> &events) {
   ProtoWriter trace;
+  auto internedNames = collectPerfettoInternedNames(events);
   appendProcessTrackDescriptor(trace);
   for (const auto &[uuid, name] : tracks) {
     appendLaneTrackDescriptor(trace, uuid, name);
   }
+  appendInternedDataPacket(trace, internedNames);
 
   std::vector<PerfettoSlicePoint> points;
   points.reserve(events.size() * 2);
@@ -976,7 +1076,7 @@ void appendPerfettoTrace(std::ostream &os,
   for (const auto &point : points) {
     // TrackEvent.Type: TYPE_SLICE_BEGIN = 1, TYPE_SLICE_END = 2.
     appendTrackEventPacket(trace, point.timestampNs, point.isBegin ? 1 : 2,
-                           *point.event);
+                           *point.event, internedNames);
   }
 
   const auto &data = trace.data();
