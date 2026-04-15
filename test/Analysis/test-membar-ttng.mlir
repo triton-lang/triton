@@ -27,7 +27,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 tt.func @wait_then_arrive_barrier(%phase: i32) {
   %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
   // CHECK: ttng.wait_barrier
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.arrive_barrier
   ttng.wait_barrier %barrier, %phase : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
   ttng.arrive_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
@@ -75,7 +74,6 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
 
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.barrier_expect
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.wait_barrier
@@ -86,7 +84,6 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
   // CHECK-NEXT: ttg.local_load
   %t = ttg.local_load %alloc : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> tensor<256x64xf16, #blocked>
 
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.barrier_expect
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
@@ -96,7 +93,6 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
   ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
 
   // CHECK-NEXT: memdesc_subslice
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.barrier_expect
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.async_tma_gather
@@ -134,7 +130,6 @@ tt.func @tma_special_cases_cf(%arg1: !tt.tensordesc<256x64xf16, #shared>, %i1 : 
   scf.if %i1 {
     //  CHECK-NOT: ttg.barrier local
     //      CHECK: ttng.async_tma_copy_global_to_local
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttng.barrier_expect
     // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttng.wait_barrier

@@ -7,6 +7,8 @@
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include <deque>
 
+namespace ttng = mlir::triton::nvidia_gpu;
+
 namespace mlir {
 
 AllocationSlice::AllocationSlice(Value value,
@@ -248,21 +250,28 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   auto containsLocalBarrier = [](Operation *op) {
     if (isa<gpu::BarrierOp>(op))
       return true;
-    if (isa<triton::nvidia_gpu::ClusterBarrierOp>(op))
+    if (isa<ttng::ClusterBarrierOp>(op))
       return true;
-    if (isa<triton::nvidia_gpu::ClusterWaitOp>(op))
+    if (isa<ttng::ClusterWaitOp>(op))
       return true;
     if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))
       return true;
+    if (isa<ttng::ArriveBarrierOp>(op))
+      return true;
+    if (isa<ttng::BarrierExpectOp>(op))
+      return true;
+    if (isa<ttng::TCGen5CommitOp>(op))
+      return true;
     if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
       return barrier.hasLocal();
+    if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(op))
+      return !mmaOp.getCompletionBarriers().empty();
     return false;
   };
 
   if (containsLocalBarrier(op)) {
     // If the current op is a local barrier, we sync previous reads and writes
     blockInfo->sync();
-    return;
   }
 
   if (op->hasTrait<mlir::OpTrait::MemWaitOpTrait>() &&
