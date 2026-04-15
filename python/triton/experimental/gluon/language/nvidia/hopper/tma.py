@@ -13,8 +13,11 @@ __all__ = [
     "async_copy_global_to_shared",
     "async_copy_global_to_shared_im2col",
     "async_copy_shared_to_global",
+    "ReduceKind",
     "store_wait",
 ]
+
+ReduceKind = ttgl.ir.DESCRIPTOR_REDUCE_KIND
 
 
 @dataclass(eq=True)
@@ -256,12 +259,22 @@ def async_copy_global_to_shared_im2col(tensor_desc, coord, offsets, barrier, res
 
 
 @builtin
-def async_copy_shared_to_global(tensor_desc, coord, src, _semantic=None):
+def async_copy_shared_to_global(tensor_desc, coord, src, red=None, _semantic=None):
+    """
+    Copy data from shared memory to global memory using TMA.
+
+    Args:
+        tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
+        coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
+        src (ttgl.shared_memory_descriptor): Source memory descriptor.
+        red (tma.ReduceKind | None): Optional reduction operation. If set, atomically reduces into global memory.
+    """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_copy_shared_to_global", "innermost coordinate",
                               _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
-    _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
+    red = _unwrap_if_constexpr(red)
+    _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle, red)
 
 
 @builtin

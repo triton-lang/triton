@@ -3884,6 +3884,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("target", [BLACKWELL_TARGET, HOPPER_TARGET])
+def test_nv_tma_descriptor_reduce_kernel(target):
+
+    @gluon.jit
+    def nv_tma_descriptor_reduce_kernel(input_ptr):
+        XBLOCK: ttgl.constexpr = 128
+        smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+        input_desc = tma.make_tensor_descriptor(
+            input_ptr,
+            shape=[XBLOCK, XBLOCK],
+            strides=[XBLOCK, 1],
+            block_shape=[XBLOCK, XBLOCK],
+            layout=smem_layout,
+        )
+        smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], smem_layout)
+        tma.async_copy_shared_to_global(input_desc, [0, 0], smem, red=tma.ReduceKind.ADD)
+        tma.store_wait(0)
+
+    ptr = MockTensor(ttgl.float32)
+    module = run_parser(nv_tma_descriptor_reduce_kernel, *make_args(ptr), target)
+    ttgir = anonymize_ir(module.str_nodebug())
+    assert "ttng.async_tma_reduce add," in ttgir
+    assert "ttng.async_tma_copy_local_to_global" not in ttgir
+
+
 @filecheck_test
 def tmem_constexpr():
     tmem_shape: ttgl.constexpr = (64, 64)

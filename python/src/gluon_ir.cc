@@ -928,17 +928,18 @@ void init_gluon_ir(py::module &&m) {
             self.create<ttng::AsyncTMACopyGlobalToLocalOp>(
                 descPtr, coord, offsetsRange, barrier, result, pred, multicast);
           })
-      .def("create_async_tma_copy_local_to_global",
-           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
-              Value src) {
-             self.create<ttng::AsyncTMACopyLocalToGlobalOp>(descPtr, coord,
-                                                            src);
-           })
-      .def("create_async_tma_reduce",
-           [](GluonOpBuilder &self, triton::DescriptorReduceKind kind,
-              Value descPtr, std::vector<Value> &coord, Value src) {
-             self.create<ttng::AsyncTMAReduceOp>(kind, descPtr, coord, src);
-           })
+      .def(
+          "create_async_tma_copy_local_to_global",
+          [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
+             Value src, std::optional<triton::DescriptorReduceKind> red) {
+            if (red) {
+              self.create<ttng::AsyncTMAReduceOp>(*red, descPtr, coord, src);
+              return;
+            }
+            self.create<ttng::AsyncTMACopyLocalToGlobalOp>(descPtr, coord, src);
+          },
+          py::arg("descPtr"), py::arg("coord"), py::arg("src"),
+          py::arg("red") = py::none())
       .def("create_async_tma_store_wait",
            [](GluonOpBuilder &self, int pendings) {
              self.create<ttng::TMAStoreWaitOp>(pendings);
