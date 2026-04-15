@@ -42,7 +42,6 @@ from triton_kernels.tensor_details.layout import (
 from triton_kernels.testing import alloc_rand, assert_close
 from triton_kernels.topk import topk
 
-
 # ===-----------------------------------------------------------------------===#
 # Device Code
 # ===-----------------------------------------------------------------------===#
@@ -180,7 +179,7 @@ def _split_m_float2(values):
 @gluon.jit
 def split_m_subtiles(values, subtile_factor: gl.constexpr):
     # For epilogue subtiling.
-    subtiles = (values,)
+    subtiles = (values, )
     for split_level in gl.static_range(5):
         if (1 << split_level) < subtile_factor:
             next_subtiles = ()
@@ -801,11 +800,11 @@ def ws_matmul_kernel(
 
     gl.warp_specialize(
         [
-            (epilogue_partition, (p,)),
-            (epilogue_store_partition, (p,)),
-            (load_activations, (p,)),
-            (load_weights, (p,)),
-            (mma_partition, (p,)),
+            (epilogue_partition, (p, )),
+            (epilogue_store_partition, (p, )),
+            (load_activations, (p, )),
+            (load_weights, (p, )),
+            (mma_partition, (p, )),
         ],
         [STORE_HELPER_WARPS, LOAD_ACTIVATION_WARPS, LOAD_WEIGHT_WARPS, MMA_WARPS],
         [STORE_HELPER_REGS, LOAD_ACTIVATION_REGS, LOAD_WEIGHT_REGS, MMA_REGS],
@@ -918,9 +917,9 @@ class KernelConfig:
         return (self.BLOCK_M // self.SWIGLU_SUBTILE_FACTOR) * (self.BLOCK_N // reduction_n)
 
 
-
 def _select_occ2_config(slice_size: int) -> KernelConfig:
-    p = KernelConfig(BLOCK_N=128, OCCUPANCY=2, MAXNREG=64, LOAD_ACTIVATION_REGS=48, LOAD_WEIGHT_REGS=32, MMA_REGS=32, STORE_HELPER_REGS=32)
+    p = KernelConfig(BLOCK_N=128, OCCUPANCY=2, MAXNREG=64, LOAD_ACTIVATION_REGS=48, LOAD_WEIGHT_REGS=32, MMA_REGS=32,
+                     STORE_HELPER_REGS=32)
 
     if slice_size <= 14:
         p = replace(p, BLOCK_M=16)
@@ -1033,7 +1032,7 @@ def matmul(
     sms = torch.cuda.get_device_properties(bias.device).multi_processor_count
     sms *= p.OCCUPANCY
     launch_grid = max(1, min(sms, expected_grid_m * grid_n))
-    grid = (launch_grid,)
+    grid = (launch_grid, )
 
     x_desc = make_operand_descriptor(a, (1, p.BLOCK_K))
     w_desc = make_operand_descriptor(b, (1, p.BLOCK_K, p.BLOCK_N))
@@ -1127,11 +1126,8 @@ class MLPConfig:
 
 
 def get_batch_sizes(c: MLPConfig) -> tuple[int, ...]:
-    batch_per_expert = tuple(
-        chain.from_iterable(range(2 ** (2 + k), 2 ** (3 + k), min(2**k, 32)) for k in range(8))
-    )
-    return tuple(
-        batch_per_expert * c.num_experts // c.experts_per_token for batch_per_expert in batch_per_expert)
+    batch_per_expert = tuple(chain.from_iterable(range(2**(2 + k), 2**(3 + k), min(2**k, 32)) for k in range(8)))
+    return tuple(batch_per_expert * c.num_experts // c.experts_per_token for batch_per_expert in batch_per_expert)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1167,7 +1163,8 @@ def alloc_randn_fp4(shape: tuple[int, ...], device: str, p: KernelConfig) -> tup
     return data, scale
 
 
-def init_routing_data(c: MLPConfig, batch_size: int, local_rank: int, device: str) -> tuple[RaggedTensorMetadata, torch.Tensor]:
+def init_routing_data(c: MLPConfig, batch_size: int, local_rank: int,
+                      device: str) -> tuple[RaggedTensorMetadata, torch.Tensor]:
     expt_dist = make_expt_dict_uniform(c.num_expert_shards, c.num_experts)
     logits = torch.randn((batch_size, c.num_experts), dtype=torch.float16, device=device)
     sparse_logits = topk(logits, c.experts_per_token, apply_softmax=True)
@@ -1181,7 +1178,8 @@ def init_routing_data(c: MLPConfig, batch_size: int, local_rank: int, device: st
     return ragged_metadata, gather_indx
 
 
-def prepare_case(c: MLPConfig, batch_size: int, device: str, seed: int = 0, p: KernelConfig | None = None) -> PreparedCase:
+def prepare_case(c: MLPConfig, batch_size: int, device: str, seed: int = 0,
+                 p: KernelConfig | None = None) -> PreparedCase:
     torch.manual_seed(seed)
 
     local_rank = int(torch.randint(0, c.num_expert_shards, size=()).item())
@@ -1272,16 +1270,11 @@ def estimate_benchmark_work(c: MLPConfig, prepared: PreparedCase) -> tuple[int, 
     k, n = c.hidden_size, c.intermediate_size
     out_n = n // prepared.fused_activation.specs.reduction_n
     active_slice_bytes = active_slices * sum(
-        _storage_nbytes(t) // n_slices
-        for t in (prepared.w, prepared.w_scale, prepared.bias)
-    )
+        _storage_nbytes(t) // n_slices for t in (prepared.w, prepared.w_scale, prepared.bias))
 
     flops = 2 * n_tokens * k * n
-    nbytes = (
-        n_tokens * k * prepared.x.element_size()
-        + active_slice_bytes
-        + n_tokens * out_n * torch.empty((), dtype=prepared.out_dtype).element_size()
-    )
+    nbytes = (n_tokens * k * prepared.x.element_size() + active_slice_bytes + n_tokens * out_n * torch.empty(
+        (), dtype=prepared.out_dtype).element_size())
     return flops, nbytes
 
 
@@ -1297,7 +1290,6 @@ def benchmark_kernel(prepared: PreparedCase, kernel, flops: int, nbytes: int) ->
 # Unit Tests
 # ===-----------------------------------------------------------------------===#
 
-
 GPT_OSS_120B_CONFIG = MLPConfig(
     name="gpt-oss-120b",
     num_experts=128,
@@ -1309,13 +1301,14 @@ GPT_OSS_120B_CONFIG = MLPConfig(
 
 
 def is_blackwell():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda" and torch.cuda.get_device_capability()[0] == 10
+    return triton.runtime.driver.active.get_current_target().backend == "cuda" and torch.cuda.get_device_capability(
+    )[0] == 10
 
 
 @pytest.mark.parametrize("c", [GPT_OSS_120B_CONFIG])
 @pytest.mark.parametrize("batch_size", get_batch_sizes(GPT_OSS_120B_CONFIG))
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon MoE BMM1 fused-gather is only supported on Blackwell GPUs")
-def test_op(c:MLPConfig, batch_size: tuple[int,...]):
+def test_op(c: MLPConfig, batch_size: tuple[int, ...]):
     prepared = prepare_case(c, batch_size, device=f"cuda:{torch.cuda.current_device()}", seed=0)
     ref_y, ref_precision = run_provider(prepared, "reference")
     cand_y, cand_precision = run_provider(prepared, "example")
@@ -1346,23 +1339,19 @@ def test_op(c:MLPConfig, batch_size: tuple[int,...]):
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
 
-BENCH_TITLE = (
-    "GPT-OSS-120B MoE MM1 "
-    f"E={GPT_OSS_120B_CONFIG.num_experts} "
-    f"EP={GPT_OSS_120B_CONFIG.experts_per_token} "
-    f"ES={GPT_OSS_120B_CONFIG.num_expert_shards} "
-    f"B={GPT_OSS_120B_CONFIG.hidden_size}x{GPT_OSS_120B_CONFIG.intermediate_size}"
-)
+BENCH_TITLE = ("GPT-OSS-120B MoE MM1 "
+               f"E={GPT_OSS_120B_CONFIG.num_experts} "
+               f"EP={GPT_OSS_120B_CONFIG.experts_per_token} "
+               f"ES={GPT_OSS_120B_CONFIG.num_expert_shards} "
+               f"B={GPT_OSS_120B_CONFIG.hidden_size}x{GPT_OSS_120B_CONFIG.intermediate_size}")
 PEAK_TFLOPS = 5_000.0
 PEAK_TBPS = 8.0
 
 
 def _format_perf(result: tuple[float, float]) -> str:
     tflops, tbps = result
-    return (
-        f"{tflops:8.2f} TFLOPS ({tflops / PEAK_TFLOPS:6.1%})  "
-        f"{tbps:6.2f} TBPS ({tbps / PEAK_TBPS:6.1%})"
-    )
+    return (f"{tflops:8.2f} TFLOPS ({tflops / PEAK_TFLOPS:6.1%})  "
+            f"{tbps:6.2f} TBPS ({tbps / PEAK_TBPS:6.1%})")
 
 
 def bench(c: MLPConfig = GPT_OSS_120B_CONFIG):
