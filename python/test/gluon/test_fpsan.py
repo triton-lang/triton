@@ -149,6 +149,18 @@ def _expected_mul_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     return _payload_u32_to_f32_bits_i32(x_u32 * y_u32)
 
 
+def _expected_min_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
+    x = _u32_to_i32(_mix_f32_bits_to_payload_u32(x_i32))
+    y = _u32_to_i32(_mix_f32_bits_to_payload_u32(y_i32))
+    return _unmix_payload_u32_to_f32_bits_i32(np.minimum(x, y).astype(np.int32).view(np.uint32))
+
+
+def _expected_max_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
+    x = _u32_to_i32(_mix_f32_bits_to_payload_u32(x_i32))
+    y = _u32_to_i32(_mix_f32_bits_to_payload_u32(y_i32))
+    return _unmix_payload_u32_to_f32_bits_i32(np.maximum(x, y).astype(np.int32).view(np.uint32))
+
+
 def _expected_srem_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     # Match LLVM srem semantics: remainder after trunc-toward-zero division.
     # NOTE: Python/NumPy '%' uses floor division for negatives, so we implement explicitly.
@@ -410,6 +422,10 @@ def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl
         z = x - y
     elif OP == "mul":
         z = x * y
+    elif OP == "min":
+        z = gl.minimum(x, y)
+    elif OP == "max":
+        z = gl.maximum(x, y)
     elif OP == "truediv":
         z = x / y
     elif OP == "fdiv":
@@ -512,6 +528,8 @@ def test_reciprocal_involution(device, fresh_knobs):
         ("add", _expected_add_i32),
         ("sub", _expected_sub_i32),
         ("mul", _expected_mul_i32),
+        ("min", _expected_min_i32),
+        ("max", _expected_max_i32),
         ("truediv", _expected_div_payload_i32),
         ("fdiv", _expected_div_payload_i32),
         ("mod", _expected_srem_i32),
