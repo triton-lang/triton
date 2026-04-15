@@ -1132,9 +1132,11 @@ class ConstexprFunction(JITCallable, Generic[T]):
         return self
 
     if TYPE_CHECKING:
+
         def __call__(self: "ConstexprFunction[Callable[P, R]]", *args: P.args, **kwargs: P.kwargs) -> R:
             ...
     else:
+
         def __call__(self, *args, _semantic=None, **kwargs):
             from triton.language.core import _unwrap_if_constexpr, constexpr
             # de-constexpr arguments and discard the _semantic keyword argument:
