@@ -425,60 +425,48 @@ def tl_load_tensor_descriptor(desc, offsets):
 
 @gluon.jit
 def tl_obj_store(obj, offsets, value):
-    if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
-        return tl_store_tensor_descriptor(obj, offsets, value)
-    else:
-        return obj.store(offsets, value)
+    tl_store_tensor_descriptor(obj, offsets, value)
 
 
 @gluon.jit
 def tl_obj_load(obj, offsets):
-    if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
-        return tl_load_tensor_descriptor(obj, offsets)
-    else:
-        return obj.load(offsets)
+    return tl_load_tensor_descriptor(obj, offsets)
 
 
 @gluon.jit
 def tl_obj_gather(obj, x_offsets, y_offset):
-    if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
-        desc = obj
-        desc_shape: ttgl.constexpr = [x_offsets.shape[0], desc.block_shape[1]]
-        alloc = ttgl.allocate_shared_memory(desc.dtype, desc_shape, desc.layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
-        mbarrier.init(bar, count=1)
-        x_offsets_layout: ttgl.constexpr = ttgl.SliceLayout(
-            0,
-            ttgl.BlockedLayout([1, 4], [get_num_threads_per_warp(), 1], [1, ttgl.num_warps()], [1, 0]),
-        )
-        x_offsets = ttgl.convert_layout(x_offsets, x_offsets_layout)
-        mbarrier.expect(bar, x_offsets.shape[0] * obj.block_type.nbytes)
-        tma_blackwell.async_gather(desc, x_offsets, y_offset, bar, alloc)
-        mbarrier.wait(bar, phase=0)
-        mbarrier.invalidate(bar)
-        ret_layout: ttgl.constexpr = default_blocked_layout(desc.block_shape, ttgl.num_warps())
-        out = alloc.load(ret_layout)
-        return out
-    else:
-        return obj.gather(x_offsets, y_offset)
+    desc = obj
+    desc_shape: ttgl.constexpr = [x_offsets.shape[0], desc.block_shape[1]]
+    alloc = ttgl.allocate_shared_memory(desc.dtype, desc_shape, desc.layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar, count=1)
+    x_offsets_layout: ttgl.constexpr = ttgl.SliceLayout(
+        0,
+        ttgl.BlockedLayout([1, 4], [get_num_threads_per_warp(), 1], [1, ttgl.num_warps()], [1, 0]),
+    )
+    x_offsets = ttgl.convert_layout(x_offsets, x_offsets_layout)
+    mbarrier.expect(bar, x_offsets.shape[0] * obj.block_type.nbytes)
+    tma_blackwell.async_gather(desc, x_offsets, y_offset, bar, alloc)
+    mbarrier.wait(bar, phase=0)
+    mbarrier.invalidate(bar)
+    ret_layout: ttgl.constexpr = default_blocked_layout(desc.block_shape, ttgl.num_warps())
+    out = alloc.load(ret_layout)
+    return out
 
 
 @gluon.jit
 def tl_obj_scatter(obj, value, x_offsets, y_offset):
-    if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
-        desc = obj
-        desc_shape: ttgl.constexpr = [x_offsets.shape[0], desc.block_shape[1]]
-        alloc = ttgl.allocate_shared_memory(desc.dtype, desc_shape, desc.layout, value)
-        fence_async_shared()
-        x_offsets_layout: ttgl.constexpr = ttgl.SliceLayout(
-            0,
-            ttgl.BlockedLayout([1, 4], [get_num_threads_per_warp(), 1], [1, ttgl.num_warps()], [1, 0]),
-        )
-        x_offsets = ttgl.convert_layout(x_offsets, x_offsets_layout)
-        tma_blackwell.async_scatter(desc, x_offsets, y_offset, alloc)
-        tma.store_wait(0)
-    else:
-        obj.scatter(value, x_offsets, y_offset)
+    desc = obj
+    desc_shape: ttgl.constexpr = [x_offsets.shape[0], desc.block_shape[1]]
+    alloc = ttgl.allocate_shared_memory(desc.dtype, desc_shape, desc.layout, value)
+    fence_async_shared()
+    x_offsets_layout: ttgl.constexpr = ttgl.SliceLayout(
+        0,
+        ttgl.BlockedLayout([1, 4], [get_num_threads_per_warp(), 1], [1, ttgl.num_warps()], [1, 0]),
+    )
+    x_offsets = ttgl.convert_layout(x_offsets, x_offsets_layout)
+    tma_blackwell.async_scatter(desc, x_offsets, y_offset, alloc)
+    tma.store_wait(0)
 
 
 # ---- NVIDIA host-side descriptor ----
