@@ -296,6 +296,9 @@ constexpr uint64_t kPerfettoProcessTrackUuid = 1;
 constexpr uint64_t kPerfettoLaneTrackUuidBase = 1000;
 constexpr uint64_t kPerfettoCycleTrackUuidBase = 1000000;
 constexpr uint64_t kPerfettoFlowIdBase = 1ULL << 32;
+constexpr uint32_t kPerfettoTracePacketSequenceId = 1;
+constexpr uint32_t kPerfettoSeqIncrementalStateCleared = 1;
+constexpr uint32_t kPerfettoSeqNeedsIncrementalState = 2;
 
 struct PerfettoAnnotation {
   enum class Kind { String, Json, UInt64, Int64, Double, Bool };
@@ -879,6 +882,12 @@ void appendTrackDescriptorPacket(ProtoWriter &trace, const ProtoWriter &track) {
   appendTracePacket(trace, packet);
 }
 
+void setTracePacketSequence(ProtoWriter &packet, uint32_t sequenceFlags) {
+  // TracePacket.trusted_packet_sequence_id = 10, sequence_flags = 13.
+  packet.writeUInt32(10, kPerfettoTracePacketSequenceId);
+  packet.writeUInt32(13, sequenceFlags);
+}
+
 void appendProcessTrackDescriptor(ProtoWriter &trace) {
   ProtoWriter process;
   // ProcessDescriptor.pid = 1, process_name = 6.
@@ -998,6 +1007,7 @@ void appendTrackEventPacket(ProtoWriter &trace, uint64_t timestampNs,
   // TracePacket.timestamp = 8, track_event = 11.
   packet.writeUInt64(8, timestampNs);
   packet.writeMessage(11, trackEvent);
+  setTracePacketSequence(packet, kPerfettoSeqNeedsIncrementalState);
   appendTracePacket(trace, packet);
 }
 
@@ -1030,6 +1040,8 @@ void appendInternedDataPacket(ProtoWriter &trace,
   ProtoWriter packet;
   // TracePacket.interned_data = 12.
   packet.writeMessage(12, internedData);
+  setTracePacketSequence(packet, kPerfettoSeqIncrementalStateCleared |
+                                     kPerfettoSeqNeedsIncrementalState);
   appendTracePacket(trace, packet);
 }
 
