@@ -316,6 +316,10 @@ getTMABlockShape(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
                  int swizzleBytes, bool fp4Padded, bool isTransposed,
                  bool packedSize, function_ref<InFlightDiagnostic()> emitError,
                  TMAMode mode);
+FailureOr<SmallVector<int64_t>>
+tryGetTMABlockShape(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
+                    int swizzleBytes, bool fp4Padded, bool isTransposed,
+                    bool packedSize, TMAMode mode);
 SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
                                       int elementBitWidth, int swizzleBytes,
                                       bool fp4Padded, bool isTransposed,

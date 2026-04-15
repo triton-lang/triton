@@ -1,6 +1,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -44,6 +45,12 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
   auto *ctx = enc.getContext();
   auto cgaLayout = ttg::getCGALayout(sharedLinear);
   auto order = ttg::getOrder(sharedLinear, shape);
+  auto sharedLinearLayout = ttg::toLinearLayout(shape, sharedLinear);
+  auto isEquivalent = [&](ttg::NVMMASharedEncodingAttr candidate) {
+    auto candidateLayout = ttg::tryNvmmaSharedToLinearLayout(
+        shape, candidate, ttg::TMAMode::Tiled);
+    return succeeded(candidateLayout) && *candidateLayout == sharedLinearLayout;
+  };
 
   SmallVector<ttg::NVMMASharedEncodingAttr> preferredCandidates;
   // TMA descriptors only support non-transposed layouts. Preserve Triton's
@@ -54,7 +61,7 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
     auto preferred = ttg::NVMMASharedEncodingAttr::get(
         ctx, shape, order, cgaLayout, elementType, fp4Padded);
     preferredCandidates.push_back(preferred);
-    if (ttg::areLayoutsEquivalent(shape, sharedLinear, preferred))
+    if (isEquivalent(preferred))
       return preferred;
   }
 
@@ -66,7 +73,7 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
           cgaLayout);
       if (llvm::is_contained(preferredCandidates, candidate))
         continue;
-      if (ttg::areLayoutsEquivalent(shape, sharedLinear, candidate))
+      if (isEquivalent(candidate))
         return candidate;
     }
   }
