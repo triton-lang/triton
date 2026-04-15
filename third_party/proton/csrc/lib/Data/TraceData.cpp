@@ -1880,9 +1880,7 @@ void TraceData::dumpPerfettoTrace(std::ostream &os, size_t phase) const {
         auto launchEventIt =
             launchEventIdToCpuScopeEvent.find(event.launchEventId);
         if (launchEventIt == launchEventIdToCpuScopeEvent.end()) {
-          throw std::runtime_error(
-              "Cannot find CPU scope event for kernel launch event id: " +
-              std::to_string(event.launchEventId));
+          continue;
         }
         const auto flowId = kPerfettoFlowIdBase + event.launchEventId;
         sourceEventToFlowIds[event.launchEventId].push_back(flowId);
