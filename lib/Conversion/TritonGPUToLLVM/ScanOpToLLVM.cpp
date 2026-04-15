@@ -185,7 +185,8 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
       for (unsigned j = 0; j < helper.getNumOperands(); ++j) {
         auto elemTy = smemTypes[j];
         Value ptr = b.gep(smemBases[j].getType(), elemTy, smemBases[j], index);
-        partialReduce[j] = b.load(elemTy, ptr);
+        partialReduce[j] =
+            targetInfo.loadShared(rewriter, loc, ptr, elemTy, b.true_val());
       }
 
       if (accumulator.acc.size() == 0) {
