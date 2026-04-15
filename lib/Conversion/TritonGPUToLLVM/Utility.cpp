@@ -646,7 +646,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto smemPtrTy = ptr_ty(ctx, 3);
+  auto smemPtrTy = ptr_ty(ctx, targetInfo.getSharedAddressSpace());
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
