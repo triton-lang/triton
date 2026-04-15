@@ -260,10 +260,18 @@ SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
 SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig);
 
-bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
+// Return true if \p cat would be valid with result encoding \p targetEncoding.
+bool isLegalCatEncoding(CatOp cat, Attribute targetEncoding);
 
 // Return true if a view between the two types cannot be implemented as a no-op.
-bool isExpensiveView(Type srcType, Type dstType);
+bool isExpensiveView(ArrayRef<int64_t> srcShape, Attribute srcEncoding,
+                     ArrayRef<int64_t> dstShape, Attribute dstEncoding);
+inline bool isExpensiveView(Type srcType, Type dstType) {
+  auto tensorSrcType = cast<RankedTensorType>(srcType);
+  auto tensorDstType = cast<RankedTensorType>(dstType);
+  return isExpensiveView(tensorSrcType.getShape(), tensorSrcType.getEncoding(),
+                         tensorDstType.getShape(), tensorDstType.getEncoding());
+}
 
 // Return a blocked encoding where the shape is distributed contiguously amongst
 // the threads, warps, CTAs with 1 element per threads.
