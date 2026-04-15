@@ -7,10 +7,19 @@ import pytest
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton.tools.triton_to_gluon_translator.translator import convert_triton_to_gluon
-from triton.tools.triton_to_gluon_translator.translator_helpers import convert_host_descriptor
 from triton.tools.triton_to_gluon_translator.target import TranslatorTarget
 from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda, is_hip_cdna4, is_hip_gfx1250, is_hip_cdna3_or_newer
 from triton.language.target_info import current_target
+
+
+def _convert_host_descriptor(desc):
+    """Import and call the target-appropriate convert_host_descriptor."""
+    target = current_target()
+    if target is not None and target.backend == "hip":
+        from triton.tools.triton_to_gluon_translator.amd_helpers import convert_host_descriptor
+    else:
+        from triton.tools.triton_to_gluon_translator.nvidia_helpers import convert_host_descriptor
+    return convert_host_descriptor(desc)
 
 
 def convert_kernel(kernel, kernel_name, tmp_path, target=None):
@@ -182,7 +191,7 @@ def test_triton_to_gluon_descriptor_roundtrip(tmp_path):
     grid = (1, )
     block_shape = [M, N]
     desc = TensorDescriptor(y, y.shape, y.stride(), block_shape)
-    gluon_desc = convert_host_descriptor(desc)
+    gluon_desc = _convert_host_descriptor(desc)
     kernel[grid](gluon_desc, M, N, 1.0)
 
     y_ref = torch.zeros((M, N), device="cuda", dtype=torch.float16)
@@ -208,8 +217,8 @@ def test_triton_to_gluon_descriptor_load_roundtrip(tmp_path):
     block_shape = [M, N]
 
     in_desc = TensorDescriptor(x, x.shape, x.stride(), block_shape)
-    gluon_desc = convert_host_descriptor(in_desc)
-    out_desc = convert_host_descriptor(TensorDescriptor(y, y.shape, y.stride(), block_shape))
+    gluon_desc = _convert_host_descriptor(in_desc)
+    out_desc = _convert_host_descriptor(TensorDescriptor(y, y.shape, y.stride(), block_shape))
     kernel[grid](gluon_desc, out_desc, M, N)
 
     y_ref = torch.zeros((M, N), device="cuda", dtype=torch.float16)
