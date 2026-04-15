@@ -1154,7 +1154,6 @@ struct AsyncCopyLocalToGlobalOpConversion
                       AMD::TargetInfo targetInfo, int vecBits, Value dstPtr,
                       Value shmemAddr, triton::CacheModifier cacheMod) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    assert(targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits));
     int32_t cacheModifiers =
         mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
             cacheMod, /*isLoad=*/false, targetInfo);
@@ -1162,11 +1161,33 @@ struct AsyncCopyLocalToGlobalOpConversion
     if (cacheMod != triton::CacheModifier::NONE) {
       emitRemark(loc) << "cache modifiers not yet implemented on gfx1250";
     }
-    std::string intrinsic =
-        "llvm.amdgcn.global.store.async.from.lds.b" + std::to_string(vecBits);
-    LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, intrinsic, {},
-        {dstPtr, shmemAddr, b.i32_val(0), b.i32_val(cacheModifiers)});
+
+    auto emitStore = [&](int bits, Value dst, Value shmem) {
+      std::string intrinsic =
+          "llvm.amdgcn.global.store.async.from.lds.b" + std::to_string(bits);
+      LLVM::createLLVMIntrinsicCallOp(
+          rewriter, loc, intrinsic, {},
+          {dst, shmem, b.i32_val(0), b.i32_val(cacheModifiers)});
+    };
+
+    // If vecBits is not supported but vecBits/2 is, split into two
+    // stores
+    if (!targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits) &&
+        targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits / 2)) {
+      int halfVecBits = vecBits / 2;
+      int halfVecBytes = halfVecBits / 8;
+      // First half store
+      emitStore(halfVecBits, dstPtr, shmemAddr);
+      // Second half store (advance pointers by halfVecBytes)
+      Value dstPtr2 = b.gep(ptr_ty(rewriter.getContext(), 1), i8_ty, dstPtr,
+                            b.i32_val(halfVecBytes));
+      Value shmemAddr2 = b.gep(ptr_ty(rewriter.getContext(), 3), i8_ty,
+                               shmemAddr, b.i32_val(halfVecBytes));
+      emitStore(halfVecBits, dstPtr2, shmemAddr2);
+    } else {
+      assert(targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits));
+      emitStore(vecBits, dstPtr, shmemAddr);
+    }
   }
 };
 

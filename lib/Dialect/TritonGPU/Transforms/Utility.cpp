@@ -465,26 +465,22 @@ static Attribute inferSrcEncoding(triton::TransposeOpInterface op,
 static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
                                            Attribute srcEnc,
                                            ArrayRef<int64_t> dstShape,
-                                           bool allowReorder) {
-  // We don't do anything smart to allow-reorder reshapes here.  They are
-  // handled in OptimizeThreadLocality.
-  if (allowReorder)
-    return {};
-
-  Attribute dstEnc;
+                                           Attribute dstEncHint = {},
+                                           bool allowReorder = false) {
+  Attribute dstEnc = dstEncHint;
   auto result =
       srcEnc.getDialect()
           .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferReshapeOpEncoding(srcShape, srcEnc, dstShape, dstEnc,
-                                   /*loc=*/std::nullopt);
+                                   allowReorder, /*loc=*/std::nullopt);
   assert(succeeded(result));
   return dstEnc;
 }
 
 static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
-  return inferReshapeOpDstEncoding(op.getSrc().getType().getShape(), encoding,
-                                   op.getType().getShape(),
-                                   op.getAllowReorder());
+  return inferReshapeOpDstEncoding(
+      op.getSrc().getType().getShape(), encoding, op.getType().getShape(),
+      op.getType().getEncoding(), op.getAllowReorder());
 }
 
 static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
@@ -499,9 +495,9 @@ static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
   // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
   // invariant of inferReshapeOpNoReorderEncoding that it's symmetric in this
   // way.
-  return inferReshapeOpDstEncoding(op.getType().getShape(), encoding,
-                                   op.getSrc().getType().getShape(),
-                                   op.getAllowReorder());
+  return inferReshapeOpDstEncoding(
+      op.getType().getShape(), encoding, op.getSrc().getType().getShape(),
+      op.getSrc().getType().getEncoding(), op.getAllowReorder());
 }
 
 static bool isSingleValue(Value value) {
@@ -604,26 +600,10 @@ bool isExpensiveLoadOrStore(Operation *op) {
   return true;
 }
 
-bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
-  if (!op)
-    return true;
-  if (isa<triton::LoadOp, triton::StoreOp>(op))
-    return isExpensiveLoadOrStore(op);
-  if (isa<triton::CatOp>(op))
-    return triton::gpu::isExpensiveCat(cast<triton::CatOp>(op), targetEncoding);
-  if (isa<triton::gpu::AsyncCopyGlobalToLocalOp, triton::AtomicRMWOp,
-          triton::AtomicCASOp, triton::DotOp>(op))
-    return true;
-  if (isa<scf::YieldOp, scf::ForOp, scf::IfOp, scf::WhileOp, scf::ConditionOp>(
-          op))
-    return true;
-  return false;
-}
-
 bool canUseResultEncoding(Operation *op, Attribute targetEncoding) {
   if (isa<triton::CatOp>(op))
-    return !triton::gpu::isExpensiveCat(cast<triton::CatOp>(op),
-                                        targetEncoding);
+    return triton::gpu::isLegalCatEncoding(cast<triton::CatOp>(op),
+                                           targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
@@ -1547,7 +1527,7 @@ bool comesFromLoadOrBlockArg(Value v) {
   // If this is problematic we can totally drop them
   return isa<BlockArgument>(v) ||
          (v.getDefiningOp() &&
-          isa<LoadOp, DescriptorLoadOp, DescriptorGatherOp>(v.getDefiningOp()));
+          isa<LoadOp, DescriptorLoadLikeOpInterface>(v.getDefiningOp()));
 }
 
 SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {

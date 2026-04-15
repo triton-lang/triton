@@ -758,3 +758,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @async_tma_reduce_rejects_unsupported_kind(%arg0: !tt.tensordesc<32x32xf32, #shared>, %x: i32) {
+    %src = ttg.local_alloc : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    // expected-error @below {{unsupported reduce kind inc for element type 'f32'}}
+    ttng.async_tma_reduce inc, %arg0[%x, %x] %src : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 64}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @async_tma_reduce_rejects_signed_i64_add(%arg0: !tt.tensordesc<32x32xsi64, #shared>, %x: i32) {
+    %src = ttg.local_alloc : () -> !ttg.memdesc<32x32xi64, #shared, #smem, mutable>
+    // expected-error @below {{unsupported reduce kind add for element type 'si64'}}
+    ttng.async_tma_reduce add, %arg0[%x, %x] %src : !tt.tensordesc<32x32xsi64, #shared>, !ttg.memdesc<32x32xi64, #shared, #smem, mutable>
+    tt.return
+  }
+}
