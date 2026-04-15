@@ -52,6 +52,7 @@ LogicalResult inferCoalescedLayout(ModuleOp &mod) {
     // infer coalesced encoding for ptrs
     //
     llvm::SmallVector<std::pair<Value, Attribute>> seedEncodings;
+    ttg::CoalesceSliceCache sliceCache;
     func.walk([&](Operation *curr) {
       Value ptr = getMemAccessPtr(curr);
       if (!ptr)
@@ -73,9 +74,9 @@ LogicalResult inferCoalescedLayout(ModuleOp &mod) {
       auto cgaLayout = getDefaultCGALayout(tensorType, numCTAs);
       auto shapePerCTA = ttg::getShapePerCTA(cgaLayout.getCTASplitNum(),
                                              tensorType.getShape());
-      auto layout =
-          ttg::buildCoalescedEncoding(axisInfoAnalysis, curr, numWarps,
-                                      threadsPerWarp, cgaLayout, shapePerCTA);
+      auto layout = ttg::buildCoalescedEncoding(
+          axisInfoAnalysis, curr, numWarps, threadsPerWarp, cgaLayout,
+          shapePerCTA, &sliceCache);
       // set seed value
       for (auto value : curr->getOperands())
         seedEncodings.push_back({value, layout});

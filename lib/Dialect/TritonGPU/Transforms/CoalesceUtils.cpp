@@ -1,6 +1,7 @@
 
 
 #include "triton/Dialect/TritonGPU/Transforms/CoalesceUtils.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -13,11 +14,26 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton::gpu {
-BlockedEncodingAttr
-buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
-                       int numWarps, int threadsPerWarp,
-                       triton::gpu::CGAEncodingAttr cgaLayout,
-                       SmallVector<int64_t> shapePerCTA) {
+ArrayRef<Operation *> CoalesceSliceCache::getSlice(Operation *op) {
+  auto it = opToSliceIndex.find(op);
+  if (it != opToSliceIndex.end())
+    return slices[it->second];
+
+  unsigned sliceIndex = slices.size();
+  auto slice = mlir::getSlice(op);
+  slices.emplace_back(slice.begin(), slice.end());
+  // mlir::getSlice excludes the seed operation. Store a complete component so
+  // that any operation in the same slice can reuse the cached result.
+  slices.back().push_back(op);
+  for (Operation *sliceOp : slices.back())
+    opToSliceIndex.try_emplace(sliceOp, sliceIndex);
+  return slices.back();
+}
+
+BlockedEncodingAttr buildCoalescedEncoding(
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op, int numWarps,
+    int threadsPerWarp, triton::gpu::CGAEncodingAttr cgaLayout,
+    SmallVector<int64_t> shapePerCTA, CoalesceSliceCache *sliceCache) {
   Value ptr = getMemAccessPtr(op);
   auto refTensorType = cast<RankedTensorType>(ptr.getType());
 
@@ -42,7 +58,16 @@ buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
   llvm::SmallSetVector<Operation *, 32> memAccessesSameOrder;
   memAccessesSameOrder.insert(op);
   if (ptr.getDefiningOp()) {
-    for (Operation *use : mlir::getSlice(op)) {
+    SmallVector<Operation *> uncachedSlice;
+    ArrayRef<Operation *> slice;
+    if (sliceCache) {
+      slice = sliceCache->getSlice(op);
+    } else {
+      auto uncachedSliceSet = mlir::getSlice(op);
+      uncachedSlice.append(uncachedSliceSet.begin(), uncachedSliceSet.end());
+      slice = uncachedSlice;
+    }
+    for (Operation *use : slice) {
       Value val = getMemAccessPtr(use);
       if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
         continue;

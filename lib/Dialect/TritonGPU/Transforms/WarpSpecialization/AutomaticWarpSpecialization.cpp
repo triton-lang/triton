@@ -60,7 +60,11 @@ void multiBufferTMADescriptors(ModuleOp mod, int numStages) {
 } // namespace
 
 void AutomaticWarpSpecialization::runOnOperation() {
-  OpPassManager pm;
+  PassManager pm(&getContext());
+  // Currently disable verifier within the subpass manager because tmem op
+  // verifier is expensive and is causing long compile time. We should enable it
+  // back after improving tmem ops verifier.
+  pm.enableVerifier(false);
   pm.addPass(createTritonGPUPartitionScheduling());
   pm.addPass(createNVWSHoistTmemStore());
   pm.addPass(createNVWSInsertAref());
@@ -74,7 +78,7 @@ void AutomaticWarpSpecialization::runOnOperation() {
   pm.addPass(createTritonGPUPartitionLoops());
   pm.addPass(createNVWSLowerWarpGroup());
   pm.addPass(createTritonGPUScheduleLoops());
-  if (failed(runPipeline(pm, getOperation())))
+  if (failed(pm.run(getOperation())))
     return signalPassFailure();
 
   // Multi-buffer TMA descriptors. We cannot rely on SWP to do it, to support

@@ -178,15 +178,16 @@ struct CoalesceAsyncCopyPass
     // Collect the coalesced encoding first as changing the IR invalidates the
     // axis analysis.
     DenseMap<AsyncCopyGlobalToLocalOp, Attribute> coalescedAsyncCopyMap;
+    CoalesceSliceCache sliceCache;
     m.walk([&](AsyncCopyGlobalToLocalOp copyOp) {
       auto dstTy = cast<MemDescType>(copyOp.getResult().getType());
       int numWarps = triton::gpu::lookupNumWarps(copyOp);
       int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(m);
       auto cgaLayout = triton::gpu::getCGALayout(dstTy.getEncoding());
       auto shapePerCTA = triton::gpu::getShapePerCTA(dstTy);
-      coalescedAsyncCopyMap[copyOp] =
-          buildCoalescedEncoding(axisInfoAnalysis, copyOp, numWarps,
-                                 threadsPerWarp, cgaLayout, shapePerCTA);
+      coalescedAsyncCopyMap[copyOp] = buildCoalescedEncoding(
+          axisInfoAnalysis, copyOp, numWarps, threadsPerWarp, cgaLayout,
+          shapePerCTA, &sliceCache);
     });
 
     MLIRContext *context = &getContext();

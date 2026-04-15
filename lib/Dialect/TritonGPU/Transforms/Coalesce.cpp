@@ -82,6 +82,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     // For each i/o operation, we determine what layout
     // the pointers should have for best memory coalescing
     llvm::MapVector<Operation *, Attribute> layoutMap;
+    CoalesceSliceCache sliceCache;
     int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(moduleOp);
     moduleOp.walk([&](Operation *curr) {
       Value ptr = getMemAccessPtr(curr);
@@ -98,9 +99,9 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       auto tensorType = cast<RankedTensorType>(ptr.getType());
       CGAEncodingAttr cgaLayout = getCGALayout(tensorType.getEncoding());
       SmallVector<int64_t> shapePerCTA = getShapePerCTA(tensorType);
-      auto layout =
-          buildCoalescedEncoding(axisInfoAnalysis, curr, numWarps,
-                                 threadsPerWarp, cgaLayout, shapePerCTA);
+      auto layout = buildCoalescedEncoding(axisInfoAnalysis, curr, numWarps,
+                                           threadsPerWarp, cgaLayout,
+                                           shapePerCTA, &sliceCache);
       layoutMap[curr] = layout;
     });
 
