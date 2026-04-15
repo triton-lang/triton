@@ -4274,10 +4274,12 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
 // Doc:
 // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html
 static FailureOr<SmallVector<int64_t>>
-getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
-                       int swizzleBytes, bool fp4Padded, bool isTransposed,
-                       bool packedSize,
-                       function_ref<InFlightDiagnostic()> emitError) {
+getTMABlockShapeIm2ColImpl(
+    ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
+    bool fp4Padded, bool isTransposed, bool packedSize,
+    function_ref<FailureOr<SmallVector<int64_t>>(
+        function_ref<void(raw_ostream &)>)>
+        emitError) {
   assert(shapePerCTA.size() == 2 && "im2col mode requires a 2D block shape");
 
   SmallVector<int64_t> blockShape(shapePerCTA);
@@ -4295,10 +4297,10 @@ getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   // H, W). Supporting pixelsPerColumn > 1024 would require computing offsets
   // that depend on input tensor shape and padding, which is non-trivial.
   if (blockShape[otherDim] > otherDimMax) {
-    return emitError() << "im2col mode: pixelsPerColumn dimension "
-                       << blockShape[otherDim]
-                       << " exceeds the maximum supported value of "
-                       << otherDimMax;
+    return emitError([&](raw_ostream &os) {
+      os << "im2col mode: pixelsPerColumn dimension " << blockShape[otherDim]
+         << " exceeds the maximum supported value of " << otherDimMax;
+    });
   }
 
   // Clamp the contiguous dimension (channelsPerPixel) to max 256
@@ -4308,12 +4310,12 @@ getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   if (swizzleBytes != 0) {
     auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
     if (blockShape[contigDim] < contigDimSize) {
-      return emitError() << "im2col mode: block shape along the contiguous "
-                            "dimension "
-                         << contigDim
-                         << " is too small for the swizzle byte size "
-                         << swizzleBytes << ", got " << blockShape[contigDim]
-                         << " but expected at least " << contigDimSize;
+      return emitError([&](raw_ostream &os) {
+        os << "im2col mode: block shape along the contiguous dimension "
+           << contigDim << " is too small for the swizzle byte size "
+           << swizzleBytes << ", got " << blockShape[contigDim]
+           << " but expected at least " << contigDimSize;
+      });
     }
     blockShape[contigDim] = contigDimSize;
   }
@@ -4324,12 +4326,34 @@ getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   return blockShape;
 }
 
+static FailureOr<SmallVector<int64_t>>
+getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
+                       int swizzleBytes, bool fp4Padded, bool isTransposed,
+                       bool packedSize,
+                       function_ref<InFlightDiagnostic()> emitError) {
+  auto emitDiagnostic =
+      [&](function_ref<void(raw_ostream &)> buildMessage)
+          -> FailureOr<SmallVector<int64_t>> {
+    auto diag = emitError();
+    SmallString<128> msg;
+    llvm::raw_svector_ostream os(msg);
+    buildMessage(os);
+    diag << msg;
+    return failure();
+  };
+  return getTMABlockShapeIm2ColImpl(shapePerCTA, elementBitWidth, swizzleBytes,
+                                    fp4Padded, isTransposed, packedSize,
+                                    emitDiagnostic);
+}
+
 // Tiled mode block shape calculation.
 static FailureOr<SmallVector<int64_t>>
-getTMABlockShapeTiled(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
-                      int swizzleBytes, bool fp4Padded, bool isTransposed,
-                      bool packedSize,
-                      function_ref<InFlightDiagnostic()> emitError) {
+getTMABlockShapeTiledImpl(
+    ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
+    bool fp4Padded, bool isTransposed, bool packedSize,
+    function_ref<FailureOr<SmallVector<int64_t>>(
+        function_ref<void(raw_ostream &)>)>
+        emitError) {
   SmallVector<int64_t> blockShape(shapePerCTA);
 
   int contigDim = isTransposed ? 0 : blockShape.size() - 1;
@@ -4344,12 +4368,12 @@ getTMABlockShapeTiled(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   if (swizzleBytes != 0) {
     auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
     if (blockShape[contigDim] < contigDimSize) {
-      return emitError() << "block shape along the contiguous dimension "
-                         << contigDim
-                         << " is too small for the swizzle byte size "
-                         << swizzleBytes << " in an NVMMASharedLayout, got "
-                         << blockShape[contigDim] << " but expected at least "
-                         << contigDimSize;
+      return emitError([&](raw_ostream &os) {
+        os << "block shape along the contiguous dimension " << contigDim
+           << " is too small for the swizzle byte size " << swizzleBytes
+           << " in an NVMMASharedLayout, got " << blockShape[contigDim]
+           << " but expected at least " << contigDimSize;
+      });
     }
     blockShape[contigDim] = contigDimSize;
   }
@@ -4357,6 +4381,26 @@ getTMABlockShapeTiled(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
     blockShape[contigDim] /= 2;
   }
   return blockShape;
+}
+
+static FailureOr<SmallVector<int64_t>>
+getTMABlockShapeTiled(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
+                      int swizzleBytes, bool fp4Padded, bool isTransposed,
+                      bool packedSize,
+                      function_ref<InFlightDiagnostic()> emitError) {
+  auto emitDiagnostic =
+      [&](function_ref<void(raw_ostream &)> buildMessage)
+          -> FailureOr<SmallVector<int64_t>> {
+    auto diag = emitError();
+    SmallString<128> msg;
+    llvm::raw_svector_ostream os(msg);
+    buildMessage(os);
+    diag << msg;
+    return failure();
+  };
+  return getTMABlockShapeTiledImpl(shapePerCTA, elementBitWidth, swizzleBytes,
+                                   fp4Padded, isTransposed, packedSize,
+                                   emitDiagnostic);
 }
 
 FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
@@ -4371,6 +4415,23 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
   // Tiled mode
   return getTMABlockShapeTiled(shapePerCTA, elementBitWidth, swizzleBytes,
                                fp4Padded, isTransposed, packedSize, emitError);
+}
+
+FailureOr<SmallVector<int64_t>> triton::gpu::tryGetTMABlockShape(
+    ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
+    bool fp4Padded, bool isTransposed, bool packedSize, TMAMode mode) {
+  auto ignoreError =
+      [&](function_ref<void(raw_ostream &)>) -> FailureOr<SmallVector<int64_t>> {
+    return failure();
+  };
+  if (mode == TMAMode::Im2Col) {
+    return getTMABlockShapeIm2ColImpl(shapePerCTA, elementBitWidth,
+                                      swizzleBytes, fp4Padded, isTransposed,
+                                      packedSize, ignoreError);
+  }
+  return getTMABlockShapeTiledImpl(shapePerCTA, elementBitWidth, swizzleBytes,
+                                   fp4Padded, isTransposed, packedSize,
+                                   ignoreError);
 }
 
 SmallVector<int64_t> triton::gpu::getTMABlockShape(

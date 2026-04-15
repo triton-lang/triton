@@ -166,3 +166,24 @@ tt.func public @descriptor_arg_from_shared_linear_use(%b_desc: !tt.tensordesc<1x
   tt.return
 }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1, 2], threadsPerWarp = [1, 4, 1, 8], warpsPerCTA = [1, 4, 1, 1], order = [3, 2, 1, 0]}>
+#shared_linear = #ttg.shared_linear<{offset = [[0, 1, 0, 0], [0, 2, 0, 0], [0, 4, 0, 0], [0, 8, 0, 0], [0, 0, 0, 1], [0, 4, 0, 2], [0, 8, 0, 4], [0, 0, 0, 8]]}, alignment = 512>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-DAG: #[[BLOCKED4D:.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1, 2], threadsPerWarp = [1, 4, 1, 8], warpsPerCTA = [1, 4, 1, 1], order = [3, 2, 1, 0]}>
+// CHECK-DAG: #[[NVMMA_64_4D:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 32, rank = 4}>
+// CHECK-DAG: #[[SL_4D:.*]] = #ttg.shared_linear<{{.*}}alignment = 512>
+tt.func public @descriptor_arg_from_4d_shared_linear_use(%arg0: !tt.tensordesc<1x16x1x16xf32>) {
+  // CHECK: %arg0: !tt.tensordesc<1x16x1x16xf32, #[[NVMMA_64_4D]]>
+  // CHECK: %[[LOAD:.*]] = tt.descriptor_load %arg0[%{{.*}}] : !tt.tensordesc<1x16x1x16xf32, #[[NVMMA_64_4D]]> -> tensor<1x16x1x16xf32, #[[BLOCKED4D]]>
+  // CHECK: ttg.local_alloc %[[LOAD]] : (tensor<1x16x1x16xf32, #[[BLOCKED4D]]>) -> !ttg.memdesc<1x16x1x16xf32, #[[SL_4D]], #smem>
+  %c0_i32 = arith.constant 0 : i32
+  %0 = tt.descriptor_load %arg0[%c0_i32, %c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x1x16xf32> -> tensor<1x16x1x16xf32, #blocked>
+  %1 = ttg.local_alloc %0 : (tensor<1x16x1x16xf32, #blocked>) -> !ttg.memdesc<1x16x1x16xf32, #shared_linear, #smem>
+  tt.return
+}
+}
