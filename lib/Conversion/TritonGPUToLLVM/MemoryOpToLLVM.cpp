@@ -22,7 +22,8 @@ SmallVector<Value> lowerLocalScGt(Location loc, MLIRContext *ctx,
                                   ArrayRef<Value> idxValues,
                                   ArrayRef<SmallVector<Value>> coords,
                                   unsigned axis, ArrayRef<Value> storeVals,
-                                  RewriterBase &rewriter) {
+                                  RewriterBase &rewriter,
+                                  const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   bool isScatter = !storeVals.empty();
 
@@ -110,9 +111,10 @@ SmallVector<Value> lowerLocalScGt(Location loc, MLIRContext *ctx,
     }
 
     if (isScatter) {
-      b.store(storeVals[i], ptr);
+      targetInfo.storeShared(rewriter, loc, ptr, storeVals[i], b.true_val());
     } else {
-      results[i] = b.load(llvmElemTy, ptr);
+      results[i] =
+          targetInfo.loadShared(rewriter, loc, ptr, llvmElemTy, b.true_val());
     }
   }
 
@@ -375,7 +377,7 @@ public:
 
     auto results = lowerLocalScGt(loc, ctx, memDescTy, smemObj, llvmElemTy,
                                   idxValues, dstIndices, op.getAxis(),
-                                  /*storeVals=*/{}, rewriter);
+                                  /*storeVals=*/{}, rewriter, targetInfo);
 
     Value result = packLLElements(loc, typeConverter, results, rewriter, regTy);
     rewriter.replaceOp(op, result);
@@ -425,7 +427,7 @@ public:
                     /*withCTAOffset=*/true);
 
     lowerLocalScGt(loc, ctx, memDescTy, smemObj, llvmElemTy, idxValues,
-                   srcIndices, op.getAxis(), values, rewriter);
+                   srcIndices, op.getAxis(), values, rewriter, targetInfo);
 
     rewriter.eraseOp(op);
     return success();
