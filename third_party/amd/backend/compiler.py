@@ -296,7 +296,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
+        if "fpsan" in options.instrumentation_mode and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
             passes.ttgpuir.add_fp_sanitizer(pm)
         pm.run(mod, 'make_ttgir')
@@ -318,7 +318,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_warp_pipeline(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
 
-        if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
+        if "fpsan" in options.instrumentation_mode and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
             passes.ttgpuir.add_fp_sanitizer(pm)
 
