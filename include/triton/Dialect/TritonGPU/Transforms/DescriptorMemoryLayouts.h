@@ -41,6 +41,15 @@ private:
                                       CGAEncodingAttr cgaLayout,
                                       ArrayRef<int64_t> usageShape,
                                       unsigned numCTAs);
+
+protected:
+  virtual Attribute getCompatibleSharedEncoding(Attribute enc,
+                                                ArrayRef<int64_t> shape,
+                                                Type elementType) {
+    return isCompatibleSharedEncoding(enc) ? enc : Attribute();
+  }
+
+private:
   // Override with backend specific implementation
   virtual Attribute buildFallbackSharedEncoding(mlir::MLIRContext *,
                                                 ArrayRef<int64_t>,
