@@ -1176,11 +1176,9 @@ def make_prod_like_logits(
 
     # Token locality: each token belongs to a synthetic topic/cluster with preferred experts.
     cluster_size = min(num_experts, max(2 * experts_per_token, num_experts // 16))
-    cluster_experts = torch.stack([
-        torch.multinomial(expert_probs, cluster_size, replacement=False)
-        for _ in range(num_clusters)
-    ])
-    token_cluster = torch.randint(num_clusters, (batch_size,), device=device)
+    cluster_experts = torch.stack(
+        [torch.multinomial(expert_probs, cluster_size, replacement=False) for _ in range(num_clusters)])
+    token_cluster = torch.randint(num_clusters, (batch_size, ), device=device)
     rows = torch.arange(batch_size, device=device)[:, None]
     logits[rows, cluster_experts[token_cluster]] += cluster_boost
 
