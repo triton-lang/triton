@@ -64,7 +64,20 @@ jobs:
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
       - name: Install dependencies
-        run: apt-get update && apt-get install -y clang lld ccache
+        run: |
+          # `apt-get update` can transiently fail on Ubuntu security mirrors
+          # (e.g. dep11 components mid-sync). Those files are cosmetic
+          # AppStream metadata and unrelated to the packages we need, so retry
+          # a few times and then continue even if update still reports errors;
+          # `apt-get install` will use whatever indexes are cached.
+          for i in 1 2 3; do
+            apt-get -o Acquire::Retries=5 update && break
+            echo "apt-get update attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          apt-get install -y clang lld ccache
+          # Fail loudly if any required tool is still missing.
+          command -v clang && command -v lld && command -v ccache
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
