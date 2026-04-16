@@ -173,6 +173,17 @@ jobs:
         run: |
           unset HIP_VISIBLE_DEVICES
           unset ROCR_VISIBLE_DEVICES
+          # The ROCm 7.12 preview ships HIP / rocprofiler-sdk inside the ROCm SDK
+          # Python wheel (under site-packages/_rocm_sdk_core/lib) instead of
+          # /opt/rocm/lib, so Proton's dlopen() can't find libamdhip64.so or
+          # librocprofiler-sdk.so without extending LD_LIBRARY_PATH.
+          # See https://rocm.docs.amd.com/en/7.12.0-preview/rocm-for-ai/vllm.html
+          if [ "${{ matrix.config.name }}" = "gfx950-rocm712" ]; then
+            ROCM_SDK_LIB="$(python3 -c 'import _rocm_sdk_core, os; print(os.path.join(os.path.dirname(_rocm_sdk_core.__file__), "lib"))')"
+            echo "ROCM_SDK_LIB=$ROCM_SDK_LIB"
+            export LD_LIBRARY_PATH="$ROCM_SDK_LIB:$LD_LIBRARY_PATH"
+            export ROCP_TOOL_ATTACH=1
+          fi
           make test-proton
       - name: Inspect cache directories
         run: |
