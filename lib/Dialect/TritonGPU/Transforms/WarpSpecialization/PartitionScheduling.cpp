@@ -218,7 +218,7 @@ SmallVector<OutputPort> initialDataValues(Graph *graph) {
   graph->walk([&](Node *node) {
     if (node->isOp()) {
       auto op = node->getOp();
-      if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
+      if (isa<tt::DescriptorLoadLikeOpInterface>(op)) {
         node->setDataValue(0);
         values.push_back({node, 0});
       }
@@ -429,8 +429,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
          return false;
        }
 
-       if (node_isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
-               edge.getFromNode())) {
+       if (node_isa<tt::DescriptorLoadLikeOpInterface>(edge.getFromNode())) {
          // require layouts to match for TMA load + alloc
          auto load = edge.getFromNode()->getOp();
          auto alloc = cast<ttg::LocalAllocOp>(edge.getToNode()->getOp());

@@ -38,6 +38,7 @@ set(TRITON_CUDACRT_PATH "" CACHE PATH "Path to CUDA CRT headers.")
 set(TRITON_CUDART_PATH "" CACHE PATH "Path to CUDA Runtime headers")
 set(TRITON_CUPTI_INCLUDE_PATH "" CACHE PATH "Path to CUPTI headers")
 set(TRITON_CUPTI_LIB_PATH "" CACHE PATH "Path to CUPTI libraries")
+set(TRITON_CUPTI_LIB_BLACKWELL_PATH "" CACHE PATH "Path to Blackwell CUPTI libraries")
 
 if(NOT TRITON_CACHE_PATH)
   message(FATAL_ERROR "TRITON_CACHE_PATH must be set or derivable from TRITON_HOME/HOME/USERPROFILE/HOMEPATH.")
@@ -79,6 +80,9 @@ if(NOT "${TRITON_CUPTI_INCLUDE_PATH}" STREQUAL "")
 endif()
 if(NOT "${TRITON_CUPTI_LIB_PATH}" STREQUAL "")
   list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cupti-lib-path "${TRITON_CUPTI_LIB_PATH}")
+endif()
+if(NOT "${TRITON_CUPTI_LIB_BLACKWELL_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cupti-lib-blackwell-path "${TRITON_CUPTI_LIB_BLACKWELL_PATH}")
 endif()
 
 # Resolve third-party package paths in CMake so direct CMake builds don't rely on setup.py.
@@ -506,7 +510,7 @@ install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
 install(DIRECTORY ${PROJECT_BINARY_DIR}/include/
   COMPONENT headers
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.h.inc")
+  FILES_MATCHING PATTERN "*.h" PATTERN "*.h.inc")
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
   COMPONENT headers
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
