@@ -10,7 +10,7 @@ import textwrap
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Callable, Generic, Iterable, Optional, ParamSpec, TypeVar, overload, Dict, Any, Tuple, TYPE_CHECKING
+from typing import Callable, Generic, Iterable, Optional, ParamSpec, TypeVar, overload, Dict, Any, Tuple
 
 from triton.backends import BaseBackend
 from types import ModuleType
@@ -1131,29 +1131,27 @@ class ConstexprFunction(JITCallable, Generic[T]):
             return BoundConstexprFunction(obj, self)
         return self
 
-    if TYPE_CHECKING:
+    @overload
+    def __call__(self: "ConstexprFunction[Callable[P, R]]", *args: P.args, **kwargs: P.kwargs) -> R:
+        ...
 
-        def __call__(self: "ConstexprFunction[Callable[P, R]]", *args: P.args, **kwargs: P.kwargs) -> R:
-            ...
-    else:
+    def __call__(self, *args, _semantic=None, **kwargs):
+        from triton.language.core import _unwrap_if_constexpr, constexpr
+        # de-constexpr arguments and discard the _semantic keyword argument:
+        args = [_unwrap_if_constexpr(x) for x in args]
+        kwargs = {k: _unwrap_if_constexpr(v) for (k, v) in kwargs.items()}
 
-        def __call__(self, *args, _semantic=None, **kwargs):
-            from triton.language.core import _unwrap_if_constexpr, constexpr
-            # de-constexpr arguments and discard the _semantic keyword argument:
-            args = [_unwrap_if_constexpr(x) for x in args]
-            kwargs = {k: _unwrap_if_constexpr(v) for (k, v) in kwargs.items()}
+        # call the raw Python function f:
+        res = self.fn(*args, **kwargs)
 
-            # call the raw Python function f:
-            res = self.fn(*args, **kwargs)
+        if _semantic is None:
+            # Not called by triton code generator, e.g. in host code, another constexpr function, or even an aggreate's __init__ function
+            return res
 
-            if _semantic is None:
-                # Not called by triton code generator, e.g. in host code, another constexpr function, or even an aggreate's __init__ function
-                return res
-
-            # convert result back to a Triton constexpr:
-            if knobs.runtime.interpret:
-                return res  # No constexpr in interpreter
-            return constexpr(res)
+        # convert result back to a Triton constexpr:
+        if knobs.runtime.interpret:
+            return res  # No constexpr in interpreter
+        return constexpr(res)
 
 
 def constexpr_function(fn: T) -> ConstexprFunction[T]:
