@@ -169,13 +169,16 @@ public:
                                    int thread, Value pred, MemType memType,
                                    Operation *insertPoint, Value recipientCTAs);
   // trackBarrierWriteForBuffer: mark a specific buffer as tracked by a
-  // barrier in the write-tracking table.
+  // barrier in the write-tracking table. When diagonalEffectRecipientCTAs is
+  // false, every signaled barrier row publishes the full effectRecipientCTAs
+  // mask. When it is true, barrier row i publishes only bit i of that mask.
   void createTrackBarrierWriteForBufferCall(ImplicitLocOpBuilder &b, Value mbar,
                                             Value buf, uint32_t length,
                                             Value pred, MemType memType,
                                             Operation *insertPoint,
                                             Value barrierRecipientCTAs,
-                                            Value effectRecipientCTAs);
+                                            Value effectRecipientCTAs,
+                                            bool diagonalEffectRecipientCTAs);
   // clearBarrierWriteTracking: clear all write tracking associated with the
   // given barrier row.
   void createClearBarrierWriteTrackingCall(ImplicitLocOpBuilder &b, Value mbar,

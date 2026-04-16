@@ -23,7 +23,7 @@
 // buffers                | tensor  | <C x B x i64>      | Base pointers of all (sub)buffers
 // barriers               | tensor  | <C x K x i64>      | Pointers to all individual mbarriers
 // barrierStates          | scratch | <C x K x i64>      | Packed barrier phase (bit 0), arrival counts (bits[1..20] init, [21..40] current), and signed tx-count (bits[41..61]); zero means invalid/uninitialized
-// barrierWriteRecipients | scratch | <C x K x i32>      | CTA bitsets of write-tracking rows reached by outstanding TMA effects on each barrier
+// barrierWriteRecipients | scratch | <C x K x i32>      | CTA bitsets of EffectWrites rows published by each barrier
 // waiting                | scratch | <C x K x i32>      | Two bits per thread: waiting flag bit (LSB), stored phase bit (bit 1)
 // writeVisibility        | scratch | <C x B x i64>      | Per-buffer thread-visibility bitmask (bit i => thread i visible)
 // readVisibility         | scratch | <C x B x T x i64>  | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
@@ -159,6 +159,12 @@ Value currentCTAMask(ImplicitLocOpBuilder &b) {
                                ctaId);
 }
 
+Value allCTAsMask(ImplicitLocOpBuilder &b) {
+  int numCTAs = ttg::lookupNumCTAs(b);
+  assert(numCTAs <= 16 && "ConSan CTA bitsets assume at most 16 CTAs");
+  return arith::ConstantIntOp::create(b, (1u << numCTAs) - 1, 32);
+}
+
 uint16_t getBlockBroadcastMask(Value alloc) {
   auto allocTy = cast<ttg::MemDescType>(alloc.getType());
   auto kBlock = StringAttr::get(alloc.getContext(), "block");
@@ -259,6 +265,8 @@ Value getMemEffectRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
       return getMulticastRecipientCTAs(b, tmaLoad.getResult());
     return currentCTAMask(b);
   }
+  if (isa<ttng::CLCTryCancelOp>(op))
+    return allCTAsMask(b);
   if (isTensorCoreOp(op))
     return getRecipientCTAsForBroadcastMasks(
         b, ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), {}));
@@ -278,6 +286,8 @@ Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
                                               tmaLoad.getBarrier());
     return getLeaderCTA(b, tmaLoad.getBarrier());
   }
+  if (isa<ttng::CLCTryCancelOp>(op))
+    return allCTAsMask(b);
 
   if (isTensorCoreOp(op))
     return getRecipientCTAsForBroadcastMasks(
@@ -560,7 +570,8 @@ private:
             memType = MemType::SHARED_MEM;
           funcBuilder.createTrackBarrierWriteForBufferCall(
               b, barrier, effect.buf, effect.length, combinedPred, memType, op,
-              recipientCTAs, effectRecipientCTAs);
+              recipientCTAs, effectRecipientCTAs,
+              barrierInfo.diagonalEffectRecipientCTAs);
         }
       }
       if (barrierInfo.count > 0 || barrierInfo.txCount != 0) {
