@@ -1163,10 +1163,59 @@ def alloc_randn_fp4(shape: tuple[int, ...], device: str, p: KernelConfig) -> tup
     return data, scale
 
 
+def make_prod_like_logits(
+    batch_size: int,
+    num_experts: int,
+    experts_per_token: int,
+    device: str,
+    dtype: torch.dtype = torch.float16,
+    *,
+    zipf_alpha: float = 1.10,
+    num_clusters: int = 16,
+    cluster_boost: float = 1.25,
+    gumbel_scale: float = 0.75,
+    batch_hot_experts: int = 4,
+    batch_hot_boost: float = 0.6,
+) -> torch.Tensor:
+    # Stable expert popularity: a few hot experts, long tail.
+    ranks = torch.arange(1, num_experts + 1, device=device, dtype=torch.float32)
+    ranked_probs = ranks.pow(-zipf_alpha)
+    ranked_probs /= ranked_probs.sum()
+
+    # Randomize which expert ids are hot so shard/id layout is not special.
+    perm = torch.randperm(num_experts, device=device)
+    expert_probs = torch.empty_like(ranked_probs)
+    expert_probs[perm] = ranked_probs
+
+    logits = expert_probs.clamp_min(1e-12).log()[None, :].expand(batch_size, -1).clone()
+
+    # Token locality: each token belongs to a synthetic topic/cluster with preferred experts.
+    cluster_size = min(num_experts, max(2 * experts_per_token, num_experts // 16))
+    cluster_experts = torch.stack([
+        torch.multinomial(expert_probs, cluster_size, replacement=False)
+        for _ in range(num_clusters)
+    ])
+    token_cluster = torch.randint(num_clusters, (batch_size,), device=device)
+    rows = torch.arange(batch_size, device=device)[:, None]
+    logits[rows, cluster_experts[token_cluster]] += cluster_boost
+
+    # Batch burstiness: a few experts are hotter for this batch.
+    if batch_hot_experts > 0:
+        hot = torch.multinomial(expert_probs, batch_hot_experts, replacement=False)
+        logits[:, hot] += batch_hot_boost
+
+    # Gumbel noise makes top-k behave like weighted sampling without replacement.
+    noise = -torch.empty_like(logits).exponential_().log()
+    logits += gumbel_scale * noise
+
+    return logits.to(dtype)
+
+
 def init_routing_data(c: MLPConfig, batch_size: int, local_rank: int,
                       device: str) -> tuple[RaggedTensorMetadata, torch.Tensor]:
     expt_dist = make_expt_dict_uniform(c.num_expert_shards, c.num_experts)
-    logits = torch.randn((batch_size, c.num_experts), dtype=torch.float16, device=device)
+    # logits = torch.randn((batch_size, c.num_experts), dtype=torch.float16, device=device)
+    logits = make_prod_like_logits(batch_size, c.num_experts, c.experts_per_token, device)
     sparse_logits = topk(logits, c.experts_per_token, apply_softmax=True)
     expt_hist = sparse_logits.mask_metadata.col_sum
     local_expts = expt_dist[local_rank]
