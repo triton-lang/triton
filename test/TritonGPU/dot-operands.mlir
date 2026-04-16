@@ -343,6 +343,35 @@ module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
+#blocked_a_load = #ttg.blocked<{sizePerThread = [1, 1, 1, 2], threadsPerWarp = [1, 4, 1, 8], warpsPerCTA = [1, 4, 1, 1], order = [3, 2, 1, 0]}>
+#blocked_a_mat = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared_a_nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 32}>
+#shared_rhs_linear = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [1, 0], [2, 4], [4, 8], [8, 0], [16, 0], [32, 0]]}, alignment = 512>
+#tmem_dbg = #ttng.tensor_memory_encoding<blockM = 64, blockN = 16, colStride = 1>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @nvmma_operand_views_not_rewritten
+  // CHECK: %[[DESC:.*]] = tt.descriptor_load %{{.*}}[%{{.*}}] : !tt.tensordesc<1x16x1x16xf32> -> tensor<1x16x1x16xf32, #{{.*}}>
+  // CHECK: %[[RESHAPE:.*]] = tt.reshape %[[DESC]] : tensor<1x16x1x16xf32, #{{.*}}> -> tensor<16x16xf32, #{{.*}}>
+  // CHECK: %[[ALLOC:.*]] = ttg.local_alloc %[[RESHAPE]] : (tensor<16x16xf32, #{{.*}}>) -> !ttg.memdesc<16x16xf32, #{{.*}}, #smem>
+  // CHECK-NOT: ttg.memdesc_reshape
+  // CHECK: ttng.tc_gen5_mma %{{.*}}, %[[ALLOC]], %{{.*}}, %true, %true : !ttg.memdesc<64x16xf32, #{{.*}}, #smem>, !ttg.memdesc<16x16xf32, #{{.*}}, #smem>, !ttg.memdesc<64x16xf32, #{{.*}}, #ttng.tensor_memory>
+  tt.func @nvmma_operand_views_not_rewritten(
+      %lhs: !tt.tensordesc<1x16x1x16xf32>,
+      %rhs: !ttg.memdesc<64x16xf32, #shared_rhs_linear, #smem>,
+      %acc: !ttg.memdesc<64x16xf32, #tmem_dbg, #ttng.tensor_memory>) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %a = tt.descriptor_load %lhs[%c0, %c0, %c0, %c0] : !tt.tensordesc<1x16x1x16xf32> -> tensor<1x16x1x16xf32, #blocked_a_load>
+    %a_rs = tt.reshape %a : tensor<1x16x1x16xf32, #blocked_a_load> -> tensor<16x16xf32, #blocked_a_mat>
+    %a_s = ttg.local_alloc %a_rs : (tensor<16x16xf32, #blocked_a_mat>) -> !ttg.memdesc<16x16xf32, #shared_a_nvmma, #smem>
+    ttng.tc_gen5_mma %rhs, %a_s, %acc, %true, %true : !ttg.memdesc<64x16xf32, #shared_rhs_linear, #smem>, !ttg.memdesc<16x16xf32, #shared_a_nvmma, #smem>, !ttg.memdesc<64x16xf32, #tmem_dbg, #ttng.tensor_memory>
+    tt.return
+  }
+}
+
+// -----
+
 #blockedA_desc = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blockedB_desc = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 16], threadsPerWarp = [1, 1, 4, 8, 1], warpsPerCTA = [1, 1, 4, 1, 1], order = [4, 3, 2, 1, 0]}>
 #blockedB0_desc = #ttg.blocked<{sizePerThread = [1, 1, 1, 16], threadsPerWarp = [1, 4, 8, 1], warpsPerCTA = [1, 4, 1, 1], order = [3, 2, 1, 0]}>
