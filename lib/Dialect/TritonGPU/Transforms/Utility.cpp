@@ -1,6 +1,7 @@
 #include "triton/Analysis/Utility.h"
 
 #include <fstream>
+#include <optional>
 
 #include "mlir/Analysis/DataFlow/LivenessAnalysis.h"
 #include "mlir/Analysis/SliceAnalysis.h"
@@ -137,6 +138,59 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         << ", divisibility: " << maxMultipleBytes
                         << ", contig: " << valInfo.getContiguity(order[0])
                         << ", alignment: " << alignment);
+  return currPerThread;
+}
+
+static std::optional<unsigned>
+getAtomicWriteElementsPerThreadCap(Operation *op) {
+  if (isa<triton::AtomicCASOp>(op))
+    return 1;
+
+  auto atomicRmw = dyn_cast<triton::AtomicRMWOp>(op);
+  if (!atomicRmw)
+    return std::nullopt;
+
+  Type elemTy = getElementTypeOrSelf(atomicRmw.getVal().getType());
+  if (elemTy.isInteger() || elemTy.isF64())
+    return 1;
+
+  if (atomicRmw.getAtomicRmwOp() != RMWOp::FADD)
+    return std::nullopt;
+
+  auto moduleOp = op->getParentOfType<ModuleOp>();
+  auto targetAttr =
+      moduleOp ? moduleOp->getAttrOfType<StringAttr>(ttg::AttrTargetName)
+               : nullptr;
+  if (!targetAttr || !targetAttr.getValue().starts_with("cuda:"))
+    return std::nullopt;
+
+  int computeCapability = getNVIDIAComputeCapability(moduleOp);
+  if (computeCapability >= 90)
+    return std::nullopt;
+
+  if (elemTy.isF32() || elemTy.isBF16())
+    return 1;
+  if (elemTy.isF16())
+    return computeCapability >= 60 ? 2 : 1;
+  return std::nullopt;
+}
+
+unsigned getNumWriteElementsPerThread(Operation *op,
+                                      SmallVector<unsigned> order,
+                                      ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                      ArrayRef<int64_t> shapePerCTA) {
+  unsigned currPerThread =
+      getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA);
+
+  // Some atomic lowerings are narrower than a plain store. TTGIR currently
+  // exposes the target architecture but not the PTX version, so we only cap
+  // cases that are unambiguous from the available target metadata and the
+  // current backend lowering.
+  if (auto atomicCap = getAtomicWriteElementsPerThreadCap(op)) {
+    LDBG("atomic write cap: " << *atomicCap);
+    return std::min(currPerThread, *atomicCap);
+  }
+
   return currPerThread;
 }
 

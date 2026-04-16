@@ -51,6 +51,14 @@ getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                         ArrayRef<int64_t> shape);
 
+// Calculate the per-thread width to use for ops that write to global memory.
+// This starts from the pointer-derived alignment/contiguity heuristic and
+// applies any narrower caps required by the specific op's lowering path.
+unsigned
+getNumWriteElementsPerThread(Operation *op, SmallVector<unsigned> order,
+                             triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                             ArrayRef<int64_t> shape);
+
 // Returns whether the op is a "view op", i.e. doesn't move any data
 bool isView(Operation *op);
 
