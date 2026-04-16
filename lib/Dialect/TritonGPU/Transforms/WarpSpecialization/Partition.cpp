@@ -1,5 +1,5 @@
-#include "PartitionAttrs.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
+#include "PartitionAttrs.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -81,8 +81,7 @@ LogicalResult verifyPartitionAttrs(Operation *op) {
     }
 
     for (Attribute attr : arrayAttr) {
-      if (failed(
-              verifyPartitionIdsAttr(op, kPartitionOutputsAttrName, attr))) {
+      if (failed(verifyPartitionIdsAttr(op, kPartitionOutputsAttrName, attr))) {
         return failure();
       }
     }
@@ -126,8 +125,7 @@ LogicalResult verifyPartitionAttrs(Operation *op) {
     if (arrayAttr.size() != numResults) {
       return op->emitOpError("does not have expected number of output "
                              "partition sets in attr ")
-             << kPartitionOutputsAttrName
-             << "; should match number of results";
+             << kPartitionOutputsAttrName << "; should match number of results";
     }
 
     if (!op->hasAttr(kPartitionAttrName)) {
@@ -142,9 +140,8 @@ LogicalResult verifyPartitionAttrs(Operation *op) {
       outputPartitionIdsUnion.insert(outputPartitionIds.begin(),
                                      outputPartitionIds.end());
     }
-    if (!llvm::all_of(outputPartitionIdsUnion, [&](int id) {
-          return partitionIds.contains(id);
-        })) {
+    if (!llvm::all_of(outputPartitionIdsUnion,
+                      [&](int id) { return partitionIds.contains(id); })) {
       return op->emitOpError("partition ids in attr ")
              << kPartitionAttrName
              << " must be the union of all partition ids in "
@@ -373,7 +370,9 @@ SetVector<int> getPartitionIds(OpOperand *use) {
   return getPartitionIds(owner);
 }
 
-bool hasPartition(Operation *op) { return op && op->hasAttr(kPartitionAttrName); }
+bool hasPartition(Operation *op) {
+  return op && op->hasAttr(kPartitionAttrName);
+}
 
 bool hasWarpSpecializeTag(Operation *op) {
   return op && op->hasAttr(kWarpSpecializeTagAttrName);

@@ -1,3 +1,4 @@
+#include "PartitionAttrs.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -8,7 +9,6 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
-#include "PartitionAttrs.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
