@@ -218,7 +218,14 @@ public:
 
 private:
   LogicalResult rewriteOperand(Value operand, PatternRewriter &rewriter) const {
-    if (!isa<MemDescType>(operand.getType()))
+    auto operandTy = dyn_cast<MemDescType>(operand.getType());
+    if (!operandTy)
+      return failure();
+
+    // Restrict this rewrite to an operand which already uses a shared-linear
+    // encoding. Backward propagation through tensor reshape/trans is not
+    // encoding-stable for NVMMAShared.
+    if (!isa<SharedLinearEncodingAttr>(operandTy.getEncoding()))
       return failure();
 
     Value beforeTrailing = operand;
