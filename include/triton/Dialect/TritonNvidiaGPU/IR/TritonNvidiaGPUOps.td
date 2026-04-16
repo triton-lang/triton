@@ -122,8 +122,7 @@ def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", [
 
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$mbarrier,
-    I1Attr:$multicast
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$mbarrier
   );
 
   let assemblyFormat = [{

@@ -378,7 +378,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
       %result: !ttg.memdesc<2xi64, #shared_clc, #smem>,
       %mbar: !ttg.memdesc<1xi64, #barrier, #smem>) {
     // expected-error @below {{completion barrier cga_layout must be}}
-    ttng.clc_try_cancel %result, %mbar {multicast = false} :
+    ttng.clc_try_cancel %result, %mbar :
       !ttg.memdesc<2xi64, #shared_clc, #smem>, !ttg.memdesc<1xi64, #barrier, #smem>
     tt.return
   }
@@ -394,7 +394,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
       %result: !ttg.memdesc<2xi64, #shared_clc_bad, #smem>,
       %mbar: !ttg.memdesc<1xi64, #barrier, #smem>) {
     // expected-error @below {{Expected CLC result buffer cga_layout bases to be all zeros. Got [[1]]}}
-    ttng.clc_try_cancel %result, %mbar {multicast = false} :
+    ttng.clc_try_cancel %result, %mbar :
       !ttg.memdesc<2xi64, #shared_clc_bad, #smem>, !ttg.memdesc<1xi64, #barrier, #smem>
     tt.return
   }
