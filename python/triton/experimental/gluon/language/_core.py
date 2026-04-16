@@ -210,7 +210,6 @@ class shared_memory_descriptor_type(base_type):
 
     @property
     def nbytes_per_cta(self) -> int:
-        cga_layout = getattr(self.layout, "cga_layout", [])
         if isinstance(self.layout, SharedLinearLayout):
             cga_layout = []
             dim_bases = [0] * len(self.shape)
@@ -221,6 +220,8 @@ class shared_memory_descriptor_type(base_type):
                         cga_basis[dim] = 1 << dim_bases[dim]
                         dim_bases[dim] += 1
                 cga_layout.append(cga_basis)
+        else:
+            cga_layout = self.layout.cga_layout
         shape_per_cta = _get_shape_per_cta(self.shape, cga_layout)
         return math.prod(shape_per_cta) * self.element_ty.primitive_bitwidth // 8
 
