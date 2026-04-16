@@ -54,6 +54,8 @@ LogicalResult verifyPartitionAttrs(Operation *op) {
 
     Operation *failedOp = nullptr;
     op->walk([&](Operation *childOp) {
+      if (isa<ub::PoisonOp>(childOp))
+        return WalkResult::advance();
       if (!childOp->hasAttr(kPartitionAttrName)) {
         failedOp = childOp;
         return WalkResult::interrupt();
