@@ -106,6 +106,8 @@ public:
 
   virtual bool isTMAOp(Operation *op) const = 0;
 
+  virtual bool isCLCOp(Operation *op) const { return false; }
+
   virtual std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const = 0;
 

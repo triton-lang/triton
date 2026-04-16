@@ -120,12 +120,16 @@ int getCurrentThread(Operation *op, const ConSanTargetHooks *hooks) {
     thread += TC_THREAD_OFFSET;
     return thread;
   }
+  if (hooks->isCLCOp(op)) {
+    thread += CLC_THREAD_OFFSET;
+    return thread;
+  }
   return thread;
 }
 
 int getBaseThread(int thread) { return thread % NUM_THREADS; }
 
-// Peer threads are the equivalent threads in the TMA, TC and normal
+// Peer threads are the equivalent threads in the TMA, TC, CLC and normal
 // thread classes.
 // If a thread is a base thread, return the mask with the peers, otherwise
 // return the mask with the thread itself.
@@ -134,6 +138,7 @@ uint64_t getThreadPeersMask(int thread) {
   if (thread < NUM_THREADS) {
     mask |= 1ULL << (thread + TMA_THREAD_OFFSET);
     mask |= 1ULL << (thread + TC_THREAD_OFFSET);
+    mask |= 1ULL << (thread + CLC_THREAD_OFFSET);
   }
   return mask;
 }

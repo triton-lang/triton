@@ -2389,11 +2389,10 @@ void FunctionBuilder::createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b,
         Value zeroTensor =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
 
-        constexpr uint64_t fullMask =
-            tti::THREADS_BITMASK_SIZE == 64
-                ? std::numeric_limits<uint64_t>::max()
-                : (std::numeric_limits<uint64_t>::max() >>
-                   (64 - tti::THREADS_BITMASK_SIZE));
+        uint64_t fullMask = tti::THREADS_BITMASK_SIZE == 64
+                                ? std::numeric_limits<uint64_t>::max()
+                                : (std::numeric_limits<uint64_t>::max() >>
+                                   (64 - tti::THREADS_BITMASK_SIZE));
         Value fullMaskVal = arith::ConstantIntOp::create(fb, fullMask, 64);
         Value destMaskElem = adjustIntegerWidth(fb, destMaskVal, elemType);
         Value fullMaskElem = adjustIntegerWidth(fb, fullMaskVal, elemType);

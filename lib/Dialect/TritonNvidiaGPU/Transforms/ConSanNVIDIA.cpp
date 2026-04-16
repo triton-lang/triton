@@ -39,9 +39,11 @@ uint32_t getBlockBroadcastMask(Type type) {
 class NVIDIAConSanHooks : public tti::ConSanTargetHooks {
 public:
   bool isTMAOp(Operation *op) const override {
-    // CLC writes its result asynchronously through the same helper-thread
-    // visibility class that ConSan uses for TMA effects.
-    return isa<ttng::TMAOpInterface, ttng::CLCTryCancelOp>(op);
+    return isa<ttng::TMAOpInterface>(op);
+  }
+
+  bool isCLCOp(Operation *op) const override {
+    return isa<ttng::CLCTryCancelOp>(op);
   }
 
   std::optional<BarrierInitInfo>
