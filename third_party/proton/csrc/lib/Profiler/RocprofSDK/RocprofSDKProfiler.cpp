@@ -837,9 +837,6 @@ protonConfigure(uint32_t version, const char *runtimeVersion, uint32_t priority,
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
   auto &state = getRuntimeState();
   std::lock_guard<std::mutex> lock(state.mutex);
-  if (!state.configured) {
-    rocprofiler::forceConfigure<true>(&protonConfigure);
-  }
   if (!state.profilingStarted) {
     rocprofiler::startContext<true>(state.profilingContext);
     state.profilingStarted = true;
@@ -876,11 +873,41 @@ RocprofSDKProfiler::RocprofSDKProfiler() {
   pImpl = std::make_unique<RocprofSDKProfilerPimpl>(*this);
   auto &state = getRuntimeState();
   state.pimpl = static_cast<RocprofSDKProfilerPimpl *>(pImpl.get());
-  // forceConfigure is deferred to doStart() so that HIP libraries are
-  // loaded by the time the SDK intercepts them.
+  // Configure rocprofiler-sdk as soon as this singleton is constructed.
+  // Deferring until doStart() is unsafe: any code that fully initializes HSA
+  // beforehand (e.g. triton's HIP driver query at pytest collection time,
+  // or a torch import chain) causes rocprofiler-sdk 1.2.0 to silently skip
+  // kernel-dispatch buffer tracing installation on already-existing queues,
+  // producing an empty dispatch buffer and no per-kernel timing data.
+  // Construction of this singleton is triggered at libproton.so load time
+  // via the __attribute__((constructor)) hook below, so force_configure
+  // lands before any user code touches the HIP/HSA runtimes.
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (!state.configured) {
+      rocprofiler::forceConfigure<true>(&protonConfigure);
+    }
+  }
 }
 
 RocprofSDKProfiler::~RocprofSDKProfiler() = default;
+
+namespace {
+// Runs during dlopen of libproton.so (i.e. `import triton.profiler._C`).
+// Touches the singleton so its constructor — which calls
+// rocprofiler_force_configure — runs before any Python code executes.
+// Wrapped in try/catch so non-ROCm environments (where
+// librocprofiler-sdk.so cannot be dlopen'd) continue to import cleanly;
+// a subsequent attempt to start a "rocprofiler" session will surface the
+// error through the normal lazy-dispatch path.
+__attribute__((constructor)) void protonRocprofSDKLoadHook() {
+  try {
+    (void)RocprofSDKProfiler::instance();
+  } catch (...) {
+    // Intentionally swallowed: non-ROCm or rocprofiler-sdk unavailable.
+  }
+}
+} // namespace
 
 void RocprofSDKProfiler::doSetMode(
     const std::vector<std::string> &modeAndOptions) {
