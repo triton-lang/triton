@@ -10,7 +10,7 @@ Auxiliary state is kept in distributed tensors and global scratch memory, with t
 
 - Base threads: 16 warp-specialization (WS) threads (allowing for up to 16 partitions).
 - Peer classes: +16 TMA threads, +16 Tensor Core (TC) threads, and +16 CLC threads to model lack of ordering with base threads.
-- Total logical threads: 64. Bitmasks are sized to the next power of two: 64.
+- Total logical threads: 64.
 
 Indexing uses a logical thread id in [0, 64), with column vectors sized to 64 for layout convenience.
 
