@@ -178,7 +178,10 @@ def update_symlink(link_path, source_path):
     if link_path.is_symlink():
         link_path.unlink()
     elif link_path.exists():
-        shutil.rmtree(link_path)
+        if link_path.is_dir():
+            shutil.rmtree(link_path)
+        else:
+            link_path.unlink()
 
     print(f"creating symlink: {link_path} -> {source_path}", file=sys.stderr)
     link_path.absolute().parent.mkdir(parents=True, exist_ok=True)  # Ensure link's parent directory exists
@@ -251,10 +254,10 @@ class CMakeBuild(build_ext):
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
         cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_include_dir]
-        roctracer_include_dir = get_env_with_keys(["TRITON_ROCTRACER_INCLUDE_PATH"])
-        if roctracer_include_dir == "":
-            roctracer_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
-        cmake_args += ["-DROCTRACER_INCLUDE_DIR=" + roctracer_include_dir]
+        rocm_include_dir = get_env_with_keys(["TRITON_ROCM_INCLUDE_PATH"])
+        if rocm_include_dir == "":
+            rocm_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
+        cmake_args += ["-DROCM_INCLUDE_DIR=" + rocm_include_dir]
         return cmake_args
 
     def build_extension(self, ext):
