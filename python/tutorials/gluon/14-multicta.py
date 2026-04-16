@@ -830,7 +830,7 @@ def matmul_clc_partition(p):
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
         mbarrier.expect(barrier, 16)
-        clc.try_cancel(result, barrier, multicast=True)
+        clc.try_cancel(result, barrier)
         mbarrier.wait(barrier, state.phase)
         clc_res = clc.load_result(result)
         has_work = clc_res.is_canceled()
