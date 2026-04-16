@@ -22,6 +22,7 @@
  */
 
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "lib/Dialect/TritonGPU/Transforms/WarpSpecialization/PartitionAttrs.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Interfaces/InferIntRangeInterface.h"
