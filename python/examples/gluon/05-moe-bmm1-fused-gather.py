@@ -122,12 +122,6 @@ def alloc_empty_ready_barriers(num_bufs: gl.constexpr):
 
 
 @gluon.jit
-def invalidate_barrier_ring(bars, num_bufs: gl.constexpr):
-    for i in gl.static_range(num_bufs):
-        mbarrier.invalidate(bars.index(i))
-
-
-@gluon.jit
 def pack_e4m3x2(values):
     return tl_core.inline_asm_elementwise(
         """
@@ -809,15 +803,6 @@ def ws_matmul_kernel(
         [STORE_HELPER_WARPS, LOAD_ACTIVATION_WARPS, LOAD_WEIGHT_WARPS, MMA_WARPS],
         [STORE_HELPER_REGS, LOAD_ACTIVATION_REGS, LOAD_WEIGHT_REGS, MMA_REGS],
     )
-
-    invalidate_barrier_ring(x_empty_bars, x_num_bufs)
-    invalidate_barrier_ring(x_ready_bars, x_num_bufs)
-    invalidate_barrier_ring(w_empty_bars, w_num_bufs)
-    invalidate_barrier_ring(w_ready_bars, w_num_bufs)
-    invalidate_barrier_ring(acc_empty_bars, acc_num_bufs)
-    invalidate_barrier_ring(acc_ready_bars, acc_num_bufs)
-    invalidate_barrier_ring(store_empty_bars, EPILOGUE_BUFFER_DEPTH)
-    invalidate_barrier_ring(store_ready_bars, EPILOGUE_BUFFER_DEPTH)
 
 
 # ===-----------------------------------------------------------------------===#
