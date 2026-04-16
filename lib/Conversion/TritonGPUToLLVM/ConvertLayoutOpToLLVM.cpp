@@ -23,7 +23,6 @@ using namespace mlir;
 using namespace mlir::triton::gpu;
 using TranspositionInfo = DecomposedWarpConversion::TranspositionInfo;
 
-constexpr int kPtrBitWidth = 64;
 struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   const TargetInfoBase &targetInfo;
@@ -39,7 +38,6 @@ struct ConvertLayoutOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = op.getContext();
 
-    const auto &shape = op.getType().getShape();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
@@ -92,8 +90,6 @@ struct ConvertLayoutOpConversion
     auto kRegister = str_attr("register");
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
     for (int i = 0; i < outVals.size(); i++) {
@@ -242,7 +238,6 @@ struct ConvertLayoutOpConversion
   void transferSwizzlingLocalMem(ConvertLayoutOp op, Value src,
                                  ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto *ctx = op.getContext();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
@@ -428,11 +423,9 @@ struct ConvertLayoutOpConversion
       ArrayRef<TranspositionInfo> mixedTranspositions) const {
     auto *ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto kReg = str_attr("register");
     auto kLane = str_attr("lane");
 
     SmallVector<Value> vals(inVals.begin(), inVals.end());
-    int m = mixedTranspositions.size();
     int numRegs = inVals.size();
     // A single mixed transposition (r_i l_j) which swaps the i-th register
     // index bit and the j-th lane index bit of an element applies a tiled 2x2

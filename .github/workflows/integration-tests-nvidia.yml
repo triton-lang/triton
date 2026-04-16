@@ -69,16 +69,8 @@ jobs:
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-      - name: Setup Python environment for GB200
-        if: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') }}
+      - name: Setup Python environment for NVIDIA self-hosted runners
         run: |
-          echo "/venv/bin" >> $GITHUB_PATH
-          echo "VIRTUAL_ENV=/venv" >> $GITHUB_ENV
-          echo "PYTHONHOME=" >> $GITHUB_ENV
-      - name: Setup Python environment for H100
-        if: ${{ startsWith(matrix.config.runner_type, 'nvidia-h100') }}
-        run: |
-          sudo chown -R "$(id -u):$(id -g)" /venv
           echo "/venv/bin" >> $GITHUB_PATH
           echo "VIRTUAL_ENV=/venv" >> $GITHUB_ENV
           echo "PYTHONHOME=" >> $GITHUB_ENV

@@ -77,7 +77,7 @@ class ClcTileScheduler:
 
     @gluon.jit
     def try_cancel(self) -> None:
-        clc.try_cancel(self.clc_result_buf, self.barrier, multicast=True)
+        clc.try_cancel(self.clc_result_buf, self.barrier)
         mbarrier.expect(self.barrier, 16)
 
     @gluon.jit

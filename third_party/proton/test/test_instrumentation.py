@@ -983,7 +983,7 @@ def test_gluon_clc_profile(tmp_path: pathlib.Path, profile_data: str, file_suffi
                 y = gl.load(y_ptr + offsets, mask)
                 gl.store(out_ptr + offsets, x + y, mask)
 
-            clc.try_cancel(clc_result, clc_bar, multicast=True)
+            clc.try_cancel(clc_result, clc_bar)
             mbarrier.expect(clc_bar, 16)
             mbarrier.wait(clc_bar, phase)
 

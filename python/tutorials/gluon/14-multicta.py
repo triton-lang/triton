@@ -477,8 +477,9 @@ cga_layout_b = get_cga_layout(cga_layout, 1, two_ctas=False)
 # every CTA in the multicast group atomically, so the wait side does not need a
 # different API.
 #
-# The only new ingredient is the layout. The TMA destination must use a
-# broadcast `cga_layout`, so that both CTAs view the same shared-memory tile.
+# The TMA destination must use a broadcast `cga_layout`, so that both CTAs
+# receive the same shared-memory tile. The barrier stays a regular 1D TMA
+# barrier unless the kernel is in 2CTA mode.
 #
 # The example below keeps things intentionally simple: it multicasts one tile
 # into shared memory and then materializes that same tile back to global memory.
@@ -489,6 +490,7 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
     gl.static_assert(gl.num_ctas() == 2)
 
     smem = gl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
+    # This kernel is not in 2CTA mode, so the TMA barrier is per-CTA.
     bar = mbarrier.allocate_mbarrier()
     mbarrier.init(bar, count=1)
 
@@ -828,7 +830,7 @@ def matmul_clc_partition(p):
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
         mbarrier.expect(barrier, 16)
-        clc.try_cancel(result, barrier, multicast=True)
+        clc.try_cancel(result, barrier)
         mbarrier.wait(barrier, state.phase)
         clc_res = clc.load_result(result)
         has_work = clc_res.is_canceled()

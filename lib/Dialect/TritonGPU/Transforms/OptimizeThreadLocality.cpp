@@ -287,7 +287,6 @@ class TritonGPUOptimizeThreadLocalityPass
       auto yieldOp = dyn_cast<scf::YieldOp>(yieldOpOperand.getOwner());
       if (!yieldOp)
         return;
-      auto operandNumber = yieldOpOperand.getOperandNumber();
       Block *block = reduce->getBlock();
       Operation *parentOp = block->getParentOp();
       auto forOp = dyn_cast<scf::ForOp>(parentOp);
@@ -309,7 +308,6 @@ class TritonGPUOptimizeThreadLocalityPass
       auto srcEncoding = srcType.getEncoding();
       assert(isa<triton::gpu::BlockedEncodingAttr>(srcEncoding) &&
              "Thread locality optimization only supports blocked encoding");
-      auto blocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(srcEncoding);
       auto elemsPerThread =
           triton::gpu::getElemsPerThread(srcType)[reduce.getAxis()];
       auto rank = srcShape.size();

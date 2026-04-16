@@ -158,7 +158,6 @@ struct LLVMDILocalVariablePass
       if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(inTy)) {
         auto pointeeTy =
             funcOp.getArgAttrOfType<TypeAttr>(idx, "tt.pointee_type");
-        auto sizeInBits = dl.getTypeSizeInBits(ptrTy);
         // If no valid pointee type for this function argument, skip it.
         mlir::Type elTy =
             pointeeTy ? pointeeTy.getValue() : builder.getNoneType();
@@ -173,8 +172,10 @@ struct LLVMDILocalVariablePass
             convertArrayType(context, arrayTy, fileAttr, dl, line);
         types.push_back(tyAttr);
       } else {
-        // Here assume remaining inTys are only scalar types
-        assert(inTy.isIntOrFloat() && "Expected scalar types");
+        // Remaining types are scalar (int/float) or vector types
+        // (e.g., from external function declarations for GPU builtins).
+        assert((inTy.isIntOrFloat() || isa<mlir::VectorType>(inTy)) &&
+               "Expected scalar or vector types");
         LLVM::DITypeAttr tyAttr = convertType(context, inTy);
         types.push_back(tyAttr);
       }
@@ -278,7 +279,10 @@ struct LLVMDILocalVariablePass
       if (isa<LLVM::LLVMFuncOp>(op)) {
         auto funcOp = cast<LLVM::LLVMFuncOp>(op);
         diSubprogramAttr = getDISubprogramAttr(funcOp);
-        diSubprogramAttr = fuseFuncArgVariables(funcOp, diSubprogramAttr);
+        // External declarations (e.g., runtime builtins like vprintf) have no
+        // body, so we cannot insert debug value intrinsics into them.
+        if (!funcOp.isExternal())
+          diSubprogramAttr = fuseFuncArgVariables(funcOp, diSubprogramAttr);
       } else {
         fuseDILocalVariable(op);
       }

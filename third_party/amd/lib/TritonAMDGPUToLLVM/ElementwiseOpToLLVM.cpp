@@ -345,7 +345,6 @@ cvtScalePk4DowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
   Value v2I16Vec = b.undef(v2I16Ty);
   Value scale = b.f32_val(1);
 
-  Value result;
   if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkFp8F32Op> ||
                 std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkBf8F32Op>) {
     v2I16Vec =
@@ -426,8 +425,6 @@ cvtScalePk8DowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
   for (size_t i = 0; i < inSize; ++i) {
     inVec = b.insert_element(vFPInTy, inVec, v[i], b.i32_val(i));
   }
-
-  Type v4I8Ty = vec_ty(i8_ty, 4);
 
   auto resVec = ConvertOp::create(rewriter, loc, vFPResTy, inVec, b.f32_val(1));
   auto outVec = b.bitcast(resVec, vFPOutTy);
@@ -781,7 +778,6 @@ static SmallVector<Value> cvtPkFp32ToF8(Location loc,
                                         const SmallVector<Value> &v) {
   assert(v.size() == 4);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Type v2I16Ty = vec_ty(i16_ty, 2);
   Value result = b.undef(i32_ty);
 
   result = ConvertOp::create(rewriter, loc, i32_ty, v[0], v[1], result,
@@ -1856,7 +1852,6 @@ struct FpToFpOpConversion
   FailureOr<ConverterT>
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
-    auto F8E4M3B15TyID = TypeID::get<Float8E4M3B11FNUZType>();
     auto F8E4M3FNUZTyID = TypeID::get<Float8E4M3FNUZType>();
     auto F8E5M2FNUZTyID = TypeID::get<Float8E5M2FNUZType>();
     auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
@@ -1864,7 +1859,6 @@ struct FpToFpOpConversion
     auto F16TyID = TypeID::get<Float16Type>();
     auto BF16TyID = TypeID::get<BFloat16Type>();
     auto F32TyID = TypeID::get<Float32Type>();
-    auto F64TyID = TypeID::get<Float64Type>();
 
     auto undefRounding = static_cast<RoundingMode>(-1);
 

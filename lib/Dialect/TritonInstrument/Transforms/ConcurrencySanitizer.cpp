@@ -9,24 +9,28 @@
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/Support/ErrorHandling.h"
 
 // clang-format off
 // Concurrency Sanitizer data structures:
 // ConSan keeps auxilary data requied for tracking memory accesses in tensors.
 // These tensors are stored as a distributed tensor or in global scratch memory.
+// C = CTAs, B = buffers, K = mbarriers, T = logical ConSan thread bit slots,
+// P = max number of warp-specialize partitions tracked by ConSan (16 for now).
 //
-// Name              | Storage | Rank/Type       | Description
-// ------------------|---------|-----------------|------------
-// buffers           | tensor  | <B x i64>       | Base pointers of all (sub)buffers
-// barriers          | tensor  | <K x i64>       | Pointers to all individual mbarriers
-// barrierStates     | scratch | <K x i32>       | Packed barrier phase (bit 0) and arrival counts (bits[1..10] init, [11..20] current); zero means invalid/uninitialized
-// waiting           | scratch | <K x i32>       | Two bits per thread: waiting flag bit (LSB), stored phase bit (bit 1)
-// writeVisibility   | scratch | <B x i64>       | Per-buffer thread-visibility bitmask (bit i => thread i visible)
-// readVisibility    | scratch | <B x T x i64>   | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
-// writeTracking     | scratch | <B x K x i8>    | Map buffers -> barriers that track writes
-// readTracking      | scratch | <B x K x i64>   | Map buffers -> barriers that track reads
+// Name                   | Storage | Rank/Type          | Description
+// -----------------------|---------|--------------------|------------
+// buffers                | tensor  | <C x B x i64>      | Base pointers of all (sub)buffers
+// barriers               | tensor  | <C x K x i64>      | Pointers to all individual mbarriers
+// barrierStates          | scratch | <C x K x i64>      | Packed barrier phase (bit 0), arrival counts (bits[1..20] init, [21..40] current), and signed tx-count (bits[41..61]); zero means invalid/uninitialized
+// barrierWriteRecipients | scratch | <C x K x i32>      | CTA bitsets of write-tracking rows reached by outstanding TMA effects on each barrier
+// waiting                | scratch | <C x K x i32>      | Two bits per thread: waiting flag bit (LSB), stored phase bit (bit 1)
+// writeVisibility        | scratch | <C x B x i64>      | Per-buffer thread-visibility bitmask (bit i => thread i visible)
+// readVisibility         | scratch | <C x B x T x i64>  | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
+// writeTracking          | scratch | <C x B x K x i8>   | Map buffers -> barriers that track writes
+// readTracking           | scratch | <C x B x K x i64>  | Map buffers -> barriers that track reads
 // outstandingCommits
-//   (async/wgmma)   | scratch | <B x T x i8>    | Number of outstanding commits per buffer/thread (2D replaces prior 1D)
+//   (async/wgmma)        | scratch | <C x B x P x i8>   | Number of outstanding commits per buffer/base partition-thread (2D replaces prior 1D)
 // clang-format on
 
 namespace mlir {
@@ -155,50 +159,68 @@ Value currentCTAMask(ImplicitLocOpBuilder &b) {
                                ctaId);
 }
 
-Value getRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
-  if (auto arriveOp = dyn_cast<ttng::ArriveBarrierOp>(op)) {
-    auto barrierTy = cast<ttg::MemDescType>(arriveOp.getAlloc().getType());
-    auto kBlock = StringAttr::get(op->getContext(), "block");
-    uint16_t broadcastMask =
-        toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    if (broadcastMask) {
-      int numCTAs = ttg::lookupNumCTAs(b);
-      auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastMask);
-      Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
-      Value leaderCTA = arith::AndIOp::create(
-          b, ctaId, arith::ConstantIntOp::create(b, encoding.fixedBits, 32));
-      return arith::ShLIOp::create(b, arith::ConstantIntOp::create(b, 1, 32),
-                                   leaderCTA);
-    }
-    return currentCTAMask(b);
-  }
+uint16_t getBlockBroadcastMask(Value alloc) {
+  auto allocTy = cast<ttg::MemDescType>(alloc.getType());
+  auto kBlock = StringAttr::get(alloc.getContext(), "block");
+  return toLinearLayout(allocTy).getFreeVariableMasks().lookup(kBlock);
+}
 
-  SmallVector<uint16_t> broadcastMasks;
-  if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    broadcastMasks = ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op),
-                                                commitOp.getDescs());
-  } else if (isa<ttng::TMEMCopyOp>(op)) {
-    broadcastMasks = ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), {});
-  } else if (auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-    SmallVector<Value> commitDescs;
-    if (mmaOp.getMulticast()) {
-      if (isa<ttg::SharedEncodingTrait>(mmaOp.getA().getType().getEncoding()))
-        commitDescs.push_back(mmaOp.getA());
-      commitDescs.push_back(mmaOp.getB());
-    }
-    broadcastMasks =
-        ttng::getCTABroadcastMasks(mmaOp.getTwoCtas(), commitDescs);
-  } else if (auto mmaScaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-    broadcastMasks = ttng::getCTABroadcastMasks(mmaScaledOp.getTwoCtas(), {});
-  }
+Value createCTABitset(ImplicitLocOpBuilder &b, uint32_t pattern,
+                      uint32_t baseMask) {
+  // Create a CTA bitset by shifting `pattern` by the non-broadcast CTA bits of
+  // the current CTA.
+  Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value base = arith::AndIOp::create(
+      b, ctaId, arith::ConstantIntOp::create(b, baseMask, 32));
+  return arith::ShLIOp::create(b, arith::ConstantIntOp::create(b, pattern, 32),
+                               base);
+}
+
+Value getMulticastRecipientCTAs(ImplicitLocOpBuilder &b, Value alloc) {
+  // Return the CTA rows touched by an alloc: current CTA for
+  // non-broadcast allocs, or all CTAs in the current multicast group.
+  uint16_t broadcastMask = getBlockBroadcastMask(alloc);
+  if (!broadcastMask)
+    return currentCTAMask(b);
+  int numCTAs = ttg::lookupNumCTAs(b);
+  auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastMask);
+  return createCTABitset(b, encoding.pattern, encoding.fixedBits);
+}
+
+Value getLeaderCTA(ImplicitLocOpBuilder &b, Value barrier) {
+  uint16_t broadcastMask = getBlockBroadcastMask(barrier);
+  if (!broadcastMask)
+    return currentCTAMask(b);
+  int numCTAs = ttg::lookupNumCTAs(b);
+  auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastMask);
+  return createCTABitset(b, /*pattern=*/1, encoding.fixedBits);
+}
+
+Value getMulticastBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Value result,
+                                       Value barrier) {
+  uint32_t resultBroadcastMask = getBlockBroadcastMask(result);
+  uint32_t barrierBroadcastMask = getBlockBroadcastMask(barrier);
+  int numCTAs = ttg::lookupNumCTAs(b);
+  uint32_t recipientBroadcastMask =
+      resultBroadcastMask & ~barrierBroadcastMask & (numCTAs - 1);
+  auto encoding =
+      ttng::getTMAMulticastMaskEncoding(numCTAs, recipientBroadcastMask);
+  uint32_t baseMask =
+      ~(resultBroadcastMask | barrierBroadcastMask) & (numCTAs - 1);
+  return createCTABitset(b, encoding.pattern, baseMask);
+}
+
+Value getRecipientCTAsForBroadcastMasks(ImplicitLocOpBuilder &b,
+                                        ArrayRef<uint16_t> broadcastMasks) {
   if (broadcastMasks.empty())
     return currentCTAMask(b);
 
   int numCTAs = ttg::lookupNumCTAs(b);
   Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
   Value recipientCTAs = arith::ConstantIntOp::create(b, 0, 32);
-  // Match tcgen05_commit lowering in MMAv5.cpp: build one concrete recipient
-  // bitset per descriptor, then OR those bitsets.
+  // Match eager tcgen05_commit lowering in
+  // DotOpToLLVM/MMAv5.cpp:createMMACommit: build one concrete recipient bitset
+  // per descriptor, then OR those bitsets.
   for (uint16_t broadcastBits : broadcastMasks) {
     // Compute the map that goes from cta_id to lead_cta_id (fixedBits)
     // and the pattern that goes from cta_0 to its multicast group (pattern).
@@ -211,6 +233,58 @@ Value getRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
     recipientCTAs = arith::OrIOp::create(b, recipientCTAs, descRecipientCTAs);
   }
   return recipientCTAs;
+}
+
+SmallVector<uint16_t> getTensorCoreBarrierBroadcastMasks(Operation *op) {
+  assert(isTensorCoreOp(op) && "expected a tensor-core op");
+  bool twoCTAs = ttng::getModuleTwoCTAs(op);
+  SmallVector<Value> commitDescs;
+  if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
+    llvm::append_range(commitDescs, commitOp.getDescs());
+  } else if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+    commitDescs = mmaOp.getCompletionDescs();
+  } else if (isa<ttng::TMEMCopyOp>(op)) {
+    // TMEMCopy does not have descs (empty)
+  } else {
+    llvm_unreachable("unknown tensor-core op");
+  }
+  return ttng::getCTABroadcastMasks(twoCTAs, commitDescs);
+}
+
+Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op);
+
+Value getMemEffectRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
+  if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+    if (copyOp.getMulticast())
+      return getMulticastRecipientCTAs(b, copyOp.getResult());
+    return currentCTAMask(b);
+  }
+  if (isTensorCoreOp(op))
+    return getRecipientCTAsForBroadcastMasks(
+        b, ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), {}));
+  return currentCTAMask(b);
+}
+
+Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
+  if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
+    return getLeaderCTA(b, expectOp.getAlloc());
+  if (auto arriveOp = dyn_cast<ttng::ArriveBarrierOp>(op))
+    return getLeaderCTA(b, arriveOp.getAlloc());
+  if (auto arriveOp = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op))
+    return getLeaderCTA(b, arriveOp.getBarrier());
+  if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+    if (copyOp.getMulticast())
+      return getMulticastBarrierRecipientCTAs(b, copyOp.getResult(),
+                                              copyOp.getBarrier());
+    return getLeaderCTA(b, copyOp.getBarrier());
+  }
+  if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
+    return getLeaderCTA(b, tmaLoad.getBarrier());
+
+  if (isTensorCoreOp(op))
+    return getRecipientCTAsForBroadcastMasks(
+        b, getTensorCoreBarrierBroadcastMasks(op));
+  return currentCTAMask(b);
 }
 
 class ConcurrencySanitizerImpl {
@@ -363,6 +437,27 @@ private:
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
   }
 
+  void instrumentBarrierExpectNonLeaderArrive(
+      ImplicitLocOpBuilder &b, ttng::BarrierExpectOp expectOp,
+      Value nonLeaderPred, int thread, tti::FunctionBuilder &funcBuilder) {
+    Value barrier = expectOp.getAlloc();
+    Value recipientCTAs = getLeaderCTA(b, barrier);
+
+    // Match BarrierOpToLLVM's cross-CTA path: non-leader CTAs contribute a
+    // plain arrive of count 1 to the leader barrier. The generic barrier path
+    // models the leader CTA's expect_tx.
+    for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
+      funcBuilder.createTrackVisibleWritesCall(
+          b, barrier, thread, nonLeaderPred, memType, expectOp, recipientCTAs);
+      funcBuilder.createTrackVisibleReadsCall(b, barrier, thread, nonLeaderPred,
+                                              memType, expectOp, recipientCTAs);
+    }
+    funcBuilder.createVerifyBarrierArriveCall(
+        b, barrier, /*count=*/1, nonLeaderPred, expectOp, recipientCTAs);
+    funcBuilder.createUpdateBarrierStateCall(
+        b, barrier, /*count=*/1, nonLeaderPred, expectOp, recipientCTAs);
+  }
+
   void instrumentMemEffects(ImplicitLocOpBuilder &b, Operation *op, int thread,
                             tti::FunctionBuilder &funcBuilder) {
     int baseThread = getBaseThread(thread);
@@ -370,8 +465,21 @@ private:
     if (!opInfo) {
       return;
     }
-    Value pred = tti::maybeAnd(b, opInfo->pred, hooks->getIssuerCTAPred(b, op));
-    Value recipientCTAs = getRecipientCTAs(b, op);
+    Value pred = opInfo->pred;
+    // Barrier expect performs an arrive on non-leader CTAs, so we need to
+    // instrument it separately before incorporating getIssuerCTAPred.
+    Value issuerCTAPred = hooks->getIssuerCTAPred(b, op);
+    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
+      if (issuerCTAPred) {
+        Value nonLeaderPred = arith::XOrIOp::create(
+            b, issuerCTAPred, arith::ConstantIntOp::create(b, 1, 1));
+        nonLeaderPred = tti::maybeAnd(b, pred, nonLeaderPred);
+        instrumentBarrierExpectNonLeaderArrive(b, expectOp, nonLeaderPred,
+                                               thread, funcBuilder);
+      }
+    }
+    pred = tti::maybeAnd(b, pred, issuerCTAPred);
+    Value effectRecipientCTAs = getMemEffectRecipientCTAs(b, op);
     for (auto effect : opInfo->operandEffects) {
       Value buf = effect.buf;
       auto bufType = cast<ttg::MemDescType>(buf.getType());
@@ -383,11 +491,12 @@ private:
         // For op that is reading, we only need to check if anything else
         // is writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
-                       thread, effect.operandName, opInfo->commitKind);
+                       thread, effect.operandName, effectRecipientCTAs,
+                       opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createSetReadVisibilityCall(
               b, buf, effect.length, getThreadPeersMask(thread), pred, memType,
-              op, recipientCTAs);
+              op, effectRecipientCTAs);
         }
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {
@@ -401,19 +510,21 @@ private:
         // Op is writing to the buffer, we need to check if anything else
         // is reading or writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
-                       thread, effect.operandName, opInfo->commitKind);
+                       thread, effect.operandName, effectRecipientCTAs,
+                       opInfo->commitKind);
         addReadChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
-                      thread, effect.operandName, opInfo->commitKind);
+                      thread, effect.operandName, effectRecipientCTAs,
+                      opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createSetWriteVisibilityCall(
               b, buf, effect.length, getThreadPeersMask(thread), pred, memType,
-              op, recipientCTAs);
-          funcBuilder.createClearWriteTrackingCall(b, buf, effect.length, pred,
-                                                   memType, op, recipientCTAs);
-          funcBuilder.createClearReadVisibilityCall(b, buf, effect.length, pred,
-                                                    memType, op, recipientCTAs);
-          funcBuilder.createClearReadTrackingCall(b, buf, effect.length, pred,
-                                                  memType, op, recipientCTAs);
+              op, effectRecipientCTAs);
+          funcBuilder.createClearWriteTrackingCall(
+              b, buf, effect.length, pred, memType, op, effectRecipientCTAs);
+          funcBuilder.createClearReadVisibilityCall(
+              b, buf, effect.length, pred, memType, op, effectRecipientCTAs);
+          funcBuilder.createClearReadTrackingCall(
+              b, buf, effect.length, pred, memType, op, effectRecipientCTAs);
         }
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {
@@ -427,6 +538,7 @@ private:
     for (const auto &barrierInfo : opInfo->barriers) {
       Value barrier = barrierInfo.barrier;
       Value combinedPred = tti::maybeAnd(b, barrierInfo.pred, pred);
+      Value recipientCTAs = getBarrierRecipientCTAs(b, op);
       funcBuilder.createVerifyBarrierInitializedCall(b, barrier, combinedPred,
                                                      op, recipientCTAs);
       if (barrierInfo.trackingMode ==
@@ -449,14 +561,17 @@ private:
           if (isa<ttg::SharedEncodingTrait>(bufType.getEncoding()))
             memType = MemType::SHARED_MEM;
           funcBuilder.createTrackBarrierWriteForBufferCall(
-              b, barrier, effect.buf, effect.length, combinedPred, memType, op);
+              b, barrier, effect.buf, effect.length, combinedPred, memType, op,
+              recipientCTAs, effectRecipientCTAs);
         }
       }
-      if (barrierInfo.count > 0) {
+      if (barrierInfo.count > 0 || barrierInfo.txCount != 0) {
         funcBuilder.createVerifyBarrierArriveCall(
-            b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs);
+            b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs,
+            barrierInfo.txCount);
         funcBuilder.createUpdateBarrierStateCall(
-            b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs);
+            b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs,
+            barrierInfo.txCount);
       }
     }
     if (opInfo->implicitCommit) {
@@ -471,9 +586,10 @@ private:
                       tti::FunctionBuilder &funcBuilder, Operation *op,
                       Value buf, uint32_t length, Value pred, MemType memType,
                       int thread, const std::string &operandName,
+                      Value recipientCTAs,
                       CommitKind::Kind opCommitKind = CommitKind::None) {
-    funcBuilder.createVerifyWriteVisibilityCall(b, buf, length, thread,
-                                                operandName, pred, memType, op);
+    funcBuilder.createVerifyWriteVisibilityCall(
+        b, buf, length, thread, operandName, pred, memType, op, recipientCTAs);
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :
@@ -482,7 +598,7 @@ private:
                             hooks->isOrderedCommitKind(opCommitKind));
         funcBuilder.createCheckOutstandingCommitsCall(
             b, buf, length, getBaseThread(thread), commitKindDesc.operationDesc,
-            pred, memType, commitKindDesc.kind, op, excludeSelf);
+            pred, memType, commitKindDesc.kind, op, recipientCTAs, excludeSelf);
       }
     }
   }
@@ -490,10 +606,10 @@ private:
   void addReadChecks(ImplicitLocOpBuilder &b, tti::FunctionBuilder &funcBuilder,
                      Operation *op, Value buf, uint32_t length, Value pred,
                      MemType memType, int thread,
-                     const std::string &operandName,
+                     const std::string &operandName, Value recipientCTAs,
                      CommitKind::Kind opCommitKind = CommitKind::None) {
-    funcBuilder.createVerifyReadVisibilityCall(b, buf, length, thread,
-                                               operandName, pred, memType, op);
+    funcBuilder.createVerifyReadVisibilityCall(
+        b, buf, length, thread, operandName, pred, memType, op, recipientCTAs);
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :
@@ -502,7 +618,7 @@ private:
                             hooks->isOrderedCommitKind(opCommitKind));
         funcBuilder.createCheckOutstandingCommitsCall(
             b, buf, length, getBaseThread(thread), commitKindDesc.operationDesc,
-            pred, memType, commitKindDesc.kind, op, excludeSelf);
+            pred, memType, commitKindDesc.kind, op, recipientCTAs, excludeSelf);
       }
     }
   }

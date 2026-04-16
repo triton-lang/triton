@@ -65,7 +65,7 @@ struct Descriptor {
 };
 
 Descriptor unpackDescriptor(TensorDescType type, ValueRange pack) {
-  int rank = type.getBlockType().getRank();
+  int rank = type.getShape().size();
   assert(pack.size() == 1 + 2 * static_cast<size_t>(rank) + 2 &&
          "Expected tensor descriptors to consist of a pointer, "
          "followed by 'rank' shape values and 'rank' stride values, "
@@ -328,7 +328,7 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
   matchAndRewrite(triton::DescriptorLoadOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    const auto blockShape = op.getDesc().getType().getBlockType().getShape();
+    const auto blockShape = op.getDesc().getType().getShape();
     auto descTy = op.getDesc().getType();
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto offsets = castToI64(rewriter, op.getIndices());
@@ -340,7 +340,7 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
     newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     Value result = newLoad.getResult();
-    if (descTy.getBlockType().getElementType().isF32()) {
+    if (descTy.getElementType().isF32()) {
 
       auto ifOp = scf::IfOp::create(rewriter, loc, result.getType(),
                                     desc.roundF32ToTF32, /*withElse=*/true);
@@ -367,7 +367,7 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto descTy = op.getDesc().getType();
-    const auto blockShape = descTy.getBlockType().getShape();
+    const auto blockShape = descTy.getShape();
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto offsets = castToI64(rewriter, op.getIndices());
 
@@ -458,7 +458,7 @@ struct RewriteScatterPattern
 
 std::optional<RMWOp> translateReduceKind(DescriptorReduceKind kind,
                                          TensorDescType ty) {
-  auto scalarTy = ty.getBlockType().getElementType();
+  auto scalarTy = ty.getElementType();
   switch (kind) {
   case DescriptorReduceKind::ADD:
     return scalarTy.isInteger() ? RMWOp::ADD : RMWOp::FADD;
@@ -496,7 +496,7 @@ struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto descTy = op.getDesc().getType();
-    const auto blockShape = descTy.getBlockType().getShape();
+    const auto blockShape = descTy.getShape();
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto offsets = castToI64(rewriter, op.getIndices());
     auto rmwOp = translateReduceKind(op.getKind(), descTy);
@@ -504,7 +504,7 @@ struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
       std::string msgstring;
       llvm::raw_string_ostream msg(msgstring);
       msg << "Cannot fallback on descriptor atomic op, unsupported for type "
-          << descTy.getBlockType().getElementType();
+          << descTy.getElementType();
       return op->emitError(msgstring);
     }
 

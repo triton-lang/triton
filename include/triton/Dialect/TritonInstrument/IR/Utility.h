@@ -37,8 +37,8 @@ enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
 // writeVisibility + readVisibility per active memory type.
 constexpr int kCapturesPerMemType = 2;
 
-// barrierStates + waiting (only when barriers exist).
-constexpr int kBarrierBaseCaptures = 2;
+// barrierStates + waiting + barrierWriteRecipients (only when barriers exist).
+constexpr int kBarrierBaseCaptures = 3;
 
 // writeTracking + readTracking per active memory type (only when barriers
 // exist and the memory type has buffers).
@@ -132,6 +132,7 @@ struct AuxDataMap {
   RegionToValueMap buffers[numMemTypes];
   RegionToValueMap barriers;
   RegionToValueMap barrierStates;
+  RegionToValueMap barrierWriteRecipients;
 
   RegionToValueMap writeVisibility[numMemTypes];
   RegionToValueMap writeTracking[numMemTypes];

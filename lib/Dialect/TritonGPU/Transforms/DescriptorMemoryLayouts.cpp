@@ -126,8 +126,8 @@ TensorDescType getTensorDescTypeWithEncoding(Operation *op,
                                              Attribute encoding) {
   auto sharedEnc = cast<SharedEncodingTrait>(encoding);
   encoding = updateEncodingForShape(op, sharedEnc, existingTy);
-  auto blockTy = existingTy.cloneWithEncoding(encoding);
-  return TensorDescType::get(existingTy.getContext(), blockTy);
+  return TensorDescType::get(existingTy.getShape(), existingTy.getElementType(),
+                             encoding);
 }
 
 struct UseInfo {
@@ -276,25 +276,15 @@ std::optional<UseInfo>
 AssignDescriptorMemoryLayouts::getUseInfo(Operation *op) {
   UseInfo info;
   info.use = op;
-  if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
+  if (auto load = dyn_cast<DescriptorLoadLikeOpInterface>(op)) {
     info.descriptor = load.getDesc();
     info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
+    auto resultTy = cast<RankedTensorType>(op->getResult(0).getType());
     auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
-                                               : load.getType().getEncoding();
+                                               : resultTy.getEncoding();
     info.cgaLayout = getCGALayout(encoding);
-    auto shape = load.getResult().getType().getShape();
-    auto rank = load.getDesc().getType().getBlockType().getRank();
-    info.shape = expandToRank(shape, rank);
-    return info;
-  }
-  if (auto gather = dyn_cast<DescriptorGatherOp>(op)) {
-    info.descriptor = gather.getDesc();
-    info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
-    auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
-                                               : gather.getType().getEncoding();
-    info.cgaLayout = getCGALayout(encoding);
-    auto shape = gather.getResult().getType().getShape();
-    auto rank = gather.getDesc().getType().getBlockType().getRank();
+    auto shape = resultTy.getShape();
+    auto rank = info.descriptor.getType().getShape().size();
     info.shape = expandToRank(shape, rank);
     return info;
   }
@@ -303,7 +293,7 @@ AssignDescriptorMemoryLayouts::getUseInfo(Operation *op) {
     auto encoding = store.getSrc().getType().getEncoding();
     info.cgaLayout = getCGALayout(encoding);
     auto shape = store.getSrc().getType().getShape();
-    auto rank = store.getDesc().getType().getBlockType().getRank();
+    auto rank = store.getDesc().getType().getShape().size();
     info.shape = expandToRank(shape, rank);
     return info;
   }
@@ -353,7 +343,7 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
       auto itr = valueToEncodingInfo.find(typedVal);
       if (itr != valueToEncodingInfo.end())
         info = combineEncodings(*itr->second, info,
-                                typedVal.getType().getBlockType().getRank());
+                                typedVal.getType().getShape().size());
     }
 
     auto einfo = internEncoding(encodings, info);

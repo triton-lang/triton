@@ -250,30 +250,27 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
       operands.push_back(b.int_val(1, tiedLower.value_or(false)));
   } else {
     assert(wmmaVer == 3 && "unexpected wmma version");
-    // arguments for v3:
-    // int:          %A_mod, %A, %B_mod, %B, %C, %A_reuse, %B_reuse, clamp
-    // f32/f16/bf16: %A_mod, %A, %B_mod, %B, %C_mod, %C, %A_reuse, %B_reuse
-    // f8/bf8:       %A, %B, %C_mod, %C, %A_reuse, %B_reuse
-    if (aElType.isInteger())
+    // LLVM AMDGPU intrinsics use one of:
+    // - AMDGPUWmmaIntrinsicModsC (f16/bf16/f32 acc, fp8 packed int, etc.):
+    //   %A, %B, %C_mod, %C, matrix_a_reuse, matrix_b_reuse
+    // - AMDGPUWmmaIntrinsicModsABClamp (e.g. i32_16x16x64_iu8):
+    //   %A_mod, %A, %B_mod, %B, %C, reuse, reuse, clamp
+    const bool isIntDot = aElType.isInteger() && bElType.isInteger();
+    if (isIntDot) {
       operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
-    else if (aElType.isFloat(16) || aElType.isF32())
-      operands.push_back(b.int_val(1, 0));
-    operands.push_back(valA);
-
-    if (bElType.isInteger())
+      operands.push_back(valA);
       operands.push_back(b.int_val(1, !bElType.isUnsignedInteger()));
-    else if (bElType.isFloat(16) || bElType.isF32())
-      operands.push_back(b.int_val(1, 0));
-    operands.push_back(valB);
-
-    if (bElType.isFloat(16) || bElType.isF32() || aElType.isFloat(8))
+      operands.push_back(valB);
+      operands.push_back(valC);
+      operands.push_back(b.i1_val(0));
+      operands.push_back(b.i1_val(0));
+      operands.push_back(b.i1_val(0));
+    } else {
+      operands.push_back(valA);
+      operands.push_back(valB);
       operands.push_back(b.int_val(16, 0));
-    operands.push_back(valC);
-
-    operands.push_back(b.i1_val(0));
-    operands.push_back(b.i1_val(0));
-    // Add clamp for int types
-    if (aElType.isInteger()) {
+      operands.push_back(valC);
+      operands.push_back(b.i1_val(0));
       operands.push_back(b.i1_val(0));
     }
   }
