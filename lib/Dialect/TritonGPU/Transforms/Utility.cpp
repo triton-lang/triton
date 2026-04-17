@@ -171,7 +171,7 @@ getAtomicWriteElementsPerThreadCap(Operation *op) {
   if (elemTy.isF32() || elemTy.isBF16())
     return 1;
   if (elemTy.isF16())
-    return computeCapability >= 60 ? 2 : 1;
+    return 2;
   return std::nullopt;
 }
 
