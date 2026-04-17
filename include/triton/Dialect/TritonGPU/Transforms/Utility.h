@@ -45,19 +45,13 @@ Value getMemAccessPtr(Operation *op);
 unsigned getElementBitWidth(RankedTensorType type);
 
 // Calculate the optimal number of elements per thread for a given operation
-// along an axis with greatest continuity.
+// along an axis with greatest continuity. The default path uses only
+// pointer-derived contiguity/alignment. When isWrite is true, it additionally
+// applies any narrower caps required by the op's write lowering path.
 unsigned
 getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                        ArrayRef<int64_t> shape);
-
-// Calculate the per-thread width to use for ops that write to global memory.
-// This starts from the pointer-derived alignment/contiguity heuristic and
-// applies any narrower caps required by the specific op's lowering path.
-unsigned
-getNumWriteElementsPerThread(Operation *op, SmallVector<unsigned> order,
-                             triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                             ArrayRef<int64_t> shape);
+                        ArrayRef<int64_t> shape, bool isWrite = false);
 
 // Returns whether the op is a "view op", i.e. doesn't move any data
 bool isView(Operation *op);

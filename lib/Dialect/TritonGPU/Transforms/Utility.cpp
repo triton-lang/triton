@@ -120,27 +120,6 @@ unsigned getElementBitWidth(RankedTensorType type) {
   return typeForMem.getIntOrFloatBitWidth();
 }
 
-unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
-                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 ArrayRef<int64_t> shapePerCTA) {
-  Value val = getMemAccessPtr(op);
-  auto ty = cast<RankedTensorType>(val.getType());
-  AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
-  unsigned elemNumBits = getElementBitWidth(ty);
-  unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
-  unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);
-  unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
-  unsigned maxContig =
-      std::min(valInfo.getContiguity(order[0]), shapePerCTA[order[0]]);
-  unsigned alignment = std::min(maxMultiple, maxContig);
-  unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
-  LDBG("elemNumBytes: " << elemNumBytes
-                        << ", divisibility: " << maxMultipleBytes
-                        << ", contig: " << valInfo.getContiguity(order[0])
-                        << ", alignment: " << alignment);
-  return currPerThread;
-}
-
 static std::optional<unsigned>
 getAtomicWriteElementsPerThreadCap(Operation *op) {
   if (isa<triton::AtomicCASOp>(op))
@@ -175,22 +154,35 @@ getAtomicWriteElementsPerThreadCap(Operation *op) {
   return std::nullopt;
 }
 
-unsigned getNumWriteElementsPerThread(Operation *op,
-                                      SmallVector<unsigned> order,
-                                      ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                      ArrayRef<int64_t> shapePerCTA) {
-  unsigned currPerThread =
-      getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA);
-
-  // Some atomic lowerings are narrower than a plain store. TTGIR currently
-  // exposes the target architecture but not the PTX version, so we only cap
-  // cases that are unambiguous from the available target metadata and the
-  // current backend lowering.
-  if (auto atomicCap = getAtomicWriteElementsPerThreadCap(op)) {
-    LDBG("atomic write cap: " << *atomicCap);
-    return std::min(currPerThread, *atomicCap);
+unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
+                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                 ArrayRef<int64_t> shapePerCTA, bool isWrite) {
+  Value val = getMemAccessPtr(op);
+  auto ty = cast<RankedTensorType>(val.getType());
+  AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
+  unsigned elemNumBits = getElementBitWidth(ty);
+  unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
+  unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);
+  unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
+  unsigned maxContig =
+      std::min(valInfo.getContiguity(order[0]), shapePerCTA[order[0]]);
+  unsigned alignment = std::min(maxMultiple, maxContig);
+  unsigned maxElementsPerThread = 128 / elemNumBits;
+  if (isWrite) {
+    // Some atomic lowerings are narrower than a plain store. TTGIR currently
+    // exposes the target architecture but not the PTX version, so we only cap
+    // cases that are unambiguous from the available target metadata and the
+    // current backend lowering.
+    if (auto atomicCap = getAtomicWriteElementsPerThreadCap(op)) {
+      LDBG("atomic write cap: " << *atomicCap);
+      maxElementsPerThread = std::min(maxElementsPerThread, *atomicCap);
+    }
   }
-
+  unsigned currPerThread = std::min(alignment, maxElementsPerThread);
+  LDBG("elemNumBytes: " << elemNumBytes
+                        << ", divisibility: " << maxMultipleBytes
+                        << ", contig: " << valInfo.getContiguity(order[0])
+                        << ", alignment: " << alignment);
   return currPerThread;
 }
 

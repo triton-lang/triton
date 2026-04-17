@@ -83,10 +83,11 @@ buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
     // in the memory write at the warp level, resulting in worse performance.
     // For loads, we can expect that the gaps won't matter due to the L1
     // cache. Atomics may have a narrower write width than plain stores, so
-    // defer to the shared write-layout helper here.
+    // request the write-aware cap here.
     perThread = std::min<int>(
         perThread,
-        getNumWriteElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA));
+        getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA,
+                                /*isWrite=*/true));
   }
   SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
   sizePerThread[order[0]] = perThread;
