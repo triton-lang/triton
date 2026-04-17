@@ -366,19 +366,19 @@ Type getElementType(Type ty) {
 
 bool isFloatLike(Type ty) { return isa<FloatType>(getElementType(ty)); }
 
-LogicalResult emitFpSanUnsupported(Operation *op, llvm::StringRef message) {
-  op->emitOpError() << "unsupported by FpSanitizer: " << message;
+LogicalResult emitFpSanUnsupported(Operation *op) {
+  op->emitOpError() << "unsupported by fpsan";
   return failure();
 }
 
-LogicalResult emitFpSanCodegenError(Operation *op, llvm::StringRef message) {
-  op->emitOpError() << "FpSanitizer failed to emit replacement IR: " << message;
+LogicalResult emitFpSanCodegenError(Operation *op) {
+  op->emitOpError() << "fpsan codegen error";
   return failure();
 }
 
-LogicalResult emitFpSanInvariantError(Operation *op, llvm::StringRef message) {
+LogicalResult emitFpSanInvariantError(Operation *op) {
   assert(false && "unexpected invalid IR in FpSanitizer");
-  op->emitOpError() << "unexpected invalid IR in FpSanitizer: " << message;
+  op->emitOpError() << "fpsan invariant violation";
   return failure();
 }
 
@@ -1535,12 +1535,10 @@ struct Fp4ToFpPattern : public OpRewritePattern<ttg::Fp4ToFpOp> {
     auto srcTy = dyn_cast<RankedTensorType>(op.getSrc().getType());
     auto dstTy = dyn_cast<RankedTensorType>(op.getType());
     if (!srcTy || !dstTy)
-      return emitFpSanInvariantError(op.getOperation(),
-                                     "fp4_to_fp operand/result type");
+      return emitFpSanInvariantError(op.getOperation());
     auto srcElemTy = dyn_cast<IntegerType>(srcTy.getElementType());
     if (!srcElemTy || srcElemTy.getWidth() != 8)
-      return emitFpSanInvariantError(op.getOperation(),
-                                     "fp4_to_fp source element type");
+      return emitFpSanInvariantError(op.getOperation());
 
     int64_t axis = op.getAxis();
     int64_t rank = srcTy.getRank();
@@ -1581,22 +1579,18 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
     auto bTy = dyn_cast<RankedTensorType>(op.getB().getType());
     auto cTy = dyn_cast<RankedTensorType>(op.getC().getType());
     if (!aTy || !bTy || !cTy)
-      return emitFpSanInvariantError(op.getOperation(),
-                                     "dot operand/result type");
+      return emitFpSanInvariantError(op.getOperation());
     if (aTy.getRank() != 2 || bTy.getRank() != 2 || cTy.getRank() != 2)
-      return emitFpSanUnsupported(op.getOperation(),
-                                  "dot operands with rank other than 2");
+      return emitFpSanUnsupported(op.getOperation());
     if (!aTy.getEncoding() || !bTy.getEncoding() || !cTy.getEncoding())
-      return emitFpSanUnsupported(op.getOperation(),
-                                  "dot operands without encodings");
+      return emitFpSanUnsupported(op.getOperation());
 
     auto aShape = aTy.getShape();
     auto bShape = bTy.getShape();
     auto cShape = cTy.getShape();
     if (aShape[1] != bShape[0] || aShape[0] != cShape[0] ||
         bShape[1] != cShape[1])
-      return emitFpSanInvariantError(op.getOperation(),
-                                     "dot operand shape mismatch");
+      return emitFpSanInvariantError(op.getOperation());
 
     auto loc = op.getLoc();
     int64_t m = aShape[0];
@@ -1635,8 +1629,7 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
     Value bPtr = createScratchAndStore(rewriter, loc, op.getB(), bTy);
     Value dPtr = createScratchAndStore(rewriter, loc, op.getC(), cTy);
     if (!aPtr || !bPtr || !dPtr)
-      return emitFpSanCodegenError(op.getOperation(),
-                                   "could not materialize dot scratch");
+      return emitFpSanCodegenError(op.getOperation());
 
     // Each warp may only store a subset of each tile's rows, so a barrier is
     // needed to make all scratch stores visible before the loops read them.
@@ -1649,8 +1642,7 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
         bTileTy, accTileTy, accLayout, accElem, useDInt, predInt,
         /*aStride=*/m, /*bStride=*/k, /*dStride=*/m);
     if (!mLoop)
-      return emitFpSanUnsupported(op.getOperation(),
-                                  "dot tile shape is not supported");
+      return emitFpSanUnsupported(op.getOperation());
     rewriter.setInsertionPointAfter(*mLoop);
 
     // Same reason: each warp may only write a subset of D's rows in the loop,
@@ -1661,8 +1653,7 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
 
     Value out = loadScratchStrided2D(rewriter, loc, dPtr, cTy, /*stride1=*/m);
     if (!out)
-      return emitFpSanCodegenError(op.getOperation(),
-                                   "could not load dot result");
+      return emitFpSanCodegenError(op.getOperation());
     rewriter.replaceOp(op, out);
     return success();
   }
@@ -1684,28 +1675,24 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
     auto bScaleTy = bScale ? dyn_cast<RankedTensorType>(bScale.getType())
                            : RankedTensorType();
     if (!aTy || !bTy || !cTy || (aScale && !aScaleTy) || (bScale && !bScaleTy))
-      return emitFpSanInvariantError(op.getOperation(),
-                                     "dot_scaled operand/result type");
+      return emitFpSanInvariantError(op.getOperation());
     if (aTy.getRank() != 2 || bTy.getRank() != 2 || cTy.getRank() != 2 ||
         (aScale && aScaleTy.getRank() != 2) ||
         (bScale && bScaleTy.getRank() != 2))
-      return emitFpSanUnsupported(op.getOperation(),
-                                  "dot_scaled operands with rank other than 2");
+      return emitFpSanUnsupported(op.getOperation());
     if (!aTy.getEncoding() || !bTy.getEncoding() || !cTy.getEncoding() ||
         (aScale && !aScaleTy.getEncoding()) ||
         (bScale && !bScaleTy.getEncoding()))
-      return emitFpSanUnsupported(op.getOperation(),
-                                  "dot_scaled operands without encodings");
+      return emitFpSanUnsupported(op.getOperation());
     // TODO: Support M/N packing.
     if (!op.getLhsKPack() || !op.getRhsKPack())
-      return emitFpSanUnsupported(op.getOperation(), "dot_scaled M/N packing");
+      return emitFpSanUnsupported(op.getOperation());
 
     auto aShape = aTy.getShape();
     auto bShape = bTy.getShape();
     auto cShape = cTy.getShape();
     if (aShape[0] != cShape[0] || bShape[1] != cShape[1])
-      return emitFpSanInvariantError(op.getOperation(),
-                                     "dot_scaled output shape mismatch");
+      return emitFpSanInvariantError(op.getOperation());
 
     int64_t aKPackFactor = 1;
     int64_t bKPackFactor = 1;
@@ -1717,16 +1704,14 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
     int64_t bPackedK = bShape[0];
     int64_t k = aPackedK * aKPackFactor;
     if (k != bPackedK * bKPackFactor)
-      return emitFpSanInvariantError(op.getOperation(),
-                                     "dot_scaled K shape mismatch");
+      return emitFpSanInvariantError(op.getOperation());
 
     auto loc = op.getLoc();
     int64_t m = cShape[0];
     int64_t n = cShape[1];
     if ((aScale && aScaleTy.getShape()[0] != m) ||
         (bScale && bScaleTy.getShape()[0] != n))
-      return emitFpSanInvariantError(op.getOperation(),
-                                     "dot_scaled scale shape mismatch");
+      return emitFpSanInvariantError(op.getOperation());
 
     auto accElem = IntegerType::get(
         rewriter.getContext(), cTy.getElementType().getIntOrFloatBitWidth());
@@ -1756,8 +1741,7 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
     auto bPtr = createScratchAndStore(rewriter, loc, op.getB(), bTy);
     auto dPtr = createScratchAndStore(rewriter, loc, op.getC(), cTy);
     if (!aPtr || !bPtr || !dPtr)
-      return emitFpSanCodegenError(op.getOperation(),
-                                   "could not materialize dot_scaled scratch");
+      return emitFpSanCodegenError(op.getOperation());
 
     auto aElemType = op.getAElemType();
     auto bElemType = op.getBElemType();
@@ -1776,9 +1760,7 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
     if (aScale && !skipAScale) {
       scale.aScalePtr = createScratchAndStore(rewriter, loc, aScale, aScaleTy);
       if (!scale.aScalePtr)
-        return emitFpSanCodegenError(
-            op.getOperation(),
-            "could not materialize dot_scaled lhs scale scratch");
+        return emitFpSanCodegenError(op.getOperation());
       scale.aScaleStride = aScaleTy.getShape()[0];
       scale.aScaleFactor = op.deduceScaleFactor();
       scale.aScaleTileTy = RankedTensorType::get(
@@ -1787,9 +1769,7 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
     if (bScale && !skipBScale) {
       scale.bScalePtr = createScratchAndStore(rewriter, loc, bScale, bScaleTy);
       if (!scale.bScalePtr)
-        return emitFpSanCodegenError(
-            op.getOperation(),
-            "could not materialize dot_scaled rhs scale scratch");
+        return emitFpSanCodegenError(op.getOperation());
       scale.bScaleStride = bScaleTy.getShape()[0];
       scale.bScaleFactor = op.deduceScaleFactor();
       scale.bScaleTileTy = RankedTensorType::get(
@@ -1805,8 +1785,7 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
         bTileTy, accTileTy, accLayout, accElem, useDInt, predInt,
         /*aStride=*/m, /*bStride=*/bPackedK, /*dStride=*/m, scale);
     if (!mLoop)
-      return emitFpSanUnsupported(op.getOperation(),
-                                  "dot_scaled tile shape is not supported");
+      return emitFpSanUnsupported(op.getOperation());
     rewriter.setInsertionPointAfter(*mLoop);
 
     ttg::BarrierOp::create(rewriter, loc,
@@ -1815,8 +1794,7 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
 
     Value out = loadScratchStrided2D(rewriter, loc, dPtr, cTy, /*stride1=*/m);
     if (!out)
-      return emitFpSanCodegenError(op.getOperation(),
-                                   "could not load dot_scaled result");
+      return emitFpSanCodegenError(op.getOperation());
     rewriter.replaceOp(op, out);
     return success();
   }
@@ -1832,19 +1810,15 @@ struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
     std::optional<ScratchInfo> info =
         scratch->getOrCreate(op.getSrc(), rewriter, scope);
     if (!info)
-      return emitFpSanCodegenError(
-          op.getOperation(),
-          "could not materialize tensor-memory load scratch");
+      return emitFpSanCodegenError(op.getOperation());
 
     Location loc = op.getLoc();
     auto resultTy = cast<RankedTensorType>(op.getResult().getType());
     if (!resultTy.getEncoding())
-      return emitFpSanUnsupported(op.getOperation(),
-                                  "tensor-memory load result without encoding");
+      return emitFpSanUnsupported(op.getOperation());
     Value result = createLoadScratchMemory(rewriter, loc, info->ptr, resultTy);
     if (!result)
-      return emitFpSanCodegenError(op.getOperation(),
-                                   "could not emit tensor-memory load scratch");
+      return emitFpSanCodegenError(op.getOperation());
 
     if (op.getNumResults() == 1) {
       rewriter.replaceOp(op, result);
@@ -1871,18 +1845,14 @@ struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
     auto scope = getScratchScopeRegion(op);
     auto info = scratch->getOrCreate(op.getDst(), rewriter, scope);
     if (!info)
-      return emitFpSanCodegenError(
-          op.getOperation(),
-          "could not materialize tensor-memory store scratch");
+      return emitFpSanCodegenError(op.getOperation());
 
     auto loc = op.getLoc();
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     if (!srcTy.getEncoding())
-      return emitFpSanUnsupported(
-          op.getOperation(), "tensor-memory store source without encoding");
+      return emitFpSanUnsupported(op.getOperation());
     if (!createStoreScratchMemory(rewriter, loc, info->ptr, op.getSrc(), srcTy))
-      return emitFpSanCodegenError(
-          op.getOperation(), "could not emit tensor-memory store scratch");
+      return emitFpSanCodegenError(op.getOperation());
 
     if (op.getNumResults() == 0) {
       rewriter.eraseOp(op);
@@ -1909,9 +1879,7 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     auto scope = getScratchScopeRegion(op);
     auto info = scratch->getOrCreate(op.getDst(), rewriter, scope);
     if (!info)
-      return emitFpSanCodegenError(
-          op.getOperation(),
-          "could not materialize tensor-memory copy scratch");
+      return emitFpSanCodegenError(op.getOperation());
 
     auto loc = op.getLoc();
     auto srcMemTy = cast<ttg::MemDescType>(op.getSrc().getType());
@@ -1924,8 +1892,7 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
         ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
             .getResult();
     if (!createStoreScratchMemory(rewriter, loc, info->ptr, srcReg, srcRegTy))
-      return emitFpSanCodegenError(op.getOperation(),
-                                   "could not emit tensor-memory copy scratch");
+      return emitFpSanCodegenError(op.getOperation());
 
     rewriter.eraseOp(op);
     return success();
@@ -1962,14 +1929,12 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     if (!aIsFloat && !bIsFloat && !dIsFloat)
       return failure();
     if (!aIsFloat || !bIsFloat || !dIsFloat)
-      return emitFpSanUnsupported(op.getOperation(),
-                                  "mixed float and non-float tc_gen5_mma");
+      return emitFpSanUnsupported(op.getOperation());
 
     auto scope = getScratchScopeRegion(op);
     auto dInfo = scratch->getOrCreate(op.getD(), rewriter, scope);
     if (!dInfo)
-      return emitFpSanCodegenError(op.getOperation(),
-                                   "could not materialize tc_gen5_mma scratch");
+      return emitFpSanCodegenError(op.getOperation());
 
     auto loc = op.getLoc();
 
@@ -1978,17 +1943,14 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
 
     if ((aIsTmem && aMemTy.getRank() != 2) ||
         (bIsTmem && bMemTy.getRank() != 2) || dMemTy.getRank() != 2)
-      return emitFpSanUnsupported(
-          op.getOperation(), "tc_gen5_mma operands with rank other than 2");
+      return emitFpSanUnsupported(op.getOperation());
 
     auto aShape = aMemTy.getShape();
     auto bShape = bMemTy.getShape();
     if (aShape.size() != 2 || bShape.size() != 2)
-      return emitFpSanInvariantError(op.getOperation(),
-                                     "tc_gen5_mma operand rank mismatch");
+      return emitFpSanInvariantError(op.getOperation());
     if (aShape[1] != bShape[0])
-      return emitFpSanInvariantError(op.getOperation(),
-                                     "tc_gen5_mma K shape mismatch");
+      return emitFpSanInvariantError(op.getOperation());
     int64_t m = aShape[0];
     int64_t k = aShape[1];
     int64_t n = bShape[1];
@@ -2005,13 +1967,11 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     auto aScratch = createOperandScratch(rewriter, loc, *scratch, op.getA(),
                                          aMemTy, aIsTmem, scope);
     if (!aScratch)
-      return emitFpSanCodegenError(op.getOperation(),
-                                   "could not materialize tc_gen5_mma lhs");
+      return emitFpSanCodegenError(op.getOperation());
     auto bScratch = createOperandScratch(rewriter, loc, *scratch, op.getB(),
                                          bMemTy, bIsTmem, scope);
     if (!bScratch)
-      return emitFpSanCodegenError(op.getOperation(),
-                                   "could not materialize tc_gen5_mma rhs");
+      return emitFpSanCodegenError(op.getOperation());
 
     int64_t tileM = std::min<int64_t>(kTileM, m);
     int64_t tileN = std::min<int64_t>(kTileN, n);
@@ -2040,8 +2000,7 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
         tileN, aTileTy, bTileTy, accTileTy, accTileLayout, accElem, useDInt,
         predInt, /*aStride=*/m, /*bStride=*/k, /*dStride=*/m);
     if (!mLoop)
-      return emitFpSanUnsupported(op.getOperation(),
-                                  "tc_gen5_mma tile shape is not supported");
+      return emitFpSanUnsupported(op.getOperation());
     rewriter.setInsertionPointAfter(*mLoop);
 
     // The emulation loop also writes D through scratch memory from multiple
@@ -2097,9 +2056,7 @@ struct TCGen5MMAScaledPattern
     if ((aIsTmem && aMemTy.getRank() != 2) ||
         (bIsTmem && bMemTy.getRank() != 2) || (aScaleMemTy.getRank() != 2) ||
         (bScaleMemTy.getRank() != 2) || dMemTy.getRank() != 2) {
-      return emitFpSanUnsupported(
-          op.getOperation(),
-          "tc_gen5_mma_scaled operands with rank other than 2");
+      return emitFpSanUnsupported(op.getOperation());
     }
 
     auto aShape = aMemTy.getShape();
@@ -2109,8 +2066,7 @@ struct TCGen5MMAScaledPattern
     auto bScaleShape = bScaleMemTy.getShape();
     if (aShape.size() != 2 || bShape.size() != 2 || dShape.size() != 2 ||
         aScaleShape.size() != 2 || bScaleShape.size() != 2)
-      return emitFpSanInvariantError(
-          op.getOperation(), "tc_gen5_mma_scaled operand rank mismatch");
+      return emitFpSanInvariantError(op.getOperation());
 
     int64_t m = dShape[0];
     int64_t n = dShape[1];
@@ -2122,23 +2078,20 @@ struct TCGen5MMAScaledPattern
       if (op.getBlockK() == aPackedK * 2) {
         aKPackFactor = 2;
       } else {
-        return emitFpSanInvariantError(
-            op.getOperation(), "tc_gen5_mma_scaled lhs E2M1 packed K mismatch");
+        return emitFpSanInvariantError(op.getOperation());
       }
     }
     if (op.getBType() == tt::ScaleDotElemType::E2M1) {
       if (op.getBlockK() == bPackedK * 2) {
         bKPackFactor = 2;
       } else {
-        return emitFpSanInvariantError(
-            op.getOperation(), "tc_gen5_mma_scaled rhs E2M1 packed K mismatch");
+        return emitFpSanInvariantError(op.getOperation());
       }
     }
 
     int64_t k = aPackedK * aKPackFactor;
     if (aShape[0] != m || bShape[1] != n || k != bPackedK * bKPackFactor)
-      return emitFpSanInvariantError(op.getOperation(),
-                                     "tc_gen5_mma_scaled shape mismatch");
+      return emitFpSanInvariantError(op.getOperation());
 
     auto deduceScaleFactor = [&](ArrayRef<int64_t> scaleShape,
                                  int64_t rows) -> std::optional<int64_t> {
@@ -2150,15 +2103,12 @@ struct TCGen5MMAScaledPattern
     auto aScaleFactor = deduceScaleFactor(aScaleShape, m);
     auto bScaleFactor = deduceScaleFactor(bScaleShape, n);
     if (!aScaleFactor || !bScaleFactor)
-      return emitFpSanInvariantError(op.getOperation(),
-                                     "tc_gen5_mma_scaled scale shape mismatch");
+      return emitFpSanInvariantError(op.getOperation());
 
     auto scope = getScratchScopeRegion(op);
     auto dInfo = scratch->getOrCreate(op.getD(), rewriter, scope);
     if (!dInfo)
-      return emitFpSanCodegenError(
-          op.getOperation(),
-          "could not materialize tc_gen5_mma_scaled accumulator");
+      return emitFpSanCodegenError(op.getOperation());
 
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
@@ -2173,25 +2123,19 @@ struct TCGen5MMAScaledPattern
     auto aScratch = createOperandScratch(rewriter, loc, *scratch, op.getA(),
                                          aMemTy, aIsTmem, scope);
     if (!aScratch)
-      return emitFpSanCodegenError(
-          op.getOperation(), "could not materialize tc_gen5_mma_scaled lhs");
+      return emitFpSanCodegenError(op.getOperation());
     auto bScratch = createOperandScratch(rewriter, loc, *scratch, op.getB(),
                                          bMemTy, bIsTmem, scope);
     if (!bScratch)
-      return emitFpSanCodegenError(
-          op.getOperation(), "could not materialize tc_gen5_mma_scaled rhs");
+      return emitFpSanCodegenError(op.getOperation());
     auto aScaleScratch = createOperandScratch(
         rewriter, loc, *scratch, op.getAScale(), aScaleMemTy, true, scope);
     if (!aScaleScratch)
-      return emitFpSanCodegenError(
-          op.getOperation(),
-          "could not materialize tc_gen5_mma_scaled lhs scale");
+      return emitFpSanCodegenError(op.getOperation());
     auto bScaleScratch = createOperandScratch(
         rewriter, loc, *scratch, op.getBScale(), bScaleMemTy, true, scope);
     if (!bScaleScratch)
-      return emitFpSanCodegenError(
-          op.getOperation(),
-          "could not materialize tc_gen5_mma_scaled rhs scale");
+      return emitFpSanCodegenError(op.getOperation());
 
     int64_t tileM = std::min<int64_t>(kTileM, m);
     int64_t tileN = std::min<int64_t>(kTileN, n);
@@ -2238,8 +2182,7 @@ struct TCGen5MMAScaledPattern
         tileN, aTileTy, bTileTy, accTileTy, accTileLayout, accElem, useDInt,
         predInt, /*aStride=*/m, /*bStride=*/bPackedK, /*dStride=*/m, scale);
     if (!mLoop)
-      return emitFpSanUnsupported(
-          op.getOperation(), "tc_gen5_mma_scaled tile shape is not supported");
+      return emitFpSanUnsupported(op.getOperation());
     rewriter.setInsertionPointAfter(*mLoop);
 
     // The emulated MMA updates the accumulator scratch cooperatively as well.
@@ -2306,8 +2249,7 @@ struct ExternElementwisePattern
     uint64_t hash = stableStringHash(op.getSymbol());
     Value result = fpsanVariadicExternTagged(rewriter, op.getLoc(), op, hash);
     if (!result)
-      return emitFpSanCodegenError(op.getOperation(),
-                                   "could not rewrite extern_elementwise");
+      return emitFpSanCodegenError(op.getOperation());
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -2351,31 +2293,30 @@ public:
     }
 
     bool hasUnsupportedOperations = false;
-    auto reportUnsupported = [&](Operation *op, llvm::StringRef message) {
+    auto reportUnsupported = [&](Operation *op) {
       hasUnsupportedOperations = true;
-      op->emitOpError() << "unsupported by FpSanitizer after rewrite: "
-                        << message;
+      op->emitOpError() << "unsupported by fpsan";
       return WalkResult::interrupt();
     };
     getOperation()->walk([&](Operation *op) {
       if (auto dot = dyn_cast<tt::DotOp>(op)) {
         if (isFloatLike(dot.getType()))
-          return reportUnsupported(op, "dot");
+          return reportUnsupported(op);
       } else if (auto dotScaled = dyn_cast<tt::DotScaledOp>(op)) {
         if (isFloatLike(dotScaled.getType()))
-          return reportUnsupported(op, "dot_scaled");
+          return reportUnsupported(op);
       } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(op)) {
         if (isFloatLike(load.getResult().getType()))
-          return reportUnsupported(op, "tensor-memory load");
+          return reportUnsupported(op);
       } else if (auto store = dyn_cast<ttng::TMEMStoreOp>(op)) {
         if (isFloatLike(store.getSrc().getType()))
-          return reportUnsupported(op, "tensor-memory store");
+          return reportUnsupported(op);
       } else if (auto copy = dyn_cast<ttng::TMEMCopyOp>(op)) {
         auto srcTy = cast<ttg::MemDescType>(copy.getSrc().getType());
         auto dstTy = cast<ttg::MemDescType>(copy.getDst().getType());
         if (isa<FloatType>(srcTy.getElementType()) ||
             isa<FloatType>(dstTy.getElementType()))
-          return reportUnsupported(op, "tensor-memory copy");
+          return reportUnsupported(op);
       } else if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(op)) {
         auto aTy = cast<ttg::MemDescType>(mma.getA().getType());
         auto bTy = cast<ttg::MemDescType>(mma.getB().getType());
@@ -2383,14 +2324,14 @@ public:
         if (isa<FloatType>(aTy.getElementType()) ||
             isa<FloatType>(bTy.getElementType()) ||
             isa<FloatType>(dTy.getElementType()))
-          return reportUnsupported(op, "tc_gen5_mma");
+          return reportUnsupported(op);
       } else if (auto scaledMma = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
         auto dTy = cast<ttg::MemDescType>(scaledMma.getD().getType());
         if (isa<FloatType>(dTy.getElementType()))
-          return reportUnsupported(op, "tc_gen5_mma_scaled");
+          return reportUnsupported(op);
       } else if (auto ext = dyn_cast<tt::ExternElementwiseOp>(op)) {
         if (externInvolvesFloatLike(ext))
-          return reportUnsupported(op, "extern_elementwise");
+          return reportUnsupported(op);
       }
 
       return WalkResult::advance();
