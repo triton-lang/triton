@@ -96,23 +96,19 @@ uint64_t getGpuLaneId(size_t deviceId, size_t streamId) {
 namespace proton::trace_data_dump {
 
 uint64_t KernelEvent::getStartTimeNs() const {
-  return std::get<uint64_t>(
-      kernelMetric->getValue(KernelMetric::StartTime));
+  return std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
 }
 
 uint64_t KernelEvent::getEndTimeNs() const {
-  return std::get<uint64_t>(
-      kernelMetric->getValue(KernelMetric::EndTime));
+  return std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime));
 }
 
 uint64_t KernelEvent::getDeviceId() const {
-  return std::get<uint64_t>(
-      kernelMetric->getValue(KernelMetric::DeviceId));
+  return std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
 }
 
 uint64_t KernelEvent::getStreamId() const {
-  return std::get<uint64_t>(
-      kernelMetric->getValue(KernelMetric::StreamId));
+  return std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId));
 }
 
 uint64_t KernelEvent::getIsMetricKernel() const {

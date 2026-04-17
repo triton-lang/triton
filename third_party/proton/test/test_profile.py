@@ -1586,8 +1586,8 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
     fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
     data_kind = "trace" if data_format == "perfetto_trace" else "tree"
-    session = proton.start(str(temp_file.with_suffix("")), data=data_kind, mode=f"periodic_flushing:format={data_format}",
-                           hook="triton")
+    session = proton.start(str(temp_file.with_suffix("")), data=data_kind,
+                           mode=f"periodic_flushing:format={data_format}", hook="triton")
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]

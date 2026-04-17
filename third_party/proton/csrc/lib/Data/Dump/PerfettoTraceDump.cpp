@@ -185,7 +185,8 @@ void internSliceEvent(PerfettoInternedNames &internedNames,
     newInternedNames.eventNames.intern(name);
   }
   if (!category.empty()) {
-    if (const auto [_, inserted] = internedNames.eventCategories.intern(category);
+    if (const auto [_, inserted] =
+            internedNames.eventCategories.intern(category);
         inserted) {
       newInternedNames.eventCategories.intern(category);
     }
@@ -228,10 +229,10 @@ void appendInternedDataPacket(ProtoWriter &trace,
 
   ProtoWriter packet;
   packet.writeMessage(/*TracePacket.interned_data=*/12, internedData);
-  setTracePacketSequence(packet, kPerfettoSeqNeedsIncrementalState |
-                                     (incrementalStateCleared
-                                          ? kPerfettoSeqIncrementalStateCleared
-                                          : 0));
+  setTracePacketSequence(
+      packet,
+      kPerfettoSeqNeedsIncrementalState |
+          (incrementalStateCleared ? kPerfettoSeqIncrementalStateCleared : 0));
   appendTracePacket(trace, packet);
 }
 
@@ -255,9 +256,9 @@ void appendTrackEventPacket(ProtoWriter &trace, uint64_t timestampNs,
                            internedNames.eventNames.get(name));
     for (const auto &annotation : annotations) {
       ProtoWriter message;
-      message.writeUInt64(/*DebugAnnotation.name_iid=*/1,
-                          internedNames.debugAnnotationNames.get(
-                              annotation.name));
+      message.writeUInt64(
+          /*DebugAnnotation.name_iid=*/1,
+          internedNames.debugAnnotationNames.get(annotation.name));
       switch (annotation.kind) {
       case PerfettoAnnotation::Kind::String:
         message.writeString(/*DebugAnnotation.string_value=*/6,
@@ -268,7 +269,8 @@ void appendTrackEventPacket(ProtoWriter &trace, uint64_t timestampNs,
                             annotation.uintValue);
         break;
       case PerfettoAnnotation::Kind::Int64:
-        message.writeInt64(/*DebugAnnotation.int_value=*/4, annotation.intValue);
+        message.writeInt64(/*DebugAnnotation.int_value=*/4,
+                           annotation.intValue);
         break;
       case PerfettoAnnotation::Kind::Double:
         message.writeDouble(/*DebugAnnotation.double_value=*/5,
@@ -317,13 +319,12 @@ void appendSlicePackets(ProtoWriter &trace, uint64_t minTimeStamp,
                    annotations);
   appendInternedDataPacket(trace, newInternedNames, incrementalStateCleared);
 
-  appendTrackEventPacket(
-      trace, getRelativeTimestamp(minTimeStamp, startTimeNs), 1, trackUuid,
-      name, category, annotations, flowId, terminatingFlowId, internedNames);
+  appendTrackEventPacket(trace, getRelativeTimestamp(minTimeStamp, startTimeNs),
+                         1, trackUuid, name, category, annotations, flowId,
+                         terminatingFlowId, internedNames);
   appendTrackEventPacket(trace, getRelativeTimestamp(minTimeStamp, endTimeNs),
-                         2, trackUuid, name, category, annotations, std::nullopt,
-                         std::nullopt,
-                         internedNames);
+                         2, trackUuid, name, category, annotations,
+                         std::nullopt, std::nullopt, internedNames);
 }
 
 void appendCpuTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
@@ -379,7 +380,8 @@ void appendGraphTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
 
       appendSlicePackets(trace, traceDump.minTimeStamp, trackUuid,
                          event.startTimeNs, event.endTimeNs, name, category,
-                         annotations, std::nullopt, std::nullopt, internedNames);
+                         annotations, std::nullopt, std::nullopt,
+                         internedNames);
     }
   }
 }

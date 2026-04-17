@@ -144,9 +144,8 @@ void dumpCpuScopeEvents(
 
       json element;
       if (flexibleMetrics != nullptr && !flexibleMetrics->empty()) {
-        element["name"] =
-            details::buildFlexibleMetricEventName(event.contexts,
-                                                  *flexibleMetrics);
+        element["name"] = details::buildFlexibleMetricEventName(
+            event.contexts, *flexibleMetrics);
         element["cat"] = "metric";
         element["args"]["metrics"] = buildFlexibleMetricsJson(*flexibleMetrics);
       } else {
@@ -174,9 +173,8 @@ void dumpGraphScopeEvents(
     for (const auto &event : events) {
       json element;
       if (event.flexibleMetrics != nullptr && !event.flexibleMetrics->empty()) {
-        element["name"] =
-            details::buildFlexibleMetricEventName(event.context,
-                                                  *event.flexibleMetrics);
+        element["name"] = details::buildFlexibleMetricEventName(
+            event.context, *event.flexibleMetrics);
         element["cat"] = "metric";
         element["args"]["metrics"] =
             buildFlexibleMetricsJson(*event.flexibleMetrics);
@@ -201,7 +199,8 @@ void dumpCpuToGpuFlowEvents(
     const std::map<size_t, std::vector<CpuScopeEvent>> &cpuScopeEvents,
     const std::map<size_t, std::vector<KernelEvent>> &kernelEvents,
     json &object) {
-  std::unordered_map<size_t, const CpuScopeEvent *> launchEventIdToCpuScopeEvent;
+  std::unordered_map<size_t, const CpuScopeEvent *>
+      launchEventIdToCpuScopeEvent;
   for (const auto &[_, events] : cpuScopeEvents) {
     for (const auto &event : events) {
       launchEventIdToCpuScopeEvent.emplace(event.eventId, &event);

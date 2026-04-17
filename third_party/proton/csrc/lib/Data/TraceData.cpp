@@ -101,7 +101,7 @@ void reconstructGraphScopeEvents(
     }
   }
 }
-}
+} // namespace
 
 class TraceData::Trace {
 public:
@@ -452,8 +452,7 @@ void TraceData::withTraceData(size_t phase, CycleHandler &&onCycleTrace,
     for (const auto &[_, event] : events) {
       if (event.hasCpuTimeRange()) {
         traceDump.cpuScopeEvents[event.threadId].emplace_back(
-            event.id,
-            trace_data_dump::details::kNoLaunchEventId,
+            event.id, trace_data_dump::details::kNoLaunchEventId,
             event.metricSet.flexibleMetrics.empty()
                 ? nullptr
                 : &event.metricSet.flexibleMetrics,
@@ -469,8 +468,8 @@ void TraceData::withTraceData(size_t phase, CycleHandler &&onCycleTrace,
                         &event.metricSet.flexibleMetrics, baseContexts,
                         /*isGraphLinked=*/false);
       for (const auto &[targetEntryId, _] : event.metricSet.linkedMetrics) {
-        const auto &linkedMetrics = event.metricSet.linkedMetrics.at(
-            targetEntryId);
+        const auto &linkedMetrics =
+            event.metricSet.linkedMetrics.at(targetEntryId);
         // Combine the base contexts and virtual contexts to form the complete
         // contexts for the linked metrics.
         auto contexts = baseContexts;
@@ -487,8 +486,7 @@ void TraceData::withTraceData(size_t phase, CycleHandler &&onCycleTrace,
                           /*isGraphLinked=*/true);
       }
 
-      if (!traceDump.kernelEvents.empty() &&
-          !traceDump.cycleEvents.empty()) {
+      if (!traceDump.kernelEvents.empty() && !traceDump.cycleEvents.empty()) {
         throw std::runtime_error("only one active metric type is supported");
       }
     }
@@ -507,7 +505,8 @@ void TraceData::withTraceData(size_t phase, CycleHandler &&onCycleTrace,
                 launchEventIdToTargetEventId.find(kernelEvent.launchEventId);
             targetIt != launchEventIdToTargetEventId.end()) {
           if (targetIt->second != kernelEvent.eventId) {
-            kernelEvent.launchEventId = trace_data_dump::details::kNoLaunchEventId;
+            kernelEvent.launchEventId =
+                trace_data_dump::details::kNoLaunchEventId;
           }
         }
       }

@@ -58,8 +58,7 @@ void ProtoWriter::writeVarint(uint64_t value) {
   buffer.push_back(static_cast<char>(value));
 }
 
-void ProtoWriter::writeBytes(uint32_t fieldId, const char *data,
-                             size_t size) {
+void ProtoWriter::writeBytes(uint32_t fieldId, const char *data, size_t size) {
   writeTag(fieldId, WireType::LengthDelimited);
   writeVarint(static_cast<uint64_t>(size));
   buffer.append(data, size);
