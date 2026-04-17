@@ -47,6 +47,8 @@ static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
     return ttng::getModuleTwoCTAs(op);
   } else if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
     return tma.getMulticast();
+  } else if (auto tma = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
+    return tma.getMulticast();
   }
   return false;
 }
@@ -107,6 +109,9 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
     return ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier());
   }
   if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+    return tma.getMulticast() && aliasesTracked(tma.getBarrier());
+  }
+  if (auto tma = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
     return tma.getMulticast() && aliasesTracked(tma.getBarrier());
   }
   return false;

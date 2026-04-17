@@ -4,7 +4,6 @@
 #include <numeric>
 #include <utility>
 
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/OperationSupport.h"
@@ -114,11 +113,10 @@ SmallVector<unsigned> getContigPerThread(RankedTensorType type) {
   return toLinearEncoding(type).getContigPerThread();
 }
 
-bool isExpensiveView(Type srcType, Type dstType) {
-  auto tensorSrcType = cast<RankedTensorType>(srcType);
-  auto tensorDstType = cast<RankedTensorType>(dstType);
-  auto llSrc = toLinearLayout(tensorSrcType);
-  auto llDst = toLinearLayout(tensorDstType);
+bool isExpensiveView(ArrayRef<int64_t> srcShape, Attribute srcEncoding,
+                     ArrayRef<int64_t> dstShape, Attribute dstEncoding) {
+  auto llSrc = toLinearLayout(srcShape, srcEncoding);
+  auto llDst = toLinearLayout(dstShape, dstEncoding);
   // In case there are replicated value we need to make sure the new and old
   // layout have matching masks.
   for (auto [srcMask, dstMask] :
@@ -127,7 +125,8 @@ bool isExpensiveView(Type srcType, Type dstType) {
     if (srcMask.second != dstMask.second)
       return true;
   }
-  return getTotalElemsPerThread(srcType) != getTotalElemsPerThread(dstType);
+  return getTotalElemsPerThread(srcEncoding, srcShape) !=
+         getTotalElemsPerThread(dstEncoding, dstShape);
 }
 
 /* Utility function used by get.*Order methods of SliceEncodingAttr.
@@ -409,16 +408,27 @@ SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
   return order.takeVector();
 }
 
-bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
-  // If the new elements per thread is less than the old one, we will need to
-  // do convert encoding that goes through shared memory anyway. So we
-  // consider it as expensive.
-  RankedTensorType tensorTy = cat.getType();
-  auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
-  auto shape = tensorTy.getShape();
-  auto newTotalElemsPerThread =
-      gpu::getTotalElemsPerThread(targetEncoding, shape);
-  return newTotalElemsPerThread < totalElemsPerThread;
+static int64_t getNumNonBroadcastRegisters(ArrayRef<int64_t> shape,
+                                           Attribute encoding) {
+  auto kReg = StringAttr::get(encoding.getContext(), "register");
+  auto strippedLayout =
+      toLinearLayout(shape, encoding).removeZeroBasesAlongDim(kReg);
+  return strippedLayout.getInDimSize(kReg);
+}
+
+static int64_t getNumNonBroadcastRegisters(RankedTensorType tensorType) {
+  return getNumNonBroadcastRegisters(tensorType.getShape(),
+                                     tensorType.getEncoding());
+}
+
+bool isLegalCatEncoding(CatOp cat, Attribute targetEncoding) {
+  // Cat lowering concatenates the operands' unique register values. So the
+  // number of unique register values in the result must be equal to those in
+  // the operands.
+  int64_t operandRegs = getNumNonBroadcastRegisters(cat.getLhs().getType()) * 2;
+  int64_t resultRegs =
+      getNumNonBroadcastRegisters(cat.getType().getShape(), targetEncoding);
+  return resultRegs == operandRegs;
 }
 
 static LogicalResult
@@ -3017,6 +3027,20 @@ struct TritonGPUInferLayoutInterface
     return success();
   }
 
+  LogicalResult verifyCatOpEncodingCompatibility(Operation *op) const override {
+    auto cat = cast<CatOp>(op);
+    int64_t operandRegs =
+        getNumNonBroadcastRegisters(cat.getLhs().getType()) * 2;
+    int64_t resultRegs = getNumNonBroadcastRegisters(cat.getType());
+    if (resultRegs != operandRegs) {
+      return op->emitError("tt.cat result encoding requires ")
+             << resultRegs
+             << " non-broadcast register values, but operands provide "
+             << operandRegs;
+    }
+    return success();
+  }
+
   // Given a src shape + encoding and a dst shape, our goal is to compute a dst
   // encoding that makes the reshape a "nop".  That is, if GPU thread [x,y,z]
   // contains elements [a,b,c,d] before the reshape, it contains those same
@@ -3284,11 +3308,17 @@ struct TritonGPUInferLayoutInterface
   LogicalResult
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                         bool allowReorder,
                          std::optional<Location> loc) const override {
     if (product(srcShape) != product(dstShape)) {
       return emitOptionalError(loc, "numel of dst shape does not match "
                                     "numel of src shape");
     }
+    // If allowReorder is true, there are multiple valid encodings. Prefer the
+    // hint if it is set and valid.
+    if (allowReorder && dstEnc)
+      if (!isExpensiveView(srcShape, srcEnc, dstShape, dstEnc))
+        return success();
     auto result =
         inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
     if (succeeded(result)) {
@@ -4020,135 +4050,6 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
            << " which is expected only on `module` or `tt.func` ops";
   }
 
-  // Verify that all ops in a tt.warp_specialize op have partition ids
-  if (attr.getName() == "tt.warp_specialize") {
-    if (!isa<scf::ForOp>(op)) {
-      return op->emitOpError("has unexpected attribute ")
-             << attr.getName() << " which is expected only on `scf.for` ops";
-    }
-    Operation *failedOp = nullptr;
-    op->walk([&](Operation *childOp) {
-      if (!childOp->hasAttr(kPartitionAttrName)) {
-        failedOp = childOp;
-        WalkResult::interrupt();
-      }
-    });
-    if (failedOp) {
-      return failedOp->emitOpError("does not have expected attribute ")
-             << kPartitionAttrName
-             << " which is expected on all child ops of an op with "
-                "attribute `tt.warp_specialize`";
-    }
-  }
-
-  // Verify that partition id lists are non-empty, sorted and have no duplicates
-  auto verifyPartitionIds =
-      [&](const ArrayRef<int> &partitionIds) -> LogicalResult {
-    SetVector<int> idSet;
-    for (auto id : partitionIds) {
-      if (idSet.contains(id))
-        return op->emitOpError("has duplicated partition ids in attribute ")
-               << attr.getName();
-      idSet.insert(id);
-    }
-    if (idSet.empty())
-      return op->emitOpError("has no partition ids in attribute ")
-             << attr.getName();
-    auto ids = idSet.takeVector();
-    SmallVector<int> sortedIds(ids.begin(), ids.end());
-    std::sort(sortedIds.begin(), sortedIds.end());
-    if (ids != sortedIds)
-      return op->emitOpError("partition ids not in sorted order in attribute ")
-             << attr.getName();
-    return success();
-  };
-
-  if (attr.getName() == kPartitionAttrName) {
-    auto result = verifyPartitionIds(
-        cast<DenseI32ArrayAttr>(attr.getValue()).asArrayRef());
-    if (failed(result))
-      return result;
-  }
-  if (attr.getName() == kPartitionOutputsAttrName) {
-    auto arrayAttr = cast<ArrayAttr>(attr.getValue());
-    for (auto idx = 0; idx < arrayAttr.size(); idx++) {
-      auto result = verifyPartitionIds(
-          cast<DenseI32ArrayAttr>(arrayAttr[idx]).asArrayRef());
-      if (failed(result))
-        return result;
-    }
-  }
-
-  // Verify that op partitions include partitions of all child ops
-  if (attr.getName() == kPartitionAttrName && op->getNumRegions() != 0) {
-    SetVector<int> expectedIds;
-    for (auto &region : op->getRegions()) {
-      for (auto &block : region.getBlocks()) {
-        for (auto &childOp : block.getOperations()) {
-          if (isa<scf::YieldOp, ub::PoisonOp>(childOp)) {
-            // yield ops and ub.poison do not need partition ids
-            continue;
-          }
-          if (!childOp.hasAttr(kPartitionAttrName))
-            return childOp.emitOpError("does not have expected attribute ")
-                   << kPartitionAttrName
-                   << " which is expected for ops whose parent has partitions";
-          auto ids = getPartitionIds(&childOp);
-          expectedIds.insert(ids.begin(), ids.end());
-        }
-      }
-    }
-    auto partitionIds = getPartitionIds(op);
-    for (auto id : expectedIds) {
-      if (!partitionIds.contains(id)) {
-        return op->emitOpError("partition ids in attr ")
-               << attr.getName()
-               << " does not contain partition ids of all child ops";
-      }
-    }
-  }
-
-  if (attr.getName() == kPartitionOutputsAttrName) {
-    if (!isa<scf::ForOp, scf::IfOp, triton::ReduceOp>(op))
-      return op->emitOpError("has unexpected attribute ") << attr.getName();
-
-    // Verify that number of output partitions matches number of For/If results
-    size_t numResults = 0;
-    if (isa<scf::ForOp>(op)) {
-      numResults = cast<scf::ForOp>(op).getResults().size();
-    } else if (isa<scf::IfOp>(op)) {
-      numResults = cast<scf::IfOp>(op).getResults().size();
-    } else {
-      numResults = cast<triton::ReduceOp>(op).getResults().size();
-    }
-
-    if (cast<ArrayAttr>(attr.getValue()).size() != numResults) {
-      return op->emitOpError("does not have expected number of output "
-                             "partition sets in attr ")
-             << attr.getName() << "; should match number of results";
-    }
-
-    // Verify that union of op output partitions is a subset of op partitions
-    if (!op->hasAttr(kPartitionAttrName))
-      return op->emitOpError("does not have expected attribute ")
-             << kPartitionAttrName << " which is expected for ops with attr "
-             << kPartitionOutputsAttrName;
-    auto partitionIds = getPartitionIds(op);
-
-    SetVector<int> outputPartitionIdsUnion;
-    for (auto outputPartitionIds : getPartitionOutputs(op)) {
-      outputPartitionIdsUnion.insert(outputPartitionIds.begin(),
-                                     outputPartitionIds.end());
-    }
-    if (!std::all_of(outputPartitionIdsUnion.begin(),
-                     outputPartitionIdsUnion.end(),
-                     [&](int id) { return partitionIds.contains(id); })) {
-      return op->emitOpError("partition ids in attr ")
-             << kPartitionAttrName
-             << " must be the union of all partition ids in " << attr.getName();
-    }
-  }
-
   return success();
 }
 
@@ -4381,57 +4282,6 @@ SmallVector<int64_t> triton::gpu::getTMABlockShape(
   return *getTMABlockShape(shapePerCTA, elementBitWidth, swizzleBytes,
                            fp4Padded, isTransposed, packedSize, emitFatalError,
                            mode);
-}
-
-SetVector<int> triton::gpu::getPartitionIds(Operation *op) {
-  auto attrs = op->getAttr(kPartitionAttrName);
-  SmallVector<int> partitionIds;
-  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
-    partitionIds.push_back(id);
-  }
-  std::sort(partitionIds.begin(), partitionIds.end());
-  return SetVector<int>(partitionIds.begin(), partitionIds.end());
-}
-
-SmallVector<SetVector<int>, 4> triton::gpu::getPartitionOutputs(Operation *op) {
-  SmallVector<SetVector<int>, 4> partitionOutputsIds;
-  if (op->getNumResults() == 0) {
-    return partitionOutputsIds;
-  }
-  assert(op->hasAttr(kPartitionOutputsAttrName));
-  auto arrayAttr = cast<ArrayAttr>(op->getAttr(kPartitionOutputsAttrName));
-  for (auto attr : arrayAttr) {
-    auto ids = cast<DenseI32ArrayAttr>(attr).asArrayRef();
-    partitionOutputsIds.push_back(SetVector<int>(ids.begin(), ids.end()));
-  }
-  return partitionOutputsIds;
-}
-
-SetVector<int> triton::gpu::getPartitionIds(OpOperand *use) {
-  auto owner = use->getOwner();
-  if (isa<scf::YieldOp>(owner)) {
-    return getPartitionOutputs(owner->getParentOp())[use->getOperandNumber()];
-  } else if (scf::ForOp forOp = dyn_cast<scf::ForOp>(owner)) {
-    int idx = use->getOperandNumber() - forOp.getNumControlOperands();
-    return idx >= 0 ? getPartitionOutputs(owner)[idx] : getPartitionIds(forOp);
-  } else {
-    return getPartitionIds(owner);
-  }
-}
-
-bool triton::gpu::hasPartition(Operation *op) {
-  return op && op->hasAttr(kPartitionAttrName);
-}
-
-bool triton::gpu::hasWarpSpecializeTag(Operation *op) {
-  return op && op->hasAttr(kWarpSpecializeTagAttrName);
-}
-
-std::optional<int> triton::gpu::getWarpSpecializeTag(Operation *op) {
-  if (hasWarpSpecializeTag(op)) {
-    return cast<IntegerAttr>(op->getAttr(kWarpSpecializeTagAttrName)).getInt();
-  }
-  return std::nullopt;
 }
 
 PaddedSharedEncodingAttr triton::gpu::getPaddedEncoding(Attribute encoding) {

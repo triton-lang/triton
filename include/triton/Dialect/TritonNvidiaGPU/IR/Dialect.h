@@ -30,6 +30,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/Support/ErrorHandling.h"
 
 // TritonNvidiaGPU depends on Triton
@@ -70,6 +71,7 @@ inline bool getModuleTwoCTAs(Operation *op) {
 
 struct TensorMemory : public SideEffects::Resource::Base<TensorMemory> {
   StringRef getName() const final { return "<TensorMemory>"; }
+  SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
 struct TMemAllocation {

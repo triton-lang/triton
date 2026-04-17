@@ -84,6 +84,21 @@ jobs:
             ~/.triton/nvidia
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
+      - name: Switch to Ubuntu snapshot
+        run: |
+          SNAPSHOT=20260415T120000Z
+
+          cat >/etc/apt/sources.list <<EOF
+          deb http://snapshot.ubuntu.com/ubuntu/${SNAPSHOT} jammy main universe multiverse restricted
+          deb http://snapshot.ubuntu.com/ubuntu/${SNAPSHOT} jammy-updates main universe multiverse restricted
+          deb http://snapshot.ubuntu.com/ubuntu/${SNAPSHOT} jammy-security main universe multiverse restricted
+          deb http://snapshot.ubuntu.com/ubuntu/${SNAPSHOT} jammy-backports main universe multiverse restricted
+          EOF
+
+          # Important: snapshot repos require disabling Valid-Until check
+          echo 'Acquire::Check-Valid-Until "false";' >/etc/apt/apt.conf.d/99no-check-valid-until
+
+          apt-get clean
       - name: Install dependencies
         run: apt-get update && apt-get install -y clang lld ccache
       - name: Inspect cache directories

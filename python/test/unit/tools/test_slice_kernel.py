@@ -302,7 +302,7 @@ def test_slice_kernel_public_imports():
     from triton.tools.triton_to_gluon_translator.slice_kernel import slice_kernel as new_slice_kernel
     from triton.tools.triton_to_gluon_translator.translator import translate_paths
     from triton.tools.triton_to_gluon_translator.translator import convert_triton_to_gluon
-    from triton.tools.triton_to_gluon_translator.translator_helpers import convert_host_descriptor
+    from triton.tools.triton_to_gluon_translator.nvidia_helpers import convert_host_descriptor
 
     assert callable(new_slice_kernel)
     assert callable(translate_paths)

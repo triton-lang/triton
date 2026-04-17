@@ -169,15 +169,7 @@ struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
     for (Value v : rhsVals)
       retVals.push_back(v);
 
-    if (retVals.size() != strippedDstLayout.getInDimSize(kReg)) {
-      return op->emitError()
-             << "tt.cat lowering expected "
-             << strippedDstLayout.getInDimSize(kReg)
-             << " (non-broadcast) register values for the result, but got "
-             << retVals.size()
-             << ". (hint: this usually means the operands/result encodings are "
-                "incompatible for the current CatOp lowering)";
-    }
+    assert(retVals.size() == strippedDstLayout.getInDimSize(kReg));
 
     // Re-introduce broadcasting if the destination expects it.
     if (!removeBroadcastDst.isIdentity())
@@ -307,10 +299,7 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
   matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    if (triton::gpu::isExpensiveView(op.getSrc().getType(), op.getType())) {
-      return emitOptionalError(loc,
-                               "expensive view not supported on reshape op");
-    }
+    assert(!isExpensiveView(op.getSrc().getType(), op.getType()));
     auto resultTy = cast<RankedTensorType>(op.getType());
     auto typeConverter = getTypeConverter();
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);

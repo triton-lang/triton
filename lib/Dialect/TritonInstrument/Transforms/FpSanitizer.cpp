@@ -1856,9 +1856,11 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
 
     auto loc = op.getLoc();
     auto srcMemTy = cast<ttg::MemDescType>(op.getSrc().getType());
-    auto srcRegTy =
-        RankedTensorType::get(srcMemTy.getShape(), srcMemTy.getElementType(),
-                              info->tensorType.getEncoding());
+    auto dstMemTy = cast<ttg::MemDescType>(op.getDst().getType());
+    auto srcEncoding =
+        scratch->getScratchEncoding(rewriter, op.getDst(), dstMemTy);
+    auto srcRegTy = RankedTensorType::get(
+        srcMemTy.getShape(), srcMemTy.getElementType(), srcEncoding);
     Value srcReg =
         ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
             .getResult();
@@ -2234,6 +2236,10 @@ public:
     patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
                  BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
                  BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
+                 BinaryFloatToIntPattern<arith::MinimumFOp, arith::MinSIOp>,
+                 BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
+                 BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
+                 BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
                  DivFOpPattern, PreciseDivFOpPattern, RemFOpPattern, FmaPattern,
                  ExpOpPattern, Exp2OpPattern, CosOpPattern, SinOpPattern,
                  ExtFOpPattern, TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,

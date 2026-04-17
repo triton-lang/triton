@@ -400,6 +400,10 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   }
   pred = tb.and_(pred, isWarp0);
 
+  // Synchronize the current partition before branching into the MMA block.
+  if (!barriers.empty())
+    BarrierOp::create(rewriter, loc, AddrSpace::Local);
+
   // Wrap the whole mma code sequence within a IF block.
   auto *curBlock = rewriter.getInsertionBlock();
   auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
@@ -736,6 +740,10 @@ struct TCGen5CommitOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
+
+    // Because this operation can signal other partitions we need to synchronize
+    // the current partition first.
+    BarrierOp::create(rewriter, loc, AddrSpace::Local);
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getBarrier(), rewriter.getI64Type(), rewriter);
