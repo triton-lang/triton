@@ -261,16 +261,10 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
             ds_int_rounded = ds_int & 0x7F800000
         dequant_scale_rounded = ds_int_rounded.view(torch.float32)
     else:
-        dequant_scale = torch.clamp(dequant_scale, min=0.0, max=get_max_quant_val(scale_dtype))
-        scale_tensor = dequant_scale.to(scale_dtype)
-        scale_tensor_bits = scale_tensor.view(torch.uint8)
-        dequant_scale_rounded = scale_tensor.to(torch.float32)
-        if DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_UP:
-            scale_tensor_bits = scale_tensor_bits + (dequant_scale_rounded < dequant_scale).to(torch.uint8)
-        else:
-            scale_tensor_bits = scale_tensor_bits - (dequant_scale_rounded > dequant_scale).to(torch.uint8)
-        scale_tensor = scale_tensor_bits.view(scale_dtype)
-        dequant_scale_rounded = scale_tensor.to(torch.float32)
+        # Direct fp8 scales keep the existing plain cast semantics here: the
+        # stored scale is rounded by the fp8 conversion rather than forced
+        # upward despite the ROUND_UP mode name.
+        dequant_scale_rounded = dequant_scale.to(scale_dtype).to(torch.float32)
 
     # Compute the quantization scale.
     quant_scale = torch.where(dequant_scale_rounded == 0, torch.tensor(0.0, device=device), 1.0 / dequant_scale_rounded)
@@ -331,7 +325,7 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
         dq_scale = (ds_int_rounded.view(*dequant_scale.shape) >> 23).to(torch.uint8)
         dq_scale = dq_scale.squeeze(-1)
     else:
-        dq_scale = scale_tensor.squeeze(-1)
+        dq_scale = dequant_scale_rounded.to(scale_dtype).squeeze(-1)
     out_weight = out_weight.transpose(axis, src_tensor.ndim - 1)
     dq_scale = dq_scale.transpose(axis, src_tensor.ndim - 1)
     return out_weight, dq_scale
