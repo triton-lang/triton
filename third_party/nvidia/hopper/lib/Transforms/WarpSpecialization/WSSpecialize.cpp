@@ -500,18 +500,16 @@ void specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters) {
     LLVM_DEBUG({
       LDBG("erasing op ");
       op->dump();
-    });
-    // For debugging purposes, check to see if the original op is still in use.
-    bool hasUse = false;
-    for (unsigned i = 0; i < op->getNumResults(); ++i) {
-      for (Operation *user : op->getResult(i).getUsers()) {
-        hasUse = true;
-        LLVM_DEBUG({
+
+      // For debugging purposes, check to see if the original op is still in
+      // use.
+      for (unsigned i = 0; i < op->getNumResults(); ++i) {
+        for (Operation *user : op->getResult(i).getUsers()) {
           LDBG("op has use ");
           user->dump();
-        });
+        }
       }
-    }
+    });
     op->erase();
   }
 }

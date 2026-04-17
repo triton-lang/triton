@@ -760,7 +760,10 @@ def get_test_mxfp_variants():
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
-@pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
+@pytest.mark.parametrize("M, N, K",
+                         get_test_mxfp_block_mnk() +
+                         # Add small K testcases
+                         [(16, 64, 32), (64, 128, 64)])
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
 @pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
 @pytest.mark.parametrize("scale_factor", [16, 32])
@@ -1412,6 +1415,108 @@ def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYP
 
     b_triton = b_device.cpu()
     assert torch.equal(b_triton, a)
+
+
+# ---------------------------------------------------------------------------
+# Partitioned TDM copy tests
+#
+# These test the partition-aware TDM lowering path, which adjusts the warp
+# distribution so each wave's tile stays within a single LDS partition.
+# Key scenarios:
+#   - partitionDim=0 vs partitionDim=1
+#   - Single TDM instruction (warps >= numLogicalPieces)
+#   - Multi-instruction split  (warps <  numLogicalPieces)
+#   - Different numPartitions / numGroups combinations
+# ---------------------------------------------------------------------------
+
+
+@gluon.jit
+def partitioned_tdm_copy_kernel(a_ptr, b_ptr, M, N,  #
+                                BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,  #
+                                NUM_PARTITIONS: ttgl.constexpr, NUM_GROUPS: ttgl.constexpr,  #
+                                PARTITION_DIM: ttgl.constexpr):
+    """TDM load with PartitionedSharedLayout, then store via registers."""
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+
+    if PARTITION_DIM == 0:
+        inner_shape_m: ttgl.constexpr = BLOCK_M // (NUM_PARTITIONS * NUM_GROUPS)
+        inner_shape_n: ttgl.constexpr = BLOCK_N
+    else:
+        inner_shape_m: ttgl.constexpr = BLOCK_M
+        inner_shape_n: ttgl.constexpr = BLOCK_N // (NUM_PARTITIONS * NUM_GROUPS)
+
+    inner_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [inner_shape_m, inner_shape_n],
+                                                                             [1, 0])
+    smem_layout: ttgl.constexpr = PartitionedSharedLayout(NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, inner_layout)
+
+    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
+
+    pid_m = ttgl.program_id(axis=0)
+    pid_n = ttgl.program_id(axis=1)
+    idx_m = pid_m * BLOCK_M
+    idx_n = pid_n * BLOCK_N
+
+    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
+    a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+
+    ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    a = a_buffer.load(layout=block_layout)
+
+    offs_bm = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, block_layout))
+    offs_bn = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, block_layout))
+    offs_b = (offs_bm[:, None] * N) + offs_bn[None, :]
+    b_mask = (offs_bm[:, None] < M) & (offs_bn[None, :] < N)
+    ttgl.store(b_ptr + offs_b, a, mask=b_mask)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize(
+    "BLOCK_M,BLOCK_N,NUM_PARTITIONS,NUM_GROUPS,PARTITION_DIM",
+    [
+        # # --- partitionDim = 0 (rows) ---
+        # 2 partitions x 1 group = 2 pieces along dim0 -> 4 warps covers it
+        (64, 32, 2, 1, 0),
+        # 2 partitions x 2 groups = 4 pieces along dim0 -> 4 warps covers it
+        (64, 32, 2, 2, 0),
+        # 2 partitions x 4 groups = 8 pieces along dim0 -> 4 warps < 8 -> 2 instructions
+        (64, 32, 2, 4, 0),
+        # 2 partitions x 8 groups = 16 pieces along dim0 -> 4 warps < 16 -> 4 instructions
+        (128, 64, 2, 2, 0),
+        # --- partitionDim = 1 (cols) ---
+        # 2 partitions x 1 group = 2 pieces along dim1
+        (32, 64, 2, 1, 1),
+        # 2 partitions x 2 groups = 4 pieces along dim1 -> 4 warps covers it
+        (64, 64, 2, 2, 1),
+        # 2 partitions x 4 groups = 8 pieces along dim1 -> 4 warps < 8 -> 2 instructions
+        (64, 128, 2, 4, 1),
+        # 2 partitions x 8 groups = 16 pieces along dim1 -> 4 warps < 16 -> 4 instructions
+        (64, 256, 2, 8, 1),
+    ],
+)
+@pytest.mark.parametrize("num_warps", [4])
+@pytest.mark.parametrize("M,N", [(256, 256)])
+def test_runtime_partitioned_tdm_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, num_warps, M, N):
+    """Test TDM async_load with PartitionedSharedLayout (global -> LDS)."""
+    torch.manual_seed(42)
+    a = torch.randint(0x0, 0xFFFF, (M, N), dtype=torch.uint16)
+    b = torch.zeros_like(a)
+
+    a_device = a.cuda()
+    b_device = b.cuda()
+
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    partitioned_tdm_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                      NUM_PARTITIONS=NUM_PARTITIONS, NUM_GROUPS=NUM_GROUPS, PARTITION_DIM=PARTITION_DIM,
+                                      num_warps=num_warps)
+
+    b_triton = b_device.cpu()
+    mismatched = (b_triton != a).sum().item()
+    total = a.numel()
+    assert mismatched == 0, (f"Mismatch: {mismatched}/{total} ({100*mismatched/total:.1f}%) elements differ. "
+                             f"partitionDim={PARTITION_DIM}, numPartitions={NUM_PARTITIONS}, numGroups={NUM_GROUPS}")
 
 
 @gluon.jit
@@ -3591,6 +3696,71 @@ def test_runtime_tdm_scatter_partial_column_block(N, num_warps, index_dtype):
     torch.testing.assert_close(out_result, ref_out)
 
 
+@gluon.jit
+def _tdm_scatter_padded_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stride_m, BLOCK_M: ttgl.constexpr,
+                               BLOCK_N: ttgl.constexpr, NUM_INDICES: ttgl.constexpr, DST_COL_OFFSET: ttgl.constexpr,
+                               SHARED_LAYOUT: ttgl.constexpr, IDX_LAYOUT: ttgl.constexpr):
+    """TDM scatter kernel using a padded shared layout."""
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+
+    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.gfx1250.tdm.async_load(inp_desc, [0, 0], smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
+    dst_row_indices = ttgl.load(dst_row_indices_ptr + idx_offs)
+
+    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, DST_COL_OFFSET, smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("NUM_INDICES", [4, 8, 16])
+@pytest.mark.parametrize("BLOCK_N", [16, 64, 128])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+def test_runtime_tdm_scatter_padded(NUM_INDICES, BLOCK_N, dtype, index_dtype):
+    """Test TDM scatter with padded shared layout.
+
+    Verifies the tile-widening + OOB workaround: tile_dim0 is widened to
+    include padding so LDS reads use the correct stride, while tensor_dim0
+    is clamped to the original column width so OOB drops padding elements.
+    """
+    torch.manual_seed(42)
+
+    BLOCK_M = NUM_INDICES
+    SHARED_LAYOUT = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N], [1, 0])
+
+    num_warps = 4
+    IDX_BASE = ttgl.BlockedLayout([NUM_INDICES, 1], [1, 32], [1, num_warps], [1, 0])
+    IDX_LAYOUT = ttgl.SliceLayout(1, IDX_BASE)
+
+    M_out = 2048
+    N_out = BLOCK_N
+
+    inp = _create_scatter_test_data((BLOCK_M, BLOCK_N), dtype)
+    out = torch.zeros((M_out, N_out), dtype=dtype)
+    dst_row_indices = torch.arange(NUM_INDICES, dtype=index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = dst_row_indices.cuda()
+
+    _tdm_scatter_padded_kernel[(1, )](inp_d, out_d, indices_d, M_out=M_out, N_out=N_out, stride_m=out_d.stride(0),
+                                      BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_INDICES=NUM_INDICES, DST_COL_OFFSET=0,
+                                      SHARED_LAYOUT=SHARED_LAYOUT, IDX_LAYOUT=IDX_LAYOUT, num_warps=num_warps)
+
+    out_result = out_d.cpu()
+    ref_out = torch.zeros_like(out)
+    for i in range(NUM_INDICES):
+        ref_out[dst_row_indices[i].item()] = inp[i]
+    torch.testing.assert_close(out_result, ref_out)
+
+
 # =============================================================================
 # TDM Gather Mode Tests
 # =============================================================================
@@ -3880,6 +4050,195 @@ def tdm_gather_multi_col_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M, N, str
                                                            block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
     ttgl.amd.gfx1250.tdm.async_store(out_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], smem)
     ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@gluon.jit
+def _tdm_gather_layout_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, stride_m, stride_n,
+                              BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_INDICES: ttgl.constexpr,
+                              SRC_COL_OFFSET: ttgl.constexpr, SHARED_LAYOUT: ttgl.constexpr,
+                              IDX_LAYOUT: ttgl.constexpr):
+    """Generic TDM gather kernel parameterized by index layout.
+
+    The caller supplies IDX_LAYOUT (a SliceLayout over a 2D BlockedLayout)
+    which determines how indices are distributed across warps.  The LLVM
+    lowering uses LinearLayout + freeVarMasks to generically handle any
+    valid distribution (replicated, partitioned, or mixed).
+    """
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+
+    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M_inp, N_inp), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
+    src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
+
+    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, SRC_COL_OFFSET, smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.gfx1250.tdm.async_store(out_desc, [0, 0], smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+def _tdm_gather_scatter_index_layouts():
+    """Yield (num_indices, num_warps, idx_layout) for TDM gather and scatter layout testing.
+
+    Covers five layout categories:
+      - Replicated:       warpsPerCTA=[1, W]   — all warps hold all indices, only warp 0 fires.
+      - Partitioned:      warpsPerCTA=[W, 1]   — each warp owns a disjoint subset, all fire.
+      - Mixed:            warpsPerCTA=[A, R]   — A warps partition, R redundant copies predicated off.
+      - Redundant regs:   sizePerThread=[ni, 2] — each thread holds duplicate values (regMask != 0).
+      - Wrapping:         sizePerThread < numIndices/numWarps — register dim tiles, non-contiguous positions.
+    """
+    cases = []
+    for ni in [4, 8, 16]:
+        # Replicated
+        for nw in [2, 4]:
+            parent = ttgl.BlockedLayout([ni, 1], [1, 32], [1, nw], [1, 0])
+            cases.append(pytest.param(ni, nw, ttgl.SliceLayout(1, parent), id=f"replicated-ni{ni}-w{nw}"))
+
+        # Partitioned
+        for nw in [2, 4]:
+            if ni >= nw and ni % nw == 0:
+                parent = ttgl.BlockedLayout([ni // nw, 1], [1, 32], [nw, 1], [1, 0])
+                cases.append(pytest.param(ni, nw, ttgl.SliceLayout(1, parent), id=f"partitioned-ni{ni}-w{nw}"))
+
+        # Mixed (partially redundant warps)
+        for active, redundant in [(2, 2), (1, 4)]:
+            nw = active * redundant
+            if ni >= active and ni % active == 0:
+                parent = ttgl.BlockedLayout([ni // active, 1], [1, 32], [active, redundant], [1, 0])
+                cases.append(
+                    pytest.param(ni, nw, ttgl.SliceLayout(1, parent), id=f"mixed_{active}x{redundant}-ni{ni}-w{nw}"))
+
+        # Redundant registers: sizePerThread has >1 in the sliced dim,
+        # so each thread holds duplicate index values (regMask != 0).
+        # E.g., sizePerThread=[ni, 2] → 2*ni register slots, only ni unique.
+        for nw in [1, 2]:
+            parent = ttgl.BlockedLayout([ni, 2], [1, 32], [1, nw], [1, 0])
+            cases.append(pytest.param(ni, nw, ttgl.SliceLayout(1, parent), id=f"redundant_reg-ni{ni}-w{nw}"))
+
+    # Wrapping: sizePerThread[0] < numIndices/numWarps, so the register
+    # dimension tiles (wraps) and produces non-contiguous dim0 positions.
+    # E.g., 32 indices with spt=4 and 4 warps: register bases {1,2,16}.
+    for ni, nw, spt in [(16, 4, 2), (16, 2, 4), (32, 4, 4)]:
+        if ni >= nw and ni % nw == 0 and (ni // nw) > spt:
+            parent = ttgl.BlockedLayout([spt, 1], [1, 32], [nw, 1], [1, 0])
+            cases.append(pytest.param(ni, nw, ttgl.SliceLayout(1, parent), id=f"wrapping-ni{ni}-w{nw}-spt{spt}"))
+
+    return cases
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("num_indices, num_warps, idx_layout", _tdm_gather_scatter_index_layouts())
+@pytest.mark.parametrize("BLOCK_N", [64, 128])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+def test_runtime_tdm_gather_layouts(num_indices, num_warps, idx_layout, BLOCK_N, dtype, index_dtype):
+    """Test TDM gather correctness across different index layouts.
+
+    A single test function exercises replicated, partitioned, and mixed warp
+    layouts by injecting the index layout from _tdm_gather_scatter_index_layouts().
+    Mirrors the pattern used by NVIDIA's test_gather_layouts in test_lowerings.py.
+    """
+    torch.manual_seed(42)
+
+    BLOCK_M = num_indices
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N],
+                                                                              [1, 0])
+
+    M_inp = 2048
+    N_inp = BLOCK_N
+    inp = _create_scatter_test_data((M_inp, N_inp), dtype)
+    out = torch.zeros((BLOCK_M, BLOCK_N), dtype=dtype)
+    src_row_indices = torch.arange(num_indices, dtype=index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = src_row_indices.cuda()
+
+    _tdm_gather_layout_kernel[(1, )](inp_d, out_d, indices_d, M_inp=M_inp, N_inp=N_inp, stride_m=inp_d.stride(0),
+                                     stride_n=inp_d.stride(1), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                     NUM_INDICES=num_indices, SRC_COL_OFFSET=0, SHARED_LAYOUT=SHARED_LAYOUT,
+                                     IDX_LAYOUT=idx_layout, num_warps=num_warps)
+
+    out_result = out_d.cpu()
+    gathered_out = out_result[:num_indices]
+    elem_size = inp.element_size()
+    inp_bytes = inp.view(torch.uint8).reshape(M_inp, -1)
+    ref_bytes = inp_bytes[src_row_indices.long(), :BLOCK_N * elem_size]
+    torch.testing.assert_close(gathered_out.view(torch.uint8), ref_bytes)
+
+
+@gluon.jit
+def _tdm_scatter_layout_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stride_m, stride_n,
+                               BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_INDICES: ttgl.constexpr,
+                               DST_COL_OFFSET: ttgl.constexpr, SHARED_LAYOUT: ttgl.constexpr,
+                               IDX_LAYOUT: ttgl.constexpr):
+    """Generic TDM scatter kernel parameterized by index layout.
+
+    Mirrors _tdm_gather_layout_kernel but for the scatter direction:
+    data flows from LDS to non-contiguous global memory rows.
+    """
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+
+    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.gfx1250.tdm.async_load(inp_desc, [0, 0], smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
+    dst_row_indices = ttgl.load(dst_row_indices_ptr + idx_offs)
+
+    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, DST_COL_OFFSET, smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("num_indices, num_warps, idx_layout", _tdm_gather_scatter_index_layouts())
+@pytest.mark.parametrize("BLOCK_N", [64, 128])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+def test_runtime_tdm_scatter_layouts(num_indices, num_warps, idx_layout, BLOCK_N, dtype, index_dtype):
+    """Test TDM scatter correctness across different index layouts.
+
+    Use _tdm_gather_scatter_index_layouts() to exercise replicated, partitioned,
+    and mixed warp layouts for the scatter direction. Verifies that the
+    LinearLayout-based warp predication and LDS offset computation produce
+    correct results for all layout configurations.
+    """
+    torch.manual_seed(42)
+
+    BLOCK_M = num_indices
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    M_out = 2048
+    N_out = BLOCK_N
+
+    inp = _create_scatter_test_data((BLOCK_M, BLOCK_N), dtype)
+    out = torch.zeros((M_out, N_out), dtype=dtype)
+    dst_row_indices = torch.arange(num_indices, dtype=index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = dst_row_indices.cuda()
+
+    _tdm_scatter_layout_kernel[(1, )](inp_d, out_d, indices_d, M_out=M_out, N_out=N_out, stride_m=out_d.stride(0),
+                                      stride_n=out_d.stride(1), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                      NUM_INDICES=num_indices, DST_COL_OFFSET=0, SHARED_LAYOUT=SHARED_LAYOUT,
+                                      IDX_LAYOUT=idx_layout, num_warps=num_warps)
+
+    out_result = out_d.cpu()
+    ref_out = torch.zeros_like(out)
+    elem_size = ref_out.element_size()
+    ref_out_bytes = ref_out.view(torch.uint8).reshape(M_out, -1)
+    inp_bytes = inp.view(torch.uint8).reshape(BLOCK_M, -1)
+    ref_out_bytes[dst_row_indices.long(), :BLOCK_N * elem_size] = inp_bytes[:num_indices]
+    torch.testing.assert_close(out_result, ref_out)
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")

@@ -2,6 +2,7 @@ from .layout_details.base import Layout
 from .layout_details.blackwell_scale import BlackwellMXScaleLayout
 from .layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .layout_details.blackwell_value import BlackwellMXValueLayout
+from .layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
 from .layout_details.hopper_scale import HopperMXScaleLayout
 from .layout_details.hopper_value import HopperMXValueLayout
 from .layout_details.cdna4_scale import CDNA4MXScaleLayout
@@ -12,6 +13,7 @@ from ..target_info import cuda_capability_geq, is_hip_cdna4, is_hip_gfx1250
 __all__ = [
     "Layout",
     "BlackwellMXValueLayout",
+    "BlackwellMX4ValueShuffledLayout",
     "BlackwellMXScaleLayout",
     "HopperMXScaleLayout",
     "HopperMXValueLayout",
@@ -22,8 +24,15 @@ __all__ = [
 ]
 
 
-def make_default_matmul_mxfp4_w_layout(mx_axis: int):
+def make_default_matmul_mxfp4_w_layout(
+    mx_axis: int,
+    allow_blackwell_value_shuffle: bool = False,
+    block_k: int = 128,
+    block_n: int = 256,
+):
     if cuda_capability_geq(10):
+        if allow_blackwell_value_shuffle:
+            return BlackwellMX4ValueShuffledLayout(block_k=block_k, block_n=block_n)
         return BlackwellMXValueLayout()
     elif cuda_capability_geq(9):
         return HopperMXValueLayout(mx_axis=mx_axis, mma_version=3)

@@ -101,7 +101,6 @@ public:
             *allocOp->getUsers().begin()))
       return failure();
 
-    auto dot = *allocOp->getUsers().begin();
     // Match outerCvt(trans(innerCvt(x))).
     auto trans = allocOp.getSrc().getDefiningOp<TransOp>();
     if (!trans || trans.getOrder() != ArrayRef<int32_t>({1, 0}))
@@ -111,7 +110,6 @@ public:
     auto allocEncoding = cast<NVMMASharedEncodingAttr>(allocType.getEncoding());
     RankedTensorType srcTy = trans.getSrc().getType();
 
-    auto ctx = getContext();
     Dialect &dialect = allocEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
     Attribute newInnerEnc;
@@ -152,11 +150,9 @@ public:
       return failure();
 
     MemDescType allocType = allocOp.getType();
-    auto allocEncoding = allocType.getEncoding();
 
     RankedTensorType srcTy = reshapeOp.getSrc().getType();
     auto srcShape = srcTy.getShape();
-    auto dstShape = allocType.getShape();
 
     // We use the fact that forward and backward inference are the same for
     // MemDescReshapeOp to infer the source MemDescType that would produce
@@ -259,8 +255,8 @@ private:
     }
     auto localAlloc = getNextOp<LocalAllocOp>(localLoad.getSrc());
     bool usesTMAload =
-        (localAlloc && localAlloc.getSrc() &&
-         (getNextOp<DescriptorLoadOp>(localAlloc.getSrc()) != nullptr));
+        localAlloc && localAlloc.getSrc() &&
+        getNextOp<DescriptorLoadLikeOpInterface>(localAlloc.getSrc());
     if (!isTmemCopyCompatible(localLoad.getSrc().getType(), usesTMAload))
       return failure();
 

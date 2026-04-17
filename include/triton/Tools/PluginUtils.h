@@ -16,6 +16,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Tools/Plugins/DialectPlugin.h"
 #include "python/src/ir.h"
+#include "triton/Version.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
@@ -30,7 +31,7 @@
 ///
 /// [MLIR_PLUGIN_API_VERSION]:
 /// https://github.com/llvm/llvm-project/blob/80d6e0b8/mlir/include/mlir/Tools/Plugins/PassPlugin.h#L32
-#define TRITON_PLUGIN_API_VERSION 1
+#define TRITON_PLUGIN_API_VERSION 2
 
 /// Use this helper macro on the public entry point for a Triton plugin.
 #define TRITON_PLUGIN_API extern "C" __attribute__((visibility("default")))
@@ -87,6 +88,9 @@ struct PluginInfo {
   /// The list of custom ops.
   OpInfo *ops;
   size_t numOps;
+
+  /// Triton Version
+  const char *tritonVersion;
 };
 
 /// A helper structure for storing information about a pass registered by a

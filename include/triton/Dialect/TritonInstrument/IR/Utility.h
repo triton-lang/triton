@@ -1,6 +1,7 @@
 #ifndef TRITONINSTRUMENT_UTILITY_H
 #define TRITONINSTRUMENT_UTILITY_H
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -36,8 +37,8 @@ enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
 // writeVisibility + readVisibility per active memory type.
 constexpr int kCapturesPerMemType = 2;
 
-// barrierStates + waiting (only when barriers exist).
-constexpr int kBarrierBaseCaptures = 2;
+// barrierStates + waiting + barrierWriteRecipients (only when barriers exist).
+constexpr int kBarrierBaseCaptures = 3;
 
 // writeTracking + readTracking per active memory type (only when barriers
 // exist and the memory type has buffers).
@@ -86,6 +87,15 @@ uint32_t getMemDescLength(Value buf);
 FuncOp getEntryPoint(ModuleOp module);
 gpu::DistributedEncodingTrait
 getSingleDimSliceEncoding(gpu::DistributedEncodingTrait encoding, int dim);
+
+inline Value maybeAnd(ImplicitLocOpBuilder &b, Value lhs, Value rhs) {
+  if (!lhs)
+    return rhs;
+  if (!rhs)
+    return lhs;
+  return arith::AndIOp::create(b, lhs, rhs);
+}
+
 struct ValueType {
   Value value;
   Type type;
@@ -122,6 +132,7 @@ struct AuxDataMap {
   RegionToValueMap buffers[numMemTypes];
   RegionToValueMap barriers;
   RegionToValueMap barrierStates;
+  RegionToValueMap barrierWriteRecipients;
 
   RegionToValueMap writeVisibility[numMemTypes];
   RegionToValueMap writeTracking[numMemTypes];

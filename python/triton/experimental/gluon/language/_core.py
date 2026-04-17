@@ -9,7 +9,8 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout, CoalescedLayout
+from ._layouts import (SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout, CoalescedLayout,
+                       SharedLinearLayout, _get_shape_per_cta)
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
@@ -207,6 +208,23 @@ class shared_memory_descriptor_type(base_type):
     def __str__(self) -> str:
         return f"shared_memory_descriptor<{self.element_ty}, {self.shape}, {self.layout}, {self.alloc_shape}>"
 
+    @property
+    def nbytes_per_cta(self) -> int:
+        if isinstance(self.layout, SharedLinearLayout):
+            cga_layout = []
+            dim_bases = [0] * len(self.shape)
+            for basis in self.layout.block_bases:
+                cga_basis = [0] * len(self.shape)
+                for dim, value in enumerate(basis):
+                    if value != 0:
+                        cga_basis[dim] = 1 << dim_bases[dim]
+                        dim_bases[dim] += 1
+                cga_layout.append(cga_basis)
+        else:
+            cga_layout = self.layout.cga_layout
+        shape_per_cta = _get_shape_per_cta(self.shape, cga_layout)
+        return math.prod(shape_per_cta) * self.element_ty.primitive_bitwidth // 8
+
     def __eq__(self, other) -> bool:
         return (type(self) is type(other) and self.shape == other.shape and self.layout == other.layout
                 and self.alloc_shape == other.alloc_shape)
@@ -250,6 +268,10 @@ class shared_memory_descriptor(base_value):
     @property
     def numel(self) -> int:
         return math.prod(self.shape)
+
+    @property
+    def nbytes_per_cta(self) -> int:
+        return self.type.nbytes_per_cta
 
     @property
     def layout(self):

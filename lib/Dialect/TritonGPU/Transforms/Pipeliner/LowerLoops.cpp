@@ -65,12 +65,10 @@ bool mustLoadToRegisters(Operation *op) {
     return true;
 
   Attribute loadEncoding;
-  if (auto descLoad = dyn_cast<DescriptorLoadOp>(op)) {
-    loadEncoding = nvidia_gpu::getEncodingFromDescriptor(op, descLoad.getType(),
+  if (auto descLoad = dyn_cast<DescriptorLoadLikeOpInterface>(op)) {
+    auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
+    loadEncoding = nvidia_gpu::getEncodingFromDescriptor(op, tensorType,
                                                          descLoad.getDesc());
-  } else if (auto descGather = dyn_cast<DescriptorGatherOp>(op)) {
-    loadEncoding = nvidia_gpu::getEncodingFromDescriptor(
-        op, descGather.getType(), descGather.getDesc());
   }
   return loadEncoding && (loadEncoding != alloc.getType().getEncoding());
 }
@@ -88,7 +86,7 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   // uses will become direct uses of the async load.
   // TODO: This is overly conservative, we may need to restrict to cases where
   // local_alloc is used by a dot product and has correct encoding.
-  if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
+  if (isa<tt::LoadOp, tt::DescriptorLoadLikeOpInterface>(op)) {
     DenseSet<Operation *> allocUsers;
     for (Operation *topLevelUser : topLevelUsers) {
       if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(topLevelUser)) {
@@ -157,7 +155,6 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
                      Value insertIdx, Value extractIdx, int contiguity,
                      CoarseSchedule &schedule) {
   OpBuilderForStage builder(loadOp.getLoc(), forOp, schedule);
-  Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
 
   Operation *firstUse = getFirstUseOfPipelinedOp({loadOp}, forOp, schedule);
   assert(firstUse && "LoadOp has no users");
@@ -168,7 +165,6 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   Value src = loadOp.getPtr();
   Value mask = loadOp.getMask();
   Value other = loadOp.getOther();
-  ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
 
   // Create async copy
   Value view = createSingleBufferView(builder, alloc, insertIdx);
@@ -210,7 +206,6 @@ void createTMAAsyncCopy(
     function_ref<void(OpBuilderForStage &, Value, Value, Value, Value)>
         createCopy) {
   OpBuilderForStage builder(loadOp->getLoc(), forOp, schedule);
-  Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
 
   Operation *firstUse = getFirstUseOfPipelinedOp({loadOp}, forOp, schedule);
   assert(firstUse && "LoadOp has no users");
@@ -219,7 +214,6 @@ void createTMAAsyncCopy(
 
   builder.setInsertionPoint(loadOp);
   builder.setStageCluster(schedule[loadOp]);
-  ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
 
   // Create async copy
   Value view = createSingleBufferView(builder, alloc, insertIdx);
@@ -445,7 +439,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   // Only visit the top level ops, we do not support pipelining conditional
   // loads for now
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
+    if (isa<tt::LoadOp, tt::DescriptorLoadLikeOpInterface>(op)) {
       int stageDiff = getDefUseStageDiff(&op, forOp, schedule);
       if (stageDiff == 0) {
         // Don't care about non-pipelined loads. Scalar loads will be converted

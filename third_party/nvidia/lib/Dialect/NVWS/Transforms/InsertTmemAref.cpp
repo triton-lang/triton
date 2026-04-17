@@ -1,4 +1,5 @@
 #include "Utilities.h"
+#include "lib/Dialect/TritonGPU/Transforms/WarpSpecialization/PartitionAttrs.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
@@ -106,7 +107,7 @@ struct TmemAccessDag {
     auto elseDag =
         std::make_unique<Node>(nullptr, nullptr, std::nullopt, nullptr);
     auto thenTok = addOp(*useThen, thenDag.get());
-    auto elseTok = addOp(*useElse, elseDag.get());
+    addOp(*useElse, elseDag.get());
 
     auto tokPos =
         *findValuePosInRange(ifOp.thenYield()->getOperands(), thenTok);
@@ -662,7 +663,6 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
   auto allocOp = cast<TMEMAllocOp>(rootNode->op);
 
   auto isMultiStaged = hasProducerConsumerPartitioning(accessDag);
-  int numTmemBlock = 0;
   if (isMultiStaged) {
     for (auto user : allocOp.getResult().getUsers()) {
       if (auto mmaOp = dyn_cast<MMAv5OpInterface>(user)) {

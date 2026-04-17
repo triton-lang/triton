@@ -317,3 +317,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+// Test async_copy_local_to_global with 16-bit data type.
+// On gfx1250, 16-bit stores are not directly supported, so they should be split into two 8-bit stores.
+// sizePerThread = [1] with f16 (16-bit) should generate two b8 stores per element.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {ttg.target = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 2048 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: async_copy_local_to_global_16bit_split
+  tt.func public @async_copy_local_to_global_16bit_split(%dst: tensor<128x!tt.ptr<f16>, #blocked>,
+                                                          %smem: !ttg.memdesc<128xf16, #shared, #smem, mutable>) {
+    // Each thread stores 1 element (16 bits), split into 2 x 8-bit stores
+    // CHECK-COUNT-2: llvm.amdgcn.global.store.async.from.lds.b8
+    // CHECK-NOT: llvm.amdgcn.global.store.async.from.lds
+    %0 = amdg.async_copy_local_to_global %smem, %dst : !ttg.memdesc<128xf16, #shared, #smem, mutable> -> tensor<128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----

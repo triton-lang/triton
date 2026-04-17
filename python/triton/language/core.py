@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from enum import Enum
 from functools import partial, wraps, cached_property
 import typing
-from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
+from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 import builtins
 from .. import knobs
@@ -1584,6 +1584,15 @@ def _wrap_init_args(x):
     return constexpr(x)
 
 
+if TYPE_CHECKING:
+    from typing_extensions import dataclass_transform
+else:
+
+    def dataclass_transform(**kwargs):
+        return lambda obj: obj
+
+
+@dataclass_transform(eq_default=False)
 def _aggregate(cls):
     field_annotations = typing.get_type_hints(cls)
     field_names = builtins.tuple(field_annotations.keys())

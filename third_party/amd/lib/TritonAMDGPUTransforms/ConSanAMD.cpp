@@ -8,6 +8,7 @@ namespace ttag = mlir::triton::amdgpu;
 namespace tti = mlir::triton::instrument;
 
 using tti::BarrierInitInfo;
+using tti::BarrierInvalidateInfo;
 using tti::BarrierWaitInfo;
 using tti::CommitKindDesc;
 using tti::MemEffectsOpInfo;
@@ -30,10 +31,6 @@ public:
     return kind == tti::CommitKind::TmaStore;
   }
 
-  bool isPostInstrumentedOp(Operation *op) const override {
-    return isa<ttag::WaitBarrierOp>(op);
-  }
-
   std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const override {
     if (auto initOp = dyn_cast<ttag::InitBarrierOp>(op))
@@ -49,9 +46,20 @@ public:
     return std::nullopt;
   }
 
+  std::optional<BarrierInvalidateInfo>
+  getBarrierInvalidateInfo(Operation *op) const override {
+    return std::nullopt;
+  }
+
   std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const override {
-    // AMD amdgpu::AsyncWaitOp replaces ttg::AsyncWaitOp after
-    // UpdateAsyncWaitCount. Read the preserved commit-group count.
+    // On asyncmark targets (CDNA3/CDNA4), ttg::AsyncWaitOp is kept as-is
+    // by UpdateAsyncWaitCount — read the commit group count directly.
+    if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
+      return WaitOpInfo{tti::CommitKind::AsyncCp, (int)asyncWaitOp.getNum(),
+                        /*transferWrites=*/true, /*transferReads=*/false};
+    }
+    // On non-asyncmark targets, amdgpu::AsyncWaitOp replaces ttg::AsyncWaitOp
+    // after UpdateAsyncWaitCount. Read the preserved commit-group count.
     if (auto asyncWaitOp = dyn_cast<ttag::AsyncWaitOp>(op)) {
       if (auto attr = asyncWaitOp->getAttrOfType<IntegerAttr>(
               "ttg.num_commit_groups")) {
@@ -76,6 +84,11 @@ public:
       return std::nullopt;
     }
     return std::nullopt;
+  }
+
+  Value getIssuerCTAPred(ImplicitLocOpBuilder & /*b*/,
+                         Operation * /*op*/) const override {
+    return nullptr;
   }
 
   std::optional<MemEffectsOpInfo>

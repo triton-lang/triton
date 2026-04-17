@@ -346,7 +346,7 @@ def matmul_clc_partition(p):
         result = p.clc_result_buffers.index(state.index)
         # 16: clc.try_cancel has a `.b128` modifier
         mbarrier.expect(barrier, 16)
-        clc.try_cancel(result, barrier, multicast=True)
+        clc.try_cancel(result, barrier)
         mbarrier.wait(barrier, state.phase)
         clc_res = clc.load_result(result)
         has_work = clc_res.is_canceled()

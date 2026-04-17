@@ -111,6 +111,7 @@ def _p_matmul(
              IS_EPILOGUE_QUANT_MX: tl.constexpr = False,
              Y_VALUE_PACK_FACTOR: tl.constexpr = 1,
              FLATTEN_LOOPS: tl.constexpr = True,
+             W_SHUFFLED: tl.constexpr = False,
              pYPtrs=None,
              map_dst_coord=None,
              all_writes_issued=None,
@@ -127,7 +128,7 @@ def _p_matmul(
     is_w_microscaled: tl.constexpr = WMxScale is not None
     is_x_microscaled: tl.constexpr = XMxScale is not None
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
-    tl.static_assert(not is_w_mxfp4 or W_TRANSPOSE, "NYI. Non-transposed mxfp4 weights")
+    tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
     if is_w_microscaled:
         tl.static_assert(MX_BLOCK_SIZE == NVFP_BLOCK_SIZE or MX_BLOCK_SIZE == MXFP_BLOCK_SIZE,
@@ -372,7 +373,14 @@ def _p_matmul(
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 1.0, dtype=tl.float8e4nv)
 
             # --- load w ---
-            if W_TRANSPOSE:
+            if W_SHUFFLED:
+                tile_k_idx = off_k_w // PACKED_BLOCK_K_W
+                tile_n_idx = off_n // BLOCK_N
+                w = tl.reshape(
+                    W.load([off_w_z.to(tl.int32), tile_k_idx.to(tl.int32), tile_n_idx.to(tl.int32), 0, 0]),
+                    (BLOCK_N, PACKED_BLOCK_K_W),
+                ).T
+            elif W_TRANSPOSE:
                 w = tl.reshape(W.load([off_w_z, off_w_n, off_k_w]), W.block_shape[1:]).T
             else:
                 w = tl.reshape(W.load([off_w_z, off_k_w, off_w_n]), W.block_shape[1:])

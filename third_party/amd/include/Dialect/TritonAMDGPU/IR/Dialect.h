@@ -44,7 +44,7 @@ namespace mlir::triton::amdgpu {
 /// 2D tensors: group0 (4) + group1 (8) = 12 dwords
 /// 3D-5D tensors: group0 (4) + group1 (8) + group2 (4) + group3 (4) = 20 dwords
 inline int getTensorDescNumDwords(triton::TensorDescType type) {
-  auto shape = type.getBlockType().getShape();
+  auto shape = type.getShape();
   return (shape.size() > 2) ? (4 + 8 + 4 + 4) : (4 + 8);
 }
 } // namespace mlir::triton::amdgpu

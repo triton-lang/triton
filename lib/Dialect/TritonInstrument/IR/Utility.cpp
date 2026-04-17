@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -23,8 +24,6 @@ using mlir::triton::BufferRegion;
 
 namespace {
 
-constexpr unsigned kMaxVectorLengthBits = 128;
-
 DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
                                               ArrayRef<int64_t> shape,
                                               unsigned warps, unsigned numCTAs,
@@ -37,13 +36,12 @@ DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
   auto kRegister = StringAttr::get(ctx, "register");
 
   // A warp-local layout ensures each warp has a copy of the whole tensor, so
-  // reductions, layout conversions, etc. don't require shared memory. Attempt
-  // to pick a decent coalesced layout, assuming the inner dimension is
+  // reductions, layout conversions, etc. don't require shared memory. TODO:
+  // attempt to pick a decent coalesced layout, assuming the inner dimension is
   // contiguous and the tensor is 16-byte aligned. However, pick the widest
   // vector length to reduce the number of instructions, speeding up
   // compilation.
   // unsigned vecLen = kMaxVectorLengthBits / bitwidth;
-  unsigned vecLen = 1;
 
   // Broadcast along blocks and warps. Use the innermost dimension for the
   // lane/register mapping and keep the outer dimensions replicated.
@@ -157,7 +155,22 @@ Value createZeroInitStateTensor(ImplicitLocOpBuilder &b,
                                             /*alignment=*/16,
                                             /*sharedClusterState=*/true);
   Value cstZero = arith::ConstantIntOp::create(b, 0, bitWidth);
+  Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value zero = arith::ConstantIntOp::create(b, 0, 32);
+  Value isCTA0 =
+      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
+  Block *prevBlock = b.getInsertionBlock();
+  Block::iterator insertPoint = b.getInsertionPoint();
+  Block *ifBlock = prevBlock->splitBlock(insertPoint);
+  Block *thenBlock = ifBlock->splitBlock(ifBlock->begin());
+  b.setInsertionPointToEnd(ifBlock);
+  cf::BranchOp::create(b, thenBlock);
+  b.setInsertionPointToEnd(prevBlock);
+  cf::CondBranchOp::create(b, isCTA0, ifBlock, ValueRange{}, thenBlock,
+                           ValueRange{});
+  b.setInsertionPointToStart(ifBlock);
   funcBuilder.createFillGlobalTensorCall(b, alloc, type, cstZero);
+  b.setInsertionPointToStart(thenBlock);
   return alloc;
 }
 
@@ -519,8 +532,8 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
     int numBarriers = barrierRegions.size();
     barrierStates.insert(
         entryRegion,
-        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 32, fb),
-         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
+        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 64, fb),
+         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 64)});
     passToWarpSpecialize(entryPoint, barrierStates.at(entryRegion),
                          barrierStates, captureCounter);
 
@@ -532,6 +545,13 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
          getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
     passToWarpSpecialize(entryPoint, waiting.at(entryRegion), waiting,
                          captureCounter);
+
+    barrierWriteRecipients.insert(
+        entryRegion,
+        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 32, fb),
+         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
+    passToWarpSpecialize(entryPoint, barrierWriteRecipients.at(entryRegion),
+                         barrierWriteRecipients, captureCounter);
 
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       int iMemType = (int)memType;

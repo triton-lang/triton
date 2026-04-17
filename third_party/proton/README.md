@@ -293,6 +293,10 @@ Triton's runtime has a centralized configuration system called *knobs* that cont
 
 - `triton.knobs.proton.cupti_lib_dir` or `TRITON_CUPTI_LIB_DIR` (default: `<triton_root>/backends/nvidia/lib/cupti`): The directory of the CUPTI library.
 
+- `triton.knobs.proton.profile_buffer_size` or `TRITON_PROFILE_BUFFER_SIZE` (default: `67108864`): The size in bytes of Proton's activity/profile buffers.
+
+- `triton.knobs.proton.profile_metric_buffer_size` or `TRITON_PROFILE_METRIC_BUFFER_SIZE` (default: `67108864`): The size in bytes of Proton's GPU metric buffer, which is used for storing flexible metrics during CUDA graph launches.
+
 ## Advanced features and knowledge
 
 ### Thread management

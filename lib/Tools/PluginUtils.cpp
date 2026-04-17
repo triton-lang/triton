@@ -1,10 +1,32 @@
 #include "triton/Tools/PluginUtils.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 
 #define DEBUG_TYPE "triton-plugins"
 
 using namespace mlir::triton::plugin;
+
+static bool isTritonAndPluginsVersionsMatch(const std::string &pluginVersion) {
+  // Here, if TRITON_PLUGIN_VERSION_CHECK is unset, then we simply do a default
+  // version check. However, if it is set then we either do a full (git hash)
+  // check or we skip all checking.
+  auto doCheck =
+      mlir::triton::tools::isEnvValueBool("TRITON_PLUGIN_VERSION_CHECK");
+
+  // Skip check when TRITON_PLUGIN_VERSION_CHECK is set false
+  if (doCheck.has_value() && !doCheck.value())
+    return true;
+
+  // Check full version string when TRITON_PLUGIN_VERSION_CHECK is set true
+  if (doCheck.has_value() && doCheck.value())
+    return pluginVersion == TRITON_VERSION;
+
+  // Do partial release version check when TRITON_PLUGIN_VERSION_CHECK unset
+  assert(!doCheck.has_value() && "Expected TRITON_PLUGIN_VERSION_CHECK unset");
+  return llvm::StringRef(pluginVersion).split('+').first ==
+         llvm::StringRef(TRITON_VERSION).split('+').first;
+}
 
 llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
   std::string error;
@@ -33,6 +55,13 @@ llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
         Twine("Wrong API version on plugin '") + filename + "'. Got version " +
             Twine(plugin.info->apiVersion) + ", supported version is " +
             Twine(TRITON_PLUGIN_API_VERSION) + ".",
+        llvm::inconvertibleErrorCode());
+
+  if (!isTritonAndPluginsVersionsMatch(plugin.info->tritonVersion))
+    return llvm::make_error<llvm::StringError>(
+        Twine("Wrong TRITON version on plugin '") + filename +
+            "'. Got version " + Twine(plugin.info->tritonVersion) +
+            ", supported version is " + Twine(TRITON_VERSION) + ".",
         llvm::inconvertibleErrorCode());
 
   return plugin;

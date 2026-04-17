@@ -21,11 +21,9 @@ using ::mlir::triton::gpu::SharedLinearEncodingAttr;
 DotOpMmaV5TmemLoader mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::build(
     Location loc, RewriterBase &rewriter, gpu::MemDescType memTy,
     Value tmemBase) {
-  auto ctx = loc.getContext();
   // We take the full layout even when it is a subview
   // We'll just iterate the real shape when calling tmemLoad tho
   auto ll = toLinearLayout(memTy);
-  auto layout = cast<ttng::TensorMemoryEncodingAttr>(memTy.getEncoding());
   auto bitwidth = memTy.getElementTypeBitWidth();
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   Value address = tb.ptrtoint(i32_ty, tmemBase);
@@ -314,22 +312,10 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   PTXBuilder ptxBuilder;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value mask;
-  if (!descs.empty()) {
-    auto kBlock = StringAttr::get(rewriter.getContext(), "block");
-    for (Value desc : descs) {
-      auto descTy = cast<MemDescType>(desc.getType());
-      uint16_t broadcastBits =
-          toLinearLayout(descTy).getFreeVariableMasks().lookup(kBlock);
-      if (twoCTAs)
-        broadcastBits |= 1;
-      if (broadcastBits) {
-        Value descMask =
-            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBits);
-        mask = mask ? b.or_(descMask, mask) : descMask;
-      }
-    }
-  } else if (twoCTAs) {
-    mask = LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, 0x1);
+  for (uint16_t broadcastBits : ttng::getCTABroadcastMasks(twoCTAs, descs)) {
+    Value descMask =
+        LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBits);
+    mask = mask ? b.or_(descMask, mask) : descMask;
   }
 
   SmallVector<PTXBuilder::Operand *> ptxOperands;
@@ -413,6 +399,10 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     pred = tb.and_(pred, cluster0);
   }
   pred = tb.and_(pred, isWarp0);
+
+  // Synchronize the current partition before branching into the MMA block.
+  if (!barriers.empty())
+    BarrierOp::create(rewriter, loc, AddrSpace::Local);
 
   // Wrap the whole mma code sequence within a IF block.
   auto *curBlock = rewriter.getInsertionBlock();
@@ -538,13 +528,7 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   MemDescType dTensorTy = op.getD().getType();
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   assert(twoCTAs == op.getTwoCtas());
-  SmallVector<Value> commitDescs;
-  if (op.getMulticast()) {
-    if (isa<SharedEncodingTrait>(aTensorTy.getEncoding())) {
-      commitDescs.push_back(op.getA());
-    }
-    commitDescs.push_back(op.getB());
-  }
+  SmallVector<Value> commitDescs = op.getCompletionDescs();
 
   DotConversion dot;
 
@@ -660,6 +644,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   Value baseScaleA = tb.ptrtoint(i32_ty, adaptor.getAScale());
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
+  SmallVector<Value> commitDescs = op.getCompletionDescs();
 
   int numRows = 128;
   int colSizeInBits = 32;
@@ -709,7 +694,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
                         adaptor.getA(), adaptor.getB(), dTensorTy,
                         adaptor.getUseD(), adaptor.getPred(),
                         adaptor.getBarriers(), adaptor.getBarrierPreds(),
-                        twoCTAs, ValueRange{}, opKindIsMXFP4, dot);
+                        twoCTAs, commitDescs, opKindIsMXFP4, dot);
 }
 
 //===----------------------------------------------------------------------===//
@@ -723,8 +708,6 @@ struct TCGen5MMAOpConversion
   LogicalResult
   matchAndRewrite(ttng::TCGen5MMAOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto AEnc = op.getA().getType().getEncoding();
-    auto BEnc = op.getB().getType().getEncoding();
     if (failed(convertDot(*getTypeConverter(), rewriter, op.getLoc(), op,
                           adaptor)))
       return failure();
@@ -757,6 +740,10 @@ struct TCGen5CommitOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
+
+    // Because this operation can signal other partitions we need to synchronize
+    // the current partition first.
+    BarrierOp::create(rewriter, loc, AddrSpace::Local);
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getBarrier(), rewriter.getI64Type(), rewriter);
