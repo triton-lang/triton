@@ -229,24 +229,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: reduce_xor_max
   tt.func @reduce_xor_max(%arg0: tensor<32xf32, #blocked4>) {
-    // CHECK: rocdl.ds_swizzle
+    // stride 16: CDNA fallback to bpermute
+    // CHECK: rocdl.ds_bpermute
 
+    // stride 8: ROW_ROR:8 (0x128 = 296)
     // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 280, 15, 12, false : i32
-    // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 264, 15, 3, false : i32
+    // CHECK-SAME: with 296, 15, 15, false : i32
     // CHECK: llvm.intr.maxnum
 
+    // stride 4: ROW_HALF_MIRROR (0x141 = 321) + quad_perm xor 3 (27)
     // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 276, 15, 10, false : i32
+    // CHECK-SAME: with 321, 15, 15, false : i32
     // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 260, 15, 5, false : i32
+    // CHECK-SAME: with 27, 15, 15, false : i32
     // CHECK: llvm.intr.maxnum
 
+    // stride 2: quad_perm xor 2 (78)
     // CHECK: rocdl.update.dpp
     // CHECK-SAME: with 78, 15, 15, false : i32
     // CHECK: llvm.intr.maxnum
 
+    // stride 1: quad_perm xor 1 (177)
     // CHECK: rocdl.update.dpp
     // CHECK-SAME: with 177, 15, 15, false : i32
     %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
