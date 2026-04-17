@@ -30,6 +30,8 @@ from triton_kernels.tensor_details.dtype import FP32
 class DType:
 
     def __init__(self, dtype_str):
+        # This tracks the regular fp8 flex scale path. NVFP4 has a tensor scale,
+        # but it is handled separately because it also has MX microscale storage.
         self.has_global_scale = dtype_str.startswith("float8")
         self.is_nvfp4 = dtype_str == "nvfp4_e2m1"
         self.has_mx_scale = dtype_str.startswith("mx") or self.is_nvfp4

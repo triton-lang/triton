@@ -343,16 +343,12 @@ def reduce_forward(
     if y_has_mx:
         if y_dtype == torch.float8_e4m3fn:
             postprocess_mx_fn = FnSpecs("quantize_mxfp8", quantize_mxfp8_fn, tuple(), tuple())
-            postprocess_mx_fn_args = tuple()
         elif y_mx_scale_dtype == torch.float8_e4m3fn:
             postprocess_mx_fn = FnSpecs("quantize_nvfp4", quantize_nvfp4_fn, tuple(), tuple())
-            postprocess_mx_fn_args = tuple()
         else:
             postprocess_mx_fn = FnSpecs("quantize_mxfp4", quantize_mxfp4_fn, tuple(), tuple())
-            postprocess_mx_fn_args = tuple()
     else:
         postprocess_mx_fn = FnSpecs.default()
-        postprocess_mx_fn_args = tuple()
     reduce_kernel = forward_specializations.get(postprocess_fn1=postprocess_fn1.specs,
                                                 postprocess_fn2=postprocess_fn2.specs,
                                                 postprocess_mx_fn=postprocess_mx_fn)._reduce_forward
@@ -365,7 +361,7 @@ def reduce_forward(
         scale, stride_sr, stride_s0, stride_s1,  #
         unpadded_batch_size,  #
         K, S0, X_S1, Y_S1,  #
-        *postprocess_fn1.fn_args, *postprocess_fn2.fn_args, *postprocess_mx_fn_args,  #
+        *postprocess_fn1.fn_args, *postprocess_fn2.fn_args,  #
         x_flex.scale, x_global_scale, y_flex.expected_scale, y_flex.actual_scale, y_flex.checksum_scale,  #
         y_flex_saturate_inf,  #
         IS_MASK_NONE=(mask is None),  #
@@ -670,7 +666,7 @@ class _ReduceAutograd(torch.autograd.Function):
             dx=dx,
             unpadded_batch_size=ctx.unpadded_batch_size,
         )
-        return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
+        return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
 
 def reduce(

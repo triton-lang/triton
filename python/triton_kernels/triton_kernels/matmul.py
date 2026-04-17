@@ -664,11 +664,7 @@ def matmul(a, b, bias,
     if opt_flags.split_k > 1:
         assert not out_matmul_has_mx
         postprocess_fn1 = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
-        postprocess_fn2 = (
-            ReducePostprocessFn()
-            if precision_config.c_mx_scale is not None
-            else ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
-        )
+        postprocess_fn2 = ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
         c, y_mx_scale = reduce(
             x = out_matmul.view(out_matmul.shape[0], -1, out_matmul.shape[-1]),
             dim = 0,
