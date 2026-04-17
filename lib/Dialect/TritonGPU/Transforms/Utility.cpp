@@ -154,9 +154,24 @@ getAtomicWriteElementsPerThreadCap(Operation *op) {
   return std::nullopt;
 }
 
+static unsigned getMaxElementsPerThread(Operation *op) {
+  Value val = getMemAccessPtr(op);
+  auto ty = cast<RankedTensorType>(val.getType());
+  unsigned elemNumBits = getElementBitWidth(ty);
+  unsigned maxElementsPerThread = 128 / elemNumBits;
+  // Some atomic lowerings are narrower than a plain store. TTGIR currently
+  // exposes the target architecture but not the PTX version, so we only cap
+  // cases that are unambiguous from the available target metadata and the
+  // current backend lowering.
+  if (auto atomicCap = getAtomicWriteElementsPerThreadCap(op)) {
+    maxElementsPerThread = std::min(maxElementsPerThread, *atomicCap);
+  }
+  return maxElementsPerThread;
+}
+
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 ArrayRef<int64_t> shapePerCTA, bool isWrite) {
+                                 ArrayRef<int64_t> shapePerCTA) {
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());
   AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
@@ -167,21 +182,12 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
   unsigned maxContig =
       std::min(valInfo.getContiguity(order[0]), shapePerCTA[order[0]]);
   unsigned alignment = std::min(maxMultiple, maxContig);
-  unsigned maxElementsPerThread = 128 / elemNumBits;
-  if (isWrite) {
-    // Some atomic lowerings are narrower than a plain store. TTGIR currently
-    // exposes the target architecture but not the PTX version, so we only cap
-    // cases that are unambiguous from the available target metadata and the
-    // current backend lowering.
-    if (auto atomicCap = getAtomicWriteElementsPerThreadCap(op)) {
-      LDBG("atomic write cap: " << *atomicCap);
-      maxElementsPerThread = std::min(maxElementsPerThread, *atomicCap);
-    }
-  }
+  unsigned maxElementsPerThread = getMaxElementsPerThread(op);
   unsigned currPerThread = std::min(alignment, maxElementsPerThread);
   LDBG("elemNumBytes: " << elemNumBytes
                         << ", divisibility: " << maxMultipleBytes
                         << ", contig: " << valInfo.getContiguity(order[0])
+                        << ", maximum: " << maxElementsPerThread
                         << ", alignment: " << alignment);
   return currPerThread;
 }
