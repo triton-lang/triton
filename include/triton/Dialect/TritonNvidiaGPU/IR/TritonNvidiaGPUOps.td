@@ -543,7 +543,8 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather", [
     I32:$y_offset,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
-    I1:$pred
+    I1:$pred,
+    UnitAttr:$multicast
   );
 
   let assemblyFormat = [{

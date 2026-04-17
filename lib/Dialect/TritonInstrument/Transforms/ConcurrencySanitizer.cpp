@@ -254,9 +254,9 @@ SmallVector<uint16_t> getTensorCoreBarrierBroadcastMasks(Operation *op) {
 Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op);
 
 Value getMemEffectRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
-  if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-    if (copyOp.getMulticast())
-      return getMulticastRecipientCTAs(b, copyOp.getResult());
+  if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+    if (tmaLoad.getMulticast())
+      return getMulticastRecipientCTAs(b, tmaLoad.getResult());
     return currentCTAMask(b);
   }
   if (isTensorCoreOp(op))
@@ -272,14 +272,12 @@ Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
     return getLeaderCTA(b, arriveOp.getAlloc());
   if (auto arriveOp = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op))
     return getLeaderCTA(b, arriveOp.getBarrier());
-  if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-    if (copyOp.getMulticast())
-      return getMulticastBarrierRecipientCTAs(b, copyOp.getResult(),
-                                              copyOp.getBarrier());
-    return getLeaderCTA(b, copyOp.getBarrier());
-  }
-  if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
+  if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+    if (tmaLoad.getMulticast())
+      return getMulticastBarrierRecipientCTAs(b, tmaLoad.getResult(),
+                                              tmaLoad.getBarrier());
     return getLeaderCTA(b, tmaLoad.getBarrier());
+  }
 
   if (isTensorCoreOp(op))
     return getRecipientCTAsForBroadcastMasks(

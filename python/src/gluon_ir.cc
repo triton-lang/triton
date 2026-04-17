@@ -942,12 +942,15 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, int pendings) {
              self.create<ttng::TMAStoreWaitOp>(pendings);
            })
-      .def("create_async_tma_gather",
-           [](GluonOpBuilder &self, Value descPtr, Value xOffsets,
-              Value yOffset, Value barrier, Value result, Value pred) {
-             self.create<ttng::AsyncTMAGatherOp>(descPtr, xOffsets, yOffset,
-                                                 barrier, result, pred);
-           })
+      .def(
+          "create_async_tma_gather",
+          [](GluonOpBuilder &self, Value descPtr, Value xOffsets, Value yOffset,
+             Value barrier, Value result, Value pred, bool multicast) {
+            multicast &=
+                ttng::hasCGABroadcast(cast<ttg::MemDescType>(result.getType()));
+            self.create<ttng::AsyncTMAGatherOp>(
+                descPtr, xOffsets, yOffset, barrier, result, pred, multicast);
+          })
       .def("create_async_tma_scatter",
            [](GluonOpBuilder &self, Value descPtr, Value xOffsets,
               Value yOffset, Value src) {
