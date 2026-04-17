@@ -10,7 +10,6 @@ import triton.experimental.gluon.language.nvidia.blackwell as blackwell
 import triton.experimental.gluon.language.nvidia.blackwell.tma as tma
 from triton.experimental.gluon.language.nvidia.blackwell import float2
 import triton.experimental.gluon.language.nvidia.hopper.mbarrier as mbarrier
-import triton.language.core as tl_core
 import triton.language.extra.libdevice as libdevice
 from triton.language.core import _aggregate as aggregate
 from triton.testing import do_bench_cudagraph
@@ -123,7 +122,7 @@ def alloc_empty_ready_barriers(num_bufs: gl.constexpr):
 
 @gluon.jit
 def pack_e4m3x2(values):
-    return tl_core.inline_asm_elementwise(
+    return gl.inline_asm_elementwise(
         """
         {
             .reg .f32 lane<2>;
@@ -133,7 +132,7 @@ def pack_e4m3x2(values):
         """,
         "=h,l",
         [values.value],
-        dtype=tl_core.int16,
+        dtype=gl.int16,
         is_pure=True,
         pack=1,
     )
@@ -141,13 +140,13 @@ def pack_e4m3x2(values):
 
 @gluon.jit
 def pack_u16x2(x0, x1):
-    return tl_core.inline_asm_elementwise(
+    return gl.inline_asm_elementwise(
         """
         mov.b32 $0, { $1, $2 };
         """,
         "=r,h,h",
         [x0, x1],
-        dtype=tl_core.int32,
+        dtype=gl.int32,
         is_pure=True,
         pack=1,
     )
@@ -408,7 +407,7 @@ def store_packed_out(
 def _swiglu_step1(acc_packed, limit):
     gelu, linear = float2.unpack2(acc_packed)
     gelu = gl.minimum(gelu.to(gl.float32), limit)
-    linear = tl_core.clamp(linear.to(gl.float32), -limit, limit)
+    linear = gl.clamp(linear.to(gl.float32), -limit, limit)
     return gelu, linear
 
 
