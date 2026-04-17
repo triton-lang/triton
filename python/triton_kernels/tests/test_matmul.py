@@ -277,6 +277,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if is_cuda():
         if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("Float8 not tested on A100")
+        if output_dtype_str == "nvfp4_e2m1" and torch.cuda.get_device_capability()[0] < 9:
+            pytest.skip("NVFP4 output scales use fp8e4nv, which is not supported on A100")
         if act_dtype_str == "float16" and weight_uses_mx and torch.cuda.get_device_capability()[0] >= 10:
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if weight_uses_mx:
