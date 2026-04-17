@@ -836,7 +836,7 @@ struct TMEMSubSliceOpConversion
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto dstTy = cast<MemDescType>(op.getResult().getType());
-    uint32_t offset = getTMemSubSliceOffset(dstTy, op.getN());
+    uint32_t offset = getTMemSubSliceOffset(dstTy, op.getM(), op.getN());
 
     Value tmemBase = adaptor.getSrc();
     Value offsetVal = b.i32_val(offset);

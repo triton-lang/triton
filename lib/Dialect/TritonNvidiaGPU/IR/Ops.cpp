@@ -1481,15 +1481,31 @@ LogicalResult TMEMSubSliceOp::verify() {
     return emitOpError("The result must be a 2D tensor memory buffer.");
   if (dstTy.getRank() != 2)
     return emitOpError("The result must be a 2D tensor memory buffer.");
-  if (dstTy.getDimSize(0) != srcTy.getDimSize(0))
-    return emitOpError("The result must have the same number of rows as the "
-                       "source.");
-  auto offset = getN();
-  if (offset & (dstTy.getDimSize(1) - 1)) {
-    return emitError("The split offset may not touch the tile");
+  auto nOffset = getN();
+  if (nOffset & (dstTy.getDimSize(1) - 1)) {
+    return emitError("The N split offset may not touch the tile");
   }
-  if (offset >= srcTy.getDimSize(1)) {
-    return emitError("The split offset may not exceed the source shape");
+  if (nOffset >= srcTy.getDimSize(1)) {
+    return emitError("The N split offset may not exceed the source shape");
+  }
+  // M-direction subslicing: the result M dim must be a multiple of blockM,
+  // and the M offset must be aligned to blockM. This restricts M-subslicing
+  // to selecting whole blocks of a multi-block (M > blockM) source.
+  auto mOffset = getM();
+  int64_t blockM = encoding.getBlockM();
+  if (dstTy.getDimSize(0) != srcTy.getDimSize(0)) {
+    if (dstTy.getDimSize(0) % blockM != 0)
+      return emitError("The result M dim must be a multiple of blockM");
+    if (mOffset % blockM != 0)
+      return emitError("The M split offset must be a multiple of blockM");
+  }
+  if (mOffset + dstTy.getDimSize(0) > srcTy.getDimSize(0)) {
+    return emitError("The M split offset + result M dim may not exceed the "
+                     "source shape");
+  }
+  if (mOffset != 0 && dstTy.getDimSize(0) == srcTy.getDimSize(0)) {
+    return emitError("Non-zero M split offset requires a smaller result M "
+                     "dim");
   }
 
   return success();
@@ -1501,7 +1517,18 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
   SmallVector<int64_t> shape(allocTy.getShape());
   shape.back() = size;
   auto subsliceType = allocTy.cloneWith(shape, allocTy.getElementType());
-  build(builder, state, subsliceType, alloc, offset);
+  build(builder, state, subsliceType, alloc, /*M=*/0, offset);
+}
+
+void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
+                           Value alloc, int mOffset, int mSize, int nOffset,
+                           int nSize) {
+  auto allocTy = cast<triton::gpu::MemDescType>(alloc.getType());
+  SmallVector<int64_t> shape(allocTy.getShape());
+  shape[shape.size() - 2] = mSize;
+  shape.back() = nSize;
+  auto subsliceType = allocTy.cloneWith(shape, allocTy.getElementType());
+  build(builder, state, subsliceType, alloc, mOffset, nOffset);
 }
 
 // -- TensormapCreateOp --

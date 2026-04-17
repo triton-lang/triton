@@ -92,13 +92,19 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   return {nRow, nCol};
 }
 
-uint32_t getTMemSubSliceOffset(MemDescType memDescType, int32_t nOffset) {
+uint32_t getTMemSubSliceOffset(MemDescType memDescType, int32_t mOffset,
+                               int32_t nOffset) {
   auto llInv = toLinearLayout(memDescType).pseudoinvert();
   auto dimNames = llvm::to_vector(llInv.getInDimNames());
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
   logicalOffsets.reserve(dimNames.size());
   for (auto dim : dimNames)
     logicalOffsets.push_back({dim, 0});
+  // The pseudoinverse maps logical (M, N) -> physical (row, col). Setting both
+  // dims gives us the combined physical offset, which works for any layout
+  // that puts M-extension data into either rows or cols.
+  assert(dimNames.size() >= 2);
+  logicalOffsets[dimNames.size() - 2].second = mOffset;
   logicalOffsets.back().second = nOffset;
 
   auto rowCol = llInv.apply(logicalOffsets);

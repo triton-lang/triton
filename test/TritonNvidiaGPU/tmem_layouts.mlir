@@ -205,6 +205,211 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
+// M-direction split-load optimization: <256x128> blockM=128 split into
+// 2x <128x128> by reshape + trans(order = [1, 2, 0]) + split. The optimization
+// rewrites this to two ttng.tmem_subslice + ttng.tmem_load pairs at M offsets
+// 0 and 128, each addressing one of the two physical blocks of the source.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [4, 2, 1], order = [2, 1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0], [128, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [0, 0, 32], [0, 0, 64]], lane = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0]], warp = [[0, 32, 0], [0, 64, 0], [1, 0, 0]], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 32, 0], [0, 64, 0]], lane = [[1, 0, 0], [2, 0, 0], [4, 0, 0], [8, 0, 0], [16, 0, 0]], warp = [[32, 0, 0], [64, 0, 0], [0, 0, 1]], block = []}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @subtile_tmem_load_m_split
+  tt.func public @subtile_tmem_load_m_split(%arg0: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> (tensor<128x128xf32, #blocked>, tensor<128x128xf32, #blocked>) {
+    // CHECK: %[[S0:.+]] = ttng.tmem_subslice %{{.+}} {N = 0 : i32}
+    // CHECK: %[[L0:.+]] = ttng.tmem_load %[[S0]] : !ttg.memdesc<128x128xf32
+    // CHECK: %[[C0:.+]] = ttg.convert_layout %[[L0]]
+    // CHECK: %[[S1:.+]] = ttng.tmem_subslice %{{.+}} {M = 128 : i32, N = 0 : i32}
+    // CHECK: %[[L1:.+]] = ttng.tmem_load %[[S1]] : !ttg.memdesc<128x128xf32
+    // CHECK: %[[C1:.+]] = ttg.convert_layout %[[L1]]
+    // CHECK: tt.return %[[C0]], %[[C1]]
+    %0 = ttng.tmem_load %arg0 : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #linear>
+    %1 = tt.reshape %0 : tensor<256x128xf32, #linear> -> tensor<2x128x128xf32, #linear1>
+    %2 = tt.trans %1 {order = array<i32: 1, 2, 0>} : tensor<2x128x128xf32, #linear1> -> tensor<128x128x2xf32, #linear2>
+    %3 = ttg.convert_layout %2 : tensor<128x128x2xf32, #linear2> -> tensor<128x128x2xf32, #blocked1>
+    %outLHS, %outRHS = tt.split %3 : tensor<128x128x2xf32, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.return %outLHS, %outRHS : tensor<128x128xf32, #blocked>, tensor<128x128xf32, #blocked>
+  }
+}
+
+// -----
+
+// M-direction join-store optimization: 2x <128x128> joined into <256x128>
+// blockM=128 by join + trans(order = [2, 0, 1]) + reshape + tmem_store.
+
+#blocked5 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+#blocked6 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [4, 2, 1], order = [2, 1, 0]}>
+#blocked7 = #ttg.blocked<{sizePerThread = [2, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 4, 2], order = [0, 2, 1]}>
+#linear = #ttg.linear<{register = [[128, 0], [0, 64], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp = [[0, 32], [1, 0], [2, 0]], block = []}>
+#tmem_dist = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0], [128, 0]], block = []}>
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @subtile_tmem_store_m_join
+  tt.func public @subtile_tmem_store_m_join(
+    %arg0: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+    %arg1: tensor<128x128xf32, #blocked5>,
+    %arg2: tensor<128x128xf32, #blocked5>
+  ) {
+    // CHECK: [[S0:%.+]] = ttng.tmem_subslice %arg0 {N = 0 : i32}
+    // CHECK: [[V0:%.+]] = ttg.convert_layout %arg1
+    // CHECK: ttng.tmem_store [[V0]], [[S0]]
+    // CHECK: [[S1:%.+]] = ttng.tmem_subslice %arg0 {M = 128 : i32, N = 0 : i32}
+    // CHECK: [[V1:%.+]] = ttg.convert_layout %arg2
+    // CHECK: ttng.tmem_store [[V1]], [[S1]]
+    %true = arith.constant true
+    %joined = tt.join %arg1, %arg2 : tensor<128x128xf32, #blocked5> -> tensor<128x128x2xf32, #blocked6>
+    %trans = tt.trans %joined {order = array<i32: 2, 0, 1>} : tensor<128x128x2xf32, #blocked6> -> tensor<2x128x128xf32, #blocked7>
+    %reshaped = tt.reshape %trans : tensor<2x128x128xf32, #blocked7> -> tensor<256x128xf32, #linear>
+    %cvt = ttg.convert_layout %reshaped : tensor<256x128xf32, #linear> -> tensor<256x128xf32, #tmem_dist>
+    ttng.tmem_store %cvt, %arg0, %true : tensor<256x128xf32, #tmem_dist> -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Same M-direction split-load as @subtile_tmem_load_m_split, but with srcM=512
+// (four stacked blockM=128 tiles). The 2-way split produces halves of M=256
+// (still a multiple of blockM=128), so the pattern fires once with M offsets
+// 0 and 256.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [4, 2, 1], order = [2, 1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [256, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0], [128, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [0, 0, 32], [0, 0, 64], [1, 0, 0]], lane = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0]], warp = [[0, 32, 0], [0, 64, 0], [0, 128, 0]], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 32, 0], [0, 64, 0], [0, 0, 1]], lane = [[1, 0, 0], [2, 0, 0], [4, 0, 0], [8, 0, 0], [16, 0, 0]], warp = [[32, 0, 0], [64, 0, 0], [128, 0, 0]], block = []}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @subtile_tmem_load_m_split_512
+  tt.func public @subtile_tmem_load_m_split_512(%arg0: !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> (tensor<256x128xf32, #blocked>, tensor<256x128xf32, #blocked>) {
+    // CHECK: %[[S0:.+]] = ttng.tmem_subslice %{{.+}} {N = 0 : i32}
+    // CHECK: %[[L0:.+]] = ttng.tmem_load %[[S0]] : !ttg.memdesc<256x128xf32
+    // CHECK: %[[C0:.+]] = ttg.convert_layout %[[L0]]
+    // CHECK: %[[S1:.+]] = ttng.tmem_subslice %{{.+}} {M = 256 : i32, N = 0 : i32}
+    // CHECK: %[[L1:.+]] = ttng.tmem_load %[[S1]] : !ttg.memdesc<256x128xf32
+    // CHECK: %[[C1:.+]] = ttg.convert_layout %[[L1]]
+    // CHECK: tt.return %[[C0]], %[[C1]]
+    %0 = ttng.tmem_load %arg0 : !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<512x128xf32, #linear>
+    %1 = tt.reshape %0 : tensor<512x128xf32, #linear> -> tensor<2x256x128xf32, #linear1>
+    %2 = tt.trans %1 {order = array<i32: 1, 2, 0>} : tensor<2x256x128xf32, #linear1> -> tensor<256x128x2xf32, #linear2>
+    %3 = ttg.convert_layout %2 : tensor<256x128x2xf32, #linear2> -> tensor<256x128x2xf32, #blocked1>
+    %outLHS, %outRHS = tt.split %3 : tensor<256x128x2xf32, #blocked1> -> tensor<256x128xf32, #blocked>
+    tt.return %outLHS, %outRHS : tensor<256x128xf32, #blocked>, tensor<256x128xf32, #blocked>
+  }
+}
+
+// -----
+
+// M-direction split-load with 4 warps: srcM=256, blockM=128. With only 4 warps
+// the natural TMEM-load layout uses fewer warp basis vectors and one extra
+// register basis to extend M coverage from 128 (4 warps x 32) to 256.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [0, 0, 32], [0, 0, 64], [1, 0, 0]], lane = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0]], warp = [[0, 32, 0], [0, 64, 0]], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 32, 0], [0, 64, 0], [0, 0, 1]], lane = [[1, 0, 0], [2, 0, 0], [4, 0, 0], [8, 0, 0], [16, 0, 0]], warp = [[32, 0, 0], [64, 0, 0]], block = []}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @subtile_tmem_load_m_split_4warp
+  tt.func public @subtile_tmem_load_m_split_4warp(%arg0: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> (tensor<128x128xf32, #blocked>, tensor<128x128xf32, #blocked>) {
+    // CHECK: %[[S0:.+]] = ttng.tmem_subslice %{{.+}} {N = 0 : i32}
+    // CHECK: %[[L0:.+]] = ttng.tmem_load %[[S0]] : !ttg.memdesc<128x128xf32
+    // CHECK: %[[C0:.+]] = ttg.convert_layout %[[L0]]
+    // CHECK: %[[S1:.+]] = ttng.tmem_subslice %{{.+}} {M = 128 : i32, N = 0 : i32}
+    // CHECK: %[[L1:.+]] = ttng.tmem_load %[[S1]] : !ttg.memdesc<128x128xf32
+    // CHECK: %[[C1:.+]] = ttg.convert_layout %[[L1]]
+    // CHECK: tt.return %[[C0]], %[[C1]]
+    %0 = ttng.tmem_load %arg0 : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #linear>
+    %1 = tt.reshape %0 : tensor<256x128xf32, #linear> -> tensor<2x128x128xf32, #linear1>
+    %2 = tt.trans %1 {order = array<i32: 1, 2, 0>} : tensor<2x128x128xf32, #linear1> -> tensor<128x128x2xf32, #linear2>
+    %3 = ttg.convert_layout %2 : tensor<128x128x2xf32, #linear2> -> tensor<128x128x2xf32, #blocked1>
+    %outLHS, %outRHS = tt.split %3 : tensor<128x128x2xf32, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.return %outLHS, %outRHS : tensor<128x128xf32, #blocked>, tensor<128x128xf32, #blocked>
+  }
+}
+
+// -----
+
+// M-direction split-load with blockM=64: srcM=128 = 2 * blockM, 4 warps. The
+// natural TMEM-load layout for blockM=64 places one lane bit in N (col 64) and
+// uses warp bases [32,0],[16,0] to interleave the two physical sub-block halves
+// across the 128 TMEM rows. Splitting halves it into two single-block <64,128>
+// loads at M offsets 0 and 64.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [64, 0]], warp = [[16, 0], [32, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [0, 0, 32], [0, 0, 64]], lane = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [1, 0, 0]], warp = [[0, 16, 0], [0, 32, 0]], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 32, 0], [0, 64, 0]], lane = [[1, 0, 0], [2, 0, 0], [4, 0, 0], [8, 0, 0], [0, 0, 1]], warp = [[16, 0, 0], [32, 0, 0]], block = []}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @subtile_tmem_load_m_split_blockm64
+  tt.func public @subtile_tmem_load_m_split_blockm64(%arg0: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> (tensor<64x128xf32, #blocked>, tensor<64x128xf32, #blocked>) {
+    // CHECK: %[[S0:.+]] = ttng.tmem_subslice %{{.+}} {N = 0 : i32}
+    // CHECK: %[[L0:.+]] = ttng.tmem_load %[[S0]] : !ttg.memdesc<64x128xf32
+    // CHECK: %[[C0:.+]] = ttg.convert_layout %[[L0]]
+    // CHECK: %[[S1:.+]] = ttng.tmem_subslice %{{.+}} {M = 64 : i32, N = 0 : i32}
+    // CHECK: %[[L1:.+]] = ttng.tmem_load %[[S1]] : !ttg.memdesc<64x128xf32
+    // CHECK: %[[C1:.+]] = ttg.convert_layout %[[L1]]
+    // CHECK: tt.return %[[C0]], %[[C1]]
+    %0 = ttng.tmem_load %arg0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #linear>
+    %1 = tt.reshape %0 : tensor<128x128xf32, #linear> -> tensor<2x64x128xf32, #linear1>
+    %2 = tt.trans %1 {order = array<i32: 1, 2, 0>} : tensor<2x64x128xf32, #linear1> -> tensor<64x128x2xf32, #linear2>
+    %3 = ttg.convert_layout %2 : tensor<64x128x2xf32, #linear2> -> tensor<64x128x2xf32, #blocked1>
+    %outLHS, %outRHS = tt.split %3 : tensor<64x128x2xf32, #blocked1> -> tensor<64x128xf32, #blocked>
+    tt.return %outLHS, %outRHS : tensor<64x128xf32, #blocked>, tensor<64x128xf32, #blocked>
+  }
+}
+
+// -----
+
+// M-direction join-store with 4 warps: same as @subtile_tmem_store_m_join but
+// with warpsPerCTA cut in half. Verifies the store rewrite is independent of
+// warp count.
+
+#blocked5 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked6 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+#blocked7 = #ttg.blocked<{sizePerThread = [2, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 4, 1], order = [0, 2, 1]}>
+#linear = #ttg.linear<{register = [[128, 0], [0, 32], [0, 64], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp = [[1, 0], [2, 0]], block = []}>
+#tmem_dist = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = []}>
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @subtile_tmem_store_m_join_4warp
+  tt.func public @subtile_tmem_store_m_join_4warp(
+    %arg0: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+    %arg1: tensor<128x128xf32, #blocked5>,
+    %arg2: tensor<128x128xf32, #blocked5>
+  ) {
+    // CHECK: [[S0:%.+]] = ttng.tmem_subslice %arg0 {N = 0 : i32}
+    // CHECK: [[V0:%.+]] = ttg.convert_layout %arg1
+    // CHECK: ttng.tmem_store [[V0]], [[S0]]
+    // CHECK: [[S1:%.+]] = ttng.tmem_subslice %arg0 {M = 128 : i32, N = 0 : i32}
+    // CHECK: [[V1:%.+]] = ttg.convert_layout %arg2
+    // CHECK: ttng.tmem_store [[V1]], [[S1]]
+    %true = arith.constant true
+    %joined = tt.join %arg1, %arg2 : tensor<128x128xf32, #blocked5> -> tensor<128x128x2xf32, #blocked6>
+    %trans = tt.trans %joined {order = array<i32: 2, 0, 1>} : tensor<128x128x2xf32, #blocked6> -> tensor<2x128x128xf32, #blocked7>
+    %reshaped = tt.reshape %trans : tensor<2x128x128xf32, #blocked7> -> tensor<256x128xf32, #linear>
+    %cvt = ttg.convert_layout %reshaped : tensor<256x128xf32, #linear> -> tensor<256x128xf32, #tmem_dist>
+    ttng.tmem_store %cvt, %arg0, %true : tensor<256x128xf32, #tmem_dist> -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 // Same join-store optimization as @subtile_tmem_store, but with the tensor M
 // dim spanning two stacked blockM=128 tiles (mDim=256) under 8 warps.
 
