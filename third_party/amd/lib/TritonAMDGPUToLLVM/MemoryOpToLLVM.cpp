@@ -187,7 +187,7 @@ private:
 
     // If we are lowering a subslice, the subslice offsets shall not touch the
     // contiguous part of the tile
-    if (maskSpanAffineOffset & (tile.getOutDimSizeLog2(kOffset) - 1)) {
+    if (maskSpanAffineOffset & (tile.getOutDimSize(kOffset) - 1)) {
       return failure();
     }
 
