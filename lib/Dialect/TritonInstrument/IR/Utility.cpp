@@ -591,8 +591,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
   if (numCTAs > 1) {
     ClusterBarrierOp::create(b, b.getLoc());
   } else {
-    BarrierOp::create(b, b.getLoc(),
-                      AddrSpace::GlobalRead | AddrSpace::GlobalWrite);
+    BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
   }
   lock.insert(entryRegion, {lockVal, lockVal.getType()});
   passToWarpSpecialize(entryPoint, lock.at(entryRegion), lock, captureCounter);
