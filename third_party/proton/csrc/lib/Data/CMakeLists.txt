@@ -1,5 +1,8 @@
 add_proton_library(ProtonData
+  Dump/ChromeTraceDump.cpp
+  Dump/PerfettoTraceDump.cpp
   Data.cpp
+  Dump/TraceDataDump.cpp
   Metric.cpp
   TraceData.cpp
   TreeData.cpp

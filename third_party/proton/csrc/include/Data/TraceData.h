@@ -35,6 +35,10 @@ protected:
   void exitScope(const Scope &scope) override final;
 
 private:
+  template <typename CycleHandler, typename KernelHandler>
+  void withTraceData(size_t phase, CycleHandler &&onCycleTrace,
+                     KernelHandler &&onTraceData) const;
+
   // Data
   void doDump(std::ostream &os, OutputFormat outputFormat,
               size_t phase) const override;
