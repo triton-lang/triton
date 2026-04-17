@@ -448,47 +448,6 @@ def test_multi_session(tmp_path: pathlib.Path):
         assert "cycles" in kernel_frame["children"][0]["metrics"]
 
 
-def test_cycle_metric_perfetto_trace_unsupported(tmp_path: pathlib.Path):
-
-    @triton.jit
-    def add_kernel(
-        x_ptr,
-        y_ptr,
-        output_ptr,
-        n_elements,
-        BLOCK_SIZE: tl.constexpr,
-    ):
-        with pl.scope("kernel"):
-            pid = tl.program_id(axis=0)
-            block_start = pid * BLOCK_SIZE
-            offsets = block_start + tl.arange(0, BLOCK_SIZE)
-            mask = offsets < n_elements
-            with pl.scope("load_ops"):
-                x = tl.load(x_ptr + offsets, mask=mask)
-                y = tl.load(y_ptr + offsets, mask=mask)
-            output = x + y
-            tl.store(output_ptr + offsets, output, mask=mask)
-
-    size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
-    output = torch.empty_like(x)
-    temp_file = tmp_path / "test_cycle_metric_perfetto_trace_unsupported.hatchet"
-    proton.start(
-        str(temp_file.with_suffix("")),
-        backend="instrumentation",
-        mode="default:metric_type=cycle",
-    )
-    add_kernel[(1, 1, 1)](x, y, output, output.numel(), BLOCK_SIZE=1024,
-                          num_warps=1)
-
-    with pytest.raises(
-        RuntimeError,
-        match="cycle metric Perfetto traces are not supported yet",
-    ):
-        proton.finalize(output_format="perfetto_trace")
-
-
 def test_autotune(tmp_path: pathlib.Path):
 
     def metadata_fn(
