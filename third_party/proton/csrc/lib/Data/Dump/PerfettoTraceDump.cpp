@@ -267,13 +267,13 @@ void appendTrackEventPacket(ProtoWriter &trace, uint64_t timestampNs,
   ProtoWriter trackEvent;
   trackEvent.writeUInt32(/*TrackEvent.type=*/9, type);
   trackEvent.writeUInt64(/*TrackEvent.track_uuid=*/11, trackUuid);
+  trackEvent.writeUInt64(/*TrackEvent.name_iid=*/10,
+                         internedNames.eventNames.get(name));
   if (type == 1) {
     if (!category.empty()) {
       trackEvent.writeUInt64(/*TrackEvent.category_iids=*/3,
                              internedNames.eventCategories.get(category));
     }
-    trackEvent.writeUInt64(/*TrackEvent.name_iid=*/10,
-                           internedNames.eventNames.get(name));
     for (const auto &annotation : annotations) {
       ProtoWriter message;
       message.writeUInt64(
