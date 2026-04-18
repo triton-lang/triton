@@ -60,6 +60,8 @@ def _perfetto_trace_to_python(path: str):
     trace = {
         "has_track_descriptor": False,
         "has_track_event": False,
+        "event_names": {},
+        "annotation_names": {},
         "track_events": [],
     }
     event_names = {}
@@ -99,23 +101,38 @@ def _perfetto_trace_to_python(path: str):
             if packet_field_id != 11 or packet_wire_type != 2:
                 continue
 
-            event = {"type": None, "name": None, "call_stack": None}
+            event = {
+                "type": None,
+                "name_iid": None,
+                "name": None,
+                "call_stack": None,
+                "annotations": {},
+            }
             for event_field_id, event_wire_type, event_value in _iter_proto_fields(value):
                 if event_field_id == 9 and event_wire_type == 0:
                     event["type"] = event_value
                 elif event_field_id == 10 and event_wire_type == 0:
-                    event["name"] = event_names.get(event_value)
+                    event["name_iid"] = event_value
                 elif event_field_id == 4 and event_wire_type == 2:
-                    annotation_name = None
+                    annotation_name_iid = None
                     annotation_value = None
                     for annotation_field_id, annotation_wire_type, annotation_field_value in _iter_proto_fields(event_value):
                         if annotation_field_id == 1 and annotation_wire_type == 0:
-                            annotation_name = annotation_names.get(annotation_field_value)
+                            annotation_name_iid = annotation_field_value
                         elif annotation_field_id == 6 and annotation_wire_type == 2:
                             annotation_value = annotation_field_value.decode("utf-8")
-                    if annotation_name == "call_stack":
-                        event["call_stack"] = annotation_value
+                    if annotation_name_iid is not None:
+                        event["annotations"][annotation_name_iid] = annotation_value
             trace["track_events"].append(event)
+
+    trace["event_names"] = event_names
+    trace["annotation_names"] = annotation_names
+    call_stack_iid = next((iid for iid, name in annotation_names.items() if name == "call_stack"), None)
+    for event in trace["track_events"]:
+        if event["name_iid"] is not None:
+            event["name"] = event_names.get(event["name_iid"])
+        if call_stack_iid is not None:
+            event["call_stack"] = event["annotations"].get(call_stack_iid)
 
     return trace
 
