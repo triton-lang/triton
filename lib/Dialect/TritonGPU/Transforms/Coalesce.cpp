@@ -69,6 +69,8 @@ static void pickDescriptorLoadStoreLayout(
 }
 
 struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
+  using impl::TritonGPUCoalesceBase<CoalescePass>::TritonGPUCoalesceBase;
+
   static Type getNewType(Type type, Attribute encoding) {
     RankedTensorType tensorType = cast<RankedTensorType>(type);
     return tensorType.cloneWithEncoding(encoding);
@@ -100,7 +102,8 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       SmallVector<int64_t> shapePerCTA = getShapePerCTA(tensorType);
       auto layout =
           buildCoalescedEncoding(axisInfoAnalysis, curr, numWarps,
-                                 threadsPerWarp, cgaLayout, shapePerCTA);
+                                 threadsPerWarp, cgaLayout, shapePerCTA,
+                                 maxVecBits);
       layoutMap[curr] = layout;
     });
 

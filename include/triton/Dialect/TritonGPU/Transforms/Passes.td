@@ -244,6 +244,11 @@ def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+
+  let options = [
+    Option<"maxVecBits", "max-vec-bits", "unsigned", /*default*/"128",
+           "Maximum vector width in bits for load/store coalescing">
+  ];
 }
 
 

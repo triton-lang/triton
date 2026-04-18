@@ -82,8 +82,17 @@ def naive_softmax(x):
 
 
 @triton.jit
-def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols, BLOCK_SIZE: tl.constexpr,
-                   num_stages: tl.constexpr):
+def softmax_kernel(
+    output_ptr,
+    input_ptr,
+    input_row_stride,
+    output_row_stride,
+    n_rows,
+    n_cols,
+    BLOCK_SIZE: tl.constexpr,
+    num_stages: tl.constexpr,
+    MAX_DIVISIBILITY: tl.constexpr,
+):
     # starting row of the program
     row_start = tl.program_id(0)
     row_step = tl.num_programs(0)
@@ -94,6 +103,11 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
         # row in a single block
         col_offsets = tl.arange(0, BLOCK_SIZE)
         input_ptrs = row_start_ptr + col_offsets
+        # Apply hints to the pointer tensor to enable wider vectorization (e.g., 256-bit on Blackwell).
+        # Hints on the pointer tensor override the AddPtrOp's computed AxisInfo, bypassing the
+        # gcd(ptr_div, offset_div * elemSize) bottleneck that caps vectorization at 128 bits.
+        if MAX_DIVISIBILITY > 1:
+            input_ptrs = tl.max_contiguous(tl.multiple_of(input_ptrs, MAX_DIVISIBILITY), MAX_DIVISIBILITY)
         # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
         mask = col_offsets < n_cols
         row = tl.load(input_ptrs, mask=mask, other=-float('inf'))
@@ -106,6 +120,8 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
         # Write back output to DRAM
         output_row_start_ptr = output_ptr + row_idx * output_row_stride
         output_ptrs = output_row_start_ptr + col_offsets
+        if MAX_DIVISIBILITY > 1:
+            output_ptrs = tl.max_contiguous(tl.multiple_of(output_ptrs, MAX_DIVISIBILITY), MAX_DIVISIBILITY)
         tl.store(output_ptrs, softmax_output, mask=mask)
 
 
@@ -127,6 +143,9 @@ def softmax(x):
     # The block size of each loop iteration is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
 
+    # Allocate output
+    y = torch.empty_like(x)
+
     # Another trick we can use is to ask the compiler to use more threads per row by
     # increasing the number of warps (`num_warps`) over which each row is distributed.
     # You will see in the next tutorial how to auto-tune this value in a more natural
@@ -136,12 +155,32 @@ def softmax(x):
     # Number of software pipelining stages.
     num_stages = 4 if SIZE_SMEM > 200000 else 2
 
-    # Allocate output
-    y = torch.empty_like(x)
+    # On Blackwell (sm >= 100), when the base pointers are 32-byte aligned
+    # and the non-contiguous dimension stride is 32-element aligned, enable
+    # 256-bit vectorized loads/stores and bypass software pipelining to use
+    # ld.global instead of cp.async.
+    MAX_DIVISIBILITY = 1
+    is_blackwell = torch.cuda.is_available() and torch.cuda.get_device_capability(x.device)[0] >= 10
+    ptrs_aligned = x.data_ptr() % 32 == 0 and y.data_ptr() % 32 == 0
+    strides_aligned = x.stride(0) % 32 == 0 and y.stride(0) % 32 == 0
+    if is_blackwell and ptrs_aligned and strides_aligned:
+        MAX_DIVISIBILITY = 32
+        num_stages = 1  # bypass cp.async to enable 256-bit ld.global
 
     # pre-compile kernel to get register usage and compute thread occupancy.
-    kernel = softmax_kernel.warmup(y, x, x.stride(0), y.stride(0), n_rows, n_cols, BLOCK_SIZE=BLOCK_SIZE,
-                                   num_stages=num_stages, num_warps=num_warps, grid=(1, ))
+    kernel = softmax_kernel.warmup(
+        y,
+        x,
+        x.stride(0),
+        y.stride(0),
+        n_rows,
+        n_cols,
+        BLOCK_SIZE=BLOCK_SIZE,
+        num_stages=num_stages,
+        num_warps=num_warps,
+        MAX_DIVISIBILITY=MAX_DIVISIBILITY,
+        grid=(1,),
+    )
     kernel._init_handles()
     n_regs = kernel.n_regs
     size_smem = kernel.metadata.shared
@@ -171,7 +210,9 @@ def softmax(x):
     num_programs = min(num_programs, n_rows)
 
     # Create a number of persistent programs.
-    kernel[(num_programs, 1, 1)](y, x, x.stride(0), y.stride(0), n_rows, n_cols, BLOCK_SIZE, num_stages)
+    kernel[(num_programs, 1, 1)](
+        y, x, x.stride(0), y.stride(0), n_rows, n_cols, BLOCK_SIZE, num_stages, MAX_DIVISIBILITY
+    )
     return y
 
 
