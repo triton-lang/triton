@@ -54,6 +54,26 @@ public:
     return {iid, true};
   }
 
+  void internWithIid(const std::string &name, uint64_t iid) {
+    if (auto it = nameToIid.find(name); it != nameToIid.end()) {
+      if (it->second != iid) {
+        throw std::logic_error("Perfetto name interned with mismatched iid: " +
+                               name);
+      }
+      return;
+    }
+    if (auto it = iidToName.find(iid); it != iidToName.end()) {
+      if (it->second != name) {
+        throw std::logic_error("Perfetto iid interned with mismatched name");
+      }
+      return;
+    }
+
+    nameToIid.emplace(name, iid);
+    iidToName.emplace(iid, name);
+    nextIid = std::max(nextIid, iid + 1);
+  }
+
   uint64_t get(const std::string &name) const {
     auto it = nameToIid.find(name);
     if (it == nameToIid.end()) {
@@ -180,22 +200,22 @@ void internSliceEvent(PerfettoInternedNames &internedNames,
                       PerfettoInternedNames &newInternedNames,
                       const std::string &name, const std::string &category,
                       const std::vector<PerfettoAnnotation> &annotations) {
-  if (const auto [_, inserted] = internedNames.eventNames.intern(name);
+  if (const auto [iid, inserted] = internedNames.eventNames.intern(name);
       inserted) {
-    newInternedNames.eventNames.intern(name);
+    newInternedNames.eventNames.internWithIid(name, iid);
   }
   if (!category.empty()) {
-    if (const auto [_, inserted] =
+    if (const auto [iid, inserted] =
             internedNames.eventCategories.intern(category);
         inserted) {
-      newInternedNames.eventCategories.intern(category);
+      newInternedNames.eventCategories.internWithIid(category, iid);
     }
   }
   for (const auto &annotation : annotations) {
-    if (const auto [_, inserted] =
+    if (const auto [iid, inserted] =
             internedNames.debugAnnotationNames.intern(annotation.name);
         inserted) {
-      newInternedNames.debugAnnotationNames.intern(annotation.name);
+      newInternedNames.debugAnnotationNames.internWithIid(annotation.name, iid);
     }
   }
 }
