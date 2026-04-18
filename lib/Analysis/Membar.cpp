@@ -3,13 +3,131 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include <deque>
 
 namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace mlir {
+
+static std::optional<int64_t> getConstantIntValue(Value v) {
+  APInt val;
+  if (matchPattern(v, m_ConstantInt(&val)))
+    return val.getSExtValue();
+  return std::nullopt;
+}
+
+static BufferIndexExpr analyzeBufferIndex(Value indexValue);
+
+/// Match the modular wrap pattern emitted by the pipeliner:
+///   select(cmpi sge (addi(base, C), N), zero, addi(base, C))
+///   select(cmpi slt (addi(base, C), N), addi(base, C), zero)
+/// Both represent (base + C) % N.
+static std::optional<BufferIndexExpr>
+matchModuloPattern(arith::SelectOp selectOp) {
+  auto cmp = selectOp.getCondition().getDefiningOp<arith::CmpIOp>();
+  if (!cmp)
+    return std::nullopt;
+
+  Value wrapVal, noWrapVal;
+  if (cmp.getPredicate() == arith::CmpIPredicate::sge) {
+    wrapVal = selectOp.getTrueValue();
+    noWrapVal = selectOp.getFalseValue();
+  } else if (cmp.getPredicate() == arith::CmpIPredicate::slt) {
+    noWrapVal = selectOp.getTrueValue();
+    wrapVal = selectOp.getFalseValue();
+  } else {
+    return std::nullopt;
+  }
+
+  // The wrap arm must be zero so the wrapped result equals (base + C) mod N.
+  // A non-zero wrap value would represent (base + C) - N + K, which cannot be
+  // represented by (base, offset, modulus) and would be unsound to accept.
+  auto wrapConst = getConstantIntValue(wrapVal);
+  if (!wrapConst || *wrapConst != 0)
+    return std::nullopt;
+
+  auto addOp = noWrapVal.getDefiningOp<arith::AddIOp>();
+  if (!addOp || cmp.getLhs() != addOp.getResult())
+    return std::nullopt;
+
+  // Try constant on RHS then LHS (addi is commutative).
+  std::optional<int64_t> c = getConstantIntValue(addOp.getRhs());
+  Value base = addOp.getLhs();
+  if (!c) {
+    c = getConstantIntValue(addOp.getLhs());
+    base = addOp.getRhs();
+  }
+  if (!c)
+    return std::nullopt;
+
+  // The modulus N comes from cmpi(addi(...), N). Refuse to match if N
+  // is not a positive compile-time constant — without a known positive
+  // modulus, offsets extracted from within the pattern cannot be safely
+  // compared.
+  auto mod = getConstantIntValue(cmp.getRhs());
+  if (!mod || *mod <= 0)
+    return std::nullopt;
+
+  auto baseExpr = analyzeBufferIndex(base);
+  // Nested moduli cannot be represented by a single (base, offset, mod)
+  // triple: ((x mod M) + C) mod N is not equivalent to (x + C) mod N in
+  // general. Fall back to an opaque expression.
+  if (baseExpr.modulus)
+    return std::nullopt;
+  BufferIndexExpr result{baseExpr.baseValue, baseExpr.constantOffset + *c};
+  result.modulus = *mod;
+  return result;
+}
+
+/// Decompose a buffer index value into BufferIndexExpr{base, offset}.
+/// Handles: constants, addi(base, const), and the pipeliner's modular wrap.
+static BufferIndexExpr analyzeBufferIndex(Value indexValue) {
+  if (auto c = getConstantIntValue(indexValue))
+    return BufferIndexExpr{nullptr, *c};
+
+  if (auto addOp = indexValue.getDefiningOp<arith::AddIOp>()) {
+    auto composeWithConstant = [&](Value nonConst,
+                                   int64_t constant) -> BufferIndexExpr {
+      auto baseExpr = analyzeBufferIndex(nonConst);
+      // (x mod N) + C is not representable as (base, offset, mod). Returning
+      // an opaque expression rooted at this addi is sound but conservative.
+      if (baseExpr.modulus)
+        return BufferIndexExpr{indexValue, 0};
+      return {baseExpr.baseValue, baseExpr.constantOffset + constant};
+    };
+    if (auto offset = getConstantIntValue(addOp.getRhs()))
+      return composeWithConstant(addOp.getLhs(), *offset);
+    if (auto offset = getConstantIntValue(addOp.getLhs()))
+      return composeWithConstant(addOp.getRhs(), *offset);
+  }
+
+  if (auto selectOp = indexValue.getDefiningOp<arith::SelectOp>())
+    if (auto result = matchModuloPattern(selectOp))
+      return *result;
+
+  // remsi(x, N) is the canonical form of modular wrap — strip it and
+  // record the modulus so isProvablyDifferentFrom compares mod N.
+  // Only strip when N is a positive compile-time constant; a dynamic or
+  // non-positive modulus would leave the expression without meaningful
+  // modulus protection.
+  if (auto remOp = indexValue.getDefiningOp<arith::RemSIOp>()) {
+    if (auto mod = getConstantIntValue(remOp.getRhs()); mod && *mod > 0) {
+      auto result = analyzeBufferIndex(remOp.getLhs());
+      // An inner modulus would be overwritten; fall back to opaque to
+      // preserve soundness (see note in matchModuloPattern).
+      if (result.modulus)
+        return BufferIndexExpr{indexValue, 0};
+      result.modulus = *mod;
+      return result;
+    }
+  }
+
+  return BufferIndexExpr{indexValue, 0};
+}
 
 AllocationSlice::AllocationSlice(Value value,
                                  Interval<size_t> allocationInterval,
@@ -28,12 +146,33 @@ AllocationSlice::AllocationSlice(Value value,
       subsliceOffsets = SmallVector<int64_t>(subslice.getOffsets());
     }
   }
+
+  // Populate the buffer-index expression only for MemDescIndexOp, which
+  // selects an entire slot of a multi-buffered allocation. MemDescSubsliceOp
+  // describes a sub-region within a slot and is already captured by
+  // subsliceOffsets; the two pieces of information are combined in
+  // intersects() below.
+  if (auto indexOp = value.getDefiningOp<triton::gpu::MemDescIndexOp>()) {
+    bufferIndexExpr = analyzeBufferIndex(indexOp.getIndex());
+  }
 }
 
 bool AllocationSlice::intersects(const AllocationSlice &other) const {
   // Disjoint intervals don't overlap
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
+
+  // Whole-slot disjointness: if both slices have buffer index expressions
+  // and neither is loop-carried, use expression matching to prove they
+  // target different slots within a single iteration. If this doesn't
+  // prove disjointness, fall through to the per-dimension subslice check
+  // below, which can still catch partial-slot disjointness within the
+  // same slot.
+  if (bufferIndexExpr && other.bufferIndexExpr && !isLoopCarried &&
+      !other.isLoopCarried) {
+    if (bufferIndexExpr->isProvablyDifferentFrom(*other.bufferIndexExpr))
+      return false;
+  }
 
   // If access types are unknown, assume intersection
   if (!accessTy || !other.accessTy)
@@ -90,6 +229,17 @@ void AllocationSlice::print(raw_ostream &os) const {
   } else {
     os << "? layout=unknown";
   }
+
+  if (bufferIndexExpr) {
+    if (bufferIndexExpr->hasBase()) {
+      os << " bufIdx=(" << bufferIndexExpr->baseValue << "+"
+         << bufferIndexExpr->constantOffset << ")";
+    } else {
+      os << " bufIdx=const(" << bufferIndexExpr->constantOffset << ")";
+    }
+    if (bufferIndexExpr->modulus)
+      os << "%" << *bufferIndexExpr->modulus;
+  }
 }
 
 void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
@@ -123,6 +273,10 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   std::deque<VirtualBlock> blockList;
   // Start the analysis from the entry block of the function.
   blockList.emplace_back(&funcOp.getBlocks().front(), Block::iterator());
+  // Dominance info is used to classify successor edges as backedges: an edge
+  // from `from` to `successor` is a backedge iff `successor` dominates `from`.
+  // Built once per function since the CFG is not modified during resolve().
+  DominanceInfo domInfo(funcOp);
 
   // A fixed point algorithm
   while (!blockList.empty()) {
@@ -130,7 +284,7 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     blockList.pop_front();
     // Make a copy of the inputblockInfo but not update
     auto inputBlockInfo = inputBlockInfoMap[block];
-    SmallVector<VirtualBlock> successors;
+    SmallVector<SuccessorInfo> successors;
     Block::iterator startIt =
         block.second.isValid() ? std::next(block.second) : block.first->begin();
     for (Operation &op : llvm::make_range(startIt, block.first->end())) {
@@ -140,7 +294,7 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
       update(&op, &inputBlockInfo, funcBlockInfoMap, builder);
       if (op.hasTrait<OpTrait::IsTerminator>() ||
           isa<RegionBranchOpInterface>(op)) {
-        visitTerminator(&op, successors);
+        visitTerminator(&op, domInfo, successors);
         break;
       }
     }
@@ -154,10 +308,15 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     // Update the current block. The block transfer function is not monotonic,
     // so overwrite the output state entirely.
     outputBlockInfoMap[block] = inputBlockInfo;
-    // Update the successors
-    for (VirtualBlock successor : successors) {
-      inputBlockInfoMap[successor].join(outputBlockInfoMap[block]);
-      blockList.emplace_back(successor);
+
+    for (const auto &successor : successors) {
+      if (successor.isBackedge) {
+        inputBlockInfoMap[successor.block].joinLoopCarried(
+            outputBlockInfoMap[block]);
+      } else {
+        inputBlockInfoMap[successor.block].join(outputBlockInfoMap[block]);
+      }
+      blockList.emplace_back(successor.block);
     }
   }
 
@@ -186,47 +345,77 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
 }
 
 void MembarOrFenceAnalysis::visitTerminator(
-    Operation *op, SmallVector<VirtualBlock> &successors) {
+    Operation *op, DominanceInfo &domInfo,
+    SmallVector<SuccessorInfo> &successors) {
+  // Case 1: plain CFG branch (cf.br, cf.cond_br, ...). Each successor is
+  // another block in the same region; it's a backedge iff the successor
+  // dominates the source block.
   if (isa<BranchOpInterface>(op)) {
-    // Collect the block successors of the branch.
-    for (Block *successor : op->getSuccessors())
-      successors.emplace_back(successor, Block::iterator());
+    Block *from = op->getBlock();
+    for (Block *successor : op->getSuccessors()) {
+      bool isBackedge = false;
+      if (successor->getParent() == from->getParent())
+        isBackedge = domInfo.dominates(successor, from);
+      successors.push_back({{successor, Block::iterator()}, isBackedge});
+    }
     return;
   }
 
+  // Case 2: region-branching op encountered as a regular op in the block
+  // (e.g. scf.for, scf.if). The op itself ends the current virtual block;
+  // successors are either the first block of one of its regions (entering
+  // the region) or the op's own parent block (exiting the op).
   if (auto br = dyn_cast<RegionBranchOpInterface>(op)) {
-    // The successors of an operation with regions can be queried via an
-    // interface. The operation branches to the entry blocks of its region
-    // successors. It can also branch to after itself.
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
+    Block *from = op->getBlock();
     for (RegionSuccessor &region : regions) {
       if (region.isParent()) {
-        successors.emplace_back(br->getBlock(), br->getIterator());
+        Block *successor = br->getBlock();
+        bool isBackedge = false;
+        if (successor->getParent() == from->getParent())
+          isBackedge = domInfo.dominates(successor, from);
+        successors.push_back({{successor, br->getIterator()}, isBackedge});
       } else {
         Block &block = region.getSuccessor()->front();
-        successors.emplace_back(&block, Block::iterator());
+        bool isBackedge = false;
+        if (block.getParent() == from->getParent())
+          isBackedge = domInfo.dominates(&block, from);
+        successors.push_back({{&block, Block::iterator()}, isBackedge});
       }
     }
     return;
   }
 
+  // Case 3: terminator of a region inside a region-branching op
+  // (e.g. scf.yield inside scf.for). Successors are either the first
+  // block of another region (e.g. re-entering the loop body, a backedge)
+  // or the parent op's continuation block (exiting the region).
+  //
   // FIXME: `ReturnLike` adds `RegionBranchTerminatorOpInterface` for some
   // reason. Check that the parent is actually a `RegionBranchOpInterface`.
   auto br = dyn_cast<RegionBranchTerminatorOpInterface>(op);
   if (br && isa<RegionBranchOpInterface>(br->getParentOp())) {
-    // Check the successors of a region branch terminator. It can branch to
-    // another region of its parent operation or to after the parent op.
     SmallVector<Attribute> operands(br->getNumOperands());
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(operands, regions);
-    for (RegionSuccessor &region : regions) {
+    Region *parentRegion = br->getParentRegion();
+    Block *from = op->getBlock();
+
+    for (const RegionSuccessor &region : regions) {
       if (region.isParent()) {
         Operation *parent = br->getParentOp();
-        successors.emplace_back(parent->getBlock(), parent->getIterator());
+        Block *successor = parent->getBlock();
+        bool isBackedge = false;
+        if (successor->getParent() == from->getParent())
+          isBackedge = domInfo.dominates(successor, from);
+        successors.push_back({{successor, parent->getIterator()}, isBackedge});
       } else {
         Block &block = region.getSuccessor()->front();
-        successors.emplace_back(&block, Block::iterator());
+        bool isBackedge = (region.getSuccessor() == parentRegion);
+        if (block.getParent() == from->getParent())
+          isBackedge = domInfo.dominates(&block, from);
+        successors.push_back({{&block, Block::iterator()}, isBackedge});
       }
     }
     return;

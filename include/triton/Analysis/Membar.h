@@ -3,6 +3,7 @@
 
 #include "Allocation.h"
 
+#include "mlir/IR/Dominance.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
 #include <set>
@@ -24,6 +25,65 @@ using MembarFilterFn =
 using MembarSliceFilterFn =
     std::function<bool(const AllocationSlice &, const AllocationSlice &,
                        bool /*lhsIsRead*/, bool /*rhsIsRead*/, Allocation *)>;
+
+/// Models a buffer index expression of the form (baseValue + constantOffset),
+/// optionally under a known modulus.
+/// Enables proving that two accesses target different buffer slots within the
+/// same loop iteration. For example:
+///   - Read from slot[i]   -> {base=i, offset=0}
+///   - Write to slot[i+1]  -> {base=i, offset=1}
+/// Same base, different offsets -> provably disjoint.
+///
+/// When the index is wrapped by a modular operation (remsi or select/cmpi),
+/// the modulus is recorded so that offsets are compared modulo that value.
+///
+/// Correctness relies on the SSA-identity invariant: two expressions with the
+/// same baseValue refer to the same runtime integer *within a single
+/// execution of the enclosing region*. Across a loop backedge the same SSA
+/// value (typically a for-loop iter_arg) denotes different runtime values on
+/// different iterations, so cross-iteration hazards are handled separately
+/// via the isLoopCarried flag on AllocationSlice, which disables this
+/// expression-based shortcut.
+struct BufferIndexExpr {
+  Value baseValue;
+  int64_t constantOffset = 0;
+  std::optional<int64_t> modulus;
+
+  bool hasBase() const { return baseValue != nullptr; }
+
+  /// Returns true only if both expressions provably refer to different buffer
+  /// slots: same base value, and offsets that differ (modulo the buffer count
+  /// when a modulus is known).
+  bool isProvablyDifferentFrom(const BufferIndexExpr &other) const {
+    if (baseValue != other.baseValue)
+      return false;
+    if (modulus || other.modulus) {
+      if (modulus != other.modulus)
+        return false;
+      int64_t m = *modulus;
+      // Euclidean normalization: map each offset into [0, m) so that
+      // negative constants compare correctly against positive ones.
+      int64_t a = ((constantOffset % m) + m) % m;
+      int64_t b = ((other.constantOffset % m) + m) % m;
+      return a != b;
+    }
+    return constantOffset != other.constantOffset;
+  }
+
+  bool operator==(const BufferIndexExpr &other) const {
+    return baseValue == other.baseValue &&
+           constantOffset == other.constantOffset && modulus == other.modulus;
+  }
+
+  bool operator<(const BufferIndexExpr &other) const {
+    if (baseValue.getAsOpaquePointer() != other.baseValue.getAsOpaquePointer())
+      return baseValue.getAsOpaquePointer() <
+             other.baseValue.getAsOpaquePointer();
+    if (constantOffset != other.constantOffset)
+      return constantOffset < other.constantOffset;
+    return modulus < other.modulus;
+  }
+};
 
 // Represents the access to a slice of an allocation
 // It contains information both on physical memory (the interval) and a
@@ -65,14 +125,27 @@ public:
     return shifted;
   }
 
+  /// Returns a copy of this slice with the loop-carried flag set. Used when
+  /// propagating BlockInfo across a CFG backedge so that subsequent
+  /// disjointness checks conservatively assume the slice may refer to a
+  /// previous iteration. See BufferIndexExpr for the SSA-identity invariant
+  /// this flag protects.
+  AllocationSlice createLoopCarriedCopy() const {
+    AllocationSlice copy = *this;
+    copy.isLoopCarried = true;
+    return copy;
+  }
+
+  bool getIsLoopCarried() const { return isLoopCarried; }
+
   void print(raw_ostream &os) const;
 
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
-             llvm::ArrayRef<int64_t>>
+             llvm::ArrayRef<int64_t>, std::optional<BufferIndexExpr>, bool>
   asTuple() const {
-    return {allocationInterval, bufferId, accessTy.getAsOpaquePointer(),
-            subsliceOffsets};
+    return {allocationInterval, bufferId,        accessTy.getAsOpaquePointer(),
+            subsliceOffsets,    bufferIndexExpr, isLoopCarried};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
@@ -82,6 +155,11 @@ private:
   triton::gpu::MemDescType accessTy;
   // Buffer id for partial sync on wait_barrier deps.
   Allocation::BufferId bufferId;
+  // Buffer index expression for multi-buffered accesses via MemDescIndexOp.
+  std::optional<BufferIndexExpr> bufferIndexExpr;
+  // True if this slice originates from a previous loop iteration (via
+  // backedge). Expression matching is disabled for loop-carried slices.
+  bool isLoopCarried = false;
 };
 
 struct BlockInfo {
@@ -94,13 +172,16 @@ struct BlockInfo {
 
   /// Unions two BlockInfo objects.
   BlockInfo &join(const BlockInfo &other) {
-    for (auto &slice : other.syncReadSlices)
-      syncReadSlices[slice.first].insert(slice.second.begin(),
-                                         slice.second.end());
+    joinSlices(syncReadSlices, other.syncReadSlices);
+    joinSlices(syncWriteSlices, other.syncWriteSlices);
+    return *this;
+  }
 
-    for (auto &slice : other.syncWriteSlices)
-      syncWriteSlices[slice.first].insert(slice.second.begin(),
-                                          slice.second.end());
+  /// Unions two BlockInfo objects, marking all incoming slices as loop-carried.
+  /// Used when propagating state across loop backedges.
+  BlockInfo &joinLoopCarried(const BlockInfo &other) {
+    joinSlicesAsLoopCarried(syncReadSlices, other.syncReadSlices);
+    joinSlicesAsLoopCarried(syncWriteSlices, other.syncWriteSlices);
     return *this;
   }
 
@@ -111,6 +192,8 @@ struct BlockInfo {
     for (auto &[slice, ops] : syncReadSlices) {
       err << "    ";
       slice.print(err);
+      if (slice.getIsLoopCarried())
+        err << " [loop-carried]";
       err << " ";
       for (auto &op : ops)
         err << op->getName() << " ";
@@ -120,6 +203,8 @@ struct BlockInfo {
     for (auto &[slice, ops] : syncWriteSlices) {
       err << "    ";
       slice.print(err);
+      if (slice.getIsLoopCarried())
+        err << " [loop-carried]";
       err << " ";
       for (auto &op : ops)
         err << op->getName() << " ";
@@ -159,6 +244,18 @@ struct BlockInfo {
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
 private:
+  static void joinSlices(SliceMapT &lhs, const SliceMapT &rhs) {
+    for (const auto &[slice, ops] : rhs)
+      lhs[slice].insert(ops.begin(), ops.end());
+  }
+
+  static void joinSlicesAsLoopCarried(SliceMapT &lhs, const SliceMapT &rhs) {
+    for (const auto &[slice, ops] : rhs) {
+      AllocationSlice loopCarriedSlice = slice.createLoopCarriedCopy();
+      lhs[loopCarriedSlice].insert(ops.begin(), ops.end());
+    }
+  }
+
   bool isIntersected(const SliceMapT &lhsSlices, const SliceMapT &rhsSlices,
                      bool lhsIsRead, bool rhsIsRead, MembarFilterFn filter,
                      MembarSliceFilterFn sliceFilter,
@@ -204,6 +301,15 @@ inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
 // Common class to analyze membar and fence placement.
 class MembarOrFenceAnalysis {
   using VirtualBlock = std::pair<Block *, Block::iterator>;
+  struct SuccessorInfo {
+    VirtualBlock block;
+    /// True if this successor edge is a loop backedge. A successor edge
+    /// from `from` to `successor` is a backedge iff `successor` dominates
+    /// `from`. Backedge propagation tags incoming slices as loop-carried
+    /// so that per-iteration disjointness proofs are not (incorrectly)
+    /// applied across iterations.
+    bool isBackedge = false;
+  };
 
 public:
   using FuncBlockInfoMapT = triton::CallGraph<BlockInfo>::FuncDataMapT;
@@ -231,26 +337,16 @@ public:
   void run(FuncBlockInfoMapT &funcBlockInfoMap);
 
 protected:
-  /// Applies the barrier analysis based on the SCF dialect, in which each
-  /// region has a single basic block only.
-  /// Example:
-  /// region1
-  ///   op1
-  ///   op2 (scf.if)
-  ///      region2
-  ///        op3
-  ///        op4
-  ///      region3
-  ///        op5
-  ///        op6
-  ///   op7
-  /// TODO: Explain why we don't use ForwardAnalysis:
   void resolve(FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
                OpBuilder *builder);
 
-  /// Collects the successors of the terminator
-  void visitTerminator(Operation *operation,
-                       SmallVector<VirtualBlock> &successors);
+  /// Collects the successors of the terminator, classifying each edge as a
+  /// forward edge or a loop backedge. Dispatches on the op's control-flow
+  /// interface (`BranchOpInterface`, `RegionBranchOpInterface`, or
+  /// `RegionBranchTerminatorOpInterface`). An edge is a backedge iff its
+  /// target block dominates `operation`'s block.
+  void visitTerminator(Operation *operation, DominanceInfo &domInfo,
+                       SmallVector<SuccessorInfo> &successors);
 
   /// Updates the BlockInfo operation based on the operation.
   virtual void update(Operation *operation, BlockInfo *blockInfo,
