@@ -51,24 +51,86 @@ def _iter_proto_fields(data: bytes):
         yield field_id, wire_type, value
 
 
-def _assert_perfetto_trace_file(path: str):
+def _assert_perfetto_trace_file(path: str, expected_event_name: str | None = None,
+                                expected_call_stack: str | None = None):
     data = pathlib.Path(path).read_bytes()
     assert data
     assert data[:1] == b"\x0a"
     assert not data.lstrip().startswith(b"{")
 
+    event_names = {}
+    annotation_names = {}
     has_track_descriptor = False
     has_track_event = False
+    matched_expected_event = expected_event_name is None
     for field_id, wire_type, packet in _iter_proto_fields(data):
         assert field_id == 1
         assert wire_type == 2
-        for packet_field_id, packet_wire_type, _ in _iter_proto_fields(packet):
+        packet_fields = list(_iter_proto_fields(packet))
+        for packet_field_id, packet_wire_type, value in packet_fields:
             if packet_field_id == 60 and packet_wire_type == 2:
                 has_track_descriptor = True
             if packet_field_id == 11 and packet_wire_type == 2:
                 has_track_event = True
+            if packet_field_id == 12 and packet_wire_type == 2:
+                for interned_field_id, interned_wire_type, interned_value in _iter_proto_fields(value):
+                    if interned_wire_type != 2:
+                        continue
+                    if interned_field_id == 2:
+                        name_iid = None
+                        name = None
+                        for entry_field_id, entry_wire_type, entry_value in _iter_proto_fields(interned_value):
+                            if entry_field_id == 1 and entry_wire_type == 0:
+                                name_iid = entry_value
+                            elif entry_field_id == 2 and entry_wire_type == 2:
+                                name = entry_value.decode("utf-8")
+                        if name_iid is not None and name is not None:
+                            event_names[name_iid] = name
+                    elif interned_field_id == 3:
+                        name_iid = None
+                        name = None
+                        for entry_field_id, entry_wire_type, entry_value in _iter_proto_fields(interned_value):
+                            if entry_field_id == 1 and entry_wire_type == 0:
+                                name_iid = entry_value
+                            elif entry_field_id == 2 and entry_wire_type == 2:
+                                name = entry_value.decode("utf-8")
+                        if name_iid is not None and name is not None:
+                            annotation_names[name_iid] = name
+
+        if expected_event_name is None:
+            continue
+
+        for packet_field_id, packet_wire_type, value in packet_fields:
+            if packet_field_id != 11 or packet_wire_type != 2:
+                continue
+
+            event_type = None
+            event_name = None
+            call_stack = None
+            for event_field_id, event_wire_type, event_value in _iter_proto_fields(value):
+                if event_field_id == 9 and event_wire_type == 0:
+                    event_type = event_value
+                elif event_field_id == 10 and event_wire_type == 0:
+                    event_name = event_names.get(event_value)
+                elif event_field_id == 4 and event_wire_type == 2:
+                    annotation_name = None
+                    annotation_value = None
+                    for annotation_field_id, annotation_wire_type, annotation_field_value in _iter_proto_fields(event_value):
+                        if annotation_field_id == 1 and annotation_wire_type == 0:
+                            annotation_name = annotation_names.get(annotation_field_value)
+                        elif annotation_field_id == 6 and annotation_wire_type == 2:
+                            annotation_value = annotation_field_value.decode("utf-8")
+                    if annotation_name == "call_stack":
+                        call_stack = annotation_value
+
+            if event_type == 1 and event_name == expected_event_name:
+                matched_expected_event = True
+                if expected_call_stack is not None:
+                    assert call_stack == expected_call_stack
+                break
     assert has_track_descriptor
     assert has_track_event
+    assert matched_expected_event
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -913,8 +975,9 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
     assert int(bar_frame1["metrics"]["count"]) == bar_iters
 
 
-def test_trace(tmp_path: pathlib.Path, device: str):
-    temp_file = tmp_path / "test_trace.chrome_trace"
+@pytest.mark.parametrize("output_format", ["chrome_trace", "perfetto_trace"])
+def test_trace(tmp_path: pathlib.Path, output_format: str, device: str):
+    temp_file = tmp_path / f"test_trace.{output_format}"
     proton.start(str(temp_file.with_suffix("")), data="trace")
 
     @triton.jit
@@ -929,13 +992,17 @@ def test_trace(tmp_path: pathlib.Path, device: str):
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
 
-    proton.finalize()
+    proton.finalize(output_format=output_format)
+
+    if output_format == "perfetto_trace":
+        _assert_perfetto_trace_file(temp_file, expected_event_name="foo", expected_call_stack="ROOT > test > foo")
+        return
 
     with temp_file.open() as f:
         data = json.load(f)
-        trace_events = data["traceEvents"]
-        assert trace_events[-1]["name"] == "foo"
-        assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
+    trace_events = data["traceEvents"]
+    assert trace_events[-1]["name"] == "foo"
+    assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
