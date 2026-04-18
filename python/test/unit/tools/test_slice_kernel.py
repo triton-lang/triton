@@ -11,6 +11,7 @@ import pytest
 from triton.tools.triton_to_gluon_translator.ordered_set import ordered_set
 from triton.tools.triton_to_gluon_translator.slice_kernel import RewriteSpec, get_reference, slice_kernel
 from triton.tools.triton_to_gluon_translator.stable_toposort import stable_toposort
+from triton.tools.triton_to_gluon_translator.target import TranslatorTarget
 
 
 @pytest.fixture(autouse=True)
@@ -93,7 +94,7 @@ def test_slice_kernel_basic_module_slicing(tmp_path):
         },
     )
 
-    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"])
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
     assert "import math" in output
     assert "def lib_foo_some_util() -> int:" in output
     assert "def some_util() -> int:" in output
@@ -155,6 +156,7 @@ def test_slice_kernel_supports_injected_decorator_matchers(tmp_path):
         [f"{mod('kernel_mod')}:kernel_top"],
         ["triton", "torch"],
         rewrite_spec=RewriteSpec(ignored_decorator_matchers=[matcher]),
+        target=TranslatorTarget.GENERIC,
     )
     assert "@keep()" in top
     assert "@mock_kernel" not in top
@@ -163,6 +165,7 @@ def test_slice_kernel_supports_injected_decorator_matchers(tmp_path):
         [f"{mod('kernel_mod')}:kernel_bottom"],
         ["triton", "torch"],
         rewrite_spec=RewriteSpec(ignored_decorator_matchers=[matcher]),
+        target=TranslatorTarget.GENERIC,
     )
     assert "@keep()" not in bottom
     assert "@mock_kernel" not in bottom
@@ -186,7 +189,8 @@ def test_slice_kernel_translate_to_gluon_keeps_tensor_method_rewrites(tmp_path):
         },
     )
 
-    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], translate_to_gluon=True)
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], translate_to_gluon=True,
+                          target=TranslatorTarget.GENERIC)
     assert "import triton.experimental.gluon as gluon" in output
     assert "@gluon.jit(repr=lambda _: 'custom_kernel_name')" in output
     assert "reset_to_default_layout" in output
@@ -207,7 +211,8 @@ def test_slice_kernel_translate_to_gluon_inlines_descriptor_adapter(tmp_path):
         },
     )
 
-    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], translate_to_gluon=True)
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], translate_to_gluon=True,
+                          target=TranslatorTarget.GENERIC)
     assert "convert_host_descriptor(" in output
     assert "def convert_host_descriptor" in output
 
@@ -230,7 +235,7 @@ def test_slice_kernel_binds_local_imports(tmp_path):
         },
     )
 
-    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"])
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
     assert "from .helpers import local_helper" not in output
     assert "def local_helper() -> int:" in output
     assert "return local_helper()" in output
@@ -252,7 +257,7 @@ def test_slice_kernel_treats_assign_targets_as_locals(tmp_path):
         },
     )
 
-    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"])
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
     assert "def helper() -> int:" not in output
     assert any(line.replace("lambda :", "lambda:") == "helper = lambda: 2" for line in _normalize(output))
 
@@ -272,7 +277,7 @@ def test_slice_kernel_treats_annassign_targets_as_locals(tmp_path):
         },
     )
 
-    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"])
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
     assert "value = 7" not in output
     assert "value: int = 3" in output
 
@@ -294,7 +299,8 @@ def test_slice_kernel_translate_to_gluon_avoids_double_descriptor_wrap(tmp_path)
         },
     )
 
-    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], translate_to_gluon=True)
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], translate_to_gluon=True,
+                          target=TranslatorTarget.GENERIC)
     assert "convert_host_descriptor(convert_host_descriptor(" not in output
 
 

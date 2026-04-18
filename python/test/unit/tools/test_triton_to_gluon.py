@@ -22,10 +22,10 @@ def _convert_host_descriptor(desc):
     return convert_host_descriptor(desc)
 
 
-def convert_kernel(kernel, kernel_name, tmp_path, target=None):
-    if target is None:
-        t = current_target()
-        target = TranslatorTarget("nvidia" if t.backend == "cuda" else t.arch)
+def convert_kernel(kernel, kernel_name, tmp_path):
+    t = current_target()
+    target = TranslatorTarget(f"sm{t.arch}" if t.backend == "cuda" else t.arch)
+
     converted = convert_triton_to_gluon([kernel], target=target)
 
     # Write converted kernel to a file so @gluon.jit can retrieve source
@@ -469,12 +469,14 @@ def gather_scatter_roundtrip_kernel(out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y
     out_desc.scatter(data, idx, 0)
 
 
-# TODO: parametrize over _descriptor_targets once NVIDIA gather/scatter translation is supported.
-# The translator currently routes gather/scatter to AMD-specific helpers for AMD targets only.
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+@pytest.mark.skipif(not is_hip_gfx1250() and not is_blackwell(), reason="Requires descriptor gather/scatter support")
 def test_gather_scatter_roundtrip(tmp_path):
-    kernel = convert_kernel(gather_scatter_roundtrip_kernel, "gather_scatter_roundtrip_kernel", tmp_path,
-                            target=TranslatorTarget.GFX1250)
+    kernel = convert_kernel(gather_scatter_roundtrip_kernel, "gather_scatter_roundtrip_kernel", tmp_path)
+
+    def allocator(size: int, align: int, stream):
+        return torch.empty(size, dtype=torch.uint8, device="cuda")
+
+    triton.set_allocator(allocator)
 
     X, Y, BLOCK_X, BLOCK_Y = 64, 64, 8, 64
     inp = torch.arange(X * Y, device="cuda", dtype=torch.float16).reshape(X, Y)

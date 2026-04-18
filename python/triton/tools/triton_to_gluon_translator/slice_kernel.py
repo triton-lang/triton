@@ -533,10 +533,10 @@ class ReferenceRewriter(ast.NodeTransformer):
 
 @dataclass
 class SliceRewriter(ReferenceRewriter):
+    target: TranslatorTarget = field(kw_only=True)
     translate_to_gluon: bool = False
     inline_helpers: ordered_set[str] = field(default_factory=ordered_set[str])
     cvt_context: list[bool] = field(default_factory=lambda: [False])
-    target: TranslatorTarget = TranslatorTarget.NVIDIA
 
     def __post_init__(self) -> None:
         # Special rules for sugaring imports.
@@ -725,7 +725,8 @@ def slice_kernel(
     leaf_paths: list[str] | None = None,
     translate_to_gluon: bool = False,
     rewrite_spec: RewriteSpec | None = None,
-    target: TranslatorTarget = TranslatorTarget.NVIDIA,
+    *,
+    target: TranslatorTarget,
 ) -> str:
     rewrite_spec = rewrite_spec or RewriteSpec()
     base_values: list[GlobalValue] = [get_base_value(root_path) for root_path in root_paths]
@@ -826,7 +827,8 @@ def slice_kernel_from_trace(
     translate_to_gluon: bool,
     extra_modules: dict[str, str],
     rewrite_spec: RewriteSpec | None = None,
-    target: TranslatorTarget = TranslatorTarget.NVIDIA,
+    *,
+    target: TranslatorTarget,
 ) -> str:
     module_remap: dict[str, str] = {}
     for name, path in extra_modules.items():
@@ -873,7 +875,8 @@ def main(
     leaf_paths: list[str] | None = None,
     translate_to_gluon: bool = False,
     output_path: str = "/tmp/reference.py",
-    target: TranslatorTarget = TranslatorTarget.NVIDIA,
+    *,
+    target: TranslatorTarget,
 ) -> None:
     output = slice_kernel(
         root_paths=root_paths,
@@ -899,6 +902,7 @@ def _main_cli() -> None:
     parser.add_argument("--translate-to-gluon", action="store_true",
                         help="Translate Triton JIT callables to Gluon while slicing.")
     parser.add_argument("--output-path", default="/tmp/reference.py", help="Path to write the sliced output.")
+    parser.add_argument("--target", required=True, help="Target architecture (e.g. nvidia, gfx1250).")
     args = parser.parse_args()
     main(
         root_paths=args.root_paths,
@@ -907,6 +911,7 @@ def _main_cli() -> None:
         leaf_paths=args.leaf_paths or None,
         translate_to_gluon=args.translate_to_gluon,
         output_path=args.output_path,
+        target=TranslatorTarget(args.target),
     )
 
 
