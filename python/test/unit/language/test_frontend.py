@@ -3,7 +3,6 @@ import triton
 import triton.language as tl
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.errors import CompilationError
-from triton.runtime.jit import MockTensor
 import pytest
 from typing import NamedTuple
 
