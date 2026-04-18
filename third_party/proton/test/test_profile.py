@@ -51,67 +51,60 @@ def _iter_proto_fields(data: bytes):
         yield field_id, wire_type, value
 
 
-def _assert_perfetto_trace_file(path: str, expected_event_name: str | None = None,
-                                expected_call_stack: str | None = None):
+def _perfetto_trace_to_python(path: str):
     data = pathlib.Path(path).read_bytes()
     assert data
     assert data[:1] == b"\x0a"
     assert not data.lstrip().startswith(b"{")
 
+    trace = {
+        "has_track_descriptor": False,
+        "has_track_event": False,
+        "track_events": [],
+    }
     event_names = {}
     annotation_names = {}
-    has_track_descriptor = False
-    has_track_event = False
-    matched_expected_event = expected_event_name is None
+
     for field_id, wire_type, packet in _iter_proto_fields(data):
         assert field_id == 1
         assert wire_type == 2
         packet_fields = list(_iter_proto_fields(packet))
+
         for packet_field_id, packet_wire_type, value in packet_fields:
             if packet_field_id == 60 and packet_wire_type == 2:
-                has_track_descriptor = True
+                trace["has_track_descriptor"] = True
             if packet_field_id == 11 and packet_wire_type == 2:
-                has_track_event = True
+                trace["has_track_event"] = True
             if packet_field_id == 12 and packet_wire_type == 2:
                 for interned_field_id, interned_wire_type, interned_value in _iter_proto_fields(value):
                     if interned_wire_type != 2:
                         continue
+                    if interned_field_id not in (2, 3):
+                        continue
+                    name_iid = None
+                    name = None
+                    for entry_field_id, entry_wire_type, entry_value in _iter_proto_fields(interned_value):
+                        if entry_field_id == 1 and entry_wire_type == 0:
+                            name_iid = entry_value
+                        elif entry_field_id == 2 and entry_wire_type == 2:
+                            name = entry_value.decode("utf-8")
+                    if name_iid is None or name is None:
+                        continue
                     if interned_field_id == 2:
-                        name_iid = None
-                        name = None
-                        for entry_field_id, entry_wire_type, entry_value in _iter_proto_fields(interned_value):
-                            if entry_field_id == 1 and entry_wire_type == 0:
-                                name_iid = entry_value
-                            elif entry_field_id == 2 and entry_wire_type == 2:
-                                name = entry_value.decode("utf-8")
-                        if name_iid is not None and name is not None:
-                            event_names[name_iid] = name
-                    elif interned_field_id == 3:
-                        name_iid = None
-                        name = None
-                        for entry_field_id, entry_wire_type, entry_value in _iter_proto_fields(interned_value):
-                            if entry_field_id == 1 and entry_wire_type == 0:
-                                name_iid = entry_value
-                            elif entry_field_id == 2 and entry_wire_type == 2:
-                                name = entry_value.decode("utf-8")
-                        if name_iid is not None and name is not None:
-                            annotation_names[name_iid] = name
-
-        if expected_event_name is None:
-            continue
+                        event_names[name_iid] = name
+                    else:
+                        annotation_names[name_iid] = name
 
         for packet_field_id, packet_wire_type, value in packet_fields:
             if packet_field_id != 11 or packet_wire_type != 2:
                 continue
 
-            event_type = None
-            event_name = None
-            call_stack = None
+            event = {"type": None, "name": None, "call_stack": None}
             for event_field_id, event_wire_type, event_value in _iter_proto_fields(value):
                 if event_field_id == 9 and event_wire_type == 0:
-                    event_type = event_value
+                    event["type"] = event_value
                 elif event_field_id == 10 and event_wire_type == 0:
-                    event_name = event_names.get(event_value)
+                    event["name"] = event_names.get(event_value)
                 elif event_field_id == 4 and event_wire_type == 2:
                     annotation_name = None
                     annotation_value = None
@@ -121,16 +114,28 @@ def _assert_perfetto_trace_file(path: str, expected_event_name: str | None = Non
                         elif annotation_field_id == 6 and annotation_wire_type == 2:
                             annotation_value = annotation_field_value.decode("utf-8")
                     if annotation_name == "call_stack":
-                        call_stack = annotation_value
+                        event["call_stack"] = annotation_value
+            trace["track_events"].append(event)
 
-            if event_type == 1 and event_name == expected_event_name:
-                matched_expected_event = True
-                if expected_call_stack is not None:
-                    assert call_stack == expected_call_stack
-                break
-    assert has_track_descriptor
-    assert has_track_event
-    assert matched_expected_event
+    return trace
+
+
+def _assert_perfetto_trace_file(path: str, expected_event_name: str | None = None,
+                                expected_call_stack: str | None = None):
+    trace = _perfetto_trace_to_python(path)
+    assert trace["has_track_descriptor"]
+    assert trace["has_track_event"]
+    if expected_event_name is None:
+        return
+
+    matched_event = None
+    for event in trace["track_events"]:
+        if event["type"] == 1 and event["name"] == expected_event_name:
+            matched_event = event
+            break
+    assert matched_event is not None
+    if expected_call_stack is not None:
+        assert matched_event["call_stack"] == expected_call_stack
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
