@@ -29,12 +29,10 @@ Value emitDpp(Location loc, RewriterBase &rewriter, Value old, Value src,
               DppCtrl dppCtrl, uint32_t rowMask = 0xf, uint32_t bankMask = 0xf,
               bool boundCtrl = false) {
   return ROCDL::DPPUpdateOp::create(
-             rewriter, loc, src.getType(), old, src,
-             rewriter.getI32IntegerAttr(static_cast<uint32_t>(dppCtrl)),
-             rewriter.getI32IntegerAttr(rowMask),
-             rewriter.getI32IntegerAttr(bankMask),
-             rewriter.getBoolAttr(boundCtrl))
-      .getRes();
+      rewriter, loc, src.getType(), old, src,
+      rewriter.getI32IntegerAttr(static_cast<uint32_t>(dppCtrl)),
+      rewriter.getI32IntegerAttr(rowMask), rewriter.getI32IntegerAttr(bankMask),
+      rewriter.getBoolAttr(boundCtrl));
 }
 
 Value emitPermlaneX16Xor(Location loc, RewriterBase &rewriter, Value val,
@@ -53,8 +51,7 @@ Value emitPermlaneX16Xor(Location loc, RewriterBase &rewriter, Value val,
   Value loSel = b.i32_val(buildSelectorMask(0));
   Value hiSel = b.i32_val(buildSelectorMask(8));
   return ROCDL::PermlaneX16Op::create(rewriter, loc, val.getType(), val, val,
-                                      loSel, hiSel, true, false)
-      .getRes();
+                                      loSel, hiSel, true, false);
 }
 
 Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,

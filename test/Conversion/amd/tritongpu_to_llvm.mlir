@@ -263,6 +263,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+#linear = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [0, 0], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+#slice = #ttg.slice<{dim = 0, parent = #linear}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // GFX1250-LABEL: reduce_xor_row_xmask
+  tt.func @reduce_xor_row_xmask(%arg0: tensor<16x2xf32, #linear>) {
+    // stride 16
+    // GFX1250-NOT: rocdl.ds_bpermute
+    // GFX1250: rocdl.permlanex16
+
+    // stride 8: ROW_XMASK:8
+    // GFX1250: rocdl.update.dpp
+    // GFX1250-SAME: with 360, 15, 15, false
+
+    // stride 4: ROW_XMASK:4
+    // GFX1250: rocdl.update.dpp
+    // GFX1250-SAME: with 356, 15, 15, false
+
+    // stride 1: ROW_XMASK:1
+    // GFX1250: rocdl.update.dpp
+    // GFX1250-SAME: with 353, 15, 15, false
+    %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32, %arg2: f32):
+      %1 = arith.maxnumf %arg1, %arg2 : f32
+      tt.reduce.return %1 : f32
+    }) : (tensor<16x2xf32, #linear>) -> tensor<2xf32, #slice>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomicrmw_scope_memsemantics
