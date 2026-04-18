@@ -96,10 +96,12 @@ struct PerfettoInternedNames {
   PerfettoInternedStringTable eventCategories;
   PerfettoInternedStringTable eventNames;
   PerfettoInternedStringTable debugAnnotationNames;
+  PerfettoInternedStringTable debugAnnotationStringValues;
 
   bool empty() const {
     return eventCategories.empty() && eventNames.empty() &&
-           debugAnnotationNames.empty();
+           debugAnnotationNames.empty() &&
+           debugAnnotationStringValues.empty();
   }
 };
 
@@ -217,6 +219,15 @@ void internSliceEvent(PerfettoInternedNames &internedNames,
         inserted) {
       newInternedNames.debugAnnotationNames.internWithIid(annotation.name, iid);
     }
+    if (annotation.kind == PerfettoAnnotation::Kind::String) {
+      if (const auto [iid, inserted] =
+              internedNames.debugAnnotationStringValues.intern(
+                  annotation.stringValue);
+          inserted) {
+        newInternedNames.debugAnnotationStringValues.internWithIid(
+            annotation.stringValue, iid);
+      }
+    }
   }
 }
 
@@ -245,6 +256,14 @@ void appendInternedDataPacket(ProtoWriter &trace,
     entry.writeUInt64(/*DebugAnnotationName.iid=*/1, iid);
     entry.writeString(/*DebugAnnotationName.name=*/2, name);
     internedData.writeMessage(/*InternedData.debug_annotation_names=*/3, entry);
+  }
+  for (const auto &[iid, value] :
+       internedNames.debugAnnotationStringValues.entries()) {
+    ProtoWriter entry;
+    entry.writeUInt64(/*InternedString.iid=*/1, iid);
+    entry.writeString(/*InternedString.name=*/2, value);
+    internedData.writeMessage(/*InternedData.debug_annotation_string_values=*/29,
+                              entry);
   }
 
   ProtoWriter packet;
@@ -281,8 +300,9 @@ void appendTrackEventPacket(ProtoWriter &trace, uint64_t timestampNs,
           internedNames.debugAnnotationNames.get(annotation.name));
       switch (annotation.kind) {
       case PerfettoAnnotation::Kind::String:
-        message.writeString(/*DebugAnnotation.string_value=*/6,
-                            annotation.stringValue);
+        message.writeUInt64(/*DebugAnnotation.string_value_iid=*/17,
+                            internedNames.debugAnnotationStringValues.get(
+                                annotation.stringValue));
         break;
       case PerfettoAnnotation::Kind::UInt64:
         message.writeUInt64(/*DebugAnnotation.uint_value=*/3,
