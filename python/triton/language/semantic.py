@@ -1562,7 +1562,14 @@ class TritonSemantic(Generic[TensorTy]):
                    rhs_scale: Optional[TensorTy], rhs_format: str, acc: TensorTy | None, fast_math: bool,
                    lhs_k_pack: bool, rhs_k_pack: bool, out_dtype: tl.dtype) -> TensorTy:
         assert lhs.type.is_block() and rhs.type.is_block()
-        #TODO: validate types.
+        rhs_scale_is_none = rhs_scale is None or (isinstance(rhs_scale, tl.constexpr) and rhs_scale.value is None)
+        lhs_scale_is_none = lhs_scale is None or (isinstance(lhs_scale, tl.constexpr) and lhs_scale.value is None)
+        if not lhs_scale_is_none:
+            assert lhs_scale.dtype in (tl.uint8, tl.float8e4nv), \
+                f"lhs_scale must be uint8 (e8m0) or float8e4nv (nvfp4). Got {lhs_scale.dtype}"
+        if not rhs_scale_is_none:
+            assert rhs_scale.dtype in (tl.uint8, tl.float8e4nv), \
+                f"rhs_scale must be uint8 (e8m0) or float8e4nv (nvfp4). Got {rhs_scale.dtype}"
         lhs_rank = len(lhs.shape)
         rhs_rank = len(rhs.shape)
         assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
@@ -1573,8 +1580,6 @@ class TritonSemantic(Generic[TensorTy]):
         allowed_formats = {"e2m1", "e4m3", "e5m2", "bf16", "fp16"}
         assert lhs_format in allowed_formats, f"NYI: lhs_format {lhs_format}"
         assert rhs_format in allowed_formats, f"NYI: rhs_format {rhs_format}"
-        rhs_scale_is_none = rhs_scale is None or (isinstance(rhs_scale, tl.constexpr) and rhs_scale.value is None)
-        lhs_scale_is_none = lhs_scale is None or (isinstance(lhs_scale, tl.constexpr) and lhs_scale.value is None)
         lhs = self._bitcast_to_fp_type(lhs, lhs_format)
         rhs = self._bitcast_to_fp_type(rhs, rhs_format)
 

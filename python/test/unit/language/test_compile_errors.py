@@ -582,3 +582,22 @@ def test_err_nested_function_def():
     err_msg = format_exception(e.type, value=e.value, tb=e.tb)
     assert "StopIteration" not in err_msg, "nested def should not leak StopIteration"
     assert "nested function" in err_msg, "error should mention nested function"
+
+
+def test_dot_scaled_invalid_scale_dtype(fresh_triton_cache):
+
+    @triton.jit
+    def kernel():
+        M: tl.constexpr = 32
+        K: tl.constexpr = 64
+        N: tl.constexpr = 32
+        a = tl.full((M, K), 0, tl.uint8)
+        b = tl.full((K, N), 0, tl.uint8)
+        lhs_scale = tl.full((M, 2), 0.0, tl.float32)
+        rhs_scale = tl.full((N, 2), 0, tl.uint8)
+        acc = tl.full((M, N), 0.0, tl.float32)
+        tl.dot_scaled(a, lhs_scale, "e5m2", b, rhs_scale, "e5m2", acc, False, True, True, tl.float32)
+
+    with pytest.raises(CompilationError, match="lhs_scale must be uint8.*or float8e4nv"):
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
+
