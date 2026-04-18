@@ -44,10 +44,14 @@ class TranslatorTarget(str, Enum):
     @property
     def helpers_module(self) -> str:
         base = "triton.tools.triton_to_gluon_translator"
+
         if self.is_amd:
             return f"{base}.amd_helpers"
+
         if self.is_nvidia:
             if self in (TranslatorTarget.SM100, TranslatorTarget.SM103):
                 return f"{base}.blackwell_helpers"
-            return f"{base}.nvidia_helpers"
+            if self in (TranslatorTarget.SM90):
+                return f"{base}.hopper_helpers"
+
         return f"{base}.common_helpers"
