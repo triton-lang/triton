@@ -1178,6 +1178,7 @@ class TritonSemantic(Generic[TensorTy]):
         if mask is None:
             ptr, val = self.broadcast_tensors(ptr, val)
         else:
+            mask = self.to_tensor(mask)
             ptr, val, mask = self.broadcast_tensors(ptr, val, mask)
         if ptr_shape != ptr.shape:
             raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
