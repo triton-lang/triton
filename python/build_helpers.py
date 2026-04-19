@@ -365,13 +365,27 @@ def write_thirdparty_cmake_vars(output: str, packages: list[str], helper_args: B
 # --- nvidia toolchain helpers -----
 
 
+def _copy_path(src_path: str, dst_path: str):
+    os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
+    print(f"copy {src_path} to {dst_path} ...")
+    if os.path.isdir(src_path):
+        # Use copy (not copy2) so destination mtimes are refreshed and Ninja sees dependent headers as updated.
+        shutil.copytree(src_path, dst_path, copy_function=shutil.copy, dirs_exist_ok=True)
+    else:
+        shutil.copy(src_path, dst_path)
+
+
 def download_and_copy(name, src_func, dst_path, override_path, version, url_func, helper_args: BuildHelperArgs):
+    base_dir = get_base_dir()
+    dst_path = os.path.join(base_dir, "third_party", "nvidia", "backend", dst_path)  # final binary path
+    if override_path is not None:
+        if not os.path.exists(override_path):
+            raise RuntimeError(f"Override path does not exist: {override_path}")
+        _copy_path(override_path, dst_path)
+        return
     if helper_args.offline_build:
         return
     cache_path = helper_args.cache_path
-    if override_path is not None:
-        return
-    base_dir = get_base_dir()
     system = platform.system()
     arch = platform.machine()
     # NOTE: This might be wrong for jetson if both grace chips and jetson chips return aarch64
@@ -380,7 +394,6 @@ def download_and_copy(name, src_func, dst_path, override_path, version, url_func
     url = url_func(supported[system], arch, version)
     src_path = src_func(supported[system], arch, version)
     tmp_path = os.path.join(cache_path, "nvidia", name)  # path to cache the download
-    dst_path = os.path.join(base_dir, "third_party", "nvidia", "backend", dst_path)  # final binary path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
     if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
@@ -390,13 +403,7 @@ def download_and_copy(name, src_func, dst_path, override_path, version, url_func
         download = download or curr_version.group(1) != version
     if download:
         _download_and_extract(url, tmp_path, name)
-    os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
-    print(f"copy {src_path} to {dst_path} ...")
-    if os.path.isdir(src_path):
-        # Use copy (not copy2) so destination mtimes are refreshed and Ninja sees dependent headers as updated.
-        shutil.copytree(src_path, dst_path, copy_function=shutil.copy, dirs_exist_ok=True)
-    else:
-        shutil.copy(src_path, dst_path)
+    _copy_path(src_path, dst_path)
 
 
 def download_and_copy_dependencies(helper_args: BuildHelperArgs):
