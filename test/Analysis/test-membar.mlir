@@ -1271,3 +1271,247 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %sum : tensor<128x32xf16, #blockedCallDst>
   }
 }
+
+// -----
+// Tests for the dynamic-buffer-index disjointness analysis.
+// The analysis is target-agnostic, so these live alongside the generic
+// membar tests rather than under test/Conversion/amd.
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+
+// CHECK-LABEL: disjoint_remsi
+// Write at (phase + 2) % 3, read at phase % 3 — provably disjoint within
+// an iteration; no barrier required.
+tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
+  %c2_i32 = arith.constant 2 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  %w_off = arith.addi %phase, %c2_i32 : i32
+  %w_idx = arith.remsi %w_off, %c3_i32 : i32
+  %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %r_idx = arith.remsi %phase, %c3_i32 : i32
+  %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
+// CHECK-LABEL: disjoint_select_cmpi_sge
+// (phase + 2) % 3 vs (phase + 1) % 3 expressed via the sge select/cmpi
+// idiom (NVIDIA pipeliner shape) — provably disjoint.
+tt.func @disjoint_select_cmpi_sge(%cst: tensor<128x128xf16>, %phase: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  %w_sum = arith.addi %phase, %c2_i32 : i32
+  %w_cmp = arith.cmpi sge, %w_sum, %c3_i32 : i32
+  %w_idx = arith.select %w_cmp, %c0_i32, %w_sum : i32
+  %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  %r_sum = arith.addi %phase, %c1_i32 : i32
+  %r_cmp = arith.cmpi sge, %r_sum, %c3_i32 : i32
+  %r_idx = arith.select %r_cmp, %c0_i32, %r_sum : i32
+  %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
+// CHECK-LABEL: disjoint_constant_indices
+// Constant slot indices produce BufferIndexExpr{base=nullptr, offset=C}.
+// Different constants are provably disjoint without needing a modulus.
+tt.func @disjoint_constant_indices(%cst: tensor<128x128xf16>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  %w_view = ttg.memdesc_index %alloc[%c0_i32] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %r_view = ttg.memdesc_index %alloc[%c1_i32] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
+// CHECK-LABEL: must_barrier_same_expression
+// Two slices computed from the same SSA base with the same offset and
+// modulus alias the same slot; the analysis must NOT prove disjointness.
+tt.func @must_barrier_same_expression(%cst: tensor<128x128xf16>, %phase: i32) {
+  %c3_i32 = arith.constant 3 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  %w_idx = arith.remsi %phase, %c3_i32 : i32
+  %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %r_idx = arith.remsi %phase, %c3_i32 : i32
+  %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
+// CHECK-LABEL: must_barrier_different_bases
+// Indices rooted at different SSA bases cannot be related; the analysis
+// must conservatively assume aliasing.
+tt.func @must_barrier_different_bases(%cst: tensor<128x128xf16>, %a: i32, %b: i32) {
+  %c3_i32 = arith.constant 3 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  %w_idx = arith.remsi %a, %c3_i32 : i32
+  %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %r_idx = arith.remsi %b, %c3_i32 : i32
+  %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
+// CHECK-LABEL: must_barrier_mismatched_moduli
+// Same base but different moduli (3 vs 4) cannot be compared; offsets
+// modulo different N's are not directly comparable.
+tt.func @must_barrier_mismatched_moduli(%cst: tensor<128x128xf16>, %phase: i32) {
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable>
+
+  %w_sum = arith.addi %phase, %c1_i32 : i32
+  %w_idx = arith.remsi %w_sum, %c3_i32 : i32
+  %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %r_idx = arith.remsi %phase, %c4_i32 : i32
+  %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
+// CHECK-LABEL: must_barrier_zero_modulus_remsi
+// remsi with a non-positive constant modulus must not be stripped: the
+// guard rejects the pattern, leaving the index opaque so disjointness
+// cannot be proven against the disjoint-looking write at offset 1.
+tt.func @must_barrier_zero_modulus_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  %w_sum = arith.addi %phase, %c1_i32 : i32
+  %w_idx = arith.remsi %w_sum, %c3_i32 : i32
+  %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // Read at phase % 0 — non-positive modulus, pattern must be rejected.
+  %r_idx = arith.remsi %phase, %c0_i32 : i32
+  %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
+// CHECK-LABEL: must_barrier_dynamic_modulus
+// remsi with a non-constant (runtime) modulus must not be stripped: with
+// no known modulus the wrapped expression is opaque and aliasing must
+// be assumed.
+tt.func @must_barrier_dynamic_modulus(%cst: tensor<128x128xf16>, %phase: i32, %mod: i32) {
+  %c1_i32 = arith.constant 1 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  %w_sum = arith.addi %phase, %c1_i32 : i32
+  %w_idx = arith.remsi %w_sum, %mod : i32
+  %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %r_idx = arith.remsi %phase, %mod : i32
+  %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
+// CHECK-LABEL: must_barrier_nested_modulus
+// Nested moduli ((phase + C) % M) % N are not representable as a single
+// (base, offset, mod) triple. The recursive analyzer must detect the
+// inner modulus and fall back to opaque rather than overwriting it.
+tt.func @must_barrier_nested_modulus(%cst: tensor<128x128xf16>, %phase: i32) {
+  %c2_i32 = arith.constant 2 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c5_i32 = arith.constant 5 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  // Write at ((phase + 2) % 5) % 3 — naive composition would yield
+  // {base=phase, off=2, mod=3} and falsely prove disjoint vs read.
+  %w_sum = arith.addi %phase, %c2_i32 : i32
+  %w_inner = arith.remsi %w_sum, %c5_i32 : i32
+  %w_idx = arith.remsi %w_inner, %c3_i32 : i32
+  %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %r_idx = arith.remsi %phase, %c3_i32 : i32
+  %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
+// CHECK-LABEL: must_barrier_nonzero_wrap_arm
+// The select/cmpi modular-wrap pattern requires the wrap arm to be 0.
+// A non-zero wrap value yields (base + C) - N + K, which is not
+// representable by (base, offset, mod) and must be rejected.
+tt.func @must_barrier_nonzero_wrap_arm(%cst: tensor<128x128xf16>, %phase: i32) {
+  %c1_i32 = arith.constant 1 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  // Write: select(slt, addi(phase, 2), 3), addi(phase, 2), %c1_i32) — wrap
+  // arm is 1 (not 0), so the pattern is rejected.
+  %w_sum = arith.addi %phase, %c2_i32 : i32
+  %w_cmp = arith.cmpi slt, %w_sum, %c3_i32 : i32
+  %w_idx = arith.select %w_cmp, %w_sum, %c1_i32 : i32
+  %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %r_idx = arith.remsi %phase, %c3_i32 : i32
+  %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
+}
