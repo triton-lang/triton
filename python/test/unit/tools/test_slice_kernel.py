@@ -9,7 +9,7 @@ from typing import Callable
 import pytest
 
 from triton.tools.triton_to_gluon_translator.ordered_set import ordered_set
-from triton.tools.triton_to_gluon_translator.slice_kernel import get_reference, slice_kernel
+from triton.tools.triton_to_gluon_translator.slice_kernel import RewriteSpec, get_reference, slice_kernel
 from triton.tools.triton_to_gluon_translator.stable_toposort import stable_toposort
 
 
@@ -154,7 +154,7 @@ def test_slice_kernel_supports_injected_decorator_matchers(tmp_path):
     top = slice_kernel(
         [f"{mod('kernel_mod')}:kernel_top"],
         ["triton", "torch"],
-        ignored_decorator_matchers=[matcher],
+        rewrite_spec=RewriteSpec(ignored_decorator_matchers=[matcher]),
     )
     assert "@keep()" in top
     assert "@mock_kernel" not in top
@@ -162,7 +162,7 @@ def test_slice_kernel_supports_injected_decorator_matchers(tmp_path):
     bottom = slice_kernel(
         [f"{mod('kernel_mod')}:kernel_bottom"],
         ["triton", "torch"],
-        ignored_decorator_matchers=[matcher],
+        rewrite_spec=RewriteSpec(ignored_decorator_matchers=[matcher]),
     )
     assert "@keep()" not in bottom
     assert "@mock_kernel" not in bottom
@@ -302,7 +302,7 @@ def test_slice_kernel_public_imports():
     from triton.tools.triton_to_gluon_translator.slice_kernel import slice_kernel as new_slice_kernel
     from triton.tools.triton_to_gluon_translator.translator import translate_paths
     from triton.tools.triton_to_gluon_translator.translator import convert_triton_to_gluon
-    from triton.tools.triton_to_gluon_translator.translator_helpers import convert_host_descriptor
+    from triton.tools.triton_to_gluon_translator.nvidia_helpers import convert_host_descriptor
 
     assert callable(new_slice_kernel)
     assert callable(translate_paths)

@@ -41,7 +41,6 @@ struct DescriptorInfo {
 
 static void setTMAPtrAxisHints(OpBuilder &builder, Value ptr) {
   auto ptrTy = cast<RankedTensorType>(ptr.getType());
-  auto elemTy = cast<tt::PointerType>(ptrTy.getElementType()).getPointeeType();
 
   Operation *def = ptr.getDefiningOp();
   if (!def)
@@ -127,7 +126,7 @@ static DescriptorInfo getDescriptorInfo(Value desc, OpBuilder &builder) {
 
   auto elemTy = descTy.getSignlessBlockType().getElementType();
   auto basePtrTy = tt::getPointerType(elemTy);
-  unsigned rank = descTy.getBlockType().getRank();
+  unsigned rank = descTy.getShape().size();
   SmallVector<Type> resultTypes;
   resultTypes.reserve(1 + 2 * rank);
   resultTypes.push_back(basePtrTy);
@@ -316,6 +315,19 @@ static void instrumentAsyncTMAStore(Operation *op, Value descValue,
                                          access.second, /*isStore=*/true);
 }
 
+static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op) {
+  OpBuilder builder(op);
+  auto desc = getDescriptorInfo(op.getDesc(), builder);
+
+  auto offsets = castToI64(builder, op.getLoc(), op.getCoord());
+  auto access = createTiledAccess(builder, op.getLoc(), desc,
+                                  op.getSrc().getType().getShape(), offsets,
+                                  std::nullopt);
+  ExperimentalGSanAtomicTensorAccessOp::create(
+      builder, op.getLoc(), access.first, access.second, MemSemantic::RELAXED,
+      MemSyncScope::GPU);
+}
+
 static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op) {
   OpBuilder builder(op);
   auto desc = getDescriptorInfo(op.getDesc(), builder);
@@ -404,7 +416,7 @@ public:
     }
 
     module.walk([&](Operation *op) {
-      OpBuilder b(op);
+      IRRewriter b(op);
       mlir::TypeSwitch<Operation *>(op)
           .Case([&](tt::LoadOp op) {
             ExperimentalGSanTensorAccessOp::create(
@@ -428,19 +440,28 @@ public:
                                     op.getSrc().getType().getShape(),
                                     op.getCoord());
           })
-          .Case([&](ttng::AsyncTMAReduceOp op) {
-            // FIXME: This is just plain wrong. TMA reduce is atomic.
-            instrumentAsyncTMAStore(op, op.getDesc(),
-                                    op.getSrc().getType().getShape(),
-                                    op.getCoord());
-          })
+          .Case(
+              [&](ttng::AsyncTMAReduceOp op) { instrumentAsyncTMAReduce(op); })
           .Case([&](ttng::AsyncTMAScatterOp op) {
             instrumentAsyncTMAScatter(op);
+          })
+          .Case([&](tt::AtomicRMWOp op) {
+            auto newOp = ExperimentalGSanAtomicRMWOp::create(
+                b, op.getLoc(), op.getType(), op.getAtomicRmwOp(), op.getPtr(),
+                op.getVal(), op.getMask(), op.getSem(), op.getScope());
+            newOp->setAttrs(op->getAttrs());
+            b.replaceOp(op, newOp);
+          })
+          .Case([&](tt::AtomicCASOp op) {
+            auto newOp = ExperimentalGSanAtomicCASOp::create(
+                b, op.getLoc(), op.getType(), op.getPtr(), op.getCmp(),
+                op.getVal(), op.getSem(), op.getScope());
+            newOp->setAttrs(op->getAttrs());
+            b.replaceOp(op, newOp);
+          })
+          .Case([&](ttg::WarpSpecializeOp op) {
+            op->setAttr(kDisableSetMaxRegisterAttr, builder.getUnitAttr());
           });
-    });
-
-    module.walk([&](ttg::WarpSpecializeOp op) {
-      op->setAttr(kDisableSetMaxRegisterAttr, builder.getUnitAttr());
     });
   }
 };

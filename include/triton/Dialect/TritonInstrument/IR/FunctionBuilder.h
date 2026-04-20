@@ -114,18 +114,19 @@ public:
   void createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                         Value pred, Operation *insertPoint);
   // verifyBarrierArrive: Check that applying the arrive count would not drive
-  // the tracked current count negative. Triggers an assertion on failure.
+  // the tracked current count negative, and that applying the tx-count delta
+  // would keep it in range. Triggers an assertion on failure.
   void createVerifyBarrierArriveCall(ImplicitLocOpBuilder &b, Value mbar,
                                      int count, Value pred,
                                      Operation *insertPoint,
-                                     Value recipientCTAs);
+                                     Value recipientCTAs, int txCount = 0);
   // updateBarrierState: Apply an arrive count to the tracked barrier state,
-  // toggling the phase when the count reaches zero and reloading the current
-  // count from the initial count.
+  // apply a tx-count delta, toggling the phase when both counts reach zero and
+  // reloading the current count from the initial count.
   void createUpdateBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                     int count, Value pred,
-                                    Operation *insertPoint,
-                                    Value recipientCTAs);
+                                    Operation *insertPoint, Value recipientCTAs,
+                                    int txCount = 0);
   // setWriteVisibility: Set the write visibility for a buffer. Marks the buffer
   // as visible to the threads set in threadMask. Clears out any other threads
   // from the visibility bitmask. We know this is safe because there cannot be
@@ -168,11 +169,16 @@ public:
                                    int thread, Value pred, MemType memType,
                                    Operation *insertPoint, Value recipientCTAs);
   // trackBarrierWriteForBuffer: mark a specific buffer as tracked by a
-  // barrier in the write-tracking table.
+  // barrier in the write-tracking table. When diagonalEffectRecipientCTAs is
+  // false, every signaled barrier row publishes the full effectRecipientCTAs
+  // mask. When it is true, barrier row i publishes only bit i of that mask.
   void createTrackBarrierWriteForBufferCall(ImplicitLocOpBuilder &b, Value mbar,
                                             Value buf, uint32_t length,
                                             Value pred, MemType memType,
-                                            Operation *insertPoint);
+                                            Operation *insertPoint,
+                                            Value barrierRecipientCTAs,
+                                            Value effectRecipientCTAs,
+                                            bool diagonalEffectRecipientCTAs);
   // clearBarrierWriteTracking: clear all write tracking associated with the
   // given barrier row.
   void createClearBarrierWriteTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
@@ -198,13 +204,15 @@ public:
   void createVerifyWriteVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
                                        uint32_t length, int thread,
                                        StringRef operandName, Value pred,
-                                       MemType memType, Operation *insertPoint);
+                                       MemType memType, Operation *insertPoint,
+                                       Value recipientCTAs);
   // verifyReadVisibility: ensure all reads from the buffer are visible to the
   // thread.
   void createVerifyReadVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
                                       uint32_t length, int thread,
                                       StringRef operandName, Value pred,
-                                      MemType memType, Operation *insertPoint);
+                                      MemType memType, Operation *insertPoint,
+                                      Value recipientCTAs);
   // copyWriteVisibility: replicate the write visibility bit of sourceThread to
   // every destination thread in destMask.
   void createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,
@@ -254,13 +262,11 @@ public:
   // buffer is zero before the access described by pendingAccessType.
   // When excludeSelf is true, the calling thread's own column is masked out
   // so that only other partitions' outstanding commits are checked.
-  void createCheckOutstandingCommitsCall(ImplicitLocOpBuilder &b, Value buf,
-                                         uint32_t length, int thread,
-                                         StringRef pendingAccessType,
-                                         Value pred, MemType memType,
-                                         CommitKind::Kind commitKind,
-                                         Operation *insertPoint,
-                                         bool excludeSelf = false);
+  void createCheckOutstandingCommitsCall(
+      ImplicitLocOpBuilder &b, Value buf, uint32_t length, int thread,
+      StringRef pendingAccessType, Value pred, MemType memType,
+      CommitKind::Kind commitKind, Operation *insertPoint, Value recipientCTAs,
+      bool excludeSelf = false);
 
 private:
   ModuleOp module;

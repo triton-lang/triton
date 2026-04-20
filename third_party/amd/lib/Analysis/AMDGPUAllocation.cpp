@@ -11,9 +11,6 @@
 
 namespace mlir::triton::AMD {
 
-// Max shmem instruction in bits
-constexpr int kMaxShmemVecBitLength = 128;
-
 unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
                                         RankedTensorType dstTy) {
   if (!cvtNeedsSharedMemory(srcTy, dstTy))

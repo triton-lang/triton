@@ -162,7 +162,7 @@ int computeMinCountBackward(Operation *cursor, Operation *cameFrom,
   assert(cameFrom != nullptr);
   // Step to the previous op within the current block; if none, step to
   // the parent op. Stop at the module since it asserts on ->getPrevNode().
-  auto getPredecessor = [&cameFrom](Operation *op) {
+  auto getPredecessor = [](Operation *op) {
     auto prevOp = op->getPrevNode();
     if (!prevOp) {
       prevOp = op->getParentOp();
@@ -397,46 +397,36 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
       return;
     }
 
-    // For HW which does not support async loads (GFX9) but only direct-to-lds,
-    // we still use the waitcnt to support interleaving of direct-to-lds loads
-    // when pipelining. The flag is used to emit warnings in case we find
-    // tt.loads/store which make the computed count conservative and hinder
-    // performance.
-    bool supportsAsyncLoads = true;
-    switch (targetInfo.getISAFamily()) {
-    case triton::AMD::ISAFamily::CDNA3:
-    case triton::AMD::ISAFamily::CDNA4:
-      supportsAsyncLoads = false;
-      break;
-    default:
-      break;
-    }
-
     ModuleOp m = getOperation();
 
-    // ttg.async_wait should only count async **non** tdm load:
-    SmallVector<ttg::AsyncWaitOp> waitOps;
-    getOperation()->walk(
-        [&](ttg::AsyncWaitOp waitOp) { waitOps.push_back(waitOp); });
+    // With asyncmark/wait_asyncmark, LLVM handles vmcnt computation —
+    // Triton no longer needs to walk the IR and count outstanding async
+    // intrinsics. Keep the ttg.async_wait ops unchanged (they track
+    // commit groups) and lower them directly to wait_asyncmark later.
+    if (!targetInfo.useAsyncMarks()) {
+      // GFX1250 (and future arches without asyncmark) use instruction counting.
+      SmallVector<ttg::AsyncWaitOp> waitOps;
+      getOperation()->walk(
+          [&](ttg::AsyncWaitOp waitOp) { waitOps.push_back(waitOp); });
 
-    ModuleAxisInfoAnalysis axisInfo(m);
-    // Cache #intrinsic per asyc op to avoid expensive recomputations
-    DenseMap<Operation *, int> intrinsicCountCache;
-    auto countAsyncLoadInstructions = [&](Operation *op) {
-      auto found = intrinsicCountCache.find(op);
-      if (found != intrinsicCountCache.end()) {
-        return found->second;
+      ModuleAxisInfoAnalysis axisInfo(m);
+      DenseMap<Operation *, int> intrinsicCountCache;
+      auto countAsyncLoadInstructions = [&](Operation *op) {
+        auto found = intrinsicCountCache.find(op);
+        if (found != intrinsicCountCache.end()) {
+          return found->second;
+        }
+        auto v = getOpNumberOfAsyncCopyInstructions(
+            op, targetInfo, axisInfo,
+            /*emitRemarkOnNonAsyncOp=*/false);
+        intrinsicCountCache[op] = v;
+        return v;
+      };
+
+      for (auto waitOp : waitOps) {
+        IRRewriter builder(waitOp->getContext());
+        updateWaitCount(waitOp, countAsyncLoadInstructions, builder);
       }
-      auto v = getOpNumberOfAsyncCopyInstructions(op, targetInfo, axisInfo,
-                                                  !supportsAsyncLoads);
-      intrinsicCountCache[op] = v;
-      return v;
-    };
-
-    // Note: AsyncWaits should ignore TDM ops; different HW counter
-    for (auto waitOp : waitOps) {
-      IRRewriter builder(waitOp->getContext());
-      updateWaitCount(waitOp, countAsyncLoadInstructions, builder);
     }
 
     // amdgpu.AsyncTDMWait should only count async tdm ops

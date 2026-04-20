@@ -65,6 +65,9 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
     else:
         tl.static_assert(mx_scale_dtype == tl.float8e4nv, f"Unsupported {mx_scale_dtype=}")
         tl.static_assert(DEQUANT_SCALE_ROUNDING_MODE == 0, "Direct float8 scales only support ROUND_UP")
+        # Direct fp8 scales keep the existing plain cast semantics here: the
+        # stored scale is rounded by the fp8 conversion rather than forced
+        # upward despite the ROUND_UP mode name.
         scale_tensor = (max_val / _get_max_quant_val(mx_tensor_dtype)).to(tl.float8e4nv)
         dequant_scale_rounded = scale_tensor.to(tl.float32)
         scale_tensor = scale_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE])

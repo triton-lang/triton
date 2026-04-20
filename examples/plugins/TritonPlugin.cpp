@@ -75,6 +75,7 @@ TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
                                     nullptr,
                                     0,
                                     nullptr,
-                                    0};
+                                    0,
+                                    TRITON_VERSION};
   return &info;
 }

@@ -12,13 +12,22 @@
 namespace mlir::triton::instrument {
 
 struct MemEffectsOpInfo {
-  // Frontier: snapshot thread-visible frontier into barrier tracking.
-  // EffectWrites: track only buffers written by op effects.
-  // None: perform no visibility tracking for the barrier.
+  // Controls which memory effects become visible to a CTA after it waits on
+  // this barrier.
+  //
+  // Frontier snapshots the issuing thread's current visibility frontier into
+  // the barrier. A later wait publishes whatever shared/tensor memory writes
+  // and reads were visible to that logical thread before the arrive/commit. Use
+  // this for ordering operations whose semantics are a release of prior work.
+  //
+  // EffectWrites does not snapshot the whole thread frontier. Instead, it
+  // attaches only the explicit write effects of this op to the barrier. A later
+  // wait publishes those op-local writes and nothing else. Use this for PTX ops
+  // that perform the write and also signal the barrier via
+  // `mbarrier::complete_tx`.
   enum class BarrierTrackingMode {
     Frontier,
     EffectWrites,
-    None,
   };
   struct Effects {
     enum RW { Read, Write } rw;
@@ -35,6 +44,19 @@ struct MemEffectsOpInfo {
     Value pred;
     int count;
     BarrierTrackingMode trackingMode = BarrierTrackingMode::Frontier;
+    int txCount = 0;
+    // For EffectWrites, effectRecipientCTAs identifies the CTA rows where the
+    // op wrote its explicit result. By default, for
+    // diagonalEffectRecipientCTAs=false, waiting on a barrier publishes the CTA
+    // rows in effectRecipientCTAs, which is the full mask. This is the
+    // behaviour of TMA multicast. If diagonalEffectRecipientCTAs is true,
+    // waiting on a barrier publishes only the CTA rows in effectRecipientCTAs,
+    // which is the diagonal mask. e.g. effectRecipientCTAs = 0b1101 If
+    // DiagonalEffectRecipientCTAs is false, waiting on the barrier publishes
+    // the following CTA rows: CTA0 0b1101 CTA1 0b1101 CTA2 0b1101 CTA3 0b1101
+    // If diagonalEffectRecipientCTAs is true, waiting on the barrier publishes
+    // the following CTA rows: CTA0 0b1000 CTA1 0b0100 CTA2 0b0000 CTA3 0b0001
+    bool diagonalEffectRecipientCTAs = false;
   };
   enum class TrackingKind {
     None,
@@ -83,6 +105,8 @@ public:
   virtual ~ConSanTargetHooks() = default;
 
   virtual bool isTMAOp(Operation *op) const = 0;
+
+  virtual bool isCLCOp(Operation *op) const { return false; }
 
   virtual std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const = 0;

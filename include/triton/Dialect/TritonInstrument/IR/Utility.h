@@ -6,6 +6,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <array>
 
@@ -22,8 +23,11 @@ constexpr int numMemTypes = getMaxEnumValForMemType() + 1;
 constexpr int NUM_THREADS = 16;
 constexpr int TMA_THREAD_OFFSET = NUM_THREADS;
 constexpr int TC_THREAD_OFFSET = TMA_THREAD_OFFSET + NUM_THREADS;
-constexpr int TOTAL_NUM_THREADS = TC_THREAD_OFFSET + NUM_THREADS;
-constexpr int THREADS_BITMASK_SIZE = llvm::NextPowerOf2(TOTAL_NUM_THREADS);
+constexpr int CLC_THREAD_OFFSET = TC_THREAD_OFFSET + NUM_THREADS;
+constexpr int TOTAL_NUM_THREADS = CLC_THREAD_OFFSET + NUM_THREADS;
+static_assert(TOTAL_NUM_THREADS <= 64,
+              "ConSan thread bitsets are stored in i64 masks");
+const int THREADS_BITMASK_SIZE = llvm::PowerOf2Ceil(TOTAL_NUM_THREADS);
 
 namespace CommitKind {
 enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
@@ -37,8 +41,8 @@ enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
 // writeVisibility + readVisibility per active memory type.
 constexpr int kCapturesPerMemType = 2;
 
-// barrierStates + waiting (only when barriers exist).
-constexpr int kBarrierBaseCaptures = 2;
+// barrierStates + waiting + barrierWriteRecipients (only when barriers exist).
+constexpr int kBarrierBaseCaptures = 3;
 
 // writeTracking + readTracking per active memory type (only when barriers
 // exist and the memory type has buffers).
@@ -132,6 +136,7 @@ struct AuxDataMap {
   RegionToValueMap buffers[numMemTypes];
   RegionToValueMap barriers;
   RegionToValueMap barrierStates;
+  RegionToValueMap barrierWriteRecipients;
 
   RegionToValueMap writeVisibility[numMemTypes];
   RegionToValueMap writeTracking[numMemTypes];

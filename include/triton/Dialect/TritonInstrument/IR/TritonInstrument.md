@@ -9,10 +9,10 @@ Auxiliary state is kept in distributed tensors and global scratch memory, with t
 ### Thread model
 
 - Base threads: 16 warp-specialization (WS) threads (allowing for up to 16 partitions).
-- Peer classes: +16 Tensor Core (TC) threads and +16 TMA threads to model lack of ordering with base threads.
-- Total logical threads: 48. Bitmasks are sized to the next power of two: 64.
+- Peer classes: +16 TMA threads, +16 Tensor Core (TC) threads, and +16 CLC threads to model lack of ordering with base threads.
+- Total logical threads: 64.
 
-Indexing uses a logical thread id in [0, 48), with column vectors sized to 64 for layout convenience.
+Indexing uses a logical thread id in [0, 64), with column vectors sized to 64 for layout convenience.
 
 ## Auxiliary data structures
 
@@ -21,7 +21,7 @@ All types are generated on-demand (per partition) based on:
 - B: number of tracked buffers (power-of-two padded)
 - K: number of mbarriers (power-of-two padded)
 - T_bits: 64 (bitmask width)
-- T_commits: 16 (base threads; commit counters do not apply to TC/TMA helpers)
+- T_commits: 16 (base threads; commit counters do not apply to TC/TMA/CLC helpers)
 
 “tensor” means a distributed Triton tensor; “scratch” means a pointer into global scratch memory. Shapes below are logical; actual encodings are partition-local blocked layouts.
 
@@ -31,7 +31,7 @@ All types are generated on-demand (per partition) based on:
 - readVisibility (scratch, <B x 64 x i64>): Per-buffer, per-thread lanes. Each lane stores a 64-bit mask of other threads whose reads are visible to that lane’s thread
 - writeTracking (scratch, <B x K x i8>): Map buffers → barriers tracking writes (boolean stored in i8)
 - readTracking (scratch, <B x K x i64>): Map buffers → barriers tracking reads (bitmask of threads)
-- barrierStates (scratch, <K x i32>): Packed barrier metadata. Bit 0 stores the current phase, bits [1..10] the initial arrival count, bits [11..20] the current arrival count. The verifier checks underflow before updating, and flips the phase when the current count reaches zero.
+- barrierStates (scratch, <K x i64>): Packed barrier metadata. Bit 0 stores the current phase, bits [1..20] the initial arrival count, bits [21..40] the current arrival count, and bits [41..61] the signed tx-count. The verifier checks underflow before updating, and flips the phase when both the current count and tx-count reach zero.
 - waiting (scratch, <K x i32>): Per-barrier bitfield describing waiting threads. Each base thread gets two bits: bit (2 * thread + 0) is the waiting flag, bit (2 * thread + 1) stores the phase the thread is waiting on.
 - outstandingCommits (scratch, <B x 16 x i8>): Per-buffer, per-base-thread commit counters for cp.async and wgmma
 
@@ -53,13 +53,13 @@ ConSan separates “tracking” from “visibility transfer”:
   - experimental_set_read_visibility / experimental_set_write_visibility updates the appropriate visibility table for the current thread and buffer.
   - experimental_track_visible_reads / experimental_track_visible_writes snapshots current per-buffer visibility into readTracking/writeTracking for the given barrier.
 - At arrive/commit sites (e.g., tc commit, arrive on mbarrier): ConSan emits the track ops for both reads and writes.
-- At waits: experimental_transfer_visible_reads / experimental_transfer_visible_writes propagates tracked visibility from the barrier back into the waiting thread’s visibility, and this transfer is repeated to peer threads (base, TMA, TC) to keep the three classes consistent.
+- At waits: experimental_transfer_visible_reads / experimental_transfer_visible_writes propagates tracked visibility from the barrier back into the waiting thread’s visibility, and this transfer is repeated to peer threads (base, TMA, TC, CLC) to keep the classes consistent.
 
 ### Barrier phase/count tracking
 
 - experimental_init_barrier_state(barrier, count, barrierStates) initializes the per-barrier state with phase = 0 and both initial/current arrival counts = `count`.
-- experimental_verify_barrier_arrive(barrier, count, barrierStates) checks that subtracting `count` from the current arrival count would not underflow. The codegen emits an assert if it would.
-- experimental_update_barrier_state(barrier, count, barrierStates) applies the arrive: subtracts `count`, flips the phase when the count reaches zero, and reloads the current count from the initial count.
+- experimental_verify_barrier_arrive(barrier, count, txCount, barrierStates) checks that subtracting `count` from the current arrival count would not underflow and that applying `txCount` keeps the tx-count in range. The codegen emits an assert if it would not.
+- experimental_update_barrier_state(barrier, count, txCount, barrierStates) applies the arrive and tx-count delta, flips the phase when both counts reach zero, and reloads the current count from the initial count.
 
 ### Deadlock detection
 

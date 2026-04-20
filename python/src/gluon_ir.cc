@@ -595,19 +595,18 @@ void init_gluon_ir(py::module &&m) {
       .def("get_tensor_descriptor_layout_type",
            [](GluonOpBuilder &self, Type blockType, bool isSigned,
               Attribute layout) -> Type {
-             auto ctx = self.getContext();
              auto blockTy = cast<RankedTensorType>(blockType);
-             auto blockTyLayout = blockTy.cloneWithEncoding(layout);
-             return triton::TensorDescType::get(ctx, blockTyLayout, isSigned);
+             return triton::TensorDescType::get(blockTy.getShape(),
+                                                blockTy.getElementType(),
+                                                layout, isSigned);
            })
       .def("get_tensor_descriptor_im2col_layout_type",
            [](GluonOpBuilder &self, Type blockType, bool isSigned,
               Attribute layout) -> Type {
-             auto ctx = self.getContext();
              auto blockTy = cast<RankedTensorType>(blockType);
-             auto blockTyLayout = blockTy.cloneWithEncoding(layout);
              return triton::nvidia_gpu::TensorDescIm2ColType::get(
-                 ctx, blockTyLayout);
+                 blockTy.getShape(), blockTy.getElementType(), layout,
+                 isSigned);
            })
       .def("is_convert_layout_trivial",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> bool {
@@ -825,7 +824,7 @@ void init_gluon_ir(py::module &&m) {
           py::arg("propagateNan") = tt::PropagateNan::NONE)
       .def("create_tmem_copy",
            [](GluonOpBuilder &self, Value src, Value dst) {
-             self.create<ttng::TMEMCopyOp>(src, dst, /*barrier=*/Value());
+             self.create<ttng::TMEMCopyOp>(src, dst);
            })
       .def("create_tmem_subslice",
            [](GluonOpBuilder &self, Type resultTy, Value memDesc,
@@ -871,23 +870,19 @@ void init_gluon_ir(py::module &&m) {
           py::arg("relaxed") = false)
       // CLC (Cluster Launch Control) ops - SM100+
       .def("create_clc_try_cancel",
-           [](GluonOpBuilder &self, Value result, Value mbarrier,
-              bool multicast) {
-             self.create<ttng::CLCTryCancelOp>(result, mbarrier, multicast);
+           [](GluonOpBuilder &self, Value result, Value mbarrier) {
+             self.create<ttng::CLCTryCancelOp>(result, mbarrier);
            })
       .def("create_clc_load_result",
            [](GluonOpBuilder &self, Value result) -> Value {
-             auto i64Ty = self.getBuilder().getI64Type();
              return self.create<ttng::CLCLoadResultOp>(result);
            })
       .def("create_clc_is_canceled",
            [](GluonOpBuilder &self, Value clcResult) -> Value {
-             auto i1Ty = self.getBuilder().getI1Type();
              return self.create<ttng::CLCIsCanceledOp>(clcResult);
            })
       .def("create_clc_get_program_id",
            [](GluonOpBuilder &self, Value clcResult, int dim) -> Value {
-             auto i32Ty = self.getBuilder().getI32Type();
              return self.create<ttng::CLCGetProgramIdOp>(clcResult, dim);
            })
       .def("create_tcgen05_mma",
@@ -906,12 +901,13 @@ void init_gluon_ir(py::module &&m) {
               Value bScale, tt::ScaleDotElemType aType,
               tt::ScaleDotElemType bType, Value useAcc, Value pred,
               std::vector<Value> &mbarriers, std::vector<Value> &mbarrier_preds,
-              bool two_ctas) {
+              bool two_ctas, bool multicast) {
              Value accDep;
              auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
              self.create<ttng::TCGen5MMAScaledOp>(
                  tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
-                 useAcc, pred, mbarriers, mbarrier_preds, two_ctas);
+                 useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
+                 /*isAsync=*/false, multicast);
            })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier, Value &pred,
@@ -946,12 +942,15 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, int pendings) {
              self.create<ttng::TMAStoreWaitOp>(pendings);
            })
-      .def("create_async_tma_gather",
-           [](GluonOpBuilder &self, Value descPtr, Value xOffsets,
-              Value yOffset, Value barrier, Value result, Value pred) {
-             self.create<ttng::AsyncTMAGatherOp>(descPtr, xOffsets, yOffset,
-                                                 barrier, result, pred);
-           })
+      .def(
+          "create_async_tma_gather",
+          [](GluonOpBuilder &self, Value descPtr, Value xOffsets, Value yOffset,
+             Value barrier, Value result, Value pred, bool multicast) {
+            multicast &=
+                ttng::hasCGABroadcast(cast<ttg::MemDescType>(result.getType()));
+            self.create<ttng::AsyncTMAGatherOp>(
+                descPtr, xOffsets, yOffset, barrier, result, pred, multicast);
+          })
       .def("create_async_tma_scatter",
            [](GluonOpBuilder &self, Value descPtr, Value xOffsets,
               Value yOffset, Value src) {

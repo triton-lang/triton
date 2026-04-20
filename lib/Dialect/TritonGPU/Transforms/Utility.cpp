@@ -1,6 +1,7 @@
 #include "triton/Analysis/Utility.h"
 
 #include <fstream>
+#include <optional>
 
 #include "mlir/Analysis/DataFlow/LivenessAnalysis.h"
 #include "mlir/Analysis/SliceAnalysis.h"
@@ -119,6 +120,55 @@ unsigned getElementBitWidth(RankedTensorType type) {
   return typeForMem.getIntOrFloatBitWidth();
 }
 
+static std::optional<unsigned>
+getAtomicWriteElementsPerThreadCap(Operation *op) {
+  if (isa<triton::AtomicCASOp>(op))
+    return 1;
+
+  auto atomicRmw = dyn_cast<triton::AtomicRMWOp>(op);
+  if (!atomicRmw)
+    return std::nullopt;
+
+  Type elemTy = getElementTypeOrSelf(atomicRmw.getVal().getType());
+  if (elemTy.isInteger() || elemTy.isF64())
+    return 1;
+
+  if (atomicRmw.getAtomicRmwOp() != RMWOp::FADD)
+    return std::nullopt;
+
+  auto moduleOp = op->getParentOfType<ModuleOp>();
+  auto targetAttr =
+      moduleOp ? moduleOp->getAttrOfType<StringAttr>(ttg::AttrTargetName)
+               : nullptr;
+  if (!targetAttr || !targetAttr.getValue().starts_with("cuda:"))
+    return std::nullopt;
+
+  int computeCapability = getNVIDIAComputeCapability(moduleOp);
+  if (computeCapability >= 90)
+    return std::nullopt;
+
+  if (elemTy.isF32() || elemTy.isBF16())
+    return 1;
+  if (elemTy.isF16())
+    return 2;
+  return std::nullopt;
+}
+
+static unsigned getMaxElementsPerThread(Operation *op) {
+  Value val = getMemAccessPtr(op);
+  auto ty = cast<RankedTensorType>(val.getType());
+  unsigned elemNumBits = getElementBitWidth(ty);
+  unsigned maxElementsPerThread = 128 / elemNumBits;
+  // Some atomic lowerings are narrower than a plain store. TTGIR currently
+  // exposes the target architecture but not the PTX version, so we only cap
+  // cases that are unambiguous from the available target metadata and the
+  // current backend lowering.
+  if (auto atomicCap = getAtomicWriteElementsPerThreadCap(op)) {
+    maxElementsPerThread = std::min(maxElementsPerThread, *atomicCap);
+  }
+  return maxElementsPerThread;
+}
+
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                  ArrayRef<int64_t> shapePerCTA) {
@@ -132,10 +182,12 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
   unsigned maxContig =
       std::min(valInfo.getContiguity(order[0]), shapePerCTA[order[0]]);
   unsigned alignment = std::min(maxMultiple, maxContig);
-  unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
+  unsigned maxElementsPerThread = getMaxElementsPerThread(op);
+  unsigned currPerThread = std::min(alignment, maxElementsPerThread);
   LDBG("elemNumBytes: " << elemNumBytes
                         << ", divisibility: " << maxMultipleBytes
                         << ", contig: " << valInfo.getContiguity(order[0])
+                        << ", maximum: " << maxElementsPerThread
                         << ", alignment: " << alignment);
   return currPerThread;
 }
@@ -600,26 +652,10 @@ bool isExpensiveLoadOrStore(Operation *op) {
   return true;
 }
 
-bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
-  if (!op)
-    return true;
-  if (isa<triton::LoadOp, triton::StoreOp>(op))
-    return isExpensiveLoadOrStore(op);
-  if (isa<triton::CatOp>(op))
-    return triton::gpu::isExpensiveCat(cast<triton::CatOp>(op), targetEncoding);
-  if (isa<triton::gpu::AsyncCopyGlobalToLocalOp, triton::AtomicRMWOp,
-          triton::AtomicCASOp, triton::DotOp>(op))
-    return true;
-  if (isa<scf::YieldOp, scf::ForOp, scf::IfOp, scf::WhileOp, scf::ConditionOp>(
-          op))
-    return true;
-  return false;
-}
-
 bool canUseResultEncoding(Operation *op, Attribute targetEncoding) {
   if (isa<triton::CatOp>(op))
-    return !triton::gpu::isExpensiveCat(cast<triton::CatOp>(op),
-                                        targetEncoding);
+    return triton::gpu::isLegalCatEncoding(cast<triton::CatOp>(op),
+                                           targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
@@ -864,7 +900,6 @@ LogicalResult getConvertBackwardSlice(
 
   auto updateLayout = [&](Value value, Attribute encoding) {
     assert((isa<RankedTensorType>(value.getType())));
-    slice.insert(value);
     Attribute &existing = layout[value];
     if (existing && existing != encoding)
       return failure();
@@ -876,7 +911,8 @@ LogicalResult getConvertBackwardSlice(
     auto [currentValueUse, encoding] = queue.back();
     Value currentValue = currentValueUse->get();
     queue.pop_back();
-    if (!isa<RankedTensorType>(currentValue.getType()))
+    auto currentValueType = dyn_cast<RankedTensorType>(currentValue.getType());
+    if (!currentValueType)
       continue;
     // Skip propagating through for op/while op/ws op results for now.
     // TODO: enable this based on needs.
@@ -885,6 +921,11 @@ LogicalResult getConvertBackwardSlice(
       return failure();
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
+    // If the value already has the desired encoding, we can stop here without
+    // adding it to the slice.
+    if (currentValueType.getEncoding() == encoding)
+      continue;
+    slice.insert(currentValue);
 
     // If there is already an existing conversion to the target layout, we don't
     // need to propagate to the operands.
@@ -915,6 +956,7 @@ LogicalResult getConvertBackwardSlice(
           continue;
         if (failed(updateLayout(result, encoding)))
           return failure();
+        slice.insert(result);
       }
       if (isFreeConvert(definingOp)) {
         enqueue(definingOp->getOpOperand(0), encoding);
@@ -945,13 +987,6 @@ LogicalResult getConvertBackwardSlice(
         }
         if (!srcEncoding)
           return failure();
-        // If the infered layout matches the original one we don't need to keep
-        // propagating.
-        if (auto operandType =
-                dyn_cast<RankedTensorType>(operand.get().getType())) {
-          if (srcEncoding == operandType.getEncoding())
-            continue;
-        }
         enqueue(operand, srcEncoding);
       }
       continue;
@@ -1544,7 +1579,7 @@ bool comesFromLoadOrBlockArg(Value v) {
   // If this is problematic we can totally drop them
   return isa<BlockArgument>(v) ||
          (v.getDefiningOp() &&
-          isa<LoadOp, DescriptorLoadOp, DescriptorGatherOp>(v.getDefiningOp()));
+          isa<LoadOp, DescriptorLoadLikeOpInterface>(v.getDefiningOp()));
 }
 
 SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {

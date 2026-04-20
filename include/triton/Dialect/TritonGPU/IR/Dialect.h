@@ -5,6 +5,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 // TritonGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -50,11 +51,6 @@ constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
-// FIXME: rename to match above
-constexpr static char kPartitionAttrName[] = "ttg.partition";
-constexpr static char kPartitionOutputsAttrName[] = "ttg.partition.outputs";
-constexpr static char kPartitionStagesAttrName[] = "ttg.partition.stages";
-constexpr static char kWarpSpecializeTagAttrName[] = "ttg.warp_specialize.tag";
 
 // Find the contextual number of warps on which this operation is executed.
 int lookupNumWarps(Operation *op);
@@ -102,6 +98,7 @@ using LinearEncodingCache = Cache<CacheKey, LinearEncodingAttr>;
 namespace mlir::triton::gpu {
 struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   StringRef getName() const final { return "<SharedMemory>"; }
+  SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
 // Convert a distributed layout to a linear encoding
@@ -260,7 +257,8 @@ SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
 SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig);
 
-bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
+// Return true if \p cat would be valid with result encoding \p targetEncoding.
+bool isLegalCatEncoding(CatOp cat, Attribute targetEncoding);
 
 // Return true if a view between the two types cannot be implemented as a no-op.
 bool isExpensiveView(ArrayRef<int64_t> srcShape, Attribute srcEncoding,
@@ -332,13 +330,6 @@ LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
                                   ShapedType dstTy);
 // Verify a memory allocation operation.
 LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy);
-
-SetVector<int> getPartitionIds(Operation *op);
-SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op);
-SetVector<int> getPartitionIds(OpOperand *use);
-bool hasPartition(Operation *op);
-bool hasWarpSpecializeTag(Operation *op);
-std::optional<int> getWarpSpecializeTag(Operation *op);
 /// Returns the size in bytes of a scalar type when stored in shared memory.
 size_t getSharedMemorySize(Type type);
 
