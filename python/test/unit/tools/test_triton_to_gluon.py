@@ -66,7 +66,7 @@ def test_simple_kernel(tmp_path):
     x = torch.randn(n, device="cuda", dtype=torch.float32)
     y = torch.randn(n, device="cuda", dtype=torch.float32)
     out = torch.empty_like(x)
-    grid = (n // BLOCK,)
+    grid = (n // BLOCK, )
     kernel[grid](x, y, out, n, BLOCK)
 
     ref = torch.empty_like(x)
@@ -98,7 +98,7 @@ def test_triton_to_gluon_dot_minimal(tmp_path):
     M, N, K = 128, 128, 128
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
-    grid = (1,)
+    grid = (1, )
 
     c = torch.empty((M, N), device="cuda", dtype=torch.float32)
     kernel[grid](a, b, c, M, N, K, num_warps=8)
@@ -236,7 +236,7 @@ def test_triton_to_gluon_dot_scaled(
 
     c = torch.empty((BLOCK_M, BLOCK_N), device=device, dtype=torch.float32)
     ref = torch.empty_like(c)
-    grid = (1,)
+    grid = (1, )
     kernel_args = (
         BLOCK_M,
         BLOCK_N,
@@ -373,7 +373,7 @@ def test_triton_to_gluon_descriptor_roundtrip(tmp_path):
 
     M = N = 64
     y = torch.zeros((M, N), device="cuda", dtype=torch.float16)
-    grid = (1,)
+    grid = (1, )
     block_shape = [M, N]
     desc = TensorDescriptor(y, y.shape, y.stride(), block_shape)
     gluon_desc = _convert_host_descriptor(desc)
@@ -398,7 +398,7 @@ def test_triton_to_gluon_descriptor_load_roundtrip(tmp_path):
     M = N = 64
     x = torch.ones((M, N), device="cuda", dtype=torch.float16) * 3.0
     y = torch.zeros((M, N), device="cuda", dtype=torch.float16)
-    grid = (1,)
+    grid = (1, )
     block_shape = [M, N]
 
     in_desc = TensorDescriptor(x, x.shape, x.stride(), block_shape)
@@ -437,7 +437,7 @@ def test_triton_to_gluon_make_tensor_descriptor(tmp_path, with_allocator):
     M = N = 64
     x = torch.randn((M, N), device="cuda", dtype=torch.float16)
     y = torch.zeros_like(x)
-    grid = (1,)
+    grid = (1, )
 
     kernel[grid](x, y, M, N, M, N)
 
@@ -472,7 +472,7 @@ def test_triton_reshape_trans(tmp_path, TRANS_KIND):
     x = torch.randn(n, device="cuda", dtype=torch.float32)
     y = torch.randn(n, device="cuda", dtype=torch.float32)
     out = torch.empty_like(x)
-    grid = (n // BLOCK,)
+    grid = (n // BLOCK, )
     kernel[grid](x, y, out, n, BLOCK, TRANS_KIND)
     ref = torch.empty_like(x)
     reshape_trans_kernel[grid](x, y, ref, n, BLOCK, TRANS_KIND)
@@ -499,7 +499,7 @@ def test_split(tmp_path):
 
     n = 1024
     x = torch.randn(2 * n, device="cuda", dtype=torch.float32)
-    grid = (n // BLOCK_SPLIT,)
+    grid = (n // BLOCK_SPLIT, )
 
     out = torch.empty_like(x[:n])
     kernel[grid](x, out)
@@ -525,9 +525,9 @@ def test_cat_translation(tmp_path, can_reorder):
     block = 128
     x = torch.arange(0, block, device="cuda", dtype=torch.int32)
     y = torch.arange(-block, 0, device="cuda", dtype=torch.int32)
-    out = torch.empty((2 * block,), device="cuda", dtype=torch.int32)
+    out = torch.empty((2 * block, ), device="cuda", dtype=torch.int32)
 
-    kernel[(1,)](x, y, out, BLOCK=block, CAN_REORDER=can_reorder, num_warps=4)
+    kernel[(1, )](x, y, out, BLOCK=block, CAN_REORDER=can_reorder, num_warps=4)
 
     ref = torch.cat([x, y], dim=0)
     if can_reorder:
@@ -545,9 +545,9 @@ def reduce_to_scalar_kernel(out_ptr):
 
 def test_reduce_to_scalar(tmp_path):
     kernel = convert_kernel(reduce_to_scalar_kernel, "reduce_to_scalar_kernel", tmp_path)
-    grid = (1,)
+    grid = (1, )
 
-    out = torch.empty((1,), device="cuda", dtype=torch.int32)
+    out = torch.empty((1, ), device="cuda", dtype=torch.int32)
     kernel[grid](out)
     ref = torch.empty_like(out)
     reduce_to_scalar_kernel[grid](ref)
@@ -569,13 +569,13 @@ def test_extrema_reduction(tmp_path):
 
     block = 256
     x = torch.randn(block, device="cuda", dtype=torch.float32)
-    out_max = torch.empty((block // 2,), device="cuda", dtype=torch.float32)
-    out_min = torch.empty((block // 2,), device="cuda", dtype=torch.float32)
-    kernel[(1,)](x, out_max, out_min, BLOCK=block)
+    out_max = torch.empty((block // 2, ), device="cuda", dtype=torch.float32)
+    out_min = torch.empty((block // 2, ), device="cuda", dtype=torch.float32)
+    kernel[(1, )](x, out_max, out_min, BLOCK=block)
 
     ref_max = torch.empty_like(out_max)
     ref_min = torch.empty_like(out_min)
-    extrema_reduce_kernel[(1,)](x, ref_max, ref_min, BLOCK=block)
+    extrema_reduce_kernel[(1, )](x, ref_max, ref_min, BLOCK=block)
     torch.testing.assert_close(out_max, ref_max, atol=0, rtol=0)
     torch.testing.assert_close(out_min, ref_min, atol=0, rtol=0)
 
@@ -593,9 +593,9 @@ def test_num_threads(tmp_path):
 
     num_threads = 256
     out = torch.empty(num_threads, dtype=torch.int32, device="cuda")
-    kernel[(1,)](out, num_warps=num_threads // 32)
+    kernel[(1, )](out, num_warps=num_threads // 32)
     ref = torch.empty_like(out)
-    num_threads_kernel[(1,)](ref, num_warps=num_threads // 32)
+    num_threads_kernel[(1, )](ref, num_warps=num_threads // 32)
     torch.testing.assert_close(out, ref, atol=0, rtol=0)
 
 
@@ -610,11 +610,11 @@ def test_atomic_add(tmp_path):
     kernel = convert_kernel(atomic_add_kernel, "atomic_add_kernel", tmp_path)
 
     block = 32 * 4
-    ref = torch.zeros((block,), device="cuda")
-    atomic_add_kernel[(1,)](ref, BLOCK=block)
+    ref = torch.zeros((block, ), device="cuda")
+    atomic_add_kernel[(1, )](ref, BLOCK=block)
 
-    out = torch.zeros((block,), device="cuda")
-    kernel[(1,)](out, BLOCK=block)
+    out = torch.zeros((block, ), device="cuda")
+    kernel[(1, )](out, BLOCK=block)
     torch.testing.assert_close(out, ref)
 
 
@@ -637,17 +637,16 @@ def test_cat(tmp_path):
     x = torch.randn(BLOCK, device="cuda", dtype=torch.float32)
     y = torch.randn(BLOCK, device="cuda", dtype=torch.float32)
     out = torch.empty(2 * BLOCK, device="cuda", dtype=torch.float32)
-    kernel[(1,)](x, y, out, BLOCK)
+    kernel[(1, )](x, y, out, BLOCK)
 
     ref = torch.empty_like(out)
-    cat_kernel[(1,)](x, y, ref, BLOCK)
+    cat_kernel[(1, )](x, y, ref, BLOCK)
     torch.testing.assert_close(sorted(out.cpu()), sorted(ref.cpu()), atol=0, rtol=0)
 
 
 @triton.jit
-def gather_scatter_roundtrip_kernel(
-    out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y: tl.constexpr, BLOCK_X: tl.constexpr, BLOCK_Y: tl.constexpr
-):
+def gather_scatter_roundtrip_kernel(out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y: tl.constexpr, BLOCK_X: tl.constexpr,
+                                    BLOCK_Y: tl.constexpr):
     idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
     in_desc = tl.make_tensor_descriptor(in_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
     out_desc = tl.make_tensor_descriptor(out_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
@@ -668,7 +667,7 @@ def test_gather_scatter_roundtrip(tmp_path):
     inp = torch.arange(X * Y, device="cuda", dtype=torch.float16).reshape(X, Y)
     idx = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7], device="cuda", dtype=torch.int32)
     out = torch.zeros((X, Y), device="cuda", dtype=torch.float16)
-    kernel[(1,)](out, inp, idx, X, Y, BLOCK_X, BLOCK_Y)
+    kernel[(1, )](out, inp, idx, X, Y, BLOCK_X, BLOCK_Y)
 
     expected = torch.zeros_like(out)
     for i, row in enumerate(idx.tolist()):

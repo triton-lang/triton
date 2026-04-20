@@ -12,7 +12,10 @@ from triton.experimental.gluon.language.nvidia.hopper import (
 )
 
 from triton.tools.triton_to_gluon_translator.common_helpers import *  # noqa: F401,F403
-from triton.tools.triton_to_gluon_translator.common_helpers import tl_dot_decomposed_block_scales_impl
+from triton.tools.triton_to_gluon_translator.common_helpers import (
+    tl_dot_decomposed_block_scales_impl,
+    default_blocked_layout,
+)
 from triton.tools.triton_to_gluon_translator.nvidia_helpers import *  # noqa: F401,F403
 from triton.tools.triton_to_gluon_translator.nvidia_helpers import (
     tl_dot_mma_sync,
@@ -40,8 +43,8 @@ def _get_default_max_num_imprecise_acc(
 @gluon.constexpr_function
 def _get_default_input_precision(
     allow_tf32: bool | None,
-    input_precision: builtins.str | None,
-) -> builtins.str:
+    input_precision: str | None,
+) -> str:
     assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
     if input_precision is not None:
         return input_precision
@@ -68,7 +71,7 @@ def tl_dot_mmav3_supported(
     a_ty: ttgl.block_type,
     b_ty: ttgl.block_type,
     num_warps: int,
-    input_precision: builtins.str,
+    input_precision: str,
     max_num_imprecise_acc: int,
     out_dtype: ttgl.dtype,
 ) -> bool:
@@ -166,7 +169,7 @@ def _mmav3_acc_layout(
 
     return ttgl.NVMMADistributedLayout(
         version=[3, 0],
-        warps_per_tile=warps_per_tile,
+        warps_per_cta=warps_per_tile,
         instr_shape=instr_shape,
     )
 
@@ -205,7 +208,7 @@ def tl_dot_mmav3(
     )
 
     if acc is None:
-        ret_layout: ttgl.constexpr = ttgl.default_blocked_layout(c_shape, ttgl.num_warps())
+        ret_layout: ttgl.constexpr = default_blocked_layout(c_shape, ttgl.num_warps())
         acc = ttgl.zeros(c_shape, out_dtype, layout=mma_layout)
     else:
         ret_layout: ttgl.constexpr = acc.type.layout
@@ -224,19 +227,19 @@ def tl_dot(
     a: ttgl.tensor,
     b: ttgl.tensor,
     acc: ttgl.tensor | None = None,
-    input_precision: builtins.str | None = None,
-    allow_tf32: bool | None = None,
-    max_num_imprecise_acc: int | None = None,
+    input_precision_arg: builtins.str | None = None,
+    allow_tf32: builtins.bool | None = None,
+    max_num_imprecise_acc_arg: int | None = None,
     out_dtype: ttgl.dtype = ttgl.float32,
 ):
     input_precision: ttgl.constexpr = _get_default_input_precision(
         allow_tf32,
-        input_precision,
+        input_precision_arg,
     )
     max_num_imprecise_acc: ttgl.constexpr = _get_default_max_num_imprecise_acc(
         a.type,
         b.type,
-        max_num_imprecise_acc,
+        max_num_imprecise_acc_arg,
     )
     num_warps: ttgl.constexpr = ttgl.num_warps()
 

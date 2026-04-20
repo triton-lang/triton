@@ -7,8 +7,7 @@ from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared,
 
 from triton.tools.triton_to_gluon_translator.common_helpers import *  # noqa: F401,F403
 from triton.tools.triton_to_gluon_translator.common_helpers import (
-    default_blocked_layout,
-)
+    default_blocked_layout, )
 
 # ---- NVIDIA MMA sync (Ampere) ----
 
