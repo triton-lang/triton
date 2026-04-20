@@ -25,7 +25,6 @@ from triton.tools.triton_to_gluon_translator.nvidia_helpers import (
     tl_dot_decomposed_block_scales_impl,
 )
 
-
 # ---- NVIDIA Blackwell dot ----
 
 
