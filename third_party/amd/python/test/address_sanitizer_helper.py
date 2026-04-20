@@ -1,5 +1,8 @@
 import os
 import sys
+import torch
+import triton
+import triton.language as tl
 
 # Diagnostic prints so that, when ASan fails to emit its report at runtime,
 # the test harness in test_address_sanitizer.py still receives enough context
@@ -26,10 +29,6 @@ try:
     print("MAPS:\n" + "".join(_hits), file=sys.stderr)
 except Exception as _e:
     print(f"MAPS: <unreadable: {_e}>", file=sys.stderr)
-
-import torch
-import triton
-import triton.language as tl
 
 size = 4096
 x = torch.rand(size, device='cuda')
