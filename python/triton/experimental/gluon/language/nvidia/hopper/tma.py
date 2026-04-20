@@ -19,6 +19,9 @@ __all__ = [
     "async_copy_global_to_shared",
     "async_copy_global_to_shared_im2col",
     "async_copy_shared_to_global",
+    "async_load",
+    "async_load_im2col",
+    "async_store",
     "store_wait",
 ]
 
@@ -205,8 +208,7 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
         multicast: Enable multicast
     """
     if _semantic.builder.options.enable_iisan:
-        _emit_alignment_check(tensor_desc, coord, "async_copy_global_to_shared", "innermost coordinate",
-                              _semantic=_semantic)
+        _emit_alignment_check(tensor_desc, coord, "async_load", "innermost coordinate", _semantic=_semantic)
 
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
@@ -241,8 +243,7 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
         multicast: Enable multicast
     """
     if _semantic.builder.options.enable_iisan:
-        _emit_alignment_check(tensor_desc, coord, "async_copy_global_to_shared_im2col", "innermost coordinate",
-                              _semantic=_semantic)
+        _emit_alignment_check(tensor_desc, coord, "async_load", "innermost coordinate", _semantic=_semantic)
 
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
@@ -271,8 +272,7 @@ def async_store(tensor_desc, coord, src, _semantic=None):
         src (ttgl.shared_memory_descriptor): Source memory descriptor.
     """
     if _semantic.builder.options.enable_iisan:
-        _emit_alignment_check(tensor_desc, coord, "async_copy_shared_to_global", "innermost coordinate",
-                              _semantic=_semantic)
+        _emit_alignment_check(tensor_desc, coord, "async_store", "innermost coordinate", _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
 
