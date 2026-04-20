@@ -5,10 +5,18 @@ import triton
 import triton.language as tl
 import pytest
 from triton.tools.tensor_descriptor import TensorDescriptor
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
 from triton.tools.triton_to_gluon_translator.translator import convert_triton_to_gluon
 from triton.tools.triton_to_gluon_translator.target import TranslatorTarget
-from triton._internal_testing import is_blackwell, is_hopper_or_newer, is_cuda, is_hip_cdna4, is_hip_gfx1250, is_hip_cdna3_or_newer
+from triton._internal_testing import (
+    is_blackwell,
+    is_hopper_or_newer,
+    is_cuda,
+    is_hip_cdna4,
+    is_hip_gfx1250,
+    is_hip_cdna3_or_newer,
+)
 from triton.language.target_info import current_target
 
 
@@ -58,7 +66,7 @@ def test_simple_kernel(tmp_path):
     x = torch.randn(n, device="cuda", dtype=torch.float32)
     y = torch.randn(n, device="cuda", dtype=torch.float32)
     out = torch.empty_like(x)
-    grid = (n // BLOCK, )
+    grid = (n // BLOCK,)
     kernel[grid](x, y, out, n, BLOCK)
 
     ref = torch.empty_like(x)
@@ -90,7 +98,7 @@ def test_triton_to_gluon_dot_minimal(tmp_path):
     M, N, K = 128, 128, 128
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
-    grid = (1, )
+    grid = (1,)
 
     c = torch.empty((M, N), device="cuda", dtype=torch.float32)
     kernel[grid](a, b, c, M, N, K, num_warps=8)
@@ -98,6 +106,153 @@ def test_triton_to_gluon_dot_minimal(tmp_path):
     ref = torch.empty_like(c)
     matmul_tile_kernel[grid](a, b, ref, M, N, K, num_warps=8)
     torch.testing.assert_close(c, ref, atol=0, rtol=0)
+
+
+@triton.jit
+def dot_scaled_tile_kernel(
+    a_ptr,
+    b_ptr,
+    a_scale_ptr,
+    b_scale_ptr,
+    c_ptr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    HAS_A_SCALE: tl.constexpr,
+    HAS_B_SCALE: tl.constexpr,
+    A_FORMAT: tl.constexpr,
+    B_FORMAT: tl.constexpr,
+    LHS_K_PACK: tl.constexpr,
+    RHS_K_PACK: tl.constexpr,
+    FAST_MATH: tl.constexpr,
+):
+    offs_m = tl.arange(0, BLOCK_M)
+    offs_n = tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+    offs_scale_k = tl.arange(0, BLOCK_K // 32)
+
+    if A_FORMAT == "e2m1":
+        if LHS_K_PACK:
+            offs_ak = tl.arange(0, BLOCK_K // 2)
+            a = tl.load(a_ptr + offs_m[:, None] * (BLOCK_K // 2) + offs_ak[None, :])
+        else:
+            offs_mp = tl.arange(0, BLOCK_M // 2)
+            a = tl.load(a_ptr + offs_mp[:, None] * BLOCK_K + offs_k[None, :])
+    else:
+        a = tl.load(a_ptr + offs_m[:, None] * BLOCK_K + offs_k[None, :])
+
+    if B_FORMAT == "e2m1":
+        if RHS_K_PACK:
+            offs_bk = tl.arange(0, BLOCK_K // 2)
+            b = tl.load(b_ptr + offs_bk[:, None] * BLOCK_N + offs_n[None, :])
+        else:
+            offs_np = tl.arange(0, BLOCK_N // 2)
+            b = tl.load(b_ptr + offs_k[:, None] * (BLOCK_N // 2) + offs_np[None, :])
+    else:
+        b = tl.load(b_ptr + offs_k[:, None] * BLOCK_N + offs_n[None, :])
+
+    if HAS_A_SCALE:
+        a_scale = tl.load(a_scale_ptr + offs_m[:, None] * (BLOCK_K // 32) + offs_scale_k[None, :])
+    else:
+        a_scale = None
+
+    if HAS_B_SCALE:
+        b_scale = tl.load(b_scale_ptr + offs_n[:, None] * (BLOCK_K // 32) + offs_scale_k[None, :])
+    else:
+        b_scale = None
+
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    acc = tl.dot_scaled(
+        a,
+        a_scale,
+        A_FORMAT,
+        b,
+        b_scale,
+        B_FORMAT,
+        acc,
+        lhs_k_pack=LHS_K_PACK,
+        rhs_k_pack=RHS_K_PACK,
+        fast_math=FAST_MATH,
+    )
+    tl.store(c_ptr + offs_m[:, None] * BLOCK_N + offs_n[None, :], acc)
+
+
+def _make_dot_scaled_operand(fmt, rows, cols, *, device, is_rhs=False, k_pack=True):
+    if fmt == "e2m1":
+        if is_rhs:
+            operand = MXFP4Tensor(size=(cols, rows), device=device).random()
+            return operand.to_packed_tensor(dim=1 if k_pack else 0).T.contiguous()
+        operand = MXFP4Tensor(size=(rows, cols), device=device).random()
+        return operand.to_packed_tensor(dim=1 if k_pack else 0).contiguous()
+    if fmt == "e5m2":
+        return torch.randint(20, 40, (rows, cols), dtype=torch.uint8, device=device).view(torch.float8_e5m2)
+    if fmt == "e4m3":
+        return torch.randint(20, 40, (rows, cols), dtype=torch.uint8, device=device).view(torch.float8_e4m3fn)
+    if fmt == "fp16":
+        return torch.randn((rows, cols), dtype=torch.float16, device=device)
+    if fmt == "bf16":
+        return torch.randn((rows, cols), dtype=torch.bfloat16, device=device)
+    raise ValueError(f"unsupported dot_scaled format: {fmt}")
+
+
+def _make_dot_scaled_scale(rows, k, *, device):
+    return MXScaleTensor(size=(rows, k // 32), device=device).random(high=32.0).data
+
+
+@pytest.mark.parametrize(
+    "BLOCK_M,BLOCK_N,BLOCK_K,A_FORMAT,B_FORMAT,HAS_A_SCALE,HAS_B_SCALE,LHS_K_PACK,RHS_K_PACK,FAST_MATH,NUM_WARPS",
+    [
+        pytest.param(128, 16, 32, "e5m2", "e5m2", True, True, True, True, True, 4, id="fp8-both-scales"),
+        pytest.param(128, 128, 64, "e2m1", "e2m1", True, True, True, True, True, 4, id="fp4-both-scales"),
+        pytest.param(128, 128, 128, "e2m1", "e5m2", True, True, True, True, True, 4, id="mixed-lhs-fp4"),
+        pytest.param(128, 128, 128, "e5m2", "e2m1", True, True, True, True, True, 4, id="mixed-rhs-fp4"),
+        pytest.param(64, 16, 32, "fp16", "e5m2", False, True, True, True, True, 4, id="rhs-scale-only-fallback"),
+    ],
+)
+def test_triton_to_gluon_dot_scaled(
+    BLOCK_M,
+    BLOCK_N,
+    BLOCK_K,
+    A_FORMAT,
+    B_FORMAT,
+    HAS_A_SCALE,
+    HAS_B_SCALE,
+    LHS_K_PACK,
+    RHS_K_PACK,
+    FAST_MATH,
+    NUM_WARPS,
+    tmp_path,
+):
+    if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_gfx1250()):
+        pytest.skip("Requires Hopper, Blackwell, CDNA4, or gfx1250")
+    torch.manual_seed(0)
+
+    kernel = convert_kernel(dot_scaled_tile_kernel, "dot_scaled_tile_kernel", tmp_path)
+    device = "cuda"
+    a = _make_dot_scaled_operand(A_FORMAT, BLOCK_M, BLOCK_K, device=device, k_pack=LHS_K_PACK)
+    b = _make_dot_scaled_operand(B_FORMAT, BLOCK_K, BLOCK_N, device=device, is_rhs=True, k_pack=RHS_K_PACK)
+    a_scale = _make_dot_scaled_scale(BLOCK_M, BLOCK_K, device=device) if HAS_A_SCALE else None
+    b_scale = _make_dot_scaled_scale(BLOCK_N, BLOCK_K, device=device) if HAS_B_SCALE else None
+
+    c = torch.empty((BLOCK_M, BLOCK_N), device=device, dtype=torch.float32)
+    ref = torch.empty_like(c)
+    grid = (1,)
+    kernel_args = (
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
+        HAS_A_SCALE,
+        HAS_B_SCALE,
+        A_FORMAT,
+        B_FORMAT,
+        LHS_K_PACK,
+        RHS_K_PACK,
+        FAST_MATH,
+    )
+
+    kernel[grid](a, b, a_scale, b_scale, c, *kernel_args, num_warps=NUM_WARPS)
+    dot_scaled_tile_kernel[grid](a, b, a_scale, b_scale, ref, *kernel_args, num_warps=NUM_WARPS)
+    torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)
 
 
 @triton.jit
@@ -160,12 +315,42 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     dtype_dst = getattr(torch, dtype_dst_str)
     output = torch.empty((M, N), dtype=dtype_dst, device=device)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    kernel[grid](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
-                 output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K)
+    kernel[grid](
+        a,
+        b,
+        output,
+        M,
+        N,
+        K,
+        a.stride(0),
+        a.stride(1),
+        b.stride(0),
+        b.stride(1),
+        output.stride(0),
+        output.stride(1),
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
+    )
 
     ref = torch.empty_like(output)
-    matmul_kernel[grid](a, b, ref, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
-                        output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K)
+    matmul_kernel[grid](
+        a,
+        b,
+        ref,
+        M,
+        N,
+        K,
+        a.stride(0),
+        a.stride(1),
+        b.stride(0),
+        b.stride(1),
+        output.stride(0),
+        output.stride(1),
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
+    )
     torch.testing.assert_close(output, ref, atol=0, rtol=0)
 
 
@@ -188,7 +373,7 @@ def test_triton_to_gluon_descriptor_roundtrip(tmp_path):
 
     M = N = 64
     y = torch.zeros((M, N), device="cuda", dtype=torch.float16)
-    grid = (1, )
+    grid = (1,)
     block_shape = [M, N]
     desc = TensorDescriptor(y, y.shape, y.stride(), block_shape)
     gluon_desc = _convert_host_descriptor(desc)
@@ -213,7 +398,7 @@ def test_triton_to_gluon_descriptor_load_roundtrip(tmp_path):
     M = N = 64
     x = torch.ones((M, N), device="cuda", dtype=torch.float16) * 3.0
     y = torch.zeros((M, N), device="cuda", dtype=torch.float16)
-    grid = (1, )
+    grid = (1,)
     block_shape = [M, N]
 
     in_desc = TensorDescriptor(x, x.shape, x.stride(), block_shape)
@@ -252,7 +437,7 @@ def test_triton_to_gluon_make_tensor_descriptor(tmp_path, with_allocator):
     M = N = 64
     x = torch.randn((M, N), device="cuda", dtype=torch.float16)
     y = torch.zeros_like(x)
-    grid = (1, )
+    grid = (1,)
 
     kernel[grid](x, y, M, N, M, N)
 
@@ -287,7 +472,7 @@ def test_triton_reshape_trans(tmp_path, TRANS_KIND):
     x = torch.randn(n, device="cuda", dtype=torch.float32)
     y = torch.randn(n, device="cuda", dtype=torch.float32)
     out = torch.empty_like(x)
-    grid = (n // BLOCK, )
+    grid = (n // BLOCK,)
     kernel[grid](x, y, out, n, BLOCK, TRANS_KIND)
     ref = torch.empty_like(x)
     reshape_trans_kernel[grid](x, y, ref, n, BLOCK, TRANS_KIND)
@@ -314,7 +499,7 @@ def test_split(tmp_path):
 
     n = 1024
     x = torch.randn(2 * n, device="cuda", dtype=torch.float32)
-    grid = (n // BLOCK_SPLIT, )
+    grid = (n // BLOCK_SPLIT,)
 
     out = torch.empty_like(x[:n])
     kernel[grid](x, out)
@@ -340,9 +525,9 @@ def test_cat_translation(tmp_path, can_reorder):
     block = 128
     x = torch.arange(0, block, device="cuda", dtype=torch.int32)
     y = torch.arange(-block, 0, device="cuda", dtype=torch.int32)
-    out = torch.empty((2 * block, ), device="cuda", dtype=torch.int32)
+    out = torch.empty((2 * block,), device="cuda", dtype=torch.int32)
 
-    kernel[(1, )](x, y, out, BLOCK=block, CAN_REORDER=can_reorder, num_warps=4)
+    kernel[(1,)](x, y, out, BLOCK=block, CAN_REORDER=can_reorder, num_warps=4)
 
     ref = torch.cat([x, y], dim=0)
     if can_reorder:
@@ -360,9 +545,9 @@ def reduce_to_scalar_kernel(out_ptr):
 
 def test_reduce_to_scalar(tmp_path):
     kernel = convert_kernel(reduce_to_scalar_kernel, "reduce_to_scalar_kernel", tmp_path)
-    grid = (1, )
+    grid = (1,)
 
-    out = torch.empty((1, ), device="cuda", dtype=torch.int32)
+    out = torch.empty((1,), device="cuda", dtype=torch.int32)
     kernel[grid](out)
     ref = torch.empty_like(out)
     reduce_to_scalar_kernel[grid](ref)
@@ -384,13 +569,13 @@ def test_extrema_reduction(tmp_path):
 
     block = 256
     x = torch.randn(block, device="cuda", dtype=torch.float32)
-    out_max = torch.empty((block // 2, ), device="cuda", dtype=torch.float32)
-    out_min = torch.empty((block // 2, ), device="cuda", dtype=torch.float32)
-    kernel[(1, )](x, out_max, out_min, BLOCK=block)
+    out_max = torch.empty((block // 2,), device="cuda", dtype=torch.float32)
+    out_min = torch.empty((block // 2,), device="cuda", dtype=torch.float32)
+    kernel[(1,)](x, out_max, out_min, BLOCK=block)
 
     ref_max = torch.empty_like(out_max)
     ref_min = torch.empty_like(out_min)
-    extrema_reduce_kernel[(1, )](x, ref_max, ref_min, BLOCK=block)
+    extrema_reduce_kernel[(1,)](x, ref_max, ref_min, BLOCK=block)
     torch.testing.assert_close(out_max, ref_max, atol=0, rtol=0)
     torch.testing.assert_close(out_min, ref_min, atol=0, rtol=0)
 
@@ -408,9 +593,9 @@ def test_num_threads(tmp_path):
 
     num_threads = 256
     out = torch.empty(num_threads, dtype=torch.int32, device="cuda")
-    kernel[(1, )](out, num_warps=num_threads // 32)
+    kernel[(1,)](out, num_warps=num_threads // 32)
     ref = torch.empty_like(out)
-    num_threads_kernel[(1, )](ref, num_warps=num_threads // 32)
+    num_threads_kernel[(1,)](ref, num_warps=num_threads // 32)
     torch.testing.assert_close(out, ref, atol=0, rtol=0)
 
 
@@ -425,11 +610,11 @@ def test_atomic_add(tmp_path):
     kernel = convert_kernel(atomic_add_kernel, "atomic_add_kernel", tmp_path)
 
     block = 32 * 4
-    ref = torch.zeros((block, ), device="cuda")
-    atomic_add_kernel[(1, )](ref, BLOCK=block)
+    ref = torch.zeros((block,), device="cuda")
+    atomic_add_kernel[(1,)](ref, BLOCK=block)
 
-    out = torch.zeros((block, ), device="cuda")
-    kernel[(1, )](out, BLOCK=block)
+    out = torch.zeros((block,), device="cuda")
+    kernel[(1,)](out, BLOCK=block)
     torch.testing.assert_close(out, ref)
 
 
@@ -452,16 +637,17 @@ def test_cat(tmp_path):
     x = torch.randn(BLOCK, device="cuda", dtype=torch.float32)
     y = torch.randn(BLOCK, device="cuda", dtype=torch.float32)
     out = torch.empty(2 * BLOCK, device="cuda", dtype=torch.float32)
-    kernel[(1, )](x, y, out, BLOCK)
+    kernel[(1,)](x, y, out, BLOCK)
 
     ref = torch.empty_like(out)
-    cat_kernel[(1, )](x, y, ref, BLOCK)
+    cat_kernel[(1,)](x, y, ref, BLOCK)
     torch.testing.assert_close(sorted(out.cpu()), sorted(ref.cpu()), atol=0, rtol=0)
 
 
 @triton.jit
-def gather_scatter_roundtrip_kernel(out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y: tl.constexpr, BLOCK_X: tl.constexpr,
-                                    BLOCK_Y: tl.constexpr):
+def gather_scatter_roundtrip_kernel(
+    out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y: tl.constexpr, BLOCK_X: tl.constexpr, BLOCK_Y: tl.constexpr
+):
     idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
     in_desc = tl.make_tensor_descriptor(in_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
     out_desc = tl.make_tensor_descriptor(out_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
@@ -482,7 +668,7 @@ def test_gather_scatter_roundtrip(tmp_path):
     inp = torch.arange(X * Y, device="cuda", dtype=torch.float16).reshape(X, Y)
     idx = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7], device="cuda", dtype=torch.int32)
     out = torch.zeros((X, Y), device="cuda", dtype=torch.float16)
-    kernel[(1, )](out, inp, idx, X, Y, BLOCK_X, BLOCK_Y)
+    kernel[(1,)](out, inp, idx, X, Y, BLOCK_X, BLOCK_Y)
 
     expected = torch.zeros_like(out)
     for i, row in enumerate(idx.tolist()):
