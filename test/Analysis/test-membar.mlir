@@ -1304,11 +1304,39 @@ tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
 }
 
 // CHECK-LABEL: disjoint_select_cmpi_sge
-// (phase + 2) % 3 vs (phase + 1) % 3 expressed via the sge select/cmpi
-// idiom (NVIDIA pipeliner shape) — provably disjoint.
+// Write at (phase + 1) % 3 via the sge select/cmpi idiom (NVIDIA
+// pipeliner shape, C == 1) vs. read at phase % 3 via arith.remsi —
+// same base, different offsets in the same modular ring, provably
+// disjoint.
 tt.func @disjoint_select_cmpi_sge(%cst: tensor<128x128xf16>, %phase: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  %w_sum = arith.addi %phase, %c1_i32 : i32
+  %w_cmp = arith.cmpi sge, %w_sum, %c3_i32 : i32
+  %w_idx = arith.select %w_cmp, %c0_i32, %w_sum : i32
+  %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  %r_idx = arith.remsi %phase, %c3_i32 : i32
+  %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
+// CHECK-LABEL: must_barrier_select_cmpi_large_c
+// The select/cmpi matcher only accepts C == 1. For C >= 2 the wrap arm
+// returns 0 instead of (base + C) - N, so matching it as (base + C) % N
+// would be unsound (e.g. phase=2, N=3, C=2: wrap gives 0, but 4 % 3 = 1).
+// The matcher must reject this and leave the index opaque.
+tt.func @must_barrier_select_cmpi_large_c(%cst: tensor<128x128xf16>, %phase: i32) {
+  %c0_i32 = arith.constant 0 : i32
   %c2_i32 = arith.constant 2 : i32
   %c3_i32 = arith.constant 3 : i32
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
@@ -1318,15 +1346,13 @@ tt.func @disjoint_select_cmpi_sge(%cst: tensor<128x128xf16>, %phase: i32) {
   %w_idx = arith.select %w_cmp, %c0_i32, %w_sum : i32
   %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
 
-  %r_sum = arith.addi %phase, %c1_i32 : i32
-  %r_cmp = arith.cmpi sge, %r_sum, %c3_i32 : i32
-  %r_idx = arith.select %r_cmp, %c0_i32, %r_sum : i32
+  %r_idx = arith.remsi %phase, %c3_i32 : i32
   %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
 
   // CHECK: ttg.local_store
   ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-  // CHECK-NOT: ttg.barrier local
-  // CHECK: ttg.local_load
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
   %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
   tt.return
 }

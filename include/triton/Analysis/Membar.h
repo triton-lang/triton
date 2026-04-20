@@ -26,24 +26,17 @@ using MembarSliceFilterFn =
     std::function<bool(const AllocationSlice &, const AllocationSlice &,
                        bool /*lhsIsRead*/, bool /*rhsIsRead*/, Allocation *)>;
 
-/// Models a buffer index expression of the form (baseValue + constantOffset),
-/// optionally under a known modulus.
-/// Enables proving that two accesses target different buffer slots within the
-/// same loop iteration. For example:
-///   - Read from slot[i]   -> {base=i, offset=0}
-///   - Write to slot[i+1]  -> {base=i, offset=1}
-/// Same base, different offsets -> provably disjoint.
+/// A buffer index decomposed as `baseValue + constantOffset`, optionally
+/// under a known modulus (recorded when the index is wrapped by remsi or
+/// the pipeliner's select/cmpi idiom). Used to prove that two
+/// multi-buffered shared-memory accesses target different slots.
 ///
-/// When the index is wrapped by a modular operation (remsi or select/cmpi),
-/// the modulus is recorded so that offsets are compared modulo that value.
-///
-/// Correctness relies on the SSA-identity invariant: two expressions with the
-/// same baseValue refer to the same runtime integer *within a single
-/// execution of the enclosing region*. Across a loop backedge the same SSA
-/// value (typically a for-loop iter_arg) denotes different runtime values on
-/// different iterations, so cross-iteration hazards are handled separately
-/// via the isLoopCarried flag on AllocationSlice, which disables this
-/// expression-based shortcut.
+/// Correctness relies on SSA identity: two expressions with the same
+/// baseValue refer to the same runtime integer only within a single
+/// execution of the enclosing region. Across a loop backedge the same SSA
+/// value (e.g. an scf.for iter_arg) denotes different runtime values on
+/// different iterations; those cases are handled separately via the
+/// isLoopCarried flag on AllocationSlice, which suppresses this shortcut.
 struct BufferIndexExpr {
   Value baseValue;
   int64_t constantOffset = 0;
@@ -52,8 +45,8 @@ struct BufferIndexExpr {
   bool hasBase() const { return baseValue != nullptr; }
 
   /// Returns true only if both expressions provably refer to different buffer
-  /// slots: same base value, and offsets that differ (modulo the buffer count
-  /// when a modulus is known).
+  /// slots: same base value, and offsets that differ (modulo the recorded
+  /// modulus when one is known).
   bool isProvablyDifferentFrom(const BufferIndexExpr &other) const {
     if (baseValue != other.baseValue)
       return false;
@@ -125,11 +118,9 @@ public:
     return shifted;
   }
 
-  /// Returns a copy of this slice with the loop-carried flag set. Used when
-  /// propagating BlockInfo across a CFG backedge so that subsequent
-  /// disjointness checks conservatively assume the slice may refer to a
-  /// previous iteration. See BufferIndexExpr for the SSA-identity invariant
-  /// this flag protects.
+  /// Returns a copy of this slice with isLoopCarried set. Used when
+  /// propagating BlockInfo across a CFG backedge; see BufferIndexExpr for
+  /// the SSA-identity invariant this flag protects.
   AllocationSlice createLoopCarriedCopy() const {
     AllocationSlice copy = *this;
     copy.isLoopCarried = true;
@@ -157,8 +148,6 @@ private:
   Allocation::BufferId bufferId;
   // Buffer index expression for multi-buffered accesses via MemDescIndexOp.
   std::optional<BufferIndexExpr> bufferIndexExpr;
-  // True if this slice originates from a previous loop iteration (via
-  // backedge). Expression matching is disabled for loop-carried slices.
   bool isLoopCarried = false;
 };
 
@@ -303,11 +292,9 @@ class MembarOrFenceAnalysis {
   using VirtualBlock = std::pair<Block *, Block::iterator>;
   struct SuccessorInfo {
     VirtualBlock block;
-    /// True if this successor edge is a loop backedge. A successor edge
-    /// from `from` to `successor` is a backedge iff `successor` dominates
-    /// `from`. Backedge propagation tags incoming slices as loop-carried
-    /// so that per-iteration disjointness proofs are not (incorrectly)
-    /// applied across iterations.
+    /// True when this edge is a loop backedge, defined as the target
+    /// dominating the source block. Backedges propagate slices as
+    /// loop-carried (see BlockInfo::joinLoopCarried).
     bool isBackedge = false;
   };
 
@@ -340,11 +327,10 @@ protected:
   void resolve(FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
                OpBuilder *builder);
 
-  /// Collects the successors of the terminator, classifying each edge as a
-  /// forward edge or a loop backedge. Dispatches on the op's control-flow
-  /// interface (`BranchOpInterface`, `RegionBranchOpInterface`, or
-  /// `RegionBranchTerminatorOpInterface`). An edge is a backedge iff its
-  /// target block dominates `operation`'s block.
+  /// Collects the successors of the terminator and populates
+  /// SuccessorInfo::isBackedge for each. Dispatches on the op's
+  /// control-flow interface (`BranchOpInterface`,
+  /// `RegionBranchOpInterface`, or `RegionBranchTerminatorOpInterface`).
   void visitTerminator(Operation *operation, DominanceInfo &domInfo,
                        SmallVector<SuccessorInfo> &successors);
 

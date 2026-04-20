@@ -22,10 +22,13 @@ static std::optional<int64_t> getConstantIntValue(Value v) {
 
 static BufferIndexExpr analyzeBufferIndex(Value indexValue);
 
-/// Match the modular wrap pattern emitted by the pipeliner:
-///   select(cmpi sge (addi(base, C), N), zero, addi(base, C))
-///   select(cmpi slt (addi(base, C), N), addi(base, C), zero)
-/// Both represent (base + C) % N.
+/// Match the one-step modular wrap the pipeliner emits on its iter_arg:
+///   select(cmpi sge (addi(base, 1), N), zero, addi(base, 1))
+///   select(cmpi slt (addi(base, 1), N), addi(base, 1), zero)
+/// Both equal (base + 1) % N when base ∈ [0, N), which the pipeliner
+/// ensures. For larger constants the wrap arm would be 0 rather than
+/// (base + C) - N, so we restrict C to 1 here; general `x % N` should use
+/// arith.remsi, handled in analyzeBufferIndex.
 static std::optional<BufferIndexExpr>
 matchModuloPattern(arith::SelectOp selectOp) {
   auto cmp = selectOp.getCondition().getDefiningOp<arith::CmpIOp>();
@@ -43,9 +46,6 @@ matchModuloPattern(arith::SelectOp selectOp) {
     return std::nullopt;
   }
 
-  // The wrap arm must be zero so the wrapped result equals (base + C) mod N.
-  // A non-zero wrap value would represent (base + C) - N + K, which cannot be
-  // represented by (base, offset, modulus) and would be unsound to accept.
   auto wrapConst = getConstantIntValue(wrapVal);
   if (!wrapConst || *wrapConst != 0)
     return std::nullopt;
@@ -61,21 +61,18 @@ matchModuloPattern(arith::SelectOp selectOp) {
     c = getConstantIntValue(addOp.getLhs());
     base = addOp.getRhs();
   }
-  if (!c)
+  if (!c || *c != 1)
     return std::nullopt;
 
-  // The modulus N comes from cmpi(addi(...), N). Refuse to match if N
-  // is not a positive compile-time constant — without a known positive
-  // modulus, offsets extracted from within the pattern cannot be safely
-  // compared.
+  // Modulus must be a positive compile-time constant for comparisons to
+  // be meaningful.
   auto mod = getConstantIntValue(cmp.getRhs());
   if (!mod || *mod <= 0)
     return std::nullopt;
 
   auto baseExpr = analyzeBufferIndex(base);
-  // Nested moduli cannot be represented by a single (base, offset, mod)
-  // triple: ((x mod M) + C) mod N is not equivalent to (x + C) mod N in
-  // general. Fall back to an opaque expression.
+  // Nested moduli ((x mod M) + 1) mod N don't reduce to (x + 1) mod N in
+  // general; bail out to an opaque expression.
   if (baseExpr.modulus)
     return std::nullopt;
   BufferIndexExpr result{baseExpr.baseValue, baseExpr.constantOffset + *c};
@@ -84,7 +81,8 @@ matchModuloPattern(arith::SelectOp selectOp) {
 }
 
 /// Decompose a buffer index value into BufferIndexExpr{base, offset}.
-/// Handles: constants, addi(base, const), and the pipeliner's modular wrap.
+/// Handles: constants, addi(base, const), arith.remsi, and the pipeliner's
+/// select-based modular wrap.
 static BufferIndexExpr analyzeBufferIndex(Value indexValue) {
   if (auto c = getConstantIntValue(indexValue))
     return BufferIndexExpr{nullptr, *c};
@@ -93,8 +91,8 @@ static BufferIndexExpr analyzeBufferIndex(Value indexValue) {
     auto composeWithConstant = [&](Value nonConst,
                                    int64_t constant) -> BufferIndexExpr {
       auto baseExpr = analyzeBufferIndex(nonConst);
-      // (x mod N) + C is not representable as (base, offset, mod). Returning
-      // an opaque expression rooted at this addi is sound but conservative.
+      // (x mod N) + C is not representable as (base, offset, mod); bail
+      // out to an opaque expression.
       if (baseExpr.modulus)
         return BufferIndexExpr{indexValue, 0};
       return {baseExpr.baseValue, baseExpr.constantOffset + constant};
@@ -109,16 +107,12 @@ static BufferIndexExpr analyzeBufferIndex(Value indexValue) {
     if (auto result = matchModuloPattern(selectOp))
       return *result;
 
-  // remsi(x, N) is the canonical form of modular wrap — strip it and
-  // record the modulus so isProvablyDifferentFrom compares mod N.
-  // Only strip when N is a positive compile-time constant; a dynamic or
-  // non-positive modulus would leave the expression without meaningful
-  // modulus protection.
+  // arith.remsi(x, N): strip the remainder and record N as the modulus.
+  // N must be a positive compile-time constant.
   if (auto remOp = indexValue.getDefiningOp<arith::RemSIOp>()) {
     if (auto mod = getConstantIntValue(remOp.getRhs()); mod && *mod > 0) {
       auto result = analyzeBufferIndex(remOp.getLhs());
-      // An inner modulus would be overwritten; fall back to opaque to
-      // preserve soundness (see note in matchModuloPattern).
+      // Nested modulus: bail to opaque (see matchModuloPattern).
       if (result.modulus)
         return BufferIndexExpr{indexValue, 0};
       result.modulus = *mod;
@@ -147,11 +141,9 @@ AllocationSlice::AllocationSlice(Value value,
     }
   }
 
-  // Populate the buffer-index expression only for MemDescIndexOp, which
-  // selects an entire slot of a multi-buffered allocation. MemDescSubsliceOp
-  // describes a sub-region within a slot and is already captured by
-  // subsliceOffsets; the two pieces of information are combined in
-  // intersects() below.
+  // MemDescIndexOp selects a whole slot of a multi-buffered allocation;
+  // record its index so intersects() can prove slot-level disjointness.
+  // Sub-region offsets within a slot are captured by subsliceOffsets above.
   if (auto indexOp = value.getDefiningOp<triton::gpu::MemDescIndexOp>()) {
     bufferIndexExpr = analyzeBufferIndex(indexOp.getIndex());
   }
@@ -162,12 +154,10 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
 
-  // Whole-slot disjointness: if both slices have buffer index expressions
-  // and neither is loop-carried, use expression matching to prove they
-  // target different slots within a single iteration. If this doesn't
-  // prove disjointness, fall through to the per-dimension subslice check
-  // below, which can still catch partial-slot disjointness within the
-  // same slot.
+  // Whole-slot disjointness via buffer index matching. Skipped for
+  // loop-carried slices, where the SSA-identity invariant does not hold.
+  // A failed match falls through to the subslice check below, which can
+  // still prove partial disjointness within the same slot.
   if (bufferIndexExpr && other.bufferIndexExpr && !isLoopCarried &&
       !other.isLoopCarried) {
     if (bufferIndexExpr->isProvablyDifferentFrom(*other.bufferIndexExpr))
@@ -273,9 +263,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   std::deque<VirtualBlock> blockList;
   // Start the analysis from the entry block of the function.
   blockList.emplace_back(&funcOp.getBlocks().front(), Block::iterator());
-  // Dominance info is used to classify successor edges as backedges: an edge
-  // from `from` to `successor` is a backedge iff `successor` dominates `from`.
-  // Built once per function since the CFG is not modified during resolve().
+  // Used by visitTerminator to classify backedges. Built once per
+  // function since the CFG is not modified during resolve().
   DominanceInfo domInfo(funcOp);
 
   // A fixed point algorithm
@@ -347,9 +336,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
 void MembarOrFenceAnalysis::visitTerminator(
     Operation *op, DominanceInfo &domInfo,
     SmallVector<SuccessorInfo> &successors) {
-  // Case 1: plain CFG branch (cf.br, cf.cond_br, ...). Each successor is
-  // another block in the same region; it's a backedge iff the successor
-  // dominates the source block.
+  // Case 1: plain CFG branch (cf.br, cf.cond_br, ...). Successors are
+  // blocks in the same region.
   if (isa<BranchOpInterface>(op)) {
     Block *from = op->getBlock();
     for (Block *successor : op->getSuccessors()) {
@@ -361,10 +349,9 @@ void MembarOrFenceAnalysis::visitTerminator(
     return;
   }
 
-  // Case 2: region-branching op encountered as a regular op in the block
-  // (e.g. scf.for, scf.if). The op itself ends the current virtual block;
-  // successors are either the first block of one of its regions (entering
-  // the region) or the op's own parent block (exiting the op).
+  // Case 2: region-branching op (e.g. scf.for, scf.if) encountered in
+  // the block. Successors are the first block of one of its regions
+  // (entering) or the op's own parent block (exiting).
   if (auto br = dyn_cast<RegionBranchOpInterface>(op)) {
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
@@ -388,9 +375,8 @@ void MembarOrFenceAnalysis::visitTerminator(
   }
 
   // Case 3: terminator of a region inside a region-branching op
-  // (e.g. scf.yield inside scf.for). Successors are either the first
-  // block of another region (e.g. re-entering the loop body, a backedge)
-  // or the parent op's continuation block (exiting the region).
+  // (e.g. scf.yield). Successors are the first block of another region
+  // (e.g. re-entering a loop body) or the parent op's continuation block.
   //
   // FIXME: `ReturnLike` adds `RegionBranchTerminatorOpInterface` for some
   // reason. Check that the parent is actually a `RegionBranchOpInterface`.

@@ -289,25 +289,24 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: disjoint_tdm_copy_select_cmpi
 // Test that TDM copy and local_load with provably disjoint dynamic indices
 // using the select/cmpi modular wrap pattern (AMD pipeliner) do not
-// require a barrier.
+// require a barrier. The matcher only accepts C == 1 for the select form;
+// the read uses arith.remsi to keep the base the same while demonstrating
+// a different constant offset in the same modular ring.
 tt.func @disjoint_tdm_copy_select_cmpi(%desc: !tt.tensordesc<128x128xf16, #shared>, %phase: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
-  %c2_i32 = arith.constant 2 : i32
   %c3_i32 = arith.constant 3 : i32
   %c_pred = arith.constant 1 : i32
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
 
-  // Write index: (phase + 2) % 3 via select(cmpi slt)
-  %write_sum = arith.addi %phase, %c2_i32 : i32
+  // Write index: (phase + 1) % 3 via select(cmpi slt)
+  %write_sum = arith.addi %phase, %c1_i32 : i32
   %write_cmp = arith.cmpi slt, %write_sum, %c3_i32 : i32
   %write_idx = arith.select %write_cmp, %write_sum, %c0_i32 : i32
   %write_view = ttg.memdesc_index %alloc[%write_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
 
-  // Read index: (phase + 1) % 3 via select(cmpi slt)
-  %read_sum = arith.addi %phase, %c1_i32 : i32
-  %read_cmp = arith.cmpi slt, %read_sum, %c3_i32 : i32
-  %read_idx = arith.select %read_cmp, %read_sum, %c0_i32 : i32
+  // Read index: phase % 3 via arith.remsi
+  %read_idx = arith.remsi %phase, %c3_i32 : i32
   %read_view = ttg.memdesc_index %alloc[%read_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
 
   // CHECK: amdg.async_tdm_copy_global_to_local
