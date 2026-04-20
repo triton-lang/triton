@@ -93,7 +93,7 @@ def memcpy_1d_tma_kernel(in_desc, out_desc, XBLOCK: gl.constexpr):
     # decrement the number of outstanding bytes as transactions complete. When
     # it reaches 0, the mbarrier is arrived on once.
     mbarrier.expect(bar, in_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(in_desc, [pid * XBLOCK], bar, smem)
+    tma.async_load(in_desc, [pid * XBLOCK], bar, smem)
 
     # Wait for completion of the read. We query the completion state of the
     # mbarrier using the parity of the phase, i.e. either 0 or 1. mbarriers are
@@ -158,7 +158,7 @@ def test_memcpy_1d_tma(XBLOCK, xnumel):
 # ```python
 # value = smem.load()
 # fence_async_shared()
-# tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+# tma.async_load(desc, [0, 0], bar, smem)
 # ```
 #
 # Without the fence, async_copy_global_to_shared can start copying into `smem`
@@ -177,7 +177,7 @@ def test_memcpy_1d_tma(XBLOCK, xnumel):
 # do not require a fence. For example, waiting on the result of a TMA load:
 #
 # ```python
-# tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+# tma.async_load(desc, [0, 0], bar, smem)
 # mbarrier.wait(bar, phase=0)
 # value = smem.load()
 # ```
@@ -203,8 +203,8 @@ def issue_loads(copy_index, a_desc, b_desc, a_smem, b_smem, bars, xoff, YBLOCK: 
     yoff = copy_index * YBLOCK
     bar = bars.index(copy_index % num_buffers)
     mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [xoff, yoff], bar, a_smem.index(copy_index % num_buffers))
-    tma.async_copy_global_to_shared(b_desc, [xoff, yoff], bar, b_smem.index(copy_index % num_buffers))
+    tma.async_load(a_desc, [xoff, yoff], bar, a_smem.index(copy_index % num_buffers))
+    tma.async_load(b_desc, [xoff, yoff], bar, b_smem.index(copy_index % num_buffers))
     return copy_index + 1
 
 

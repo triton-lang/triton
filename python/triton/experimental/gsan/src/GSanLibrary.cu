@@ -656,6 +656,26 @@ __triton_gsan_store_tensor(void *globalState, const char *stackPtr,
   gsan::tensorStore(threadState, stackPtr, numElems, bytesPerElem, loc);
 }
 
+extern "C" GSAN_DEVICE void
+__triton_gsan_atomic_tensor(void *globalState, const char *stackPtr,
+                            int numElems, int bytesPerElem, int sem, int scope,
+                            const char *file, unsigned line) {
+  auto loc = gsan::Location{file, line};
+  auto *globals = reinterpret_cast<gsan::GlobalState *>(globalState);
+  const auto *ptrsPtr = reinterpret_cast<const gsan::uintptr_t *>(stackPtr);
+  const auto *maskPtr = stackPtr + numElems * sizeof(gsan::uintptr_t);
+
+  for (int i = 0; i < numElems; ++i) {
+    if (!maskPtr[i])
+      continue;
+    gsan::AtomicEventState event;
+    gsan::beginAtomicAccess(globals, &event, /*pred=*/true, ptrsPtr[i],
+                            bytesPerElem, sem, scope, loc);
+    gsan::endAtomicAccess(&event, /*pred=*/true, /*didWrite=*/true, sem, scope,
+                          loc);
+  }
+}
+
 extern "C" GSAN_DEVICE void __triton_gsan_atomic_begin_scalar(
     void *globalState, void *eventState, int pred, gsan::uintptr_t address,
     int bytesPerElem, int sem, int scope, const char *file, unsigned line) {

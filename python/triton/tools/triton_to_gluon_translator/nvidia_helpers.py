@@ -412,7 +412,7 @@ def tl_load_tensor_descriptor(desc, offsets):
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
     mbarrier.expect(bar, desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(desc, offsets, bar, smem)
+    tma.async_load(desc, offsets, bar, smem)
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
     ret_layout: ttgl.constexpr = default_blocked_layout(desc.block_shape, ttgl.num_warps())
@@ -420,22 +420,8 @@ def tl_load_tensor_descriptor(desc, offsets):
     return out
 
 
-# ---- NVIDIA obj dispatch ----
-
-
 @gluon.jit
-def tl_obj_store(obj, offsets, value):
-    tl_store_tensor_descriptor(obj, offsets, value)
-
-
-@gluon.jit
-def tl_obj_load(obj, offsets):
-    return tl_load_tensor_descriptor(obj, offsets)
-
-
-@gluon.jit
-def tl_obj_gather(obj, x_offsets, y_offset):
-    desc = obj
+def tl_gather_tensor_descriptor(desc, x_offsets, y_offset):
     desc_shape: ttgl.constexpr = [x_offsets.shape[0], desc.block_shape[1]]
     alloc = ttgl.allocate_shared_memory(desc.dtype, desc_shape, desc.layout)
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
@@ -445,7 +431,7 @@ def tl_obj_gather(obj, x_offsets, y_offset):
         ttgl.BlockedLayout([1, 4], [get_num_threads_per_warp(), 1], [1, ttgl.num_warps()], [1, 0]),
     )
     x_offsets = ttgl.convert_layout(x_offsets, x_offsets_layout)
-    mbarrier.expect(bar, x_offsets.shape[0] * obj.block_type.nbytes)
+    mbarrier.expect(bar, x_offsets.shape[0] * desc.block_type.nbytes)
     tma_blackwell.async_gather(desc, x_offsets, y_offset, bar, alloc)
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
@@ -455,8 +441,7 @@ def tl_obj_gather(obj, x_offsets, y_offset):
 
 
 @gluon.jit
-def tl_obj_scatter(obj, value, x_offsets, y_offset):
-    desc = obj
+def tl_scatter_tensor_descriptor(desc, value, x_offsets, y_offset):
     desc_shape: ttgl.constexpr = [x_offsets.shape[0], desc.block_shape[1]]
     alloc = ttgl.allocate_shared_memory(desc.dtype, desc_shape, desc.layout, value)
     fence_async_shared()
@@ -467,6 +452,41 @@ def tl_obj_scatter(obj, value, x_offsets, y_offset):
     x_offsets = ttgl.convert_layout(x_offsets, x_offsets_layout)
     tma_blackwell.async_scatter(desc, x_offsets, y_offset, alloc)
     tma.store_wait(0)
+
+
+# ---- NVIDIA obj dispatch ----
+
+
+@gluon.jit
+def tl_obj_store(obj, offsets, value):
+    if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
+        return tl_store_tensor_descriptor(obj, offsets, value)
+    else:
+        return obj.store(offsets, value)
+
+
+@gluon.jit
+def tl_obj_load(obj, offsets):
+    if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
+        return tl_load_tensor_descriptor(obj, offsets)
+    else:
+        return obj.load(offsets)
+
+
+@gluon.jit
+def tl_obj_gather(obj, x_offsets, y_offset):
+    if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
+        return tl_gather_tensor_descriptor(obj, x_offsets, y_offset)
+    else:
+        return obj.gather(x_offsets, y_offset)
+
+
+@gluon.jit
+def tl_obj_scatter(obj, value, x_offsets, y_offset):
+    if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
+        return tl_scatter_tensor_descriptor(obj, value, x_offsets, y_offset)
+    else:
+        return obj.scatter(value, x_offsets, y_offset)
 
 
 # ---- NVIDIA host-side descriptor ----

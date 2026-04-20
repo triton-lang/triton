@@ -177,7 +177,7 @@ def load_partition(p):
         mbarrier.expect(ready_bar, p.in_desc.block_type.nbytes + p.weight_desc.block_type.nbytes)
 
         # Input tile via TMA im2col: channel offset iter_ci*BLOCK_K (OOB channels zero-filled)
-        tma.async_copy_global_to_shared_im2col(
+        tma.async_load_im2col(
             p.in_desc,
             [
                 batch_id, out_y * config.stride_h - config.pad_h, out_x * config.stride_w - config.pad_w,
@@ -193,7 +193,7 @@ def load_partition(p):
         # ci block bleeds into the next (r,s) group, those weight elements are multiplied
         # by zero-filled input channels, so the result is still correct.
         k_offset = (iter_r * config.S + iter_s) * config.Ci + iter_ci * BLOCK_K
-        tma.async_copy_global_to_shared(
+        tma.async_load(
             p.weight_desc,
             [prog.pid_n * BLOCK_N, k_offset],
             ready_bar,

@@ -180,6 +180,7 @@ def get_max_quant_val(dtype: torch.dtype):
 def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int,
                            scale_dtype: torch.dtype = torch.uint8,
                            microblock_size: int = MXFP_BLOCK_SIZE.value,
+                           expected_scale: torch.Tensor | None = None,
                            DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP):
     """
     Converts the src tensor to the output format specified by out_quant_type.
@@ -191,6 +192,9 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
          • For mxfp8, the output has the same shape as src_tensor.
          • For FP4, the size along the axis is halved, and the tensor is returned as a torch.uint8.
       scale: Scale tensor computed per microblock along the axis.
+
+    If expected_scale is provided, apply the same preconditioning as float_to_flex
+    before microscaled output quantization by dividing the source tensor by it.
     """
     # This should probably be packed into its own tiny class
     ndim = src_tensor.ndim
@@ -217,6 +221,12 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
 
     # Permute the tensor so that the contiguous axis becomes the last dimension.
     src = src_tensor.transpose(axis, src_tensor.ndim - 1).to(torch.float32)
+    if expected_scale is not None:
+        if expected_scale.numel() == 1:
+            src = src / expected_scale.to(device=device, dtype=src.dtype)
+        else:
+            assert src.ndim == 3
+            src = src / expected_scale.to(device=device, dtype=src.dtype)[:, None, None]
     axis_shape = src.shape[-1]
 
     # Pad the axis to be divisible by the microblock size, in case it is not.
@@ -251,6 +261,9 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
             ds_int_rounded = ds_int & 0x7F800000
         dequant_scale_rounded = ds_int_rounded.view(torch.float32)
     else:
+        # Direct fp8 scales keep the existing plain cast semantics here: the
+        # stored scale is rounded by the fp8 conversion rather than forced
+        # upward despite the ROUND_UP mode name.
         dequant_scale_rounded = dequant_scale.to(scale_dtype).to(torch.float32)
 
     # Compute the quantization scale.
