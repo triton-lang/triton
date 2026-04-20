@@ -959,15 +959,16 @@ static int64_t computePerPartitionSliceStride(
 
 // Emit a single TDM intrinsic (load or store) for the given block shape.
 // This handles both the 2D (d2 intrinsic) and >2D (full intrinsic) cases.
-static void emitTDMIntrinsic(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, ArrayRef<Value> desc,
-    size_t numDims, Type elementType, SmallVector<int64_t> effectiveBlockShape,
-    unsigned padInterval, unsigned padAmount, SmallVector<Value> globalOffset,
-    ArrayRef<Value> instrDstPtrs, Value pred, Value multicastMask,
-    Value barrier, const triton::LinearLayout &instrSharedLayout, Value ctaId,
-    bool isLoad, ArrayRef<unsigned> warpsPerCTA,
-    ArrayRef<int64_t> warpBases = {}) {
+static void
+emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
+                 const LLVMTypeConverter *typeConverter, ArrayRef<Value> desc,
+                 size_t numDims, Type elementType,
+                 SmallVector<int64_t> effectiveBlockShape, unsigned padInterval,
+                 unsigned padAmount, SmallVector<Value> globalOffset,
+                 ArrayRef<Value> instrDstPtrs, Value pred, Value multicastMask,
+                 Value barrier, const triton::LinearLayout &instrSharedLayout,
+                 Value ctaId, bool isLoad, ArrayRef<unsigned> warpsPerCTA,
+                 ArrayRef<int64_t> warpBases = {}) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
   Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
@@ -978,12 +979,11 @@ static void emitTDMIntrinsic(
     auto group2Vec = SmallVector<Value>(desc.begin() + 12, desc.begin() + 16);
     auto group3Vec = SmallVector<Value>(desc.begin() + 16, desc.end());
 
-    fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      effectiveBlockShape, padInterval, padAmount, group0Vec,
-                      group1Vec, std::ref(group2Vec), std::ref(group3Vec),
-                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA,
-                      warpBases);
+    fillTDMDescriptor(
+        rewriter, loc, typeConverter, elementType, effectiveBlockShape,
+        padInterval, padAmount, group0Vec, group1Vec, std::ref(group2Vec),
+        std::ref(group3Vec), globalOffset, instrDstPtrs, pred, multicastMask,
+        barrier, instrSharedLayout, ctaId, !isLoad, warpsPerCTA, warpBases);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -999,12 +999,11 @@ static void emitTDMIntrinsic(
     auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
     auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
 
-    fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      effectiveBlockShape, padInterval, padAmount, group0Vec,
-                      group1Vec, std::nullopt, std::nullopt, globalOffset,
-                      instrDstPtrs, pred, multicastMask, barrier,
-                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA,
-                      warpBases);
+    fillTDMDescriptor(
+        rewriter, loc, typeConverter, elementType, effectiveBlockShape,
+        padInterval, padAmount, group0Vec, group1Vec, std::nullopt,
+        std::nullopt, globalOffset, instrDstPtrs, pred, multicastMask, barrier,
+        instrSharedLayout, ctaId, !isLoad, warpsPerCTA, warpBases);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
