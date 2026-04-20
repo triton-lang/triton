@@ -1,5 +1,7 @@
 import os
 import subprocess
+import sys
+import pytest
 
 import triton
 
@@ -32,6 +34,42 @@ def test_address_sanitizer():
     # Disable buffer ops given it has builtin support for out of bound access.
     os.environ["AMDGCN_USE_BUFFER_OPS"] = "0"
 
-    out = subprocess.Popen(["python", "address_sanitizer_helper.py"], stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-    assert "Begin function __asan_report" in out.stdout.read().decode()
-    assert "heap-buffer-overflow" in out.stderr.read().decode()
+    os.environ["TRITON_ALWAYS_COMPILE"] = "1"
+
+    helper = os.path.join(os.path.dirname(__file__), "address_sanitizer_helper.py")
+
+    try:
+        r = subprocess.run(
+            [sys.executable, helper],
+            capture_output=True,
+            timeout=180,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        pytest.fail(
+            "ASan helper timed out after {}s\n"
+            "stdout tail: {!r}\n"
+            "stderr tail: {!r}".format(
+                e.timeout,
+                (e.stdout or b"")[-2000:],
+                (e.stderr or b"")[-2000:],
+            ))
+
+    stdout = r.stdout.decode(errors="replace")
+    stderr = r.stderr.decode(errors="replace")
+    has_begin = "Begin function __asan_report" in stdout
+    has_overflow = "heap-buffer-overflow" in stderr
+
+    assert has_begin and has_overflow, (
+        "ASan check failed\n"
+        f"  returncode   = {r.returncode}\n"
+        f"  stdout_bytes = {len(stdout)}\n"
+        f"  stderr_bytes = {len(stderr)}\n"
+        f"  has_begin    = {has_begin}   # 'Begin function __asan_report' in stdout\n"
+        f"  has_overflow = {has_overflow} # 'heap-buffer-overflow' in stderr\n"
+        "--- stdout head ---\n"
+        f"{stdout[:1500]}\n"
+        "--- stdout tail ---\n"
+        f"{stdout[-1500:]}\n"
+        "--- stderr head ---\n"
+        f"{stderr[:2000]}\n")
