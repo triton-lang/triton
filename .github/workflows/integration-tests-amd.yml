@@ -182,6 +182,7 @@ jobs:
       - name: Run asan tests on AMD
         if: ${{ matrix.runner[0] == 'amd-gfx942' }}
         run: |
+          # Retrigger CI
           cd third_party/amd/python/test/
           ulimit -s 1024
           export PATH=$(find ~/.triton/llvm -name llvm-symbolizer  -printf '%h\n'):$PATH
