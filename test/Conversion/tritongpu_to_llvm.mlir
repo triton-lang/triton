@@ -2022,7 +2022,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [8, 8]}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 4, order = [1, 0]}>
 #shared1 = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 2, order = [1, 0]}>
 #smem = #ttg.shared_memory
@@ -2319,7 +2319,7 @@ tt.func @gather_in_shared(%arg0: tensor<16x4xi32, #blocked1>, %arg1: tensor<8x4x
 
 // -----
 
-#mma = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [1, 1]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [8, 8]}>
 #dot = #ttg.dot_op<{opIdx=0, parent=#mma, kWidth=1}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
 
@@ -2327,10 +2327,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 tt.func @gather_in_shared_dot_input(%arg0: tensor<16x4xi32, #blocked>, %arg1: tensor<8x4xf32, #dot>) {
   // CHECK-LABEL: gather_in_shared_dot_input
+
+  // CHECK: [[S0:%.*]] = llvm.extractvalue %arg1[0]
+
   // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
   // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
-  // CHECK-COUNT-4: store
-  // CHECK-NEXT: nvvm.barrier0
+  // CHECK: insertelement [[S0]]
+  // CHECK: nvvm.barrier0
 
   // CHECK: [[I0:%.*]] = llvm.extractvalue %arg0[0]
 

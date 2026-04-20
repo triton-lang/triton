@@ -383,8 +383,8 @@ def matmul_load_partition(p):
             mbarrier.wait(p.load_empty_bars.index(state.index), state.phase, pred=pred)
             bar = p.load_ready_bars.index(state.index)
             mbarrier.expect(bar, p.a_desc.nbytes_per_cta + p.b_desc.nbytes_per_cta)
-            tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index), multicast=True)
-            tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index), multicast=True)
+            tma.async_load(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index), multicast=True)
+            tma.async_load(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index), multicast=True)
             state = state.next()
         scheduler = scheduler.step(i)
         i += 1
