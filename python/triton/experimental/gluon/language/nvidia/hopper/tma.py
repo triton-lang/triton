@@ -192,9 +192,9 @@ def _convert_im2col_offsets(offsets, _semantic):
 
 
 @builtin
-def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, multicast=False, _semantic=None):
+def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, _semantic=None):
     """
-    Copy data from global memory to shared memory using TMA.
+    Load data from global memory to shared memory using TMA.
 
     Args:
         tensor_desc: Tensor descriptor (tiled)
@@ -224,10 +224,9 @@ def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, 
 
 
 @builtin
-def async_copy_global_to_shared_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, multicast=False,
-                                       _semantic=None):
+def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, multicast=False, _semantic=None):
     """
-    Copy data from global memory to shared memory using TMA in im2col mode.
+    Load data from global memory to shared memory using TMA in im2col mode.
 
     Args:
         tensor_desc: Tensor descriptor (im2col)
@@ -262,9 +261,9 @@ def async_copy_global_to_shared_im2col(tensor_desc, coord, offsets, barrier, res
 
 
 @builtin
-def async_copy_shared_to_global(tensor_desc, coord, src, _semantic=None):
+def async_store(tensor_desc, coord, src, _semantic=None):
     """
-    Copy data from shared memory to global memory using TMA.
+    Store data from shared memory to global memory using TMA.
 
     Args:
         tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
@@ -276,6 +275,12 @@ def async_copy_shared_to_global(tensor_desc, coord, src, _semantic=None):
                               _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
+
+
+# Backward-compatible aliases
+async_copy_global_to_shared = async_load
+async_copy_global_to_shared_im2col = async_load_im2col
+async_copy_shared_to_global = async_store
 
 
 def _async_atomic_shared_to_global(kind, tensor_desc, coord, src, fn_name: str, _semantic=None):
