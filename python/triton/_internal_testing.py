@@ -94,7 +94,8 @@ def is_hip_rdna3():
 
 def is_hip_rdna4():
     target = get_current_target()
-    return target is not None and target.backend == 'hip' and 'gfx12' in target.arch
+    # check for gfx120 instead of gfx12, to avoid matching gfx1250
+    return target is not None and target.backend == 'hip' and 'gfx120' in target.arch
 
 
 def is_hip_gfx1250():
