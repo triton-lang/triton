@@ -123,6 +123,8 @@ def _perfetto_trace_to_python(path: str):
                     for annotation_field_id, annotation_wire_type, annotation_field_value in _iter_proto_fields(event_value):
                         if annotation_field_id == 1 and annotation_wire_type == 0:
                             annotation_name_iid = annotation_field_value
+                        elif annotation_field_id == 3 and annotation_wire_type == 0:
+                            annotation_value = annotation_field_value
                         elif annotation_field_id == 6 and annotation_wire_type == 2:
                             annotation_value = annotation_field_value.decode("utf-8")
                         elif annotation_field_id == 17 and annotation_wire_type == 0:
@@ -134,18 +136,25 @@ def _perfetto_trace_to_python(path: str):
     trace["event_names"] = event_names
     trace["annotation_names"] = annotation_names
     trace["annotation_string_values"] = annotation_string_values
-    call_stack_iid = next((iid for iid, name in annotation_names.items() if name == "call_stack"), None)
     for event in trace["track_events"]:
         if event["name_iid"] is not None:
             event["name"] = event_names.get(event["name_iid"])
-        if call_stack_iid is not None:
-            event["call_stack"] = event["annotations"].get(call_stack_iid)
+        call_stack = []
+        for annotation_name_iid, annotation_value in event["annotations"].items():
+            annotation_name = annotation_names.get(annotation_name_iid)
+            if annotation_name is None or not annotation_name.startswith("call_stack_"):
+                continue
+            frame_index = int(annotation_name.removeprefix("call_stack_"))
+            call_stack.append((frame_index, annotation_value))
+        if call_stack:
+            call_stack.sort(key=lambda item: item[0])
+            event["call_stack"] = [frame_name for _, frame_name in call_stack]
 
     return trace
 
 
 def _assert_perfetto_trace_file(path: str, expected_event_name: str | None = None,
-                                expected_call_stack: str | None = None):
+                                expected_call_stack: list[str] | None = None):
     trace = _perfetto_trace_to_python(path)
     assert trace["has_track_descriptor"]
     assert trace["has_track_event"]
@@ -1024,7 +1033,7 @@ def test_trace(tmp_path: pathlib.Path, output_format: str, device: str):
     proton.finalize(output_format=output_format)
 
     if output_format == "perfetto_trace":
-        _assert_perfetto_trace_file(temp_file, expected_event_name="foo", expected_call_stack="ROOT > test > foo")
+        _assert_perfetto_trace_file(temp_file, expected_event_name="foo", expected_call_stack=["ROOT", "test", "foo"])
         return
 
     with temp_file.open() as f:

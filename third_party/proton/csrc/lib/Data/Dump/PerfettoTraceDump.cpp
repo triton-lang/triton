@@ -149,17 +149,15 @@ void setTracePacketSequence(ProtoWriter &packet, uint32_t sequenceFlags) {
   packet.writeUInt32(/*TracePacket.sequence_flags=*/13, sequenceFlags);
 }
 
-void appendCallStackAnnotation(std::vector<PerfettoAnnotation> &annotations,
-                               const std::vector<Context> &contexts) {
-  PerfettoAnnotation annotation;
-  annotation.name = "call_stack";
+void appendCallStackAnnotations(std::vector<PerfettoAnnotation> &annotations,
+                                const std::vector<Context> &contexts) {
   for (size_t i = 0; i < contexts.size(); ++i) {
-    if (i != 0) {
-      annotation.stringValue += " > ";
-    }
-    annotation.stringValue += contexts[i].name;
+    PerfettoAnnotation annotation;
+    annotation.name = "call_stack_" + std::to_string(i);
+    annotation.stringValue = contexts[i].name;
+    annotation.kind = PerfettoAnnotation::Kind::String;
+    annotations.push_back(std::move(annotation));
   }
-  annotations.push_back(std::move(annotation));
 }
 
 void appendFlexibleMetricAnnotations(
@@ -374,7 +372,7 @@ void appendCpuTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
         getPerfettoLaneTrackUuid(details::getCpuLaneId(threadId));
     for (const auto &event : cpuEvents) {
       std::vector<PerfettoAnnotation> annotations;
-      appendCallStackAnnotation(annotations, event.contexts);
+      appendCallStackAnnotations(annotations, event.contexts);
       std::string name;
       std::string category;
       if (event.flexibleMetrics != nullptr && !event.flexibleMetrics->empty()) {
@@ -433,7 +431,7 @@ void appendKernelTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
         getPerfettoLaneTrackUuid(details::getGpuLaneId(streamId));
     for (const auto &event : streamKernelEvents) {
       std::vector<PerfettoAnnotation> annotations;
-      appendCallStackAnnotation(annotations, event.contexts);
+      appendCallStackAnnotations(annotations, event.contexts);
       if (event.flexibleMetrics != nullptr) {
         appendFlexibleMetricAnnotations(annotations, *event.flexibleMetrics);
       }
