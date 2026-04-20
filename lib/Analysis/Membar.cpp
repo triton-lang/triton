@@ -214,7 +214,7 @@ void MembarOrFenceAnalysis::visitTerminator(
   // cf.br cycles; treat all CFG edges as forward.
   if (isa<BranchOpInterface>(op)) {
     for (Block *successor : op->getSuccessors())
-      successors.push_back({{successor, Block::iterator()}, false});
+      successors.emplace_back(successor, Block::iterator());
     return;
   }
 
@@ -226,10 +226,10 @@ void MembarOrFenceAnalysis::visitTerminator(
     br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
     for (RegionSuccessor &region : regions) {
       if (region.isParent()) {
-        successors.push_back({{br->getBlock(), br->getIterator()}, false});
+        successors.emplace_back(br->getBlock(), br->getIterator());
       } else {
         Block &block = region.getSuccessor()->front();
-        successors.push_back({{&block, Block::iterator()}, false});
+        successors.emplace_back(&block, Block::iterator());
       }
     }
     return;
@@ -255,13 +255,12 @@ void MembarOrFenceAnalysis::visitTerminator(
     for (const RegionSuccessor &region : regions) {
       if (region.isParent()) {
         Operation *parent = br->getParentOp();
-        successors.push_back(
-            {{parent->getBlock(), parent->getIterator()}, false});
+        successors.emplace_back(parent->getBlock(), parent->getIterator());
       } else {
         Block &block = region.getSuccessor()->front();
         bool isBackedge =
             region.getSuccessor()->getRegionNumber() <= termRegionNo;
-        successors.push_back({{&block, Block::iterator()}, isBackedge});
+        successors.emplace_back(&block, Block::iterator(), isBackedge);
       }
     }
     return;

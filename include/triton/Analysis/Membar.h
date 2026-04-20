@@ -253,6 +253,9 @@ inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
 class MembarOrFenceAnalysis {
   using VirtualBlock = std::pair<Block *, Block::iterator>;
   struct SuccessorInfo {
+    SuccessorInfo(Block *block, Block::iterator it, bool isBackedge = false)
+        : block(block, it), isBackedge(isBackedge) {}
+
     VirtualBlock block;
     /// True when this edge is a loop backedge (e.g. scf.for yield back to
     /// the body region, scf.while after-region yield back to before).
