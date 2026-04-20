@@ -1,3 +1,32 @@
+import os
+import sys
+
+# Diagnostic prints so that, when ASan fails to emit its report at runtime,
+# the test harness in test_address_sanitizer.py still receives enough context
+# on stderr to diagnose the cause.
+print("PYEXE:", sys.executable, file=sys.stderr)
+_diag_env = {
+    k: os.environ.get(k)
+    for k in (
+        "HSA_XNACK",
+        "TRITON_ENABLE_ASAN",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "AMDGCN_USE_BUFFER_OPS",
+        "AMD_PYTORCH_NO_CUDA_MEMORY_CACHING",
+        "PYTORCH_NO_HIP_MEMORY_CACHING",
+        "HSA_DISABLE_FRAGMENT_ALLOCATOR",
+        "TRITON_ALWAYS_COMPILE",
+    )
+}
+print("ENV:", _diag_env, file=sys.stderr)
+try:
+    with open(f"/proc/{os.getpid()}/maps") as _f:
+        _hits = [ln for ln in _f if ("libamdhip64" in ln or "libclang_rt.asan" in ln)]
+    print("MAPS:\n" + "".join(_hits), file=sys.stderr)
+except Exception as _e:
+    print(f"MAPS: <unreadable: {_e}>", file=sys.stderr)
+
 import torch
 import triton
 import triton.language as tl
