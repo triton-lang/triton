@@ -210,7 +210,7 @@ class AttentionConfig:
     use_exp2_turnstile: gl.constexpr
 
     @gluon.constexpr_function
-    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, dtype,
+    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, SPLIT_EXP_FACTOR, dtype,
                  num_warps):
         self.qk_scale = qk_scale
         self.Z = Z
@@ -226,7 +226,7 @@ class AttentionConfig:
         self.num_warps = gl.constexpr(num_warps)
 
         self.SPLIT_D_FACTOR = gl.constexpr(2)
-        self.SPLIT_EXP_FACTOR = gl.constexpr(256 // HEAD_DIM)
+        self.SPLIT_EXP_FACTOR = gl.constexpr(SPLIT_EXP_FACTOR)
         self.SPLIT_QK_LOAD_FACTOR = gl.constexpr(2 if STAGE == 1 else 1)
         self.SPLIT_M = gl.constexpr(self.BLOCK_M // 2)
         self.SPLIT_D = gl.constexpr(self.HEAD_DIM // self.SPLIT_D_FACTOR)
@@ -824,14 +824,14 @@ def attention_repr(specialization):
     return name
 
 
-@gluon.jit(do_not_specialize=["Z"], repr=attention_repr)
+@gluon.jit(do_not_specialize=["Z", "H", "N_CTX"], repr=attention_repr)
 def attention_kernel(  #
         sm_scale, M, Z, H, N_CTX, desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, HEAD_DIM: gl.constexpr,  #
-        GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr, STAGE: gl.constexpr, dtype: gl.constexpr,  #
-        num_warps: gl.constexpr, use_tmem_red: gl.constexpr):
+        GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr, STAGE: gl.constexpr, SPLIT_EXP_FACTOR: gl.constexpr,  #
+        dtype: gl.constexpr, num_warps: gl.constexpr, use_tmem_red: gl.constexpr):
     qk_scale = sm_scale * 1.44269504
-    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE,  #
+    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, SPLIT_EXP_FACTOR,  #
                              dtype, num_warps)
 
     q_chnl = get_desc_channel(desc_q, num_buffers=2)
@@ -915,7 +915,8 @@ def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
         sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
         desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M, BLOCK_N, HEAD_DIM_K, GROUP_SIZE_N, NUM_SMS,  #
-        stage, torch_dtype_to_triton(q.dtype),  #
+        SPLIT_EXP_FACTOR=256 // HEAD_DIM_K,
+        STAGE=stage, dtype=torch_dtype_to_triton(q.dtype),  #
         num_warps=4, maxnreg=128, use_tmem_red=use_tmem_red)
 
     return o, M
@@ -938,13 +939,13 @@ def is_blackwell_ultra():
     return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
 
 
-@pytest.mark.parametrize("Z", [4])
-@pytest.mark.parametrize("H", [48])
-@pytest.mark.parametrize("N_CTX", [1024])
-@pytest.mark.parametrize("HEAD_DIM", [128])
-@pytest.mark.parametrize("causal", [True])
-@pytest.mark.parametrize("dtype", [torch.bfloat16])
-@pytest.mark.parametrize("use_tmem_red", [False])
+@pytest.mark.parametrize("Z", [1, 4])
+@pytest.mark.parametrize("H", [32])
+@pytest.mark.parametrize("N_CTX", [1024, 2048, 4096, 8192])
+@pytest.mark.parametrize("HEAD_DIM", [64, 128])
+@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("use_tmem_red", [False, True] if is_blackwell_ultra() else [False])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, profile=False):
     device = "cuda"
