@@ -12,10 +12,12 @@ class TranslatorTarget(str, Enum):
     """
 
     GENERIC = "generic"
+    SM80 = "sm80"
     SM90 = "sm90"
     SM100 = "sm100"
     SM103 = "sm103"
     # AMD targets currently exercised by the translator test suite:
+    GFX90A = "gfx90a"
     GFX1250 = "gfx1250"
     GFX942 = "gfx942"
     GFX950 = "gfx950"
@@ -30,11 +32,21 @@ class TranslatorTarget(str, Enum):
 
     @property
     def is_amd(self) -> bool:
-        return self in (TranslatorTarget.GFX1250, TranslatorTarget.GFX942, TranslatorTarget.GFX950)
+        return self in (
+            TranslatorTarget.GFX90A,
+            TranslatorTarget.GFX942,
+            TranslatorTarget.GFX950,
+            TranslatorTarget.GFX1250,
+        )
 
     @property
     def is_nvidia(self) -> bool:
-        return self in (TranslatorTarget.SM90, TranslatorTarget.SM100, TranslatorTarget.SM103)
+        return self in (
+            TranslatorTarget.SM80,
+            TranslatorTarget.SM90,
+            TranslatorTarget.SM100,
+            TranslatorTarget.SM103,
+        )
 
     @property
     def tensor_descriptor_import(self) -> str:
@@ -53,5 +65,7 @@ class TranslatorTarget(str, Enum):
                 return f"{base}.blackwell_helpers"
             if self in (TranslatorTarget.SM90):
                 return f"{base}.hopper_helpers"
+            if self in (TranslatorTarget.SM80):
+                return f"{base}.nvidia_helpers"
 
         return f"{base}.common_helpers"
