@@ -122,8 +122,7 @@ def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", [
 
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$mbarrier,
-    I1Attr:$multicast
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$mbarrier
   );
 
   let assemblyFormat = [{
@@ -544,7 +543,8 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather", [
     I32:$y_offset,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
-    I1:$pred
+    I1:$pred,
+    UnitAttr:$multicast
   );
 
   let assemblyFormat = [{

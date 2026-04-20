@@ -473,6 +473,35 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
+#sharedCLC = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#barrierCLC = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CLC multicasts completion through the cluster, so it needs init sync even
+  // if the barrier allocation shape looks per-CTA.
+  // CHECK-LABEL: @cluster_clc_with_per_cta_barrier
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.clc_try_cancel
+  // CHECK: tt.return
+  tt.func @cluster_clc_with_per_cta_barrier() {
+    %true = arith.constant true
+    %result = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #sharedCLC, #smem, mutable>
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
+    ttng.clc_try_cancel %result, %barrier :
+      !ttg.memdesc<2xi64, #sharedCLC, #smem, mutable>,
+      !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
+    ttng.barrier_expect %barrier, 16, %true :
+      !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
 #barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>

@@ -99,8 +99,7 @@ def TTI_ExperimentalGSanTensorDescInfoOp
 
 def TTI_ExperimentalGSanTensorAccessOp
     : TTI_Op<"experimental_gsan_tensor_access",
-             [MemoryEffects<[MemWrite<GlobalMemory>, MemWrite<GlobalMemory>]>,
-              TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+             [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
                              "getI1SameShape(getPointeeType($_self))",
                              "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
   let summary = "Instrument a tensor load/store access for GSan";
@@ -108,10 +107,27 @@ def TTI_ExperimentalGSanTensorAccessOp
     Emits runtime instrumentation for a tensor pointer access. The pointer and
     optional mask are consumed by the GSan runtime.
   }];
-  let arguments = (ins TT_PtrLike:$ptr, Optional<TT_BoolLike>:$mask,
-                   BoolAttr:$isStore);
+  let arguments = (ins Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+                   Optional<TT_BoolLike>:$mask, BoolAttr:$isStore);
   let assemblyFormat = [{
     $ptr `,` $isStore (`,` $mask^)? attr-dict `:` type($ptr)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicTensorAccessOp
+    : TTI_Op<"experimental_gsan_atomic_tensor_access",
+             [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                             "getI1SameShape(getPointeeType($_self))",
+                             "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
+  let summary = "Instrument a tensor atomic access for GSan";
+  let description = [{
+    Emits runtime instrumentation for a tensor pointer access whose individual
+    elements are atomic read-modify-write operations.
+  }];
+  let arguments = (ins Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+                   Optional<TT_BoolLike>:$mask, TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:` type($ptr)
   }];
 }
 

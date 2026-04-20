@@ -77,6 +77,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: scf.for
     // CHECK: ttg.barrier global_read|global_write
+    // CHECK: tt.store
+    // CHECK-NEXT: }
+    // CHECK-NEXT: }
+    // CHECK-NEXT: ttg.barrier global_read|global_write
     // CHECK-NEXT: ttng.arrive_barrier
     // CHECK-NOT: ttng.tc_gen5_mma
     %true = arith.constant true
@@ -102,6 +106,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: scf.for
     // CHECK: ttg.barrier global_read|global_write
+    // CHECK: tt.store
+    // CHECK-NEXT: }
+    // CHECK-NEXT: }
+    // CHECK-NEXT: ttg.barrier global_read|global_write
     // CHECK-NEXT: ttng.arrive_barrier
     // CHECK-NOT: ttng.tc_gen5_mma
     %false = arith.constant false
@@ -129,6 +137,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: scf.for
     // CHECK: ttg.barrier global_read|global_write
+    // CHECK: tt.store
+    // CHECK-NEXT: }
+    // CHECK-NEXT: }
+    // CHECK-NEXT: ttg.barrier global_read|global_write
     // CHECK-NEXT: ttng.arrive_barrier
     // CHECK-NOT: ttng.tc_gen5_mma_scaled
     %true = arith.constant true

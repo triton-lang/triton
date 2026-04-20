@@ -1,3 +1,4 @@
+#include "PartitionAttrs.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -1453,6 +1454,12 @@ struct PartitionScheduling
       analyze(idx, op);
       if (hasPartition(op))
         cloneMultiPartitionDataOps(op);
+      if (auto loop = dyn_cast<scf::ForOp>(op);
+          loop && loop->hasAttr(kPartitionStagesAttrName) &&
+          failed(verifyPartitionedLoop(loop))) {
+        signalPassFailure();
+        return;
+      }
       idx++;
     }
   }

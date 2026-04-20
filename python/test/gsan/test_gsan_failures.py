@@ -175,6 +175,25 @@ def _host_tma_scatter_war_kernel(target_ptr, target_desc, x_offsets_ptr, src_ptr
         target_desc.scatter(values, x_offsets, y_offset)
 
 
+@triton.jit
+def _host_tma_atomic_flag_publish_kernel(payload_ptr, flag_ptr, flag_desc, counter_ptr, scratch_ptr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_xchg(flag_ptr, 1, sem="release", scope="gpu")
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
+    else:
+        atomic_poll(counter_ptr, 1)
+        BLOCK_X: tl.constexpr = flag_desc.block_shape[0]
+        BLOCK_Y: tl.constexpr = flag_desc.block_shape[1]
+        values = tl.full((BLOCK_X, BLOCK_Y), 1, dtype=tl.int32)
+        # TMA atomics on the released flag are relaxed.gpu and must not acquire
+        # the producer's prior payload store.
+        flag_desc.atomic_add([0, 0], values)
+        result = tl.load(payload_ptr)
+        tl.store(scratch_ptr, result)
+
+
 def _cuda_byte_allocator(size: int, _align: int, _stream):
     return torch.empty(size, dtype=torch.int8, device="cuda")
 
@@ -297,6 +316,16 @@ def _run_host_tma_scatter_war_case() -> None:
 
 
 @run_with_gsan
+def _run_host_tma_atomic_flag_publish_case() -> None:
+    flag = torch.zeros((1, 16), dtype=torch.int32, device="cuda")
+    flag_desc = TensorDescriptor.from_tensor(flag, [1, 16])
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+    scratch = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _host_tma_atomic_flag_publish_kernel[(2, )](payload, flag, flag_desc, counter, scratch, num_warps=1)
+
+
+@run_with_gsan
 def _run_cross_sm_atomic_sync_case(producer_sem: str, consumer_sem: str, scope: str) -> None:
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
     flags = torch.zeros(1, dtype=torch.int32, device="cuda")
@@ -401,6 +430,13 @@ def test_host_tma_scatter_write_after_read():
     _run_failure_case("host_tma_scatter_war", runner=_run_host_tma_scatter_war_case,
                       source_function=_host_tma_scatter_war_kernel.fn,
                       marker="target_desc.scatter(values, x_offsets, y_offset)", error="Write after read race detected")
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
+def test_host_tma_atomic_on_release_flag_does_not_publish_data():
+    _run_failure_case("host_tma_atomic_flag_publish", runner=_run_host_tma_atomic_flag_publish_case,
+                      source_function=_host_tma_atomic_flag_publish_kernel.fn, marker="result = tl.load(payload_ptr)",
+                      error="Read after write race detected")
 
 
 @pytest.mark.parametrize("producer_sem, consumer_sem, scope", CROSS_SM_SEMANTIC_MISMATCH_CASES)

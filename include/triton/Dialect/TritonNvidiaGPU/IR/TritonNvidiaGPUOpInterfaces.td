@@ -42,6 +42,11 @@ def TMALoadLikeOpInterface : OpInterface<"TMALoadLikeOpInterface", [TMAOpInterfa
       /*retType=*/"::mlir::Value",
       /*methodName=*/"getPred",
       /*args=*/(ins)>,
+    InterfaceMethod<
+      /*desc=*/"Return true if this load uses multicast",
+      /*retType=*/"bool",
+      /*methodName=*/"getMulticast",
+      /*args=*/(ins)>,
   ];
 }
 

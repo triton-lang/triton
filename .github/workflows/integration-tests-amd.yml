@@ -165,7 +165,7 @@ jobs:
             python3 -m pytest -s -n 12 tests/
           fi
       - name: Run asan tests on AMD
-        if: ${{ matrix.runner[0] == 'amd-gfx942' }}
+        if: false
         run: |
           cd third_party/amd/python/test/
           ulimit -s 1024

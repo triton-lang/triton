@@ -421,7 +421,7 @@ struct CLCTryCancelOpConversion
 
     std::string ptxAsm = "@$2 clusterlaunchcontrol.try_cancel.async.shared::cta"
                          ".mbarrier::complete_tx::bytes";
-    if (op.getMulticast())
+    if (numCTAs > 1)
       ptxAsm += ".multicast::cluster::all";
     ptxAsm += ".b128 [$0], [$1];";
 

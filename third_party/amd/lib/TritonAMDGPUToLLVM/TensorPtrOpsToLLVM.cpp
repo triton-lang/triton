@@ -16,8 +16,6 @@ namespace {
 // compatible with TDM. Requirements:
 //  - The shared order must be [rank-1, rank-2, ..., 0].
 //  - All stride-1 dimensions must be consecutive trailing dims.
-// Additionally, a single stride-1 dimension may appear at the rank-2
-// position (col-major) if the shared order has rank-2 and rank-1 swapped.
 LogicalResult validateStridesAndSharedOrder(triton::MakeTensorDescOp op,
                                             Attribute sharedEnc,
                                             ArrayRef<int64_t> shape,
@@ -25,41 +23,22 @@ LogicalResult validateStridesAndSharedOrder(triton::MakeTensorDescOp op,
   int rank = shape.size();
   auto sharedOrder = triton::gpu::getOrder(
       cast<triton::gpu::SharedEncodingTrait>(sharedEnc), shape);
-
-  SmallVector<unsigned> strideOneDims;
-  for (auto [dim, strideVal] : llvm::enumerate(strides)) {
-    if (getConstantIntValue(getAsOpFoldResult(strideVal)).value_or(0) == 1)
-      strideOneDims.push_back(dim);
-  }
-
-  if (strideOneDims.empty())
-    return op.emitError() << "requires at least one dimension to have stride 1";
-
-  // If the only stride-1 dim is the second-to-last dimension (col-major) we can
-  // safely reorder the dimensions during lowering.
-  bool isColMajor =
-      strideOneDims.size() == 1 && strideOneDims.front() == rank - 2;
-
   SmallVector<unsigned> expectedOrder(llvm::reverse(llvm::seq<unsigned>(rank)));
-  if (isColMajor)
-    std::swap(expectedOrder[0], expectedOrder[1]);
-
   if (sharedOrder != ArrayRef(expectedOrder)) {
-    if (isColMajor)
-      return op.emitError()
-             << "requires shared order [rank-2, rank-1, rank-3, "
-                "rank-4, ..., 0] because dim[rank-2] has stride 1";
     return op.emitError() << "requires shared order [rank-1, rank-2, ..., 0]";
   }
 
-  if (strideOneDims.size() > 1) {
-    unsigned numStride1Dims = strideOneDims.size();
-    for (unsigned i = 0; i < numStride1Dims; ++i) {
-      if (strideOneDims[i] != rank - numStride1Dims + i)
-        return op.emitError() << "requires all stride 1 dimensions to be "
-                                 "consecutive starting from the last dimension";
-    }
-  }
+  auto isStride1 = [](Value v) {
+    return getConstantIntValue(getAsOpFoldResult(v)).value_or(0) == 1;
+  };
+  auto reversedStrides = llvm::reverse(strides);
+  auto firstNonStride1 = llvm::find_if_not(reversedStrides, isStride1);
+  if (firstNonStride1 == reversedStrides.begin())
+    return op.emitError() << "last dimension must have stride 1";
+  if (llvm::any_of(llvm::make_range(firstNonStride1, reversedStrides.end()),
+                   isStride1))
+    return op.emitError() << "requires all stride 1 dimensions to be "
+                             "consecutive starting from the last dimension";
 
   return success();
 }
@@ -102,8 +81,8 @@ struct MakeTensorDescOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto basePtr = adaptor.getBase();
-    auto tensorShape = llvm::to_vector(adaptor.getShape());
-    auto tensorStride = llvm::to_vector(adaptor.getStrides());
+    auto tensorShape = adaptor.getShape();
+    auto tensorStride = adaptor.getStrides();
     auto result = op.getResult();
 
     auto tensorDescTy = result.getType();
@@ -138,8 +117,7 @@ struct MakeTensorDescOpConversion
     // Create TDM descriptor for 2D-5D tensors
     auto tdmDesc = LLVM::AMD::createTDMDescriptor(
         rewriter, loc, getTypeConverter(), elementType, shapePerCTA, numWarps,
-        padInterval, padAmount, tensorShape, tensorStride, basePtr, isRowMajor,
-        sharedEnc);
+        padInterval, padAmount, tensorShape, tensorStride, basePtr, sharedEnc);
 
     SmallVector<Value> groups = tdmDesc.getAllGroups();
 

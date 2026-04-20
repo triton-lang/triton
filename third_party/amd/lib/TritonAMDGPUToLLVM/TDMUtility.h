@@ -37,7 +37,7 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
                                   unsigned padInterval, unsigned padAmount,
                                   SmallVector<Value> tensorShape,
                                   SmallVector<Value> tensorStride, Value srcPtr,
-                                  bool isRowMajor, Attribute sharedEncoding);
+                                  Attribute sharedEncoding);
 
 // Update the global memory address with offset, and fill the shared memory
 // address and pred in a given TDM descriptor for regular load/store (1D-5D).
@@ -61,8 +61,7 @@ void fillTDMDescriptor(
     SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
     Value multicastMask, Value barrierPtr,
     const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
-    bool isRowMajor, ArrayRef<unsigned> warpsPerCTA,
-    ArrayRef<int64_t> warpBases = {});
+    ArrayRef<unsigned> warpsPerCTA, ArrayRef<int64_t> warpBases = {});
 
 // Fill TDM descriptor for gather/scatter operations (2D only).
 // Gather reads from non-contiguous rows in global memory to LDS.
@@ -109,7 +108,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value pred, Value multicastMask, Type elementType,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
-                      Attribute encoding, Value ctaId, bool isRowMajor,
+                      Attribute encoding, Value ctaId,
                       ArrayRef<int64_t> warpBases = {});
 
 // Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.

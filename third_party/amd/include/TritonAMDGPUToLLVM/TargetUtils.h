@@ -37,8 +37,12 @@ enum class DppCtrl : uint32_t {
   QUAD_PERM_FIRST = 0,
   ROW_SHL0 = 0x100,
   ROW_SHR0 = 0x110,
+  ROW_ROR0 = 0x120,
+  ROW_MIRROR = 0x140,
+  ROW_HALF_MIRROR = 0x141,
   BCAST15 = 0x142,
-  BCAST31 = 0x143
+  BCAST31 = 0x143,
+  ROW_XMASK0 = 0x160,
 };
 
 } // namespace mlir::triton::AMD
