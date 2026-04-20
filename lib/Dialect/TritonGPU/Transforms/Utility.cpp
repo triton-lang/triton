@@ -37,7 +37,7 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
     auto rank = shape.size();
     SmallVector<unsigned, 3> ret(rank, 1);
     ret[rank - 1] = 8;
-    ret[rank - 2] = 16;
+    ret[rank - 2] = eltType.isF64() ? 8 : 16;
     return ret;
   } else if (version == 3) {
     unsigned k = 256 / eltType.getIntOrFloatBitWidth();

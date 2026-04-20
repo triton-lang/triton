@@ -3148,6 +3148,12 @@ def get_test_dot_base_cases():
 
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+def get_test_dot_small_fp64_cases():
+    return [(*shape, 1, False, False, 'none', 'ieee', 'float64', 'float64', 1, None)
+            for shape in [(8, 8, 4), (8, 8, 8), (16, 8, 4), (8, 8, 16)]]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 def get_test_dot_softmax():
     return [(128, 128, 64, 8, False, False, 'softmax', 'ieee', 'float16', 'float32', 1, None)]
 
@@ -3275,7 +3281,8 @@ def get_test_small_dots_cases():
     get_test_dot_small_mn_wmma_cases() + \
     get_test_dot_small_k_wmma_cases() + \
     get_test_dot_softmax() + \
-    get_test_small_dots_cases())
+    get_test_small_dots_cases() + \
+    get_test_dot_small_fp64_cases())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size,
              num_ctas, device):
@@ -3286,7 +3293,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             pytest.skip(f"input_precision {input_precision} is not supported in the interpreter")
     else:
         if not is_hip() and K < 16:
-            pytest.skip("small dots are supported only on HIP at the moment")
+            if in_dtype != 'float64':
+                pytest.skip("small dots are supported only on HIP at the moment")
         if is_cuda():
             capability = torch.cuda.get_device_capability()
 
