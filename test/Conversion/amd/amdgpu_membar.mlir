@@ -288,14 +288,11 @@ tt.func @missing_barrier_reused_allocation(%A: !tt.ptr<f16>, %B: !tt.ptr<f16>) {
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: must_barrier_tdm_copy_select_cmpi_unbounded_base
 // The select/cmpi modular-wrap idiom only equals (base + 1) % N when
-// base ∈ [-1, N). The matcher verifies that invariant by requiring
-// `base` to be a constant in range, a remsi-wrapped value, or an
-// scf.for iter_arg with a matching init and yield. Here the base is a
-// plain function argument (additionally the RUN line has already
-// lowered scf to cf), so none of those shapes apply and the matcher
-// must leave the index opaque, forcing a barrier between the TDM copy
-// and the local_load. Positive coverage for the iter_arg path lives
-// in test/Analysis/test-membar.mlir.
+// base ∈ [-1, N). Here the base is a plain function argument with no
+// provable bound, so the matcher must leave the index opaque and a
+// barrier must be emitted between the TDM copy and the local_load.
+// Positive coverage for the iter_arg path lives in
+// test/Analysis/test-membar.mlir.
 tt.func @must_barrier_tdm_copy_select_cmpi_unbounded_base(%desc: !tt.tensordesc<128x128xf16, #shared>, %phase: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32

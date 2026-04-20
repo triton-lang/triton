@@ -43,8 +43,6 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
 
   // Whole-slot disjointness via buffer-index matching. Skipped for
   // loop-carried slices, where the SSA-identity invariant does not hold.
-  // A failed match falls through to the subslice check below, which can
-  // still prove partial disjointness within the same slot.
   if (!isLoopCarried && !other.isLoopCarried &&
       areIndicesProvablyDifferent(bufferIndex, other.bufferIndex))
     return false;

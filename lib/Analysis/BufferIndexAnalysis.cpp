@@ -1,23 +1,3 @@
-//===- BufferIndexAnalysis.cpp - Decompose buffer-index SSA values --------===//
-//
-// Support for the membar analysis's dynamic-buffer-index disjointness
-// check: given two SSA values used as slot indices into a multi-buffered
-// shared-memory allocation, try to prove that they denote different slots
-// within a single execution of the enclosing region.
-//
-// The public entry point (declared in Membar.h) is
-//   bool areIndicesProvablyDifferent(Value, Value);
-// Everything else here is an implementation detail.
-//
-// Correctness relies on SSA identity: two expressions with the same base
-// value refer to the same runtime integer only within a single execution
-// of the enclosing region. Across a loop backedge the same SSA value
-// (e.g. an scf.for iter_arg) denotes different runtime values on
-// different iterations; those cases are handled by the caller via the
-// isLoopCarried flag on AllocationSlice.
-//
-//===----------------------------------------------------------------------===//
-
 #include "triton/Analysis/Membar.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -119,10 +99,8 @@ bool isBaseProvablyBounded(Value base, int64_t modulus,
 ///   select(cmpi slt (addi(base, 1), N), addi(base, 1), zero)
 /// Both equal (base + 1) % N only when base ∈ [-1, N); outside that range
 /// the wrap arm would need to be (base + 1) - N, not 0, so accepting the
-/// match unconditionally would be unsound. We require C == 1 (general
-/// offsets with modular wrap should go through arith.remsi, handled in
-/// analyzeBufferIndex) and verify the range assumption via
-/// isBaseProvablyBounded.
+/// match unconditionally would be unsound. We require C == 1 and verify
+/// the range assumption via isBaseProvablyBounded.
 std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp) {
   auto cmp = selectOp.getCondition().getDefiningOp<arith::CmpIOp>();
   if (!cmp)
@@ -157,8 +135,7 @@ std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp) {
   if (!c || *c != 1)
     return std::nullopt;
 
-  // Modulus must be a positive compile-time constant for comparisons to
-  // be meaningful.
+  // Modulus must be a positive compile-time constant.
   auto mod = getConstantIntValue(cmp.getRhs());
   if (!mod || *mod <= 0)
     return std::nullopt;

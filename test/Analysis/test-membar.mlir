@@ -1313,8 +1313,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 // Tests for the dynamic-buffer-index disjointness analysis.
-// The analysis is target-agnostic, so these live alongside the generic
-// membar tests rather than under test/Conversion/amd.
 #shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #smem = #ttg.shared_memory
 
@@ -1345,13 +1343,11 @@ tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
 // CHECK-LABEL: disjoint_select_cmpi_iter_arg
 // Pipeliner-style (base + 1) % N via select/cmpi where `base` is an
 // scf.for iter_arg with a compile-time init in [-1, N) and the yield
-// operand is exactly the matched select. That inductive shape proves
-// base stays in [-1, N), so the select equals (base + 1) % N. Within
-// an iteration the write at (phase + 1) % 3 and read at phase % 3 are
-// then disjoint; no intra-iteration barrier is required. A
-// cross-iteration barrier is still emitted ahead of the write because
-// loop-carried slices conservatively alias (the SSA-identity shortcut
-// on the buffer-index analysis is disabled for them).
+// operand is exactly the matched select. Within an iteration the write
+// at (phase + 1) % 3 and read at phase % 3 are disjoint, so no
+// intra-iteration barrier is required. A cross-iteration barrier is
+// still emitted ahead of the write because loop-carried slices alias
+// conservatively.
 tt.func @disjoint_select_cmpi_iter_arg(%cst: tensor<128x128xf16>,
                                        %lb: i32, %ub: i32, %step: i32) {
   %c0_i32 = arith.constant 0 : i32
@@ -1411,10 +1407,7 @@ tt.func @must_barrier_select_cmpi_unbounded_base(%cst: tensor<128x128xf16>, %pha
 // The select/cmpi matcher only accepts C == 1. For C >= 2 the wrap arm
 // returns 0 instead of (base + C) - N, so matching it as (base + C) % N
 // would be unsound (e.g. phase=2, N=3, C=2: wrap gives 0, but 4 % 3 = 1).
-// The matcher must reject this and leave the index opaque. (The base
-// here is additionally unbounded, which the matcher would also reject;
-// this test still exercises the C == 1 guard because it is checked
-// first.)
+// The matcher must reject this and leave the index opaque.
 tt.func @must_barrier_select_cmpi_large_c(%cst: tensor<128x128xf16>, %phase: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c2_i32 = arith.constant 2 : i32
@@ -1603,8 +1596,7 @@ tt.func @must_barrier_nonzero_wrap_arm(%cst: tensor<128x128xf16>, %phase: i32) {
   %c3_i32 = arith.constant 3 : i32
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
 
-  // Write: select(slt, addi(phase, 2), 3), addi(phase, 2), %c1_i32) — wrap
-  // arm is 1 (not 0), so the pattern is rejected.
+  // Wrap arm is 1 (not 0), so the select/cmpi pattern is rejected.
   %w_sum = arith.addi %phase, %c2_i32 : i32
   %w_cmp = arith.cmpi slt, %w_sum, %c3_i32 : i32
   %w_idx = arith.select %w_cmp, %w_sum, %c1_i32 : i32
