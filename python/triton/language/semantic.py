@@ -919,6 +919,8 @@ class TritonSemantic(Generic[TensorTy]):
                 cache = ir.CACHE_MODIFIER.CA
             elif cache_modifier == ".cg":
                 cache = ir.CACHE_MODIFIER.CG
+            elif cache_modifier == ".cs":
+                cache = ir.CACHE_MODIFIER.CS
             elif cache_modifier == ".cv":
                 cache = ir.CACHE_MODIFIER.CV
             else:

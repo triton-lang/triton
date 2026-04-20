@@ -298,12 +298,11 @@ def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale
     mbarrier.expect(
         bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta + a_scale_desc.nbytes_per_cta + b_scale_desc.nbytes_per_cta,
         pred)
-    tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar,
-                                    a_scale_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar,
-                                    b_scale_bufs.index(index), pred, multicast=multicast_b_scale)
+    tma.async_load(a_desc, [off_m, off_k_a], bar, a_bufs.index(index), pred)
+    tma.async_load(b_desc, [off_n, off_k_b], bar, b_bufs.index(index), pred)
+    tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_bufs.index(index), pred)
+    tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_bufs.index(index), pred,
+                   multicast=multicast_b_scale)
     return producer.next(pred)
 
 

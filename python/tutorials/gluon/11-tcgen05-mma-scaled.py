@@ -174,8 +174,8 @@ def simple_mma_scaled_kernel(a_desc, b_desc, c_desc, a_scale_ptr, a_scale_stride
 
         # Load the A and B tiles.
         mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_smem)
+        tma.async_load(a_desc, [off_m, off_k_a], bar, a_smem)
+        tma.async_load(b_desc, [off_n, off_k_b], bar, b_smem)
         mbarrier.wait(bar, phase)
 
         # Load the scales. We must always feed `b_scales` into `tcgen05_mma_scaled`
@@ -481,8 +481,8 @@ def mma_scaled_contig_kernel(a_desc, b_desc, c_desc, a_scale_ptr, b_scale_ptr, V
         off_k_b = k // B_ELEM_PER_BYTE
 
         mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_smem)
+        tma.async_load(a_desc, [off_m, off_k_a], bar, a_smem)
+        tma.async_load(b_desc, [off_n, off_k_b], bar, b_smem)
         mbarrier.wait(bar, phase)
 
         # ======= End unchanged code from `simple_mma_scaled_kernel` =======
@@ -725,10 +725,10 @@ def mma_scaled_packed_block_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         mbarrier.expect(
             bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + a_scale_desc.block_type.nbytes +
             b_scale_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_smem)
-        tma.async_copy_global_to_shared(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_smem)
-        tma.async_copy_global_to_shared(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_smem)
+        tma.async_load(a_desc, [off_m, off_k_a], bar, a_smem)
+        tma.async_load(b_desc, [off_n, off_k_b], bar, b_smem)
+        tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_smem)
+        tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_smem)
         mbarrier.wait(bar, phase)
 
         # We know the destination 2D layout of the scales required to store them
@@ -1005,10 +1005,10 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         mbarrier.expect(
             bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + a_scale_desc.block_type.nbytes +
             b_scale_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_smem)
-        tma.async_copy_global_to_shared(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_smem)
-        tma.async_copy_global_to_shared(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_smem)
+        tma.async_load(a_desc, [off_m, off_k_a], bar, a_smem)
+        tma.async_load(b_desc, [off_n, off_k_b], bar, b_smem)
+        tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_smem)
+        tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_smem)
         mbarrier.wait(bar, phase)
 
         # ======= End unchanged code from `mma_scaled_packed_block_kernel` =======
@@ -1186,12 +1186,10 @@ def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale
     mbarrier.expect(
         bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + a_scale_desc.block_type.nbytes +
         b_scale_desc.block_type.nbytes, pred)
-    tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar,
-                                    a_scale_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar,
-                                    b_scale_bufs.index(index), pred)
+    tma.async_load(a_desc, [off_m, off_k_a], bar, a_bufs.index(index), pred)
+    tma.async_load(b_desc, [off_n, off_k_b], bar, b_bufs.index(index), pred)
+    tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_bufs.index(index), pred)
+    tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_bufs.index(index), pred)
     return producer.next(pred)
 
 

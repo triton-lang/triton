@@ -616,20 +616,6 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                    warpId, rewriter, targetInfo, maybeMaxVecElems, emitLdSt);
 }
 
-// Build a vector containing multiple base pointers for dynamic indexing.
-static Value buildBasePtrVector(Location loc, RewriterBase &rewriter,
-                                ArrayRef<Value> smemBases) {
-  assert(smemBases.size() > 1 && "Need multiple bases to build a vector");
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto ptrTy = smemBases[0].getType();
-  auto vecTy = VectorType::get({static_cast<int64_t>(smemBases.size())}, ptrTy);
-  Value basesVec = b.undef(vecTy);
-  for (size_t i = 0; i < smemBases.size(); ++i) {
-    basesVec = b.insert_element(basesVec, smemBases[i], b.i32_val(i));
-  }
-  return basesVec;
-}
-
 SmallVector<Value>
 lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           ArrayRef<Value> valsArray, // Input for store, output for load
@@ -669,7 +655,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   Value basesVec;
   if (isPartitioned) {
     partitionLayout = cvt.sublayout(inDimNames, {kPartition});
-    basesVec = buildBasePtrVector(loc, rewriter, smemBases);
+    basesVec = LLVM::buildBasePtrVector(loc, rewriter, smemBases);
   }
 
   // Strip kPartition output for vectorization analysis.
@@ -1283,6 +1269,20 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
   return {/*bases=*/{elems.begin(), elems.begin() + numBases},
           /*baseElemType=*/elemTy,
           /*offsets=*/{elems.begin() + numBases, elems.end()}};
+}
+
+// Build a vector containing multiple base pointers for dynamic indexing.
+Value buildBasePtrVector(Location loc, RewriterBase &rewriter,
+                         ArrayRef<Value> smemBases) {
+  assert(smemBases.size() > 1 && "Need multiple bases to build a vector");
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto ptrTy = smemBases[0].getType();
+  auto vecTy = VectorType::get({static_cast<int64_t>(smemBases.size())}, ptrTy);
+  Value basesVec = b.undef(vecTy);
+  for (size_t i = 0; i < smemBases.size(); ++i) {
+    basesVec = b.insert_element(basesVec, smemBases[i], b.i32_val(i));
+  }
+  return basesVec;
 }
 
 Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp) {

@@ -802,7 +802,7 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
 
-    tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
+    tma.async_load(input_desc, [0, 0], bar, smem)
     ttgl.static_assert(input_desc.block_type.nbytes == XBLOCK * XBLOCK * 2)
     mbarrier.expect(bar, input_desc.block_type.nbytes)
     mbarrier.wait(bar, 0)
@@ -3849,7 +3849,7 @@ def test_nv_tma_descriptor_load_kernel(target):
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
+        tma.async_load(input_desc, [0, 0], bar, smem)
 
     ptr = MockTensor(ttgl.float32)
     module = run_parser(nv_tma_descriptor_load_kernel, *make_args(ptr), target)
