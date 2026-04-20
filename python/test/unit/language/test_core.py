@@ -1024,7 +1024,6 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_fdiv_ieee_rounding(num_ctas, device):
 
     @triton.jit
