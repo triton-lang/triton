@@ -46,30 +46,28 @@ def test_address_sanitizer():
             check=False,
         )
     except subprocess.TimeoutExpired as e:
-        pytest.fail(
-            "ASan helper timed out after {}s\n"
-            "stdout tail: {!r}\n"
-            "stderr tail: {!r}".format(
-                e.timeout,
-                (e.stdout or b"")[-2000:],
-                (e.stderr or b"")[-2000:],
-            ))
+        pytest.fail("ASan helper timed out after {}s\n"
+                    "stdout tail: {!r}\n"
+                    "stderr tail: {!r}".format(
+                        e.timeout,
+                        (e.stdout or b"")[-2000:],
+                        (e.stderr or b"")[-2000:],
+                    ))
 
     stdout = r.stdout.decode(errors="replace")
     stderr = r.stderr.decode(errors="replace")
     has_begin = "Begin function __asan_report" in stdout
     has_overflow = "heap-buffer-overflow" in stderr
 
-    assert has_begin and has_overflow, (
-        "ASan check failed\n"
-        f"  returncode   = {r.returncode}\n"
-        f"  stdout_bytes = {len(stdout)}\n"
-        f"  stderr_bytes = {len(stderr)}\n"
-        f"  has_begin    = {has_begin}   # 'Begin function __asan_report' in stdout\n"
-        f"  has_overflow = {has_overflow} # 'heap-buffer-overflow' in stderr\n"
-        "--- stdout head ---\n"
-        f"{stdout[:1500]}\n"
-        "--- stdout tail ---\n"
-        f"{stdout[-1500:]}\n"
-        "--- stderr head ---\n"
-        f"{stderr[:2000]}\n")
+    assert has_begin and has_overflow, ("ASan check failed\n"
+                                        f"  returncode   = {r.returncode}\n"
+                                        f"  stdout_bytes = {len(stdout)}\n"
+                                        f"  stderr_bytes = {len(stderr)}\n"
+                                        f"  has_begin    = {has_begin}   # 'Begin function __asan_report' in stdout\n"
+                                        f"  has_overflow = {has_overflow} # 'heap-buffer-overflow' in stderr\n"
+                                        "--- stdout head ---\n"
+                                        f"{stdout[:1500]}\n"
+                                        "--- stdout tail ---\n"
+                                        f"{stdout[-1500:]}\n"
+                                        "--- stderr head ---\n"
+                                        f"{stderr[:2000]}\n")
