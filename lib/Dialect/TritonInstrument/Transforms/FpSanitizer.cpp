@@ -2292,53 +2292,6 @@ public:
       signalPassFailure();
     }
 
-    bool hasUnsupportedOperations = false;
-    auto reportUnsupported = [&](Operation *op) {
-      hasUnsupportedOperations = true;
-      op->emitOpError() << "unsupported by fpsan";
-      return WalkResult::interrupt();
-    };
-    getOperation()->walk([&](Operation *op) {
-      if (auto dot = dyn_cast<tt::DotOp>(op)) {
-        if (isFloatLike(dot.getType()))
-          return reportUnsupported(op);
-      } else if (auto dotScaled = dyn_cast<tt::DotScaledOp>(op)) {
-        if (isFloatLike(dotScaled.getType()))
-          return reportUnsupported(op);
-      } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(op)) {
-        if (isFloatLike(load.getResult().getType()))
-          return reportUnsupported(op);
-      } else if (auto store = dyn_cast<ttng::TMEMStoreOp>(op)) {
-        if (isFloatLike(store.getSrc().getType()))
-          return reportUnsupported(op);
-      } else if (auto copy = dyn_cast<ttng::TMEMCopyOp>(op)) {
-        auto srcTy = cast<ttg::MemDescType>(copy.getSrc().getType());
-        auto dstTy = cast<ttg::MemDescType>(copy.getDst().getType());
-        if (isa<FloatType>(srcTy.getElementType()) ||
-            isa<FloatType>(dstTy.getElementType()))
-          return reportUnsupported(op);
-      } else if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-        auto aTy = cast<ttg::MemDescType>(mma.getA().getType());
-        auto bTy = cast<ttg::MemDescType>(mma.getB().getType());
-        auto dTy = cast<ttg::MemDescType>(mma.getD().getType());
-        if (isa<FloatType>(aTy.getElementType()) ||
-            isa<FloatType>(bTy.getElementType()) ||
-            isa<FloatType>(dTy.getElementType()))
-          return reportUnsupported(op);
-      } else if (auto scaledMma = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-        auto dTy = cast<ttg::MemDescType>(scaledMma.getD().getType());
-        if (isa<FloatType>(dTy.getElementType()))
-          return reportUnsupported(op);
-      } else if (auto ext = dyn_cast<tt::ExternElementwiseOp>(op)) {
-        if (externInvolvesFloatLike(ext))
-          return reportUnsupported(op);
-      }
-
-      return WalkResult::advance();
-    });
-    if (hasUnsupportedOperations)
-      signalPassFailure();
-
     // TODO: Remove unused tmem usages. This requires unwiring them from the
     // warp specialize partitions.
   }
