@@ -78,6 +78,13 @@ struct BufferIndexExpr {
   }
 };
 
+/// Decompose a buffer-index SSA value into a BufferIndexExpr. Recognizes
+/// constants, `addi(base, const)`, `arith.remsi`, and the pipeliner's
+/// select/cmpi one-step modular wrap. Unrecognized patterns yield an
+/// opaque expression (the value itself as `baseValue`, offset 0). The
+/// implementation lives in BufferIndexAnalysis.cpp.
+BufferIndexExpr analyzeBufferIndex(Value indexValue);
+
 // Represents the access to a slice of an allocation
 // It contains information both on physical memory (the interval) and a
 // logical view on it (layout, subslice offsets and shape for the access)

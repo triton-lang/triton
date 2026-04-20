@@ -1303,12 +1303,50 @@ tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
   tt.return
 }
 
-// CHECK-LABEL: disjoint_select_cmpi_sge
-// Write at (phase + 1) % 3 via the sge select/cmpi idiom (NVIDIA
-// pipeliner shape, C == 1) vs. read at phase % 3 via arith.remsi —
-// same base, different offsets in the same modular ring, provably
-// disjoint.
-tt.func @disjoint_select_cmpi_sge(%cst: tensor<128x128xf16>, %phase: i32) {
+// CHECK-LABEL: disjoint_select_cmpi_iter_arg
+// Pipeliner-style (base + 1) % N via select/cmpi where `base` is an
+// scf.for iter_arg with a compile-time init in [-1, N) and the yield
+// operand is exactly the matched select. That inductive shape proves
+// base stays in [-1, N), so the select equals (base + 1) % N. Within
+// an iteration the write at (phase + 1) % 3 and read at phase % 3 are
+// then disjoint; no intra-iteration barrier is required. A
+// cross-iteration barrier is still emitted ahead of the write because
+// loop-carried slices conservatively alias (the SSA-identity shortcut
+// on bufferIndexExpr is disabled for them).
+tt.func @disjoint_select_cmpi_iter_arg(%cst: tensor<128x128xf16>,
+                                       %lb: i32, %ub: i32, %step: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %init = arith.constant -1 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  %res = scf.for %iv = %lb to %ub step %step iter_args(%phase = %init) -> (i32) : i32 {
+    %w_sum = arith.addi %phase, %c1_i32 : i32
+    %w_cmp = arith.cmpi sge, %w_sum, %c3_i32 : i32
+    %w_idx = arith.select %w_cmp, %c0_i32, %w_sum : i32
+    %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+    %r_idx = arith.remsi %phase, %c3_i32 : i32
+    %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+    // CHECK: ttg.barrier local
+    // CHECK: ttg.local_store
+    ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: ttg.local_load
+    %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+
+    scf.yield %w_idx : i32
+  }
+  tt.return
+}
+
+// CHECK-LABEL: must_barrier_select_cmpi_unbounded_base
+// The select/cmpi idiom only equals (base + 1) % N when base ∈ [-1, N).
+// Here the base is a plain function argument with no provable bound,
+// so the matcher must reject the pattern and a barrier is required.
+tt.func @must_barrier_select_cmpi_unbounded_base(%cst: tensor<128x128xf16>, %phase: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
   %c3_i32 = arith.constant 3 : i32
@@ -1324,8 +1362,8 @@ tt.func @disjoint_select_cmpi_sge(%cst: tensor<128x128xf16>, %phase: i32) {
 
   // CHECK: ttg.local_store
   ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-  // CHECK-NOT: ttg.barrier local
-  // CHECK: ttg.local_load
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
   %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
   tt.return
 }
@@ -1334,7 +1372,10 @@ tt.func @disjoint_select_cmpi_sge(%cst: tensor<128x128xf16>, %phase: i32) {
 // The select/cmpi matcher only accepts C == 1. For C >= 2 the wrap arm
 // returns 0 instead of (base + C) - N, so matching it as (base + C) % N
 // would be unsound (e.g. phase=2, N=3, C=2: wrap gives 0, but 4 % 3 = 1).
-// The matcher must reject this and leave the index opaque.
+// The matcher must reject this and leave the index opaque. (The base
+// here is additionally unbounded, which the matcher would also reject;
+// this test still exercises the C == 1 guard because it is checked
+// first.)
 tt.func @must_barrier_select_cmpi_large_c(%cst: tensor<128x128xf16>, %phase: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c2_i32 = arith.constant 2 : i32
