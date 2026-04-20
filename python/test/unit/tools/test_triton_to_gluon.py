@@ -84,8 +84,8 @@ def matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.c
 
 
 def test_triton_to_gluon_dot_minimal(tmp_path):
-    if not (is_blackwell() or is_hip_cdna3_or_newer() or is_hip_gfx1250()):
-        pytest.skip("Requires Blackwell, CDNA3+, or gfx1250")
+    if not (is_hopper_or_newer() or is_hip_cdna3_or_newer() or is_hip_gfx1250()):
+        pytest.skip("Requires Hopper, Blackwell, CDNA3+, or gfx1250")
     kernel = convert_kernel(matmul_tile_kernel, "matmul_tile_kernel", tmp_path)
     M, N, K = 128, 128, 128
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
@@ -145,8 +145,8 @@ def matmul_kernel(  #
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES", [(128, 128, 64, 1)])
 @pytest.mark.parametrize("NUM_WARPS", [4])
 def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, NUM_WARPS, tmp_path):
-    if not (is_blackwell() or is_hip_cdna4() or is_hip_gfx1250()):
-        pytest.skip("Requires Blackwell, CDNA4, or gfx1250")
+    if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_gfx1250()):
+        pytest.skip("Requires Hopper, Blackwell, CDNA4, or gfx1250")
     device = "cuda"
     M, N, K = 1024, 512, 256
     torch.manual_seed(42)

@@ -17,11 +17,13 @@ from triton.tools.triton_to_gluon_translator.common_helpers import *  # noqa: F4
 from triton.tools.triton_to_gluon_translator.common_helpers import (
     default_blocked_layout,
     get_num_threads_per_warp,
-    tl_dot_decomposed_scale_arg,
-    tl_trans,
 )
 from triton.tools.triton_to_gluon_translator.nvidia_helpers import *  # noqa: F401,F403
-from triton.tools.triton_to_gluon_translator.nvidia_helpers import tl_dot_mma_sync
+from triton.tools.triton_to_gluon_translator.nvidia_helpers import (
+    tl_dot_mma_sync,
+    get_shared_memory_mma_operand,
+    tl_dot_decomposed_block_scales_impl,
+)
 
 
 # ---- NVIDIA Blackwell dot ----
@@ -46,54 +48,6 @@ def tl_dot_mmav5_supported(a_ty, b_ty, num_warps, input_precision, allow_tf32, m
         return False
     return (num_warps in [4, 8] and len(a_ty.shape) == 2 and len(b_ty.shape) == 2 and K >= min_K and M >= 64
             and N >= 16)
-
-
-@gluon.constexpr_function
-def get_shared_memory_mma_layout(type, operand_index, allow_transpose, is_fp4_padded=False, force_transpose=False):
-    if not allow_transpose:
-        if operand_index == 1:
-            transposed = True
-        else:
-            transposed = False
-        if force_transpose:
-            transposed = not transposed
-    else:
-        transposed = operand_index == 1
-
-    shape = type.shape
-    swizzle_byte_width = 0
-    ele_bit_width = type.element_ty.primitive_bitwidth
-    packing_factor = 2 if is_fp4_padded else 1
-
-    contig_dim_size_in_byte = ((shape[0] if transposed else shape[1]) * packing_factor * ele_bit_width // 8)
-    if contig_dim_size_in_byte >= 128 and contig_dim_size_in_byte % 128 == 0:
-        swizzle_byte_width = 128
-    elif contig_dim_size_in_byte >= 64 and contig_dim_size_in_byte % 64 == 0:
-        swizzle_byte_width = 64
-    elif contig_dim_size_in_byte >= 32 and contig_dim_size_in_byte % 32 == 0:
-        swizzle_byte_width = 32
-    else:
-        swizzle_byte_width = 0
-
-    flatten_outer_dim = 1
-    for dim in shape:
-        flatten_outer_dim *= dim
-    if len(shape) < 2 or flatten_outer_dim < 8:
-        swizzle_byte_width = 0
-    return ttgl.NVMMASharedLayout(
-        swizzle_byte_width=swizzle_byte_width,
-        transposed=transposed,
-        element_bitwidth=ele_bit_width,
-        rank=len(shape),
-        fp4_padded=is_fp4_padded,
-    )
-
-
-@gluon.jit
-def get_shared_memory_mma_operand(value, operand_index, allow_transpose, is_fp4_padded=False, force_transpose=False):
-    layout: ttgl.constexpr = get_shared_memory_mma_layout(value.type, operand_index, allow_transpose, is_fp4_padded,
-                                                          force_transpose)
-    return ttgl.allocate_shared_memory(value.dtype, value.shape, layout, value)
 
 
 @gluon.jit
@@ -252,7 +206,6 @@ def tl_dot_scaled_blackwell(
     return out
 
 
-# Defined here (not imported from common) so __globals__ resolves tl_dot to this module's version.
 @gluon.jit
 def tl_dot_decomposed_block_scales(
     lhs,
@@ -267,38 +220,21 @@ def tl_dot_decomposed_block_scales(
     rhs_k_pack=True,
     out_dtype=ttgl.float32,
 ):
-    if lhs_scale is None and rhs_scale is not None:
-        lhs_trans = tl_trans(lhs)
-        rhs_trans = tl_trans(rhs)
-        if acc is not None:
-            orig_layout: ttgl.constexpr = acc.type.layout
-            acc = tl_trans(acc)
-        result = tl_dot_scaled(
-            rhs_trans,
-            rhs_scale,
-            rhs_format,
-            lhs_trans,
-            lhs_scale,
-            lhs_format,
-            acc,
-            fast_math,
-            lhs_k_pack,
-            rhs_k_pack,
-            out_dtype,
-        )
-        result = tl_trans(result)
-        if acc is not None:
-            result = ttgl.convert_layout(result, orig_layout)
-        return result
-    else:
-        ttgl.static_assert(not (not lhs_k_pack or not rhs_k_pack), "TODO: support m/n packed formats")
-        compute_type: ttgl.constexpr = (ttgl.float16 if
-                                        (lhs_format == "fp16" or rhs_format == "fp16") else ttgl.bfloat16)
-
-        scale_a = tl_dot_decomposed_scale_arg(lhs, lhs_scale, lhs_format, 0, compute_type, fast_math)
-        scale_b = tl_dot_decomposed_scale_arg(rhs, rhs_scale, rhs_format, 1, compute_type, fast_math)
-
-        return tl_dot(scale_a, scale_b, acc, out_dtype=out_dtype)
+    return tl_dot_decomposed_block_scales_impl(
+        tl_dot_scaled,
+        tl_dot,
+        lhs,
+        lhs_scale,
+        lhs_format,
+        rhs,
+        rhs_scale,
+        rhs_format,
+        acc=acc,
+        fast_math=fast_math,
+        lhs_k_pack=lhs_k_pack,
+        rhs_k_pack=rhs_k_pack,
+        out_dtype=out_dtype,
+    )
 
 
 @gluon.jit
