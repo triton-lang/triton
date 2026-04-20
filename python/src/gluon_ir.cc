@@ -315,6 +315,18 @@ template <typename CondT> static void check(CondT &&cond, const char *msg) {
 void init_gluon_ir(py::module &&m) {
   using ret = py::return_value_policy;
 
+  // Validate a flattened warp_bases attribute against numWarps and
+  // block_shape.  Raises ValueError with the same message the MLIR verifier
+  // would produce, so the Python front-end and the IR verifier stay in sync.
+  m.def("validate_tdm_warp_bases",
+        [](std::vector<int64_t> warpBases, int64_t numWarps,
+           std::vector<int64_t> blockShape) {
+          auto err = ttag::AsyncTDMCopyGlobalToLocalOp::validateWarpBases(
+              warpBases, numWarps, blockShape);
+          if (err)
+            throw std::invalid_argument(*err);
+        });
+
   py::enum_<ttng::TMEMLoadReduceModifier>(m, "TMEM_LOAD_REDUCE_MODIFIER",
                                           py::module_local())
       .value("MIN", ttng::TMEMLoadReduceModifier::MIN)

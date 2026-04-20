@@ -237,7 +237,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// Partial TDM copy: 4 active warps out of 8, verify predication logic
+// Partial TDM copy: 4 active warps out of 8, verify predication logic.
+// Free-variable mask of the "warp" input dim is 0b100 (bit 2 is the only
+// redundant warp bit for warp_bases = [(64,0),(128,0),(0,0)]), so predication
+// is (warpId & 4) == 0.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -250,9 +253,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c_pred = arith.constant 1 : i32
     %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <256x64xf16, #shared>
     %1 = ttg.local_alloc : () -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
-    // warp_bases for 4 active warps: pred = user_pred AND (warpId < 4)
-    // CHECK-DAG: %[[C4:.*]] = llvm.mlir.constant(4 : i32) : i32
-    // CHECK: %[[IS_ACTIVE:.*]] = llvm.icmp "ult" %{{.*}}, %[[C4]] : i32
+    // CHECK-DAG: %[[FREE_MASK:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[MASKED:.*]] = llvm.and %{{.*}}, %[[FREE_MASK]] : i32
+    // CHECK: %[[IS_ACTIVE:.*]] = llvm.icmp "eq" %[[MASKED]], %[[ZERO]] : i32
     // CHECK: %[[LAYOUT_PRED:.*]] = llvm.select %[[IS_ACTIVE]], %{{.*}}, %{{.*}} : i1, i32
     // CHECK: llvm.and %{{.*}}, %[[LAYOUT_PRED]] : i32
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"
@@ -263,11 +267,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Partial TDM copy with partitioned layout: effectiveWarps controls TDM instruction count.
-// Without warp_bases (4 warps), all 4 logical pieces fit in 1 instruction.
-// With warp_bases for 2 active warps, gcd(2,4)=2 → ceil(4/2)=2 instructions.
+// Partial TDM copy with partitioned layout.  warp_bases selects 2 active
+// warps (bit 1 is the free warp bit) out of 4, and warpsPerCTA along the
+// partition dim (2) matches numLogicalPieces (2) so the copy fits in a
+// single TDM instruction.
 #shared_inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #shared_inner}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #shared_inner}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tdm_load_warp_bases_partitioned
@@ -279,10 +284,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c_pred = arith.constant 1 : i32
     %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <128x16xf16, #partitioned>
     %1 = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
-    // 2 active warps on partitioned layout → 2 TDM instructions
-    // CHECK: llvm.icmp "ult"
-    // CHECK-COUNT-2: "llvm.amdgcn.tensor.load.to.lds"
+    // CHECK-DAG: %[[FREE_MASK:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[MASKED:.*]] = llvm.and %{{.*}}, %[[FREE_MASK]] : i32
+    // CHECK: llvm.icmp "eq" %[[MASKED]], %[[ZERO]] : i32
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
     %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset] into %1, pred = %c_pred {warp_bases = array<i64: 64, 0, 0, 0>} : !tt.tensordesc<128x16xf16, #partitioned> -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Non-canonical bit ordering: bit 0 of warpId is the redundant one, bits
+// 1,2 carry the real warp offsets.  Verifier allows this, and the free
+// mask must report bit 0 (mask = 1) so predication uses `(warpId & 1) == 0`.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_warp_bases_redundant_bit_first
+  tt.func public @tdm_load_warp_bases_redundant_bit_first(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 256 : i32
+    %c_stride0 = arith.constant 256 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %c_offset = arith.constant 0 : i32
+    %c_pred = arith.constant 1 : i32
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <256x64xf16, #shared>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
+    // CHECK-DAG: %[[FREE_MASK:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[MASKED:.*]] = llvm.and %{{.*}}, %[[FREE_MASK]] : i32
+    // CHECK: llvm.icmp "eq" %[[MASKED]], %[[ZERO]] : i32
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+    %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset] into %1, pred = %c_pred {warp_bases = array<i64: 0, 0, 64, 0, 128, 0>} : !tt.tensordesc<256x64xf16, #shared> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
     tt.return
   }
 }

@@ -164,16 +164,24 @@ std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle);
 
-// Create a LinearLayout for TDM (Tensor DMA) block shapes.
-// Returns a (message, warp, block) -> (dim0, dim1, ...) layout.
+// Create a LinearLayout for TDM (Tensor DMA) block shapes.  Returns a
+// (message, warp, block) -> (dim0, dim1, ...) layout.
 //
-// TDM operates at warp granularity. The warp dimension distributes warps across
-// output dimensions according to warpsPerCTA. The message dimension covers each
-// warp's portion of the block (blockShape / warpsPerCTA) for surjectivity. The
-// block dimension comes from cgaLayout.
+// TDM operates at warp granularity.  The "warp" sublayout describes which
+// tensor-coordinate offset each bit of warpId contributes; the "message"
+// sublayout covers each warp's portion of the block (blockShape /
+// warpsPerCTA) for surjectivity; the "block" sublayout comes from
+// `cgaLayout`.
+//
+// When `warpBases` is empty the warp sublayout is an identity over
+// `warpsPerCTA` (the default greedy distribution).  Otherwise `warpBases`
+// is a flattened row-major array of shape (log2(numWarps), ndim) used
+// directly as the warp sublayout -- enabling stride subsets and
+// redundant (free) warp bits exposed via getFreeVariableMasks().
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
-                                const LinearLayout &cgaLayout);
+                                const LinearLayout &cgaLayout,
+                                ArrayRef<int64_t> warpBases = {});
 
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

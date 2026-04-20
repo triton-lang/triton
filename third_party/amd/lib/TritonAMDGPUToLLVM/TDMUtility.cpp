@@ -532,21 +532,23 @@ swapOutDimSemantics(const triton::LinearLayout &layout, StringAttr dimA,
 }
 
 // Fill TDM descriptor for regular load/store operations (1D-5D tensors).
-// activeWarps: number of warps that actually issue TDM copies (power of two,
-// <= numWarps).  Warps with warpId >= activeWarps get pred=0 (hardware no-op).
-// 0 is the sentinel for "warp_bases absent, all warps active"; when warp_bases
-// is present, activeWarps is at least 1.
+// When warpBases is non-empty, the "warp" sublayout of the TDM LinearLayout
+// is driven directly by those user-provided bases, and predication is
+// derived from the layout's free-variable masks (any redundant bit of
+// warpId gets pred=0, producing a hardware no-op).
 void fillTDMDescriptor(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> shapePerCTA, int numWarps, unsigned padInterval,
-    unsigned padAmount, SmallVector<Value> &group0, SmallVector<Value> &group1,
+    SmallVector<int64_t> shapePerCTA, unsigned padInterval, unsigned padAmount,
+    SmallVector<Value> &group0, SmallVector<Value> &group1,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group2,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group3,
     SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
     Value multicastMask, Value barrierPtr,
     const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
-    bool isRowMajor, ArrayRef<unsigned> warpsPerCTA, int activeWarps) {
+    bool isRowMajor, ArrayRef<unsigned> warpsPerCTA,
+    ArrayRef<int64_t> warpBases) {
+  bool hasWarpBases = !warpBases.empty();
   size_t numDims = offset.size();
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors.");
   assert(!dstPtrs.empty() && "dstPtrs cannot be empty");
@@ -585,10 +587,11 @@ void fillTDMDescriptor(
               : std::nullopt,
           numDims);
 
-  // When partial TDM copy is active, the per-warp block shape differs from
-  // what createTDMDescriptor encoded (which used numWarps). Re-encode the
-  // correct per-warp tile dimensions based on warpsPerCTA (from activeWarps).
-  if (activeWarps > 0) {
+  // When partial TDM copy is active (warp_bases supplied), the per-warp
+  // block shape may differ from what createTDMDescriptor encoded (which
+  // assumed the default greedy distribution over all warps).  Re-encode
+  // the per-warp tile dimensions from the warpsPerCTA derived here.
+  if (hasWarpBases) {
     Value v16 = b.i32_val(16);
     for (size_t i = 0; i < numDims; ++i)
       decodedBlockShape[i] =
@@ -637,8 +640,8 @@ void fillTDMDescriptor(
                        .getCGALayout()
                        .getLinearLayout();
 
-  auto tdmLayout =
-      triton::gpu::getTDMLinearLayout(shapePerCTA, warpsPerCTA, cgaLayout);
+  auto tdmLayout = triton::gpu::getTDMLinearLayout(shapePerCTA, warpsPerCTA,
+                                                   cgaLayout, warpBases);
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
@@ -738,11 +741,19 @@ void fillTDMDescriptor(
   Value ldsAddr = b.ptrtoint(i32_ty, dstPtr);
 
   // Combine user predicate with layout predicate for partial TDM copy.
-  // Duplicate warps (warpId >= activeWarps) get pred=0 (hardware no-op).
-  if (activeWarps > 0 && activeWarps < numWarps) {
-    Value isActive = b.icmp_ult(warpId, b.i32_val(activeWarps));
-    Value layoutPred = b.select(isActive, b.i32_val(1), b.i32_val(0));
-    pred = b.and_(pred, layoutPred);
+  // `tdmLayout.getFreeVariableMasks()[kWarp]` reports every bit of warpId
+  // that does not contribute any offset (i.e. warps that are redundant
+  // duplicates under the chosen warp_bases).  Warps where any such bit is
+  // set get pred=0 so the TDM instruction they issue is a hardware no-op.
+  if (hasWarpBases) {
+    auto freeMasks = tdmLayout.getFreeVariableMasks();
+    int32_t warpFreeMask = freeMasks.lookup(kWarp);
+    if (warpFreeMask != 0) {
+      Value isActive =
+          b.icmp_eq(b.and_(warpId, b.i32_val(warpFreeMask)), b.i32_val(0));
+      Value layoutPred = b.select(isActive, b.i32_val(1), b.i32_val(0));
+      pred = b.and_(pred, layoutPred);
+    }
   }
   group0[0] = pred;
   group0[1] = ldsAddr;
@@ -1004,11 +1015,11 @@ static void emitTDMIntrinsic(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, ArrayRef<Value> desc,
     size_t numDims, Type elementType, SmallVector<int64_t> effectiveBlockShape,
-    int numWarps, unsigned padInterval, unsigned padAmount,
-    SmallVector<Value> globalOffset, ArrayRef<Value> instrDstPtrs, Value pred,
-    Value multicastMask, Value barrier,
-    const triton::LinearLayout &instrSharedLayout, Value ctaId, bool isLoad,
-    bool isRowMajor, ArrayRef<unsigned> warpsPerCTA, int activeWarps = 0) {
+    unsigned padInterval, unsigned padAmount, SmallVector<Value> globalOffset,
+    ArrayRef<Value> instrDstPtrs, Value pred, Value multicastMask,
+    Value barrier, const triton::LinearLayout &instrSharedLayout, Value ctaId,
+    bool isLoad, bool isRowMajor, ArrayRef<unsigned> warpsPerCTA,
+    ArrayRef<int64_t> warpBases = {}) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
   Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
@@ -1020,11 +1031,11 @@ static void emitTDMIntrinsic(
     auto group3Vec = SmallVector<Value>(desc.begin() + 16, desc.end());
 
     fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      effectiveBlockShape, numWarps, padInterval, padAmount,
-                      group0Vec, group1Vec, std::ref(group2Vec),
-                      std::ref(group3Vec), globalOffset, instrDstPtrs, pred,
-                      multicastMask, barrier, instrSharedLayout, ctaId, !isLoad,
-                      isRowMajor, warpsPerCTA, activeWarps);
+                      effectiveBlockShape, padInterval, padAmount, group0Vec,
+                      group1Vec, std::ref(group2Vec), std::ref(group3Vec),
+                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
+                      instrSharedLayout, ctaId, !isLoad, isRowMajor,
+                      warpsPerCTA, warpBases);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -1040,12 +1051,11 @@ static void emitTDMIntrinsic(
     auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
     auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
 
-    fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      effectiveBlockShape, numWarps, padInterval, padAmount,
-                      group0Vec, group1Vec, std::nullopt, std::nullopt,
-                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-                      instrSharedLayout, ctaId, !isLoad, isRowMajor,
-                      warpsPerCTA, activeWarps);
+    fillTDMDescriptor(
+        rewriter, loc, typeConverter, elementType, effectiveBlockShape,
+        padInterval, padAmount, group0Vec, group1Vec, std::nullopt,
+        std::nullopt, globalOffset, instrDstPtrs, pred, multicastMask, barrier,
+        instrSharedLayout, ctaId, !isLoad, isRowMajor, warpsPerCTA, warpBases);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -1083,45 +1093,46 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
   size_t numDims = blockShape.size();
   assert(numDims <= 5);
 
-  // Determine activeWarps from warp_bases.
-  // activeWarps = 2^(number of non-zero bit-rows), so it is at least 1 when
-  // warp_bases is present (even all-zero rows yield activeWarps=1).
-  // activeWarps=0 is the sentinel for "attribute absent, all warps active."
-  int activeWarps = 0;
-  if (!warpBases.empty()) {
-    int numBits = warpBases.size() / numDims;
-    int activeCount = 0;
-    for (int bit = 0; bit < numBits; ++bit) {
-      bool isZero = true;
-      for (size_t d = 0; d < numDims; ++d) {
-        if (warpBases[bit * numDims + d] != 0) {
-          isZero = false;
-          break;
-        }
-      }
-      if (!isZero)
-        activeCount++;
-    }
-    activeWarps = 1 << activeCount;
-  }
-
-  // When partial TDM copy is active, compute the warp distribution based
-  // on activeWarps instead of numWarps.
-  int effectiveWarps = (activeWarps > 0) ? activeWarps : numWarps;
-
   auto partitionedEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding);
 
-  // Compute warp distribution -- partition-aligned when needed.
-  auto [warpsPerCTA, numTDMInstructions] =
-      distributeTDMWarpsAlignToPartition(blockShape, effectiveWarps, encoding);
+  // Compute the warp distribution.  When warp_bases is provided, derive
+  // warpsPerCTA directly from the per-dim span of the user-specified bases
+  // (each non-zero basis row along dim d doubles warpsPerCTA[d]).  This
+  // supports stride subsets and non-greedy distributions that the default
+  // `distributeTDMWarpsAlignToPartition` would not produce.  When
+  // warp_bases is absent, fall back to the greedy partition-aligned
+  // distribution over all warps.
+  SmallVector<unsigned> warpsPerCTA;
+  unsigned numTDMInstructions = 1;
+  if (!warpBases.empty()) {
+    int numBits = warpBases.size() / numDims;
+    warpsPerCTA.assign(numDims, 1);
+    for (int bit = 0; bit < numBits; ++bit) {
+      for (size_t d = 0; d < numDims; ++d) {
+        if (warpBases[bit * numDims + d] != 0) {
+          warpsPerCTA[d] *= 2;
+          break; // verifier ensures at most one non-zero entry per row
+        }
+      }
+    }
+    // The verifier guarantees warpsPerCTA[partitionDim] >= numLogicalPieces
+    // when warp_bases is combined with a partitioned encoding, so the copy
+    // always fits in a single TDM instruction (numTDMInstructions stays 1).
+    // Multi-instruction slicing is not supported for warp_bases because the
+    // bases are stated in full-block coordinates and would land outside
+    // each slice's extent along partitionDim.
+  } else {
+    std::tie(warpsPerCTA, numTDMInstructions) =
+        distributeTDMWarpsAlignToPartition(blockShape, numWarps, encoding);
+  }
 
   // Fast path: single instruction covers the entire block.
   if (numTDMInstructions == 1) {
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
-                     to_vector(blockShape), numWarps, padInterval, padAmount,
+                     to_vector(blockShape), padInterval, padAmount,
                      to_vector(offset), dstPtrs, pred, multicastMask,
                      barrierPtr, sharedLayout, ctaId, isLoad, isRowMajor,
-                     warpsPerCTA, activeWarps);
+                     warpsPerCTA, warpBases);
     return;
   }
 
@@ -1183,10 +1194,9 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
     }
 
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
-                     effectiveBlockShape, numWarps, padInterval, padAmount,
-                     globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-                     sliceLayout, ctaId, isLoad, isRowMajor, warpsPerCTA,
-                     activeWarps);
+                     effectiveBlockShape, padInterval, padAmount, globalOffset,
+                     instrDstPtrs, pred, multicastMask, barrier, sliceLayout,
+                     ctaId, isLoad, isRowMajor, warpsPerCTA, warpBases);
   }
 }
 

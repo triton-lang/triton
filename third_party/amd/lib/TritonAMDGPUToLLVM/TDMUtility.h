@@ -43,20 +43,26 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // address and pred in a given TDM descriptor for regular load/store (1D-5D).
 // For partitioned shared memory, dstPtrs contains multiple base pointers and
 // the correct one is selected based on sharedLayout's partition dimension.
-// activeWarps: number of warps that actually issue TDM copies (power of two,
-// <= numWarps).  0 is the sentinel for "warp_bases absent, all warps active";
-// when warp_bases is present, activeWarps is at least 1.
+//
+// warpBases: optional flattened (log2(numWarps), ndim) array.  When non-empty,
+// the TDM LinearLayout's "warp" sublayout is driven directly by these bases,
+// the tile dimensions in the descriptor are re-encoded to match the resulting
+// per-warp tile (blockShape / warpsPerCTA), and predication is masked by
+// `(warpId & freeMask) == 0` where freeMask is the free-variable mask for the
+// "warp" input dim reported by the LinearLayout.  When empty, behaviour is
+// unchanged from the default greedy distribution (all warps active).
 void fillTDMDescriptor(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> blockShape, int numWarps, unsigned padInterval,
-    unsigned padAmount, SmallVector<Value> &group0, SmallVector<Value> &group1,
+    SmallVector<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
+    SmallVector<Value> &group0, SmallVector<Value> &group1,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group2,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group3,
     SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
     Value multicastMask, Value barrierPtr,
     const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
-    bool isRowMajor, ArrayRef<unsigned> warpsPerCTA, int activeWarps = 0);
+    bool isRowMajor, ArrayRef<unsigned> warpsPerCTA,
+    ArrayRef<int64_t> warpBases = {});
 
 // Fill TDM descriptor for gather/scatter operations (2D only).
 // Gather reads from non-contiguous rows in global memory to LDS.
@@ -80,18 +86,21 @@ void fillTDMDescriptorForGatherScatter(
 //
 // Supports 1D-5D tensors.  When the encoding is a PartitionedSharedEncoding,
 // the warp distribution is adjusted so each wave's tile fits within a single
-// LDS partition.  If the warps cannot cover all logical pieces in one
-// instruction, the operation is automatically split into multiple sequential
-// TDM instructions.
+// LDS partition.  Without `warpBases`, if the warps cannot cover all logical
+// pieces in one instruction the op is automatically split into multiple
+// sequential TDM instructions.  With `warpBases`, the verifier requires
+// warpsPerCTA[partitionDim] >= numLogicalPieces, so a single instruction
+// always suffices (multi-instruction slicing is not supported in that path
+// because warpBases are stated in full-block coordinates).
 //
 // - offset: starting position in global memory for each dimension
 // - dstPtrs: base pointers to LDS (multiple for partitioned encoding)
 // - sharedLayout: linear layout for the full allocation shape (pre-CGA-split)
 // - encoding: shared memory encoding (used for partition constraints when
 //   splitting into multiple TDM instructions)
-// warpBases: flattened row-major array of shape (log2(numWarps), ndim).
-// Empty means all warps active (default greedy distribution).
-// Zero-basis entries produce duplicate warps that get pred=0.
+// - warpBases: flattened row-major array of shape (log2(numWarps), ndim).
+//   Empty means all warps active (default greedy distribution).
+//   Zero-basis entries produce duplicate warps that get pred=0.
 void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const LLVMTypeConverter *typeConverter,
                       ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,

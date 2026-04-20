@@ -1711,7 +1711,8 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
 
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
-                                const LinearLayout &cgaLayout) {
+                                const LinearLayout &cgaLayout,
+                                ArrayRef<int64_t> warpBases) {
   int numDims = blockShape.size();
   auto ctx = cgaLayout.getOutDimNames().begin()->getContext();
 
@@ -1724,8 +1725,44 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
 
   auto order = getMatrixOrder(numDims, /*rowMajor=*/false);
 
-  return (identityStandardND(S("message"), messageShape, order) *
-          identityStandardND(S("warp"), warpsPerCTA, order) * cgaLayout)
+  // Build the "warp" sublayout.  Without warpBases this is the standard
+  // identity over warpsPerCTA.  With warpBases we use the user-provided bases
+  // directly, divided down by messageShape so that operator* with the
+  // "message" sublayout rescales them back to absolute tensor-coordinate
+  // strides.  Bit ordering is preserved -- critical for getFreeVariableMasks
+  // to report the correct redundant bits of warpId -- and all-zero rows are
+  // permitted (they encode redundant warps).
+  auto kWarp = S("warp");
+  LinearLayout warpLayout = identityStandardND(kWarp, warpsPerCTA, order);
+  if (!warpBases.empty()) {
+    int numBits = warpBases.size() / numDims;
+    assert(static_cast<int>(warpBases.size()) == numBits * numDims);
+    std::vector<std::vector<int32_t>> rows;
+    rows.reserve(numBits);
+    for (int bit = 0; bit < numBits; ++bit) {
+      std::vector<int32_t> row(numDims, 0);
+      for (int d = 0; d < numDims; ++d) {
+        int64_t v = warpBases[bit * numDims + d];
+        if (v == 0)
+          continue;
+        assert(messageShape[d] > 0 && v % messageShape[d] == 0 &&
+               "warp_bases must be a multiple of messageShape; verifier "
+               "should have caught this");
+        row[d] = static_cast<int32_t>(v / messageShape[d]);
+      }
+      rows.push_back(std::move(row));
+    }
+    SmallVector<std::pair<StringAttr, int32_t>> warpOutDims;
+    auto outDimNames = standardOutDimNames(ctx, numDims);
+    for (int d = 0; d < numDims; ++d)
+      warpOutDims.push_back(
+          {outDimNames[d], static_cast<int32_t>(warpsPerCTA[d])});
+    warpLayout = LinearLayout({{kWarp, std::move(rows)}}, warpOutDims,
+                              /*requireSurjective=*/false);
+  }
+
+  return (identityStandardND(S("message"), messageShape, order) * warpLayout *
+          cgaLayout)
       .transposeOuts(standardOutDimNames(ctx, numDims));
 }
 

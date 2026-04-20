@@ -1,8 +1,8 @@
 from __future__ import annotations
-import math
 from typing import List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 
+import triton._C.libtriton.gluon_ir as _gluon_ir
 import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._layouts import PaddedSharedLayout, SwizzledSharedLayout
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
@@ -144,63 +144,24 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
 
 
 def _validate_warp_bases(warp_bases, block_shape, num_warps):
-    """Validate warp_bases for partial TDM copy.
+    """Validate warp_bases for partial TDM copy and return the flattened array.
 
-    warp_bases must be log2(num_warps) entries where the non-zero entries form
-    a contiguous prefix matching the greedy distribution for block_shape over
-    active_warps, and the remaining entries are all zero.
+    Delegates the structural checks (axis alignment, power-of-two entries,
+    valid tiling along each dim) to the MLIR verifier via a C++ binding so
+    Python-side errors match what the IR verifier would report.  Encoding-
+    specific constraints (e.g. the partitioned shared encoding rule) are
+    only enforced later by the MLIR op verifier.
     """
     ndim = len(block_shape)
-    num_bits = int(math.log2(num_warps))
-
-    assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, \
-        f"num_warps must be a power of two, got {num_warps}"
-    assert len(warp_bases) == num_bits, \
-        f"warp_bases must have log2(num_warps)={num_bits} entries, got {len(warp_bases)}"
     for i, basis in enumerate(warp_bases):
         assert len(basis) == ndim, \
             f"warp_bases[{i}] must have {ndim} elements, got {len(basis)}"
-
-    active_count = 0
-    seen_zero = False
-    for bit, basis in enumerate(warp_bases):
-        is_zero = all(v == 0 for v in basis)
-        if is_zero:
-            seen_zero = True
-        else:
-            assert not seen_zero, \
-                f"warp_bases non-zero entries must form a contiguous prefix; " \
-                f"found non-zero basis at bit {bit} after a zero basis"
-            active_count += 1
-
-    active_warps = 1 << active_count
-
-    # Compute expected greedy distribution for active_warps.
-    warps_per_dim = [1] * ndim
-    remaining = active_warps
-    for d in range(ndim):
-        while remaining > 1 and warps_per_dim[d] * 2 <= block_shape[d]:
-            warps_per_dim[d] *= 2
-            remaining //= 2
-    if remaining > 1:
-        warps_per_dim[-1] *= remaining
-
-    # Reconstruct expected bases from the greedy distribution.
-    expected_bases = []
-    for d in range(ndim):
-        per_warp_tile = block_shape[d] // warps_per_dim[d]
-        for k in range(int(math.log2(warps_per_dim[d]))):
-            basis = [0] * ndim
-            basis[d] = per_warp_tile * (1 << k)
-            expected_bases.append(basis)
-
-    for bit in range(active_count):
-        assert warp_bases[bit] == expected_bases[bit], \
-            f"warp_bases[{bit}] = {warp_bases[bit]} but expected " \
-            f"{expected_bases[bit]} (greedy distribution for block_shape=" \
-            f"{block_shape}, active_warps={active_warps})"
-
-    return [v for basis in warp_bases for v in basis]
+    flat = [int(v) for basis in warp_bases for v in basis]
+    try:
+        _gluon_ir.validate_tdm_warp_bases(flat, int(num_warps), [int(s) for s in block_shape])
+    except ValueError as e:
+        raise AssertionError(str(e)) from e
+    return flat
 
 
 @builtin

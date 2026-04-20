@@ -300,25 +300,96 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 
-  tt.func @warp_bases_non_contiguous_prefix(
+  tt.func @warp_bases_non_power_of_two(
     %tensorDesc: !tt.tensordesc<256x64xf16>,
     %memDesc: !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>,
     %pred: i32
   ) {
     %c0 = arith.constant 0 : i32
-    // expected-error @+1 {{warp_bases non-zero entries must form a contiguous prefix; found non-zero basis at bit 1 after a zero basis}}
-    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_bases = array<i64: 0, 0, 64, 0, 0, 0>} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
+    // expected-error @+1 {{must be a positive power of two}}
+    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_bases = array<i64: 48, 0, 128, 0, 0, 0>} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
     tt.return
   }
 
-  tt.func @warp_bases_greedy_mismatch(
+  tt.func @warp_bases_multiple_dims_per_bit(
     %tensorDesc: !tt.tensordesc<256x64xf16>,
     %memDesc: !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>,
     %pred: i32
   ) {
     %c0 = arith.constant 0 : i32
-    // expected-error @+1 {{warp_bases mismatch at bit 0 dim 0: expected 64 but got 0; non-zero bases must match the greedy distribution for block_shape over active_warps=4}}
-    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_bases = array<i64: 0, 32, 0, 64, 0, 0>} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
+    // expected-error @+1 {{has non-zero entries in multiple dims}}
+    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_bases = array<i64: 64, 32, 128, 0, 0, 0>} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
+    tt.return
+  }
+
+  tt.func @warp_bases_out_of_range(
+    %tensorDesc: !tt.tensordesc<256x64xf16>,
+    %memDesc: !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>,
+    %pred: i32
+  ) {
+    %c0 = arith.constant 0 : i32
+    // expected-error @+1 {{must be < block_shape[0] = 256}}
+    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_bases = array<i64: 256, 0, 128, 0, 0, 0>} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
+    tt.return
+  }
+
+  tt.func @warp_bases_duplicate_along_dim(
+    %tensorDesc: !tt.tensordesc<256x64xf16>,
+    %memDesc: !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>,
+    %pred: i32
+  ) {
+    %c0 = arith.constant 0 : i32
+    // expected-error @+1 {{duplicate basis 64 along dim 0}}
+    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_bases = array<i64: 64, 0, 64, 0, 0, 0>} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
+    tt.return
+  }
+
+  tt.func @warp_bases_non_aligned_stride(
+    %tensorDesc: !tt.tensordesc<256x64xf16>,
+    %memDesc: !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>,
+    %pred: i32
+  ) {
+    %c0 = arith.constant 0 : i32
+    // Single non-zero basis along dim0 => m_d = block_shape[0] / 2 = 128.
+    // Basis 64 is a power of two but is not a multiple of m_d=128, so it
+    // cannot form a valid tiling with a single warp bit.
+    // expected-error @+1 {{is not a multiple of m_d}}
+    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_bases = array<i64: 64, 0, 0, 0, 0, 0>} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
+    tt.return
+  }
+
+  // Stride subsets and redundant-bit orderings are now legal.  This
+  // configuration has bit 0 = (0,0) (a redundant warp bit) and bits 1,2
+  // forming a valid tiling along dim0 with m_d = 64.
+  tt.func @warp_bases_redundant_bit_first(
+    %tensorDesc: !tt.tensordesc<256x64xf16>,
+    %memDesc: !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>,
+    %pred: i32
+  ) {
+    %c0 = arith.constant 0 : i32
+    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_bases = array<i64: 0, 0, 64, 0, 128, 0>} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Partitioned encoding requires warpsPerCTA[partitionDim] >= numLogicalPieces
+// (= numPartitions*numGroups = 4).  Here warp_bases = [(64,0),(0,0)] gives
+// warpsPerCTA[0] = 2 < 4, which would otherwise force multi-instruction
+// slicing that is not supported with warp_bases.
+#shared_inner_mi = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned_mi = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #shared_inner_mi}>
+#smem_mi = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @warp_bases_partitioned_multi_instruction(
+    %tensorDesc: !tt.tensordesc<128x16xf16>,
+    %memDesc: !ttg.memdesc<128x16xf16, #partitioned_mi, #smem_mi, mutable>,
+    %pred: i32
+  ) {
+    %c0 = arith.constant 0 : i32
+    // expected-error @+1 {{warp_bases with a partitioned shared encoding must place enough warps along partitionDim}}
+    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_bases = array<i64: 64, 0, 0, 0>} : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #partitioned_mi, #smem_mi, mutable>
     tt.return
   }
 }
