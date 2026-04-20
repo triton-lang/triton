@@ -19,138 +19,61 @@ import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
 
 
-def _read_proto_varint(data: bytes, offset: int) -> tuple[int, int]:
-    value = 0
-    shift = 0
-    while True:
-        byte = data[offset]
-        offset += 1
-        value |= (byte & 0x7F) << shift
-        if byte < 0x80:
-            return value, offset
-        shift += 7
-
-
-def _iter_proto_fields(data: bytes):
-    offset = 0
-    while offset < len(data):
-        key, offset = _read_proto_varint(data, offset)
-        field_id = key >> 3
-        wire_type = key & 0x7
-        if wire_type == 0:
-            value, offset = _read_proto_varint(data, offset)
-        elif wire_type == 1:
-            value = data[offset:offset + 8]
-            offset += 8
-        elif wire_type == 2:
-            size, offset = _read_proto_varint(data, offset)
-            value = data[offset:offset + size]
-            offset += size
-        else:
-            raise AssertionError(f"unsupported protobuf wire type: {wire_type}")
-        yield field_id, wire_type, value
-
-
 def _perfetto_trace_to_python(path: str):
-    data = pathlib.Path(path).read_bytes()
-    assert data
-    assert data[:1] == b"\x0a"
-    assert not data.lstrip().startswith(b"{")
+    TraceProcessor = pytest.importorskip(
+        "perfetto.trace_processor",
+        reason="perfetto package is required for perfetto_trace validation",
+    ).TraceProcessor
 
-    trace = {
-        "has_track_descriptor": False,
-        "has_track_event": False,
-        "event_names": {},
-        "annotation_names": {},
-        "annotation_string_values": {},
-        "track_events": [],
-    }
-    event_names = {}
-    annotation_names = {}
-    annotation_string_values = {}
+    def _arg_value(row):
+        if row.string_value is not None:
+            return row.string_value
+        if row.int_value is not None:
+            return row.int_value
+        if row.real_value is not None:
+            return row.real_value
+        return None
 
-    for field_id, wire_type, packet in _iter_proto_fields(data):
-        assert field_id == 1
-        assert wire_type == 2
-        packet_fields = list(_iter_proto_fields(packet))
+    with TraceProcessor(trace=path) as tp:
+        has_track_descriptor = next(iter(tp.query("SELECT COUNT(*) AS cnt FROM track"))).cnt > 0
+        slices = list(tp.query("SELECT id, ts, name, arg_set_id FROM slice ORDER BY ts, id"))
+        arg_rows = list(
+            tp.query(
+                """
+                SELECT arg_set_id, flat_key, key, string_value, int_value, real_value
+                FROM args
+                WHERE flat_key GLOB 'call_stack_*' OR key GLOB 'call_stack_*'
+                ORDER BY arg_set_id, flat_key, key
+                """
+            ))
 
-        for packet_field_id, packet_wire_type, value in packet_fields:
-            if packet_field_id == 60 and packet_wire_type == 2:
-                trace["has_track_descriptor"] = True
-            if packet_field_id == 11 and packet_wire_type == 2:
-                trace["has_track_event"] = True
-            if packet_field_id == 12 and packet_wire_type == 2:
-                for interned_field_id, interned_wire_type, interned_value in _iter_proto_fields(value):
-                    if interned_wire_type != 2:
-                        continue
-                    if interned_field_id not in (2, 3, 29):
-                        continue
-                    name_iid = None
-                    name = None
-                    for entry_field_id, entry_wire_type, entry_value in _iter_proto_fields(interned_value):
-                        if entry_field_id == 1 and entry_wire_type == 0:
-                            name_iid = entry_value
-                        elif entry_field_id == 2 and entry_wire_type == 2:
-                            name = entry_value.decode("utf-8")
-                    if name_iid is None or name is None:
-                        continue
-                    if interned_field_id == 2:
-                        event_names[name_iid] = name
-                    elif interned_field_id == 3:
-                        annotation_names[name_iid] = name
-                    else:
-                        annotation_string_values[name_iid] = name
+    args_by_arg_set = {}
+    for row in arg_rows:
+        arg_key = row.flat_key if row.flat_key is not None else row.key
+        if arg_key is None:
+            continue
+        args_by_arg_set.setdefault(row.arg_set_id, {})[arg_key] = _arg_value(row)
 
-        for packet_field_id, packet_wire_type, value in packet_fields:
-            if packet_field_id != 11 or packet_wire_type != 2:
-                continue
-
-            event = {
-                "type": None,
-                "name_iid": None,
-                "name": None,
-                "call_stack": None,
-                "annotations": {},
-            }
-            for event_field_id, event_wire_type, event_value in _iter_proto_fields(value):
-                if event_field_id == 9 and event_wire_type == 0:
-                    event["type"] = event_value
-                elif event_field_id == 10 and event_wire_type == 0:
-                    event["name_iid"] = event_value
-                elif event_field_id == 4 and event_wire_type == 2:
-                    annotation_name_iid = None
-                    annotation_value = None
-                    for annotation_field_id, annotation_wire_type, annotation_field_value in _iter_proto_fields(event_value):
-                        if annotation_field_id == 1 and annotation_wire_type == 0:
-                            annotation_name_iid = annotation_field_value
-                        elif annotation_field_id == 3 and annotation_wire_type == 0:
-                            annotation_value = annotation_field_value
-                        elif annotation_field_id == 6 and annotation_wire_type == 2:
-                            annotation_value = annotation_field_value.decode("utf-8")
-                        elif annotation_field_id == 17 and annotation_wire_type == 0:
-                            annotation_value = annotation_string_values.get(annotation_field_value)
-                    if annotation_name_iid is not None:
-                        event["annotations"][annotation_name_iid] = annotation_value
-            trace["track_events"].append(event)
-
-    trace["event_names"] = event_names
-    trace["annotation_names"] = annotation_names
-    trace["annotation_string_values"] = annotation_string_values
-    for event in trace["track_events"]:
-        if event["name_iid"] is not None:
-            event["name"] = event_names.get(event["name_iid"])
+    track_events = []
+    for row in slices:
+        event = {"name": row.name, "call_stack": None}
         call_stack = []
-        for annotation_name_iid, annotation_value in event["annotations"].items():
-            annotation_name = annotation_names.get(annotation_name_iid)
-            if annotation_name is None or not annotation_name.startswith("call_stack_"):
+        for arg_key, arg_value in args_by_arg_set.get(row.arg_set_id, {}).items():
+            key = arg_key.split(".")[-1]
+            if not key.startswith("call_stack_"):
                 continue
-            frame_index = int(annotation_name.removeprefix("call_stack_"))
-            call_stack.append((frame_index, annotation_value))
+            frame_index = int(key.removeprefix("call_stack_"))
+            call_stack.append((frame_index, arg_value))
         if call_stack:
             call_stack.sort(key=lambda item: item[0])
             event["call_stack"] = [frame_name for _, frame_name in call_stack]
+        track_events.append(event)
 
-    return trace
+    return {
+        "has_track_descriptor": has_track_descriptor,
+        "has_track_event": bool(track_events),
+        "track_events": track_events,
+    }
 
 
 def _assert_perfetto_trace_file(path: str, expected_event_name: str | None = None,
