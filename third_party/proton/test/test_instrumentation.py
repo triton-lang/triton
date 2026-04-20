@@ -19,6 +19,7 @@ from triton._internal_testing import (
     is_hip,
     is_hip_cdna2,
     is_hip_cdna4,
+    is_hip_gfx1250,
     supports_tma,
     supports_ws,
 )
@@ -174,7 +175,15 @@ def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
 
     # check llir line info
     llir_lines = pgm.asm["llir"].splitlines()
-    clock_instr = "clock" if is_cuda() else "memtime"
+    if is_cuda():
+        clock_instr = "clock"
+    elif is_hip_gfx1250():
+        # gfx1250 (MI400) dropped the s_memtime/s_memrealtime intrinsics and
+        # moved SHADER_CYCLES out of the hwreg table; clock() now lowers to
+        # inline-asm `s_get_shader_cycles_u64` (see TargetInfo.cpp).
+        clock_instr = "s_get_shader_cycles"
+    else:
+        clock_instr = "memtime"
     clock_loc = None
     for line in llir_lines:
         if clock_instr not in line or "!dbg" not in line:
