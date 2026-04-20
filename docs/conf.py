@@ -115,15 +115,30 @@ def setup(app):
 
         return wrapped
 
-    old_documenter = sphinx.ext.autosummary.get_documenter
+    autosummary = sphinx.ext.autosummary
 
-    def documenter(app, obj, parent):
-        import triton
-        if isinstance(obj, triton.runtime.JITFunction):
-            obj = obj.fn
-        return old_documenter(app, obj, parent)
+    # Sphinx 9 dropped the public autosummary.get_documenter helper in favor
+    # of the private _get_documenter entrypoint with a different signature.
+    if hasattr(autosummary, "get_documenter"):
+        old_documenter = autosummary.get_documenter
 
-    sphinx.ext.autosummary.get_documenter = documenter
+        def documenter(app, obj, parent):
+            import triton
+            if isinstance(obj, triton.runtime.JITFunction):
+                obj = obj.fn
+            return old_documenter(app, obj, parent)
+
+        autosummary.get_documenter = documenter
+    else:
+        old_documenter = autosummary._get_documenter
+
+        def documenter(obj, parent):
+            import triton
+            if isinstance(obj, triton.runtime.JITFunction):
+                obj = obj.fn
+            return old_documenter(obj, parent)
+
+        autosummary._get_documenter = documenter
     sphinx.util.inspect.unwrap_all = forward_jit_fn(sphinx.util.inspect.unwrap_all)
     sphinx.util.inspect.signature = forward_jit_fn(sphinx.util.inspect.signature)
     sphinx.util.inspect.object_description = forward_jit_fn(sphinx.util.inspect.object_description)
