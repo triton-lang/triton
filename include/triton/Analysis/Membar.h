@@ -3,7 +3,6 @@
 
 #include "Allocation.h"
 
-#include "mlir/IR/Dominance.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
 #include <set>
@@ -26,64 +25,12 @@ using MembarSliceFilterFn =
     std::function<bool(const AllocationSlice &, const AllocationSlice &,
                        bool /*lhsIsRead*/, bool /*rhsIsRead*/, Allocation *)>;
 
-/// A buffer index decomposed as `baseValue + constantOffset`, optionally
-/// under a known modulus (recorded when the index is wrapped by remsi or
-/// the pipeliner's select/cmpi idiom). Used to prove that two
-/// multi-buffered shared-memory accesses target different slots.
-///
-/// Correctness relies on SSA identity: two expressions with the same
-/// baseValue refer to the same runtime integer only within a single
-/// execution of the enclosing region. Across a loop backedge the same SSA
-/// value (e.g. an scf.for iter_arg) denotes different runtime values on
-/// different iterations; those cases are handled separately via the
-/// isLoopCarried flag on AllocationSlice, which suppresses this shortcut.
-struct BufferIndexExpr {
-  Value baseValue;
-  int64_t constantOffset = 0;
-  std::optional<int64_t> modulus;
-
-  bool hasBase() const { return baseValue != nullptr; }
-
-  /// Returns true only if both expressions provably refer to different buffer
-  /// slots: same base value, and offsets that differ (modulo the recorded
-  /// modulus when one is known).
-  bool isProvablyDifferentFrom(const BufferIndexExpr &other) const {
-    if (baseValue != other.baseValue)
-      return false;
-    if (modulus || other.modulus) {
-      if (modulus != other.modulus)
-        return false;
-      int64_t m = *modulus;
-      // Euclidean normalization: map each offset into [0, m) so that
-      // negative constants compare correctly against positive ones.
-      int64_t a = ((constantOffset % m) + m) % m;
-      int64_t b = ((other.constantOffset % m) + m) % m;
-      return a != b;
-    }
-    return constantOffset != other.constantOffset;
-  }
-
-  bool operator==(const BufferIndexExpr &other) const {
-    return baseValue == other.baseValue &&
-           constantOffset == other.constantOffset && modulus == other.modulus;
-  }
-
-  bool operator<(const BufferIndexExpr &other) const {
-    if (baseValue.getAsOpaquePointer() != other.baseValue.getAsOpaquePointer())
-      return baseValue.getAsOpaquePointer() <
-             other.baseValue.getAsOpaquePointer();
-    if (constantOffset != other.constantOffset)
-      return constantOffset < other.constantOffset;
-    return modulus < other.modulus;
-  }
-};
-
-/// Decompose a buffer-index SSA value into a BufferIndexExpr. Recognizes
-/// constants, `addi(base, const)`, `arith.remsi`, and the pipeliner's
-/// select/cmpi one-step modular wrap. Unrecognized patterns yield an
-/// opaque expression (the value itself as `baseValue`, offset 0). The
-/// implementation lives in BufferIndexAnalysis.cpp.
-BufferIndexExpr analyzeBufferIndex(Value indexValue);
+/// Returns true only if `a` and `b` provably denote different buffer slots
+/// within a single execution of the enclosing region. Used by the membar
+/// analysis to skip barriers between multi-buffered shared-memory accesses
+/// whose dynamic slot indices are different. Implementation (and the
+/// invariants it relies on) lives in BufferIndexAnalysis.cpp.
+bool areIndicesProvablyDifferent(Value a, Value b);
 
 // Represents the access to a slice of an allocation
 // It contains information both on physical memory (the interval) and a
@@ -126,8 +73,9 @@ public:
   }
 
   /// Returns a copy of this slice with isLoopCarried set. Used when
-  /// propagating BlockInfo across a CFG backedge; see BufferIndexExpr for
-  /// the SSA-identity invariant this flag protects.
+  /// propagating BlockInfo across a CFG backedge; disables the
+  /// SSA-identity-based buffer-index disjointness shortcut, which
+  /// assumes both indices denote values from the same iteration.
   AllocationSlice createLoopCarriedCopy() const {
     AllocationSlice copy = *this;
     copy.isLoopCarried = true;
@@ -140,10 +88,14 @@ public:
 
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
-             llvm::ArrayRef<int64_t>, std::optional<BufferIndexExpr>, bool>
+             llvm::ArrayRef<int64_t>, const void *, bool>
   asTuple() const {
-    return {allocationInterval, bufferId,        accessTy.getAsOpaquePointer(),
-            subsliceOffsets,    bufferIndexExpr, isLoopCarried};
+    return {allocationInterval,
+            bufferId,
+            accessTy.getAsOpaquePointer(),
+            subsliceOffsets,
+            bufferIndex.getAsOpaquePointer(),
+            isLoopCarried};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
@@ -153,8 +105,11 @@ private:
   triton::gpu::MemDescType accessTy;
   // Buffer id for partial sync on wait_barrier deps.
   Allocation::BufferId bufferId;
-  // Buffer index expression for multi-buffered accesses via MemDescIndexOp.
-  std::optional<BufferIndexExpr> bufferIndexExpr;
+  // Dynamic slot index of a multi-buffered allocation: the operand of
+  // the MemDescIndexOp that produced this slice, or null when the access
+  // does not go through one. Distinguishes slices that target different
+  // slots of the same buffer so they stay as separate map entries.
+  Value bufferIndex;
   bool isLoopCarried = false;
 };
 
@@ -299,9 +254,10 @@ class MembarOrFenceAnalysis {
   using VirtualBlock = std::pair<Block *, Block::iterator>;
   struct SuccessorInfo {
     VirtualBlock block;
-    /// True when this edge is a loop backedge, defined as the target
-    /// dominating the source block. Backedges propagate slices as
-    /// loop-carried (see BlockInfo::joinLoopCarried).
+    /// True when this edge is a loop backedge (e.g. scf.for yield back to
+    /// the body region, scf.while after-region yield back to before).
+    /// Backedges propagate slices as loop-carried (see
+    /// BlockInfo::joinLoopCarried).
     bool isBackedge = false;
   };
 
@@ -338,7 +294,11 @@ protected:
   /// SuccessorInfo::isBackedge for each. Dispatches on the op's
   /// control-flow interface (`BranchOpInterface`,
   /// `RegionBranchOpInterface`, or `RegionBranchTerminatorOpInterface`).
-  void visitTerminator(Operation *operation, DominanceInfo &domInfo,
+  /// Backedges are classified only for region-branch terminators, where a
+  /// successor with a region number <= the terminator's region number
+  /// denotes a re-entry into an earlier region (scf.for yield -> body,
+  /// scf.while after -> before).
+  void visitTerminator(Operation *operation,
                        SmallVector<SuccessorInfo> &successors);
 
   /// Updates the BlockInfo operation based on the operation.

@@ -1206,6 +1206,45 @@ tt.func @loop_memindex_subslice(%arg0: tensor<2x128x128xf16>) {
 }
 
 // -----
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: disjoint_remsi_loop_carried
+// Cross-iteration hazard: within one iteration the read index (phase % 3)
+// and the write index ((phase + 2) % 3) are provably disjoint under the
+// buffer-index analysis, so no intra-iteration barrier is needed. Across
+// the scf.for backedge, however, slices get tagged loop-carried, which
+// disables the SSA-identity shortcut and forces a conservative barrier
+// before the read.
+tt.func @disjoint_remsi_loop_carried(%cst: tensor<128x128xf16>,
+                                     %lb: i32, %ub: i32, %step: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  %res = scf.for %i = %lb to %ub step %step iter_args(%phase = %c0_i32) -> (i32) : i32 {
+    %r_idx = arith.remsi %phase, %c3_i32 : i32
+    %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
+    %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+
+    %w_sum = arith.addi %phase, %c2_i32 : i32
+    %w_idx = arith.remsi %w_sum, %c3_i32 : i32
+    %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: ttg.local_store
+    ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+    %next_phase = arith.addi %phase, %c1_i32 : i32
+    scf.yield %next_phase : i32
+  }
+  tt.return
+}
+
+// -----
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared3 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
@@ -1312,7 +1351,7 @@ tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
 // then disjoint; no intra-iteration barrier is required. A
 // cross-iteration barrier is still emitted ahead of the write because
 // loop-carried slices conservatively alias (the SSA-identity shortcut
-// on bufferIndexExpr is disabled for them).
+// on the buffer-index analysis is disabled for them).
 tt.func @disjoint_select_cmpi_iter_arg(%cst: tensor<128x128xf16>,
                                        %lb: i32, %ub: i32, %step: i32) {
   %c0_i32 = arith.constant 0 : i32
@@ -1399,7 +1438,7 @@ tt.func @must_barrier_select_cmpi_large_c(%cst: tensor<128x128xf16>, %phase: i32
 }
 
 // CHECK-LABEL: disjoint_constant_indices
-// Constant slot indices produce BufferIndexExpr{base=nullptr, offset=C}.
+// Constant slot indices are decomposed to (base=nullptr, offset=C).
 // Different constants are provably disjoint without needing a modulus.
 tt.func @disjoint_constant_indices(%cst: tensor<128x128xf16>) {
   %c0_i32 = arith.constant 0 : i32

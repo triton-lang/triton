@@ -32,9 +32,8 @@ AllocationSlice::AllocationSlice(Value value,
   // MemDescIndexOp selects a whole slot of a multi-buffered allocation;
   // record its index so intersects() can prove slot-level disjointness.
   // Sub-region offsets within a slot are captured by subsliceOffsets above.
-  if (auto indexOp = value.getDefiningOp<triton::gpu::MemDescIndexOp>()) {
-    bufferIndexExpr = analyzeBufferIndex(indexOp.getIndex());
-  }
+  if (auto indexOp = value.getDefiningOp<triton::gpu::MemDescIndexOp>())
+    bufferIndex = indexOp.getIndex();
 }
 
 bool AllocationSlice::intersects(const AllocationSlice &other) const {
@@ -42,15 +41,13 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
 
-  // Whole-slot disjointness via buffer index matching. Skipped for
+  // Whole-slot disjointness via buffer-index matching. Skipped for
   // loop-carried slices, where the SSA-identity invariant does not hold.
   // A failed match falls through to the subslice check below, which can
   // still prove partial disjointness within the same slot.
-  if (bufferIndexExpr && other.bufferIndexExpr && !isLoopCarried &&
-      !other.isLoopCarried) {
-    if (bufferIndexExpr->isProvablyDifferentFrom(*other.bufferIndexExpr))
-      return false;
-  }
+  if (!isLoopCarried && !other.isLoopCarried &&
+      areIndicesProvablyDifferent(bufferIndex, other.bufferIndex))
+    return false;
 
   // If access types are unknown, assume intersection
   if (!accessTy || !other.accessTy)
@@ -108,16 +105,8 @@ void AllocationSlice::print(raw_ostream &os) const {
     os << "? layout=unknown";
   }
 
-  if (bufferIndexExpr) {
-    if (bufferIndexExpr->hasBase()) {
-      os << " bufIdx=(" << bufferIndexExpr->baseValue << "+"
-         << bufferIndexExpr->constantOffset << ")";
-    } else {
-      os << " bufIdx=const(" << bufferIndexExpr->constantOffset << ")";
-    }
-    if (bufferIndexExpr->modulus)
-      os << "%" << *bufferIndexExpr->modulus;
-  }
+  if (bufferIndex)
+    os << " bufIdx=" << bufferIndex;
 }
 
 void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
@@ -151,9 +140,6 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   std::deque<VirtualBlock> blockList;
   // Start the analysis from the entry block of the function.
   blockList.emplace_back(&funcOp.getBlocks().front(), Block::iterator());
-  // Used by visitTerminator to classify backedges. Built once per
-  // function since the CFG is not modified during resolve().
-  DominanceInfo domInfo(funcOp);
 
   // A fixed point algorithm
   while (!blockList.empty()) {
@@ -171,7 +157,7 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
       update(&op, &inputBlockInfo, funcBlockInfoMap, builder);
       if (op.hasTrait<OpTrait::IsTerminator>() ||
           isa<RegionBranchOpInterface>(op)) {
-        visitTerminator(&op, domInfo, successors);
+        visitTerminator(&op, successors);
         break;
       }
     }
@@ -222,49 +208,40 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
 }
 
 void MembarOrFenceAnalysis::visitTerminator(
-    Operation *op, DominanceInfo &domInfo,
-    SmallVector<SuccessorInfo> &successors) {
-  // Case 1: plain CFG branch (cf.br, cf.cond_br, ...). Successors are
-  // blocks in the same region.
+    Operation *op, SmallVector<SuccessorInfo> &successors) {
+  // Plain CFG branch (cf.br, cf.cond_br, ...). Triton's membar runs
+  // before any scf-to-cf lowering, so loops are not yet expressed as
+  // cf.br cycles; treat all CFG edges as forward.
   if (isa<BranchOpInterface>(op)) {
-    Block *from = op->getBlock();
-    for (Block *successor : op->getSuccessors()) {
-      bool isBackedge = false;
-      if (successor->getParent() == from->getParent())
-        isBackedge = domInfo.dominates(successor, from);
-      successors.push_back({{successor, Block::iterator()}, isBackedge});
-    }
+    for (Block *successor : op->getSuccessors())
+      successors.push_back({{successor, Block::iterator()}, false});
     return;
   }
 
-  // Case 2: region-branching op (e.g. scf.for, scf.if) encountered in
-  // the block. Successors are the first block of one of its regions
-  // (entering) or the op's own parent block (exiting).
+  // A region-branching op (e.g. scf.for, scf.if) encountered mid-block.
+  // Its region-entry edges all come from the parent region and are
+  // therefore forward.
   if (auto br = dyn_cast<RegionBranchOpInterface>(op)) {
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
-    Block *from = op->getBlock();
     for (RegionSuccessor &region : regions) {
       if (region.isParent()) {
-        Block *successor = br->getBlock();
-        bool isBackedge = false;
-        if (successor->getParent() == from->getParent())
-          isBackedge = domInfo.dominates(successor, from);
-        successors.push_back({{successor, br->getIterator()}, isBackedge});
+        successors.push_back({{br->getBlock(), br->getIterator()}, false});
       } else {
         Block &block = region.getSuccessor()->front();
-        bool isBackedge = false;
-        if (block.getParent() == from->getParent())
-          isBackedge = domInfo.dominates(&block, from);
-        successors.push_back({{&block, Block::iterator()}, isBackedge});
+        successors.push_back({{&block, Block::iterator()}, false});
       }
     }
     return;
   }
 
-  // Case 3: terminator of a region inside a region-branching op
-  // (e.g. scf.yield). Successors are the first block of another region
-  // (e.g. re-entering a loop body) or the parent op's continuation block.
+  // Terminator of a region inside a region-branching op (e.g. scf.yield).
+  // Successors are the first block of another region (re-entering a
+  // loop body / condition region) or the parent op's continuation block.
+  // Backedge rule: a successor region with number <= the terminator's
+  // region number denotes re-entry into an earlier region. That covers
+  // scf.for yield -> body (same region) and scf.while after -> before
+  // (successor 0 <= terminator 1).
   //
   // FIXME: `ReturnLike` adds `RegionBranchTerminatorOpInterface` for some
   // reason. Check that the parent is actually a `RegionBranchOpInterface`.
@@ -273,22 +250,17 @@ void MembarOrFenceAnalysis::visitTerminator(
     SmallVector<Attribute> operands(br->getNumOperands());
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(operands, regions);
-    Region *parentRegion = br->getParentRegion();
-    Block *from = op->getBlock();
+    unsigned termRegionNo = br->getParentRegion()->getRegionNumber();
 
     for (const RegionSuccessor &region : regions) {
       if (region.isParent()) {
         Operation *parent = br->getParentOp();
-        Block *successor = parent->getBlock();
-        bool isBackedge = false;
-        if (successor->getParent() == from->getParent())
-          isBackedge = domInfo.dominates(successor, from);
-        successors.push_back({{successor, parent->getIterator()}, isBackedge});
+        successors.push_back(
+            {{parent->getBlock(), parent->getIterator()}, false});
       } else {
         Block &block = region.getSuccessor()->front();
-        bool isBackedge = (region.getSuccessor() == parentRegion);
-        if (block.getParent() == from->getParent())
-          isBackedge = domInfo.dominates(&block, from);
+        bool isBackedge =
+            region.getSuccessor()->getRegionNumber() <= termRegionNo;
         successors.push_back({{&block, Block::iterator()}, isBackedge});
       }
     }

@@ -1,13 +1,20 @@
 //===- BufferIndexAnalysis.cpp - Decompose buffer-index SSA values --------===//
 //
 // Support for the membar analysis's dynamic-buffer-index disjointness
-// check: given an SSA value used as a slot index into a multi-buffered
-// shared-memory allocation, recover a symbolic form
-// `baseValue + constantOffset (mod modulus?)` so the membar analysis can
-// prove two accesses hit different slots.
+// check: given two SSA values used as slot indices into a multi-buffered
+// shared-memory allocation, try to prove that they denote different slots
+// within a single execution of the enclosing region.
 //
-// The entry point is analyzeBufferIndex (declared in Membar.h). Everything
-// else here is internal to this file.
+// The public entry point (declared in Membar.h) is
+//   bool areIndicesProvablyDifferent(Value, Value);
+// Everything else here is an implementation detail.
+//
+// Correctness relies on SSA identity: two expressions with the same base
+// value refer to the same runtime integer only within a single execution
+// of the enclosing region. Across a loop backedge the same SSA value
+// (e.g. an scf.for iter_arg) denotes different runtime values on
+// different iterations; those cases are handled by the caller via the
+// isLoopCarried flag on AllocationSlice.
 //
 //===----------------------------------------------------------------------===//
 
@@ -20,12 +27,43 @@
 namespace mlir {
 namespace {
 
+/// A buffer index decomposed as `baseValue + constantOffset`, optionally
+/// under a known modulus (recorded when the index is wrapped by remsi or
+/// the pipeliner's select/cmpi idiom). Two expressions rooted at the
+/// same base value with different offsets (mod the recorded modulus when
+/// one is known) provably target different slots.
+struct BufferIndexExpr {
+  Value baseValue;
+  int64_t constantOffset = 0;
+  std::optional<int64_t> modulus;
+
+  bool hasBase() const { return baseValue != nullptr; }
+
+  bool isProvablyDifferentFrom(const BufferIndexExpr &other) const {
+    if (baseValue != other.baseValue)
+      return false;
+    if (modulus || other.modulus) {
+      if (modulus != other.modulus)
+        return false;
+      int64_t m = *modulus;
+      // Euclidean normalization: map each offset into [0, m) so that
+      // negative constants compare correctly against positive ones.
+      int64_t a = ((constantOffset % m) + m) % m;
+      int64_t b = ((other.constantOffset % m) + m) % m;
+      return a != b;
+    }
+    return constantOffset != other.constantOffset;
+  }
+};
+
 std::optional<int64_t> getConstantIntValue(Value v) {
   APInt val;
   if (matchPattern(v, m_ConstantInt(&val)))
     return val.getSExtValue();
   return std::nullopt;
 }
+
+BufferIndexExpr analyzeBufferIndex(Value indexValue);
 
 /// Verify that `base` is provably in [-1, N) so that
 ///   select(cmpi sge/slt (addi(base, 1), N), ...)
@@ -139,8 +177,6 @@ std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp) {
   return result;
 }
 
-} // namespace
-
 BufferIndexExpr analyzeBufferIndex(Value indexValue) {
   if (auto c = getConstantIntValue(indexValue))
     return BufferIndexExpr{nullptr, *c};
@@ -179,6 +215,14 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue) {
   }
 
   return BufferIndexExpr{indexValue, 0};
+}
+
+} // namespace
+
+bool areIndicesProvablyDifferent(Value a, Value b) {
+  if (!a || !b)
+    return false;
+  return analyzeBufferIndex(a).isProvablyDifferentFrom(analyzeBufferIndex(b));
 }
 
 } // namespace mlir
