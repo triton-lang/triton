@@ -882,7 +882,7 @@ def make_tensor_desc(x, shape, strides, block_shape):
     return TensorDescriptor(x, shape=shape, strides=strides, block_shape=block_shape, layout=layout)
 
 
-def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
+def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, use_tmem_red=False):
     HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
     HEAD_DIM_V = v.shape[-1]
     assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
@@ -890,8 +890,10 @@ def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
 
     stage = 3 if causal else 1
 
-    o = torch.empty_like(q)
-    M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+    if o is None:
+        o = torch.empty_like(q)
+    if M is None:
+        M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
     y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
@@ -1023,15 +1025,18 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, use_tmem_red, provider):
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).requires_grad_()).to(dtype)
     sm_scale = 1.3
 
+    o = torch.empty_like(q)
+    M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+
     with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.CUDNN_ATTENTION]):
         if provider == "triton":
-            fn = lambda: attention_forward(q, k, v, causal, sm_scale, use_tmem_red)
+            fn = lambda: attention_forward(q, k, v, causal, sm_scale, o, M, use_tmem_red)
         elif provider == "cudnn":
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
-        ms = triton.testing.do_bench(fn)
+        ms = triton.testing.do_bench_cudagraph(fn)
         flops_per_matmul = 2.0 * Z * H * N_CTX * N_CTX * HEAD_DIM
         total_flops = 2 * flops_per_matmul
         if causal:
