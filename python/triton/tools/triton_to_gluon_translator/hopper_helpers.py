@@ -1,5 +1,7 @@
 # type: ignore
 
+import builtins
+
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.hopper import (
@@ -38,8 +40,8 @@ def _get_default_max_num_imprecise_acc(
 @gluon.constexpr_function
 def _get_default_input_precision(
     allow_tf32: bool | None,
-    input_precision: str | None,
-) -> str:
+    input_precision: builtins.str | None,
+) -> builtins.str:
     assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
     if input_precision is not None:
         return input_precision
@@ -66,7 +68,7 @@ def tl_dot_mmav3_supported(
     a_ty: ttgl.block_type,
     b_ty: ttgl.block_type,
     num_warps: int,
-    input_precision: str,
+    input_precision: builtins.str,
     max_num_imprecise_acc: int,
     out_dtype: ttgl.dtype,
 ) -> bool:
@@ -174,7 +176,7 @@ def tl_dot_mmav3(
     a: ttgl.tensor,
     b: ttgl.tensor,
     acc: ttgl.tensor | None,
-    input_precision: str,
+    input_precision: builtins.str,
     max_num_imprecise_acc: int,
     out_dtype: ttgl.dtype,
 ):
@@ -222,7 +224,7 @@ def tl_dot(
     a: ttgl.tensor,
     b: ttgl.tensor,
     acc: ttgl.tensor | None = None,
-    input_precision: str | None = None,
+    input_precision: builtins.str | None = None,
     allow_tf32: bool | None = None,
     max_num_imprecise_acc: int | None = None,
     out_dtype: ttgl.dtype = ttgl.float32,
