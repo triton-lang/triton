@@ -339,3 +339,99 @@ def test_permutation_ptxas_bug(device):
     )
     ref = torch.matmul(X.float(), W.float()).to(dtype)
     torch.testing.assert_close(Out.to(torch.float32), ref.to(torch.float32), rtol=0.25, atol=0.0625)
+
+
+@pytest.mark.skipif(
+    not (torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 10),
+    reason="regression test for #9871 requires Blackwell (sm_100+)",
+)
+@pytest.mark.parametrize(
+    "num_warps,BV,num_stages",
+    [
+        # Previously-failing configurations from issue #9871 on v3.6.0;
+        # fixed by PR #9615 which adds fence + cluster-relaxed bar.sync
+        # instructions automatically in the MultiCTA Membar pass.
+        (4, 32, 2),
+        (4, 32, 3),
+        # Adjacent passing configurations (sanity — must stay deterministic).
+        (4, 64, 2),
+        (2, 32, 2),
+        (4, 32, 4),
+    ],
+)
+def test_tl_dot_determinism_blackwell_issue_9871(num_warps, BV, num_stages, device):
+    # Regression test for issue #9871: tl.dot was non-deterministic on
+    # Blackwell (sm_100) for num_warps=4 + BV<=32 + num_stages in {2,3} when
+    # grid>=160 CTAs. Caused by missing bar.sync before mbarrier.arrive in
+    # the tcgen05 MMA async path; fixed by PR #9615.
+    #
+    # Two identical invocations of the minimal recurrence kernel must
+    # produce bitwise-equal outputs.
+
+    @triton.jit
+    def _recurrence_fwd_kernel(
+        k, w, u, h,
+        T: tl.constexpr, H: tl.constexpr, K: tl.constexpr, V: tl.constexpr,
+        BT: tl.constexpr, BV: tl.constexpr,
+    ):
+        pid = tl.program_id(0)
+        NV = tl.cdiv(V, BV)
+        i_v, i_nh = pid % NV, pid // NV
+        i_n, i_h = i_nh // H, i_nh % H
+        bos = i_n * T
+        NT = tl.cdiv(T, BT)
+        boh = i_n * NT
+
+        b_h1 = tl.zeros([64, BV], dtype=tl.float32)
+        b_h2 = tl.zeros([64, BV], dtype=tl.float32)
+
+        h += (boh * H + i_h) * K * V
+        u += (bos * H + i_h) * V
+        k += (bos * H + i_h) * K
+        w += (bos * H + i_h) * K
+        sv, sh, sk, sw = H * V, H * K * V, H * K, H * K
+
+        for i_t in range(NT):
+            p_h1 = tl.make_block_ptr(h + i_t * sh, (K, V), (V, 1), (0, i_v * BV), (64, BV), (1, 0))
+            tl.store(p_h1, b_h1.to(p_h1.dtype.element_ty), boundary_check=(0, 1))
+            p_h2 = tl.make_block_ptr(h + i_t * sh, (K, V), (V, 1), (64, i_v * BV), (64, BV), (1, 0))
+            tl.store(p_h2, b_h2.to(p_h2.dtype.element_ty), boundary_check=(0, 1))
+
+            b_v_new = tl.zeros([BT, BV], dtype=tl.float32)
+            p_w1 = tl.make_block_ptr(w, (T, K), (sw, 1), (i_t * BT, 0), (BT, 64), (1, 0))
+            b_v_new += tl.dot(tl.load(p_w1, boundary_check=(0, 1)), b_h1.to(tl.bfloat16))
+            p_w2 = tl.make_block_ptr(w, (T, K), (sw, 1), (i_t * BT, 64), (BT, 64), (1, 0))
+            b_v_new += tl.dot(tl.load(p_w2, boundary_check=(0, 1)), b_h2.to(tl.bfloat16))
+            p_v = tl.make_block_ptr(u, (T, V), (sv, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+            b_v_new = -b_v_new + tl.load(p_v, boundary_check=(0, 1))
+            b_v_new = b_v_new.to(tl.bfloat16)
+
+            p_k1 = tl.make_block_ptr(k, (K, T), (1, sk), (0, i_t * BT), (64, BT), (0, 1))
+            b_h1 += tl.dot(tl.load(p_k1, boundary_check=(0, 1)), b_v_new)
+            p_k2 = tl.make_block_ptr(k, (K, T), (1, sk), (64, i_t * BT), (64, BT), (0, 1))
+            b_h2 += tl.dot(tl.load(p_k2, boundary_check=(0, 1)), b_v_new)
+
+    N, T, H, K, V, BT = 6, 4096, 8, 128, 128, 64  # grid = 192
+    NT = (T + BT - 1) // BT
+
+    torch.manual_seed(42)
+    k = torch.randn(N, T, H, K, dtype=torch.bfloat16, device=device) * 0.1
+    w = torch.randn(N, T, H, K, dtype=torch.bfloat16, device=device) * 0.1
+    u = torch.randn(N, T, H, V, dtype=torch.bfloat16, device=device) * 0.1
+    h = k.new_empty(N, NT, H, K, V)
+    grid = ((V + BV - 1) // BV * N * H, )
+
+    def run_once():
+        _recurrence_fwd_kernel[grid](
+            k, w, u, h, T, H, K, V, BT, BV,
+            num_warps=num_warps, num_stages=num_stages,
+        )
+        return h.clone()
+
+    out1 = run_once()
+    out2 = run_once()
+    assert torch.equal(out1, out2), (
+        f"Non-determinism detected for num_warps={num_warps}, BV={BV}, "
+        f"num_stages={num_stages}: MAE="
+        f"{(out1.float() - out2.float()).abs().mean().item():.2e}"
+    )
