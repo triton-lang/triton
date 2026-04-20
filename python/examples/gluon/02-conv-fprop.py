@@ -197,7 +197,7 @@ def load_partition(p):
             mbarrier.wait(empty_bars.index(state.index), state.phase)
             mbarrier.expect(ready_bar, p.in_desc.block_type.nbytes + p.weight_desc.block_type.nbytes)
 
-            tma.async_copy_global_to_shared_im2col(
+            tma.async_load_im2col(
                 p.in_desc,
                 [
                     batch_id,
@@ -211,7 +211,7 @@ def load_partition(p):
             )
 
             k_offset = (iter_r * config.S + iter_s) * config.Ci + iter_ci * BLOCK_K
-            tma.async_copy_global_to_shared(
+            tma.async_load(
                 p.weight_desc,
                 [prog.pid_n * config.BLOCK_N, k_offset],
                 ready_bar,

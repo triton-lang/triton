@@ -241,7 +241,7 @@ def load_partition(p):
             mbarrier.expect(ready_bar, p.grad_out_desc.block_type.nbytes + p.in_desc.block_type.nbytes)
 
             # A = grad_output: (M_spatial, Co), block [BLOCK_K, BLOCK_M]
-            tma.async_copy_global_to_shared(
+            tma.async_load(
                 p.grad_out_desc,
                 [m_global, co_offset],
                 ready_bar,
@@ -249,7 +249,7 @@ def load_partition(p):
             )
 
             # B = im2col(input): [N, H, W, Ci], block [BLOCK_K, BLOCK_N]
-            tma.async_copy_global_to_shared_im2col(
+            tma.async_load_im2col(
                 p.in_desc,
                 [
                     batch,
