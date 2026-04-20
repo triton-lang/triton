@@ -17,12 +17,12 @@ from triton.tools.triton_to_gluon_translator.common_helpers import *  # noqa: F4
 from triton.tools.triton_to_gluon_translator.common_helpers import (
     default_blocked_layout,
     get_num_threads_per_warp,
+    tl_dot_decomposed_block_scales_impl,
 )
 from triton.tools.triton_to_gluon_translator.nvidia_helpers import *  # noqa: F401,F403
 from triton.tools.triton_to_gluon_translator.nvidia_helpers import (
     tl_dot_mma_sync,
     get_shared_memory_mma_operand,
-    tl_dot_decomposed_block_scales_impl,
 )
 
 # ---- NVIDIA Blackwell dot ----

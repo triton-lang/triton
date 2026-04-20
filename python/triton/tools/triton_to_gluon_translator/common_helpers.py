@@ -271,3 +271,53 @@ def tl_dot_decomposed_scale_arg(v, scale, arg_format, operand_index, compute_typ
         reshape_scale, scale = tl_dot_decomposed_extend_and_broadcast_scale(v, scale, compute_type, operand_index)
         mxfp = ttgl.mul(v, reshape_scale)
         return tl_dot_decomposed_mask_nan(mxfp, scale, fast_math)
+
+
+@gluon.jit
+def tl_dot_decomposed_block_scales_impl(
+    tl_dot_scaled_fn: ttgl.constexpr,
+    tl_dot_fn: ttgl.constexpr,
+    lhs,
+    lhs_scale,
+    lhs_format,
+    rhs,
+    rhs_scale,
+    rhs_format,
+    acc=None,
+    fast_math=False,
+    lhs_k_pack=True,
+    rhs_k_pack=True,
+    out_dtype=ttgl.float32,
+):
+    if lhs_scale is None and rhs_scale is not None:
+        lhs_trans = tl_trans(lhs)
+        rhs_trans = tl_trans(rhs)
+        if acc is not None:
+            orig_layout: ttgl.constexpr = acc.type.layout
+            acc = tl_trans(acc)
+        result = tl_dot_scaled_fn(
+            rhs_trans,
+            rhs_scale,
+            rhs_format,
+            lhs_trans,
+            lhs_scale,
+            lhs_format,
+            acc,
+            fast_math,
+            lhs_k_pack,
+            rhs_k_pack,
+            out_dtype,
+        )
+        result = tl_trans(result)
+        if acc is not None:
+            result = ttgl.convert_layout(result, orig_layout)
+        return result
+    else:
+        ttgl.static_assert(not (not lhs_k_pack or not rhs_k_pack), "TODO: support m/n packed formats")
+        compute_type: ttgl.constexpr = (ttgl.float16 if
+                                        (lhs_format == "fp16" or rhs_format == "fp16") else ttgl.bfloat16)
+
+        scale_a = tl_dot_decomposed_scale_arg(lhs, lhs_scale, lhs_format, 0, compute_type, fast_math)
+        scale_b = tl_dot_decomposed_scale_arg(rhs, rhs_scale, rhs_format, 1, compute_type, fast_math)
+
+        return tl_dot_fn(scale_a, scale_b, acc, out_dtype=out_dtype)

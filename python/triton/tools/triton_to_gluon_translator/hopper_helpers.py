@@ -10,8 +10,7 @@ from triton.experimental.gluon.language.nvidia.hopper import (
 )
 
 from triton.tools.triton_to_gluon_translator.common_helpers import *  # noqa: F401,F403
-from triton.tools.triton_to_gluon_translator.common_helpers import (
-    tl_dot_decomposed_block_scales_impl, )
+from triton.tools.triton_to_gluon_translator.common_helpers import tl_dot_decomposed_block_scales_impl
 from triton.tools.triton_to_gluon_translator.nvidia_helpers import *  # noqa: F401,F403
 from triton.tools.triton_to_gluon_translator.nvidia_helpers import (
     tl_dot_mma_sync,
@@ -51,8 +50,15 @@ def _get_default_input_precision(
 
 @gluon.constexpr_function
 def _operand_supports_mmav3(dtype: ttgl.dtype) -> bool:
-    return (dtype.is_fp8() or dtype.is_fp16() or dtype.is_bf16() or dtype.is_fp32() or dtype.is_fp64()
-            or dtype.is_int8() or dtype.is_uint8())
+    return (
+        dtype.is_fp8()
+        or dtype.is_fp16()
+        or dtype.is_bf16()
+        or dtype.is_fp32()
+        or dtype.is_fp64()
+        or dtype.is_int8()
+        or dtype.is_uint8()
+    )
 
 
 @gluon.constexpr_function
@@ -91,13 +97,13 @@ def tl_dot_mmav3_supported(
 
     # Accepted LHS dtypes: float8e5m2, float8e4m3fn, u/int8, float16, bfloat16, float32.
     if a_dtype not in [
-            ttgl.float8e5,
-            ttgl.float8e4nv,
-            ttgl.int8,
-            ttgl.uint8,
-            ttgl.float16,
-            ttgl.bfloat16,
-            ttgl.float32,
+        ttgl.float8e5,
+        ttgl.float8e4nv,
+        ttgl.int8,
+        ttgl.uint8,
+        ttgl.float16,
+        ttgl.bfloat16,
+        ttgl.float32,
     ]:
         return False
 
@@ -206,7 +212,7 @@ def tl_dot_mmav3(
     fence_async_shared()
     wgmma_acc = warpgroup_mma_init(acc)
     wgmma_acc = warpgroup_mma(a_smem, b_smem, wgmma_acc, is_async=True)
-    acc = warpgroup_mma_wait(num_outstanding=0, deps=(wgmma_acc, ))
+    acc = warpgroup_mma_wait(num_outstanding=0, deps=(wgmma_acc,))
 
     return ttgl.convert_layout(acc, ret_layout)
 
