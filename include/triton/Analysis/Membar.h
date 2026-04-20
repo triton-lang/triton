@@ -290,6 +290,20 @@ public:
   void run(FuncBlockInfoMapT &funcBlockInfoMap);
 
 protected:
+  /// Applies the barrier analysis based on the SCF dialect, in which each
+  /// region has a single basic block only.
+  /// Example:
+  /// region1
+  ///   op1
+  ///   op2 (scf.if)
+  ///      region2
+  ///        op3
+  ///        op4
+  ///      region3
+  ///        op5
+  ///        op6
+  ///   op7
+  /// TODO: Explain why we don't use ForwardAnalysis:
   void resolve(FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
                OpBuilder *builder);
 

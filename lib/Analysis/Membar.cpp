@@ -219,8 +219,9 @@ void MembarOrFenceAnalysis::visitTerminator(
   }
 
   // A region-branching op (e.g. scf.for, scf.if) encountered mid-block.
-  // Its region-entry edges all come from the parent region and are
-  // therefore forward.
+  // Its successors are the entry blocks of its region successors, or the
+  // op's own continuation (region.isParent()). Both kinds of edge come
+  // from the parent region and are forward.
   if (auto br = dyn_cast<RegionBranchOpInterface>(op)) {
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
