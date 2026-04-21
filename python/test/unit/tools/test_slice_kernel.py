@@ -31,7 +31,7 @@ def _make_package(tmp_path: Path, files: dict[str, str]) -> tuple[str, Callable[
     pkg_dir.mkdir()
     (pkg_dir / "__init__.py").write_text("")
     for name, source in files.items():
-        (pkg_dir / name).write_text(textwrap.dedent(source).strip() + "\n")
+        (pkg_dir / name).write_text(textwrap.dedent(source).strip().replace("{pkg}", pkg) + "\n")
     sys.path.insert(0, str(tmp_path))
     importlib.invalidate_caches()
     return pkg, lambda mod: f"{pkg}.{mod}"
@@ -330,6 +330,277 @@ def kernel() -> int:
     assert_code_equal(output, expected)
 
 
+def test_slice_kernel_function_import(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "kernel_mod.py":
+            """
+                def helper() -> None:
+                    import math
+
+                    math.prod([11, 33])
+
+                def kernel() -> None:
+                    helper()
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    expected = R"""
+import math
+
+def helper() -> None:
+    math.prod([11, 33])
+
+
+def kernel() -> None:
+    helper()
+    """
+    assert_code_equal(output, expected)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="TODO: handle local import aliases that are used as module values",
+)
+def test_slice_kernel_function_import_module_value(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "kernel_mod.py":
+            """
+                def helper():
+                    import math
+
+                    return math
+
+                def kernel():
+                    return helper()
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    expected = R"""
+import math
+
+def helper():
+    return math
+
+
+def kernel():
+    return helper()
+    """
+    assert_code_equal(output, expected)
+
+
+def test_slice_kernel_function_relative_import(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "lib_foo.py":
+            """
+                import math
+
+                def common_util() -> int:
+                    return math.prod([11, 33])
+            """,
+            "kernel_mod.py":
+            """
+                def helper() -> None:
+                    from .lib_foo import common_util as util_foo
+
+                    util_foo()
+
+                def kernel() -> None:
+                    helper()
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    expected = R"""
+import math
+
+def common_util() -> int:
+    return math.prod([11, 33])
+
+
+def helper() -> None:
+    common_util()
+
+
+def kernel() -> None:
+    helper()
+    """
+    assert_code_equal(output, expected)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="TODO: preserve origin metadata for local from-import values",
+)
+def test_slice_kernel_function_from_import_value(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "kernel_mod.py":
+            """
+                def helper():
+                    from math import pi
+
+                    return pi
+
+                def kernel():
+                    return helper()
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    expected = R"""
+import math
+
+def helper():
+    return math.pi
+
+
+def kernel():
+    return helper()
+    """
+    assert_code_equal(output, expected)
+
+
+def test_slice_kernel_function_absolute_import(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "lib_foo.py":
+            """
+                import math
+
+                def common_util() -> int:
+                    return math.prod([11, 33])
+            """,
+            "kernel_mod.py":
+            """
+                import {pkg}.lib_foo
+
+                _PRELOADED_LIB_FOO = {pkg}.lib_foo
+
+                def helper() -> None:
+                    from {pkg}.lib_foo import common_util as util_foo
+
+                    util_foo()
+
+                def kernel() -> None:
+                    helper()
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    expected = R"""
+import math
+
+def common_util() -> int:
+    return math.prod([11, 33])
+
+
+def helper() -> None:
+    common_util()
+
+
+def kernel() -> None:
+    helper()
+    """
+    assert_code_equal(output, expected)
+
+
+def test_slice_kernel_function_module_relative_import(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "lib_foo.py":
+            """
+                import math
+
+                def common_util() -> int:
+                    return math.prod([11, 33])
+            """,
+            "kernel_mod.py":
+            """
+                def helper() -> None:
+                    from . import lib_foo
+
+                    lib_foo.common_util()
+
+                def kernel() -> None:
+                    helper()
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    expected = R"""
+import math
+
+def common_util() -> int:
+    return math.prod([11, 33])
+
+
+def helper() -> None:
+    common_util()
+
+
+def kernel() -> None:
+    helper()
+    """
+    assert_code_equal(output, expected)
+
+
+def test_slice_kernel_function_module_relative_import_leaf(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "lib_foo.py":
+            """
+                import math
+
+                def common_util() -> int:
+                    return math.prod([11, 33])
+            """,
+            "kernel_mod.py":
+            """
+                def helper() -> None:
+                    from . import lib_foo
+
+                    lib_foo.common_util()
+
+                def kernel() -> None:
+                    helper()
+            """,
+        },
+    )
+
+    output = slice_kernel(
+        [f"{mod('kernel_mod')}:kernel"], ["triton", "torch", mod("lib_foo")], target=TranslatorTarget.GENERIC
+    )
+    expected = f"""
+import {pkg}.lib_foo
+
+def helper() -> None:
+    {pkg}.lib_foo.common_util()
+
+
+def kernel() -> None:
+    helper()
+    """
+    assert_code_equal(output, expected)
+
+
 def test_slice_kernel_treats_assign_targets_as_locals(tmp_path):
     pkg, mod = _make_package(
         tmp_path,
@@ -375,6 +646,44 @@ def test_slice_kernel_treats_annassign_targets_as_locals(tmp_path):
 def kernel() -> int:
     value: int = 3
     return value
+    """
+    assert_code_equal(output, expected)
+
+
+def test_slice_kernel_treats_assign_and_annassign_targets_as_locals(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "kernel_mod.py":
+            """
+                import triton
+
+                def global_assign() -> int:
+                    return 1
+
+                def global_annassign() -> int:
+                    return 2
+
+                @triton.jit
+                def kernel() -> tuple[int, int]:
+                    global_assign = 3
+                    copied = global_assign
+                    global_annassign: int = copied + 1
+                    return copied, global_annassign
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    expected = R"""
+import triton
+
+@triton.jit
+def kernel() -> tuple[int, int]:
+    global_assign = 3
+    copied = global_assign
+    global_annassign: int = copied + 1
+    return (copied, global_annassign)
     """
     assert_code_equal(output, expected)
 
