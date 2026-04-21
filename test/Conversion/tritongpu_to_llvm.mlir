@@ -2177,6 +2177,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: test_local_atomic_add
+  // CHECK: llvm.atomicrmw add
+  tt.func public @test_local_atomic_add(%arg0: tensor<1xi32, #blocked>, %arg1: tensor<1xi32, #blocked>) -> tensor<1xi32, #blocked> {
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
+    %1 = ttg.local_atomic_add %0[%arg0], %arg1 {axis = 0 : i32} : !ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked> -> tensor<1xi32, #blocked>
+    tt.return %1 : tensor<1xi32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: test_local_atomic_inc
+  // CHECK: llvm.inline_asm
+  // CHECK-SAME: atom.shared.inc.u32
+  tt.func public @test_local_atomic_inc(%arg0: tensor<1xi32, #blocked>) -> tensor<1xi32, #blocked> {
+    %c1 = arith.constant dense<1> : tensor<1xi32, #blocked>
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
+    %1 = ttg.local_atomic_add %0[%arg0], %c1 {axis = 0 : i32} : !ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked> -> tensor<1xi32, #blocked>
+    tt.return %1 : tensor<1xi32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: test_local_atomic_inc_dead
+  // CHECK: llvm.inline_asm
+  // CHECK-SAME: red.shared.inc.u32
+  tt.func public @test_local_atomic_inc_dead(%arg0: tensor<1xi32, #blocked>) {
+    %c1 = arith.constant dense<1> : tensor<1xi32, #blocked>
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
+    %1 = ttg.local_atomic_add %0[%arg0], %c1 {axis = 0 : i32} : !ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked> -> tensor<1xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: print_ptr

@@ -212,6 +212,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@filecheck_test
+@gluon.jit
+def test_shared_atomic_add():
+    # CHECK: [[SMEM:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<8x32xi32
+    # CHECK: [[INDICES:%.*]] = arith.addi
+    # CHECK: [[VALUES:%.*]] = arith.constant dense<1> : tensor<8x32xi32, #blocked>
+    # CHECK: ttg.local_atomic_add [[SMEM]][[[INDICES]]], [[VALUES]] {axis = 1 : i32} : !ttg.memdesc<8x32xi32, #shared, #smem, mutable>, tensor<8x32xi32, #blocked>, tensor<8x32xi32, #blocked> -> tensor<8x32xi32, #blocked>
+    shape: ttgl.constexpr = [8, 32]
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+
+    smem = ttgl.allocate_shared_memory(ttgl.int32, shape, smem_layout)
+    smem.store(ttgl.zeros(shape, ttgl.int32, layout))
+
+    cols = ttgl.arange(0, shape[1], layout=ttgl.SliceLayout(0, layout))[None, :]
+    indices = cols + ttgl.zeros(shape, ttgl.int32, layout)
+    values = ttgl.full(shape, 1, ttgl.int32, layout)
+    old = smem.atomic_add(values, indices, axis=1)  # noqa: F841
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS)
+def test_shared_atomic_add_unsupported_dtype(target):
+
+    @gluon.jit
+    def kernel():
+        shape: ttgl.constexpr = [8, 32]
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
+
+        smem = ttgl.allocate_shared_memory(ttgl.int8, shape, smem_layout)
+        indices = ttgl.full(shape, 0, ttgl.int32, layout)
+        values = ttgl.full(shape, 1, ttgl.int8, layout)
+        smem.atomic_add(values, indices, axis=1)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, target=target)
+
+    assert "shared atomic_add does not support int8" in str(e.value.__cause__)
+
+
 @gluon.jit
 def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
     XBLOCK: ttgl.constexpr = tmem_layout.block[0]

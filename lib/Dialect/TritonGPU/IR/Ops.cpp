@@ -877,6 +877,59 @@ LogicalResult LocalScatterOp::verify() {
   return success();
 }
 
+// LocalAtomicAddOp
+LogicalResult LocalAtomicAddOp::verify() {
+  auto dstTy = getDst().getType();
+  auto valuesTy = cast<RankedTensorType>(getValues().getType());
+  auto indicesTy = cast<RankedTensorType>(getIndices().getType());
+  Type valuesEltTy = valuesTy.getElementType();
+  unsigned axis = getAxis();
+
+  // Match Triton's existing atomic_add type support.
+  if (!valuesEltTy.isIntOrFloat()) {
+    return emitError("values must have integer or floating element type");
+  }
+  unsigned valuesBitwidth = valuesEltTy.getIntOrFloatBitWidth();
+  if (valuesBitwidth < 16) {
+    return emitError("local_atomic_add does not support element type ")
+           << valuesEltTy;
+  }
+  if (isa<IntegerType>(valuesEltTy) && valuesBitwidth == 16) {
+    return emitError("local_atomic_add does not support element type ")
+           << valuesEltTy;
+  }
+
+  // Verify indices tensor has integer element type
+  if (!indicesTy.getElementType().isInteger()) {
+    return emitError("indices must have integer element type");
+  }
+
+  if (failed(verifySharedMemoryRank(*this, valuesTy, dstTy, "values")))
+    return failure();
+
+  // Verify values and indices have the same shape/rank.
+  if (valuesTy.getShape() != indicesTy.getShape()) {
+    return emitError("values shape must match indices shape");
+  }
+
+  // Verify axis is valid
+  if (axis >= dstTy.getRank()) {
+    return emitError("axis ")
+           << axis << " is out of bounds for destination rank "
+           << dstTy.getRank();
+  }
+
+  // Verify values, indices, and result have the same layout
+  if (valuesTy.getEncoding() != indicesTy.getEncoding()) {
+    return emitError("values must have the same layout as indices");
+  }
+  if (dstTy.getElementType() != valuesEltTy) {
+    return emitError("values element type must match destination element type");
+  }
+
+  return success();
+}
+
 // AsyncCopyGlobalToLocalOp
 LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   if (!getResult().getType().getMutableMemory())

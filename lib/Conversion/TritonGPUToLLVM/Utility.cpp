@@ -535,6 +535,78 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return ret;
 }
 
+SmallVector<Value>
+computeLocalPtrs(Location loc, triton::gpu::MemDescType memDescTy,
+                 SharedMemoryObject smemObj, Type llvmElemTy,
+                 ArrayRef<Value> idxValues,
+                 ArrayRef<SmallVector<Value>> coords, unsigned axis,
+                 RewriterBase &rewriter) {
+  MLIRContext *ctx = memDescTy.getContext();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  auto sharedLayout = triton::gpu::isPaddedEncoding(memDescTy.getEncoding())
+                          ? paddedLinearLayout(memDescTy)
+                          : toLinearLayout(memDescTy);
+  LinearLayout invSharedLayout = sharedLayout.invert();
+
+  SmallVector<StringAttr> allDims;
+  for (unsigned dim = 0, rank = memDescTy.getRank(); dim < rank; ++dim)
+    allDims.push_back(str_attr("dim" + Twine(dim)));
+
+  auto kOffset = str_attr("offset");
+  Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
+  auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+
+  SmallVector<Value> ptrs;
+  ptrs.reserve(coords.size());
+
+  for (auto [i, idxVal] : llvm::enumerate(idxValues)) {
+    Value idx = idxVal;
+    unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
+    if (idxWidth > 32) {
+      idx = b.trunc(i32_ty, idx);
+    } else if (idxWidth < 32) {
+      idx = b.zext(i32_ty, idx);
+    }
+
+    SmallVector<Value> indices(coords[i]);
+    indices[axis] = idx;
+
+    SmallVector<std::pair<StringAttr, Value>> inputs;
+    for (unsigned dim = 0; dim < indices.size(); ++dim)
+      inputs.push_back({allDims[dim], indices[dim]});
+
+    auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
+
+    Value offset = nullptr;
+    for (auto [name, value] : outputs) {
+      if (name == kOffset) {
+        offset = value;
+        break;
+      }
+    }
+    assert(offset && "expected offset output from inverted shared layout");
+
+    offset = b.xor_(offset, affineOffset);
+
+    Value ptr;
+    if (triton::gpu::isPaddedEncoding(memDescTy.getEncoding())) {
+      Value offsetBytes = b.mul(offset, b.i32_val(bitwidth / 8));
+      auto shifts = getPaddedSharedShifts(memDescTy.getEncoding(), bitwidth,
+                                          /*offsetInBytes=*/true);
+      Value totalOffset = applyPadding(loc, rewriter, offsetBytes, shifts);
+      ptr = b.gep(smemObj.getBase().getType(), i8_ty, smemObj.getBase(),
+                  totalOffset);
+    } else {
+      ptr = b.gep(smemObj.getBase().getType(), llvmElemTy, smemObj.getBase(),
+                  offset);
+    }
+    ptrs.push_back(ptr);
+  }
+
+  return ptrs;
+}
+
 SmallVector<std::pair<unsigned, unsigned>>
 getPaddedSharedShifts(Attribute enc, unsigned bitwidth, bool offsetInBytes) {
   auto padded = triton::gpu::getPaddedEncoding(enc);

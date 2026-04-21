@@ -1,9 +1,11 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
+#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -18,6 +20,30 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 using namespace mlir::LLVM::NVIDIA;
+
+bool isConstI32One(Value value) {
+  APInt constant;
+  return matchPattern(value, m_ConstantInt(&constant)) && constant.isOne();
+}
+
+Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                    bool returnOld) {
+  PTXBuilder ptxBuilder;
+  auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
+  auto *boundOpr = ptxBuilder.newConstantOperand("0xffffffff");
+  if (!returnOld) {
+    auto &red = *ptxBuilder.create("red");
+    red.shared().o("inc").o("u32");
+    red(ptrOpr, boundOpr);
+    return ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+  }
+
+  auto *dstOpr = ptxBuilder.newOperand("=r", /*init=*/true);
+  auto &atom = *ptxBuilder.create("atom");
+  atom.shared().o("inc").o("u32");
+  atom(dstOpr, ptrOpr, boundOpr);
+  return ptxBuilder.launch(rewriter, loc, i32_ty);
+}
 
 LogicalResult lowerLdStMatrix(
     Location loc, const LinearLayout &regLayout, MemDescType memDescType,
@@ -186,6 +212,71 @@ struct LocalStoreOpConversion
 private:
   const NVIDIA::TargetInfo &targetInfo;
 };
+
+struct LocalAtomicAddOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalAtomicAddOp> {
+public:
+  LocalAtomicAddOpConversion(const LLVMTypeConverter &converter,
+                             const NVIDIA::TargetInfo &targetInfo,
+                             PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<triton::gpu::LocalAtomicAddOp>(converter,
+                                                              benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::LocalAtomicAddOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
+    if (!valuesTy.getElementType().isInteger(32))
+      return failure();
+
+    SmallVector<Value> values =
+        unpackLLElements(op.getLoc(), adaptor.getValues(), rewriter);
+    if (!llvm::all_of(values, isConstI32One))
+      return failure();
+
+    auto memDescTy = cast<MemDescType>(op.getDst().getType());
+    if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
+            memDescTy.getEncoding())) {
+      return failure();
+    }
+
+    auto llvmElemTy = getTypeConverter()->convertType(memDescTy.getElementType());
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
+    SmallVector<Value> idxValues =
+        unpackLLElements(op.getLoc(), adaptor.getIndices(), rewriter);
+    SmallVector<SmallVector<Value>> srcIndices =
+        emitIndices(op.getLoc(), rewriter, targetInfo, valuesTy.getEncoding(),
+                    valuesTy, /*withCTAOffset=*/true);
+    SmallVector<Value> ptrs = computeLocalPtrs(op.getLoc(), memDescTy, smemObj,
+                                               llvmElemTy, idxValues,
+                                               srcIndices, op.getAxis(),
+                                               rewriter);
+
+    if (op.getResult().use_empty()) {
+      for (Value ptr : ptrs)
+        emitSharedInc(rewriter, op.getLoc(), ptr, /*returnOld=*/false);
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    SmallVector<Value> results;
+    results.reserve(ptrs.size());
+    for (Value ptr : ptrs)
+      results.push_back(
+          emitSharedInc(rewriter, op.getLoc(), ptr, /*returnOld=*/true));
+
+    Value result =
+        packLLElements(op.getLoc(), getTypeConverter(), results, rewriter,
+                       op.getType());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+private:
+  const NVIDIA::TargetInfo &targetInfo;
+};
 } // namespace
 
 void mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
@@ -196,6 +287,8 @@ void mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
                                        benefit.getBenefit() + 1);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo,
                                        benefit.getBenefit() + 1);
+  patterns.add<LocalAtomicAddOpConversion>(typeConverter, targetInfo,
+                                           benefit.getBenefit() + 1);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo,
                                       benefit.getBenefit() + 1);
   mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,

@@ -460,6 +460,38 @@ def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
   let hasVerifier = 1;
 }
 
+def TTG_LocalAtomicAddOp : TTG_Op<"local_atomic_add", [
+  TypesMatchWith<"result type matches values type", "result", "values", "$_self">
+]> {
+  let summary = "Atomically add elements into shared memory along a specified axis";
+
+  let description = [{
+    Atomically adds elements to a shared memory descriptor using an indices tensor
+    along a single specified axis. The values tensor has the same shape as the
+    indices tensor and the result returns the previous values observed at each
+    updated location.
+
+    For each input position I, the operation atomically updates dst where the
+    coordinate at the axis is replaced by indices[I]:
+      old = dst[I[0], ..., indices[I], ..., I[n]]
+      dst[I[0], ..., indices[I], ..., I[n]] = old + values[I]
+      result[I] = old
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$dst,
+    TT_Tensor:$values,
+    TT_IntTensor:$indices,
+    I32Attr:$axis
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $dst `[` $indices `]` `,` $values attr-dict `:` qualified(type($dst)) `,`
+    type($indices) `,` type($values) `->` type($result)
+  }];
+  let hasVerifier = 1;
+}
+
 def TTG_PredicateStageOp: TTG_Op<"predicate_stage",
                                 [Pure, AllTypesMatch<["iv", "ub", "step"]>]> {
   let summary = "pipeliner stage predicate";

@@ -595,6 +595,13 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
+SmallVector<Value>
+computeLocalPtrs(Location loc, triton::gpu::MemDescType memDescTy,
+                 SharedMemoryObject smemObj, Type llvmElemTy,
+                 ArrayRef<Value> idxValues,
+                 ArrayRef<SmallVector<Value>> coords, unsigned axis,
+                 RewriterBase &rewriter);
+
 // Calculates the required interval chunking and padding logical-shift values
 // for shared memory padding, depending on elements' bit width and whether
 // offsets count the number of bytes or number of elements.

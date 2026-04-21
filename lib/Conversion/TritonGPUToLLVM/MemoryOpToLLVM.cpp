@@ -24,90 +24,14 @@ lowerLocalScGt(Location loc, MLIRContext *ctx, MemDescType memDescTy,
                const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   bool isScatter = !storeVals.empty();
-
-  // Get the shared memory layout (linear component for padded layouts)
-  auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
-                          ? paddedLinearLayout(memDescTy)
-                          : toLinearLayout(memDescTy);
-  LinearLayout invSharedLayout = sharedLayout.invert();
-
-  // Get layout dimension names for all dims
-  SmallVector<StringAttr> allDims;
-  for (unsigned dim = 0, rank = memDescTy.getRank(); dim < rank; ++dim) {
-    allDims.push_back(str_attr("dim" + Twine(dim)));
-  }
-
-  auto kOffset = str_attr("offset");
-
-  // Get the subslice affine offset (non-zero for memdesc subslices)
-  Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
-  auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+  SmallVector<Value> ptrs = computeLocalPtrs(
+      loc, memDescTy, smemObj, llvmElemTy, idxValues, coords, axis, rewriter);
 
   SmallVector<Value> results;
-  if (!isScatter) {
+  if (!isScatter)
     results.resize(coords.size());
-  }
 
-  for (auto [i, idxVal] : llvm::enumerate(idxValues)) {
-    // Convert index to i32 if needed
-    Value idx = idxVal;
-    unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
-    if (idxWidth > 32) {
-      idx = b.trunc(i32_ty, idx);
-    } else if (idxWidth < 32) {
-      idx = b.zext(i32_ty, idx);
-    }
-
-    // Copy coordinates and replace the axis coordinate with the index value
-    SmallVector<Value> indices(coords[i]);
-    indices[axis] = idx;
-
-    // Apply inverted shared layout to compute offset
-    SmallVector<std::pair<StringAttr, Value>> inputs;
-    for (unsigned dim = 0; dim < indices.size(); ++dim) {
-      inputs.push_back({allDims[dim], indices[dim]});
-    }
-
-    auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
-
-    // Extract the offset value
-    Value offset = nullptr;
-    for (auto [name, value] : outputs) {
-      if (name == kOffset) {
-        offset = value;
-        break;
-      }
-    }
-    assert(offset && "expected offset output from inverted shared layout");
-
-    // For subslices, the physical offset is computed as:
-    //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
-    //
-    // We use XOR for consistency with lowerLdSt. MemDescSubsliceOp::verify()
-    // enforces:
-    // 1. Subslice offsets must be multiples of the tile size
-    // 2. Subslice offsets must map to power-of-2 physical offsets
-    //
-    // These constraints ensure the bit ranges of L⁻¹(coords) and
-    // L⁻¹(subslice_offset) are disjoint, so XOR and addition are equivalent.
-    offset = b.xor_(offset, affineOffset);
-
-    // Add padding offset for padded layouts (non-linear component)
-    Value ptr;
-    if (isPaddedEncoding(memDescTy.getEncoding())) {
-      // Convert offset to bytes for padding calculation
-      Value offsetBytes = b.mul(offset, b.i32_val(bitwidth / 8));
-      auto shifts = getPaddedSharedShifts(memDescTy.getEncoding(), bitwidth,
-                                          /*offsetInBytes=*/true);
-      // GEP in bytes: base + offset*elemSize + padOffset
-      Value totalOffset = applyPadding(loc, rewriter, offsetBytes, shifts);
-      ptr = b.gep(smemObj.getBase().getType(), i8_ty, smemObj.getBase(),
-                  totalOffset);
-    } else {
-      ptr = b.gep(smemObj.getBase().getType(), llvmElemTy, smemObj.getBase(),
-                  offset);
-    }
-
+  for (auto [i, ptr] : llvm::enumerate(ptrs)) {
     if (isScatter) {
       targetInfo.storeShared(rewriter, loc, ptr, storeVals[i], b.true_val());
     } else {
@@ -434,6 +358,65 @@ public:
 private:
   const TargetInfoBase &targetInfo;
 };
+
+struct LocalAtomicAddOpConversion
+    : public ConvertOpToLLVMPattern<LocalAtomicAddOp> {
+public:
+  LocalAtomicAddOpConversion(LLVMTypeConverter &typeConverter,
+                             const TargetInfoBase &targetInfo,
+                             PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
+
+  LogicalResult
+  matchAndRewrite(LocalAtomicAddOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto memDescTy = cast<MemDescType>(op.getDst().getType());
+    if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
+            memDescTy.getEncoding())) {
+      return rewriter.notifyMatchFailure(
+          op, "PartitionedSharedEncoding not yet supported in lowering");
+    }
+    auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
+    auto typeConverter = getTypeConverter();
+    auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
+                                                         llvmElemTy, rewriter);
+
+    SmallVector<Value> values =
+        unpackLLElements(loc, adaptor.getValues(), rewriter);
+    SmallVector<Value> idxValues =
+        unpackLLElements(loc, adaptor.getIndices(), rewriter);
+    SmallVector<SmallVector<Value>> srcIndices =
+        emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(), valuesTy,
+                    /*withCTAOffset=*/true);
+
+    LLVM::AtomicBinOp atomicBinOp = isa<FloatType>(llvmElemTy)
+                                        ? LLVM::AtomicBinOp::fadd
+                                        : LLVM::AtomicBinOp::add;
+    SmallVector<Value> ptrs = computeLocalPtrs(
+        loc, memDescTy, smemObj, llvmElemTy, idxValues, srcIndices,
+        op.getAxis(), rewriter);
+    SmallVector<Value> results;
+    results.reserve(ptrs.size());
+
+    for (auto [ptr, value] : llvm::zip(ptrs, values)) {
+      results.push_back(
+          LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp, ptr, value,
+                                    LLVM::AtomicOrdering::monotonic)
+              .getResult());
+    }
+
+    Value result = packLLElements(loc, typeConverter, results, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
 } // namespace
 
 void mlir::triton::populateMemoryOpToLLVMPatterns(
@@ -446,6 +429,7 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<LocalAtomicAddOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BarrierOpConversion>(typeConverter, benefit);
 }

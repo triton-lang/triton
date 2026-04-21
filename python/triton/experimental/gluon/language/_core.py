@@ -344,6 +344,28 @@ class shared_memory_descriptor(base_value):
         axis = _unwrap_if_constexpr(axis)
         return _semantic.shared_scatter(self, values, indices, axis)
 
+    @builtin
+    def atomic_add(self, values, indices, axis, _semantic: GluonSemantic = None) -> tensor:
+        """
+        Add elements to shared memory along a specified axis using an indices tensor.
+
+        For each input position I, the operation reads the previous value from dst where the
+        coordinate at the update axis is replaced by indices[I], adds values[I], then writes
+        the updated result back to shared memory.
+
+        Args:
+            values (tensor): Tensor with values to add (same shape as indices).
+            indices (tensor): Tensor specifying which indices to update along the axis.
+            axis (int): The axis along which to update values.
+
+        Returns:
+            tensor: Gluon tensor with the values observed before the update.
+        """
+        values = _unwrap_if_constexpr(values)
+        indices = _unwrap_if_constexpr(indices)
+        axis = _unwrap_if_constexpr(axis)
+        return _semantic.shared_atomic_add(self, values, indices, axis)
+
     def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Create a subview of shared memory by slicing along a given dimension.
