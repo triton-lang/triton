@@ -535,12 +535,12 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return ret;
 }
 
-SmallVector<Value>
-computeLocalPtrs(Location loc, triton::gpu::MemDescType memDescTy,
-                 SharedMemoryObject smemObj, Type llvmElemTy,
-                 ArrayRef<Value> idxValues,
-                 ArrayRef<SmallVector<Value>> coords, unsigned axis,
-                 RewriterBase &rewriter) {
+SmallVector<Value> computeLocalPtrs(Location loc,
+                                    triton::gpu::MemDescType memDescTy,
+                                    SharedMemoryObject smemObj, Type llvmElemTy,
+                                    ArrayRef<Value> idxValues,
+                                    ArrayRef<SmallVector<Value>> coords,
+                                    unsigned axis, RewriterBase &rewriter) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 

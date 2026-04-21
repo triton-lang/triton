@@ -395,9 +395,9 @@ public:
     LLVM::AtomicBinOp atomicBinOp = isa<FloatType>(llvmElemTy)
                                         ? LLVM::AtomicBinOp::fadd
                                         : LLVM::AtomicBinOp::add;
-    SmallVector<Value> ptrs = computeLocalPtrs(
-        loc, memDescTy, smemObj, llvmElemTy, idxValues, srcIndices,
-        op.getAxis(), rewriter);
+    SmallVector<Value> ptrs =
+        computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
+                         srcIndices, op.getAxis(), rewriter);
     SmallVector<Value> results;
     results.reserve(ptrs.size());
 
@@ -408,8 +408,8 @@ public:
               .getResult());
     }
 
-    Value result = packLLElements(loc, typeConverter, results, rewriter,
-                                  op.getType());
+    Value result =
+        packLLElements(loc, typeConverter, results, rewriter, op.getType());
     rewriter.replaceOp(op, result);
     return success();
   }

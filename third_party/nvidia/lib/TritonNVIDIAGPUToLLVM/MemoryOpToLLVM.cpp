@@ -26,8 +26,8 @@ bool isConstI32One(Value value) {
   return matchPattern(value, m_ConstantInt(&constant)) && constant.isOne();
 }
 
-Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                    bool returnOld) {
+Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
+                    Value ptr, bool returnOld) {
   PTXBuilder ptxBuilder;
   auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
   auto *boundOpr = ptxBuilder.newConstantOperand("0xffffffff");
@@ -241,7 +241,8 @@ public:
       return failure();
     }
 
-    auto llvmElemTy = getTypeConverter()->convertType(memDescTy.getElementType());
+    auto llvmElemTy =
+        getTypeConverter()->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
     SmallVector<Value> idxValues =
@@ -249,10 +250,9 @@ public:
     SmallVector<SmallVector<Value>> srcIndices =
         emitIndices(op.getLoc(), rewriter, targetInfo, valuesTy.getEncoding(),
                     valuesTy, /*withCTAOffset=*/true);
-    SmallVector<Value> ptrs = computeLocalPtrs(op.getLoc(), memDescTy, smemObj,
-                                               llvmElemTy, idxValues,
-                                               srcIndices, op.getAxis(),
-                                               rewriter);
+    SmallVector<Value> ptrs =
+        computeLocalPtrs(op.getLoc(), memDescTy, smemObj, llvmElemTy, idxValues,
+                         srcIndices, op.getAxis(), rewriter);
 
     if (op.getResult().use_empty()) {
       for (Value ptr : ptrs)
@@ -267,9 +267,8 @@ public:
       results.push_back(
           emitSharedInc(rewriter, op.getLoc(), ptr, /*returnOld=*/true));
 
-    Value result =
-        packLLElements(op.getLoc(), getTypeConverter(), results, rewriter,
-                       op.getType());
+    Value result = packLLElements(op.getLoc(), getTypeConverter(), results,
+                                  rewriter, op.getType());
     rewriter.replaceOp(op, result);
     return success();
   }
