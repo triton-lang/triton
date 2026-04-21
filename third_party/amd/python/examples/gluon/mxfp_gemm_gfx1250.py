@@ -5,7 +5,6 @@ from triton.experimental import gluon
 import triton.experimental.gluon.language as gl
 from triton.experimental.gluon.language.amd.gfx1250 import tdm
 from triton.experimental.gluon.language.amd.gfx1250 import async_copy as cp
-from triton.language.core import _aggregate as aggregate
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
 # Handle imports for both pytest (module context) and direct execution
@@ -41,7 +40,7 @@ def get_wmma_layout(num_warps, packed, scale_preshuffle):
     return gl.amd.AMDWMMALayout(3, True, warp_bases, reg_bases, instr_shape)
 
 
-@aggregate
+@gluon.aggregate
 class MXFPGEMMConfig:
     BLOCK_M: gl.constexpr
     BLOCK_N: gl.constexpr
@@ -153,7 +152,7 @@ class MXFPGEMMConfig:
                                                     [self.BLOCK_N_PRESHUFFLED, self.BLOCK_K_SCALE_PRESHUFFLED], [1, 0]))
 
 
-@aggregate
+@gluon.aggregate
 class ScaleAsyncCopyDescriptor:
     cfg: MXFPGEMMConfig
     op_idx: gl.constexpr
@@ -203,7 +202,7 @@ class ScaleAsyncCopyDescriptor:
             cp.commit_group()
 
 
-@aggregate
+@gluon.aggregate
 class MXFPGEMMProgramBase:
 
     @gluon.constexpr_function
@@ -279,7 +278,7 @@ class MXFPGEMMProgramBase:
 
 
 @composition
-@aggregate
+@gluon.aggregate
 class MXFPGEMMPipelinedProgram:
     base: MXFPGEMMProgramBase
 
@@ -412,7 +411,7 @@ class MXFPGEMMPipelinedProgram:
 
 
 @composition
-@aggregate
+@gluon.aggregate
 class MXFPGEMMSliceKProgram:
     base: MXFPGEMMProgramBase
 
@@ -637,7 +636,7 @@ class MXFPGEMMSliceKProgram:
         gl.amd.gfx1250.buffer_store(accumulator, self.c_ptr, self.c_offs, mask=self.c_mask)
 
 
-@aggregate
+@gluon.aggregate
 class MXFPGEMMSliceNKProgram:
     cfg: MXFPGEMMConfig
     a_buffer: gl.shared_memory_descriptor

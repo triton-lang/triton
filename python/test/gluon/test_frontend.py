@@ -441,7 +441,7 @@ def warp_specialize_worker1(a, b, e: ttgl.constexpr):
     pass
 
 
-@tl.core._aggregate
+@gluon.aggregate
 class Pair:
     first: tl.tensor
     second: tl.tensor
