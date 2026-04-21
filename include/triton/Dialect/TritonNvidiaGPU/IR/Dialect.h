@@ -119,7 +119,8 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
 
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 
-uint32_t getTMemSubSliceOffset(gpu::MemDescType memDescType, int32_t nOffset);
+uint32_t getTMemSubSliceOffset(gpu::MemDescType memDescType, int32_t mOffset,
+                               int32_t nOffset);
 
 SmallVector<gpu::DistributedEncodingTrait>
 getTmemCompatibleLayouts(gpu::MemDescType memType, unsigned numWarps,

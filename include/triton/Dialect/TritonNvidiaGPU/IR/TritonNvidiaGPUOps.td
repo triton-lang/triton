@@ -942,10 +942,15 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
   let description = [{
     This operation takes a subslice of a tensor memory allocation and returns a new descriptor
     containing the address and a view of the subslice.
-    This is similar to ttg.memdesc_subslice except we can only slice along the inner dimension
-    of a 2D memdesc as this is the only one we can do for TMem.
+    This is similar to ttg.memdesc_subslice. The N offset selects a sub-range of the inner
+    dimension. The M offset selects a sub-range of the outer dimension and must be a multiple
+    of blockM; it is used to address an individual block of a multi-block (M > blockM)
+    allocation. The result type encodes the new shape; the size of each subsliced dimension
+    comes from the corresponding dim of the result type.
   }];
-  let arguments = (ins TTG_MemDescType:$src, I32Attr:$N);
+  let arguments = (ins TTG_MemDescType:$src,
+                       DefaultValuedAttr<I32Attr, "0">:$M,
+                       I32Attr:$N);
 
   let assemblyFormat = [{
     $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
@@ -953,6 +958,8 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
 
   let builders = [
       OpBuilder<(ins "Value":$alloc, "int":$offset, "int":$size)>,
+      OpBuilder<(ins "Value":$alloc, "int":$mOffset, "int":$mSize,
+                     "int":$nOffset, "int":$nSize)>,
     ];
   let results = (outs TTG_MemDescType:$result);
   let hasVerifier = 1;
