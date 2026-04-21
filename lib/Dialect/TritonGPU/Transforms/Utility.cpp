@@ -1,6 +1,7 @@
 #include "triton/Analysis/Utility.h"
 
 #include <fstream>
+#include <optional>
 
 #include "mlir/Analysis/DataFlow/LivenessAnalysis.h"
 #include "mlir/Analysis/SliceAnalysis.h"
@@ -36,7 +37,7 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
     auto rank = shape.size();
     SmallVector<unsigned, 3> ret(rank, 1);
     ret[rank - 1] = 8;
-    ret[rank - 2] = 16;
+    ret[rank - 2] = eltType.isF64() ? 8 : 16;
     return ret;
   } else if (version == 3) {
     unsigned k = 256 / eltType.getIntOrFloatBitWidth();
@@ -119,6 +120,61 @@ unsigned getElementBitWidth(RankedTensorType type) {
   return typeForMem.getIntOrFloatBitWidth();
 }
 
+static std::optional<unsigned>
+getAtomicWriteElementsPerThreadCap(Operation *op) {
+  if (isa<triton::AtomicCASOp>(op))
+    return 1;
+
+  auto atomicRmw = dyn_cast<triton::AtomicRMWOp>(op);
+  if (!atomicRmw)
+    return std::nullopt;
+
+  Type elemTy = getElementTypeOrSelf(atomicRmw.getVal().getType());
+  if (elemTy.isInteger() || elemTy.isF64())
+    return 1;
+
+  auto moduleOp = op->getParentOfType<ModuleOp>();
+
+  if (moduleOp && getAMDArch(moduleOp)) {
+    unsigned elemBitwidth = elemTy.getIntOrFloatBitWidth();
+    return std::max(1u, 32u / elemBitwidth);
+  }
+
+  if (atomicRmw.getAtomicRmwOp() != RMWOp::FADD)
+    return std::nullopt;
+
+  auto targetAttr =
+      moduleOp ? moduleOp->getAttrOfType<StringAttr>(ttg::AttrTargetName)
+               : nullptr;
+  if (!targetAttr || !targetAttr.getValue().starts_with("cuda:"))
+    return std::nullopt;
+
+  int computeCapability = getNVIDIAComputeCapability(moduleOp);
+  if (computeCapability >= 90)
+    return std::nullopt;
+
+  if (elemTy.isF32() || elemTy.isBF16())
+    return 1;
+  if (elemTy.isF16())
+    return 2;
+  return std::nullopt;
+}
+
+static unsigned getMaxElementsPerThread(Operation *op) {
+  Value val = getMemAccessPtr(op);
+  auto ty = cast<RankedTensorType>(val.getType());
+  unsigned elemNumBits = getElementBitWidth(ty);
+  unsigned maxElementsPerThread = 128 / elemNumBits;
+  // Some atomic lowerings are narrower than a plain store. TTGIR currently
+  // exposes the target architecture but not the PTX version, so we only cap
+  // cases that are unambiguous from the available target metadata and the
+  // current backend lowering.
+  if (auto atomicCap = getAtomicWriteElementsPerThreadCap(op)) {
+    maxElementsPerThread = std::min(maxElementsPerThread, *atomicCap);
+  }
+  return maxElementsPerThread;
+}
+
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                  ArrayRef<int64_t> shapePerCTA) {
@@ -132,10 +188,12 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
   unsigned maxContig =
       std::min(valInfo.getContiguity(order[0]), shapePerCTA[order[0]]);
   unsigned alignment = std::min(maxMultiple, maxContig);
-  unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
+  unsigned maxElementsPerThread = getMaxElementsPerThread(op);
+  unsigned currPerThread = std::min(alignment, maxElementsPerThread);
   LDBG("elemNumBytes: " << elemNumBytes
                         << ", divisibility: " << maxMultipleBytes
                         << ", contig: " << valInfo.getContiguity(order[0])
+                        << ", maximum: " << maxElementsPerThread
                         << ", alignment: " << alignment);
   return currPerThread;
 }

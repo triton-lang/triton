@@ -475,7 +475,7 @@ def test_unused_result():
     assert expected_err_msg == obtained_err_msg
 
 
-@tl.core._aggregate
+@triton.aggregate
 class Square:
     x: tl.tensor
 

@@ -1267,15 +1267,12 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
 
     auto shapePerCTA =
         triton::gpu::getShapePerCTA(encoding, tensorDescTy.getShape());
-    auto sharedOrder = triton::gpu::getOrder(
-        cast<triton::gpu::SharedEncodingTrait>(encoding), shapePerCTA);
-    bool isRowMajor = sharedOrder[0] == (sharedOrder.size() - 1);
 
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, dstPtrs, op.getPred(), multicastMask,
-        elementType, barrierPtr, /*isLoad=*/true, sharedLayout, encoding, ctaId,
-        isRowMajor);
+        elementType, barrierPtr, /*isLoad=*/true, sharedLayout, encoding,
+        ctaId);
 
     rewriter.eraseOp(op);
     return success();
@@ -1347,17 +1344,13 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
-    auto sharedOrder = triton::gpu::getOrder(
-        cast<triton::gpu::SharedEncodingTrait>(smemTy.getEncoding()),
-        shapePerCTA);
-    bool isRowMajor = sharedOrder[0] == (sharedOrder.size() - 1);
 
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, srcPtrs, pred,
         /*multicastMask=*/{}, elementType, barrierPtr,
-        /*isLoad=*/false, sharedLayout, encoding, ctaId, isRowMajor);
+        /*isLoad=*/false, sharedLayout, encoding, ctaId);
 
     rewriter.eraseOp(op);
     return success();

@@ -45,6 +45,11 @@ static bool isValueAvailableInScope(Value value, Region *scope) {
 constexpr int64_t kTileM = 8;
 constexpr int64_t kTileN = 8;
 
+void createGlobalScratchBarrier(PatternRewriter &rewriter, Location loc) {
+  ttg::BarrierOp::create(
+      rewriter, loc, ttg::AddrSpace::GlobalRead | ttg::AddrSpace::GlobalWrite);
+}
+
 enum class UnaryOpId : uint64_t {
   Exp = 0,
   Log,
@@ -1319,6 +1324,7 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
   Value accMasked = arith::MulIOp::create(rewriter, loc, accTileI, predInv);
   Value outSelI = arith::AddIOp::create(rewriter, loc, outMasked, accMasked);
   Value out = unembedToFloat(rewriter, loc, outSelI, accTileTy);
+  createGlobalScratchBarrier(rewriter, loc);
   storeScratchStrided2D(rewriter, loc, dTilePtr, out, accTileTy, dStride);
 
   return mLoop;
@@ -1612,9 +1618,7 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
 
     // Each warp may only store a subset of each tile's rows, so a barrier is
     // needed to make all scratch stores visible before the loops read them.
-    ttg::BarrierOp::create(rewriter, loc,
-                           ttg::AddrSpace::GlobalRead |
-                               ttg::AddrSpace::GlobalWrite);
+    createGlobalScratchBarrier(rewriter, loc);
 
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, aPtr, bPtr, dPtr, m, n, k, tileM, tileN, aTileTy,
@@ -1626,9 +1630,7 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
 
     // Same reason: each warp may only write a subset of D's rows in the loop,
     // so synchronize before the final load.
-    ttg::BarrierOp::create(rewriter, loc,
-                           ttg::AddrSpace::GlobalRead |
-                               ttg::AddrSpace::GlobalWrite);
+    createGlobalScratchBarrier(rewriter, loc);
 
     Value out = loadScratchStrided2D(rewriter, loc, dPtr, cTy, /*stride1=*/m);
     if (!out)
@@ -1749,9 +1751,7 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
           {1, tileN}, bScaleTy.getElementType(), accLayout);
     }
 
-    ttg::BarrierOp::create(rewriter, loc,
-                           ttg::AddrSpace::GlobalRead |
-                               ttg::AddrSpace::GlobalWrite);
+    createGlobalScratchBarrier(rewriter, loc);
 
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, aPtr, bPtr, dPtr, m, n, k, tileM, tileN, aTileTy,
@@ -1761,9 +1761,7 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
       return failure();
     rewriter.setInsertionPointAfter(*mLoop);
 
-    ttg::BarrierOp::create(rewriter, loc,
-                           ttg::AddrSpace::GlobalRead |
-                               ttg::AddrSpace::GlobalWrite);
+    createGlobalScratchBarrier(rewriter, loc);
 
     Value out = loadScratchStrided2D(rewriter, loc, dPtr, cTy, /*stride1=*/m);
     if (!out)
@@ -1792,6 +1790,8 @@ struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
     Value result = createLoadScratchMemory(rewriter, loc, info->ptr, resultTy);
     if (!result)
       return failure();
+
+    createGlobalScratchBarrier(rewriter, loc);
 
     if (op.getNumResults() == 1) {
       rewriter.replaceOp(op, result);
@@ -1826,6 +1826,8 @@ struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
       return failure();
     if (!createStoreScratchMemory(rewriter, loc, info->ptr, op.getSrc(), srcTy))
       return failure();
+
+    createGlobalScratchBarrier(rewriter, loc);
 
     if (op.getNumResults() == 0) {
       rewriter.eraseOp(op);
@@ -1866,6 +1868,8 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
             .getResult();
     if (!createStoreScratchMemory(rewriter, loc, info->ptr, srcReg, srcRegTy))
       return failure();
+
+    createGlobalScratchBarrier(rewriter, loc);
 
     rewriter.eraseOp(op);
     return success();
@@ -1961,9 +1965,7 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
 
     // Each warp may only populate a subset of the operand scratch tiles, so
     // synchronize before the emulation loops start reading them.
-    ttg::BarrierOp::create(rewriter, loc,
-                           ttg::AddrSpace::GlobalRead |
-                               ttg::AddrSpace::GlobalWrite);
+    createGlobalScratchBarrier(rewriter, loc);
 
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, aScratch->ptr, bScratch->ptr, dInfo->ptr, m, n, k, tileM,
@@ -2145,9 +2147,7 @@ struct TCGen5MMAScaledPattern
 
     // The operand and scale scratch buffers are written cooperatively, so all
     // warps must finish those stores before the emulation loop reads them.
-    ttg::BarrierOp::create(rewriter, loc,
-                           ttg::AddrSpace::GlobalRead |
-                               ttg::AddrSpace::GlobalWrite);
+    createGlobalScratchBarrier(rewriter, loc);
 
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, aScratch->ptr, bScratch->ptr, dInfo->ptr, m, n, k, tileM,

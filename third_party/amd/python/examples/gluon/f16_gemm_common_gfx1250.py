@@ -7,7 +7,6 @@ persistent and StreamK GEMM implementations.
 """
 
 from triton.experimental import gluon
-from triton.language.core import _aggregate as aggregate
 import triton.experimental.gluon.language as ttgl
 
 
@@ -247,7 +246,27 @@ def issue_wmma_compute(a, b, accumulator):
     return accumulator
 
 
-@aggregate
+@gluon.jit
+def swiglu_epilogue(acc):
+    """Apply SwiGLU: reshape (M, 2N) -> split into gate/up -> swish(gate) * up."""
+    BLOCK_M: ttgl.constexpr = acc.shape[0]
+    BLOCK_N: ttgl.constexpr = acc.shape[1] // 2
+    acc_3d = ttgl.reshape(acc, (BLOCK_M, BLOCK_N, 2))
+    gate, up = ttgl.split(acc_3d)
+    # swish(x) = x * sigmoid(x); sigmoid(x) = 1 / (1 + exp(-x))
+    return gate * (1.0 / (1.0 + ttgl.exp(-gate))) * up
+
+
+@gluon.jit
+def apply_activation_epilogue(acc, ACTIVATION: ttgl.constexpr, ACC_LAYOUT: ttgl.constexpr):
+    if ACTIVATION == "swiglu":
+        result = ttgl.convert_layout(swiglu_epilogue(acc), ACC_LAYOUT)
+    else:
+        result = acc
+    return result
+
+
+@gluon.aggregate
 class TileScheduler:
     """
     Tile Scheduler

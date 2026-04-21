@@ -1576,7 +1576,8 @@ AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
     return emitError() << "invalid WMMA v2 instruction shape";
 
   auto validShapesV3 = std::vector<llvm::SmallVector<unsigned>>{
-      {16, 16, 4}, {16, 16, 32}, {16, 16, 64}, {16, 16, 128}};
+      {16, 16, 4},   {16, 16, 32}, {16, 16, 64},
+      {16, 16, 128}, {32, 16, 64}, {32, 16, 128}};
   if (version == 3 && !llvm::is_contained(validShapesV3, shape))
     return emitError() << "invalid WMMA v3 instruction shape";
 
@@ -2624,10 +2625,10 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
     tileSize.push_back(1);
   }
   // warpSizeK * (warpRepK * VecBitWidth)
-  auto tileBitWidthK = bitwidth == 64 ? (2 * 256) : (4 * 64);
+  auto tileBitWidthK = bitwidth == 64 ? (1 * 256) : (4 * 64);
   if (opIdx == 0) {
     // m x k
-    tileSize.push_back(16);
+    tileSize.push_back(bitwidth == 64 ? 8 : 16);
     tileSize.push_back(tileBitWidthK / bitwidth);
   } else {
     // k x n
