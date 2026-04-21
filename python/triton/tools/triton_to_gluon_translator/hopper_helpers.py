@@ -274,3 +274,20 @@ def tl_dot_scaled(
         rhs_k_pack=rhs_k_pack,
         out_dtype=out_dtype,
     )
+
+
+# ---- NVIDIA obj dispatch ----
+
+
+@gluon.jit
+def tl_obj_gather(obj, x_offsets, y_offset):
+    ttgl.static_assert(not isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor),
+                       "descriptor gather is not supported on Hopper")
+    return obj.gather(x_offsets, y_offset)
+
+
+@gluon.jit
+def tl_obj_scatter(obj, value, x_offsets, y_offset):
+    ttgl.static_assert(not isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor),
+                       "descriptor scatter is not supported on Hopper")
+    return obj.scatter(value, x_offsets, y_offset)

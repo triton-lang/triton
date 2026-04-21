@@ -345,4 +345,3 @@ def test_stable_toposort_preserves_component_order():
         4: ordered_set(),
     }
     assert stable_toposort(graph) == [0, 1, 2, 3, 4]
-

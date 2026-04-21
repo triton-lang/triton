@@ -627,8 +627,14 @@ def is_stdlib_module(module: ModuleType) -> bool:
     if origin in ["built-in", "frozen"]:
         return True
 
-    stdlib_path = Path(sysconfig.get_paths()["stdlib"])
-    return Path(origin).is_relative_to(stdlib_path)
+    origin_path = Path(origin)
+    sys_paths = sysconfig.get_paths()
+    site_package_paths = [Path(sys_paths[key]) for key in ("purelib", "platlib") if key in sys_paths]
+    if any(origin_path.is_relative_to(site_path) for site_path in site_package_paths):
+        return False
+
+    stdlib_paths = [Path(sys_paths[key]) for key in ("stdlib", "platstdlib") if key in sys_paths]
+    return any(origin_path.is_relative_to(stdlib_path) for stdlib_path in stdlib_paths)
 
 
 def find_references(

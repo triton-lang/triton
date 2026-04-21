@@ -1,6 +1,7 @@
 import ast
 import importlib
 import sys
+import sysconfig
 import textwrap
 import uuid
 from pathlib import Path
@@ -8,9 +9,7 @@ from typing import Callable
 
 import pytest
 
-from triton.tools.triton_to_gluon_translator.ordered_set import ordered_set
 from triton.tools.triton_to_gluon_translator.slice_kernel import RewriteSpec, get_reference, slice_kernel
-from triton.tools.triton_to_gluon_translator.stable_toposort import stable_toposort
 from triton.tools.triton_to_gluon_translator.target import TranslatorTarget
 
 
@@ -117,6 +116,52 @@ def kernel() -> None:
     lib_bar_prod([42, 22])
     some_util()
     lib_foo_some_util()
+    """
+    assert_code_equal(output, expected)
+
+
+def test_slice_kernel_does_not_treat_site_packages_as_stdlib(tmp_path, monkeypatch):
+    fake_stdlib = tmp_path / "venv" / "lib" / "python3.12"
+    fake_site_packages = fake_stdlib / "site-packages"
+    fake_site_packages.mkdir(parents=True)
+    pkg, mod = _make_package(
+        fake_site_packages,
+        {
+            "helpers.py":
+            """
+                def helper() -> int:
+                    return 7
+            """,
+            "kernel_mod.py":
+            """
+                from .helpers import helper
+
+                def kernel() -> int:
+                    return helper()
+            """,
+        },
+    )
+
+    original_get_paths = sysconfig.get_paths
+
+    def fake_get_paths():
+        paths = original_get_paths().copy()
+        paths["stdlib"] = str(fake_stdlib)
+        paths["platstdlib"] = str(fake_stdlib)
+        paths["purelib"] = str(fake_site_packages)
+        paths["platlib"] = str(fake_site_packages)
+        return paths
+
+    monkeypatch.setattr(sysconfig, "get_paths", fake_get_paths)
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    expected = R"""
+def helper() -> int:
+    return 7
+
+
+def kernel() -> int:
+    return helper()
     """
     assert_code_equal(output, expected)
 
@@ -585,9 +630,8 @@ def test_slice_kernel_function_module_relative_import_leaf(tmp_path):
         },
     )
 
-    output = slice_kernel(
-        [f"{mod('kernel_mod')}:kernel"], ["triton", "torch", mod("lib_foo")], target=TranslatorTarget.GENERIC
-    )
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch", mod("lib_foo")],
+                          target=TranslatorTarget.GENERIC)
     expected = f"""
 import {pkg}.lib_foo
 
