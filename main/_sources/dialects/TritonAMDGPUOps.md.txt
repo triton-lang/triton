@@ -63,7 +63,7 @@ Contiguity is the maximum number of elements that can be stored in a single vect
 the given layout and mask.
 This allows op to use async_copy_local_to_global even if the alignment cannot be proven based on IR.
 
-Interfaces: `InferTypeOpInterface`
+Interfaces: `InferTypeOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 
@@ -136,7 +136,7 @@ it sends an "LDS atomic arrive" to signal its completion.
 
 Traits: `AttrSizedOperandSegments`
 
-Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`
+Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterface`
 
 #### Operands:
 
@@ -215,7 +215,7 @@ If more rows are needed, multiple TDM instructions will be issued.
 The src_col_offset specifies the starting column in the source tensor for
 all gathered rows.
 
-Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`
+Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterface`
 
 #### Operands:
 
@@ -482,7 +482,7 @@ when it converts to the buffer ops because it is important for optimizing the ca
 
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
 
-Interfaces: `BufferOpInterface`
+Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 
@@ -541,7 +541,7 @@ This allows to use buffer_load even if the alignment cannot be proven based on I
 
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
 
-Interfaces: `BufferOpInterface`
+Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 
@@ -587,7 +587,7 @@ This allows to use buffer_load_to_local even if the alignment cannot be proven b
 
 Traits: `AttrSizedOperandSegments`
 
-Interfaces: `BufferOpInterface`, `InferTypeOpInterface`
+Interfaces: `BufferOpInterface`, `InferTypeOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 
@@ -646,7 +646,7 @@ This allows to use buffer_store even if the alignment cannot be proven based on 
 
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsEncoding`
 
-Interfaces: `BufferOpInterface`
+Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 
@@ -1269,7 +1269,7 @@ but it does not copy the data to local memory and instead only prefetches the da
 Speculative prefetches can generate more efficient assembly because they do not require out of bounds checks.
 However, they are dropped by the hardware in case the virtual address translation is not already cached at CU level.
 
-Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface (MemoryEffectOpInterface)`, `PredicatedOpInterface`
 
 Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::amd::L2Cache}`
 

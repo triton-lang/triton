@@ -741,14 +741,6 @@ abbr, acronym {
     cursor: help;
 }
 
-.translated {
-    background-color: rgba(207, 255, 207, 0.2)
-}
-
-.untranslated {
-    background-color: rgba(255, 207, 207, 0.2)
-}
-
 /* -- code displays --------------------------------------------------------- */
 
 pre {

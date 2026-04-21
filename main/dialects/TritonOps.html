@@ -17,8 +17,8 @@
 
   
       <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-      <script src="../_static/doctools.js?v=9bcbadda"></script>
-      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -819,7 +819,7 @@ gather operations on targets that support it.</p>
 The descriptor block must have 1 row and the indices must be a 1D tensor.
 Accordingly, the result is a 2D tensor multiple rows.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">TT_DescriptorOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">TT_DescriptorLoadLikeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TT_DescriptorOpInterface</span></code></p>
 <section id="id20">
 <h3>Operands:<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -873,7 +873,7 @@ Accordingly, the result is a 2D tensor multiple rows.</p>
 <code class="docutils literal notranslate"><span class="pre">desc</span></code> is a tensor descriptor object.
 The destination tensor type and shape must match the descriptor otherwise the result is undefined.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">TT_DescriptorOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">TT_DescriptorLoadLikeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TT_DescriptorOpInterface</span></code></p>
 <section id="id22">
 <h3>Attributes:<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h3>
 <table>

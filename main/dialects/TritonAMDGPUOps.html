@@ -17,8 +17,8 @@
 
   
       <script src="../_static/documentation_options.js?v=5929fcd5"></script>
-      <script src="../_static/doctools.js?v=9bcbadda"></script>
-      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -343,7 +343,7 @@ to by the memory descriptor instead of a distributed tensor.
 Contiguity is the maximum number of elements that can be stored in a single vector with
 the given layout and mask.
 This allows op to use async_copy_local_to_global even if the alignment cannot be proven based on IR.</p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id1">
 <h3>Attributes:<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <table>
@@ -434,7 +434,7 @@ swizzling.
 The operation can also take an optional 64bit LDS barrier address, in which case
 it sends an “LDS atomic arrive” to signal its completion.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id5">
 <h3>Operands:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -541,7 +541,7 @@ If more rows are needed, multiple TDM instructions will be issued.</p></li>
 </ul>
 <p>The src_col_offset specifies the starting column in the source tensor for
 all gathered rows.</p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id8">
 <h3>Operands:<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -899,7 +899,7 @@ Stride is the distance between the beginning of contiguous memory chunks. When p
 the address difference between the first elements of each row in bytes. Compiler tries to obtain the <code class="docutils literal notranslate"><span class="pre">stride</span></code>
 when it converts to the buffer ops because it is important for optimizing the cache memory access.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id24">
 <h3>Attributes:<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h3>
 <table>
@@ -977,7 +977,7 @@ Contiguity is the maximum number of elements that can be loaded in a single vect
 with the given layout and mask.
 This allows to use buffer_load even if the alignment cannot be proven based on IR.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id27">
 <h3>Attributes:<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
 <table>
@@ -1042,7 +1042,7 @@ This allows to use buffer_load even if the alignment cannot be proven based on I
 Contiguity is the maximum number of elements that can be loaded in a single vector with the given layout and mask.
 This allows to use buffer_load_to_local even if the alignment cannot be proven based on IR.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id30">
 <h3>Attributes:<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h3>
 <table>
@@ -1122,7 +1122,7 @@ Contiguity is the maximum number of elements that can be loaded in a single vect
 with the given layout and mask.
 This allows to use buffer_store even if the alignment cannot be proven based on IR.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id33">
 <h3>Attributes:<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h3>
 <table>
@@ -1818,7 +1818,7 @@ on the AMD CDNA4 architecture.</p>
 but it does not copy the data to local memory and instead only prefetches the data into the L2 cache.
 Speculative prefetches can generate more efficient assembly because they do not require out of bounds checks.
 However, they are dropped by the hardware in case the virtual address translation is not already cached at CU level.</p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::amd::L2Cache}</span></code></p>
 <section id="id59">
 <h3>Attributes:<a class="headerlink" href="#id59" title="Link to this heading">¶</a></h3>

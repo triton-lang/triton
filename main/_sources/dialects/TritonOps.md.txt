@@ -358,7 +358,7 @@ Accordingly, the result is a 2D tensor multiple rows.
 
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `TT_DescriptorOpInterface`
+Interfaces: `TT_DescriptorLoadLikeOpInterface`, `TT_DescriptorOpInterface`
 
 #### Operands:
 
@@ -397,7 +397,7 @@ The destination tensor type and shape must match the descriptor otherwise the re
 
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `TT_DescriptorOpInterface`
+Interfaces: `TT_DescriptorLoadLikeOpInterface`, `TT_DescriptorOpInterface`
 
 #### Attributes:
 
