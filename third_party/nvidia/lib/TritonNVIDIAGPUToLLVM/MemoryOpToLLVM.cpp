@@ -232,6 +232,8 @@ public:
     auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
     if (!valuesTy.getElementType().isInteger(32))
       return failure();
+    if (op.getSem() != triton::MemSemantic::RELAXED)
+      return failure();
 
     SmallVector<Value> values =
         unpackLLElements(op.getLoc(), adaptor.getValues(), rewriter);

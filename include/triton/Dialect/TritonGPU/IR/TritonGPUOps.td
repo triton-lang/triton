@@ -479,12 +479,13 @@ def TTG_LocalAtomicAddOp : TTG_Op<"local_atomic_add", [
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$dst,
     TT_Tensor:$values,
     TT_IntTensor:$indices,
-    I32Attr:$axis
+    I32Attr:$axis,
+    TT_MemSemanticAttr:$sem
   );
   let results = (outs TT_Tensor:$result);
 
   let assemblyFormat = [{
-    $dst `[` $indices `]` `,` $values attr-dict `:` qualified(type($dst)) `,`
+    $sem `,` $dst `[` $indices `]` `,` $values attr-dict `:` qualified(type($dst)) `,`
     type($indices) `,` type($values) `->` type($result)
   }];
   let hasVerifier = 1;

@@ -708,12 +708,13 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_local_atomic_add",
            [](GluonOpBuilder &self, Value memDesc, Value values, Value indices,
-              int32_t axis) -> Value {
+              int32_t axis, tt::MemSemantic sem) -> Value {
              auto ctx = self.getContext();
              auto i32Ty = IntegerType::get(ctx, 32);
              auto axisAttr = IntegerAttr::get(i32Ty, axis);
+             auto semAttr = tt::MemSemanticAttr::get(ctx, sem);
              return self.create<ttg::LocalAtomicAddOp>(
-                 values.getType(), memDesc, values, indices, axisAttr);
+                 values.getType(), memDesc, values, indices, axisAttr, semAttr);
            })
       .def("get_shared_bank_conflicts",
            [](GluonOpBuilder &self, Attribute regLayoutAttr,

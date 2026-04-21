@@ -917,7 +917,6 @@ LogicalResult LocalAtomicAddOp::verify() {
   if (dstTy.getElementType() != valuesEltTy) {
     return emitError("values element type must match destination element type");
   }
-
   return success();
 }
 

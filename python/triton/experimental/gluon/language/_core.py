@@ -345,7 +345,7 @@ class shared_memory_descriptor(base_value):
         return _semantic.shared_scatter(self, values, indices, axis)
 
     @builtin
-    def atomic_add(self, values, indices, axis, _semantic: GluonSemantic = None) -> tensor:
+    def atomic_add(self, values, indices, axis, sem=None, _semantic: GluonSemantic = None) -> tensor:
         """
         Add elements to shared memory along a specified axis using an indices tensor.
 
@@ -357,6 +357,7 @@ class shared_memory_descriptor(base_value):
             values (tensor): Tensor with values to add (same shape as indices).
             indices (tensor): Tensor specifying which indices to update along the axis.
             axis (int): The axis along which to update values.
+            sem (str, optional): Memory semantic descriptor.
 
         Returns:
             tensor: Gluon tensor with the values observed before the update.
@@ -364,7 +365,8 @@ class shared_memory_descriptor(base_value):
         values = _unwrap_if_constexpr(values)
         indices = _unwrap_if_constexpr(indices)
         axis = _unwrap_if_constexpr(axis)
-        return _semantic.shared_atomic_add(self, values, indices, axis)
+        sem = _unwrap_if_constexpr(sem)
+        return _semantic.shared_atomic_add(self, values, indices, axis, sem)
 
     def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """

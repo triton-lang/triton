@@ -218,7 +218,7 @@ def test_shared_atomic_add():
     # CHECK: [[SMEM:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<8x32xi32
     # CHECK: [[INDICES:%.*]] = arith.addi
     # CHECK: [[VALUES:%.*]] = arith.constant dense<1> : tensor<8x32xi32, #blocked>
-    # CHECK: ttg.local_atomic_add [[SMEM]][[[INDICES]]], [[VALUES]] {axis = 1 : i32} : !ttg.memdesc<8x32xi32, #shared, #smem, mutable>, tensor<8x32xi32, #blocked>, tensor<8x32xi32, #blocked> -> tensor<8x32xi32, #blocked>
+    # CHECK: ttg.local_atomic_add relaxed, [[SMEM]][[[INDICES]]], [[VALUES]] {axis = 1 : i32} : !ttg.memdesc<8x32xi32, #shared, #smem, mutable>, tensor<8x32xi32, #blocked>, tensor<8x32xi32, #blocked> -> tensor<8x32xi32, #blocked>
     shape: ttgl.constexpr = [8, 32]
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
     smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
@@ -229,7 +229,7 @@ def test_shared_atomic_add():
     cols = ttgl.arange(0, shape[1], layout=ttgl.SliceLayout(0, layout))[None, :]
     indices = cols + ttgl.zeros(shape, ttgl.int32, layout)
     values = ttgl.full(shape, 1, ttgl.int32, layout)
-    old = smem.atomic_add(values, indices, axis=1)  # noqa: F841
+    old = smem.atomic_add(values, indices, axis=1, sem="relaxed")  # noqa: F841
 
 
 @gluon.jit

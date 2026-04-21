@@ -308,7 +308,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         self.builder.create_local_scatter(mem_desc.handle, values.handle, indices.handle, axis)
 
-    def shared_atomic_add(self, mem_desc, values, indices, axis):
+    def shared_atomic_add(self, mem_desc, values, indices, axis, sem):
         _check(isinstance(indices, ttgl.tensor),
                lambda: f"expected 'indices' to be a tensor, but got a {type(indices)}")
         _check(isinstance(axis, int), lambda: f"expected 'axis' to be an int, but got a {type(axis)}")
@@ -325,7 +325,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             values.dtype == mem_desc.dtype,
             lambda: f"values element type must match destination element type: got {values.dtype} and {mem_desc.dtype}")
 
-        handle = self.builder.create_local_atomic_add(mem_desc.handle, values.handle, indices.handle, axis)
+        sem = self._str_to_sem(sem)
+        handle = self.builder.create_local_atomic_add(mem_desc.handle, values.handle, indices.handle, axis, sem)
         ret_ty = ttgl.distributed_type(mem_desc.dtype, values.shape, values.type.layout)
         return ttgl.tensor(handle, ret_ty)
 

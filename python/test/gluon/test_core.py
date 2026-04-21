@@ -2547,6 +2547,7 @@ def shared_atomic_add_kernel(
     M: ttgl.constexpr,
     axis: ttgl.constexpr,
     dtype: ttgl.constexpr,
+    sem: ttgl.constexpr,
     layout_2d: ttgl.constexpr,
     shared_layout: ttgl.constexpr,
 ):
@@ -2559,7 +2560,7 @@ def shared_atomic_add_kernel(
     smem = ttgl.allocate_shared_memory(dtype, [N, M], layout=shared_layout)
     smem.store(ttgl.zeros([N, M], dtype, layout=layout_2d))
 
-    old = smem.atomic_add(values, indices, axis=axis)
+    old = smem.atomic_add(values, indices, axis=axis, sem=sem)
     final = smem.load(layout=layout_2d)
 
     ttgl.store(old_ptr + offsets_2d, old)
@@ -2580,7 +2581,8 @@ def test_shared_atomic_add_dtypes(torch_dtype, gluon_dtype, N, M, axis):
 
     values = (torch.arange(N * M, dtype=torch.int32, device=device).reshape(N, M) % 7 + 1).to(torch_dtype)
     torch.manual_seed(17)
-    indices = torch.randint(0, M, (N, M), dtype=torch.int32, device=device)
+    upper = M if axis == 1 else N
+    indices = torch.randint(0, upper, (N, M), dtype=torch.int32, device=device)
     old = torch.empty((N, M), dtype=torch_dtype, device=device)
     final = torch.empty_like(old)
     expected = torch.zeros((N, M), dtype=torch_dtype, device=device)
@@ -2599,6 +2601,7 @@ def test_shared_atomic_add_dtypes(torch_dtype, gluon_dtype, N, M, axis):
         M=M,
         axis=axis,
         dtype=gluon_dtype,
+        sem="relaxed",
         layout_2d=layout_2d,
         shared_layout=shared_layout,
         num_warps=1,

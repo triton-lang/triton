@@ -2185,7 +2185,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: llvm.atomicrmw add
   tt.func public @test_local_atomic_add(%arg0: tensor<1xi32, #blocked>, %arg1: tensor<1xi32, #blocked>) {
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
-    %1 = ttg.local_atomic_add %0[%arg0], %arg1 {axis = 0 : i32} : !ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked> -> tensor<1xi32, #blocked>
+    %1 = ttg.local_atomic_add acq_rel, %0[%arg0], %arg1 {axis = 0 : i32} : !ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked> -> tensor<1xi32, #blocked>
     %2 = ttg.local_alloc {allocation.offset = 4 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
     ttg.local_store %1, %2 : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
     tt.return
@@ -2205,7 +2205,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @test_local_atomic_inc(%arg0: tensor<1xi32, #blocked>) {
     %c1 = arith.constant dense<1> : tensor<1xi32, #blocked>
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
-    %1 = ttg.local_atomic_add %0[%arg0], %c1 {axis = 0 : i32} : !ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked> -> tensor<1xi32, #blocked>
+    %1 = ttg.local_atomic_add relaxed, %0[%arg0], %c1 {axis = 0 : i32} : !ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked> -> tensor<1xi32, #blocked>
     %2 = ttg.local_alloc {allocation.offset = 4 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
     ttg.local_store %1, %2 : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
     tt.return
@@ -2224,7 +2224,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @test_local_atomic_inc_dead(%arg0: tensor<1xi32, #blocked>) {
     %c1 = arith.constant dense<1> : tensor<1xi32, #blocked>
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
-    %1 = ttg.local_atomic_add %0[%arg0], %c1 {axis = 0 : i32} : !ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked> -> tensor<1xi32, #blocked>
+    %1 = ttg.local_atomic_add relaxed, %0[%arg0], %c1 {axis = 0 : i32} : !ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked> -> tensor<1xi32, #blocked>
     tt.return
   }
 }

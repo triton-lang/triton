@@ -395,6 +395,10 @@ public:
     LLVM::AtomicBinOp atomicBinOp = isa<FloatType>(llvmElemTy)
                                         ? LLVM::AtomicBinOp::fadd
                                         : LLVM::AtomicBinOp::add;
+    auto ordering = getMemoryOrdering(op.getSem());
+    if (!ordering.has_value()) {
+      return rewriter.notifyMatchFailure(op, "unsupported memory semantic");
+    }
     SmallVector<Value> ptrs =
         computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
                          srcIndices, op.getAxis(), rewriter);
@@ -404,7 +408,7 @@ public:
     for (auto [ptr, value] : llvm::zip(ptrs, values)) {
       results.push_back(
           LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp, ptr, value,
-                                    LLVM::AtomicOrdering::monotonic)
+                                    *ordering)
               .getResult());
     }
 
