@@ -30,7 +30,7 @@ from triton.tools.triton_to_gluon_translator.nvidia_helpers import (
 
 @gluon.constexpr_function
 def tl_dot_mmav5_supported(a_ty, b_ty, num_warps, input_precision, allow_tf32, max_num_imprecise_acc):
-    assert max_num_imprecise_acc is None, ("max_num_imprecise_acc only applies to Hopper warp_group_dot")
+    assert max_num_imprecise_acc in [0, None], ("max_num_imprecise_acc only applies to Hopper warp_group_dot")
     assert input_precision is None or allow_tf32 is None, (
         "Only one of input_precision and allow_tf32 can be specified")
     if input_precision is None and (allow_tf32 or allow_tf32 is None):
