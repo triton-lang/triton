@@ -7,7 +7,6 @@ persistent and StreamK GEMM implementations.
 """
 
 from triton.experimental import gluon
-from triton.language.core import _aggregate as aggregate
 import triton.experimental.gluon.language as ttgl
 
 
@@ -267,7 +266,7 @@ def apply_activation_epilogue(acc, ACTIVATION: ttgl.constexpr, ACC_LAYOUT: ttgl.
     return result
 
 
-@aggregate
+@gluon.aggregate
 class TileScheduler:
     """
     Tile Scheduler

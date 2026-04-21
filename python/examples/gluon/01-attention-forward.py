@@ -5,8 +5,6 @@ import triton
 import pytest
 import itertools
 
-from triton.language.core import _aggregate as aggregate
-
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
@@ -42,7 +40,7 @@ def get_mma_instr_shape(shape, element_ty):
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate
+@gluon.aggregate
 class BarrierCounter:
     index: gl.tensor
     phase: gl.tensor
@@ -62,7 +60,7 @@ class BarrierCounter:
 
 def Channel(T, alloc_fn):
 
-    @aggregate
+    @gluon.aggregate
     class ChannelType:
         mem: T
         ready_bars: gl.shared_memory_descriptor
@@ -122,7 +120,7 @@ def Channel(T, alloc_fn):
                 mbarrier.invalidate(self.ready_bars.index(i))
                 mbarrier.invalidate(self.empty_bars.index(i))
 
-    @aggregate
+    @gluon.aggregate
     class Producer:
         channel: ChannelType
         counter: BarrierCounter
@@ -133,7 +131,7 @@ def Channel(T, alloc_fn):
             next = Producer(self.channel, self.counter.increment())
             return mem, ready_bar, next
 
-    @aggregate
+    @gluon.aggregate
     class Consumer:
         channel: ChannelType
         counter: BarrierCounter
@@ -171,7 +169,7 @@ def issue_async_tma_load(smem, bar, desc, offset):
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate
+@gluon.aggregate
 class AttentionConfig:
     qk_scale: gl.tensor
     Z: gl.tensor
@@ -279,7 +277,7 @@ class AttentionConfig:
         return AttentionProgram(self, start_m, off_hz, offset_y, qo_offset_y)
 
 
-@aggregate
+@gluon.aggregate
 class ProgramScheduler:
     config: AttentionConfig
     start_pid: gl.tensor
@@ -306,7 +304,7 @@ class ProgramScheduler:
         return self.config.get_program(pid_m, pid_n)
 
 
-@aggregate
+@gluon.aggregate
 class AttentionProgram:
     config: AttentionConfig
     start_m: gl.tensor

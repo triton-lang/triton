@@ -28,7 +28,6 @@ from functools import partial
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
-from triton.language.core import _aggregate as aggregate
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia.blackwell import (
@@ -385,7 +384,7 @@ if __name__ == "__main__":
 
 
 # Helper class for passing arguments around partitions.
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor
@@ -402,7 +401,7 @@ class PartitionArgs:
 
 
 # Counter abstraction for tracking barrier index and phase.
-@aggregate
+@gluon.aggregate
 class Counter:
     index: gl.tensor
     phase: gl.tensor

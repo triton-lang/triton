@@ -8,8 +8,6 @@ import torch
 import triton
 import triton.language as tl
 
-from triton.language.core import _aggregate as aggregate
-
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor, TensorDescriptorIm2Col
@@ -74,7 +72,7 @@ normalize_2d = _conv_common.normalize_2d
 #   K_GEMM = R * S * Ci          (reduction over filter x input channels)
 
 
-@aggregate
+@gluon.aggregate
 class ConvConfig:
     N: gl.tensor
     H: gl.tensor
@@ -127,7 +125,7 @@ class ConvConfig:
         return self.R * self.S * gl.cdiv(self.Ci, self.BLOCK_K)
 
 
-@aggregate
+@gluon.aggregate
 class ConvProgram:
     config: ConvConfig
     pid_m: gl.tensor
@@ -149,7 +147,7 @@ class ConvProgram:
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     config: ConvConfig
     in_desc: tma.tensor_descriptor_im2col
