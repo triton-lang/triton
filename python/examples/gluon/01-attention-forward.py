@@ -4,7 +4,7 @@ import torch
 import triton
 import pytest
 import itertools
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields
 
 from triton.language.core import _aggregate as aggregate
 
@@ -897,55 +897,102 @@ def _default_num_kv_buffers(head_dim: int, dtype: torch.dtype) -> int:
     return 4 if head_dim == 128 else 8
 
 
-def select_kernel_config(head_dim: int, n_ctx: int, dtype: torch.dtype, causal: bool, use_tmem_red: bool) -> KernelConfig:
-    enable_tmem_red = (use_tmem_red or (_is_blackwell_ultra_device() and not causal))
+def select_kernel_config(
+    head_dim: int,
+    n_ctx: int,
+    dtype: torch.dtype,
+    causal: bool,
+    use_tmem_red: bool,
+    override: KernelConfig | None = None,
+) -> KernelConfig:
+    is_fp8 = dtype == torch.float8_e5m2
+    is_bf16 = dtype == torch.bfloat16
+    is_bwu = _is_blackwell_ultra_device()
+
+    block_m = 256
+    block_n = 128
     group_size_n = 1
+    split_exp_factor = _default_split_exp_factor(head_dim)
+    num_warps = 4
+    maxnreg = 128
+    occupancy = 1
+    use_selected_tmem_red = (use_tmem_red or (is_bwu and not causal)) and not causal
+    num_kv_buffers = _default_num_kv_buffers(head_dim, dtype)
+    use_exp2_turnstile = head_dim == 64
+
     if causal:
         group_size_n = 8 if head_dim == 64 or n_ctx <= 2048 else 4
-    p = KernelConfig(
-        GROUP_SIZE_N=group_size_n,
-        SPLIT_EXP_FACTOR=_default_split_exp_factor(head_dim),
-        USE_TMEM_RED=enable_tmem_red and not causal,
-        NUM_KV_BUFFERS=_default_num_kv_buffers(head_dim, dtype),
-        USE_EXP2_TURNSTILE=head_dim == 64,
-    )
 
     if head_dim == 128:
-        p = replace(p, SPLIT_EXP_FACTOR=4)
-        if not causal and dtype == torch.bfloat16 and n_ctx <= 2048:
-            p = replace(p, GROUP_SIZE_N=4)
-    elif not causal and head_dim == 64 and p.USE_TMEM_RED:
-        p = replace(p, SPLIT_EXP_FACTOR=1)
+        split_exp_factor = 4
+        if not causal and is_bf16 and n_ctx <= 2048:
+            group_size_n = 4
+    elif not causal and head_dim == 64 and use_selected_tmem_red:
+        split_exp_factor = 1
         if n_ctx <= 1024:
-            p = replace(p, NUM_KV_BUFFERS=2)
+            num_kv_buffers = 2
         elif n_ctx >= 8192:
-            p = replace(p, MAXNREG=112)
-    elif causal and head_dim == 64 and n_ctx <= 1024:
-        p = replace(p, SPLIT_EXP_FACTOR=2, NUM_KV_BUFFERS=2)
+            maxnreg = 112
     elif causal and head_dim == 64:
-        p = replace(p, NUM_KV_BUFFERS=2, USE_EXP2_TURNSTILE=False)
+        num_kv_buffers = 2
+        if n_ctx <= 1024:
+            split_exp_factor = 2
+        else:
+            use_exp2_turnstile = False
 
-    if dtype == torch.float8_e5m2:
-        if causal:
-            if head_dim == 64:
-                p = replace(p, GROUP_SIZE_N=8 if n_ctx <= 2048 else 4, SPLIT_EXP_FACTOR=4 if n_ctx <= 2048 else 2,
-                            MAXNREG=112 if n_ctx >= 4096 else 128, USE_TMEM_RED=False, NUM_KV_BUFFERS=2,
-                            USE_EXP2_TURNSTILE=n_ctx <= 1024)
-            elif head_dim == 128:
-                p = replace(p, GROUP_SIZE_N=8 if n_ctx <= 2048 else 4, SPLIT_EXP_FACTOR=2 if n_ctx <= 2048 else 8,
-                            MAXNREG=128, USE_TMEM_RED=False, NUM_KV_BUFFERS=4, USE_EXP2_TURNSTILE=False)
-        elif head_dim == 64:
-            p = replace(p, GROUP_SIZE_N=1, SPLIT_EXP_FACTOR=2, MAXNREG=128, USE_TMEM_RED=_is_blackwell_ultra_device(),
-                        NUM_KV_BUFFERS=2 if n_ctx <= 1024 else 8, USE_EXP2_TURNSTILE=True)
-        elif head_dim == 128:
-            p = replace(p, GROUP_SIZE_N=1, SPLIT_EXP_FACTOR=4 if n_ctx <= 2048 else 8, MAXNREG=128,
-                        USE_TMEM_RED=_is_blackwell_ultra_device(), NUM_KV_BUFFERS=4, USE_EXP2_TURNSTILE=False)
+    if is_fp8:
+        if causal and head_dim == 64:
+            group_size_n = 8 if n_ctx <= 2048 else 4
+            split_exp_factor = 4 if n_ctx <= 2048 else 2
+            maxnreg = 112 if n_ctx >= 4096 else 128
+            use_selected_tmem_red = False
+            num_kv_buffers = 2
+            use_exp2_turnstile = n_ctx <= 1024
+        elif causal and head_dim == 128:
+            group_size_n = 8 if n_ctx <= 2048 else 4
+            split_exp_factor = 2 if n_ctx <= 2048 else 8
+            maxnreg = 128
+            use_selected_tmem_red = False
+            num_kv_buffers = 4
+            use_exp2_turnstile = False
+        elif not causal and head_dim == 64:
+            group_size_n = 1
+            split_exp_factor = 2
+            maxnreg = 128
+            use_selected_tmem_red = is_bwu
+            num_kv_buffers = 2 if n_ctx <= 1024 else 8
+            use_exp2_turnstile = True
+        elif not causal and head_dim == 128:
+            group_size_n = 1
+            split_exp_factor = 4 if n_ctx <= 2048 else 8
+            maxnreg = 128
+            use_selected_tmem_red = is_bwu
+            num_kv_buffers = 4
+            use_exp2_turnstile = False
         else:
             # Keep unsearched fp8 dimensions on the original conservative policy.
-            p = replace(p, GROUP_SIZE_N=4 if causal else 1, SPLIT_EXP_FACTOR=_default_split_exp_factor(head_dim),
-                        USE_TMEM_RED=use_tmem_red and not causal)
+            group_size_n = 4 if causal else 1
+            split_exp_factor = _default_split_exp_factor(head_dim)
+            use_selected_tmem_red = use_tmem_red and not causal
 
-    return p
+    config = KernelConfig(
+        BLOCK_M=block_m,
+        BLOCK_N=block_n,
+        GROUP_SIZE_N=group_size_n,
+        SPLIT_EXP_FACTOR=split_exp_factor,
+        NUM_WARPS=num_warps,
+        MAXNREG=maxnreg,
+        OCCUPANCY=occupancy,
+        USE_TMEM_RED=use_selected_tmem_red,
+        NUM_KV_BUFFERS=num_kv_buffers,
+        USE_EXP2_TURNSTILE=use_exp2_turnstile,
+    )
+    if override is None:
+        return config
+
+    values = {field.name: getattr(override, field.name) for field in fields(KernelConfig)}
+    values = {name: getattr(config, name) if value is None else value for name, value in values.items()}
+    return KernelConfig(**values)
 
 
 def torch_dtype_to_triton(dtype):
@@ -970,15 +1017,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, use_tmem_red=Fa
     assert HEAD_DIM_K in {16, 32, 64, 128, 256}
 
     stage = 3 if causal else 1
-    p = p or select_kernel_config(HEAD_DIM_K, q.shape[2], q.dtype, causal, use_tmem_red)
-    if p.GROUP_SIZE_N is None:
-        p = replace(p, GROUP_SIZE_N=4 if causal else 1)
-    if p.SPLIT_EXP_FACTOR is None:
-        p = replace(p, SPLIT_EXP_FACTOR=_default_split_exp_factor(HEAD_DIM_K))
-    if p.NUM_KV_BUFFERS is None:
-        p = replace(p, NUM_KV_BUFFERS=_default_num_kv_buffers(HEAD_DIM_K, q.dtype))
-    if p.USE_EXP2_TURNSTILE is None:
-        p = replace(p, USE_EXP2_TURNSTILE=HEAD_DIM_K == 64)
+    p = select_kernel_config(HEAD_DIM_K, q.shape[2], q.dtype, causal, use_tmem_red, override=p)
 
     if o is None:
         o = torch.empty_like(q)
