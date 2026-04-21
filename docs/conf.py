@@ -349,6 +349,7 @@ extensions = [
     'myst_sphinx_gallery',
 ]
 autosummary_generate = True
+autosummary_ignore_module_all = False
 
 # versioning config
 smv_tag_whitelist = r'^(v3.7.0)$'

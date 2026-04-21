@@ -6,12 +6,19 @@ NVIDIA Hopper
 .. autosummary::
     :toctree: generated
     :nosignatures:
+    :template: autosummary/gluon-module.rst
 
     async_copy
     cluster
-    fence_async_shared
     mbarrier
-    mma_v2
     tma
+
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    fence_async_shared
+    mma_v2
     warpgroup_mma
     warpgroup_mma_wait

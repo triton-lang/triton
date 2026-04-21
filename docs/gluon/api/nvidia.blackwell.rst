@@ -6,15 +6,22 @@ NVIDIA Blackwell
 .. autosummary::
     :toctree: generated
     :nosignatures:
+    :template: autosummary/gluon-module.rst
 
-    allocate_tensor_memory
     async_copy
     clc
-    fence_async_shared
     mbarrier
+    tma
+
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    allocate_tensor_memory
+    fence_async_shared
     mma_v2
     tensor_memory_descriptor
     tensor_memory_descriptor_type
     TensorMemoryLayout
     TensorMemoryScalesLayout
-    tma
