@@ -406,10 +406,9 @@ public:
     results.reserve(ptrs.size());
 
     for (auto [ptr, value] : llvm::zip(ptrs, values)) {
-      results.push_back(
-          LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp, ptr, value,
-                                    *ordering)
-              .getResult());
+      results.push_back(LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp,
+                                                  ptr, value, *ordering)
+                            .getResult());
     }
 
     Value result =
