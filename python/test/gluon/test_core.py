@@ -2537,6 +2537,76 @@ def test_shared_scatter(N, M):
     torch.testing.assert_close(output, expected)
 
 
+@gluon.jit
+def shared_atomic_add_kernel(
+    values_ptr,
+    indices_ptr,
+    old_ptr,
+    final_ptr,
+    N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    axis: ttgl.constexpr,
+    dtype: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    indices_x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
+    indices_y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
+    offsets_2d = indices_x[:, None] * M + indices_y[None, :]
+    values = ttgl.load(values_ptr + offsets_2d)
+    indices = ttgl.load(indices_ptr + offsets_2d)
+
+    smem = ttgl.allocate_shared_memory(dtype, [N, M], layout=shared_layout)
+    smem.store(ttgl.zeros([N, M], dtype, layout=layout_2d))
+
+    old = smem.atomic_add(values, indices, axis=axis)
+    final = smem.load(layout=layout_2d)
+
+    ttgl.store(old_ptr + offsets_2d, old)
+    ttgl.store(final_ptr + offsets_2d, final)
+
+
+@pytest.mark.parametrize("torch_dtype,gluon_dtype", [
+    (torch.int32, ttgl.int32),
+    (torch.float16, ttgl.float16),
+    (torch.float32, ttgl.float32),
+])
+@pytest.mark.parametrize("N,M,axis", [
+    (16, 32, 1),
+    (32, 16, 0),
+])
+def test_shared_atomic_add_dtypes(torch_dtype, gluon_dtype, N, M, axis):
+    device = torch.device("cuda")
+
+    values = (torch.arange(N * M, dtype=torch.int32, device=device).reshape(N, M) % 7 + 1).to(torch_dtype)
+    torch.manual_seed(17)
+    indices = torch.randint(0, M, (N, M), dtype=torch.int32, device=device)
+    old = torch.empty((N, M), dtype=torch_dtype, device=device)
+    final = torch.empty_like(old)
+    expected = torch.zeros((N, M), dtype=torch_dtype, device=device)
+    expected.scatter_add_(axis, indices.long(), values)
+
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                   warps_per_cta=[1, 1], order=[1, 0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    shared_atomic_add_kernel[(1, )](
+        values,
+        indices,
+        old,
+        final,
+        N=N,
+        M=M,
+        axis=axis,
+        dtype=gluon_dtype,
+        layout_2d=layout_2d,
+        shared_layout=shared_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(final, expected, atol=0, rtol=0)
+
+
 # ============================================================================
 # Multi-warp Tests
 # ============================================================================
