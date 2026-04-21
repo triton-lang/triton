@@ -4,6 +4,7 @@ import torch
 import triton
 import pytest
 import itertools
+from dataclasses import dataclass, replace
 
 from triton.language.core import _aggregate as aggregate
 
@@ -211,7 +212,7 @@ class AttentionConfig:
 
     @gluon.constexpr_function
     def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, SPLIT_EXP_FACTOR, dtype,
-                 num_warps):
+                 num_warps, NUM_KV_BUFFERS, USE_EXP2_TURNSTILE):
         self.qk_scale = qk_scale
         self.Z = Z
         self.H = H
@@ -258,13 +259,8 @@ class AttentionConfig:
         self.o_splitn_layout = gl.constexpr(o_splitn_tmem_ty.get_reg_layout(num_warps=self.num_warps))
         self.alpha_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1]))
 
-        is_fp16 = self.dtype.value in [gl.float16, gl.bfloat16]
-        if is_fp16:
-            self.num_kv_buffers = gl.constexpr(3 if HEAD_DIM == 128 else 6)
-        else:
-            self.num_kv_buffers = gl.constexpr(4 if HEAD_DIM == 128 else 8)
-
-        self.use_exp2_turnstile = gl.constexpr(HEAD_DIM == 64)
+        self.num_kv_buffers = gl.constexpr(NUM_KV_BUFFERS)
+        self.use_exp2_turnstile = gl.constexpr(USE_EXP2_TURNSTILE)
 
     @gluon.jit
     def get_program(self, pid_m, pid_n):
@@ -829,10 +825,11 @@ def attention_kernel(  #
         sm_scale, M, Z, H, N_CTX, desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, HEAD_DIM: gl.constexpr,  #
         GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr, STAGE: gl.constexpr, SPLIT_EXP_FACTOR: gl.constexpr,  #
-        dtype: gl.constexpr, num_warps: gl.constexpr, use_tmem_red: gl.constexpr):
+        dtype: gl.constexpr, num_warps: gl.constexpr, use_tmem_red: gl.constexpr, NUM_KV_BUFFERS: gl.constexpr,
+        USE_EXP2_TURNSTILE: gl.constexpr):
     qk_scale = sm_scale * 1.44269504
     config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, SPLIT_EXP_FACTOR,  #
-                             dtype, num_warps)
+                             dtype, num_warps, NUM_KV_BUFFERS, USE_EXP2_TURNSTILE)
 
     q_chnl = get_desc_channel(desc_q, num_buffers=2)
     kv_chnl = get_desc_channel(desc_k, num_buffers=config.num_kv_buffers)
@@ -871,6 +868,86 @@ def attention_kernel(  #
 # ===-----------------------------------------------------------------------===#
 
 
+@dataclass(frozen=True, slots=True)
+class KernelConfig:
+    BLOCK_M: int = 256
+    BLOCK_N: int = 128
+    GROUP_SIZE_N: int | None = None
+    SPLIT_EXP_FACTOR: int | None = None
+    NUM_WARPS: int = 4
+    MAXNREG: int = 128
+    OCCUPANCY: int = 1
+    USE_TMEM_RED: bool = False
+    NUM_KV_BUFFERS: int | None = None
+    USE_EXP2_TURNSTILE: bool | None = None
+
+
+def _default_split_exp_factor(head_dim: int) -> int:
+    return max(1, 256 // head_dim)
+
+
+def _is_blackwell_ultra_device() -> bool:
+    return torch.cuda.is_available() and torch.cuda.get_device_capability()[0:2] == (10, 3)
+
+
+def _default_num_kv_buffers(head_dim: int, dtype: torch.dtype) -> int:
+    is_fp16 = dtype in [torch.float16, torch.bfloat16]
+    if is_fp16:
+        return 3 if head_dim == 128 else 6
+    return 4 if head_dim == 128 else 8
+
+
+def select_kernel_config(head_dim: int, n_ctx: int, dtype: torch.dtype, causal: bool, use_tmem_red: bool) -> KernelConfig:
+    enable_tmem_red = (use_tmem_red or (_is_blackwell_ultra_device() and not causal))
+    group_size_n = 1
+    if causal:
+        group_size_n = 8 if head_dim == 64 or n_ctx <= 2048 else 4
+    p = KernelConfig(
+        GROUP_SIZE_N=group_size_n,
+        SPLIT_EXP_FACTOR=_default_split_exp_factor(head_dim),
+        USE_TMEM_RED=enable_tmem_red and not causal,
+        NUM_KV_BUFFERS=_default_num_kv_buffers(head_dim, dtype),
+        USE_EXP2_TURNSTILE=head_dim == 64,
+    )
+
+    if head_dim == 128:
+        p = replace(p, SPLIT_EXP_FACTOR=4)
+        if not causal and dtype == torch.bfloat16 and n_ctx <= 2048:
+            p = replace(p, GROUP_SIZE_N=4)
+    elif not causal and head_dim == 64 and p.USE_TMEM_RED:
+        p = replace(p, SPLIT_EXP_FACTOR=1)
+        if n_ctx <= 1024:
+            p = replace(p, NUM_KV_BUFFERS=2)
+        elif n_ctx >= 8192:
+            p = replace(p, MAXNREG=112)
+    elif causal and head_dim == 64 and n_ctx <= 1024:
+        p = replace(p, SPLIT_EXP_FACTOR=2, NUM_KV_BUFFERS=2)
+    elif causal and head_dim == 64:
+        p = replace(p, NUM_KV_BUFFERS=2, USE_EXP2_TURNSTILE=False)
+
+    if dtype == torch.float8_e5m2:
+        if causal:
+            if head_dim == 64:
+                p = replace(p, GROUP_SIZE_N=8 if n_ctx <= 2048 else 4, SPLIT_EXP_FACTOR=4 if n_ctx <= 2048 else 2,
+                            MAXNREG=112 if n_ctx >= 4096 else 128, USE_TMEM_RED=False, NUM_KV_BUFFERS=2,
+                            USE_EXP2_TURNSTILE=n_ctx <= 1024)
+            elif head_dim == 128:
+                p = replace(p, GROUP_SIZE_N=8 if n_ctx <= 2048 else 4, SPLIT_EXP_FACTOR=2 if n_ctx <= 2048 else 8,
+                            MAXNREG=128, USE_TMEM_RED=False, NUM_KV_BUFFERS=4, USE_EXP2_TURNSTILE=False)
+        elif head_dim == 64:
+            p = replace(p, GROUP_SIZE_N=1, SPLIT_EXP_FACTOR=2, MAXNREG=128, USE_TMEM_RED=_is_blackwell_ultra_device(),
+                        NUM_KV_BUFFERS=2 if n_ctx <= 1024 else 8, USE_EXP2_TURNSTILE=True)
+        elif head_dim == 128:
+            p = replace(p, GROUP_SIZE_N=1, SPLIT_EXP_FACTOR=4 if n_ctx <= 2048 else 8, MAXNREG=128,
+                        USE_TMEM_RED=_is_blackwell_ultra_device(), NUM_KV_BUFFERS=4, USE_EXP2_TURNSTILE=False)
+        else:
+            # Keep unsearched fp8 dimensions on the original conservative policy.
+            p = replace(p, GROUP_SIZE_N=4 if causal else 1, SPLIT_EXP_FACTOR=_default_split_exp_factor(head_dim),
+                        USE_TMEM_RED=use_tmem_red and not causal)
+
+    return p
+
+
 def torch_dtype_to_triton(dtype):
     if dtype == torch.float8_e5m2:
         return gl.float8e5
@@ -882,13 +959,26 @@ def make_tensor_desc(x, shape, strides, block_shape):
     return TensorDescriptor(x, shape=shape, strides=strides, block_shape=block_shape, layout=layout)
 
 
-def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, use_tmem_red=False):
+def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, use_tmem_red=False, p: KernelConfig | None = None):
+    if isinstance(o, bool) and M is None and use_tmem_red is False:
+        use_tmem_red = o
+        o = None
+
     HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
     HEAD_DIM_V = v.shape[-1]
     assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
     assert HEAD_DIM_K in {16, 32, 64, 128, 256}
 
     stage = 3 if causal else 1
+    p = p or select_kernel_config(HEAD_DIM_K, q.shape[2], q.dtype, causal, use_tmem_red)
+    if p.GROUP_SIZE_N is None:
+        p = replace(p, GROUP_SIZE_N=4 if causal else 1)
+    if p.SPLIT_EXP_FACTOR is None:
+        p = replace(p, SPLIT_EXP_FACTOR=_default_split_exp_factor(HEAD_DIM_K))
+    if p.NUM_KV_BUFFERS is None:
+        p = replace(p, NUM_KV_BUFFERS=_default_num_kv_buffers(HEAD_DIM_K, q.dtype))
+    if p.USE_EXP2_TURNSTILE is None:
+        p = replace(p, USE_EXP2_TURNSTILE=HEAD_DIM_K == 64)
 
     if o is None:
         o = torch.empty_like(q)
@@ -898,11 +988,11 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, use_tmem_red=Fa
     y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
     # The kernel will split BLOCK_M into two subtiles.
-    BLOCK_M = 256
-    BLOCK_N = 128
+    BLOCK_M = p.BLOCK_M
+    BLOCK_N = p.BLOCK_N
     SPLIT_M = BLOCK_M // 2
-    GROUP_SIZE_N = 4 if causal else 1
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    GROUP_SIZE_N = p.GROUP_SIZE_N
+    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count * p.OCCUPANCY
 
     desc_q = make_tensor_desc(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[SPLIT_M, HEAD_DIM_K])
     desc_v = make_tensor_desc(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[BLOCK_N, HEAD_DIM_K])
@@ -917,9 +1007,10 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, use_tmem_red=Fa
         sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
         desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M, BLOCK_N, HEAD_DIM_K, GROUP_SIZE_N, NUM_SMS,  #
-        SPLIT_EXP_FACTOR=256 // HEAD_DIM_K,
+        SPLIT_EXP_FACTOR=p.SPLIT_EXP_FACTOR,
         STAGE=stage, dtype=torch_dtype_to_triton(q.dtype),  #
-        num_warps=4, maxnreg=128, use_tmem_red=use_tmem_red)
+        num_warps=p.NUM_WARPS, maxnreg=p.MAXNREG, use_tmem_red=p.USE_TMEM_RED, NUM_KV_BUFFERS=p.NUM_KV_BUFFERS,
+        USE_EXP2_TURNSTILE=p.USE_EXP2_TURNSTILE)
 
     return o, M
 
