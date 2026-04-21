@@ -8,8 +8,6 @@ import torch
 import triton
 import triton.language as tl
 
-from triton.language.core import _aggregate as aggregate
-
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor, TensorDescriptorIm2Col
@@ -86,7 +84,7 @@ normalize_2d = _conv_common.normalize_2d
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate
+@gluon.aggregate
 class WgradConfig:
     N: gl.tensor
     Ci: gl.tensor
@@ -159,7 +157,7 @@ class WgradConfig:
         return WgradProgram(self, pid_co, ci_block, iter_r, iter_s, split_k_idx, k_start, k_iters_this_split)
 
 
-@aggregate
+@gluon.aggregate
 class WgradProgram:
     config: WgradConfig
     pid_co: gl.tensor
@@ -198,7 +196,7 @@ class WgradProgram:
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     config: WgradConfig
     in_desc: tma.tensor_descriptor_im2col
