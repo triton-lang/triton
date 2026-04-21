@@ -711,11 +711,12 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttg::LocalScatterOp>(memDesc, values, indices,
                                               axisAttr);
            })
-      .def("create_local_atomic_scatter_add",
-           [](GluonOpBuilder &self, Value memDesc, Value values, Value indices,
-              std::optional<Value> mask, int32_t axis) -> Value {
-             return self.create<ttg::LocalAtomicScatterAddOp>(
-                 memDesc, values, indices, mask.value_or(Value()), axis);
+      .def("create_local_atomic_scatter_rmw",
+           [](GluonOpBuilder &self, tt::RMWOp rmwOp, Value memDesc,
+              Value values, Value indices, std::optional<Value> mask,
+              int32_t axis) -> Value {
+             return self.create<ttg::LocalAtomicScatterRMWOp>(
+                 rmwOp, memDesc, values, indices, mask.value_or(Value()), axis);
            })
       .def("get_shared_bank_conflicts",
            [](GluonOpBuilder &self, Attribute regLayoutAttr,
