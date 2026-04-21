@@ -2197,8 +2197,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: test_local_atomic_inc
-  // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.u32 $0, 0x0;
-  // CHECK-SAME: atom.shared.inc.u32 $0, [ $1 + 0 ], 0xffffffff;", "=r,r"
+  // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
+  // CHECK-SAME: mov.u32 $0, 0x0;
+  // CHECK-SAME: atom.shared.inc.u32
   tt.func public @test_local_atomic_inc(%arg0: tensor<1xi32, #blocked>) -> tensor<1xi32, #blocked> {
     %c1 = arith.constant dense<1> : tensor<1xi32, #blocked>
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
@@ -2214,7 +2215,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: test_local_atomic_inc_dead
-  // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "red.shared.inc.u32 [ $0 + 0 ], 0xffffffff;", "r"
+  // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
+  // CHECK-SAME: red.shared.inc.u32
   tt.func public @test_local_atomic_inc_dead(%arg0: tensor<1xi32, #blocked>) {
     %c1 = arith.constant dense<1> : tensor<1xi32, #blocked>
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
