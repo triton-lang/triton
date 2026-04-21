@@ -37,8 +37,12 @@ def _make_package(tmp_path: Path, files: dict[str, str]) -> tuple[str, Callable[
     return pkg, lambda mod: f"{pkg}.{mod}"
 
 
-def _normalize(source: str) -> list[str]:
-    return [line.strip() for line in source.strip().splitlines() if line.strip()]
+def assert_code_equal(actual: str, expected: str) -> None:
+    actual_lines: list[str] = actual.strip().splitlines()
+    actual_lines = [line.strip() for line in actual_lines if line]
+    expected_lines: list[str] = expected.strip().splitlines()
+    expected_lines = [line.strip() for line in expected_lines if line]
+    assert actual_lines == expected_lines
 
 
 def test_stable_toposort_preserves_component_order():
@@ -95,13 +99,37 @@ def test_slice_kernel_basic_module_slicing(tmp_path):
     )
 
     output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
-    assert "import math" in output
-    assert "def lib_foo_some_util() -> int:" in output
-    assert "def some_util() -> int:" in output
-    assert "def lib_bar_prod(values) -> None:" in output
-    assert "def common_util() -> int:" in output
-    assert "lib_bar_prod([42, 22])" in output
-    assert "lib_foo_some_util()" in output
+    expected = R"""
+import math
+
+def lib_foo_some_util() -> int:
+    return 42
+
+
+def some_util() -> int:
+    return 55
+
+
+def lib_bar_prod(values) -> None:
+    return
+
+
+def common_util() -> int:
+    return math.prod([11, 33])
+
+
+def prod() -> None:
+    return
+
+
+def kernel() -> None:
+    prod()
+    common_util()
+    lib_bar_prod([42, 22])
+    some_util()
+    lib_foo_some_util()
+    """
+    assert_code_equal(output, expected)
 
 
 def test_slice_kernel_supports_injected_decorator_matchers(tmp_path):
@@ -158,8 +186,23 @@ def test_slice_kernel_supports_injected_decorator_matchers(tmp_path):
         rewrite_spec=RewriteSpec(ignored_decorator_matchers=[matcher]),
         target=TranslatorTarget.GENERIC,
     )
-    assert "@keep()" in top
-    assert "@mock_kernel" not in top
+    expected_top = R"""
+def keep():
+
+    def deco(inner):
+        return inner
+    return deco
+
+
+def foo() -> None:
+    pass
+
+
+@keep()
+def kernel_top() -> None:
+    foo()
+    """
+    assert_code_equal(top, expected_top)
 
     bottom = slice_kernel(
         [f"{mod('kernel_mod')}:kernel_bottom"],
@@ -167,10 +210,22 @@ def test_slice_kernel_supports_injected_decorator_matchers(tmp_path):
         rewrite_spec=RewriteSpec(ignored_decorator_matchers=[matcher]),
         target=TranslatorTarget.GENERIC,
     )
-    assert "@keep()" not in bottom
-    assert "@mock_kernel" not in bottom
-    assert "def get_idle_sms" not in bottom
-    assert "def nested_dep" not in bottom
+    expected_bottom = R"""
+def keep():
+
+    def deco(inner):
+        return inner
+    return deco
+
+
+def foo() -> None:
+    pass
+
+
+def kernel_bottom() -> None:
+    foo()
+    """
+    assert_code_equal(bottom, expected_bottom)
 
 
 def test_slice_kernel_translate_to_gluon_keeps_tensor_method_rewrites(tmp_path):
@@ -191,10 +246,22 @@ def test_slice_kernel_translate_to_gluon_keeps_tensor_method_rewrites(tmp_path):
 
     output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], translate_to_gluon=True,
                           target=TranslatorTarget.GENERIC)
-    assert "import triton.experimental.gluon as gluon" in output
-    assert "@gluon.jit(repr=lambda _: 'custom_kernel_name')" in output
-    assert "reset_to_default_layout" in output
-    assert "squeeze(x, 0)" in output
+    expected = R"""
+import triton.experimental.gluon.language as gl
+import triton.tools.triton_to_gluon_translator.common_helpers
+import triton.experimental.gluon as gluon
+
+@gluon.jit
+def squeeze(x, dim: gl.constexpr):
+    gl.static_assert(x.shape[dim] == 1)
+    return triton.tools.triton_to_gluon_translator.common_helpers.reset_to_default_layout(x.reshape(x.shape[:dim] + x.shape[dim + 1:]))
+
+
+@gluon.jit(repr=lambda _: 'custom_kernel_name')
+def kernel(x):
+    squeeze(x, 0)
+    """
+    assert_code_equal(output, expected)
 
 
 def test_slice_kernel_translate_to_gluon_inlines_descriptor_adapter(tmp_path):
@@ -213,8 +280,35 @@ def test_slice_kernel_translate_to_gluon_inlines_descriptor_adapter(tmp_path):
 
     output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], translate_to_gluon=True,
                           target=TranslatorTarget.GENERIC)
-    assert "convert_host_descriptor(" in output
-    assert "def convert_host_descriptor" in output
+    expected = R"""
+import triton.tools.ragged_tma
+
+def kernel(t):
+    return convert_host_descriptor(triton.tools.ragged_tma.create_ragged_descriptor(t, [16, 16]))
+
+
+def _torch_dtype_to_triton(dtype):
+    import torch
+
+    if dtype == torch.float8_e5m2:
+        return gl.float8e5
+    if dtype == torch.float8_e4m3fn:
+        return gl.float8e4nv
+    return getattr(gl, str(dtype).split(".")[1])
+
+def convert_host_descriptor(desc):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    assert isinstance(desc, TensorDescriptor)
+    block_shape = desc.block_shape
+    dtype = desc.base.dtype
+    tensor = desc.base
+    layout = gl.NVMMASharedLayout.get_default_for(block_shape, _torch_dtype_to_triton(dtype))
+    return gluon.nvidia.hopper.TensorDescriptor(
+        tensor, desc.shape, desc.strides, block_shape, layout
+    )
+    """
+    assert_code_equal(output, expected)
 
 
 def test_slice_kernel_binds_local_imports(tmp_path):
@@ -236,9 +330,15 @@ def test_slice_kernel_binds_local_imports(tmp_path):
     )
 
     output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
-    assert "from .helpers import local_helper" not in output
-    assert "def local_helper() -> int:" in output
-    assert "return local_helper()" in output
+    expected = R"""
+def local_helper() -> int:
+    return 3
+
+
+def kernel() -> int:
+    return local_helper()
+    """
+    assert_code_equal(output, expected)
 
 
 def test_slice_kernel_treats_assign_targets_as_locals(tmp_path):
@@ -258,8 +358,12 @@ def test_slice_kernel_treats_assign_targets_as_locals(tmp_path):
     )
 
     output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
-    assert "def helper() -> int:" not in output
-    assert any(line.replace("lambda :", "lambda:") == "helper = lambda: 2" for line in _normalize(output))
+    expected = R"""
+def kernel() -> int:
+    helper = lambda: 2
+    return helper()
+    """
+    assert_code_equal(output, expected)
 
 
 def test_slice_kernel_treats_annassign_targets_as_locals(tmp_path):
@@ -278,8 +382,12 @@ def test_slice_kernel_treats_annassign_targets_as_locals(tmp_path):
     )
 
     output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
-    assert "value = 7" not in output
-    assert "value: int = 3" in output
+    expected = R"""
+def kernel() -> int:
+    value: int = 3
+    return value
+    """
+    assert_code_equal(output, expected)
 
 
 def test_slice_kernel_translate_to_gluon_avoids_double_descriptor_wrap(tmp_path):
@@ -301,7 +409,17 @@ def test_slice_kernel_translate_to_gluon_avoids_double_descriptor_wrap(tmp_path)
 
     output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], translate_to_gluon=True,
                           target=TranslatorTarget.GENERIC)
-    assert "convert_host_descriptor(convert_host_descriptor(" not in output
+    expected = R"""
+from triton.tools.tensor_descriptor import TensorDescriptor
+
+def convert_host_descriptor(desc):
+    return desc
+
+
+def kernel(t):
+    return convert_host_descriptor(TensorDescriptor.from_tensor(t, [16, 16]))
+    """
+    assert_code_equal(output, expected)
 
 
 def test_translate_to_gluon_explicit_expand_dims_rewrites_layout(tmp_path):
@@ -324,7 +442,18 @@ def test_translate_to_gluon_explicit_expand_dims_rewrites_layout(tmp_path):
 
     output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton"], translate_to_gluon=True,
                           target=TranslatorTarget.GENERIC)
-    assert "helpers.convert_to_expand_dims_layout(offsets, [0])" in output
+    expected = R"""
+import triton.experimental.gluon.language as gl
+import triton.tools.triton_to_gluon_translator.common_helpers
+import triton.experimental.gluon as gluon
+
+@gluon.jit
+def kernel(out_ptr, BLOCK: gl.constexpr):
+    offsets = triton.tools.triton_to_gluon_translator.common_helpers.tl_arange(0, BLOCK)
+    expanded = gl.expand_dims(triton.tools.triton_to_gluon_translator.common_helpers.convert_to_expand_dims_layout(offsets, [0]), 0)
+    gl.store(out_ptr + expanded, expanded)
+    """
+    assert_code_equal(output, expected)
 
 
 def test_translate_to_gluon_member_fn_expand_dims_rewrites_layout(tmp_path):
@@ -347,8 +476,18 @@ def test_translate_to_gluon_member_fn_expand_dims_rewrites_layout(tmp_path):
 
     output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton"], translate_to_gluon=True,
                           target=TranslatorTarget.GENERIC)
-    print(output)
-    assert "helpers.convert_to_expand_dims_layout(offsets, [0])" in output
+    expected = R"""
+import triton.experimental.gluon.language as gl
+import triton.tools.triton_to_gluon_translator.common_helpers
+import triton.experimental.gluon as gluon
+
+@gluon.jit
+def kernel(out_ptr, BLOCK: gl.constexpr):
+    offsets = triton.tools.triton_to_gluon_translator.common_helpers.tl_arange(0, BLOCK)
+    expanded = triton.tools.triton_to_gluon_translator.common_helpers.convert_to_expand_dims_layout(offsets, [0]).expand_dims(0)
+    gl.store(out_ptr + expanded, expanded)
+    """
+    assert_code_equal(output, expected)
 
 
 def test_slice_kernel_public_imports():
