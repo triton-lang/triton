@@ -21,9 +21,12 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 using namespace mlir::LLVM::NVIDIA;
 
-bool isConstI32One(Value value) {
-  APInt constant;
-  return matchPattern(value, m_ConstantInt(&constant)) && constant.isOne();
+bool isConstI32OneTensor(Value value) {
+  DenseElementsAttr constant;
+  return matchPattern(value, m_Constant(&constant)) &&
+         constant.getElementType().isInteger(32) &&
+         llvm::all_of(constant.getValues<APInt>(),
+                      [](const APInt &value) { return value.isOne(); });
 }
 
 Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
@@ -232,7 +235,7 @@ public:
 
     SmallVector<Value> values =
         unpackLLElements(op.getLoc(), adaptor.getValues(), rewriter);
-    if (!llvm::all_of(values, isConstI32One))
+    if (!isConstI32OneTensor(op.getValues()))
       return failure();
 
     auto memDescTy = cast<MemDescType>(op.getDst().getType());
