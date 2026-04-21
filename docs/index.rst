@@ -59,7 +59,7 @@ Gluon
 
 
 Triton MLIR Dialects and Ops
---------------------
+----------------------------
 
 - :doc:`Triton MLIR Dialects and Ops <dialects/dialects>`
 

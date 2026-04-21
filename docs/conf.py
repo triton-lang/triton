@@ -261,7 +261,7 @@ def setup_generated_mlir_docs():
 
     rst_string = f"""
 Triton MLIR Dialects and Ops
-=====================
+============================
 
 .. toctree::
    :maxdepth: 1
