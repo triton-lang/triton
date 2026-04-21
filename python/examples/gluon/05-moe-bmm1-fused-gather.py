@@ -11,7 +11,6 @@ import triton.experimental.gluon.language.nvidia.blackwell.tma as tma
 from triton.experimental.gluon.language.nvidia.blackwell import float2
 import triton.experimental.gluon.language.nvidia.hopper.mbarrier as mbarrier
 import triton.language.extra.libdevice as libdevice
-from triton.language.core import _aggregate as aggregate
 from triton.testing import do_bench_cudagraph
 
 from triton_kernels.distributed import make_expt_dict_uniform
@@ -183,7 +182,7 @@ def split_m_subtiles(values, subtile_factor: gl.constexpr):
     return subtiles
 
 
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     x_desc: tma.tensor_descriptor
     w_desc: tma.tensor_descriptor

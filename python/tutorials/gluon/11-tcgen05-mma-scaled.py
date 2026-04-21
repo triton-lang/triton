@@ -68,7 +68,6 @@ import triton.experimental.gluon as gluon
 import triton.experimental.gluon.language as gl
 from dataclasses import replace
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-from triton.language.core import _aggregate as aggregate
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
@@ -1334,7 +1333,7 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
 # wrote simplify writing the warp-specialized code.
 
 
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor
