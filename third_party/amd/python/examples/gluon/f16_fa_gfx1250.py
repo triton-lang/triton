@@ -5,7 +5,6 @@ This file implements a BSHD Flash Attention and tests against torch reference.
 import torch
 from triton.experimental import gluon
 import triton.experimental.gluon.language as gl
-from triton.language.core import _aggregate as aggregate
 import pytest
 
 
@@ -29,7 +28,7 @@ except ImportError:
     from gfx1250_utils import static_profile
 
 
-@aggregate
+@gluon.aggregate
 class AttentionConfig:
     SEQLEN_Q: gl.constexpr
     SEQLEN_K: gl.constexpr
@@ -84,7 +83,7 @@ class AttentionConfig:
         self.p_layout = gl.constexpr(gl.DotOperandLayout(0, self.pv_layout, 8))
 
 
-@aggregate
+@gluon.aggregate
 class AttentionProgram:
     cfg: AttentionConfig
 

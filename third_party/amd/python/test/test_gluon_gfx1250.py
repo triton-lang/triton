@@ -748,28 +748,41 @@ def get_test_mxfp_variants():
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
-@pytest.mark.parametrize("M, N, K",
-                         get_test_mxfp_block_mnk() +
-                         # Add small K testcases
-                         [(16, 64, 32), (64, 128, 64)])
+@pytest.mark.parametrize("wmma_shape", [(16, 16), (32, 16)])
+@pytest.mark.parametrize(
+    "M, N, K",
+    get_test_mxfp_block_mnk() +
+    # Add small K testcases
+    [(16, 64, 32), (64, 128, 64)] +
+    # Add non-square test cases
+    [(32, 64, 128), (64, 32, 128)])
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
 @pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
 @pytest.mark.parametrize("scale_factor", [16, 32])
 @pytest.mark.parametrize("with_a_scale, with_b_scale", itertools.product([True, False], repeat=2))
-def test_amd_wmma_scaled(M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor, with_a_scale, with_b_scale):
+def test_amd_wmma_scaled(wmma_shape, M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor, with_a_scale,
+                         with_b_scale):
+    instr_m, instr_n = wmma_shape
+
+    if instr_m == 32:
+        if a_type != "e2m1" or b_type != "e2m1":
+            pytest.skip("32x16 WMMA only supports FP4 x FP4")
 
     @gluon.jit
     def kernel(c_ptr, a_ptr, a_scale_ptr, b_ptr, b_scale_ptr,  #
                a_type: ttgl.constexpr, b_type: ttgl.constexpr,  #
                BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
-               SCALE_FACTOR: ttgl.constexpr):
+               SCALE_FACTOR: ttgl.constexpr, INSTR_SHAPE_M: ttgl.constexpr, INSTR_SHAPE_N: ttgl.constexpr):
         DIV_FACTOR_A: ttgl.constexpr = 2 if a_type == "e2m1" else 1
         DIV_FACTOR_B: ttgl.constexpr = 2 if b_type == "e2m1" else 1
+        TRANSPOSED: ttgl.constexpr = INSTR_SHAPE_M == INSTR_SHAPE_N
 
         wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(  #
-            version=3, transposed=True, warp_bases=[[0, 1], [1, 0]], instr_shape=[16, 16, 128])
+            version=3, transposed=TRANSPOSED, warp_bases=[[0, 1], [1, 0]],
+            instr_shape=[INSTR_SHAPE_M, INSTR_SHAPE_N, 128])
         wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(  #
-            version=3, transposed=True, warp_bases=[[0, 1], [1, 0]], instr_shape=[16, 16, 64])
+            version=3, transposed=TRANSPOSED, warp_bases=[[0, 1], [1, 0]],
+            instr_shape=[INSTR_SHAPE_M, INSTR_SHAPE_N, 64])
         a_layout: ttgl.constexpr = ttgl.DotOperandLayout(  #
             0, wmma_layout_packed if a_type == "e2m1" else wmma_layout, k_width=16)
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(  #
@@ -831,14 +844,20 @@ def test_amd_wmma_scaled(M, N, K, a_type, b_type, a_scale_type, b_scale_type, sc
         b_scale_ref = 1.0
 
     c = torch.zeros((M, N), dtype=torch.float32).cuda()
-    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, num_warps=4)
+    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, instr_m, instr_n, num_warps=4)
 
     no_scales = not with_a_scale and not with_b_scale
 
-    if scale_factor == 32 or no_scales:
-        assert "v_wmma_scale_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
+    if instr_m == 32:
+        if scale_factor == 32 or no_scales:
+            assert "v_wmma_scale_f32_32x16x128_f4" in pgm.asm["amdgcn"]
+        else:
+            assert "v_wmma_scale16_f32_32x16x128_f4" in pgm.asm["amdgcn"]
     else:
-        assert "v_wmma_scale16_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
+        if scale_factor == 32 or no_scales:
+            assert "v_wmma_scale_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
+        else:
+            assert "v_wmma_scale16_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
 
     c_torch = (a_ref * a_scale_ref) @ (b_ref * b_scale_ref)
     torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)

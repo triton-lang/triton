@@ -17,7 +17,6 @@ import triton
 import triton.experimental.gluon as gluon
 import triton.experimental.gluon.language as gl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-from triton.language.core import _aggregate as aggregate
 
 from triton._C.libtriton import nvidia
 
@@ -316,7 +315,7 @@ def issue_mma(consumer, c_bars, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs, prod
     return consumer.next(pred), producer.next(pred)
 
 
-@aggregate
+@gluon.aggregate
 class Counter:
     index: gl.tensor
     phase: gl.tensor
@@ -336,7 +335,7 @@ class Counter:
         return Counter(index, phase, self.num_barriers)
 
 
-@aggregate
+@gluon.aggregate
 class ClcTileSchedulerConsumer:
     has_work: gl.tensor
     tile_id: gl.tensor
@@ -443,7 +442,7 @@ class ClcTileSchedulerConsumer:
 # ---------------------------------------------------------------------------
 
 
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor

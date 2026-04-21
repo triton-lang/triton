@@ -33,7 +33,6 @@ from functools import partial
 from typing import Union
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton.language.core import _aggregate as aggregate
 
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.hopper import (
@@ -85,13 +84,13 @@ def get_flops(ms, M, N, K):
 # of tensor core operations so that our persistent matmul can be used on both
 # Hopper and Blackwell.
 #
-# We can use @aggregate to define a class that contains the state of the
+# We can use @gluon.aggregate to define a class that contains the state of the
 # matmul. We will define the API of our MMA wrapper to be like WGMMA's, because
 # is the more restrictive of the two.
 
 
 # MMA wrapper for WGMMA, which maps directly to the WGMMA functions.
-@aggregate
+@gluon.aggregate
 class WGMMA:
     acc: Union[warpgroup_mma_accumulator, gl.tensor]
     use_acc: gl.tensor
@@ -123,7 +122,7 @@ class WGMMA:
 # MMA wrapper for tcgen05. In order to implement `wait_num_outstanding`, we
 # need to allocate barriers and keep track of how many MMAs have been issued.
 # State will be tracked with an accumulator.
-@aggregate
+@gluon.aggregate
 class MMAv5:
     use_acc: gl.tensor
     acc_tmem: tensor_memory_descriptor
@@ -322,7 +321,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
 # scheduling strategy, starting with a basic row-major tile scheduler.
 
 
-@aggregate
+@gluon.aggregate
 class PersistentTileScheduler:
     pid_start: gl.tensor
     pid_end: gl.tensor
@@ -497,7 +496,7 @@ def GroupedPersistentTileScheduler(GROUP_SIZE_M):
     GROUP_SIZE_M = gl.constexpr(GROUP_SIZE_M)
 
     # Like C++ templates!
-    @aggregate
+    @gluon.aggregate
     class GroupedPersistentTileSchedulerImpl:
         start_pid: gl.tensor
         num_pid_m: gl.tensor

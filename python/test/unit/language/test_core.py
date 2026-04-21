@@ -1022,6 +1022,29 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
     assert torch.all(out == out_ref)  # bitwise exact
 
 
+@pytest.mark.interpreter
+def test_fdiv_ieee_rounding(device):
+
+    @triton.jit
+    def kernel(X, Y, OUT_IEEE, OUT_RN, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        ieee = tl.math.fdiv(x, y, ieee_rounding=True)
+        rn = tl.math.div_rn(x, y)
+        tl.store(OUT_IEEE + offs, ieee)
+        tl.store(OUT_RN + offs, rn)
+
+    shape = (128, )
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    y = torch.randn(shape, dtype=torch.float32, device=device) + 1e-6
+    out_ieee = torch.zeros(shape, dtype=torch.float32, device=device)
+    out_rn = torch.zeros(shape, dtype=torch.float32, device=device)
+
+    kernel[(1, )](x, y, out_ieee, out_rn, BLOCK=shape[0], num_ctas=1)
+    assert torch.all(out_ieee == out_rn)  # bitwise exact
+
+
 # ----------------
 # test abs
 # ----------------
