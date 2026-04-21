@@ -219,6 +219,11 @@ def list_of_functions_constexpr(arg, fns: tl.constexpr):
         fns[i](arg)
 
 
+@triton.jit
+def consume_varargs(*dims):
+    return dims[0]
+
+
 @filecheck_test
 @triton.jit
 def test_list_of_functions():
@@ -229,6 +234,15 @@ def test_list_of_functions():
     # CHECK-NEXT: call @{{.*}}anchor
     # CHECK-NEXT: call @{{.*}}forward
     list_of_functions_constexpr(tl.arange(0, 4), [anchor, forward])
+
+
+@filecheck_test
+@triton.jit
+def test_starred_varargs():
+    # CHECK-LABEL: test_starred_varargs
+    # CHECK: call @{{.*}}consume_varargs
+    dims: tl.constexpr = (1, 0)
+    consume_varargs(*dims)
 
 
 @triton.jit
@@ -613,6 +627,43 @@ def test_constexpr_return():
         tl.static_assert(x == 42)
 
     run_parser(test)
+
+
+@filecheck_test
+@triton.jit
+def test_atomic_scalar_masks():
+    # CHECK-LABEL: test_atomic_scalar_masks
+    BLOCK: tl.constexpr = 128
+    ptr = tl.full((BLOCK, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    offs = tl.arange(0, BLOCK)
+    ptrs = ptr + offs
+    val = tl.full((BLOCK, ), 1, tl.int32)
+    mask = offs >= 0
+    scalar_mask = True
+    constexpr_value: tl.constexpr = 1
+    constexpr_mask: tl.constexpr = True
+
+    # CHECK: {{.*}} = tt.atomic_rmw add, acq_rel, gpu
+    tl.atomic_add(ptrs, val, mask=mask)
+    # CHECK: {{.*}} = tt.atomic_rmw add, acq_rel, gpu
+    tl.atomic_add(ptrs, 1, mask=True)
+    # CHECK: {{.*}} = tt.atomic_rmw add, acq_rel, gpu
+    tl.atomic_add(ptrs, constexpr_value, mask=constexpr_mask)
+    # CHECK: {{.*}} = tt.atomic_rmw add, acq_rel, gpu
+    tl.atomic_add(ptrs, val, mask=scalar_mask)
+
+    # CHECK: {{.*}} = tt.atomic_rmw exch, acq_rel, gpu
+    tl.atomic_xchg(ptrs, 1, mask=True)
+    # CHECK: {{.*}} = tt.atomic_rmw max, acq_rel, gpu
+    tl.atomic_max(ptrs, 1, mask=True)
+    # CHECK: {{.*}} = tt.atomic_rmw min, acq_rel, gpu
+    tl.atomic_min(ptrs, 1, mask=True)
+    # CHECK: {{.*}} = tt.atomic_rmw and, acq_rel, gpu
+    tl.atomic_and(ptrs, 1, mask=True)
+    # CHECK: {{.*}} = tt.atomic_rmw or, acq_rel, gpu
+    tl.atomic_or(ptrs, 1, mask=True)
+    # CHECK: {{.*}} = tt.atomic_rmw xor, acq_rel, gpu
+    tl.atomic_xor(ptrs, 1, mask=True)
 
 
 @pytest.mark.interpreter

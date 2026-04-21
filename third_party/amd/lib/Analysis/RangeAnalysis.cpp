@@ -342,17 +342,17 @@ collectRanges(const DataFlowSolver &solver, ValueRange values) {
   return ranges;
 }
 
-bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp) {
+std::optional<bool> evaluateCmpI(const DataFlowSolver &solver,
+                                 arith::CmpIOp cmpOp) {
   if (auto inputRanges =
           collectRanges(solver, ValueRange{cmpOp.getOperands()})) {
     intrange::CmpPredicate pred =
         static_cast<intrange::CmpPredicate>(cmpOp.getPredicate());
     if (!(*inputRanges)[0] || !(*inputRanges)[1])
-      return false;
-    return intrange::evaluatePred(pred, *(*inputRanges)[0], *(*inputRanges)[1])
-        .value_or(false);
+      return std::nullopt;
+    return intrange::evaluatePred(pred, *(*inputRanges)[0], *(*inputRanges)[1]);
   }
-  return false;
+  return std::nullopt;
 }
 
 LogicalResult TritonIntegerRangeAnalysis::initialize(Operation *top) {
@@ -542,7 +542,11 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
           op)) {
     llvm::TypeSwitch<Operation *>(op)
         .Case<GetProgramIdOp>([&](auto getPIDOp) {
-          inferResultRangesPID(getPIDOp, kDefaultMaxPrograms - 1, joinCallback);
+          int axis = getPIDOp.getAxisAsInt();
+          auto it = pidBounds.find(axis);
+          uint64_t maxPID =
+              it != pidBounds.end() ? it->second : kDefaultMaxPrograms - 1;
+          inferResultRangesPID(getPIDOp, maxPID, joinCallback);
         })
         .Case<GetNumProgramsOp>([&](auto getPIDOp) {
           inferResultRangesPID(getPIDOp, kDefaultMaxPrograms, joinCallback);
@@ -813,16 +817,13 @@ struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
 
   LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
                                 PatternRewriter &rewriter) const override {
-    if (llvm::isa<IntegerType, IndexType>(cmpOp.getType()) &&
-        cmpIIsStaticallyTrue(*solver, cmpOp)) {
-      if (failed(mlir::dataflow::maybeReplaceWithConstant(*solver, rewriter,
-                                                          cmpOp.getResult()))) {
-        LDBG("failed to replace with constant op: " << cmpOp);
-        return failure();
-      }
-    } else {
+    auto result = evaluateCmpI(*solver, cmpOp);
+    if (!result)
       return failure();
-    }
+
+    TypedAttr constAttr = *result ? rewriter.getOneAttr(cmpOp.getType())
+                                  : rewriter.getZeroAttr(cmpOp.getType());
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(cmpOp, constAttr);
     return success();
   }
 

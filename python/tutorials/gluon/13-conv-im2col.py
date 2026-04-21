@@ -246,7 +246,7 @@ def tma_im2col_kernel(in_desc, out_desc, coord_n: int, coord_h: int, coord_w: in
     mbarrier.expect(bar, in_desc.block_type.nbytes)
 
     # TMA im2col load with specified coordinates and offsets
-    tma.async_copy_global_to_shared_im2col(
+    tma.async_load_im2col(
         in_desc,
         [coord_n, coord_h, coord_w, coord_c],
         [offset_h, offset_w],
@@ -884,12 +884,12 @@ if __name__ == "__main__":
 #                 for ci_block in range(Ci // BLOCK_K):
 #                     # Input tile via TMA im2col:
 #                     # input[batch, out_y*stride+r-pad, out_x*stride+s-pad, ci_block*BLOCK_K:...]
-#                     tma.async_copy_global_to_shared_im2col(...)
+#                     tma.async_load_im2col(...)
 #                     A_tile = a_smem         # [BLOCK_M, BLOCK_K]
 #
 #                     # Weight tile via standard TMA:
 #                     # weight[co_start:..., r, s, ci_block*BLOCK_K:...]
-#                     tma.async_copy_global_to_shared(...)
+#                     tma.async_load(...)
 #                     B_tile = b_smem         # [BLOCK_N, BLOCK_K]
 #
 #                     # Matrix multiply-accumulate (details omitted here)
@@ -1004,7 +1004,7 @@ def conv2d_im2col_kernel(
         # TMA applies offsets to the spatial coords, so start is:
         #   [batch_id, out_y*stride_h-pad_h+r, out_x*stride_w-pad_w+s, ci_block*BLOCK_K]
         mbarrier.expect(tma_bar, in_desc.block_type.nbytes + weight_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared_im2col(
+        tma.async_load_im2col(
             in_desc,
             [batch_id, out_y * stride_h - pad_h, out_x * stride_w - pad_w, ci_block * BLOCK_K],
             [r.to(tl.int16), s.to(tl.int16)],
@@ -1017,7 +1017,7 @@ def conv2d_im2col_kernel(
         # group, those weight elements are multiplied by zero-filled input channels (TMA
         # zero-fills input channels past Ci), so the result is still correct.
         k_offset = r * S * Ci + s * Ci + ci_block * BLOCK_K
-        tma.async_copy_global_to_shared(weight_desc, [pid_n * BLOCK_N, k_offset], tma_bar, b_smem)
+        tma.async_load(weight_desc, [pid_n * BLOCK_N, k_offset], tma_bar, b_smem)
         mbarrier.wait(tma_bar, phase=phase)
 
         # acc += A @ B^T

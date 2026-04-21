@@ -340,44 +340,27 @@ class CudaDriver(GPUDriver):
     def __init__(self):
         self.utils = CudaUtils()  # TODO: make static
         self.launcher_cls = CudaLauncher
-        self.get_device_capability = self._get_device_capability
-        self.get_current_stream = self._get_current_stream
-        self.get_current_device = self._get_current_device
-        self.set_current_device = self._set_current_device
-
-    @staticmethod
-    def _get_loaded_torch():
-        torch = sys.modules.get("torch")
-        if torch is None:
-            return None
-        return torch
+        if sys.modules.get("torch") is not None:
+            super().__init__()
+        else:
+            self.get_device_capability = self._get_device_capability
+            self.get_current_stream = self._get_current_stream
+            self.get_current_device = self._get_current_device
+            self.set_current_device = self._set_current_device
 
     def _get_device_capability(self, device):
-        torch = self._get_loaded_torch()
-        if torch is not None:
-            return torch.cuda.get_device_capability(device)
         return self.utils.get_device_capability(device)
 
     def _get_current_stream(self, device):
-        torch = self._get_loaded_torch()
-        if torch is not None:
-            return torch.cuda.current_stream(device).cuda_stream
         # The CUDA driver API does not expose PyTorch's notion of the current
         # stream. In torch-free launches we fall back to the device's default
         # stream after making that device's primary context current.
         return self.utils.get_default_stream(device)
 
     def _get_current_device(self):
-        torch = self._get_loaded_torch()
-        if torch is not None:
-            return torch.cuda.current_device()
         return self.utils.get_current_device()
 
     def _set_current_device(self, device):
-        torch = self._get_loaded_torch()
-        if torch is not None:
-            torch.cuda.set_device(device)
-            return
         self.utils.set_current_device(device)
 
     def get_current_target(self):

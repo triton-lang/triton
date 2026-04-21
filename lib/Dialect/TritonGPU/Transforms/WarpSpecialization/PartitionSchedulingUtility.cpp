@@ -43,9 +43,9 @@ Flags getNodeFlags(Node *node) {
     if (op->hasAttr("store"))
       return Flags::STORE;
 
-    if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
+    if (isa<tt::DescriptorLoadLikeOpInterface>(op))
       return Flags::LOAD;
-    if (isa<tt::DescriptorStoreOp, tt::DescriptorScatterOp>(op))
+    if (isa<tt::DescriptorStoreLikeOpInterface>(op))
       return Flags::STORE;
     if (isa<ttng::MMAv5OpInterface>(op) || op->hasAttr("mma"))
       return Flags::MMA;
@@ -60,7 +60,7 @@ Flags getNodeFlags(Node *node) {
 }
 
 size_t computeCost(Operation *op) {
-  if (auto mma = dyn_cast<nvidia_gpu::TCGen5MMAOp>(op)) {
+  if (auto mma = dyn_cast<nvidia_gpu::MMAv5OpInterface>(op)) {
     auto a = mma.getA();
     auto b = mma.getB();
     auto a_shape = a.getType().getShape();

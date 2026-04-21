@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-update-async-wait-count=arch-generation-name=gfx950 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-update-async-wait-count=arch-generation-name=gfx1250 | FileCheck %s
 
 // The number in SSA symbolic names represents the number of generated async load operation at assembly level a ttg.async_copy_global_to_local will generate, which is counted by this pass.
 // For example `ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst ..` will generate two global_load_async_to_lds_b128 assembly instruction
@@ -25,11 +25,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     // CHECK: amdg.async_wait {num_inst = 0
     ttg.async_wait {num = 0 : i32}
+    // 1 outstanding commit group (2nd): 2 instructions
     // CHECK: amdg.async_wait {num_inst = 2
     ttg.async_wait {num = 1 : i32}
-    // Check we stop at function boundary
+    // 2 outstanding commit groups: 2 + 1 = 3 instructions
     // CHECK: amdg.async_wait {num_inst = 3
     ttg.async_wait {num = 2 : i32}
+    // Only 2 commit groups exist, stop at function boundary
     // CHECK: amdg.async_wait {num_inst = 3
     ttg.async_wait {num = 3 : i32}
 
@@ -47,10 +49,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // Emit 1 instruction
     ttg.async_copy_global_to_local %ptr1Inst, %memDesc1Inst : tensor<64x16x!tt.ptr<f16>, #blocked> -> <64x16xf16, #shared, #smem, mutable>
 
-    // We expect 1 because the async copy above has not been committed yet
+    // No commit groups found, walk to function boundary: 1 instruction
     // CHECK: amdg.async_wait {num_inst = 1
     ttg.async_wait {num = 0 : i32}
-    // -1 can be used to wait on all, even non committed async ops
+    // -1 means wait on all — immediate stop → conservative 0
     // CHECK: amdg.async_wait {num_inst = 0
     ttg.async_wait {num = -1 : i32}
 
@@ -216,6 +218,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttg.async_commit_group
     ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     ttg.async_commit_group
+    // 3 outstanding commit groups, each ptr2Inst emits 2 instr → 6
     // CHECK: amdg.async_wait {num_inst = 6
     ttg.async_wait {num = 3: i32}
 
@@ -570,7 +573,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tdm_gather_scatter_multiple_instructions
   tt.func public @tdm_gather_scatter_multiple_instructions(
     %memDesc: !ttg.memdesc<256x128xf16, #shared, #smem, mutable>,
-    %tensorDesc: !tt.tensordesc<tensor<64x128xf16>>,
+    %tensorDesc: !tt.tensordesc<64x128xf16>,
     %row_indices_i32: tensor<64xi32>,
     %row_indices_i16: tensor<256xi16>,
     %pred: i32
@@ -578,13 +581,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
 
     // Gather with 64xi32 indices: 64/8 = 8 instructions
-    amdg.async_tdm_gather %tensorDesc[%row_indices_i32, %c0_i32] to %memDesc, pred = %pred : tensor<64xi32>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    amdg.async_tdm_gather %tensorDesc[%row_indices_i32, %c0_i32] to %memDesc, pred = %pred : tensor<64xi32>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
     // Scatter with 64xi32 indices: 64/8 = 8 instructions
-    amdg.async_tdm_scatter %tensorDesc[%row_indices_i32, %c0_i32] from %memDesc : tensor<64xi32>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    amdg.async_tdm_scatter %tensorDesc[%row_indices_i32, %c0_i32] from %memDesc : tensor<64xi32>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
     // Gather with 128xi16 indices: 256/16 = 16 instructions
-    amdg.async_tdm_gather %tensorDesc[%row_indices_i16, %c0_i32] to %memDesc, pred = %pred : tensor<256xi16>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    amdg.async_tdm_gather %tensorDesc[%row_indices_i16, %c0_i32] to %memDesc, pred = %pred : tensor<256xi16>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
     // Scatter with 128xi16 indices: 256/16 = 16 instructions
-    amdg.async_tdm_scatter %tensorDesc[%row_indices_i16, %c0_i32] from %memDesc : tensor<256xi16>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    amdg.async_tdm_scatter %tensorDesc[%row_indices_i16, %c0_i32] from %memDesc : tensor<256xi16>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
 
     // CHECK: amdg.async_tdm_intrinsic_wait {count = 0
     amdg.async_tdm_wait {num = 0 : i32}
@@ -610,15 +613,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tdm_load_store_single_instruction
   tt.func public @tdm_load_store_single_instruction(
     %memDesc: !ttg.memdesc<64x128xf16, #shared, #smem, mutable>,
-    %tensorDesc: !tt.tensordesc<tensor<64x128xf16>>,
+    %tensorDesc: !tt.tensordesc<64x128xf16>,
     %pred: i32
   ) {
     %c0_i32 = arith.constant 0 : i32
 
-    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %pred : !tt.tensordesc<tensor<64x128xf16>> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
-    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc : !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
-    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %pred : !tt.tensordesc<tensor<64x128xf16>> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
-    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc : !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %pred : !tt.tensordesc<64x128xf16> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
+    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc : !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %pred : !tt.tensordesc<64x128xf16> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
+    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc : !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
 
     // CHECK: amdg.async_tdm_intrinsic_wait {count = 0
     amdg.async_tdm_wait {num = 0 : i32}

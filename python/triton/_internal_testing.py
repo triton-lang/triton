@@ -102,6 +102,10 @@ def is_hip_gfx1250():
     return target is not None and target.backend == 'hip' and 'gfx1250' in target.arch
 
 
+def is_hip_cdna3_or_newer():
+    return is_hip_cdna3() or is_hip_cdna4()
+
+
 def is_hip_cdna():
     return is_hip_cdna2() or is_hip_cdna3() or is_hip_cdna4()
 
@@ -117,11 +121,6 @@ def get_hip_lds_size():
 def is_xpu():
     target = get_current_target()
     return False if target is None else target.backend == "xpu"
-
-
-def get_arch():
-    target = get_current_target()
-    return "" if target is None else str(target.arch)
 
 
 def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, high=None):

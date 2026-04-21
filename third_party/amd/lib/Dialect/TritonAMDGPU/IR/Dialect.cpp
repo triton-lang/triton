@@ -598,7 +598,7 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   auto smemTy = getResult().getType();
 
   // Check that every dimension of the block shape is <= 2^16
-  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto blockShape = tensorDescTy.getShape();
   auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
   if (failed(verifyResult))
     return verifyResult;
@@ -635,6 +635,14 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   Type elementType = smemTy.getElementType();
   auto elementBitWidth = elementType.getIntOrFloatBitWidth();
   if (paddedEnc) {
+    auto descPaddedEnc = llvm::dyn_cast_or_null<gpu::PaddedSharedEncodingAttr>(
+        tensorDescTy.getBlockType().getEncoding());
+    if (descPaddedEnc &&
+        descPaddedEnc.getIntervals() != paddedEnc.getIntervals() &&
+        descPaddedEnc.getPaddings() != paddedEnc.getPaddings()) {
+      return emitOpError(
+          "Interval/Padding mismatch between descriptor and allocation");
+    }
     unsigned dwordSize = 32;
     for (auto [interval, padding] :
          llvm::zip(paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
@@ -666,7 +674,7 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   auto smemTy = getSrc().getType();
 
   // Check that every dimension of the block shape is <= 2^16
-  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto blockShape = tensorDescTy.getShape();
   auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
   if (failed(verifyResult))
     return verifyResult;
@@ -679,13 +687,23 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   auto paddedEnc =
       llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
   if (paddedEnc) {
+    // Check if descriptor has a compatible padded encoding
+    auto descPaddedEnc = llvm::dyn_cast_or_null<gpu::PaddedSharedEncodingAttr>(
+        tensorDescTy.getBlockType().getEncoding());
+    if (descPaddedEnc &&
+        descPaddedEnc.getIntervals() != paddedEnc.getIntervals() &&
+        descPaddedEnc.getPaddings() != paddedEnc.getPaddings()) {
+      return emitOpError(
+          "Interval/Padding mismatch between descriptor and allocation");
+    }
     // Check if we can apply the padding workaround, see the lowering to LLVM
     // for more details.
     auto intervals = paddedEnc.getIntervals();
     if (intervals.size() != 1)
       return emitOpError("TDM store only supports single interval paddings.");
 
-    if (intervals[0] != blockShape[paddedEnc.getOrder().front()])
+    auto shapePerCTA = triton::gpu::getShapePerCTA(paddedEnc, blockShape);
+    if (intervals[0] != shapePerCTA.back())
       return emitOpError("TDM store padding is only supported when padding "
                          "interval equals the innermost block dimension (got "
                          "padInterval=")
@@ -704,7 +722,7 @@ LogicalResult AsyncTDMScatterOp::verify() {
   auto smemTy = getSrc().getType();
 
   // TDM scatter mode only supports 2D tensors
-  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto blockShape = tensorDescTy.getShape();
   if (blockShape.size() != 2)
     return emitOpError("TDM scatter only supports 2D tensors, got ")
            << blockShape.size() << "D";
@@ -733,18 +751,23 @@ LogicalResult AsyncTDMScatterOp::verify() {
 
   auto paddedEnc =
       llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
-  if (paddedEnc)
-    return emitOpError("TDM scatter does not support padding");
+  if (paddedEnc) {
+    // Check if we can apply the padding workaround, see the lowering to LLVM
+    // for more details.
+    auto intervals = paddedEnc.getIntervals();
+    if (intervals.size() != 1)
+      return emitOpError("TDM scatter only supports single interval paddings.");
+
+    if (intervals[0] != blockShape.back())
+      return emitOpError("TDM scatter padding is only supported when padding "
+                         "interval equals the innermost block dimension (got "
+                         "padInterval=")
+             << intervals[0] << ", innermost dimension=" << blockShape.back()
+             << ")";
+  }
 
   if (!paddedEnc && !swizzledEnc)
     return emitOpError("Invalid shared memory layout for TDM");
-
-  auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
-  auto sharedOrder = triton::gpu::getOrder(
-      cast<triton::gpu::SharedEncodingTrait>(smemTy.getEncoding()),
-      shapePerCTA);
-  if (sharedOrder[0] != (sharedOrder.size() - 1))
-    return emitOpError("TDM scatter only supports row-major shared order");
 
   return success();
 }
@@ -754,7 +777,7 @@ LogicalResult AsyncTDMGatherOp::verify() {
   auto smemTy = getDst().getType();
 
   // TDM gather mode only supports 2D tensors
-  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto blockShape = tensorDescTy.getShape();
   if (blockShape.size() != 2)
     return emitOpError("TDM gather only supports 2D tensors, got ")
            << blockShape.size() << "D";
@@ -798,6 +821,22 @@ LogicalResult AsyncTDMGatherOp::verify() {
   if (sharedOrder[0] != (sharedOrder.size() - 1))
     return emitOpError("TDM gather only supports row-major shared order");
 
+  // TDM gather reads the descriptor from SGPRs — all lanes in a warp see
+  // the same descriptor. The index layout must broadcast the same values
+  // to all lanes (all lane bits must be free).
+  if (srcRowIndicesType.getEncoding()) {
+    auto indexLL = triton::gpu::toLinearLayout(srcRowIndicesType);
+    auto kLane = mlir::StringAttr::get(getContext(), "lane");
+    auto freeVarMasks = indexLL.getFreeVariableMasks();
+    unsigned laneFreeMask = freeVarMasks.lookup(kLane);
+    unsigned numLanes = indexLL.getInDimSize(kLane);
+    if (laneFreeMask != (numLanes - 1))
+      return emitOpError(
+          "index layout distributes values across lanes, which is "
+          "incompatible with the warp-level TDM instruction. Change layout "
+          "to broadcast the same indices to all lanes in a warp.");
+  }
+
   return success();
 }
 
@@ -810,12 +849,16 @@ LogicalResult InitBarrierOp::verify() {
   return success();
 }
 
+TypedValue<gpu::MemDescType> InitBarrierOp::getBarrier() { return getAlloc(); }
+
 // -- WaitBarrierOp --
 LogicalResult WaitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
 }
+
+TypedValue<gpu::MemDescType> WaitBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- ArriveBarrierOp --
 LogicalResult ArriveBarrierOp::verify() {
@@ -824,6 +867,10 @@ LogicalResult ArriveBarrierOp::verify() {
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
   return success();
+}
+
+TypedValue<gpu::MemDescType> ArriveBarrierOp::getBarrier() {
+  return getAlloc();
 }
 
 // -- AsyncCopyMbarrierArriveOp --
@@ -844,7 +891,7 @@ LogicalResult AsyncCopyMbarrierArriveOp::verify() {
 // prefetch instruction.
 LogicalResult TDMPrefetchOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    DictionaryAttr attributes, PropertyRef properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   TDMPrefetchOp::Adaptor ad(operands, attributes, properties, regions);
 
@@ -854,9 +901,8 @@ LogicalResult TDMPrefetchOp::inferReturnTypes(
   }
 
   auto descType = cast<triton::TensorDescType>(ad.getDesc().getType());
-  auto blockType = descType.getBlockType();
-  auto blockShape = blockType.getShape();
-  auto elementType = blockType.getElementType();
+  auto blockShape = descType.getShape();
+  auto elementType = descType.getElementType();
 
   // Lookup the module to get the number of threads per warp, number of warps
   // and number of CTAs
@@ -914,6 +960,72 @@ LogicalResult ClusterBarrierWaitOp::verify() {
   if (numCTAs <= 1)
     return emitOpError("requires ttg.num-ctas > 1");
   return success();
+}
+
+// -- PredicatedOpInterface implementations --
+
+Value BufferLoadOp::getPredicateOperand() { return getMask(); }
+void BufferLoadOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+Type BufferLoadOp::getPredicateOperandTypeLike() {
+  return getOffsets().getType();
+}
+
+Value BufferLoadToLocalOp::getPredicateOperand() { return getMask(); }
+void BufferLoadToLocalOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+Type BufferLoadToLocalOp::getPredicateOperandTypeLike() {
+  return getOffsets().getType();
+}
+
+Value BufferAtomicRMWOp::getPredicateOperand() { return getMask(); }
+void BufferAtomicRMWOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+Type BufferAtomicRMWOp::getPredicateOperandTypeLike() {
+  return getOffsets().getType();
+}
+
+Value BufferStoreOp::getPredicateOperand() { return getMask(); }
+void BufferStoreOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+Type BufferStoreOp::getPredicateOperandTypeLike() {
+  return getOffsets().getType();
+}
+
+Value AsyncCopyLocalToGlobalOp::getPredicateOperand() { return getMask(); }
+void AsyncCopyLocalToGlobalOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+Type AsyncCopyLocalToGlobalOp::getPredicateOperandTypeLike() {
+  return getDst().getType();
+}
+
+Value AsyncTDMCopyGlobalToLocalOp::getPredicateOperand() { return getPred(); }
+void AsyncTDMCopyGlobalToLocalOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+Type AsyncTDMCopyGlobalToLocalOp::getPredicateOperandTypeLike() {
+  return getPred().getType();
+}
+
+Value AsyncTDMGatherOp::getPredicateOperand() { return getPred(); }
+void AsyncTDMGatherOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+Type AsyncTDMGatherOp::getPredicateOperandTypeLike() {
+  return getPred().getType();
+}
+
+Value TDMPrefetchOp::getPredicateOperand() { return getPred(); }
+void TDMPrefetchOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+Type TDMPrefetchOp::getPredicateOperandTypeLike() {
+  return IntegerType::get(getContext(), 1);
 }
 
 } // namespace mlir::triton::amdgpu

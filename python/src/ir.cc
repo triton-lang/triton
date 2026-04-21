@@ -6,7 +6,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
@@ -184,8 +183,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       continue;
 
     bool isIm2Col = isa<ttng::TensorDescIm2ColType>(arg.getType());
-    auto blockType = descTy.getBlockType();
-    auto encoding = blockType.getEncoding();
+    auto encoding = descTy.getSharedLayout();
 
     py::dict metadata;
     if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
@@ -196,21 +194,23 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
         throw py::type_error("invalid TMA descriptor type");
       auto tmaMode = isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
       auto blockSize =
-          ttng::getTMABlockShape(blockType, /*packedSize=*/false, tmaMode);
+          ttng::getTMABlockShape(descTy, /*packedSize=*/false, tmaMode);
       metadata["swizzle"] = *swizzle;
-      metadata["elem_size"] = blockType.getElementTypeBitWidth() / 8;
+      metadata["elem_size"] =
+          descTy.getElementType().getIntOrFloatBitWidth() / 8;
       metadata["elem_type"] = *elemType;
       metadata["block_size"] =
           std::vector<int>(blockSize.begin(), blockSize.end());
       metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
       metadata["is_im2col"] = isIm2Col;
     } else {
-      auto blockShape = blockType.getShape();
+      auto blockShape = descTy.getShape();
       metadata["block_size"] =
           std::vector<int>(blockShape.begin(), blockShape.end());
-      metadata["elem_bits"] = blockType.getElementTypeBitWidth();
+      metadata["elem_bits"] = descTy.getElementType().getIntOrFloatBitWidth();
 
-      if (auto paddedEnc = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
+      if (auto paddedEnc =
+              dyn_cast_if_present<ttg::PaddedSharedEncodingAttr>(encoding)) {
         py::list intervalPaddingPairs;
         for (auto [interval, padding] : llvm::zip_equal(
                  paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
@@ -220,8 +220,6 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
           intervalPaddingPairs.append(pair);
         }
         metadata["interval_padding_pairs"] = intervalPaddingPairs;
-
-        auto blockShape = blockType.getShape();
       }
     }
     result.append(std::move(metadata));
@@ -230,37 +228,6 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 }
 
 } // anonymous namespace
-
-static void
-registerCustomOps(py::class_<TritonOpBuilder> &TritonOpBuilderBinding,
-                  const std::string &filename) {
-  TritonPlugin TP(filename);
-  std::vector<const char *> customOpNames;
-  if (auto result = TP.getCustomOpHandles(customOpNames); !result)
-    throw TP.err2exp(result.takeError());
-
-  for (unsigned i = 0; i < customOpNames.size(); ++i) {
-    const char *customOpName = customOpNames.data()[i];
-
-    TritonOpBuilderBinding.def(
-        customOpName,
-        [customOpName](TritonOpBuilder &self,
-                       std::vector<mlir::Value> &args) -> mlir::Value {
-          std::string filename =
-              mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-          TritonPlugin TP(filename);
-
-          ::mlir::Value dst;
-          std::vector<::mlir::Value> values = {dst};
-          llvm::copy(args, std::back_inserter(values));
-          auto result = TP.addCustomOp(customOpName, self, values);
-          if (!result)
-            throw TP.err2exp(result.takeError());
-          dst = values[0];
-          return dst;
-        });
-  }
-}
 
 /*****************************************************************************/
 /* Python bindings for ir                                                    */
@@ -369,10 +336,9 @@ void init_triton_ir(py::module &&m) {
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
 
-    if (std::string filename =
-            mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-        !filename.empty()) {
-      loadPluginDialects(filename, registry);
+    // Register plugin dialects.
+    for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
+      plugin.registerDialects(registry);
     }
 
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
@@ -455,6 +421,16 @@ void init_triton_ir(py::module &&m) {
                  owner->getParentOp()->setAttr(attrName, attr);
                }
              }
+           })
+      .def("get_shape",
+           [](Value &self) -> py::object {
+             auto type = self.getType();
+             if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+               auto shape = tensorType.getShape();
+               return py::cast(
+                   std::vector<int64_t>(shape.begin(), shape.end()));
+             }
+             return py::none();
            })
       .def("get_context", &Value::getContext)
       .def("get_loc", &Value::getLoc)
@@ -661,6 +637,26 @@ void init_triton_ir(py::module &&m) {
              if (!ret)
                return py::none();
              return py::int_(ret.getInt());
+           })
+      .def("get_constant_value",
+           [](Operation &self) -> py::object {
+             auto constOp = dyn_cast<arith::ConstantOp>(self);
+             if (!constOp)
+               return py::none();
+
+             auto attr = constOp.getValue();
+
+             if (auto intAttr = dyn_cast<IntegerAttr>(attr))
+               return py::int_(intAttr.getValue().getSExtValue());
+
+             if (auto denseAttr = dyn_cast<DenseIntElementsAttr>(attr)) {
+               if (denseAttr.isSplat())
+                 return py::int_(
+                     denseAttr.getSplatValue<APInt>().getSExtValue());
+               return py::none();
+             }
+
+             return py::none();
            })
       .def("get_bool_attr",
            [](Operation &self, const std::string &name) -> py::object {
@@ -1539,9 +1535,9 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_tensor_descriptor_type",
            [](TritonOpBuilder &self, Type blockTy, bool isSigned) -> Type {
-             auto ctx = self.getContext();
-             return triton::TensorDescType::get(
-                 ctx, cast<RankedTensorType>(blockTy), isSigned);
+             auto rtt = cast<RankedTensorType>(blockTy);
+             return triton::TensorDescType::get(rtt.getShape(),
+                                                rtt.getElementType(), isSigned);
            })
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
@@ -1863,10 +1859,16 @@ void init_triton_ir(py::module &&m) {
                                                   paddingOption);
            });
 
-  if (std::string filename =
-          mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-      !filename.empty()) {
-    registerCustomOps(TritonOpBuilderBinding, filename);
+  // Add custom operations.
+  for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
+    for (const auto &op : plugin.listOps()) {
+      TritonOpBuilderBinding.def(
+          op.name, [op](TritonOpBuilder &self, std::vector<Value> args) {
+            args.insert(args.begin(), Value());
+            op.addOp(self, args);
+            return args[0];
+          });
+    }
   }
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())

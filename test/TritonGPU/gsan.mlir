@@ -44,7 +44,7 @@ module attributes {"ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32}
 
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @instrumented_async_tma_copy
-  tt.func @instrumented_async_tma_copy(%desc: !tt.tensordesc<tensor<32x32xf32, #shared>>) {
+  tt.func @instrumented_async_tma_copy(%desc: !tt.tensordesc<32x32xf32, #shared>) {
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
@@ -52,25 +52,26 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
     // CHECK: tti.experimental_gsan_tensordesc_info %arg0
     // CHECK: tti.experimental_gsan_tensor_access %{{.*}}, false, %{{.*}}
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local
-    ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<tensor<32x32xf32, #shared>>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     // CHECK: tti.experimental_gsan_tensordesc_info %arg0
     // CHECK: tti.experimental_gsan_tensor_access %{{.*}}, true, %{{.*}}
     // CHECK-NEXT: ttng.async_tma_copy_local_to_global
-    ttng.async_tma_copy_local_to_global %desc[%c0_i32, %c0_i32] %buf : !tt.tensordesc<tensor<32x32xf32, #shared>>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    ttng.async_tma_copy_local_to_global %desc[%c0_i32, %c0_i32] %buf : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
   }
 }
 
 // -----
 
-#blocked_rows = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked_rows_parent = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked_rows = #ttg.slice<{dim = 0, parent = #blocked_rows_parent}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @instrumented_async_tma_gather_scatter
-  tt.func @instrumented_async_tma_gather_scatter(%desc: !tt.tensordesc<tensor<1x32xf32, #shared>>) {
+  tt.func @instrumented_async_tma_gather_scatter(%desc: !tt.tensordesc<1x32xf32, #shared>) {
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
     %x_offsets = arith.constant dense<1> : tensor<32xi32, #blocked_rows>
@@ -79,11 +80,11 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
     // CHECK: tti.experimental_gsan_tensordesc_info %arg0
     // CHECK: tti.experimental_gsan_tensor_access %{{.*}}, false, %{{.*}}
     // CHECK-NEXT: ttng.async_tma_gather
-    ttng.async_tma_gather %desc[%x_offsets, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<tensor<1x32xf32, #shared>>, tensor<32xi32, #blocked_rows>, i32, !ttg.memdesc<1xi64, #bar, #smem, mutable>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, i1
+    ttng.async_tma_gather %desc[%x_offsets, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32, #blocked_rows>, i32, !ttg.memdesc<1xi64, #bar, #smem, mutable>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, i1
     // CHECK: tti.experimental_gsan_tensordesc_info %arg0
     // CHECK: tti.experimental_gsan_tensor_access %{{.*}}, true, %{{.*}}
     // CHECK-NEXT: ttng.async_tma_scatter
-    ttng.async_tma_scatter %desc[%x_offsets, %c0_i32] %buf : !tt.tensordesc<tensor<1x32xf32, #shared>>, tensor<32xi32, #blocked_rows>, i32, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    ttng.async_tma_scatter %desc[%x_offsets, %c0_i32] %buf : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32, #blocked_rows>, i32, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -106,13 +107,13 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
     %c32_i32 = arith.constant 32 : i32
     ttng.tensormap_create %raw_desc, %base, [%c32_i32, %c32_i32], [%shape1, %shape0], [%stride0], [%c1_i32, %c1_i32] {elem_type = 0 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 0 : i32} : (!tt.ptr<i8>, !tt.ptr<f32>, i32, i32, i32, i32, i64, i32, i32) -> ()
     // CHECK: %[[DESC:.*]] = ttng.reinterpret_tensor_descriptor %arg0
-    %desc = ttng.reinterpret_tensor_descriptor %raw_desc : !tt.ptr<i8> to !tt.tensordesc<tensor<32x32xf32, #shared>>
+    %desc = ttng.reinterpret_tensor_descriptor %raw_desc : !tt.ptr<i8> to !tt.tensordesc<32x32xf32, #shared>
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
     // CHECK: tti.experimental_gsan_tensordesc_info %[[DESC]]
     // CHECK: tti.experimental_gsan_tensor_access %{{.*}}, false, %{{.*}}
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local
-    ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<tensor<32x32xf32, #shared>>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
   }
 }

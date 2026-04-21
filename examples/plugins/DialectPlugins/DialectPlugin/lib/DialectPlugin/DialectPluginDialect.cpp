@@ -3,6 +3,7 @@
 #include "DialectPlugin/DialectPluginTypes.h"
 
 using namespace mlir;
+using namespace mlir::triton;
 using namespace mlir::triton::plugin;
 
 #include "DialectPlugin/DialectPluginOpsDialect.cpp.inc"
@@ -30,9 +31,13 @@ void DialectPluginDialect::initialize() {
 #include "triton/Tools/PluginUtils.h"
 #include "llvm/Config/llvm-config.h"
 
-using namespace mlir;
+static const char *PLUGIN_NAME = "DialectPlugin";
+static const char *DIALECT_NAME = "DialectPlugin";
+static const char *PASS_NAME = "plugingpu_conversion";
+static const char *VERSION = "0.1.0";
 
-static void addTritonPluginPass(mlir::PassManager *pm) {
+static void addTritonPluginPass(mlir::PassManager *pm,
+                                const std::vector<std::string> &args) {
   pm->addPass(mlir::triton::plugin::createConvertPluginGPUToLLVMPass());
 }
 
@@ -42,88 +47,38 @@ static void registerTritonPluginPass() {
   });
 }
 
-static const char *ADD_PLUGIN_PASS_NAME = "plugingpu_conversion";
-static std::unordered_map<std::string, void (*)(mlir::PassManager *)> passMap =
-    {{ADD_PLUGIN_PASS_NAME, addTritonPluginPass}};
-static std::unordered_map<std::string, void (*)()> registryMap = {
-    {ADD_PLUGIN_PASS_NAME, registerTritonPluginPass}};
-static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME};
-
-// Key APIs:
-
-TRITON_PLUGIN_API
-tritonAddPluginPass(mlir::PassManager *pm, const char *passName,
-                    const std::vector<std::string> &args) {
-  std::string passNameStr(passName);
-  if (passMap.find(passNameStr) == passMap.end())
-    return TP_GENERIC_FAILURE;
-  passMap[passNameStr](pm);
-  return TP_SUCCESS;
+static void registerTritonPluginDialect(DialectRegistry *registry) {
+  registry->insert<mlir::triton::plugin::DialectPluginDialect>();
+  mlir::triton::plugin::registerpluginPasses();
 }
 
-TRITON_PLUGIN_API
-tritonRegisterPluginPass(const char *passName) {
-  std::string passNameStr(passName);
-  if (registryMap.find(passNameStr) == registryMap.end())
-    return TP_GENERIC_FAILURE;
-  registryMap[passNameStr]();
-  return TP_SUCCESS;
-}
-
-TRITON_PLUGIN_API
-tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
-  if (!passCount)
-    return TP_GENERIC_FAILURE;
-  auto count = passMap.size();
-  assert(count == registryMap.size() &&
-         "Expected register and add passes map size to match");
-  *passCount = count;
-  if (!passNames)
-    return TP_SUCCESS;
-  unsigned i = 0;
-  for (auto passName : passNamesTable) {
-    passNames[i] = passName;
-  }
-  return TP_SUCCESS;
-}
-
-TRITON_PLUGIN_API
-tritonEnumeratePluginDialects(uint32_t *dialectCount,
-                              const char **dialectNames) {
-  *dialectCount = 1;
-  if (!dialectNames)
-    return TP_SUCCESS;
-  dialectNames[0] = "DialectPlugin";
-  return TP_SUCCESS;
-}
-
-TRITON_PLUGIN_API_TYPE(DialectPluginLibraryInfo)
-tritonGetDialectPluginInfo(const char *name) {
-  return {MLIR_PLUGIN_API_VERSION, "DialectPlugin", LLVM_VERSION_STRING,
-          [](DialectRegistry *registry) {
-            registry->insert<mlir::triton::plugin::DialectPluginDialect>();
-            mlir::triton::plugin::registerpluginPasses();
-          }};
-}
-
-TRITON_PLUGIN_API
-tritonEnumeratePluginCustomOps(uint32_t *count, const char **handles) {
-  if (!count)
-    return TP_GENERIC_FAILURE;
-  *count = 1;
-  if (!handles)
-    return TP_SUCCESS;
-  handles[0] = "create_custom_op";
-  return TP_SUCCESS;
-}
-
-TRITON_PLUGIN_API
-tritonAddPluginCustomOp(const char *handle, TritonOpBuilder &self,
-                        std::vector<mlir::Value> &operands) {
+static void addTritonPluginCustomOp(TritonOpBuilder &self,
+                                    std::vector<mlir::Value> &operands) {
   ::mlir::Value &dst = operands[0];
   ::mlir::Value &src = operands[1];
 
   dst = self.create<arith::AddFOp>(src, src);
   operands[0] = dst;
-  return TP_SUCCESS;
+}
+
+TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
+  static plugin::PassInfo pass = {PASS_NAME, VERSION, addTritonPluginPass,
+                                  registerTritonPluginPass};
+  static plugin::PassInfo passes[] = {pass};
+  static plugin::DialectInfo dialect = {DIALECT_NAME, VERSION,
+                                        registerTritonPluginDialect};
+  static plugin::DialectInfo dialects[] = {dialect};
+  static plugin::OpInfo op = {"create_custom_op", addTritonPluginCustomOp};
+  static plugin::OpInfo ops[] = {op};
+  static plugin::PluginInfo info = {TRITON_PLUGIN_API_VERSION,
+                                    PLUGIN_NAME,
+                                    VERSION,
+                                    passes,
+                                    1,
+                                    dialects,
+                                    1,
+                                    ops,
+                                    1,
+                                    TRITON_VERSION};
+  return &info;
 }

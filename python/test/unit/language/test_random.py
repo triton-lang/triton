@@ -189,7 +189,7 @@ def test_rand(size, seed, dtype, device, const_seed):
         const_kernel[grid](x, N, seed=seed, dtype=getattr(tl, dtype))
     else:
         kernel[grid](x, N, seed, dtype=getattr(tl, dtype))
-    assert all((x >= 0) & (x <= 1))
+    assert all((x >= 0) & (x < 1))
     assert scipy.stats.kstest(x.tolist(), 'uniform', args=(0, 1)).statistic < 0.01
 
 

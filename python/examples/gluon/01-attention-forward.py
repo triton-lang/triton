@@ -163,7 +163,7 @@ def get_desc_channel(desc, num_buffers: gl.constexpr, num_consumers: gl.constexp
 @gluon.jit
 def issue_async_tma_load(smem, bar, desc, offset):
     mbarrier.expect(bar, desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(desc, [offset, 0], bar, smem)
+    tma.async_load(desc, [offset, 0], bar, smem)
 
 
 # ===-----------------------------------------------------------------------===#

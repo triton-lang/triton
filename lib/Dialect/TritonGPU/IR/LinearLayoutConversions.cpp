@@ -492,7 +492,6 @@ chooseDotDsReadTrLayout(DotOperandEncodingAttr dotMfmaLayout,
 
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
-  int32_t kWidthDot = dotMfmaLayout.getKWidth();
   auto kDim = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
 
   int32_t kSize = shape[kDim];
@@ -579,7 +578,6 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
 
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
-  int mIndex = 0 + hasBatchDim;
 
   int32_t kWidth = dotMfmaLayout.getKWidth();
   auto nonKDimIndex = dotMfmaLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
@@ -680,7 +678,6 @@ LinearLayout AMDWmmaEncodingAttr::getTileLayout(unsigned rank) const {
 
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
-  StringAttr kWarp = S("warp");
 
   // https://github.com/ROCm/amd_matrix_instruction_calculator can print the
   // register and lane layout for mfma instructions.
@@ -712,16 +709,28 @@ LinearLayout AMDWmmaEncodingAttr::getTileLayout(unsigned rank) const {
   // AMDWmmaEncodingAttr section.
   unsigned version = getVersion();
   assert(version >= 1 && version <= 3 && "unexpected wmma version");
-  LinearLayout tileLayout =
-      version == 1
-          ? LinearLayout(
-                {{kRegister, {/*gap*/ {0, 2}, {0, 4}, {0, 8}}},
-                 {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 1}}}},
-                {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]})
-          : LinearLayout(
-                {{kRegister, {{0, 1}, {0, 2}, {0, 4}}},
-                 {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 8}}}},
-                {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]});
+  LinearLayout tileLayout;
+  if (version == 1) {
+    tileLayout = LinearLayout(
+        {{kRegister, {/*gap*/ {0, 2}, {0, 4}, {0, 8}}},
+         {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 1}}}},
+        {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]});
+  } else {
+    // version 2/3
+    auto instrShape = getInstrShape();
+    if (instrShape[0] == 32 && instrShape[1] == 16) {
+      // 32x16 is two 16x16 stacked with extra vgprs for second 16x16
+      tileLayout = LinearLayout(
+          {{kRegister, {{0, 1}, {0, 2}, {0, 4}, {0, 16}}},
+           {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 8}}}},
+          {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]});
+    } else {
+      tileLayout = LinearLayout(
+          {{kRegister, {{0, 1}, {0, 2}, {0, 4}}},
+           {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 8}}}},
+          {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]});
+    }
+  }
 
   if (hasBatchDim) {
     tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[0]);
@@ -733,17 +742,7 @@ LinearLayout AMDWmmaEncodingAttr::getTileLayout(unsigned rank) const {
 
 LinearLayout
 AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  auto mnkDim = getInstrShape();
   auto rank = shape.size();
-  bool hasBatchDim = rank == 3;
-  int mIndex = 0 + hasBatchDim;
-  int nIndex = 1 + hasBatchDim;
-  unsigned mDim = mnkDim[0], nDim = mnkDim[1];
-  (void)mDim, (void)nDim;
-
-  assert(((shape[mIndex] == 1 || shape[mIndex] >= mDim) &&
-          (shape[nIndex] == 1 || shape[nIndex] >= nDim)) &&
-         "Unsupported tensor shape for given wmma layout");
 
   auto tileLayout = getTileLayout(rank);
   auto ctaLayout = getCtaLayout();
@@ -768,13 +767,11 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
   assert(version >= 1 && version <= 3 && "unexpected wmma version");
 
   auto rank = shape.size();
-  bool hasBatchDim = rank == 3;
 
   MLIRContext *ctx = dotWmmaLayout.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
-  StringAttr kWarp = S("warp");
 
   // lane order
   // operand A: [1, 0] / [2, 1, 0]
@@ -787,31 +784,47 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
 
   auto mnkDim = wmmaLayout.getInstrShape();
   auto kDim = mnkDim[2];
-  auto nonKDimIndex = dotWmmaLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
-  auto kDimIndex = dotWmmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
-  unsigned kSize = shape[kDimIndex];
-
   auto nonKDim = dotWmmaLayout.getOpIdx() == 0 ? mnkDim[0] : mnkDim[1];
   auto kWidth = dotWmmaLayout.getKWidth();
   constexpr int warpSize = 32;
 
   // The relative order of registers and lanes is given by:
   // - k dim: kWidth registers
-  // - non-k dim: nonKDim lanes
-  // - k dim: depth = warpSize / nonKDim lanes
+  // - non-k dim: wmmaTileDim(=16) lanes
+  // - k dim: kDepth = warpSize / wmmaTileDim lanes
   //   version 1 duplicates these values across k dim
   //   version 2/3 offsets these values across k dim
-  // - k dim: repeat kDim / (kWidth * depth) times to fit k dim
-  LinearLayout tileLayout;
-  int depth = warpSize / nonKDim;
-  tileLayout = LinearLayout::identity1D(kWidth, kRegister, dimK) *
-               LinearLayout::identity1D(nonKDim, kLane, dimNonK);
-  tileLayout *= version == 1 ? LinearLayout::zeros1D(depth, kLane, dimK)
-                             : LinearLayout::identity1D(depth, kLane, dimK);
+  // - k dim: repeat kDim / (kWidth * kDepth) times to fit k dim
+  // - non-k dim: nonKRepeat registers (for 32×16 where M > 16 lanes)
+  //
+  // Per-warp (reg, lane) mapping for one WMMA tile (kWidth=16,kDepth=2):
+  //
+  //            <----- kDepth=0 ------>       | <----- kDepth=1 ------>
+  //            K=0       K=1      .. K=15    | K=16      K=17     .. K=31
+  // M=0:      (r0,L0)   (r1,L0)     (r15,L0) | (r0,L16)  (r1,L16)   (r15,L16)
+  // M=1:      (r0,L1)   (r1,L1)     (r15,L1) | (r0,L17)  (r1,L17)   (r15,L17)
+  //  ...                                     |
+  // M=15:     (r0,L15)  (r1,L15)    (r15,L15)| (r0,L31)  (r1,L31)   (r15,L31)
+  //           --------------- nonKRepeat=2 (32x16 only) ---------------
+  // M=16:     (r16,L0)  (r17,L0)    (r31,L0) | (r16,L16) (r17,L16)  (r31,L16)
+  //  ...                                     |
+  // M=31:     (r16,L15) (r17,L15)   (r31,L15)| (r16,L31) (r17,L31)  (r31,L31)
+  //
+  int wmmaTileDim = 16;
+  int nonKRepeat = nonKDim / wmmaTileDim;
 
-  int kTileSize = depth * kWidth;
-  tileLayout *= LinearLayout::identity1D(std::max(kSize, kDim) / kTileSize,
-                                         kRegister, dimK);
+  LinearLayout tileLayout;
+  int kDepth = warpSize / wmmaTileDim;
+  tileLayout = LinearLayout::identity1D(kWidth, kRegister, dimK) *
+               LinearLayout::identity1D(wmmaTileDim, kLane, dimNonK);
+  tileLayout *= version == 1 ? LinearLayout::zeros1D(kDepth, kLane, dimK)
+                             : LinearLayout::identity1D(kDepth, kLane, dimK);
+
+  int kTileSize = kDepth * kWidth;
+  int kTileRepeat = kDim / kTileSize;
+  tileLayout *= LinearLayout::identity1D(kTileRepeat, kRegister, dimK);
+  if (nonKRepeat > 1)
+    tileLayout *= LinearLayout::identity1D(nonKRepeat, kRegister, dimNonK);
 
   auto ctaLayout = wmmaLayout.getCtaLayout();
   // Zero out M or N dim based on opIdx
@@ -959,13 +972,16 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
   MLIRContext *ctx = mma.getContext();
 
   SmallVector<unsigned> tileShape(rank, 1);
+  unsigned instrM = mma.getInstrShape()[rank - 2];
+  // For fp64 (instrM == 8), the native m8n8k4 instruction uses a smaller tile.
+  unsigned kTileMultiplier = instrM == 8 ? 4 : 8;
   if (isA) {
-    tileShape[rank - 2] = 16;
-    tileShape[rank - 1] = kWidth * 8;
+    tileShape[rank - 2] = instrM;
+    tileShape[rank - 1] = kWidth * kTileMultiplier;
   } else {
     // Hopper takes the rhs via shared memory
     assert(mma.isAmpere());
-    tileShape[rank - 2] = kWidth * 8;
+    tileShape[rank - 2] = kWidth * kTileMultiplier;
     tileShape[rank - 1] = 8;
   }
   auto order = getOrderForDotOperand(dot.getOpIdx(), rank, /*kContig*/ true);
@@ -990,7 +1006,6 @@ DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     return wmmaDotOperandToLinearLayout(*this, shape);
   } else {
-    auto mma = mlir::cast<NvidiaMmaEncodingAttr>(parent);
     return nvidiaDotToLinearLayout(shape, *this);
   }
 }
@@ -1250,8 +1265,7 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
                                                                    layout);
 }
 
-LinearLayout paddedLinearLayout(MemDescType type) {
-  auto encoding = type.getEncoding();
+LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
   assert(isPaddedEncoding(encoding) &&
          "expected padded encoding or partitioned wrapping padded");
 
@@ -1260,8 +1274,12 @@ LinearLayout paddedLinearLayout(MemDescType type) {
   }
 
   auto partitioned = cast<PartitionedSharedEncodingAttr>(encoding);
-  auto shape = type.getAllocShape().take_back(type.getRank());
   return partitionedSharedToLinearLayout(shape, partitioned);
+}
+
+LinearLayout paddedLinearLayout(MemDescType type) {
+  auto shape = type.getAllocShape().take_back(type.getRank());
+  return paddedLinearLayout(shape, type.getEncoding());
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
@@ -1377,8 +1395,6 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
 
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
-  StringAttr kWarp = StringAttr::get(ctx, "warp");
-  StringAttr kBlock = StringAttr::get(ctx, "block");
 
   // In scaled dot, the shapes of operands(without batch dimension) are,
   // respectively:
@@ -1391,12 +1407,15 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
 
   // Each lane holds kWidth=4(scale32) or kWidth=8(scale16) consecutive values
   // along the K dim. The first 16 lanes are distributed along the nonK dim.
+  constexpr unsigned warpSize = 32;
+  unsigned nonKDim = (dotOperandIdx == 0) ? wmmaMDim : 16;
+  unsigned depth = warpSize / nonKDim;
   unsigned scaleKWidth = scaleFactor == 32 ? 4 : 8;
   auto kSize = dotOperandShape[1];
   LinearLayout tileLayout =
       LinearLayout::identity1D(scaleKWidth, kRegister, dimK) *
-      LinearLayout::identity1D(16, kLane, dimNonK) *
-      LinearLayout::zeros1D(2, kLane, dimNonK);
+      LinearLayout::identity1D(nonKDim, kLane, dimNonK) *
+      LinearLayout::zeros1D(depth, kLane, dimNonK);
 
   // If the shape along the K dim is larger than kWidth, repeat this
   // pattern to fill the K dim.
@@ -1427,6 +1446,9 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   ctaLayout = tileLayout.transposeOuts(outDimNames) * ctaLayout;
   auto nonOpSelLayout =
       combineCtaCgaWithShape(ctaLayout, cgaLayout, dotOperandShape);
+
+  if (wmmaMDim > 16)
+    return nonOpSelLayout;
 
   // This is the tricky part. For a single tile, only 16 threads
   // hold scale values, 4 for each thread. Other 16 thread in a warp
@@ -1511,7 +1533,6 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
-  StringAttr kBlock = StringAttr::get(ctx, "block");
 
   // Fetch the tilesPerWarp value in the M dimension for operand A, or in the N
   // dimension for operand B.

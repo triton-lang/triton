@@ -13,8 +13,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // Each thread needs to load 8 elements and we load 1 (sizePerThread) per buffer load instruction
     // COMMON: rocdl.make.buffer.rsrc
     // COMMON-NOT: rocdl.make.buffer.rsrc
-    // COMMON-COUNT-8: rocdl.raw.ptr.buffer.load.lds
-    // COMMON-NOT: rocdl.raw.ptr.buffer.load.lds
+    // COMMON-COUNT-8: rocdl.raw.ptr.buffer.load.async.lds
+    // COMMON-NOT: rocdl.raw.ptr.buffer.load.async.lds
     %65 = amdg.buffer_load_to_local %arg1[%arg2] into %arg3 : <f32>[tensor<32x64xi32, #blocked>] -> <32x64xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -41,8 +41,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // Each thread needs to load 2 elements and we load 2 (sizePerThread) per buffer load instruction
     // COMMON: rocdl.make.buffer.rsrc
     // COMMON-NOT: rocdl.make.buffer.rsrc
-    // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON-NOT: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds
+    // COMMON-NOT: rocdl.raw.ptr.buffer.load.async.lds
     %8 = amdg.buffer_load_to_local %arg1[%7] into %arg2 : <f16>[tensor<64x64xi32, #blocked>]  -> <64x64xf16, #shared, #smem, mutable>
     tt.return
   }
@@ -69,11 +69,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // Each thread needs to load 8 elements and we load 8 (sizePerThread) per buffer load instruction
     // GFX950: rocdl.make.buffer.rsrc
     // GFX950-NOT: rocdl.make.buffer.rsrc
-    // GFX950: rocdl.raw.ptr.buffer.load.lds
-    // GFX950-NOT: rocdl.raw.ptr.buffer.load.lds
+    // GFX950: rocdl.raw.ptr.buffer.load.async.lds
+    // GFX950-NOT: rocdl.raw.ptr.buffer.load.async.lds
 
     // GFX942 does not support vectorization > 4bytes so we cannot lower it
-    // GFX942-NOT: rocdl.raw.ptr.buffer.load.lds
+    // GFX942-NOT: rocdl.raw.ptr.buffer.load.async.lds
     // GFX942: amdg.buffer_load_to_local
     %8 = amdg.buffer_load_to_local %arg1[%7] into %arg2 : <f16>[tensor<64x64xi32, #blocked>]  -> <64x64xf16, #shared, #smem, mutable>
     tt.return
@@ -101,11 +101,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // Each thread needs to load 8 elements and we load 8 (sizePerThread) per buffer load instruction
     // GFX950: rocdl.make.buffer.rsrc
     // GFX950-NOT: rocdl.make.buffer.rsrc
-    // GFX950: rocdl.raw.ptr.buffer.load.lds
-    // GFX950-NOT: rocdl.raw.ptr.buffer.load.lds
+    // GFX950: rocdl.raw.ptr.buffer.load.async.lds
+    // GFX950-NOT: rocdl.raw.ptr.buffer.load.async.lds
 
     // GFX942 does not support vectorization > 4bytes so we cannot lower it
-    // GFX942-NOT: rocdl.raw.ptr.buffer.load.lds
+    // GFX942-NOT: rocdl.raw.ptr.buffer.load.async.lds
     // GFX942: amdg.buffer_load_to_local
     %8 = amdg.buffer_load_to_local %arg1[%7] into %arg2 : <f16>[tensor<256x8xi32, #blocked>]  -> <256x8xf16, #shared, #smem, mutable>
     tt.return
@@ -146,7 +146,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // Each thread needs to load 4 elements and we load 1 (sizePerThread) per buffer load instruction
     // Note that mask/other alignment is 1 so we need 4 conditionals
 
-    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds
     // COMMON: llvm.cond_br
     // COMMON: llvm.store
 
@@ -154,19 +154,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // COMMON: [[AND:%.*]] = llvm.and
     // COMMON: llvm.cond_br [[AND]]
 
-    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds
     // COMMON: llvm.cond_br
     // COMMON: llvm.store
 
-    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds
     // COMMON: llvm.cond_br
     // COMMON: llvm.store
 
-    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds
     // COMMON: llvm.cond_br
     // COMMON: llvm.store
 
-    // COMMON-NOT: rocdl.raw.ptr.buffer.load.lds
+    // COMMON-NOT: rocdl.raw.ptr.buffer.load.async.lds
     // COMMON-NOT: _predicated_store
     // COMMON-NOT: llvm.cond_br
     // COMMON-NOT: llvm.store
@@ -191,15 +191,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // COMMON-NEXT: %[[IMM0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COMMON-NEXT: %[[aux_ca:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COMMON-NEXT: %[[IMM1:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // COMMON-NEXT: rocdl.raw.ptr.buffer.load.lds {{.*}}, {{.*}}, {{.*}}, %[[VOFFSET]], %[[IMM1]], %[[IMM0]], %[[aux_ca]]
+    // COMMON-NEXT: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, %[[VOFFSET]], %[[IMM1]], %[[IMM0]], %[[aux_ca]]
     %1 = amdg.buffer_load_to_local %arg0[%0] cacheModifier = ca into %arg2: <f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
     // COMMON: llvm.getelementptr
     // COMMON: %[[aux_cg:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // COMMON: rocdl.raw.ptr.buffer.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cg]]
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cg]]
     %2 = amdg.buffer_load_to_local %arg0[%0] cacheModifier = cg into %arg2: <f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
     // COMMON: llvm.getelementptr
     // COMMON: %[[aux_cv:.*]] = llvm.mlir.constant(17 : i32) : i32
-    // COMMON: rocdl.raw.ptr.buffer.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cv]]
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cv]]
     %3 = amdg.buffer_load_to_local %arg0[%0] cacheModifier = cv into %arg2: <f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
 
     tt.return
@@ -221,10 +221,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // COMMON: rocdl.make.buffer.rsrc
     // COMMON-NOT: rocdl.make.buffer.rsrc
     // COMMON: rocdl.ds_bpermute
-    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds
     // COMMON: rocdl.ds_bpermute
-    // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON-NOT: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds
+    // COMMON-NOT: rocdl.raw.ptr.buffer.load.async.lds
     %65 = amdg.buffer_load_to_local %arg1[%arg2] into %arg3 : <f32>[tensor<16x64xi32, #blocked>] -> <16x64xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -266,31 +266,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
-    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds
     // COMMON: llvm.cond_br
     // COMMON: llvm.store
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
-    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds
     // COMMON: llvm.cond_br
     // COMMON: llvm.store
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
-    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds
     // COMMON: llvm.cond_br
     // COMMON: llvm.store
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
-    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds
     // COMMON: llvm.cond_br
     // COMMON: llvm.store
 
     // COMMON-NOT: rocdl.ds_bpermute
     // COMMON-NOT: rocdl.ballot
-    // COMMON-NOT: rocdl.raw.ptr.buffer.load.lds
+    // COMMON-NOT: rocdl.raw.ptr.buffer.load.async.lds
     // COMMON-NOT: _predicated_store
 
     amdg.buffer_load_to_local %arg1[%arg2] mask=%67 other=%cst_0 into %arg3 : <f32>[tensor<32x32xi32, #blocked>] tensor<32x32xf32, #blocked>  -> <32x32xf32, #shared, #smem, mutable>
@@ -318,11 +318,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
 
     // Each thread needs to load 8 elements and we load 8 (sizePerThread) per buffer load instruction
     // GFX950: rocdl.make.buffer.rsrc
-    // GFX950: rocdl.raw.ptr.buffer.load.lds
-    // GFX950-NOT: rocdl.raw.ptr.buffer.load.lds
+    // GFX950: rocdl.raw.ptr.buffer.load.async.lds
+    // GFX950-NOT: rocdl.raw.ptr.buffer.load.async.lds
 
     // GFX942 does not support vectorization > 4bytes so we cannot lower it
-    // GFX942-NOT: rocdl.raw.ptr.buffer.load.lds
+    // GFX942-NOT: rocdl.raw.ptr.buffer.load.async.lds
     // GFX942: amdg.buffer_load_to_local
     %8 = amdg.buffer_load_to_local %arg1[%7] into %arg2 : <f16>[tensor<64x64xi32, #blocked>]  -> <64x64xf16, #shared, #smem, mutable>
     tt.return
@@ -339,7 +339,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @buffer_load_to_local_contiguity_hint(%ptr: !tt.ptr<f16>, %off: tensor<256xi32, #blocked>, %lds: !ttg.memdesc<256xf16, #shared1D, #smem, mutable>) {
     // Check we load 4 bytes
     // COMMON: %[[LOAD_BYTES:.*]] = llvm.mlir.constant(4 : i32) : i32
-    // COMMON: rocdl.raw.ptr.buffer.load.lds %{{.*}}, %{{.*}}, %[[LOAD_BYTES]]
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds %{{.*}}, %{{.*}}, %[[LOAD_BYTES]]
     %0 = amdg.buffer_load_to_local %ptr[%off] into %lds {contiguity = 2 : i32} : <f16>[tensor<256xi32, #blocked>] -> <256xf16, #shared1D, #smem, mutable>
     tt.return
   }

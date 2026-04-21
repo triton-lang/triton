@@ -22,7 +22,6 @@ namespace gpu {
 LogicalResult CircularStoreOp::verify() {
   auto scopeId = getScopeId();
   auto segmentType = getSegment().getType();
-  auto granularity = segmentType.getGranularity();
   auto selectedIds = segmentType.getSelectIds();
   auto bufferSizeInBytes = segmentType.getNBytes();
   auto mod = getOperation()->getParentOfType<ModuleOp>();
