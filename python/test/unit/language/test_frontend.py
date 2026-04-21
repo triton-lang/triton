@@ -520,7 +520,7 @@ def test_jit_call_tuple_of_tensors_plus_tuple_of_int():
     def kernel():
         x0 = tl.program_id(0)
         x1 = tl.program_id(1)
-        tuple_arg_identity((x0, x1)[:-1] + (1,))
+        tuple_arg_identity((x0, x1)[:-1] + (1, ))
 
     run_parser(kernel)
 
