@@ -159,7 +159,7 @@ public:
     // `allocType` after a reshape.
     MemDescType innerTy;
     if (failed(MemDescReshapeOp::inferReturnTypes(
-            getContext(), allocOp.getLoc(), allocType, srcShape, innerTy)))
+            getContext(), /*loc=*/std::nullopt, allocType, srcShape, innerTy)))
       return failure();
 
     // For now don't apply the transformation if the new encoding is not an
