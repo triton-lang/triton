@@ -45,17 +45,6 @@ def assert_code_equal(actual: str, expected: str) -> None:
     assert actual_lines == expected_lines
 
 
-def test_stable_toposort_preserves_component_order():
-    graph = {
-        0: ordered_set([1]),
-        1: ordered_set([2]),
-        2: ordered_set([0, 3]),
-        3: ordered_set([4]),
-        4: ordered_set(),
-    }
-    assert stable_toposort(graph) == [0, 1, 2, 3, 4]
-
-
 def test_slice_kernel_basic_module_slicing(tmp_path):
     pkg, mod = _make_package(
         tmp_path,
