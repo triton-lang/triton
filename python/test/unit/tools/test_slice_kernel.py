@@ -304,6 +304,53 @@ def test_slice_kernel_translate_to_gluon_avoids_double_descriptor_wrap(tmp_path)
     assert "convert_host_descriptor(convert_host_descriptor(" not in output
 
 
+def test_translate_to_gluon_explicit_expand_dims_rewrites_layout(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "kernel_mod.py":
+            """
+                import triton
+                import triton.language as tl
+
+                @triton.jit
+                def kernel(out_ptr, BLOCK: tl.constexpr):
+                    offsets = tl.arange(0, BLOCK)
+                    expanded = tl.expand_dims(offsets, 0)
+                    tl.store(out_ptr + expanded, expanded)
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton"], translate_to_gluon=True,
+                          target=TranslatorTarget.GENERIC)
+    assert "helpers.convert_to_expand_dims_layout(offsets, [0])" in output
+
+
+def test_translate_to_gluon_member_fn_expand_dims_rewrites_layout(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "kernel_mod.py":
+            """
+                import triton
+                import triton.language as tl
+
+                @triton.jit
+                def kernel(out_ptr, BLOCK: tl.constexpr):
+                    offsets = tl.arange(0, BLOCK)
+                    expanded = offsets.expand_dims(0)
+                    tl.store(out_ptr + expanded, expanded)
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton"], translate_to_gluon=True,
+                          target=TranslatorTarget.GENERIC)
+    print(output)
+    assert "helpers.convert_to_expand_dims_layout(offsets, [0])" in output
+
+
 def test_slice_kernel_public_imports():
     from triton.tools.triton_to_gluon_translator.slice_kernel import slice_kernel as new_slice_kernel
     from triton.tools.triton_to_gluon_translator.translator import translate_paths

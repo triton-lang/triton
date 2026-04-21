@@ -127,7 +127,7 @@ class Translator(ReferenceRewriter):
         self.imports.add("import triton.experimental.gluon.language as gl")
         self.imports.add(f"import {self.target.helpers_module} as helpers")
 
-        self.tensor_member_match_fns = ["reshape", "trans", "permute", "split", "reduce", "sum"]
+        self.tensor_member_match_fns = ["reshape", "trans", "permute", "split", "reduce", "sum", "expand_dims"]
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         new_node = super().visit_Attribute(node)
@@ -170,6 +170,9 @@ class Translator(ReferenceRewriter):
             node.keywords = [kw for kw in node.keywords if kw.arg != "can_reorder"]
         elif value is tl.split:
             node.args[0] = parse_expr(f"helpers.set_split_src_layout({ast.unparse(node.args[0])})")
+        elif value is tl.expand_dims:
+            node.args[0] = parse_expr(
+                f"helpers.convert_to_expand_dims_layout({ast.unparse(node.args[0])}, [{ast.unparse(node.args[1])}])")
         elif value is tl.range:
             return ast.Call(
                 func=ast.Name("range", ast.Load()),
