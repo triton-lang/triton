@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-optimize-dot-operands -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-optimize-dot-operands -canonicalize -verify-diagnostics | FileCheck %s
+
 
 
 #blockedA = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -291,5 +292,21 @@ module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num
     %a = ttg.local_alloc %r : (tensor<64x64xf32, #blocked1>) -> !ttg.memdesc<64x64xf32, #shared, #smem>
     // CHECK: tt.return
     tt.return %a: !ttg.memdesc<64x64xf32, #shared, #smem>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [8, 2, 2], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @reshape_memdesc_infer_failure_does_not_emit_diagnostic
+  tt.func @reshape_memdesc_infer_failure_does_not_emit_diagnostic(%arg: tensor<64x4x2xf32, #blocked>) -> !ttg.memdesc<64x8xf32, #shared, #smem> {
+    %r = tt.reshape %arg : tensor<64x4x2xf32, #blocked> -> tensor<64x8xf32, #blocked1>
+    %a = ttg.local_alloc %r : (tensor<64x8xf32, #blocked1>) -> !ttg.memdesc<64x8xf32, #shared, #smem>
+    // CHECK: tt.return
+    tt.return %a: !ttg.memdesc<64x8xf32, #shared, #smem>
   }
 }
