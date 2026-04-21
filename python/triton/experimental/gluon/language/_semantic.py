@@ -18,13 +18,6 @@ def _is_int_list(value):
     return isinstance(value, Sequence) and all(isinstance(i, int) for i in value)
 
 
-def _check_atomic_add_dtype(dtype):
-    _check(dtype.is_int() or dtype.is_floating(),
-           lambda: f"shared atomic_add requires an integer or floating dtype, got {dtype}")
-    _check(dtype.primitive_bitwidth >= 16 and not (dtype.is_int() and dtype.primitive_bitwidth == 16),
-           lambda: f"shared atomic_add does not support {dtype}")
-
-
 def _compute_tmem_reg_layout(element_ty, shape, alloc_shape, layout, num_warps, instr_variant):
     _check(isinstance(instr_variant, str), lambda: "instr_variant must be a string")
     _check(instr_variant in ("32x32b", "16x64b", "16x128b", "16x256b", "16x32bx2", "32x32b_splitn"),
@@ -331,7 +324,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(
             values.dtype == mem_desc.dtype,
             lambda: f"values element type must match destination element type: got {values.dtype} and {mem_desc.dtype}")
-        _check_atomic_add_dtype(values.dtype)
 
         handle = self.builder.create_local_atomic_add(mem_desc.handle, values.handle, indices.handle, axis)
         ret_ty = ttgl.distributed_type(mem_desc.dtype, values.shape, values.type.layout)

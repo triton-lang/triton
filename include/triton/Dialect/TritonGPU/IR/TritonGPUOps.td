@@ -473,9 +473,7 @@ def TTG_LocalAtomicAddOp : TTG_Op<"local_atomic_add", [
 
     For each input position I, the operation atomically updates dst where the
     coordinate at the axis is replaced by indices[I]:
-      old = dst[I[0], ..., indices[I], ..., I[n]]
-      dst[I[0], ..., indices[I], ..., I[n]] = old + values[I]
-      result[I] = old
+      dst[I[0], ..., indices[I], ..., I[n]] += values[I]
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$dst,

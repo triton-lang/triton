@@ -889,15 +889,6 @@ LogicalResult LocalAtomicAddOp::verify() {
   if (!valuesEltTy.isIntOrFloat()) {
     return emitError("values must have integer or floating element type");
   }
-  unsigned valuesBitwidth = valuesEltTy.getIntOrFloatBitWidth();
-  if (valuesBitwidth < 16) {
-    return emitError("local_atomic_add does not support element type ")
-           << valuesEltTy;
-  }
-  if (isa<IntegerType>(valuesEltTy) && valuesBitwidth == 16) {
-    return emitError("local_atomic_add does not support element type ")
-           << valuesEltTy;
-  }
 
   // Verify indices tensor has integer element type
   if (!indicesTy.getElementType().isInteger()) {

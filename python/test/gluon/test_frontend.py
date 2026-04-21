@@ -232,26 +232,6 @@ def test_shared_atomic_add():
     old = smem.atomic_add(values, indices, axis=1)  # noqa: F841
 
 
-@pytest.mark.parametrize("target", ALL_TARGETS)
-def test_shared_atomic_add_unsupported_dtype(target):
-
-    @gluon.jit
-    def kernel():
-        shape: ttgl.constexpr = [8, 32]
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
-        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
-
-        smem = ttgl.allocate_shared_memory(ttgl.int8, shape, smem_layout)
-        indices = ttgl.full(shape, 0, ttgl.int32, layout)
-        values = ttgl.full(shape, 1, ttgl.int8, layout)
-        smem.atomic_add(values, indices, axis=1)
-
-    with pytest.raises(CompilationError) as e:
-        run_parser(kernel, target=target)
-
-    assert "shared atomic_add does not support int8" in str(e.value.__cause__)
-
-
 @gluon.jit
 def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
     XBLOCK: ttgl.constexpr = tmem_layout.block[0]
