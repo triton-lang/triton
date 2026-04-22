@@ -207,7 +207,6 @@ class PartitionArgs:
     gather_indx_ptr: gl.tensor
     x_slice_sizes: gl.tensor
     x_slice_offs: gl.tensor
-    x_block_offs: gl.tensor
     x_block_schedule: gl.tensor
 
     x_bufs: gl.shared_memory_descriptor
@@ -227,10 +226,6 @@ class PartitionArgs:
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
     acc_num_bufs: gl.constexpr
-
-    store_bufs: gl.shared_memory_descriptor
-    store_empty_bars: gl.shared_memory_descriptor
-    store_ready_bars: gl.shared_memory_descriptor
 
     grid_m: gl.tensor
     GRID_N: gl.constexpr
@@ -255,12 +250,10 @@ class PartitionArgs:
     FLEXPOINT_SATURATE_INF: gl.constexpr
 
     SWIGLU_SUBTILE_FACTOR: gl.constexpr
-    EPILOGUE_BUFFER_DEPTH: gl.constexpr
     BAND_N: gl.constexpr
     X_GATHER_MULTICAST: gl.constexpr
     W_SCALE_MULTICAST: gl.constexpr
     FORCE_EPILOGUE_WARPS_N1: gl.constexpr
-    USE_DIRECT_EPILOGUE_STORE: gl.constexpr
 
     @gluon.jit
     def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
@@ -457,25 +450,6 @@ def pack_fp8_out_fragment(out_packed, out_recip):
 
 
 @gluon.jit
-def _store_out_subtile(
-    p: PartitionArgs,
-    out_packed,
-    out_recip,
-    store_idx,
-    store_phase,
-    store_issued,
-):
-    payload = pack_fp8_out_fragment(out_packed, out_recip)
-    empty_bar = p.store_empty_bars.index(store_idx)
-    ready_bar = p.store_ready_bars.index(store_idx)
-    mbarrier.wait(empty_bar, store_phase, pred=store_issued >= p.EPILOGUE_BUFFER_DEPTH)
-    p.store_bufs.index(store_idx).store(payload)
-    mbarrier.arrive(ready_bar)
-    next_store_idx, next_store_phase = advance(store_idx, store_phase, p.EPILOGUE_BUFFER_DEPTH)
-    return next_store_idx, next_store_phase, store_issued + 1
-
-
-@gluon.jit
 def get_store_layout(p: PartitionArgs):
     frag_rows: gl.constexpr = p.BLOCK_M // p.SWIGLU_SUBTILE_FACTOR
     local_cga_layout: gl.constexpr = ((0, 1), ) if p.USE_2CTA else ()
@@ -516,71 +490,6 @@ def epilogue_direct_store(
 
 
 @gluon.jit
-def epilogue_overlapped_store(
-    p: PartitionArgs,
-    acc_packed,
-    out_recip,
-    store_idx,
-    store_phase,
-    store_issued,
-):
-    gl.static_assert(p.SWIGLU_SUBTILE_FACTOR > 1, "store helper requires row fragments")
-    acc_packed_subtiles = split_m_subtiles(acc_packed, p.SWIGLU_SUBTILE_FACTOR)
-
-    # Software pipelined and overlapped SwiGLU with transfer to store partition.
-    prepared_gelu, prepared_linear = _swiglu_step1(
-        acc_packed_subtiles[0],
-        p.SWIGLU_LIMIT,
-    )
-    ready_out_packed = acc_packed_subtiles[0]
-    for frag_idx in gl.static_range(1, p.SWIGLU_SUBTILE_FACTOR):
-        cur_gelu, cur_linear = _swiglu_step1(
-            acc_packed_subtiles[frag_idx],
-            p.SWIGLU_LIMIT,
-        )
-        next_ready_out_packed = _swiglu_step2(
-            prepared_gelu,
-            prepared_linear,
-            p.SWIGLU_ALPHA,
-        )
-        if frag_idx > 1:
-            store_idx, store_phase, store_issued = _store_out_subtile(
-                p,
-                ready_out_packed,
-                out_recip,
-                store_idx,
-                store_phase,
-                store_issued,
-            )
-        ready_out_packed = next_ready_out_packed
-        prepared_gelu = cur_gelu
-        prepared_linear = cur_linear
-
-    store_idx, store_phase, store_issued = _store_out_subtile(
-        p,
-        ready_out_packed,
-        out_recip,
-        store_idx,
-        store_phase,
-        store_issued,
-    )
-    last_out_packed = _swiglu_step2(
-        prepared_gelu,
-        prepared_linear,
-        p.SWIGLU_ALPHA,
-    )
-    store_idx, store_phase, store_issued = _store_out_subtile(
-        p,
-        last_out_packed,
-        out_recip,
-        store_idx,
-        store_phase,
-        store_issued,
-    )
-    return store_idx, store_phase, store_issued
-
-
-@gluon.jit
 def apply_bias_and_scale(
     p: PartitionArgs,
     idx,
@@ -614,44 +523,9 @@ def apply_bias_and_scale(
 
 
 @gluon.jit
-def epilogue_store_partition(p: PartitionArgs):
-    gl.static_assert(p.SWIGLU_SUBTILE_FACTOR > 1, "store helper requires row fragments")
-    store_layout: gl.constexpr = get_store_layout(p)
-    frag_rows: gl.constexpr = p.BLOCK_M // p.SWIGLU_SUBTILE_FACTOR
-    gl.static_assert(p.EPILOGUE_BUFFER_DEPTH >= 2, "store helper depth must be at least 2")
-
-    store_idx = 0
-    store_phase = 0
-    for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        pid_m, pid_n, slice_idx, slice_offset = p.apply_block_schedule(block_id)
-        off_m = pid_m * p.BLOCK_M
-        shape_m = gl.load(p.x_slice_sizes + slice_idx)
-        out_off_n_packed = pid_n * (p.BLOCK_N // p.REDUCTION_N // 4)
-        for frag_idx in gl.static_range(p.SWIGLU_SUBTILE_FACTOR):
-            frag_off_m = off_m + frag_idx * frag_rows
-            ready_bar = p.store_ready_bars.index(store_idx)
-            empty_bar = p.store_empty_bars.index(store_idx)
-            mbarrier.wait(ready_bar, store_phase)
-            packed_fp8 = p.store_bufs.index(store_idx).load(store_layout)
-            mbarrier.arrive(empty_bar)
-            store_packed_out(
-                p,
-                packed_fp8,
-                frag_off_m,
-                out_off_n_packed,
-                shape_m,
-                slice_offset,
-            )
-            store_idx, store_phase = advance(store_idx, store_phase, p.EPILOGUE_BUFFER_DEPTH)
-
-
-@gluon.jit
 def epilogue_partition(p: PartitionArgs):
     idx = 0
     phase = 0
-    store_idx = 0
-    store_phase = 1
-    store_issued = 0
 
     x_scale = 1.0 if p.x_scale_ptr is None else gl.load(p.x_scale_ptr)
     w_scale = 1.0 if p.w_scale_ptr is None else gl.load(p.w_scale_ptr)
@@ -673,10 +547,9 @@ def epilogue_partition(p: PartitionArgs):
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
         pid_m, pid_n, slice_idx, slice_offset = p.apply_block_schedule(block_id)
-        if p.USE_DIRECT_EPILOGUE_STORE:
-            off_m = pid_m * p.BLOCK_M
-            shape_m = gl.load(p.x_slice_sizes + slice_idx)
-            out_off_n_packed = pid_n * (p.BLOCK_N // p.REDUCTION_N // 4)
+        off_m = pid_m * p.BLOCK_M
+        shape_m = gl.load(p.x_slice_sizes + slice_idx)
+        out_off_n_packed = pid_n * (p.BLOCK_N // p.REDUCTION_N // 4)
         idx, phase, acc_packed = apply_bias_and_scale(
             p,
             idx,
@@ -687,27 +560,16 @@ def epilogue_partition(p: PartitionArgs):
             bias_layout,
             acc_scale,
         )
-
-        if p.USE_DIRECT_EPILOGUE_STORE:
-            epilogue_direct_store(
-                p,
-                acc_packed,
-                out_recip,
-                off_m,
-                out_off_n_packed,
-                shape_m,
-                slice_offset,
-                store_layout,
-            )
-        else:
-            store_idx, store_phase, store_issued = epilogue_overlapped_store(
-                p,
-                acc_packed,
-                out_recip,
-                store_idx,
-                store_phase,
-                store_issued,
-            )
+        epilogue_direct_store(
+            p,
+            acc_packed,
+            out_recip,
+            off_m,
+            out_off_n_packed,
+            shape_m,
+            slice_offset,
+            store_layout,
+        )
 
 
 @gluon.jit
@@ -753,18 +615,14 @@ def ws_matmul_kernel(
     LOAD_ACTIVATION_WARPS: gl.constexpr,
     LOAD_WEIGHT_WARPS: gl.constexpr,
     MMA_WARPS: gl.constexpr,
-    STORE_HELPER_WARPS: gl.constexpr,
     LOAD_ACTIVATION_REGS: gl.constexpr,
     LOAD_WEIGHT_REGS: gl.constexpr,
     MMA_REGS: gl.constexpr,
-    STORE_HELPER_REGS: gl.constexpr,
     SWIGLU_SUBTILE_FACTOR: gl.constexpr,
-    EPILOGUE_BUFFER_DEPTH: gl.constexpr,
     BAND_N: gl.constexpr,
     X_GATHER_MULTICAST: gl.constexpr,
     W_SCALE_MULTICAST: gl.constexpr,
     FORCE_EPILOGUE_WARPS_N1: gl.constexpr,
-    USE_DIRECT_EPILOGUE_STORE: gl.constexpr,
     SCALE_SIZE_OUTER: gl.constexpr,
     SCALE_SIZE_INNER: gl.constexpr,
     MXFP_BLOCK_SIZE: gl.constexpr,
@@ -824,22 +682,6 @@ def ws_matmul_kernel(
     )
     acc_empty_bars, acc_ready_bars = alloc_ring_barriers(acc_num_bufs, producer_two_ctas=use_2cta)
 
-    if USE_DIRECT_EPILOGUE_STORE:
-        store_bufs = x_bufs
-        store_empty_bars = x_empty_bars
-        store_ready_bars = x_ready_bars
-    else:
-        gl.static_assert(SWIGLU_SUBTILE_FACTOR > 1, "store helper requires row fragments")
-        gl.static_assert(EPILOGUE_BUFFER_DEPTH >= 2, "store helper depth must be at least 2")
-        frag_rows: gl.constexpr = BLOCK_M // SWIGLU_SUBTILE_FACTOR
-        out_packed_n: gl.constexpr = BLOCK_N // REDUCTION_N // 2
-        store_bufs = gl.allocate_shared_memory(
-            gl.int16,
-            [EPILOGUE_BUFFER_DEPTH, frag_rows, out_packed_n],
-            gl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=((0, 1), ) if use_2cta else ()),
-        )
-        store_empty_bars, store_ready_bars = alloc_ring_barriers(EPILOGUE_BUFFER_DEPTH)
-
     x_scale_tmem.store(gl.full((BLOCK_M, scale_k), 127, dtype=gl.uint8, layout=x_scale_tmem.get_reg_layout()))
 
     p = PartitionArgs(
@@ -857,7 +699,6 @@ def ws_matmul_kernel(
         gather_indx_ptr=gather_indx_ptr,
         x_slice_sizes=x_slice_sizes,
         x_slice_offs=x_slice_offs,
-        x_block_offs=x_block_offs,
         x_block_schedule=x_block_schedule,
         #
         x_bufs=x_bufs,
@@ -877,10 +718,6 @@ def ws_matmul_kernel(
         acc_empty_bars=acc_empty_bars,
         acc_ready_bars=acc_ready_bars,
         acc_num_bufs=acc_num_bufs,
-        #
-        store_bufs=store_bufs,
-        store_empty_bars=store_empty_bars,
-        store_ready_bars=store_ready_bars,
         #
         grid_m=grid_m,
         GRID_N=grid_n,
@@ -905,37 +742,22 @@ def ws_matmul_kernel(
         FLEXPOINT_SATURATE_INF=FLEXPOINT_SATURATE_INF,
         #
         SWIGLU_SUBTILE_FACTOR=SWIGLU_SUBTILE_FACTOR,
-        EPILOGUE_BUFFER_DEPTH=EPILOGUE_BUFFER_DEPTH,
         BAND_N=BAND_N,
         X_GATHER_MULTICAST=X_GATHER_MULTICAST,
         W_SCALE_MULTICAST=W_SCALE_MULTICAST,
         FORCE_EPILOGUE_WARPS_N1=FORCE_EPILOGUE_WARPS_N1,
-        USE_DIRECT_EPILOGUE_STORE=USE_DIRECT_EPILOGUE_STORE,
     )
 
-    if USE_DIRECT_EPILOGUE_STORE:
-        gl.warp_specialize(
-            [
-                (epilogue_partition, (p, )),
-                (load_activations, (p, )),
-                (load_weights, (p, )),
-                (mma_partition, (p, )),
-            ],
-            [LOAD_ACTIVATION_WARPS, LOAD_WEIGHT_WARPS, MMA_WARPS],
-            [LOAD_ACTIVATION_REGS, LOAD_WEIGHT_REGS, MMA_REGS],
-        )
-    else:
-        gl.warp_specialize(
-            [
-                (epilogue_partition, (p, )),
-                (epilogue_store_partition, (p, )),
-                (load_activations, (p, )),
-                (load_weights, (p, )),
-                (mma_partition, (p, )),
-            ],
-            [STORE_HELPER_WARPS, LOAD_ACTIVATION_WARPS, LOAD_WEIGHT_WARPS, MMA_WARPS],
-            [STORE_HELPER_REGS, LOAD_ACTIVATION_REGS, LOAD_WEIGHT_REGS, MMA_REGS],
-        )
+    gl.warp_specialize(
+        [
+            (epilogue_partition, (p, )),
+            (load_activations, (p, )),
+            (load_weights, (p, )),
+            (mma_partition, (p, )),
+        ],
+        [LOAD_ACTIVATION_WARPS, LOAD_WEIGHT_WARPS, MMA_WARPS],
+        [LOAD_ACTIVATION_REGS, LOAD_WEIGHT_REGS, MMA_REGS],
+    )
 
 
 # ===-----------------------------------------------------------------------===#
@@ -1033,20 +855,16 @@ class KernelConfig:
     LOAD_ACTIVATION_WARPS: int = 4
     LOAD_WEIGHT_WARPS: int = 1
     MMA_WARPS: int = 1
-    STORE_HELPER_WARPS: int = 2
 
     SWIGLU_SUBTILE_FACTOR: int = 8
-    EPILOGUE_BUFFER_DEPTH: int = 2
     BAND_N: int = 20
     X_GATHER_MULTICAST: bool = True
     W_SCALE_MULTICAST: bool = True
     FORCE_EPILOGUE_WARPS_N1: bool = False
-    USE_DIRECT_EPILOGUE_STORE: bool = False
 
     LOAD_ACTIVATION_REGS: int = 112
     LOAD_WEIGHT_REGS: int = 48
     MMA_REGS: int = 48
-    STORE_HELPER_REGS: int = 48
     MAXNREG: int = None
     OCCUPANCY: int = 1
 
@@ -1075,7 +893,6 @@ def _select_occ2_config(slice_size: int) -> KernelConfig:
         LOAD_ACTIVATION_REGS=48,
         LOAD_WEIGHT_REGS=32,
         MMA_REGS=32,
-        STORE_HELPER_REGS=32,
     )
 
     if slice_size <= 14:
@@ -1163,9 +980,9 @@ def _select_band_n(slice_size: int) -> int:
 
 def maybe_enable_2cta(p: KernelConfig, slice_size: int) -> KernelConfig:
     if p.BLOCK_M == 32 and p.BLOCK_N == 128 and slice_size in (16, 20, 24, 32):
-        # Low-batch 2CTA only wins when the wider N tile is paired with direct
-        # epilogue stores and a four-warp layout. Slice 28 remains on 1CTA
-        # because uniform routing still shows a stable regression there.
+        # Low-batch 2CTA only wins when the wider N tile is paired with a
+        # four-warp layout. Slice 28 remains on 1CTA because uniform routing
+        # still shows a stable regression there.
         next_p = replace(
             p,
             BLOCK_N=256,
@@ -1182,7 +999,6 @@ def maybe_enable_2cta(p: KernelConfig, slice_size: int) -> KernelConfig:
             MAXNREG=52,
             BAND_N=32,
             FORCE_EPILOGUE_WARPS_N1=True,
-            USE_DIRECT_EPILOGUE_STORE=True,
         )
         if slice_size == 16:
             return replace(next_p, X_NUM_BUFS=5)
@@ -1202,11 +1018,9 @@ def maybe_enable_2cta(p: KernelConfig, slice_size: int) -> KernelConfig:
             X_NUM_BUFS=6,
             W_NUM_BUFS=5,
             SWIGLU_SUBTILE_FACTOR=4,
-            EPILOGUE_BUFFER_DEPTH=2,
             LOAD_ACTIVATION_REGS=64,
             LOAD_WEIGHT_REGS=48,
             MMA_REGS=48,
-            STORE_HELPER_REGS=48,
             MAXNREG=64,
         )
     if p.BLOCK_M == 128 and p.BLOCK_N == 256 and slice_size >= 80:
@@ -1223,7 +1037,7 @@ def select_kernel_config(slice_size: int) -> KernelConfig:
     else:
         p = _select_occ1_config(slice_size)
     p = maybe_enable_2cta(p, slice_size)
-    if p.BLOCK_M == 32 and p.BLOCK_N == 256 and p.NUM_CTAS == 2 and p.USE_DIRECT_EPILOGUE_STORE and slice_size <= 32:
+    if p.BLOCK_M == 32 and p.BLOCK_N == 256 and p.NUM_CTAS == 2 and slice_size <= 32:
         p = replace(p, BAND_N=32)
     elif p.BLOCK_M == 64 and p.BLOCK_N == 256 and p.NUM_CTAS == 2 and 36 <= slice_size <= 72:
         p = replace(p, BAND_N=26)
@@ -1343,18 +1157,14 @@ def matmul(
         LOAD_ACTIVATION_WARPS=p.LOAD_ACTIVATION_WARPS,
         LOAD_WEIGHT_WARPS=p.LOAD_WEIGHT_WARPS,
         MMA_WARPS=p.MMA_WARPS,
-        STORE_HELPER_WARPS=p.STORE_HELPER_WARPS,
         LOAD_ACTIVATION_REGS=p.LOAD_ACTIVATION_REGS,
         LOAD_WEIGHT_REGS=p.LOAD_WEIGHT_REGS,
         MMA_REGS=p.MMA_REGS,
-        STORE_HELPER_REGS=p.STORE_HELPER_REGS,
         SWIGLU_SUBTILE_FACTOR=p.SWIGLU_SUBTILE_FACTOR,
-        EPILOGUE_BUFFER_DEPTH=p.EPILOGUE_BUFFER_DEPTH,
         BAND_N=p.BAND_N,
         X_GATHER_MULTICAST=p.X_GATHER_MULTICAST,
         W_SCALE_MULTICAST=p.W_SCALE_MULTICAST,
         FORCE_EPILOGUE_WARPS_N1=p.FORCE_EPILOGUE_WARPS_N1,
-        USE_DIRECT_EPILOGUE_STORE=p.USE_DIRECT_EPILOGUE_STORE,
         #
         SCALE_SIZE_OUTER=p.SCALE_SIZE_OUTER,
         SCALE_SIZE_INNER=p.SCALE_SIZE_INNER,
