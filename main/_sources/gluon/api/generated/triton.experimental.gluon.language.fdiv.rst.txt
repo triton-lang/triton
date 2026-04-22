@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.fdiv
+=======================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: fdiv

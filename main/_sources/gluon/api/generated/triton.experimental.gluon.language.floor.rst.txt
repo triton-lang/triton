@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.floor
+========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: floor

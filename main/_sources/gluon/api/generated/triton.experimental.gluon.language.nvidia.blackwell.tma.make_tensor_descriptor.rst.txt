@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.blackwell.tma.make\_tensor\_descriptor
+================================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell.tma
+
+.. autofunction:: make_tensor_descriptor

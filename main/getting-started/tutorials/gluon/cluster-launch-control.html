@@ -1,0 +1,465 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cluster Launch Control (CLC) &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/custom.css" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="TMA im2col mode and Convolution via Implicit GEMM" href="conv-im2col.html" />
+    <link rel="prev" title="Blocked-Scaled Matrix Multiplication" href="tcgen05-mma-scaled.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="intro.html">Introduction to Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="layouts.html">Tensor Layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="async-copy.html">Async Copy in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tma.html">TMA in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="wgmma.html">Warp-Group MMA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05.html">The 5th Generation TensorCore<sup>TM</sup></a></li>
+<li class="toctree-l2"><a class="reference internal" href="persistence.html">Persistent Kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="warp-specialization.html">Warp Specialization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tma-gather-scatter.html">Native TMA Gather and Scatter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-copy.html">TCGen05 Copy Instruction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-mma-scaled.html">Blocked-Scaled Matrix Multiplication</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Cluster Launch Control (CLC)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#key-insight">Key Insight</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#clc-api">CLC API</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#clc-matmul-kernel">CLC Matmul Kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#benchmark">Benchmark</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#cluster-launch-control-clc-matmul-blackwell">Cluster Launch Control (CLC) Matmul - Blackwell</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="conv-im2col.html">TMA im2col mode and Convolution via Implicit GEMM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html">Multi-CTA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html#benchmarking-matmul-multicta">Benchmarking matmul_multicta</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/api/index.html">API Reference</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Gluon Tutorials</a></li>
+      <li class="breadcrumb-item active">Cluster Launch Control (CLC)</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/getting-started/tutorials/gluon/cluster-launch-control.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="cluster-launch-control-clc">
+<span id="example-cluster-launch-control"></span><h1>Cluster Launch Control (CLC)<a class="headerlink" href="#cluster-launch-control-clc" title="Link to this heading"></a></h1>
+<p>Cluster Launch Control (CLC) is a Blackwell (SM100+) hardware feature that enables
+dynamic work distribution between thread blocks. When a block finishes early, it can
+cancel a not-yet-launched cluster and take over its work, improving load balancing.</p>
+<p>This tutorial demonstrates:</p>
+<ol class="arabic simple">
+<li><p>The CLC API: try_cancel, is_canceled, get_first_ctaid</p></li>
+<li><p>How to overlap CLC with computation to hide latency</p></li>
+<li><p>A comparison with a statically scheduled persistent matmul</p></li>
+</ol>
+<section id="key-insight">
+<h2>Key Insight<a class="headerlink" href="#key-insight" title="Link to this heading"></a></h2>
+<p>The critical optimization is issuing CLC during the TMA prologue and checking
+the result after tile completion. This hides CLC latency behind computation.</p>
+</section>
+<section id="clc-api">
+<h2>CLC API<a class="headerlink" href="#clc-api" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">clc.try_cancel(result,</span> <span class="pre">mbar)</span></code>: Issue async CLC request to cancel a pending cluster</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">clc_result</span> <span class="pre">=</span> <span class="pre">clc.load_result(result)</span></code>: Load CLC response into registers</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">clc_result.is_canceled()</span></code>: Returns True if a cluster was successfully canceled</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">clc_result.program_id(dim)</span></code>: Get the canceled cluster’s program ID</p></li>
+</ul>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">importlib</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental</span><span class="w"> </span><span class="kn">import</span> <span class="n">gluon</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon</span><span class="w"> </span><span class="kn">import</span> <span class="n">language</span> <span class="k">as</span> <span class="n">gl</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.nvidia.blackwell</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.language.nvidia.blackwell</span><span class="w"> </span><span class="kn">import</span> <span class="n">tma</span><span class="p">,</span> <span class="n">mbarrier</span><span class="p">,</span> <span class="n">fence_async_shared</span><span class="p">,</span> <span class="n">clc</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">is_blackwell</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">()</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">10</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">():</span>
+    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;This tutorial requires Blackwell (SM100+) GPU&quot;</span><span class="p">)</span>
+
+<span class="c1"># Re-use helpers from tutorial 7.</span>
+<span class="n">t7</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">import_module</span><span class="p">(</span><span class="s2">&quot;07-persistence&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="clc-matmul-kernel">
+<h2>CLC Matmul Kernel<a class="headerlink" href="#clc-matmul-kernel" title="Link to this heading"></a></h2>
+<p>This kernel processes its assigned tile, then attempts to steal additional work.
+CLC is issued during the prologue so the result is ready after tile completion.</p>
+<p>This is identical to the persistent_matmul_kernel from tutorial 7, except for the
+changed ClcTileScheduler interface to support dynamic scheduling.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">aggregate</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ClcTileScheduler</span><span class="p">:</span>
+    <span class="n">has_work</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+    <span class="n">tile_id</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+    <span class="n">clc_result_buf</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">shared_memory_descriptor</span>
+    <span class="n">barrier</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">shared_memory_descriptor</span>
+    <span class="n">phase</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">initialize</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">):</span>
+        <span class="n">has_work</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">to_tensor</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">starting_tile_id</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+        <span class="n">barrier</span> <span class="o">=</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">allocate_mbarrier</span><span class="p">()</span>
+        <span class="n">clc_result_buffer</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">SwizzledSharedLayout</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">barrier</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">phase</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">to_tensor</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">ClcTileScheduler</span><span class="p">(</span><span class="n">has_work</span><span class="p">,</span> <span class="n">starting_tile_id</span><span class="p">,</span> <span class="n">clc_result_buffer</span><span class="p">,</span> <span class="n">barrier</span><span class="p">,</span> <span class="n">phase</span><span class="p">)</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">try_cancel</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">clc</span><span class="o">.</span><span class="n">try_cancel</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">clc_result_buf</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">barrier</span><span class="p">)</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">barrier</span><span class="p">,</span> <span class="mi">16</span><span class="p">)</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">advance</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">barrier</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">phase</span><span class="p">)</span>
+        <span class="n">clc_res</span> <span class="o">=</span> <span class="n">clc</span><span class="o">.</span><span class="n">load_result</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">clc_result_buf</span><span class="p">)</span>
+        <span class="n">has_work</span> <span class="o">=</span> <span class="n">clc_res</span><span class="o">.</span><span class="n">is_canceled</span><span class="p">()</span>
+        <span class="n">next_tile_id</span> <span class="o">=</span> <span class="n">clc_res</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">ClcTileScheduler</span><span class="p">(</span><span class="n">has_work</span><span class="p">,</span> <span class="n">next_tile_id</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">clc_result_buf</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">barrier</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">phase</span> <span class="o">^</span> <span class="mi">1</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>We also implement a static scheduler that conforms to the same interface,
+so we can directly compare the benifits of dynamic scheduling.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">aggregate</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">StaticTileScheduler</span><span class="p">:</span>
+    <span class="n">has_work</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+    <span class="n">tile_id</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+    <span class="n">num_tiles</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">initialize</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">):</span>
+        <span class="n">starting_tile_id</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">num_tiles</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span> <span class="o">*</span> <span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+        <span class="n">has_work</span> <span class="o">=</span> <span class="n">starting_tile_id</span> <span class="o">&lt;</span> <span class="n">num_tiles</span>
+        <span class="k">return</span> <span class="n">StaticTileScheduler</span><span class="p">(</span><span class="n">has_work</span><span class="p">,</span> <span class="n">starting_tile_id</span><span class="p">,</span> <span class="n">num_tiles</span><span class="p">)</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">try_cancel</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">pass</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">advance</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">next_tile_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">tile_id</span> <span class="o">+</span> <span class="n">gl</span><span class="o">.</span><span class="n">num_programs</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">has_work</span> <span class="o">=</span> <span class="n">next_tile_id</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_tiles</span>
+        <span class="k">return</span> <span class="n">StaticTileScheduler</span><span class="p">(</span><span class="n">has_work</span><span class="p">,</span> <span class="n">next_tile_id</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_tiles</span><span class="p">)</span>
+
+
+<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_compute_pid</span><span class="p">(</span><span class="n">tile_id</span><span class="p">,</span> <span class="n">num_pid_in_group</span><span class="p">,</span> <span class="n">num_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">):</span>
+    <span class="n">group_id</span> <span class="o">=</span> <span class="n">tile_id</span> <span class="o">//</span> <span class="n">num_pid_in_group</span>
+    <span class="n">first_pid_m</span> <span class="o">=</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span>
+    <span class="n">group_size_m</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">num_pid_m</span> <span class="o">-</span> <span class="n">first_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
+    <span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">(</span><span class="n">tile_id</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
+    <span class="n">pid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">tile_id</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">//</span> <span class="n">group_size_m</span>
+    <span class="k">return</span> <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">persistent_matmul_kernel</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">MMAImpl</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+                             <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">BLOCK_K</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">dtype</span>
+    <span class="n">K</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">N</span> <span class="o">=</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">M</span> <span class="o">=</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="n">num_pid_n</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+    <span class="n">num_pid_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span>
+    <span class="n">GROUP_SIZE_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="mi">8</span>
+    <span class="n">num_pid_in_group</span> <span class="o">=</span> <span class="n">GROUP_SIZE_M</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+
+    <span class="n">bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="c1"># Producer and consumer indices.</span>
+    <span class="n">producer</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">consumer</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">MMAImpl</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">scheduler</span> <span class="o">=</span> <span class="n">SchedulerImpl</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+    <span class="k">while</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">has_work</span><span class="p">:</span>
+        <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span> <span class="o">=</span> <span class="n">_compute_pid</span><span class="p">(</span><span class="n">scheduler</span><span class="o">.</span><span class="n">tile_id</span><span class="p">,</span> <span class="n">num_pid_in_group</span><span class="p">,</span> <span class="n">num_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
+        <span class="n">off_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
+        <span class="n">off_n</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_N</span>
+
+        <span class="n">scheduler</span><span class="o">.</span><span class="n">try_cancel</span><span class="p">()</span>
+
+        <span class="n">a_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">]</span> <span class="o">+</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+        <span class="n">b_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">]</span> <span class="o">+</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">),</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+            <span class="n">producer</span> <span class="o">=</span> <span class="n">t7</span><span class="o">.</span><span class="n">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">),</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+            <span class="n">producer</span> <span class="o">=</span> <span class="n">t7</span><span class="o">.</span><span class="n">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+            <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">t7</span><span class="o">.</span><span class="n">issue_mma</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">):</span>
+            <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">t7</span><span class="o">.</span><span class="n">issue_mma</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+        <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">c_smem</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+        <span class="n">c</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">take_result</span><span class="p">()</span>
+        <span class="n">c_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
+        <span class="n">fence_async_shared</span><span class="p">()</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">scheduler</span> <span class="o">=</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">advance</span><span class="p">()</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">run_matmul_kernel</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">num_buffers</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">use_clc</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">C</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">a_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">b_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">c_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">a_layout</span><span class="p">)</span>
+    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">b_layout</span><span class="p">)</span>
+    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">c_layout</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">use_clc</span><span class="p">:</span>
+        <span class="n">num_pid_m</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span>
+        <span class="n">num_pid_n</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+        <span class="n">grid</span> <span class="o">=</span> <span class="n">num_pid_m</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+        <span class="n">SchedulerImpl</span> <span class="o">=</span> <span class="n">ClcTileScheduler</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">dev_props</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">grid</span> <span class="o">=</span> <span class="n">dev_props</span><span class="o">.</span><span class="n">multi_processor_count</span>
+        <span class="n">SchedulerImpl</span> <span class="o">=</span> <span class="n">StaticTileScheduler</span>
+
+    <span class="n">MMAImpl</span> <span class="o">=</span> <span class="n">t7</span><span class="o">.</span><span class="n">MMAv5</span>
+    <span class="n">persistent_matmul_kernel</span><span class="p">[(</span><span class="n">grid</span><span class="p">,</span> <span class="p">)](</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">MMAImpl</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Blackwell&quot;</span><span class="p">)</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;M, N, K&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span><span class="p">),</span> <span class="p">(</span><span class="mi">1000</span><span class="p">,</span> <span class="mi">1000</span><span class="p">,</span> <span class="mi">1000</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;use_clc&quot;</span><span class="p">,</span> <span class="p">[</span><span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">])</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_op</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">use_clc</span><span class="p">):</span>
+    <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+
+    <span class="n">C_ref</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">mm</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">)</span>
+    <span class="n">run_matmul_kernel</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">use_clc</span><span class="o">=</span><span class="n">use_clc</span><span class="p">)</span>
+
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">C_ref</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="benchmark">
+<h2>Benchmark<a class="headerlink" href="#benchmark" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">benchmark</span><span class="p">():</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;=&quot;</span> <span class="o">*</span> <span class="mi">60</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Cluster Launch Control (CLC) Matmul - Blackwell&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;=&quot;</span> <span class="o">*</span> <span class="mi">60</span><span class="p">)</span>
+
+    <span class="n">props</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Device: </span><span class="si">{</span><span class="n">props</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">, SMs: </span><span class="si">{</span><span class="n">props</span><span class="o">.</span><span class="n">multi_processor_count</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Matrix: </span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">x</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">x</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+
+    <span class="c1"># Static baseline</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">static_fn</span><span class="p">():</span>
+        <span class="n">run_matmul_kernel</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">use_clc</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+    <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench_cudagraph</span><span class="p">(</span><span class="n">static_fn</span><span class="p">)</span>
+    <span class="n">static_tflops</span> <span class="o">=</span> <span class="n">t7</span><span class="o">.</span><span class="n">get_flops</span><span class="p">(</span><span class="n">ms</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Static:     </span><span class="si">{</span><span class="n">static_tflops</span><span class="si">:</span><span class="s2">7.2f</span><span class="si">}</span><span class="s2"> TFLOPS&quot;</span><span class="p">)</span>
+
+    <span class="c1"># CLC matmul</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">clc_fn</span><span class="p">():</span>
+        <span class="n">run_matmul_kernel</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">)</span>
+
+    <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench_cudagraph</span><span class="p">(</span><span class="n">clc_fn</span><span class="p">)</span>
+    <span class="n">clc_tflops</span> <span class="o">=</span> <span class="n">t7</span><span class="o">.</span><span class="n">get_flops</span><span class="p">(</span><span class="n">ms</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CLC:        </span><span class="si">{</span><span class="n">clc_tflops</span><span class="si">:</span><span class="s2">7.2f</span><span class="si">}</span><span class="s2"> TFLOPS (</span><span class="si">{</span><span class="mi">100</span><span class="o">*</span><span class="n">clc_tflops</span><span class="o">/</span><span class="n">static_tflops</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">% of static)&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Correctness check</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Verifying correctness...&quot;</span><span class="p">)</span>
+    <span class="n">A_test</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">1024</span><span class="p">,</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">B_test</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">1024</span><span class="p">,</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">C_ref</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">mm</span><span class="p">(</span><span class="n">A_test</span><span class="p">,</span> <span class="n">B_test</span><span class="p">)</span>
+    <span class="n">C_clc</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">C_ref</span><span class="p">)</span>
+    <span class="n">run_matmul_kernel</span><span class="p">(</span><span class="n">A_test</span><span class="p">,</span> <span class="n">B_test</span><span class="p">,</span> <span class="n">C_clc</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">synchronize</span><span class="p">()</span>
+    <span class="n">max_diff</span> <span class="o">=</span> <span class="p">(</span><span class="n">C_ref</span> <span class="o">-</span> <span class="n">C_clc</span><span class="p">)</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Max diff: </span><span class="si">{</span><span class="n">max_diff</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">max_diff</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">,</span> <span class="s2">&quot;Correctness check failed&quot;</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;✓ Correctness verified&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>A sample run of this benchmark may look like,</p>
+<section id="cluster-launch-control-clc-matmul-blackwell">
+<h3>Cluster Launch Control (CLC) Matmul - Blackwell<a class="headerlink" href="#cluster-launch-control-clc-matmul-blackwell" title="Link to this heading"></a></h3>
+<p>Device: NVIDIA GB200, SMs: 152
+Matrix: 8192x8192x8192</p>
+<p>Static:     1040.13 TFLOPS
+CLC:        1080.74 TFLOPS (103.9% of static)</p>
+<p>Notice that we’ve achieved a 3.9% speedup (which will vary run to run),
+without improving the actual matmul computation at all. This is because there
+is always a slight variance between the time taken to compute each tile. For
+example, one may have inputs already cached in L2 and another might suffer a
+cache miss. With a static scheduler, the kernel takes as long as it takes the
+slowest SM to complete it’s assigned <code class="docutils literal notranslate"><span class="pre">num_tiles</span> <span class="pre">/</span> <span class="pre">num_sms</span></code> tiles. However, CLC
+allows us to better balance the load by give more work to the SMs that finish
+early and less to those that are taking longer.</p>
+<p>This effect will be even more pronounced in kernels that have more run-time
+variation, e.g. in a ragged matmul where the k dim is different for different
+output tiles.</p>
+<p>Note that a similar effect can be achieved on pre-blackwell by using a global
+atomic counter to track the next available tile id. However, this requires
+additional run time overhead to zero out the counter before launching the
+kernel which may nullify the benefit for reasonably-balanced workloads.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">benchmark</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="tcgen05-mma-scaled.html" class="btn btn-neutral float-left" title="Blocked-Scaled Matrix Multiplication" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="conv-im2col.html" class="btn btn-neutral float-right" title="TMA im2col mode and Convolution via Implicit GEMM" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

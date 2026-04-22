@@ -1,6 +1,6 @@
 
 Triton MLIR Dialects and Ops
-=====================
+============================
 
 .. toctree::
    :maxdepth: 1

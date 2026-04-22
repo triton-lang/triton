@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.set\_auto\_layout
+====================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: set_auto_layout

@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.fp4\_to\_fp
+==============================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: fp4_to_fp

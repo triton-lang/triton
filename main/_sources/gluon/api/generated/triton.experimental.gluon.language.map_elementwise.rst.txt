@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.map\_elementwise
+===================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: map_elementwise

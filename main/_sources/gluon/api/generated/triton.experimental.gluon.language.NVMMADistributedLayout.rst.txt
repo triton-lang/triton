@@ -1,0 +1,36 @@
+﻿triton.experimental.gluon.language.NVMMADistributedLayout
+=========================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autoclass:: NVMMADistributedLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~NVMMADistributedLayout.__init__
+      ~NVMMADistributedLayout.format_hardware_view
+      ~NVMMADistributedLayout.format_tensor_view
+      ~NVMMADistributedLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~NVMMADistributedLayout.rank
+      ~NVMMADistributedLayout.type
+      ~NVMMADistributedLayout.version
+      ~NVMMADistributedLayout.warps_per_cta
+      ~NVMMADistributedLayout.instr_shape
+      ~NVMMADistributedLayout.cga_layout
+   
+   

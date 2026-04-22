@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.cos
+======================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: cos

@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.bank\_conflicts
+==================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: bank_conflicts

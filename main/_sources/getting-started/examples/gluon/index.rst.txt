@@ -1,0 +1,137 @@
+.. _example_gluon_examples_header:
+
+Gluon Examples
+==============
+
+These examples can be found in ``python/examples/gluon``.
+
+
+
+.. toctree::
+    :hidden:
+
+    attention-forward
+    conv-dgrad
+    conv-fprop
+    conv-wgrad
+    matmul-multicta
+    2cta-block-scale-matmul
+    moe-bmm1-fused-gather
+
+
+.. grid::
+    :class-container: msg-sd-container
+    :class-row: msg-sd-row
+
+    
+    .. grid-item-card:: :ref:`example_attention-forward`
+        :img-top: /getting-started/examples/gluon/myst_sphinx_gallery_thumbs/no_image.webp
+        :link: example_attention-forward
+        :link-type: ref
+        :shadow: md
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
+        :class-item: msg-sd-card-hover
+        :class-title: msg-sd-card-title
+        :class-img-top: msg-sd-card-img-top
+        :class-header: msg-sd-card-header
+        :class-body: msg-sd-card-body
+        :class-footer: msg-sd-card-footer
+        :text-align: center
+
+
+    
+    .. grid-item-card:: :ref:`example_conv-dgrad`
+        :img-top: /getting-started/examples/gluon/myst_sphinx_gallery_thumbs/no_image.webp
+        :link: example_conv-dgrad
+        :link-type: ref
+        :shadow: md
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
+        :class-item: msg-sd-card-hover
+        :class-title: msg-sd-card-title
+        :class-img-top: msg-sd-card-img-top
+        :class-header: msg-sd-card-header
+        :class-body: msg-sd-card-body
+        :class-footer: msg-sd-card-footer
+        :text-align: center
+
+
+    
+    .. grid-item-card:: :ref:`example_conv-fprop`
+        :img-top: /getting-started/examples/gluon/myst_sphinx_gallery_thumbs/no_image.webp
+        :link: example_conv-fprop
+        :link-type: ref
+        :shadow: md
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
+        :class-item: msg-sd-card-hover
+        :class-title: msg-sd-card-title
+        :class-img-top: msg-sd-card-img-top
+        :class-header: msg-sd-card-header
+        :class-body: msg-sd-card-body
+        :class-footer: msg-sd-card-footer
+        :text-align: center
+
+
+    
+    .. grid-item-card:: :ref:`example_conv-wgrad`
+        :img-top: /getting-started/examples/gluon/myst_sphinx_gallery_thumbs/no_image.webp
+        :link: example_conv-wgrad
+        :link-type: ref
+        :shadow: md
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
+        :class-item: msg-sd-card-hover
+        :class-title: msg-sd-card-title
+        :class-img-top: msg-sd-card-img-top
+        :class-header: msg-sd-card-header
+        :class-body: msg-sd-card-body
+        :class-footer: msg-sd-card-footer
+        :text-align: center
+
+
+    
+    .. grid-item-card:: :ref:`example_matmul-multicta`
+        :img-top: /getting-started/examples/gluon/myst_sphinx_gallery_thumbs/no_image.webp
+        :link: example_matmul-multicta
+        :link-type: ref
+        :shadow: md
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
+        :class-item: msg-sd-card-hover
+        :class-title: msg-sd-card-title
+        :class-img-top: msg-sd-card-img-top
+        :class-header: msg-sd-card-header
+        :class-body: msg-sd-card-body
+        :class-footer: msg-sd-card-footer
+        :text-align: center
+
+
+    
+    .. grid-item-card:: :ref:`example_2cta-block-scale-matmul`
+        :img-top: /getting-started/examples/gluon/myst_sphinx_gallery_thumbs/no_image.webp
+        :link: example_2cta-block-scale-matmul
+        :link-type: ref
+        :shadow: md
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
+        :class-item: msg-sd-card-hover
+        :class-title: msg-sd-card-title
+        :class-img-top: msg-sd-card-img-top
+        :class-header: msg-sd-card-header
+        :class-body: msg-sd-card-body
+        :class-footer: msg-sd-card-footer
+        :text-align: center
+
+
+    
+    .. grid-item-card:: :ref:`example_moe-bmm1-fused-gather`
+        :img-top: /getting-started/examples/gluon/myst_sphinx_gallery_thumbs/no_image.webp
+        :link: example_moe-bmm1-fused-gather
+        :link-type: ref
+        :shadow: md
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
+        :class-item: msg-sd-card-hover
+        :class-title: msg-sd-card-title
+        :class-img-top: msg-sd-card-img-top
+        :class-header: msg-sd-card-header
+        :class-body: msg-sd-card-body
+        :class-footer: msg-sd-card-footer
+        :text-align: center
+
+

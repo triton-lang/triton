@@ -1,0 +1,38 @@
+﻿triton.experimental.gluon.language.NVMMASharedLayout
+====================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autoclass:: NVMMASharedLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~NVMMASharedLayout.__init__
+      ~NVMMASharedLayout.format_hardware_view
+      ~NVMMASharedLayout.format_tensor_view
+      ~NVMMASharedLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~NVMMASharedLayout.fp4_padded
+      ~NVMMASharedLayout.get_default_for
+      ~NVMMASharedLayout.rank
+      ~NVMMASharedLayout.transposed
+      ~NVMMASharedLayout.type
+      ~NVMMASharedLayout.swizzle_byte_width
+      ~NVMMASharedLayout.element_bitwidth
+      ~NVMMASharedLayout.cga_layout
+   
+   

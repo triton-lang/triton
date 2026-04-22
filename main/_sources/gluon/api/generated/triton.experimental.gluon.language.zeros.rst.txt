@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.zeros
+========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: zeros

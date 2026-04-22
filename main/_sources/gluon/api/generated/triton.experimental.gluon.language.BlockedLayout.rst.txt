@@ -1,0 +1,37 @@
+﻿triton.experimental.gluon.language.BlockedLayout
+================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autoclass:: BlockedLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~BlockedLayout.__init__
+      ~BlockedLayout.format_hardware_view
+      ~BlockedLayout.format_tensor_view
+      ~BlockedLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~BlockedLayout.rank
+      ~BlockedLayout.type
+      ~BlockedLayout.size_per_thread
+      ~BlockedLayout.threads_per_warp
+      ~BlockedLayout.warps_per_cta
+      ~BlockedLayout.order
+      ~BlockedLayout.cga_layout
+   
+   

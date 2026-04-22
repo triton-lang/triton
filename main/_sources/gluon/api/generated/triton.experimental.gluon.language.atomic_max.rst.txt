@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.atomic\_max
+==============================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: atomic_max

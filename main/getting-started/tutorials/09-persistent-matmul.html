@@ -13,12 +13,17 @@
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
 
   
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
       <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../_static/design-tabs.js?v=f930bc37"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -70,6 +75,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
 </ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/api/index.html">API Reference</a></li>
+</ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
@@ -112,7 +124,7 @@
 to download the full example code.</p>
 </div>
 <section class="sphx-glr-example-title" id="persistent-matmul">
-<span id="sphx-glr-getting-started-tutorials-09-persistent-matmul-py"></span><h1>Persistent Matmul<a class="headerlink" href="#persistent-matmul" title="Link to this heading">¶</a></h1>
+<span id="sphx-glr-getting-started-tutorials-09-persistent-matmul-py"></span><h1>Persistent Matmul<a class="headerlink" href="#persistent-matmul" title="Link to this heading"></a></h1>
 <p>This script demonstrates persistent kernel implementations of matrix multiplication using Triton.
 Various matmul methods are included, such as naive, persistent, and TMA (Tensor Memory Accelerator) based approaches.
 The kernels support both FP16 and FP8 data types but the FP8 implementation is only available on CUDA devices with compute capability &gt;= 9.0.</p>
@@ -162,13 +174,13 @@ Benchmarking naive: ...
 Benchmarking naive: done
 Benchmarking persistent: ...
 Benchmarking persistent: done
-nan 15755.049 ROOT
-├─ 176.457 3894.403 cuBLAS [M=8192, N=8192, K=512]
-│  └─ nan 3894.403 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-├─ 177.171 3878.712 matmul_kernel [M=8192, N=8192, K=512]
-├─ 167.783 4095.744 matmul_kernel_persistent [M=8192, N=8192, K=512]
-└─ 176.830 3886.190 torch [M=8192, N=8192, K=512]
-   └─ nan 3886.190 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+nan 15877.177 ROOT
+├─ 175.123 3924.077 cuBLAS [M=8192, N=8192, K=512]
+│  └─ nan 3924.077 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 175.771 3909.612 matmul_kernel [M=8192, N=8192, K=512]
+├─ 166.359 4130.803 matmul_kernel_persistent [M=8192, N=8192, K=512]
+└─ 175.633 3912.685 torch [M=8192, N=8192, K=512]
+   └─ nan 3912.685 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 </pre></div>
 </div>
 <div class="line-block">
@@ -913,7 +925,7 @@ nan 15755.049 ROOT
         <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;matmul&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 31.711 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 30.371 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>

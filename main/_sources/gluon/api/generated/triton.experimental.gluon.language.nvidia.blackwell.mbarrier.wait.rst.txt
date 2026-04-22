@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.blackwell.mbarrier.wait
+=================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
+
+.. autofunction:: mbarrier.wait

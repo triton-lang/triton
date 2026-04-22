@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.num\_ctas
+============================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: num_ctas

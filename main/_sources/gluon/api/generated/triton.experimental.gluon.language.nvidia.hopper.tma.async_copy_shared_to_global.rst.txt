@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.tma.async\_copy\_shared\_to\_global
+====================================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.tma
+
+.. autofunction:: async_copy_shared_to_global

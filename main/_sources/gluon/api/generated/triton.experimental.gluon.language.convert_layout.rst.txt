@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.convert\_layout
+==================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: convert_layout

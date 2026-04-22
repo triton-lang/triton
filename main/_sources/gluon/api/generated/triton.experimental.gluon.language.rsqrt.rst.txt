@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.rsqrt
+========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: rsqrt

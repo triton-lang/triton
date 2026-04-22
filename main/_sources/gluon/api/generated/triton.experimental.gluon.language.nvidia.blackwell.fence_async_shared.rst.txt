@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.blackwell.fence\_async\_shared
+========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
+
+.. autofunction:: fence_async_shared

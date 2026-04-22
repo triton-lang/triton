@@ -1,0 +1,957 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Persistent Kernels &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/custom.css" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Warp Specialization" href="warp-specialization.html" />
+    <link rel="prev" title="The 5th Generation TensorCoreTM" href="tcgen05.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="intro.html">Introduction to Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="layouts.html">Tensor Layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="async-copy.html">Async Copy in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tma.html">TMA in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="wgmma.html">Warp-Group MMA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05.html">The 5th Generation TensorCore<sup>TM</sup></a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Persistent Kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="warp-specialization.html">Warp Specialization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tma-gather-scatter.html">Native TMA Gather and Scatter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-copy.html">TCGen05 Copy Instruction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-mma-scaled.html">Blocked-Scaled Matrix Multiplication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cluster-launch-control.html">Cluster Launch Control (CLC)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="conv-im2col.html">TMA im2col mode and Convolution via Implicit GEMM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html">Multi-CTA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html#benchmarking-matmul-multicta">Benchmarking matmul_multicta</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/api/index.html">API Reference</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Gluon Tutorials</a></li>
+      <li class="breadcrumb-item active">Persistent Kernels</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/getting-started/tutorials/gluon/persistence.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="persistent-kernels">
+<span id="example-persistence"></span><h1>Persistent Kernels<a class="headerlink" href="#persistent-kernels" title="Link to this heading"></a></h1>
+<p>So far, we have defined kernels such that one programs handles one block of work
+and we span all the work using the grid dimensions. This creates a large number
+of programs, and we rely on the GPU to schedule the work. The primary benefit is
+the GPU will dynamically load-balance the work across its SMs.</p>
+<p>However, this approach has downsides. The scheduler incurs an overhead, and the
+GPU is not aware of the memory access patterns of the kernels. This also
+prevents overlapping across blocks of work, as the GPU waits until kernels have
+fully exited before issuing more work.</p>
+<p>Persistent kernels is a technique where we assign multiple blocks of work to
+each program, and the programs “persist” on the GPU until all the work is
+complete. The work assignment is typically static, although dynamic scheduling
+is still possible with more advanced techniques or hardware features like
+cluster launch control.</p>
+<p>In this tutorial, we will explore persistent kernels by implementing a
+persistent matmul. We will then show how we can pipeline across the persistent
+outer loop to achieve greater overlap and more throughput.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">itertools</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">importlib</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">partial</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Union</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental</span><span class="w"> </span><span class="kn">import</span> <span class="n">gluon</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon</span><span class="w"> </span><span class="kn">import</span> <span class="n">language</span> <span class="k">as</span> <span class="n">gl</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.nvidia.hopper</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.language.nvidia.hopper</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">tma</span><span class="p">,</span>
+    <span class="n">mbarrier</span><span class="p">,</span>
+    <span class="n">fence_async_shared</span><span class="p">,</span>
+    <span class="n">warpgroup_mma</span><span class="p">,</span>
+    <span class="n">warpgroup_mma_wait</span><span class="p">,</span>
+    <span class="n">warpgroup_mma_accumulator</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.language.nvidia.blackwell</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">TensorMemoryLayout</span><span class="p">,</span>
+    <span class="n">tensor_memory_descriptor</span><span class="p">,</span>
+    <span class="n">allocate_tensor_memory</span><span class="p">,</span>
+    <span class="n">tcgen05_mma</span><span class="p">,</span>
+    <span class="n">tcgen05_commit</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">():</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">triton._C.libtriton</span><span class="w"> </span><span class="kn">import</span> <span class="n">nvidia</span>
+    <span class="n">cublas_workspace</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="mi">32</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+    <span class="n">cublas</span> <span class="o">=</span> <span class="n">nvidia</span><span class="o">.</span><span class="n">cublas</span><span class="o">.</span><span class="n">CublasLt</span><span class="p">(</span><span class="n">cublas_workspace</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">cublas</span> <span class="o">=</span> <span class="kc">None</span>
+
+<span class="n">t5</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">import_module</span><span class="p">(</span><span class="s2">&quot;05-wgmma&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">is_hopper_or_newer</span><span class="p">():</span>
+    <span class="n">target</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">target</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;cuda&quot;</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">9</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_hopper_or_newer</span><span class="p">():</span>
+    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;This tutorial requires Hopper or newer NVIDIA GPU&quot;</span><span class="p">)</span>
+
+<span class="n">profiling_with_ncu</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="ow">and</span> <span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;profile&quot;</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">get_flops</span><span class="p">(</span><span class="n">ms</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">):</span>
+    <span class="n">flops</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span>
+    <span class="k">return</span> <span class="n">flops</span> <span class="o">*</span> <span class="mf">1e-12</span> <span class="o">/</span> <span class="p">(</span><span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-3</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>In the previous two tutorials, we introduced tensor core operations for Hopper
+and Blackwell NVIDIA GPUs. To make this tutorial more accessible, and to
+demonstrate some Gluon features, we will build an abstraction around both sets
+of tensor core operations so that our persistent matmul can be used on both
+Hopper and Blackwell.</p>
+<p>We can use &#64;gluon.aggregate to define a class that contains the state of the
+matmul. We will define the API of our MMA wrapper to be like WGMMA’s, because
+is the more restrictive of the two.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="c1"># MMA wrapper for WGMMA, which maps directly to the WGMMA functions.</span>
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">aggregate</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">WGMMA</span><span class="p">:</span>
+    <span class="n">acc</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">warpgroup_mma_accumulator</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span><span class="p">]</span>
+    <span class="n">use_acc</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">initialize</span><span class="p">(</span><span class="n">dtype</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+        <span class="n">mma_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">t5</span><span class="o">.</span><span class="n">pick_wgmma_layout</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+        <span class="n">acc</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">gl</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">mma_layout</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">WGMMA</span><span class="p">(</span><span class="n">acc</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">to_tensor</span><span class="p">(</span><span class="kc">False</span><span class="p">))</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">issue_async_mma</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+        <span class="n">acc</span> <span class="o">=</span> <span class="n">warpgroup_mma</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">acc</span><span class="p">,</span> <span class="n">is_async</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">use_acc</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">use_acc</span><span class="p">)</span>
+        <span class="c1"># Note that aggregates don&#39;t support in-place mutation, so we need to</span>
+        <span class="c1"># return a new instance and re-assign it at the callsite.</span>
+        <span class="k">return</span> <span class="n">WGMMA</span><span class="p">(</span><span class="n">acc</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">to_tensor</span><span class="p">(</span><span class="kc">True</span><span class="p">))</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">wait_num_outstanding</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_outstanding</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+        <span class="n">acc</span> <span class="o">=</span> <span class="n">warpgroup_mma_wait</span><span class="p">(</span><span class="n">num_outstanding</span><span class="p">,</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">acc</span><span class="p">,</span> <span class="p">))</span>
+        <span class="k">return</span> <span class="n">WGMMA</span><span class="p">(</span><span class="n">acc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_acc</span><span class="p">)</span>
+
+    <span class="c1"># Take the result and reset the accumulator.</span>
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">take_result</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">acc</span><span class="p">,</span> <span class="n">WGMMA</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">acc</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">to_tensor</span><span class="p">(</span><span class="kc">False</span><span class="p">))</span>
+
+
+<span class="c1"># MMA wrapper for tcgen05. In order to implement `wait_num_outstanding`, we</span>
+<span class="c1"># need to allocate barriers and keep track of how many MMAs have been issued.</span>
+<span class="c1"># State will be tracked with an accumulator.</span>
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">aggregate</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">MMAv5</span><span class="p">:</span>
+    <span class="n">use_acc</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+    <span class="n">acc_tmem</span><span class="p">:</span> <span class="n">tensor_memory_descriptor</span>
+    <span class="n">bar</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">shared_memory_descriptor</span>
+    <span class="n">counter</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">initialize</span><span class="p">(</span><span class="n">dtype</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+        <span class="n">layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">TensorMemoryLayout</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">col_stride</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">acc_tmem</span> <span class="o">=</span> <span class="n">allocate_tensor_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">layout</span><span class="p">)</span>
+        <span class="n">bar</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">MMAv5</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">to_tensor</span><span class="p">(</span><span class="kc">False</span><span class="p">),</span> <span class="n">acc_tmem</span><span class="p">,</span> <span class="n">bar</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">to_tensor</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">issue_async_mma</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+        <span class="n">tcgen05_mma</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">acc_tmem</span><span class="p">,</span> <span class="n">use_acc</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">use_acc</span><span class="p">)</span>
+        <span class="n">tcgen05_commit</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">bar</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">MMAv5</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">to_tensor</span><span class="p">(</span><span class="kc">True</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">acc_tmem</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">bar</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">counter</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">wait_num_outstanding</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_outstanding</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">bar</span><span class="p">,</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">counter</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">num_outstanding</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">take_result</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">next</span> <span class="o">=</span> <span class="n">MMAv5</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">to_tensor</span><span class="p">(</span><span class="kc">False</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">acc_tmem</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">bar</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">counter</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">acc_tmem</span><span class="o">.</span><span class="n">load</span><span class="p">(),</span> <span class="nb">next</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">select_mma_impl</span><span class="p">():</span>
+    <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">9</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">WGMMA</span>
+    <span class="k">elif</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">10</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">MMAv5</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+</pre></div>
+</div>
+<p>Let’s validate our abstraction by implementing a matmul where we pipeline both
+the MMA and the loads. This achieves async overlap of both the TMA loads and
+the MMAs by requiring at least two operand buffers. This will make the
+persistent kernel more interesting by allowing us to overlap more things.</p>
+<p>We will factor our kernel into components we can re-use between
+implementations.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">pred</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="n">index</span> <span class="o">=</span> <span class="n">producer</span> <span class="o">%</span> <span class="n">num_buffers</span>
+    <span class="n">producer</span> <span class="o">+=</span> <span class="mi">1</span>
+    <span class="n">bar</span> <span class="o">=</span> <span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span> <span class="o">+</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">,</span> <span class="n">pred</span><span class="o">=</span><span class="n">pred</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">k</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">a_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">pred</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">b_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">k</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">b_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">pred</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">producer</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">issue_mma</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">index</span> <span class="o">=</span> <span class="n">consumer</span> <span class="o">%</span> <span class="n">num_buffers</span>
+    <span class="n">phase</span> <span class="o">=</span> <span class="n">consumer</span> <span class="o">//</span> <span class="n">num_buffers</span> <span class="o">&amp;</span> <span class="mi">1</span>
+    <span class="n">consumer</span> <span class="o">+=</span> <span class="mi">1</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">phase</span><span class="p">)</span>
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">issue_async_mma</span><span class="p">(</span><span class="n">a_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">b_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_pipelined_kernel</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">MMAImpl</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+                            <span class="n">num_warps</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">BLOCK_K</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">dtype</span>
+    <span class="n">K</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="n">gl</span><span class="o">.</span><span class="n">static_assert</span><span class="p">(</span><span class="n">num_buffers</span> <span class="o">&gt;=</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;expected at least 2 buffers&quot;</span><span class="p">)</span>
+    <span class="n">a_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">]</span> <span class="o">+</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">b_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">]</span> <span class="o">+</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="c1"># Separate producer and consumer indices, to support more than 2 buffers.</span>
+    <span class="n">producer</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">consumer</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="n">pid_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">pid_n</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">off_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
+    <span class="n">off_n</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_N</span>
+
+    <span class="c1"># Use our MMA abstraction!</span>
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">MMAImpl</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+
+    <span class="c1"># Prefetch at most num_buffers-2 loads to allow the MMA to overlap.</span>
+    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">),</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+        <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">),</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+        <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+        <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">issue_mma</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">):</span>
+        <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">issue_mma</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">c_smem</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">c</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">take_result</span><span class="p">()</span>
+    <span class="n">c_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
+    <span class="n">fence_async_shared</span><span class="p">()</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_pipelined</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">):</span>
+    <span class="n">MMAImpl</span> <span class="o">=</span> <span class="n">select_mma_impl</span><span class="p">()</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">C</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="n">a_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">b_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">c_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">a_layout</span><span class="p">)</span>
+    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">b_layout</span><span class="p">)</span>
+    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">c_layout</span><span class="p">)</span>
+
+    <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">),</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">))</span>
+    <span class="n">matmul_pipelined_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">MMAImpl</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;M, N, K&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">2000</span><span class="p">,</span> <span class="mi">1000</span><span class="p">,</span> <span class="mi">2000</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;BLOCK_M, BLOCK_N, BLOCK_K&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">64</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_buffers&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_warps&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper or newer&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_pipelined_matmul</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">):</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">matmul_pipelined</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">A</span> <span class="o">@</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-1</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The optimal block shapes for our kernel are BLOCK_M=128 and BLOCK_N=256, which
+gives the maximum instruction shape on both Blackwell and Hopper. However, on
+Hopper we need 8 warps to fit the accumulator in registers.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span><span class="p">,</span> <span class="mi">16</span> <span class="o">*</span> <span class="mi">1024</span>
+    <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">profiling_with_ncu</span><span class="p">:</span>
+    <span class="n">BLOCK_M</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="n">BLOCK_N</span> <span class="o">=</span> <span class="mi">256</span>
+    <span class="n">is_hopper</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">9</span>
+    <span class="n">warps</span> <span class="o">=</span> <span class="p">[</span><span class="mi">8</span><span class="p">]</span> <span class="k">if</span> <span class="n">is_hopper</span> <span class="k">else</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">]</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Benchmarking pipelined matmul&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;=============================&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;BLOCK_M=</span><span class="si">{</span><span class="n">BLOCK_M</span><span class="si">}</span><span class="s2">, BLOCK_N=</span><span class="si">{</span><span class="n">BLOCK_N</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;BLOCK_K num_buffers num_warps tflops/s&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="p">(</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">),</span> <span class="n">num_warps</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">product</span><span class="p">([(</span><span class="mi">128</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">4</span><span class="p">)],</span> <span class="n">warps</span><span class="p">):</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">BLOCK_K</span><span class="si">:</span><span class="s2">&gt;7</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">num_buffers</span><span class="si">:</span><span class="s2">&gt;11</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">num_warps</span><span class="si">:</span><span class="s2">&gt;9</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot; &quot;</span><span class="p">)</span>
+        <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">matmul_pipelined</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+        <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench_cudagraph</span><span class="p">(</span><span class="n">fn</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">get_flops</span><span class="p">(</span><span class="n">ms</span><span class="p">,</span><span class="w"> </span><span class="n">M</span><span class="p">,</span><span class="w"> </span><span class="n">N</span><span class="p">,</span><span class="w"> </span><span class="n">K</span><span class="p">)</span><span class="si">:</span><span class="s2">8.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">()</span>
+</pre></div>
+</div>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>BLOCK_K num_buffers num_warps Blackwell  Hopper
+    128           2         4    735.96
+    128           2         8    697.97  489.26
+     64           3         4   1054.00
+     64           3         8    973.94  673.67
+     64           4         4   1175.70
+     64           4         8   1072.83  669.16
+</pre></div>
+</div>
+<p>Blackwell performance lines up with what we have seen in previous tutorials,
+but on Hopper we see some wins. On Hopper, performance plateaus at 3 buffers,
+but on Blackwell we see benefits of 4 buffers. This suggests the throughput
+ratio has increased in favour of MMAs from Hopper to Blackwell. Noteworthy is
+our kernels are occupancy 1.</p>
+<p>To make the kernel persistent, all we have to do is put an outer loop around
+the kernel and iterate over the output tiles assigned to that kernel.</p>
+<p>Let’s define a tile scheduler abstraction that will allow us to change the
+scheduling strategy, starting with a basic row-major tile scheduler.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">aggregate</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">PersistentTileScheduler</span><span class="p">:</span>
+    <span class="n">pid_start</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+    <span class="n">pid_end</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+    <span class="n">num_pid_m</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">initialize</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+        <span class="n">kernel_id</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">num_kernels</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">num_programs</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">num_pid_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span>
+        <span class="n">num_pid_n</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+        <span class="n">num_pid</span> <span class="o">=</span> <span class="n">num_pid_m</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+        <span class="n">pid_per_kernel</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">num_pid</span><span class="p">,</span> <span class="n">num_kernels</span><span class="p">)</span>
+        <span class="n">pid_start</span> <span class="o">=</span> <span class="n">kernel_id</span> <span class="o">*</span> <span class="n">pid_per_kernel</span>
+        <span class="n">pid_end</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">pid_start</span> <span class="o">+</span> <span class="n">pid_per_kernel</span><span class="p">,</span> <span class="n">num_pid</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">PersistentTileScheduler</span><span class="p">(</span><span class="n">pid_start</span><span class="p">,</span> <span class="n">pid_end</span><span class="p">,</span> <span class="n">num_pid_m</span><span class="p">)</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_num_tiles</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">pid_end</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">pid_start</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_tile</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">):</span>
+        <span class="c1"># Delinearize the tile ID along M.</span>
+        <span class="n">pid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pid_start</span> <span class="o">+</span> <span class="n">idx</span>
+        <span class="n">pid_m</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_pid_m</span>
+        <span class="n">pid_n</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_pid_m</span>
+        <span class="k">return</span> <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span>
+</pre></div>
+</div>
+<p>We can make the kernel persistent by literally placing the outer loop around
+the whole kernel, but let’s re-use the TMA barrier and MMA state.
+We must scope the operand buffers to the inner loop so the shared memory
+allocator knows their liveranges do not intersect with the TMA store buffer.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">persistent_matmul_kernel</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">MMAImpl</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+                             <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">BLOCK_K</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">dtype</span>
+    <span class="n">K</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="n">bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="c1"># Producer and consumer indices.</span>
+    <span class="n">producer</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">consumer</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">MMAImpl</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">scheduler</span> <span class="o">=</span> <span class="n">SchedulerImpl</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">c_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">scheduler</span><span class="o">.</span><span class="n">get_num_tiles</span><span class="p">()):</span>
+        <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span> <span class="o">=</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">get_tile</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+        <span class="n">off_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
+        <span class="n">off_n</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_N</span>
+
+        <span class="n">a_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">]</span> <span class="o">+</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+        <span class="n">b_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">]</span> <span class="o">+</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">),</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+            <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">),</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+            <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+            <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">issue_mma</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">):</span>
+            <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">issue_mma</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+        <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">c_smem</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+        <span class="n">c</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">take_result</span><span class="p">()</span>
+        <span class="n">c_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
+        <span class="n">fence_async_shared</span><span class="p">()</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">persistent_matmul</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">):</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">C</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">MMAImpl</span> <span class="o">=</span> <span class="n">select_mma_impl</span><span class="p">()</span>
+
+    <span class="n">a_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">b_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">c_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">a_layout</span><span class="p">)</span>
+    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">b_layout</span><span class="p">)</span>
+    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">c_layout</span><span class="p">)</span>
+
+    <span class="n">num_sms</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">multi_processor_count</span>
+    <span class="n">num_pid</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">num_sms</span><span class="p">,</span> <span class="n">num_pid</span><span class="p">),</span> <span class="p">)</span>
+    <span class="n">persistent_matmul_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">MMAImpl</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
+
+
+<span class="n">schedulers</span> <span class="o">=</span> <span class="p">[</span><span class="n">PersistentTileScheduler</span><span class="p">]</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;M, N, K&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">2000</span><span class="p">,</span> <span class="mi">1000</span><span class="p">,</span> <span class="mi">2000</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;BLOCK_M, BLOCK_N, BLOCK_K&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">64</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_buffers&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_warps&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;SchedulerImpl&quot;</span><span class="p">,</span> <span class="n">schedulers</span><span class="p">)</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper or newer&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_persistent_matmul</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">):</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">persistent_matmul</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">A</span> <span class="o">@</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-1</span><span class="p">)</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">profiling_with_ncu</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Benchmarking persistent matmul&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;==============================&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;BLOCK_M=</span><span class="si">{</span><span class="n">BLOCK_M</span><span class="si">}</span><span class="s2"> BLOCK_N=</span><span class="si">{</span><span class="n">BLOCK_N</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;BLOCK_K num_buffers num_warps tflops/s&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="p">(</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">),</span> <span class="n">num_warps</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">product</span><span class="p">([(</span><span class="mi">128</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">4</span><span class="p">)],</span> <span class="n">warps</span><span class="p">):</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">BLOCK_K</span><span class="si">:</span><span class="s2">&gt;7</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">num_buffers</span><span class="si">:</span><span class="s2">&gt;11</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">num_warps</span><span class="si">:</span><span class="s2">&gt;9</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot; &quot;</span><span class="p">)</span>
+        <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">persistent_matmul</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">,</span>
+                                       <span class="n">PersistentTileScheduler</span><span class="p">)</span>
+        <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench_cudagraph</span><span class="p">(</span><span class="n">fn</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">get_flops</span><span class="p">(</span><span class="n">ms</span><span class="p">,</span><span class="w"> </span><span class="n">M</span><span class="p">,</span><span class="w"> </span><span class="n">N</span><span class="p">,</span><span class="w"> </span><span class="n">K</span><span class="p">)</span><span class="si">:</span><span class="s2">8.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">()</span>
+</pre></div>
+</div>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>BLOCK_K num_buffers num_warps  Blackwell  Hopper
+    128           2         4     712.25
+    128           2         8     686.64  502.84
+     64           3         4    1032.16
+     64           3         8     938.81  661.11
+     64           4         4    1142.26
+     64           4         8    1071.46  658.84
+</pre></div>
+</div>
+<p>The Hopper kernel sees a modest improvement, but the Blackwell kernel
+performance is slightly lower. Let’s capture a profile of the kernels on
+Blackwell using ncu. Pass <code class="docutils literal notranslate"><span class="pre">profile</span></code> to this script’s arguments to run the two
+kernels once.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="n">profiling_with_ncu</span><span class="p">:</span>
+    <span class="n">matmul_pipelined</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+    <span class="n">persistent_matmul</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="n">PersistentTileScheduler</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>There are many reasons the persistent kernel can be slower. Load imbalance can
+arise due to inefficient scheduling (work is not evenly distributed). But it
+can also arise from drift at runtime, such as some TMA accesses taking longer
+than others, which a static tile scheduler cannot compensate for.</p>
+<p>Another reason we suspect is the global memory access pattern:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">ncu</span> <span class="o">--</span><span class="nb">set</span> <span class="n">full</span> <span class="o">-</span><span class="n">o</span> <span class="n">pipelined</span>  <span class="o">--</span><span class="n">kernel</span><span class="o">-</span><span class="n">name</span> <span class="n">matmul_pipelined_kernel</span>  <span class="n">python</span> <span class="mi">07</span><span class="o">-</span><span class="n">persistence</span><span class="o">.</span><span class="n">py</span> <span class="n">profile</span>
+<span class="n">ncu</span> <span class="o">--</span><span class="nb">set</span> <span class="n">full</span> <span class="o">-</span><span class="n">o</span> <span class="n">persistent</span> <span class="o">--</span><span class="n">kernel</span><span class="o">-</span><span class="n">name</span> <span class="n">persistent_matmul_kernel</span> <span class="n">python</span> <span class="mi">07</span><span class="o">-</span><span class="n">persistence</span><span class="o">.</span><span class="n">py</span> <span class="n">profile</span>
+<span class="n">ncu</span> <span class="o">--</span><span class="kn">import</span><span class="w">  </span><span class="nn">pipelined.ncu</span><span class="o">-</span><span class="n">rep</span> <span class="o">|</span> <span class="n">grep</span> <span class="s2">&quot;L2 Hit Rate&quot;</span>
+    <span class="n">L2</span> <span class="n">Hit</span> <span class="n">Rate</span>                            <span class="o">%</span>        <span class="mf">61.11</span>
+<span class="n">ncu</span> <span class="o">--</span><span class="kn">import</span><span class="w"> </span><span class="nn">persistent.ncu</span><span class="o">-</span><span class="n">rep</span> <span class="o">|</span> <span class="n">grep</span> <span class="s2">&quot;L2 Hit Rate&quot;</span>
+    <span class="n">L2</span> <span class="n">Hit</span> <span class="n">Rate</span>                            <span class="o">%</span>        <span class="mf">52.93</span>
+</pre></div>
+</div>
+<p>The persistent kernel’s L2 hit rate is 10% lower. We can improve L2 efficiency
+by “super-grouping” the tiles along columns. See 03-matrix-multiplication.py
+for more details. Let’s encode this strategy in a new tile scheduler.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">GroupedPersistentTileScheduler</span><span class="p">(</span><span class="n">GROUP_SIZE_M</span><span class="p">):</span>
+    <span class="c1"># Bind this as a constexpr so it can be captured.</span>
+    <span class="n">GROUP_SIZE_M</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">(</span><span class="n">GROUP_SIZE_M</span><span class="p">)</span>
+
+    <span class="c1"># Like C++ templates!</span>
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">aggregate</span>
+    <span class="k">class</span><span class="w"> </span><span class="nc">GroupedPersistentTileSchedulerImpl</span><span class="p">:</span>
+        <span class="n">start_pid</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+        <span class="n">num_pid_m</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+        <span class="n">num_pid_in_group</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+        <span class="n">num_pid</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+
+        <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+        <span class="k">def</span><span class="w"> </span><span class="nf">initialize</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+            <span class="n">start_pid</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+            <span class="n">num_pid_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span>
+            <span class="n">num_pid_n</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+            <span class="n">num_pid_in_group</span> <span class="o">=</span> <span class="n">GROUP_SIZE_M</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+            <span class="n">num_pid</span> <span class="o">=</span> <span class="n">num_pid_m</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+            <span class="k">return</span> <span class="n">GroupedPersistentTileSchedulerImpl</span><span class="p">(</span><span class="n">start_pid</span><span class="p">,</span> <span class="n">num_pid_m</span><span class="p">,</span> <span class="n">num_pid_in_group</span><span class="p">,</span> <span class="n">num_pid</span><span class="p">)</span>
+
+        <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+        <span class="k">def</span><span class="w"> </span><span class="nf">get_num_tiles</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_pid</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_pid</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">num_programs</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">))</span>
+
+        <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+        <span class="k">def</span><span class="w"> </span><span class="nf">get_tile</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">):</span>
+            <span class="n">tile_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_pid</span> <span class="o">+</span> <span class="n">idx</span> <span class="o">*</span> <span class="n">gl</span><span class="o">.</span><span class="n">num_programs</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+            <span class="n">group_id</span> <span class="o">=</span> <span class="n">tile_id</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_pid_in_group</span>
+            <span class="n">first_pid_m</span> <span class="o">=</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span>
+            <span class="n">group_size_m</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_pid_m</span> <span class="o">-</span> <span class="n">first_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
+            <span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">(</span><span class="n">tile_id</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
+            <span class="n">pid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">tile_id</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">//</span> <span class="n">group_size_m</span>
+            <span class="k">return</span> <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span>
+
+    <span class="n">GroupedPersistentTileSchedulerImpl</span><span class="o">.</span><span class="vm">__name__</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;GroupedPersistentTileScheduler(</span><span class="si">{</span><span class="n">GROUP_SIZE_M</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">)&quot;</span>
+    <span class="k">return</span> <span class="n">GroupedPersistentTileSchedulerImpl</span>
+
+
+<span class="c1"># Add this to the testsuite.</span>
+<span class="n">schedulers</span> <span class="o">+=</span> <span class="p">[</span><span class="n">GroupedPersistentTileScheduler</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">GroupedPersistentTileScheduler</span><span class="p">(</span><span class="mi">8</span><span class="p">)]</span>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">profiling_with_ncu</span><span class="p">:</span>
+    <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">8</span> <span class="k">if</span> <span class="n">is_hopper</span> <span class="k">else</span> <span class="mi">4</span>
+    <span class="n">num_buffers</span> <span class="o">=</span> <span class="mi">3</span> <span class="k">if</span> <span class="n">is_hopper</span> <span class="k">else</span> <span class="mi">4</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Benchmarking grouped scheduler&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;=============================&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;BLOCK_M=</span><span class="si">{</span><span class="n">BLOCK_M</span><span class="si">}</span><span class="s2"> BLOCK_N=</span><span class="si">{</span><span class="n">BLOCK_N</span><span class="si">}</span><span class="s2"> BLOCK_K=</span><span class="si">{</span><span class="n">BLOCK_K</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;num_buffers=</span><span class="si">{</span><span class="n">num_buffers</span><span class="si">}</span><span class="s2"> num_warps=</span><span class="si">{</span><span class="n">num_warps</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;GROUP_SIZE_M tflops/s&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">GROUP_SIZE_M</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">8</span><span class="p">]:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">GROUP_SIZE_M</span><span class="si">:</span><span class="s2">&gt;12</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot; &quot;</span><span class="p">)</span>
+        <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">persistent_matmul</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">,</span>
+                                       <span class="n">GroupedPersistentTileScheduler</span><span class="p">(</span><span class="n">GROUP_SIZE_M</span><span class="p">))</span>
+        <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench_cudagraph</span><span class="p">(</span><span class="n">fn</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">get_flops</span><span class="p">(</span><span class="n">ms</span><span class="p">,</span><span class="w"> </span><span class="n">M</span><span class="p">,</span><span class="w"> </span><span class="n">N</span><span class="p">,</span><span class="w"> </span><span class="n">K</span><span class="p">)</span><span class="si">:</span><span class="s2">8.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">()</span>
+</pre></div>
+</div>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>GROUP_SIZE_M Blackwell  Hopper
+           1   1025.11  649.09
+           2   1050.43  651.32
+           4   1032.71  655.51
+           6   1057.27  652.39
+           8   1179.94  648.42
+</pre></div>
+</div>
+<p>At GROUP_SIZE_M=8, we recover performance on Blackwell. In fact, under ncu we
+see the L2 hit rate increases to 70%, which suggests there are other ways to
+improve the scheduling.</p>
+<p>Performance decreases on Hopper with this scheduler. The L2 hit rate of the
+persistent kernel is 86% and 89% for the non-persistent kernel. The grouped
+scheduler does not affect the L2 hit rate but it does increase load imbalance.</p>
+<p>Pipelining across the outer loop benefits smaller K shapes more because a
+larger proportion of time is spent in the epilogue. We can try overlapping the
+TMA store with the next tile by rotating the TMA store wait.</p>
+<p>However, this causes the liverange of the TMA store buffer to overlap with the
+operand buffers, decreasing our max num_buffers to 3. While Hopper is fine
+with 3 buffers, on Blackwell performance can suffer. There are 3 remedies:</p>
+<ol class="arabic simple">
+<li><p>Use gl.store which does not require shared memory but it cannot be
+pipelined. However, the layout conversion requires shared memory.</p></li>
+<li><p>Break up the TMA store to multiple steps, allowing us to use smaller
+buffers, we will only be able to pipeline the last step.
+reduces the amount of overlap.</p></li>
+<li><p>Borrow one of the b_bufs.</p></li>
+</ol>
+<p>For BLOCK_{M,N,K} = (128, 256, 64), one B buffer is half the size of the
+accumulator, but we have enough memory to use 5 buffers for B just so that we
+can steal two buffers for the epilogue, even though the inner loop only uses
+4 at a time.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="c1"># Forked versions of issue_loads and issue_mma that support `stealb`.</span>
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">issue_loads_stealb</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">stealb</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+                       <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">pred</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="n">index</span> <span class="o">=</span> <span class="n">producer</span> <span class="o">%</span> <span class="n">num_buffers</span>
+    <span class="n">b_index</span> <span class="o">=</span> <span class="n">producer</span> <span class="o">%</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">+</span> <span class="n">stealb</span><span class="p">)</span>
+    <span class="n">producer</span> <span class="o">+=</span> <span class="mi">1</span>
+    <span class="n">bar</span> <span class="o">=</span> <span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span> <span class="o">+</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">,</span> <span class="n">pred</span><span class="o">=</span><span class="n">pred</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">k</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">a_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">pred</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">b_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">k</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">b_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">b_index</span><span class="p">),</span> <span class="n">pred</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">producer</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">issue_mma_stealb</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">stealb</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">index</span> <span class="o">=</span> <span class="n">consumer</span> <span class="o">%</span> <span class="n">num_buffers</span>
+    <span class="n">b_index</span> <span class="o">=</span> <span class="n">consumer</span> <span class="o">%</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">+</span> <span class="n">stealb</span><span class="p">)</span>
+    <span class="n">phase</span> <span class="o">=</span> <span class="n">consumer</span> <span class="o">//</span> <span class="n">num_buffers</span> <span class="o">&amp;</span> <span class="mi">1</span>
+    <span class="n">consumer</span> <span class="o">+=</span> <span class="mi">1</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">phase</span><span class="p">)</span>
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">issue_async_mma</span><span class="p">(</span><span class="n">a_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">b_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">b_index</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">persistent_matmul_pipelined_kernel</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">MMAImpl</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+                                       <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">STEALB</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">BLOCK_K</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">dtype</span>
+    <span class="n">K</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="c1"># All buffers share the same liverange.</span>
+    <span class="n">gl</span><span class="o">.</span><span class="n">static_assert</span><span class="p">(</span><span class="n">num_buffers</span> <span class="o">&gt;=</span> <span class="mi">3</span><span class="p">,</span> <span class="s2">&quot;expected at least 3 buffers&quot;</span><span class="p">)</span>
+    <span class="n">a_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">]</span> <span class="o">+</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="c1"># Add an extra B buffer when stealing.</span>
+    <span class="n">b_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span> <span class="o">+</span> <span class="n">STEALB</span><span class="p">]</span> <span class="o">+</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">STEALB</span><span class="p">:</span>
+        <span class="n">c_smem</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">gl</span><span class="o">.</span><span class="n">static_assert</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">BLOCK_N</span> <span class="o">*</span> <span class="n">BLOCK_K</span> <span class="o">&gt;=</span> <span class="n">BLOCK_M</span> <span class="o">*</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="s2">&quot;B tile not large enough to steal&quot;</span><span class="p">)</span>
+    <span class="n">bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">producer</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">consumer</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">MMAImpl</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">scheduler</span> <span class="o">=</span> <span class="n">SchedulerImpl</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">c_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+    <span class="n">num_tiles</span> <span class="o">=</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">get_num_tiles</span><span class="p">()</span>
+
+    <span class="c1"># Peeled inner loop prologue.</span>
+    <span class="n">idx</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span> <span class="o">=</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">get_tile</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+    <span class="n">off_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
+    <span class="n">off_n</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_N</span>
+    <span class="k">for</span> <span class="n">ki</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">),</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+        <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads_stealb</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">ki</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">STEALB</span><span class="p">,</span>
+                                      <span class="n">num_buffers</span><span class="p">)</span>
+    <span class="n">k</span> <span class="o">=</span> <span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads_stealb</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">STEALB</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_tiles</span><span class="p">):</span>
+        <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">issue_mma_stealb</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">STEALB</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">STEALB</span><span class="p">:</span>
+            <span class="c1"># Wait for the epilogue before the first TMA load.</span>
+            <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">1</span><span class="p">),</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+            <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads_stealb</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">STEALB</span><span class="p">,</span>
+                                          <span class="n">num_buffers</span><span class="p">)</span>
+            <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">issue_mma_stealb</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">STEALB</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+        <span class="n">epilogue_off_m</span> <span class="o">=</span> <span class="n">off_m</span>
+        <span class="n">epilogue_off_n</span> <span class="o">=</span> <span class="n">off_n</span>
+
+        <span class="c1"># Peel the next prologue and fuse it with the pipeline drain loop.</span>
+        <span class="n">idx</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span> <span class="o">=</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">get_tile</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+        <span class="n">off_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
+        <span class="n">off_n</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_N</span>
+        <span class="c1"># Predicate the peeled prologue instead of using a conditional.</span>
+        <span class="n">pred</span> <span class="o">=</span> <span class="n">idx</span> <span class="o">&lt;</span> <span class="n">num_tiles</span>
+        <span class="k">for</span> <span class="n">ki</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">),</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+            <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads_stealb</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">ki</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">STEALB</span><span class="p">,</span>
+                                          <span class="n">num_buffers</span><span class="p">,</span> <span class="n">pred</span><span class="p">)</span>
+            <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">issue_mma_stealb</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">STEALB</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+        <span class="n">k</span> <span class="o">=</span> <span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads_stealb</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">STEALB</span><span class="p">,</span>
+                                      <span class="n">num_buffers</span><span class="p">)</span>
+
+        <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">c</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">take_result</span><span class="p">()</span>
+        <span class="n">c</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">STEALB</span><span class="p">:</span>
+            <span class="n">c_buf</span> <span class="o">=</span> <span class="n">c_smem</span>
+            <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Steal the next 2 B buffers for the epilogue.</span>
+            <span class="n">c_buf</span> <span class="o">=</span> <span class="n">b_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">producer</span> <span class="o">%</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">+</span> <span class="n">STEALB</span><span class="p">))</span><span class="o">.</span><span class="n">_reinterpret</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+                                                                                 <span class="n">c_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+        <span class="n">c_buf</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
+        <span class="n">fence_async_shared</span><span class="p">()</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">epilogue_off_m</span><span class="p">,</span> <span class="n">epilogue_off_n</span><span class="p">],</span> <span class="n">c_buf</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">persistent_matmul_pipelined</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">):</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">C</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">MMAImpl</span> <span class="o">=</span> <span class="n">select_mma_impl</span><span class="p">()</span>
+
+    <span class="n">a_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">b_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">c_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+
+    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">a_layout</span><span class="p">)</span>
+    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">b_layout</span><span class="p">)</span>
+    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">c_layout</span><span class="p">)</span>
+
+    <span class="n">num_sms</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">multi_processor_count</span>
+    <span class="n">num_pid</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">num_sms</span><span class="p">,</span> <span class="n">num_pid</span><span class="p">),</span> <span class="p">)</span>
+    <span class="n">persistent_matmul_pipelined_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">MMAImpl</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span>
+                                             <span class="n">STEALB</span><span class="o">=</span><span class="n">num_buffers</span> <span class="o">==</span> <span class="mi">4</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;M, N, K&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">208</span><span class="p">,</span> <span class="mi">416</span><span class="p">,</span> <span class="mi">304</span><span class="p">),</span> <span class="p">(</span><span class="mi">2000</span><span class="p">,</span> <span class="mi">1000</span><span class="p">,</span> <span class="mi">2000</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;BLOCK_M, BLOCK_N, BLOCK_K&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="p">(</span><span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">64</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_buffers&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_warps&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;SchedulerImpl&quot;</span><span class="p">,</span> <span class="n">schedulers</span><span class="p">)</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper or newer&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_persistent_matmul_pipelined</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">):</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">persistent_matmul_pipelined</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">A</span> <span class="o">@</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-1</span><span class="p">)</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">args</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;BLOCK_M&quot;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="s2">&quot;BLOCK_N&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
+        <span class="s2">&quot;BLOCK_K&quot;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+        <span class="s2">&quot;num_buffers&quot;</span><span class="p">:</span> <span class="mi">3</span> <span class="k">if</span> <span class="n">is_hopper</span> <span class="k">else</span> <span class="mi">4</span><span class="p">,</span>
+        <span class="s2">&quot;num_warps&quot;</span><span class="p">:</span> <span class="mi">8</span> <span class="k">if</span> <span class="n">is_hopper</span> <span class="k">else</span> <span class="mi">4</span><span class="p">,</span>
+    <span class="p">}</span>
+    <span class="n">scheduler</span> <span class="o">=</span> <span class="n">PersistentTileScheduler</span> <span class="k">if</span> <span class="n">is_hopper</span> <span class="k">else</span> <span class="n">GroupedPersistentTileScheduler</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span>
+    <span class="n">nonpersistent</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">matmul_pipelined</span><span class="p">,</span> <span class="o">**</span><span class="n">args</span><span class="p">)</span>
+    <span class="n">persistent</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">persistent_matmul</span><span class="p">,</span> <span class="o">**</span><span class="n">args</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="o">=</span><span class="n">scheduler</span><span class="p">)</span>
+    <span class="n">persistent_pipelined</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">persistent_matmul_pipelined</span><span class="p">,</span> <span class="o">**</span><span class="n">args</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="o">=</span><span class="n">scheduler</span><span class="p">)</span>
+
+    <span class="n">M</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Benchmarking pipelined persistent&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;=================================&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;    K     nonpersistent    persistent   pipelined    cublas&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">K</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">2</span><span class="o">**</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">9</span><span class="p">,</span> <span class="mi">15</span><span class="p">)]:</span>
+        <span class="n">as_flops</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">get_flops</span><span class="p">,</span> <span class="n">M</span><span class="o">=</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="o">=</span><span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="o">=</span><span class="n">K</span><span class="p">)</span>
+        <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+        <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+        <span class="n">BT</span> <span class="o">=</span> <span class="n">B</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+        <span class="n">r0</span> <span class="o">=</span> <span class="n">as_flops</span><span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench_cudagraph</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">nonpersistent</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">)))</span>
+        <span class="n">r1</span> <span class="o">=</span> <span class="n">as_flops</span><span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench_cudagraph</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">persistent</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">)))</span>
+        <span class="n">r2</span> <span class="o">=</span> <span class="n">as_flops</span><span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench_cudagraph</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">persistent_pipelined</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">)))</span>
+        <span class="n">r3</span> <span class="o">=</span> <span class="n">as_flops</span><span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">cublas</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">BT</span><span class="p">,</span> <span class="n">C</span><span class="p">)))</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">K</span><span class="si">:</span><span class="s2">&gt;5</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">r0</span><span class="si">:</span><span class="s2">&gt;17.2f</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">r1</span><span class="si">:</span><span class="s2">&gt;13.2f</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">r2</span><span class="si">:</span><span class="s2">&gt;11.2f</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">r3</span><span class="si">:</span><span class="s2">&gt;9.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Blackwell results:
+
+    K     nonpersistent    persistent   pipelined    cublas
+  512            615.86        828.70      993.50   1108.11
+ 1024            997.16       1077.28     1173.31   1347.44
+ 2048           1152.74       1190.55     1133.37   1435.01
+ 4096           1164.05       1120.92     1143.47   1563.98
+ 8192           1160.93       1074.97     1185.40   1491.84
+16384           1185.62       1096.34     1296.93   1548.42
+</pre></div>
+</div>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Hopper results:
+
+    K     nonpersistent    persistent   pipelined    cublas
+  512            491.74        485.01      539.88    588.15
+ 1024            554.24        575.02      602.52    588.32
+ 2048            573.87        594.72      625.91    615.58
+ 4096            609.36        630.10      640.48    646.30
+ 8192            629.44        646.22      661.57    661.11
+16384            653.79        660.29      670.00    665.49
+</pre></div>
+</div>
+<p>Persistent matmul, when pipelined, gains more performance relative to
+nonpersistent at lower K, as we would expect. Load balancing can be
+particularly difficult when the number of SMs do not evenly divide the number
+of blocks, and with 8192x8192, we are smack in the middle with ~13.5 and
+~15.5 blocks per SM for Hopper and Blackwell, respectively.</p>
+<p>On Hopper, our pipelined kernel is competitive with cublas, even pulling ahead
+for medium-sized K. However, cublas has a definitive advantage at low K. On
+Blackwell, it’s not even close: cublas is significantly faster.</p>
+<p>Some matmul performance takes:</p>
+<ul class="simple">
+<li><p>On Hopper, software pipelining is sufficient to reach peak performance for
+medium and large K.</p></li>
+<li><p>cublas uses 2-CTA matmul, which uses distributed shared memory to allow
+256x256 instruction shape. 2-CTA support in Gluon is very spotty,
+but this enables cublas to more efficiently feed the MMA, which matters more
+on Blackwell due to the relative increase in MMA throughput vs TMA.</p></li>
+<li><p>cublas matmul is warp-specialized which is necessary on Hopper to fully
+overlap the epilogue at small K.</p></li>
+<li><p>Our Blackwell implementation is limited by the shared API we designed for
+Hopper and Blackwell: we are not double-buffering the accumulator and
+leaving 256 columns of TMEM unused.</p></li>
+<li><p>On Blackwell, we can use <code class="docutils literal notranslate"><span class="pre">clusterlaunchcontrol</span></code> to dynamically schedule
+work in conjunction with the GPU, getting the best of both worlds. This is
+explored further in tutorial 12.</p></li>
+</ul>
+<p>Main takeaways:</p>
+<ul class="simple">
+<li><p>Persistent kernels replace GPU block scheduling with a (typically) static
+schedule. This allows more resource and compute coordination/overlap between
+blocks at the cost of losing dynamic scheduling.</p></li>
+<li><p>Persistent kernels tend to benefit smaller problem sizes, but still deliver
+benefits for large problem sizes.</p></li>
+</ul>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="tcgen05.html" class="btn btn-neutral float-left" title="The 5th Generation TensorCoreTM" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="warp-specialization.html" class="btn btn-neutral float-right" title="Warp Specialization" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

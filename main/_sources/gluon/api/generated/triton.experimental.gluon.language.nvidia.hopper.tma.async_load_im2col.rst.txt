@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.tma.async\_load\_im2col
+========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.tma
+
+.. autofunction:: async_load_im2col

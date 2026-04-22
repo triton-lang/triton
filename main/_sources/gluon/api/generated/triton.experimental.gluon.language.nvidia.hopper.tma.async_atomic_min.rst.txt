@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.tma.async\_atomic\_min
+=======================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.tma
+
+.. autofunction:: async_atomic_min

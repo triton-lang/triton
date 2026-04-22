@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.sub
+======================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: sub

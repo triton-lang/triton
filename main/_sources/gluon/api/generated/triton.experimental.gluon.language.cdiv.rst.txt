@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.cdiv
+=======================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: cdiv

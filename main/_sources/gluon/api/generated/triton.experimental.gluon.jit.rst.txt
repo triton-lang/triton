@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.jit
+=============================
+
+.. currentmodule:: triton.experimental.gluon
+
+.. autofunction:: jit

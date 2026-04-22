@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.log
+======================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: log

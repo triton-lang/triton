@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.umulhi
+=========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: umulhi

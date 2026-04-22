@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.full\_like
+=============================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: full_like

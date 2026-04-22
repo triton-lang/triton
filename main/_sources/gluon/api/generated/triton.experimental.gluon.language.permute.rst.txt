@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.permute
+==========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: permute

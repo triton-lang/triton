@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.abs
+======================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: abs

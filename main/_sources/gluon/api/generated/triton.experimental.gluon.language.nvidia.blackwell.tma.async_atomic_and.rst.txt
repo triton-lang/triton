@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.blackwell.tma.async\_atomic\_and
+==========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell.tma
+
+.. autofunction:: async_atomic_and

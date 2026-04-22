@@ -1,0 +1,39 @@
+﻿triton.experimental.gluon.nvidia.hopper.TensorDescriptorIm2Col
+==============================================================
+
+.. currentmodule:: triton.experimental.gluon.nvidia.hopper
+
+.. autoclass:: TensorDescriptorIm2Col
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~TensorDescriptorIm2Col.__init__
+      ~TensorDescriptorIm2Col.from_tensor
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~TensorDescriptorIm2Col.element_strides
+      ~TensorDescriptorIm2Col.mode
+      ~TensorDescriptorIm2Col.padding
+      ~TensorDescriptorIm2Col.pixel_box_lower_corner
+      ~TensorDescriptorIm2Col.pixel_box_upper_corner
+      ~TensorDescriptorIm2Col.round_f32_to_tf32
+      ~TensorDescriptorIm2Col.base
+      ~TensorDescriptorIm2Col.shape
+      ~TensorDescriptorIm2Col.strides
+      ~TensorDescriptorIm2Col.block_shape
+      ~TensorDescriptorIm2Col.layout
+   
+   

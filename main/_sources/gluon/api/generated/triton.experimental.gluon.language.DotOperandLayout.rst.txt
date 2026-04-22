@@ -1,0 +1,36 @@
+﻿triton.experimental.gluon.language.DotOperandLayout
+===================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autoclass:: DotOperandLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~DotOperandLayout.__init__
+      ~DotOperandLayout.format_hardware_view
+      ~DotOperandLayout.format_tensor_view
+      ~DotOperandLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~DotOperandLayout.cga_layout
+      ~DotOperandLayout.rank
+      ~DotOperandLayout.type
+      ~DotOperandLayout.operand_index
+      ~DotOperandLayout.parent
+      ~DotOperandLayout.k_width
+   
+   

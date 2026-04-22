@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.ampere.async\_copy.mbarrier\_arrive
+=============================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.ampere.async_copy
+
+.. autofunction:: mbarrier_arrive

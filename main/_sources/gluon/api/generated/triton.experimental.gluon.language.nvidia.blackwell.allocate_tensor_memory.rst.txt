@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.blackwell.allocate\_tensor\_memory
+============================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
+
+.. autofunction:: allocate_tensor_memory

@@ -13,12 +13,17 @@
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
 
   
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
       <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../_static/design-tabs.js?v=f930bc37"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -73,6 +78,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
 </ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/api/index.html">API Reference</a></li>
+</ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
@@ -115,7 +127,7 @@
 to download the full example code.</p>
 </div>
 <section class="sphx-glr-example-title" id="block-scaled-matrix-multiplication">
-<span id="sphx-glr-getting-started-tutorials-10-block-scaled-matmul-py"></span><h1>Block Scaled Matrix Multiplication<a class="headerlink" href="#block-scaled-matrix-multiplication" title="Link to this heading">¶</a></h1>
+<span id="sphx-glr-getting-started-tutorials-10-block-scaled-matmul-py"></span><h1>Block Scaled Matrix Multiplication<a class="headerlink" href="#block-scaled-matrix-multiplication" title="Link to this heading"></a></h1>
 <p>This tutorial demonstrates a Triton implementation of block scaled matrix multiplication
 which is generic over FP4 and FP8 formats on NVIDIA and AMD GPUs.
 The tutorial supports OCP microscaling formats such as mxfp4 and mxfp8, and NVIDIA’s nvfp4
@@ -135,7 +147,7 @@ python<span class="w"> </span><span class="m">10</span>-block-scaled-matmul.py<s
 </div>
 <p>Future updates to this tutorial which support mixed precision block scaled matmul are planned.</p>
 <section id="background">
-<h2>Background<a class="headerlink" href="#background" title="Link to this heading">¶</a></h2>
+<h2>Background<a class="headerlink" href="#background" title="Link to this heading"></a></h2>
 <p>Scale preshuffling on NVIDIA GPUs</p>
 <p>CUDA devices that support PTX 8.7 and later can utlize block scaled matrix multiply
 instructions. In order for low latency access to these scale factors in the fast
@@ -578,7 +590,7 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
             <span class="n">_</span> <span class="o">=</span> <span class="n">cublas_block_scaled_matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">a_scale_cublas</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">b_scale_cublas</span><span class="p">,</span> <span class="n">block_scale_type</span><span class="o">=</span><span class="n">block_scale_type</span><span class="p">)</span>
 
     <span class="c1"># Benchmark</span>
-    <span class="n">proton</span><span class="o">.</span><span class="n">activate</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">proton</span><span class="o">.</span><span class="n">activate</span><span class="p">()</span>
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">reps</span><span class="p">):</span>
         <span class="n">_</span> <span class="o">=</span> <span class="n">block_scaled_matmul</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">a_scale_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">b_scale_desc</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">rep_m</span><span class="p">,</span> <span class="n">rep_n</span><span class="p">,</span> <span class="n">rep_k</span><span class="p">,</span>
                                 <span class="n">configs</span><span class="p">)</span>
@@ -589,7 +601,7 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
             <span class="k">with</span> <span class="n">proton</span><span class="o">.</span><span class="n">scope</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cublas [M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">]&quot;</span><span class="p">,</span>
                               <span class="p">{</span><span class="s2">&quot;bytes&quot;</span><span class="p">:</span> <span class="n">bytes_per_elem</span> <span class="o">*</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">K_bytes</span> <span class="o">+</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K_bytes</span> <span class="o">+</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span><span class="p">),</span> <span class="s2">&quot;flops&quot;</span><span class="p">:</span> <span class="mf">2.</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span><span class="p">}):</span>
                 <span class="n">_</span> <span class="o">=</span> <span class="n">cublas_block_scaled_matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">a_scale_cublas</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">b_scale_cublas</span><span class="p">,</span> <span class="n">block_scale_type</span><span class="o">=</span><span class="n">block_scale_type</span><span class="p">)</span>
-    <span class="n">proton</span><span class="o">.</span><span class="n">deactivate</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">proton</span><span class="o">.</span><span class="n">deactivate</span><span class="p">()</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Done benchmarking&quot;</span><span class="p">)</span>
 
 
@@ -811,10 +823,10 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
     <span class="n">x</span> <span class="o">=</span> <span class="n">x_mxfp4</span><span class="o">.</span><span class="n">to_packed_tensor</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
     <span class="n">w</span> <span class="o">=</span> <span class="n">w_mxfp4</span><span class="o">.</span><span class="n">to_packed_tensor</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 
-    <span class="n">proton</span><span class="o">.</span><span class="n">activate</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">proton</span><span class="o">.</span><span class="n">activate</span><span class="p">()</span>
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">reps</span><span class="p">):</span>
         <span class="n">_</span> <span class="o">=</span> <span class="n">block_scaled_matmul_amd</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w</span><span class="p">,</span> <span class="n">x_scales_triton</span><span class="p">,</span> <span class="n">w_scales_triton</span><span class="p">,</span> <span class="n">configs</span><span class="p">)</span>
-    <span class="n">proton</span><span class="o">.</span><span class="n">deactivate</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">proton</span><span class="o">.</span><span class="n">deactivate</span><span class="p">()</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Done benchmarking&quot;</span><span class="p">)</span>
 
 
@@ -845,7 +857,7 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
 
         <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">bench</span><span class="p">:</span>
             <span class="n">proton</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="s2">&quot;block_scaled_matmul&quot;</span><span class="p">,</span> <span class="n">hook</span><span class="o">=</span><span class="s2">&quot;triton&quot;</span><span class="p">)</span>
-            <span class="n">proton</span><span class="o">.</span><span class="n">deactivate</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># Skip argument creation</span>
+            <span class="n">proton</span><span class="o">.</span><span class="n">deactivate</span><span class="p">()</span>  <span class="c1"># Skip argument creation</span>
             <span class="k">for</span> <span class="n">K</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_step</span><span class="p">):</span>
                 <span class="k">if</span> <span class="n">is_cuda</span><span class="p">():</span>
                     <span class="n">bench_block_scaled</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">reps</span><span class="o">=</span><span class="mi">10000</span><span class="p">,</span> <span class="n">block_scale_type</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">format</span><span class="p">)</span>
@@ -859,7 +871,7 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>⛔ This example requires GPU support for block scaled matmul
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.021 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.017 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-10-block-scaled-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/336ead1bb945ae9dc42eab20e58658f6/10-block-scaled-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">10-block-scaled-matmul.ipynb</span></code></a></p>

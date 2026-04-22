@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.blackwell.async\_copy.async\_load
+===========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
+
+.. autofunction:: async_copy.async_load

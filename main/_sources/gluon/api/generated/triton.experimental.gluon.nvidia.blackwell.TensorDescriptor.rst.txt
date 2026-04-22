@@ -1,0 +1,36 @@
+﻿triton.experimental.gluon.nvidia.blackwell.TensorDescriptor
+===========================================================
+
+.. currentmodule:: triton.experimental.gluon.nvidia.blackwell
+
+.. autoclass:: TensorDescriptor
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~TensorDescriptor.__init__
+      ~TensorDescriptor.from_tensor
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~TensorDescriptor.mode
+      ~TensorDescriptor.padding
+      ~TensorDescriptor.round_f32_to_tf32
+      ~TensorDescriptor.base
+      ~TensorDescriptor.shape
+      ~TensorDescriptor.strides
+      ~TensorDescriptor.block_shape
+      ~TensorDescriptor.layout
+   
+   

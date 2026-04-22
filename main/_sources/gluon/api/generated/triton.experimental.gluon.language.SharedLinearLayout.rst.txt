@@ -1,0 +1,35 @@
+﻿triton.experimental.gluon.language.SharedLinearLayout
+=====================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autoclass:: SharedLinearLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~SharedLinearLayout.__init__
+      ~SharedLinearLayout.format_hardware_view
+      ~SharedLinearLayout.format_tensor_view
+      ~SharedLinearLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~SharedLinearLayout.alignment
+      ~SharedLinearLayout.shape
+      ~SharedLinearLayout.type
+      ~SharedLinearLayout.offset_bases
+      ~SharedLinearLayout.block_bases
+   
+   

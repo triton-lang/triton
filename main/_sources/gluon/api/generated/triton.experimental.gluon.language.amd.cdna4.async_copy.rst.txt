@@ -1,0 +1,16 @@
+﻿triton.experimental.gluon.language.amd.cdna4.async\_copy
+========================================================
+
+.. automodule:: triton.experimental.gluon.language.amd.cdna4.async_copy
+
+   
+   .. rubric:: Functions
+
+   .. autosummary::
+   
+      global_load_to_shared
+      buffer_load_to_shared
+      commit_group
+      wait_group
+      load_shared_relaxed
+   

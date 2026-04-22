@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.atomic\_xchg
+===============================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: atomic_xchg

@@ -13,12 +13,17 @@
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
 
   
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
       <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../_static/design-tabs.js?v=f930bc37"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -70,6 +75,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
 </ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/api/index.html">API Reference</a></li>
+</ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
@@ -112,7 +124,7 @@
 to download the full example code.</p>
 </div>
 <section class="sphx-glr-example-title" id="group-gemm">
-<span id="sphx-glr-getting-started-tutorials-08-grouped-gemm-py"></span><h1>Group GEMM<a class="headerlink" href="#group-gemm" title="Link to this heading">¶</a></h1>
+<span id="sphx-glr-getting-started-tutorials-08-grouped-gemm-py"></span><h1>Group GEMM<a class="headerlink" href="#group-gemm" title="Link to this heading"></a></h1>
 <p>This group gemm kernel launches a fixed number of CTA to compute a group
 of gemms. The scheduling is static and we do it on device.</p>
 <ul class="sphx-glr-horizontal">
@@ -122,15 +134,15 @@ of gemms. The scheduling is static and we do it on device.</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>group-gemm-performance:
         N  cuBLAS (runtime(ms))  Triton (runtime(ms))
 0   128.0              0.022528              0.012288
-1   256.0              0.025600              0.013312
-2   512.0              0.032768              0.017408
+1   256.0              0.025600              0.014336
+2   512.0              0.032768              0.018432
 3  1024.0              0.074752              0.062464
 group-gemm-performance-m-8192-k-8192:
         M  cuBLAS (runtime(ms))  Triton (runtime(ms))
-0   128.0              0.459776              0.448512
-1   256.0              0.727040              0.738816
-2   512.0              1.949696              1.480704
-3  1024.0              2.625536              2.849792
+0   128.0              0.461824              0.449536
+1   256.0              0.735232              0.747520
+2   512.0              2.040320              1.499136
+3  1024.0              2.703360              2.856960
 </pre></div>
 </div>
 <div class="line-block">
@@ -696,7 +708,7 @@ group-gemm-performance-m-8192-k-8192:
 <span class="n">benchmark_batches</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 6.983 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 6.898 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-08-grouped-gemm-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/6360f3425f2c39f9f330971830c25ba7/08-grouped-gemm.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">08-grouped-gemm.ipynb</span></code></a></p>

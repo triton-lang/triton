@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.amd.cdna4.buffer\_atomic\_and
+================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna4
+
+.. autofunction:: buffer_atomic_and

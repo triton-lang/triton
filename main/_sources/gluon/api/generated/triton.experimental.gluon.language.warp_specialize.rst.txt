@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.warp\_specialize
+===================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: warp_specialize

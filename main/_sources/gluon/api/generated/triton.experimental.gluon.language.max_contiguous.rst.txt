@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.max\_contiguous
+==================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: max_contiguous

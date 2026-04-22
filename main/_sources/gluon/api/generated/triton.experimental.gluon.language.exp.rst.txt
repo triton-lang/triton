@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.exp
+======================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: exp

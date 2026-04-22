@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.dot\_fma
+===========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: dot_fma

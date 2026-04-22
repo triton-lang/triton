@@ -1,0 +1,783 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Native TMA Gather and Scatter &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/custom.css" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="TCGen05 Copy Instruction" href="tcgen05-copy.html" />
+    <link rel="prev" title="Warp Specialization" href="warp-specialization.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="intro.html">Introduction to Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="layouts.html">Tensor Layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="async-copy.html">Async Copy in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tma.html">TMA in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="wgmma.html">Warp-Group MMA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05.html">The 5th Generation TensorCore<sup>TM</sup></a></li>
+<li class="toctree-l2"><a class="reference internal" href="persistence.html">Persistent Kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="warp-specialization.html">Warp Specialization</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Native TMA Gather and Scatter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-copy.html">TCGen05 Copy Instruction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-mma-scaled.html">Blocked-Scaled Matrix Multiplication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cluster-launch-control.html">Cluster Launch Control (CLC)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="conv-im2col.html">TMA im2col mode and Convolution via Implicit GEMM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html">Multi-CTA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html#benchmarking-matmul-multicta">Benchmarking matmul_multicta</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/api/index.html">API Reference</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Gluon Tutorials</a></li>
+      <li class="breadcrumb-item active">Native TMA Gather and Scatter</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/getting-started/tutorials/gluon/tma-gather-scatter.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="native-tma-gather-and-scatter">
+<span id="example-tma-gather-scatter"></span><h1>Native TMA Gather and Scatter<a class="headerlink" href="#native-tma-gather-and-scatter" title="Link to this heading"></a></h1>
+<p>This tutorial explains how to use the native async TMA gather and scatter
+operations available on Blackwell GPUs. Native gather and scatter operations on
+Blackwell GPUs are implemented in the <code class="docutils literal notranslate"><span class="pre">gl.nvidia.blackwell.tma.async_gather</span></code> and
+<code class="docutils literal notranslate"><span class="pre">gl.nvidia.blackwell.tma.async_scatter</span></code> functions respectively.</p>
+<p>TMA gather and scatter operations only support 2D tensor descriptors, where the
+first dimension of the block shape must be 1. Gather accepts a 2D tensor
+descriptor, a 1D tensor of row offsets, and a scalar column offset. If the block
+shape of the 2D tensor descriptor is <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">BLOCK_Y]</span></code>, gather performs the
+following operation returning a 2D tensor:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">out</span> <span class="o">=</span> <span class="n">tensor_desc</span><span class="p">[</span><span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">:</span><span class="n">y_offset</span> <span class="o">+</span> <span class="n">BLOCK_Y</span><span class="p">]</span>
+</pre></div>
+</div>
+<p>Where <code class="docutils literal notranslate"><span class="pre">out.shape</span></code> is <code class="docutils literal notranslate"><span class="pre">(x_offsets.shape[0],</span> <span class="pre">BLOCK_Y)</span></code>. In other words, gather
+loads <code class="docutils literal notranslate"><span class="pre">x_offsets.shape[0]</span></code> separately-indexed rows of size <code class="docutils literal notranslate"><span class="pre">BLOCK_Y</span></code> from the
+tensor descriptor, starting at <code class="docutils literal notranslate"><span class="pre">y_offset</span></code>.</p>
+<p>Scatter accepts a 2D tensor descriptor, a 1D tensor of row offsets, a scalar
+column offset, and a 2D source tensor. If the block shape of the 2D tensor
+descriptor is <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">BLOCK_Y]</span></code>, scatter performs the following operation:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">tensor_desc</span><span class="p">[</span><span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">:</span><span class="n">y_offset</span> <span class="o">+</span> <span class="n">BLOCK_Y</span><span class="p">]</span> <span class="o">=</span> <span class="n">src</span>
+</pre></div>
+</div>
+<p>Where <code class="docutils literal notranslate"><span class="pre">src.shape</span></code> must be <code class="docutils literal notranslate"><span class="pre">(x_offsets.shape[0],</span> <span class="pre">BLOCK_Y)</span></code>. In other words,
+scatter writes <code class="docutils literal notranslate"><span class="pre">src</span></code> to the tensor descriptor starting at <code class="docutils literal notranslate"><span class="pre">y_offset</span></code> but to
+separately-indexed rows of size <code class="docutils literal notranslate"><span class="pre">BLOCK_Y</span></code>.</p>
+<p>Like <code class="docutils literal notranslate"><span class="pre">async_copy_global_to_shared</span></code> and <code class="docutils literal notranslate"><span class="pre">async_copy_shared_to_global</span></code>,
+<code class="docutils literal notranslate"><span class="pre">async_gather</span></code> and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> access shared memory through the async
+proxy, so fences need to be inserted as appropriate.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">importlib</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton.experimental.gluon</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">gluon</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton.experimental.gluon.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">gl</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton._C.libtriton</span><span class="w"> </span><span class="kn">import</span> <span class="n">ir</span><span class="p">,</span> <span class="n">gluon_ir</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.nvidia.hopper</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.language.nvidia.blackwell</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span><span class="n">tma</span><span class="p">,</span> <span class="n">mbarrier</span><span class="p">,</span> <span class="n">fence_async_shared</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">is_blackwell</span><span class="p">():</span>
+    <span class="n">target</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">target</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;cuda&quot;</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">10</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">():</span>
+    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;This tutorial requires a Blackwell NVIDIA GPU&quot;</span><span class="p">)</span>
+
+<span class="c1"># Re-use utilities from the previous tutorials.</span>
+<span class="n">t7</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">import_module</span><span class="p">(</span><span class="s2">&quot;07-persistence&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">async_gather</span></code> and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> impose constraints on the layout of the 1D
+row offsets tensor.</p>
+<p>Specifically, suppose the row offset tensor is divided into chunks of 4
+consecutive elements, then the layout must map each chunk to consecutive
+registers in the same thread. In addition, the chunks must be broadcasted
+across all threads in the same warp, i.e. all threads in the same warp must
+contain the same data.</p>
+<p>These constraints arise from the underlying <code class="docutils literal notranslate"><span class="pre">gather4</span></code> and <code class="docutils literal notranslate"><span class="pre">scatter4</span></code> PTX
+instructions used by <code class="docutils literal notranslate"><span class="pre">async_gather</span></code> and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code>. Each is a warp-level
+instruction that loads to or stores from 4 consecutive rows in shared memory.</p>
+<p>For example, the following layout is always valid for any row offsets tensor:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span>
+    <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+    <span class="n">parent</span><span class="o">=</span><span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">(</span>
+        <span class="n">size_per_thread</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span>
+        <span class="n">threads_per_warp</span><span class="o">=</span><span class="p">[</span><span class="n">num_threads_per_warp</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+        <span class="n">warps_per_cta</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">],</span>
+        <span class="n">order</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>Recall from <code class="docutils literal notranslate"><span class="pre">02-layouts</span></code> that the parent <code class="docutils literal notranslate"><span class="pre">BlockedLayout</span></code> specified above will
+tile the dim=1 into chunks of 4 consecutive elements mapped to 4 consecutive
+registers in the same thread, and then tile dim=1 along all the warps. dim=0
+is only tiled across the threads in a warp, but when we take the <code class="docutils literal notranslate"><span class="pre">SliceLayout</span></code>
+along dim=0, all threads in a warp will map to the same 4 consecutive
+elements.</p>
+<p>Note that transposing the blocked layout and slicing along dim=1 yields an
+identical layout:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span>
+    <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+    <span class="n">parent</span><span class="o">=</span><span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">(</span>
+        <span class="n">size_per_thread</span><span class="o">=</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+        <span class="n">threads_per_warp</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">num_threads_per_warp</span><span class="p">],</span>
+        <span class="n">warps_per_cta</span><span class="o">=</span><span class="p">[</span><span class="n">num_warps</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+        <span class="n">order</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>These are not the only valid layouts for the row offsets tensor. For example,
+given a row offset tensor with the shape <code class="docutils literal notranslate"><span class="pre">(BLOCK_X)</span></code>, a valid layout could be:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">(</span>
+    <span class="n">size_per_thread</span><span class="o">=</span><span class="p">[</span><span class="n">BLOCK_X</span><span class="p">]</span>
+    <span class="n">threads_per_warp</span><span class="o">=</span><span class="p">[</span><span class="n">num_threads_per_warp</span><span class="p">],</span>
+    <span class="n">warps_per_cta</span><span class="o">=</span><span class="p">[</span><span class="n">num_warps</span><span class="p">],</span>
+    <span class="n">order</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>This layout is valid because all elements are mapped consecutively to the
+registers in all of the threads, but it is less efficient; because all warps
+have the same data, the compiler will pick only warp 0 to emit all the
+instructions. For example, if <code class="docutils literal notranslate"><span class="pre">BLOCK_X=256</span></code>, warp 0 will execute
+<code class="docutils literal notranslate"><span class="pre">256</span> <span class="pre">//</span> <span class="pre">4</span> <span class="pre">=</span> <span class="pre">64</span></code> gather4 instructions while the rest of the warps do nothing,
+whereas the sliced layouts above will spread the work across all warps,
+resulting in <code class="docutils literal notranslate"><span class="pre">256</span> <span class="pre">//</span> <span class="pre">4</span> <span class="pre">//</span> <span class="pre">4</span> <span class="pre">=</span> <span class="pre">16</span></code> gather4 instructions per warp, assuming
+there are 4 warps.</p>
+<p>In general, a layout is valid if its linear layout representation satisfies:</p>
+<ul class="simple">
+<li><p>The first 2 register bases must be [1] and [2]</p></li>
+<li><p>The lane bases must all be [0]</p></li>
+</ul>
+<p>Let’s write a tool to convert any layout to a linear layout to help illustrate
+this concept.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">to_linear_layout</span><span class="p">(</span><span class="n">layout</span><span class="p">,</span> <span class="n">shape</span><span class="p">):</span>
+    <span class="n">context</span> <span class="o">=</span> <span class="n">ir</span><span class="o">.</span><span class="n">context</span><span class="p">()</span>
+    <span class="n">ir</span><span class="o">.</span><span class="n">load_dialects</span><span class="p">(</span><span class="n">context</span><span class="p">)</span>
+    <span class="n">builder</span> <span class="o">=</span> <span class="n">gluon_ir</span><span class="o">.</span><span class="n">GluonOpBuilder</span><span class="p">(</span><span class="n">context</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">builder</span><span class="o">.</span><span class="n">to_linear_layout</span><span class="p">(</span><span class="n">layout</span><span class="o">.</span><span class="n">_to_ir</span><span class="p">(</span><span class="n">builder</span><span class="p">),</span> <span class="n">shape</span><span class="p">)</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">num_threads_per_warp</span> <span class="o">=</span> <span class="mi">32</span>
+    <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">4</span>
+    <span class="n">BLOCK_X</span> <span class="o">=</span> <span class="mi">256</span>
+
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span>
+        <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+        <span class="n">parent</span><span class="o">=</span><span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">(</span>
+            <span class="n">size_per_thread</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span>
+            <span class="n">threads_per_warp</span><span class="o">=</span><span class="p">[</span><span class="n">num_threads_per_warp</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+            <span class="n">warps_per_cta</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">],</span>
+            <span class="n">order</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+        <span class="p">),</span>
+    <span class="p">)</span>
+    <span class="c1"># DistributedLinearLayout(</span>
+    <span class="c1">#     reg_bases=[[1], [2], [16], [32], [64], [128]],</span>
+    <span class="c1">#     lane_bases=[[0], [0], [0], [0], [0]],</span>
+    <span class="c1">#     warp_bases=[[4], [8]],</span>
+    <span class="c1">#     block_bases=[],</span>
+    <span class="c1">#     shape=[256]</span>
+    <span class="c1"># )</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">to_linear_layout</span><span class="p">(</span><span class="n">layout</span><span class="p">,</span> <span class="p">[</span><span class="mi">256</span><span class="p">]))</span>
+
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">(</span>
+        <span class="n">size_per_thread</span><span class="o">=</span><span class="p">[</span><span class="n">BLOCK_X</span><span class="p">],</span>
+        <span class="n">threads_per_warp</span><span class="o">=</span><span class="p">[</span><span class="n">num_threads_per_warp</span><span class="p">],</span>
+        <span class="n">warps_per_cta</span><span class="o">=</span><span class="p">[</span><span class="n">num_warps</span><span class="p">],</span>
+        <span class="n">order</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="c1"># DistributedLinearLayout(</span>
+    <span class="c1">#     reg_bases=[[1], [2], [4], [8], [16], [32], [64], [128]],</span>
+    <span class="c1">#     lane_bases=[[0], [0], [0], [0], [0]],</span>
+    <span class="c1">#     warp_bases=[[0], [0]],</span>
+    <span class="c1">#     block_bases=[],</span>
+    <span class="c1">#     shape=[256]</span>
+    <span class="c1"># )</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">to_linear_layout</span><span class="p">(</span><span class="n">layout</span><span class="p">,</span> <span class="p">[</span><span class="mi">256</span><span class="p">]))</span>
+
+    <span class="c1"># Notice how in the two layouts above, the first two register bases are</span>
+    <span class="c1"># indeed [1] and [2], and all lane bases are [0]. The different is the</span>
+    <span class="c1"># second layout&#39;s warp bases are all [0], which leads to inefficient code</span>
+    <span class="c1"># generation for `async_gather` and `async_scatter`.</span>
+
+    <span class="c1"># Here is an example of an invalid layout:</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">(</span>
+        <span class="n">size_per_thread</span><span class="o">=</span><span class="p">[</span><span class="mi">4</span><span class="p">],</span>
+        <span class="n">threads_per_warp</span><span class="o">=</span><span class="p">[</span><span class="n">num_threads_per_warp</span><span class="p">],</span>
+        <span class="n">warps_per_cta</span><span class="o">=</span><span class="p">[</span><span class="n">num_warps</span><span class="p">],</span>
+        <span class="n">order</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="c1"># DistributedLinearLayout(</span>
+    <span class="c1">#     reg_bases=[[1], [2]],</span>
+    <span class="c1">#     lane_bases=[[4], [8], [16], [32], [64]],</span>
+    <span class="c1">#     warp_bases=[[128], [0]],</span>
+    <span class="c1">#     block_bases=[],</span>
+    <span class="c1">#     shape=[256]</span>
+    <span class="c1"># )</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">to_linear_layout</span><span class="p">(</span><span class="n">layout</span><span class="p">,</span> <span class="p">[</span><span class="mi">256</span><span class="p">]))</span>
+
+    <span class="c1"># This layout is invalid because the lane bases are not all [0].</span>
+</pre></div>
+</div>
+<p>Let’s demonstrate how to use <code class="docutils literal notranslate"><span class="pre">async_gather</span></code> and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> by writing
+simple kernels. Note that both <code class="docutils literal notranslate"><span class="pre">async_gather</span></code> and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> have several
+additional constraints. As we already mentioned, the tensor descriptor must be
+2D with a block shape in the form of <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">BLOCK_Y]</span></code>. Additionally:</p>
+<ul class="simple">
+<li><p>The row offset tensor must have at least 8 elements. I.e. at least 8 rows
+must be loaded by async gather or stored by async scatter.</p></li>
+<li><p>There is a minimum number of columns based on the dtype. Specifically,
+<code class="docutils literal notranslate"><span class="pre">BLOCK_Y</span> <span class="pre">&gt;=</span> <span class="pre">(32</span> <span class="pre">//</span> <span class="pre">tensor_desc.dtype.primitive_bitwidth)</span> <span class="pre">*</span> <span class="pre">8</span></code>. For example,
+a <code class="docutils literal notranslate"><span class="pre">float16</span></code> tensor descriptor must have <code class="docutils literal notranslate"><span class="pre">BLOCK_Y</span> <span class="pre">&gt;=</span> <span class="pre">16</span></code>.</p></li>
+<li><p>The <code class="docutils literal notranslate"><span class="pre">y_offset</span></code> must be aligned to 16 bytes. I.e.
+<code class="docutils literal notranslate"><span class="pre">y_offset</span> <span class="pre">%</span> <span class="pre">(16</span> <span class="pre">//</span> <span class="pre">(tensor_desc.dtype.primitive_bitwidth</span> <span class="pre">//</span> <span class="pre">8))</span> <span class="pre">==</span> <span class="pre">0</span></code>.
+For example, for <code class="docutils literal notranslate"><span class="pre">float16</span></code>, <code class="docutils literal notranslate"><span class="pre">y_offset</span></code> must be a multiple of 8. This is checked
+at runtime by the hardware, and if <code class="docutils literal notranslate"><span class="pre">y_offset</span></code> is not aligned to 16 bytes, the
+CUDA driver will emit an illegal instruction error.</p></li>
+<li><p>Elements of <code class="docutils literal notranslate"><span class="pre">x_offsets</span></code> may be out-of-bounds, in which case the loaded rows of
+<code class="docutils literal notranslate"><span class="pre">async_gather</span></code> will be all zeros, and stored rows in <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> will be ignored.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">y_offset</span></code> can be out-of-bounds. Row elements in <code class="docutils literal notranslate"><span class="pre">y_offset:y_offset</span> <span class="pre">+</span> <span class="pre">BLOCK_Y</span></code> that
+are out-of-bounds will be loaded as zeros by <code class="docutils literal notranslate"><span class="pre">async_gather</span></code> and ignored when stored by <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">x_offsets</span></code> elements and <code class="docutils literal notranslate"><span class="pre">y_offset</span></code> may only be negative for <code class="docutils literal notranslate"><span class="pre">async_gather</span></code>. If <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code>
+receives negative row of column offsets, the CUDA driver will emit an illegal instruction error.</p></li>
+</ul>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="c1"># The kernel computes `out = tensor_desc[x_offsets, y_offset:y_offset + BLOCK_Y]`.</span>
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">async_gather_kernel</span><span class="p">(</span><span class="n">out_ptr</span><span class="p">,</span> <span class="n">out_stride_x</span><span class="p">,</span> <span class="n">out_stride_y</span><span class="p">,</span> <span class="n">tensor_desc</span><span class="p">,</span> <span class="n">x_offsets_ptr</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span>
+                        <span class="n">BLOCK_X</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">BLOCK_Y</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">tensor_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="c1"># Load the offsets using a coalesced layout for efficient load vectorization.</span>
+    <span class="n">coalesced_1d_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="n">gl</span><span class="o">.</span><span class="n">num_warps</span><span class="p">()],</span> <span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="n">x_offsets</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">x_offsets_ptr</span> <span class="o">+</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">coalesced_1d_layout</span><span class="p">))</span>
+
+    <span class="c1"># Convert the offsets layout to a slice layout that satisfies the constraints for `async_gather`.</span>
+    <span class="n">offsets_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">num_warps</span><span class="p">()],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]))</span>
+    <span class="n">x_offsets</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">convert_layout</span><span class="p">(</span><span class="n">x_offsets</span><span class="p">,</span> <span class="n">offsets_layout</span><span class="p">)</span>
+
+    <span class="c1"># `async_gather` loads the rows from a tensor descriptor and writes them into shared memory.</span>
+    <span class="c1"># The layout of the shared memory descriptor must match the shared memory layout of the tensor descriptor.</span>
+    <span class="n">smem_dest</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">tensor_desc</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">],</span> <span class="n">tensor_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+
+    <span class="c1"># `async_gather` is an asynchronous operation that uses an mbarrier to track its completion.</span>
+    <span class="n">bar</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="c1"># Invoke `mbarrier.expect` on the mbarrier with the number of bytes to be loaded.</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">BLOCK_X</span> <span class="o">*</span> <span class="n">tensor_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
+
+    <span class="c1"># Issue the async gather and wait.</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_gather</span><span class="p">(</span><span class="n">tensor_desc</span><span class="p">,</span> <span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">barrier</span><span class="o">=</span><span class="n">bar</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="n">smem_dest</span><span class="p">)</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">invalidate</span><span class="p">(</span><span class="n">bar</span><span class="p">)</span>
+
+    <span class="c1"># Write the result using a coalesced layout.</span>
+    <span class="n">coalesced_2d_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">num_warps</span><span class="p">()],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">smem_dest</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">coalesced_2d_layout</span><span class="p">)</span>
+
+    <span class="n">indices_x</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">coalesced_2d_layout</span><span class="p">))[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">out_stride_x</span>
+    <span class="n">indices_y</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">coalesced_2d_layout</span><span class="p">))[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">out_stride_y</span>
+    <span class="n">gl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">out_ptr</span> <span class="o">+</span> <span class="n">indices_x</span> <span class="o">+</span> <span class="n">indices_y</span><span class="p">,</span> <span class="n">out</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">async_gather</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">):</span>
+    <span class="n">gl_dtype</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">gl</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="nb">input</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)[</span><span class="mi">1</span><span class="p">])</span>
+    <span class="c1"># When picking the shared memory layout, we use the dimensions of the shared</span>
+    <span class="c1"># memory descriptor, which will be [BLOCK_X, BLOCK_Y]. But the block shape of the</span>
+    <span class="c1"># tensor descriptor must still be [1, BLOCK_Y] to be used with async gather.</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">],</span> <span class="n">gl_dtype</span><span class="p">)</span>
+    <span class="n">tensor_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">],</span> <span class="n">layout</span><span class="p">)</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">input</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">async_gather_kernel</span><span class="p">[(</span><span class="mi">1</span><span class="p">,</span> <span class="p">)](</span><span class="n">out</span><span class="p">,</span> <span class="o">*</span><span class="n">out</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">tensor_desc</span><span class="p">,</span> <span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">BLOCK_X</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">out</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;dtype&quot;</span><span class="p">,</span> <span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;BLOCK_X&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">128</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;BLOCK_Y&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">128</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;y_offset&quot;</span><span class="p">,</span> <span class="p">[</span><span class="o">-</span><span class="mi">16</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">1000</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;X_MAX, Y_MAX&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">1024</span><span class="p">,</span> <span class="mi">1024</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Blackwell&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_async_gather</span><span class="p">(</span><span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">X_MAX</span><span class="p">,</span> <span class="n">Y_MAX</span><span class="p">,</span> <span class="n">fresh_knobs</span><span class="p">):</span>
+    <span class="n">triton</span><span class="o">.</span><span class="n">knobs</span><span class="o">.</span><span class="n">compilation</span><span class="o">.</span><span class="n">instrumentation_mode</span> <span class="o">=</span> <span class="s2">&quot;iisan&quot;</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">X_MAX</span><span class="p">,</span> <span class="n">Y_MAX</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="c1"># Span row offsets from negative to out-of-bounds to test the masked load behavior.</span>
+    <span class="n">x_offsets</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="n">X_MAX</span><span class="p">,</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">X_MAX</span><span class="p">,</span> <span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="c1"># Randomly shuffle the row offsets.</span>
+    <span class="n">x_offsets</span> <span class="o">=</span> <span class="n">x_offsets</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)]</span>
+
+    <span class="n">out</span> <span class="o">=</span> <span class="n">async_gather</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">)</span>
+
+    <span class="c1"># Mask out-of-bounds and negative row offsets.</span>
+    <span class="n">x_offsets</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">x_offsets</span> <span class="o">&gt;=</span> <span class="n">X_MAX</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">x_offsets</span><span class="p">)</span>
+    <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">x_offsets</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="c1"># Mask out-of-bounds and negative column offsets by padding with zeros.</span>
+    <span class="n">y_lo</span><span class="p">,</span> <span class="n">y_hi</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">),</span> <span class="nb">min</span><span class="p">(</span><span class="n">y_offset</span> <span class="o">+</span> <span class="n">BLOCK_Y</span><span class="p">,</span> <span class="n">Y_MAX</span><span class="p">)</span>
+    <span class="n">ref</span> <span class="o">=</span> <span class="nb">input</span><span class="p">[</span><span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_lo</span><span class="p">:</span><span class="n">y_hi</span><span class="p">]</span> <span class="o">*</span> <span class="n">mask</span>
+    <span class="n">lo_zeros</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">y_lo</span> <span class="o">-</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">hi_zeros</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">y_offset</span> <span class="o">+</span> <span class="n">BLOCK_Y</span> <span class="o">-</span> <span class="n">y_hi</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">ref</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">((</span><span class="n">lo_zeros</span><span class="p">,</span> <span class="n">ref</span><span class="p">,</span> <span class="n">hi_zeros</span><span class="p">),</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">ref</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The CUDA driver will emit an illegal instruction error if <code class="docutils literal notranslate"><span class="pre">y_offset</span></code> is not
+aligned to 16 bytes for both <code class="docutils literal notranslate"><span class="pre">async_gather</span></code> and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code>, or if negative
+row or column offsets are used for <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code>.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="c1"># Note that any illegal instruction errors will corrupt the CUDA context in current Python</span>
+    <span class="c1"># process, which prevents executing any other code. Guard each of these examples with a</span>
+    <span class="c1"># flag so that only 1 is executed at a time.</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="ow">and</span> <span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;test_illegal_gather&quot;</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="c1"># y_offset=2 is not 16-byte aligned for bfloat16</span>
+            <span class="n">test_async_gather</span><span class="p">(</span><span class="n">BLOCK_X</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">y_offset</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">RuntimeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="s2">&quot;an illegal instruction was encountered&quot;</span> <span class="ow">in</span> <span class="nb">str</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+            <span class="k">raise</span>
+</pre></div>
+</div>
+<p>Illegal instruction errors can be frustrating to debug. They typically occur
+because an executed instruction does not match some runtime invariants. To
+figure out which instruction is causing the error, you can run the program
+inside the debugger <code class="docutils literal notranslate"><span class="pre">cuda-gdb</span></code>. For example, if we run</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cuda-gdb<span class="w"> </span>--args<span class="w"> </span>python<span class="w"> </span>python/tutorials/gluon/09-tma-gather-scatter.py<span class="w"> </span>test_illegal_gather
+</pre></div>
+</div>
+<p>Send <code class="docutils literal notranslate"><span class="pre">r</span></code> to run the program, and the debugger will break on the instruction
+that triggered the illegal instruction error:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CUDA</span> <span class="ne">Exception</span><span class="p">:</span> <span class="n">Warp</span> <span class="n">Illegal</span> <span class="n">Instruction</span>
+<span class="n">The</span> <span class="n">exception</span> <span class="n">was</span> <span class="n">triggered</span> <span class="n">at</span> <span class="n">PC</span> <span class="mh">0x628fbe590</span>  <span class="n">async_gather_kernel</span>  <span class="p">(</span><span class="mi">09</span><span class="o">-</span><span class="n">tma</span><span class="o">-</span><span class="n">gather</span><span class="o">-</span><span class="n">scatter</span><span class="o">.</span><span class="n">py</span><span class="p">:</span><span class="mi">245</span><span class="p">)</span>
+
+<span class="n">Thread</span> <span class="mi">1</span> <span class="s2">&quot;python&quot;</span> <span class="n">received</span> <span class="n">signal</span> <span class="n">CUDA_EXCEPTION_4</span><span class="p">,</span> <span class="n">Warp</span> <span class="n">Illegal</span> <span class="n">Instruction</span><span class="o">.</span>
+<span class="p">[</span><span class="n">Switching</span> <span class="n">focus</span> <span class="n">to</span> <span class="n">CUDA</span> <span class="n">kernel</span> <span class="mi">0</span><span class="p">,</span> <span class="n">grid</span> <span class="mi">9</span><span class="p">,</span> <span class="n">block</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">),</span> <span class="n">thread</span> <span class="p">(</span><span class="mi">96</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">),</span> <span class="n">device</span> <span class="mi">0</span><span class="p">,</span> <span class="n">sm</span> <span class="mi">148</span><span class="p">,</span> <span class="n">warp</span> <span class="mi">0</span><span class="p">,</span> <span class="n">lane</span> <span class="mi">0</span><span class="p">]</span>
+<span class="mh">0x0000000628fbe700</span> <span class="ow">in</span> <span class="n">async_gather_kernel</span><span class="o">&lt;&lt;&lt;</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">),(</span><span class="mi">128</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span><span class="o">&gt;&gt;&gt;</span> <span class="p">()</span> <span class="n">at</span> <span class="o">/</span><span class="n">root</span><span class="o">/</span><span class="n">code</span><span class="o">/</span><span class="n">triton</span><span class="o">/</span><span class="n">python</span><span class="o">/</span><span class="n">tutorials</span><span class="o">/</span><span class="n">gluon</span><span class="o">/</span><span class="mi">09</span><span class="o">-</span><span class="n">tma</span><span class="o">-</span><span class="n">gather</span><span class="o">-</span><span class="n">scatter</span><span class="o">.</span><span class="n">py</span><span class="p">:</span><span class="mi">245</span>
+<span class="mi">245</span>         <span class="n">tma</span><span class="o">.</span><span class="n">async_gather</span><span class="p">(</span><span class="n">tensor_desc</span><span class="p">,</span> <span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">barrier</span><span class="o">=</span><span class="n">bar</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="n">smem_dest</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>This kernel computes <code class="docutils literal notranslate"><span class="pre">tensor_desc[x_offsets,</span> <span class="pre">y_offset:y_offset</span> <span class="pre">+</span> <span class="pre">BLOCK_Y]</span> <span class="pre">=</span> <span class="pre">src</span></code>.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">async_scatter_kernel</span><span class="p">(</span><span class="n">tensor_desc</span><span class="p">,</span> <span class="n">x_offsets_ptr</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">src_ptr</span><span class="p">,</span> <span class="n">src_stride_x</span><span class="p">,</span> <span class="n">src_stride_y</span><span class="p">,</span>
+                         <span class="n">BLOCK_X</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">BLOCK_Y</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">tensor_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="c1"># Load the source using a coalesced layout for efficient load vectorization.</span>
+    <span class="n">coalesced_2d_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">num_warps</span><span class="p">()],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+    <span class="n">indices_x</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">coalesced_2d_layout</span><span class="p">))[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">src_stride_x</span>
+    <span class="n">indices_y</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">coalesced_2d_layout</span><span class="p">))[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">src_stride_y</span>
+    <span class="n">src</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">src_ptr</span> <span class="o">+</span> <span class="n">indices_x</span> <span class="o">+</span> <span class="n">indices_y</span><span class="p">)</span>
+
+    <span class="c1"># Load the offsets using a coalesced layout for efficient load vectorization.</span>
+    <span class="n">coalesced_1d_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="n">gl</span><span class="o">.</span><span class="n">num_warps</span><span class="p">()],</span> <span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="n">x_offsets</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">x_offsets_ptr</span> <span class="o">+</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">coalesced_1d_layout</span><span class="p">))</span>
+
+    <span class="c1"># Convert the offsets layout to a slice layout that satisfies the constraints for `async_scatter`.</span>
+    <span class="n">offsets_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">num_warps</span><span class="p">()],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]))</span>
+    <span class="n">x_offsets</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">convert_layout</span><span class="p">(</span><span class="n">x_offsets</span><span class="p">,</span> <span class="n">offsets_layout</span><span class="p">)</span>
+
+    <span class="c1"># `async_scatter` stores the rows to a tensor descriptor from shared memory.</span>
+    <span class="n">smem_src</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">tensor_desc</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">],</span> <span class="n">tensor_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">smem_src</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">src</span><span class="p">)</span>
+    <span class="c1"># An async fence is required between the store to shared memory and the async scatter.</span>
+    <span class="c1"># Recall from `04-tma` that a fence is needed when using different proxies to access shared</span>
+    <span class="c1"># memory (generic proxy for the store, and async proxy for the `async_scatter`).</span>
+    <span class="n">fence_async_shared</span><span class="p">()</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_scatter</span><span class="p">(</span><span class="n">tensor_desc</span><span class="p">,</span> <span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">smem_src</span><span class="p">)</span>
+    <span class="c1"># Wait for the completion of the async scatter using `store_wait`.</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">async_scatter</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">src</span><span class="p">,</span> <span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">):</span>
+    <span class="n">gl_dtype</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">gl</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="nb">input</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)[</span><span class="mi">1</span><span class="p">])</span>
+    <span class="c1"># When picking the shared memory layout, we use the dimensions of the shared</span>
+    <span class="c1"># memory descriptor, which will be [BLOCK_X, BLOCK_Y]. But the block shape of the</span>
+    <span class="c1"># tensor descriptor must still be [1, BLOCK_Y] to be used with async scatter.</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">],</span> <span class="n">gl_dtype</span><span class="p">)</span>
+    <span class="n">tensor_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">],</span> <span class="n">layout</span><span class="p">)</span>
+    <span class="n">async_scatter_kernel</span><span class="p">[(</span><span class="mi">1</span><span class="p">,</span> <span class="p">)](</span><span class="n">tensor_desc</span><span class="p">,</span> <span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">src</span><span class="p">,</span> <span class="o">*</span><span class="n">src</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">BLOCK_X</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;dtype&quot;</span><span class="p">,</span> <span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;BLOCK_X&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">128</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;BLOCK_Y&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">128</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;y_offset&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">1000</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;X_MAX, Y_MAX&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">1024</span><span class="p">,</span> <span class="mi">1024</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Blackwell&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_async_scatter</span><span class="p">(</span><span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">X_MAX</span><span class="p">,</span> <span class="n">Y_MAX</span><span class="p">,</span> <span class="n">fresh_knobs</span><span class="p">):</span>
+    <span class="n">triton</span><span class="o">.</span><span class="n">knobs</span><span class="o">.</span><span class="n">compilation</span><span class="o">.</span><span class="n">instrumentation_mode</span> <span class="o">=</span> <span class="s2">&quot;iisan&quot;</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">X_MAX</span><span class="p">,</span> <span class="n">Y_MAX</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">input_ref</span> <span class="o">=</span> <span class="nb">input</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
+
+    <span class="c1"># Span row offsets from 0 to out-of-bounds to test the masked store behavior.</span>
+    <span class="n">x_offsets</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">X_MAX</span><span class="p">,</span> <span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="c1"># Randomly shuffle the row offsets.</span>
+    <span class="n">x_offsets</span> <span class="o">=</span> <span class="n">x_offsets</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)]</span>
+
+    <span class="n">src</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">async_scatter</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">src</span><span class="p">,</span> <span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">)</span>
+
+    <span class="c1"># Mask out-of-bounds row offsets.</span>
+    <span class="n">mask</span> <span class="o">=</span> <span class="n">x_offsets</span> <span class="o">&lt;</span> <span class="n">X_MAX</span>
+    <span class="n">x_offsets</span> <span class="o">=</span> <span class="n">x_offsets</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span>
+    <span class="n">src</span> <span class="o">=</span> <span class="n">src</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span>
+
+    <span class="c1"># Mask out-of-bounds column offsets.</span>
+    <span class="n">y_hi</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">y_offset</span> <span class="o">+</span> <span class="n">BLOCK_Y</span><span class="p">,</span> <span class="n">Y_MAX</span><span class="p">)</span>
+
+    <span class="n">input_ref</span><span class="p">[</span><span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">:</span><span class="n">y_hi</span><span class="p">]</span> <span class="o">=</span> <span class="n">src</span><span class="p">[:,</span> <span class="p">:</span><span class="n">y_hi</span> <span class="o">-</span> <span class="n">y_offset</span><span class="p">]</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">input_ref</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">async_gather</span></code> and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> can be pipelined just like <code class="docutils literal notranslate"><span class="pre">async_copy_global_to_shared</span></code>
+and <code class="docutils literal notranslate"><span class="pre">async_copy_shared_to_global</span></code>. To demonstrate this, we will write a matmul kernel
+that has a fused gather and fused scatter along the M dimension:
+<code class="docutils literal notranslate"><span class="pre">out[out_scatter_indx,</span> <span class="pre">:]</span> <span class="pre">=</span> <span class="pre">X[X_gather_indx,</span> <span class="pre">:]</span> <span class="pre">&#64;</span> <span class="pre">W</span></code>.</p>
+<p>Recall in <code class="docutils literal notranslate"><span class="pre">06-tcgen05-mma</span></code> that we demonstrated how to write matmul kernels
+with <code class="docutils literal notranslate"><span class="pre">tcgen05_mma</span></code>. This example performs pipelining of the TMA loads, including <code class="docutils literal notranslate"><span class="pre">async_gather</span></code>,
+with <code class="docutils literal notranslate"><span class="pre">tcgen05_mma</span></code> and pipelining of the <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> with the persistent outer loop.</p>
+<p>In our blocked matmul kernrel with fused gather and scatter, for each tile of the output,
+we will load the M dimension offsets for the X tensor tile and the N dimension offsets for the W
+tensor tile via <code class="docutils literal notranslate"><span class="pre">gl.load</span></code> and schedule them sufficiently ahead of their use to account for the
+latency of the global loads.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">X_desc</span><span class="p">,</span> <span class="n">W_desc</span><span class="p">,</span> <span class="n">X_gather_indx_ptr</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">x_bufs</span><span class="p">,</span> <span class="n">w_bufs</span><span class="p">,</span>
+                <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">pred</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="c1"># Load the M dimension offsets for the X tensor tile. We expect the load to be small</span>
+    <span class="c1"># enough (no more than 128 elements) that we don&#39;t need to use a coalesced layout. Load directly into the layout</span>
+    <span class="c1"># required by `async_gather` to avoid the layout conversion.</span>
+    <span class="n">gather_indx_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">num_warps</span><span class="p">()],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]))</span>
+    <span class="n">offs_x_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">X_gather_indx_ptr</span> <span class="o">+</span> <span class="n">off_m</span> <span class="o">+</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">gather_indx_layout</span><span class="p">))</span>
+
+    <span class="n">index</span> <span class="o">=</span> <span class="n">producer</span> <span class="o">%</span> <span class="n">num_buffers</span>
+    <span class="n">producer</span> <span class="o">+=</span> <span class="mi">1</span>
+    <span class="n">bar</span> <span class="o">=</span> <span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+
+    <span class="c1"># The W tensor tile is loaded using a regular `async_copy_global_to_shared`.</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">W_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span> <span class="o">+</span> <span class="n">BLOCK_M</span> <span class="o">*</span> <span class="n">X_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_gather</span><span class="p">(</span><span class="n">X_desc</span><span class="p">,</span> <span class="n">offs_x_m</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bar</span><span class="p">,</span> <span class="n">x_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">pred</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">W_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">k</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">w_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">pred</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">producer</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">issue_mma</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">x_bufs</span><span class="p">,</span> <span class="n">w_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">index</span> <span class="o">=</span> <span class="n">consumer</span> <span class="o">%</span> <span class="n">num_buffers</span>
+    <span class="n">b_index</span> <span class="o">=</span> <span class="n">consumer</span> <span class="o">%</span> <span class="n">num_buffers</span>
+    <span class="n">phase</span> <span class="o">=</span> <span class="n">consumer</span> <span class="o">//</span> <span class="n">num_buffers</span> <span class="o">&amp;</span> <span class="mi">1</span>
+    <span class="n">consumer</span> <span class="o">+=</span> <span class="mi">1</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">phase</span><span class="p">)</span>
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">issue_async_mma</span><span class="p">(</span><span class="n">x_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">w_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">b_index</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_fused_gather_scatter_kernel</span><span class="p">(</span><span class="n">X_desc</span><span class="p">,</span> <span class="n">W_desc</span><span class="p">,</span> <span class="n">out_desc</span><span class="p">,</span> <span class="n">X_gather_indx_ptr</span><span class="p">,</span> <span class="n">out_scatter_indx_ptr</span><span class="p">,</span>
+                                       <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">W_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">BLOCK_K</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">W_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">X_desc</span><span class="o">.</span><span class="n">dtype</span>
+    <span class="n">M</span> <span class="o">=</span> <span class="n">X_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">N</span> <span class="o">=</span> <span class="n">W_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">K</span> <span class="o">=</span> <span class="n">X_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="c1"># Allocate shared memory for the input tiles.</span>
+    <span class="n">x_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">X_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">w_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">W_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+
+    <span class="c1"># Allocate shared memory for the output tile.</span>
+    <span class="n">out_smem</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">out_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+
+    <span class="c1"># Initialize barriers for multibuffering the loads.</span>
+    <span class="n">bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">producer</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">consumer</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">t7</span><span class="o">.</span><span class="n">MMAv5</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">num_warps</span><span class="p">())</span>
+    <span class="n">scheduler</span> <span class="o">=</span> <span class="n">SchedulerImpl</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+    <span class="n">num_tiles</span> <span class="o">=</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">get_num_tiles</span><span class="p">()</span>
+
+    <span class="c1"># Peeled inner loop prologue.</span>
+    <span class="n">idx</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span> <span class="o">=</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">get_tile</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+    <span class="n">off_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
+    <span class="n">off_n</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_N</span>
+    <span class="k">for</span> <span class="n">ki</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">),</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+        <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">X_desc</span><span class="p">,</span> <span class="n">W_desc</span><span class="p">,</span> <span class="n">X_gather_indx_ptr</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">ki</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">x_bufs</span><span class="p">,</span> <span class="n">w_bufs</span><span class="p">,</span>
+                               <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+    <span class="n">k</span> <span class="o">=</span> <span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">X_desc</span><span class="p">,</span> <span class="n">W_desc</span><span class="p">,</span> <span class="n">X_gather_indx_ptr</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">x_bufs</span><span class="p">,</span> <span class="n">w_bufs</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span>
+                           <span class="n">num_buffers</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_tiles</span><span class="p">):</span>
+        <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">issue_mma</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">x_bufs</span><span class="p">,</span> <span class="n">w_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">1</span><span class="p">),</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+            <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">X_desc</span><span class="p">,</span> <span class="n">W_desc</span><span class="p">,</span> <span class="n">X_gather_indx_ptr</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">x_bufs</span><span class="p">,</span> <span class="n">w_bufs</span><span class="p">,</span>
+                                   <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+            <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">issue_mma</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">x_bufs</span><span class="p">,</span> <span class="n">w_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+        <span class="n">epilogue_off_m</span> <span class="o">=</span> <span class="n">off_m</span>
+        <span class="n">epilogue_off_n</span> <span class="o">=</span> <span class="n">off_n</span>
+
+        <span class="c1"># Load the M dimension offsets for the output tile. We expect the load to be small</span>
+        <span class="c1"># enough (no more than 128 elements) that we don&#39;t need to use a coalesced layout.</span>
+        <span class="c1"># Load directly into the layout required by `async_scatter` to avoid the layout conversion.</span>
+        <span class="n">scatter_indx_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span>
+            <span class="mi">0</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">num_warps</span><span class="p">()],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]))</span>
+        <span class="n">out_offs_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">out_scatter_indx_ptr</span> <span class="o">+</span> <span class="n">epilogue_off_m</span> <span class="o">+</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">scatter_indx_layout</span><span class="p">))</span>
+
+        <span class="c1"># Peel the next prologue and fuse it with the pipeline drain loop.</span>
+        <span class="n">idx</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span> <span class="o">=</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">get_tile</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+        <span class="n">off_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
+        <span class="n">off_n</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_N</span>
+
+        <span class="c1"># Predicate the peeled prologue instead of using a conditional.</span>
+        <span class="n">pred</span> <span class="o">=</span> <span class="n">idx</span> <span class="o">&lt;</span> <span class="n">num_tiles</span>
+        <span class="k">for</span> <span class="n">ki</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">),</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+            <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">X_desc</span><span class="p">,</span> <span class="n">W_desc</span><span class="p">,</span> <span class="n">X_gather_indx_ptr</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">ki</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">x_bufs</span><span class="p">,</span> <span class="n">w_bufs</span><span class="p">,</span>
+                                   <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">pred</span><span class="p">)</span>
+            <span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">issue_mma</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">x_bufs</span><span class="p">,</span> <span class="n">w_bufs</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+        <span class="n">k</span> <span class="o">=</span> <span class="n">BLOCK_K</span> <span class="o">*</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="n">producer</span> <span class="o">=</span> <span class="n">issue_loads</span><span class="p">(</span><span class="n">producer</span><span class="p">,</span> <span class="n">X_desc</span><span class="p">,</span> <span class="n">W_desc</span><span class="p">,</span> <span class="n">X_gather_indx_ptr</span><span class="p">,</span> <span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">x_bufs</span><span class="p">,</span> <span class="n">w_bufs</span><span class="p">,</span>
+                               <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+        <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">out</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">take_result</span><span class="p">()</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="n">out</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="c1"># Pipeline the async scatter by waiting for the previous store to complete.</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">out_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
+        <span class="n">fence_async_shared</span><span class="p">()</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_scatter</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="n">out_offs_m</span><span class="p">,</span> <span class="n">epilogue_off_n</span><span class="p">,</span> <span class="n">out_smem</span><span class="p">)</span>
+    <span class="c1"># Wait for the last async scatter to complete.</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>We will pick reasonable defaults for the block sizes and number of load buffers.
+Tuning and optimizing the performance of this kernel is left as an exercise for the reader,
+as the primary objective of this tutorial is to demonstrate the use of async gather and scatter.</p>
+<p>The only alternative way to implement a matmul kernel with fused gather and
+scatter is to use async_copy (recall <code class="docutils literal notranslate"><span class="pre">03-async-copy</span></code>) or <code class="docutils literal notranslate"><span class="pre">gl.load</span></code> to load
+from global memory and <code class="docutils literal notranslate"><span class="pre">gl.store</span></code> to write to the output tensor in the
+epilogue. While these instructions provide more flexible indexing, they are
+much slower than TMA and async gather and scatter.</p>
+<p>One extra note: it is of course possible to use async gather and async scatter with
+warp-specialized kernels. Just keep in mind that because the row offsets is a tensor, you may want
+to give the load and epilogue partitions more than 1 warp to increase instruction issue throughput,
+particularly for the loads as they are on the critical path.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_fused_gather_scatter</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">X_gather_indx</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">out_scatter_indx</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>
+                                <span class="n">GROUP_SIZE_M</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">num_buffers</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
+    <span class="n">M</span> <span class="o">=</span> <span class="n">X</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">N</span> <span class="o">=</span> <span class="n">W</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">X</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Convert torch dtype to gluon dtype.</span>
+    <span class="n">dtype</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">gl</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">X</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)[</span><span class="mi">1</span><span class="p">])</span>
+    <span class="c1"># Setup descriptors for inputs and outputs.</span>
+    <span class="n">X_desc_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
+    <span class="n">W_desc_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
+    <span class="n">out_desc_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
+
+    <span class="n">X_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">X_desc_layout</span><span class="p">)</span>
+    <span class="n">W_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">W</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">W_desc_layout</span><span class="p">)</span>
+    <span class="n">out_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">out_desc_layout</span><span class="p">)</span>
+
+    <span class="c1"># Persistent kernel grid.</span>
+    <span class="n">num_sms</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">multi_processor_count</span>
+    <span class="n">num_pid</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">num_sms</span><span class="p">,</span> <span class="n">num_pid</span><span class="p">),</span> <span class="p">)</span>
+    <span class="n">SchedulerImpl</span> <span class="o">=</span> <span class="n">t7</span><span class="o">.</span><span class="n">GroupedPersistentTileScheduler</span><span class="p">(</span><span class="n">GROUP_SIZE_M</span><span class="p">)</span>
+    <span class="n">matmul_fused_gather_scatter_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">X_desc</span><span class="p">,</span> <span class="n">W_desc</span><span class="p">,</span> <span class="n">out_desc</span><span class="p">,</span> <span class="n">X_gather_indx</span><span class="p">,</span> <span class="n">out_scatter_indx</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span>
+                                             <span class="n">SchedulerImpl</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">out</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;M, N, K&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">1024</span><span class="p">,</span> <span class="mi">1024</span><span class="p">,</span> <span class="mi">2048</span><span class="p">),</span> <span class="p">(</span><span class="mi">4096</span><span class="p">,</span> <span class="mi">4096</span><span class="p">,</span> <span class="mi">4096</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;BLOCK_M, BLOCK_N&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">128</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span> <span class="p">(</span><span class="mi">128</span><span class="p">,</span> <span class="mi">64</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;BLOCK_K, num_buffers&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">128</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">3</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Blackwell&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_matmul_fused_gather_scatter</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">):</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="c1"># Randomize the gather indices.</span>
+    <span class="n">X_gather_indx</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">shfl</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">X_gather_indx</span> <span class="o">=</span> <span class="n">X_gather_indx</span><span class="p">[</span><span class="n">shfl</span><span class="p">]</span>
+
+    <span class="c1"># Randomize the scatter indices.</span>
+    <span class="n">out_scatter_indx</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">shfl</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">out_scatter_indx</span> <span class="o">=</span> <span class="n">out_scatter_indx</span><span class="p">[</span><span class="n">shfl</span><span class="p">]</span>
+
+    <span class="n">X</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">W</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">matmul_fused_gather_scatter</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">X_gather_indx</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">out_scatter_indx</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span>
+                                      <span class="n">num_buffers</span><span class="o">=</span><span class="n">num_buffers</span><span class="p">)</span>
+
+    <span class="n">out_ref</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
+    <span class="n">out_ref</span><span class="p">[</span><span class="n">out_scatter_indx</span><span class="p">,</span> <span class="p">:]</span> <span class="o">=</span> <span class="n">X</span><span class="p">[</span><span class="n">X_gather_indx</span><span class="p">,</span> <span class="p">:]</span> <span class="o">@</span> <span class="n">W</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">out_ref</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The main takeaway from this tutorial is understanding how to use <code class="docutils literal notranslate"><span class="pre">async_gather</span></code>
+and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code>. These instructions provide a middle-ground between
+block DMAs like <code class="docutils literal notranslate"><span class="pre">async_copy_global_to_shared</span></code> and <code class="docutils literal notranslate"><span class="pre">async_copy_shared_to_global</span></code>
+and regular global loads and stores (<code class="docutils literal notranslate"><span class="pre">gl.load</span></code> and <code class="docutils literal notranslate"><span class="pre">gl.store</span></code>) by allowing
+separately-indexed columns while maintaining the performance of TMAs.</p>
+<p>Keep in mind the following:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">async_gather</span></code> and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> are typically faster than <code class="docutils literal notranslate"><span class="pre">gl.load</span></code> and
+<code class="docutils literal notranslate"><span class="pre">gl.store</span></code> when they can be used, but this is not always the case. Plus, TMA
+instructions use shared memory.</p></li>
+<li><p>Sometimes using <code class="docutils literal notranslate"><span class="pre">async_gather</span></code> or <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> instead of block DMA
+instructions like <code class="docutils literal notranslate"><span class="pre">async_copy_global_to_shared</span></code> and <code class="docutils literal notranslate"><span class="pre">async_copy_shared_to_global</span></code>
+is actually faster, but these situations are rare.</p></li>
+</ul>
+<p>In general, you should consider these instructions when writing kernels and
+experiment to see what is the best way to write a kernel.</p>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="warp-specialization.html" class="btn btn-neutral float-left" title="Warp Specialization" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="tcgen05-copy.html" class="btn btn-neutral float-right" title="TCGen05 Copy Instruction" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

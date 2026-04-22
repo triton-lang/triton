@@ -1,0 +1,37 @@
+﻿triton.experimental.gluon.language.PaddedSharedLayout
+=====================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autoclass:: PaddedSharedLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~PaddedSharedLayout.__init__
+      ~PaddedSharedLayout.format_hardware_view
+      ~PaddedSharedLayout.format_tensor_view
+      ~PaddedSharedLayout.mangle
+      ~PaddedSharedLayout.verify
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~PaddedSharedLayout.type
+      ~PaddedSharedLayout.with_identity_for
+      ~PaddedSharedLayout.interval_padding_pairs
+      ~PaddedSharedLayout.offset_bases
+      ~PaddedSharedLayout.cga_layout
+      ~PaddedSharedLayout.shape
+   
+   

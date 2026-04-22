@@ -1,0 +1,33 @@
+triton.experimental.gluon.language.nvidia.blackwell.tma.tensor\_descriptor
+==========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell.tma
+
+.. autoclass:: tensor_descriptor
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~tensor_descriptor.__init__
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~tensor_descriptor.block_shape
+      ~tensor_descriptor.block_type
+      ~tensor_descriptor.dtype
+      ~tensor_descriptor.layout
+      ~tensor_descriptor.nbytes_per_cta
+      ~tensor_descriptor.type
+   
+   

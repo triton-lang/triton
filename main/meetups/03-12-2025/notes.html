@@ -13,12 +13,17 @@
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
 
   
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
       <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../_static/design-tabs.js?v=f930bc37"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" /> 
@@ -56,6 +61,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
 </ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/api/index.html">API Reference</a></li>
+</ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
@@ -92,7 +104,7 @@
            <div itemprop="articleBody">
              
   <section id="agenda">
-<h1>Agenda:<a class="headerlink" href="#agenda" title="Link to this heading">¶</a></h1>
+<h1>Agenda:<a class="headerlink" href="#agenda" title="Link to this heading"></a></h1>
 <ol class="arabic simple">
 <li><p>Improving ILP (Instruction Level Parallelism) with Warp Specialization</p></li>
 <li><p>Triton-shared (Progress and updates)</p></li>
@@ -100,9 +112,9 @@
 </ol>
 </section>
 <section id="meeting-notes">
-<h1>Meeting notes:<a class="headerlink" href="#meeting-notes" title="Link to this heading">¶</a></h1>
+<h1>Meeting notes:<a class="headerlink" href="#meeting-notes" title="Link to this heading"></a></h1>
 <section id="improving-ilp-instruction-level-parallelism-with-warp-specialization">
-<h2>Improving ILP (Instruction Level Parallelism) with Warp Specialization<a class="headerlink" href="#improving-ilp-instruction-level-parallelism-with-warp-specialization" title="Link to this heading">¶</a></h2>
+<h2>Improving ILP (Instruction Level Parallelism) with Warp Specialization<a class="headerlink" href="#improving-ilp-instruction-level-parallelism-with-warp-specialization" title="Link to this heading"></a></h2>
 <p>Speakers: Hongtao Yu (Meta), Yuanwei (Kevin) Fang (Meta), Manman Ren (Meta)</p>
 <p>Notes:</p>
 <ul class="simple">
@@ -205,7 +217,7 @@
 </ul>
 </section>
 <section id="questions">
-<h2>Questions<a class="headerlink" href="#questions" title="Link to this heading">¶</a></h2>
+<h2>Questions<a class="headerlink" href="#questions" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Q&gt; Is there an equivalent warp group for AMD? Does this apply to AMD GPUs?</p></li>
 <li><p>A&gt; Meta is doing this for AMD. No named barrier in AMD. Simulating this using shared-memory atomics on AMD to get the same effect.</p></li>
@@ -218,11 +230,11 @@
 </ul>
 </section>
 <section id="triton-shared-progress-and-updates">
-<h2>Triton-shared (Progress and updates)<a class="headerlink" href="#triton-shared-progress-and-updates" title="Link to this heading">¶</a></h2>
+<h2>Triton-shared (Progress and updates)<a class="headerlink" href="#triton-shared-progress-and-updates" title="Link to this heading"></a></h2>
 <p>Presenter: Nhat Nguyen (Microsoft), Haishan Zhu (Meta)</p>
 <p>Notes:</p>
 <section id="goal">
-<h3>Goal:<a class="headerlink" href="#goal" title="Link to this heading">¶</a></h3>
+<h3>Goal:<a class="headerlink" href="#goal" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Lower Triton IR to mlir core dialects (linalg, memref, …)  Easier path to running on CPUs.</p></li>
 <li><p>Focus on supporting strided memory access for accelerators</p></li>
@@ -234,7 +246,7 @@
 </ul>
 </section>
 <section id="progress">
-<h3>Progress<a class="headerlink" href="#progress" title="Link to this heading">¶</a></h3>
+<h3>Progress<a class="headerlink" href="#progress" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Modularizing compiler passes. Decoupled data extraction from lowering. Allowed for customized lowering flows. Predictable behavior for analysis failures.</p>
 <ul>
@@ -254,7 +266,7 @@
 </ul>
 </section>
 <section id="roadmap">
-<h3>Roadmap<a class="headerlink" href="#roadmap" title="Link to this heading">¶</a></h3>
+<h3>Roadmap<a class="headerlink" href="#roadmap" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Complete support for non-contiguous pointers</p></li>
 <li><p>Detect other memory access patterns (e.g. row-gather/scatter pointer sequences)</p></li>
@@ -262,11 +274,11 @@
 </ul>
 </section>
 <section id="thanks">
-<h3>Thanks!<a class="headerlink" href="#thanks" title="Link to this heading">¶</a></h3>
+<h3>Thanks!<a class="headerlink" href="#thanks" title="Link to this heading"></a></h3>
 <p>Meta, Qualcomm and community</p>
 </section>
 <section id="id1">
-<h3>Questions<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<h3>Questions<a class="headerlink" href="#id1" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Q&gt; Future plans, what are the higher priority items you want to work on?</p></li>
 <li><p>A&gt; Many Triton kernel have memory access patterns  that can’t be detected. We don’t have fall back solutions (e.g. gather-scatter support). Need to wait for the mlir pointer dialect to land so we can use it.  MxN loads pointer analysis fails if loads are contiguous. But rows may be contiguous so we can split analysis into multiple chunks (row scatter, row gather).</p></li>
@@ -275,7 +287,7 @@
 </section>
 </section>
 <section id="questions-about-generic-tensor-descriptor">
-<h2>Questions about Generic Tensor Descriptor<a class="headerlink" href="#questions-about-generic-tensor-descriptor" title="Link to this heading">¶</a></h2>
+<h2>Questions about Generic Tensor Descriptor<a class="headerlink" href="#questions-about-generic-tensor-descriptor" title="Link to this heading"></a></h2>
 <ul class="simple">
 <li><p>Q&gt; What is the progress on generic tensor descriptor programming?  Not Nvidia specific. (from last month).</p></li>
 <li><p>A&gt; TMA accelerator will probably become more general across GPUs.</p></li>
@@ -283,7 +295,7 @@
 </ul>
 </section>
 <section id="minutes">
-<h2>Minutes:<a class="headerlink" href="#minutes" title="Link to this heading">¶</a></h2>
+<h2>Minutes:<a class="headerlink" href="#minutes" title="Link to this heading"></a></h2>
 <p>Recording link <a class="reference external" href="https://www.youtube.com/watch?v=cIW6ZL_LmGc">here</a></p>
 </section>
 </section>

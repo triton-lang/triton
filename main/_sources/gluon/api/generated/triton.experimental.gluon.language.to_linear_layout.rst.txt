@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.to\_linear\_layout
+=====================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: to_linear_layout

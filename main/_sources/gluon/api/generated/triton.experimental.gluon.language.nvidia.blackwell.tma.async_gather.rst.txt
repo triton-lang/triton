@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.blackwell.tma.async\_gather
+=====================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell.tma
+
+.. autofunction:: async_gather

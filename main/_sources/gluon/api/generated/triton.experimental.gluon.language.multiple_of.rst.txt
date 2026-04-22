@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.multiple\_of
+===============================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: multiple_of

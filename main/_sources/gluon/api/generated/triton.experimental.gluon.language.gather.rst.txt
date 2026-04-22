@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.gather
+=========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: gather

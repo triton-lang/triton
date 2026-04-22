@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.reduce\_or
+=============================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: reduce_or

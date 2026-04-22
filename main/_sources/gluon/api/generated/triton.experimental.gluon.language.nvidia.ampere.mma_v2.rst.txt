@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.ampere.mma\_v2
+========================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.ampere
+
+.. autofunction:: mma_v2

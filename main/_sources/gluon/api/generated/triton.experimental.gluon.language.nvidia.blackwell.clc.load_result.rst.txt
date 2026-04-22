@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.blackwell.clc.load\_result
+====================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell.clc
+
+.. autofunction:: load_result

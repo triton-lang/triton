@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.histogram
+============================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: histogram

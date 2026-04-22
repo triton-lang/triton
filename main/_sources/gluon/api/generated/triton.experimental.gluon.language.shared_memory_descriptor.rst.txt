@@ -1,0 +1,42 @@
+﻿triton.experimental.gluon.language.shared\_memory\_descriptor
+=============================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autoclass:: shared_memory_descriptor
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~shared_memory_descriptor.__init__
+      ~shared_memory_descriptor.gather
+      ~shared_memory_descriptor.index
+      ~shared_memory_descriptor.load
+      ~shared_memory_descriptor.permute
+      ~shared_memory_descriptor.reshape
+      ~shared_memory_descriptor.scatter
+      ~shared_memory_descriptor.slice
+      ~shared_memory_descriptor.store
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~shared_memory_descriptor.dtype
+      ~shared_memory_descriptor.layout
+      ~shared_memory_descriptor.nbytes_per_cta
+      ~shared_memory_descriptor.numel
+      ~shared_memory_descriptor.rank
+      ~shared_memory_descriptor.shape
+      ~shared_memory_descriptor.type
+   
+   

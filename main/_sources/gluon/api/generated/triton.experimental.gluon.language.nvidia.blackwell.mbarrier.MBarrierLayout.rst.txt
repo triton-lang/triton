@@ -1,0 +1,37 @@
+triton.experimental.gluon.language.nvidia.blackwell.mbarrier.MBarrierLayout
+===========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
+
+.. autoclass:: mbarrier.MBarrierLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~mbarrier.MBarrierLayout.__init__
+      ~mbarrier.MBarrierLayout.format_hardware_view
+      ~mbarrier.MBarrierLayout.format_tensor_view
+      ~mbarrier.MBarrierLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~mbarrier.MBarrierLayout.multicta
+      ~mbarrier.MBarrierLayout.type
+      ~mbarrier.MBarrierLayout.vec
+      ~mbarrier.MBarrierLayout.per_phase
+      ~mbarrier.MBarrierLayout.max_phase
+      ~mbarrier.MBarrierLayout.order
+      ~mbarrier.MBarrierLayout.cga_layout
+   
+   

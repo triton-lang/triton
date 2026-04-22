@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.split
+========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: split

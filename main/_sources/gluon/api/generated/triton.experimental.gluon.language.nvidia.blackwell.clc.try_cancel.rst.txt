@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.blackwell.clc.try\_cancel
+===================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell.clc
+
+.. autofunction:: try_cancel

@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.amd.rdna3.wmma
+=================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.rdna3
+
+.. autofunction:: wmma

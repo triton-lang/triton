@@ -1,0 +1,32 @@
+﻿triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout
+======================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
+
+.. autoclass:: TensorMemoryLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~TensorMemoryLayout.__init__
+      ~TensorMemoryLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~TensorMemoryLayout.two_ctas
+      ~TensorMemoryLayout.block
+      ~TensorMemoryLayout.col_stride
+      ~TensorMemoryLayout.cga_layout
+   
+   

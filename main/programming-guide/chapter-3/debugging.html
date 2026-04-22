@@ -13,12 +13,17 @@
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
 
   
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
       <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../_static/design-tabs.js?v=f930bc37"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -56,6 +61,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/api/index.html">API Reference</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
@@ -101,13 +113,13 @@
            <div itemprop="articleBody">
              
   <section id="debugging-triton">
-<h1>Debugging Triton<a class="headerlink" href="#debugging-triton" title="Link to this heading">¶</a></h1>
+<h1>Debugging Triton<a class="headerlink" href="#debugging-triton" title="Link to this heading"></a></h1>
 <p>This tutorial provides guidance for debugging Triton programs.
 It is mostly documented for Triton users.
 Developers interested in exploring Triton’s backend, including MLIR code transformation and LLVM code generation,
 can refer to this <a class="reference external" href="https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking">section</a> to explore debugging options.</p>
 <section id="using-triton-s-debugging-operations">
-<h2>Using Triton’s Debugging Operations<a class="headerlink" href="#using-triton-s-debugging-operations" title="Link to this heading">¶</a></h2>
+<h2>Using Triton’s Debugging Operations<a class="headerlink" href="#using-triton-s-debugging-operations" title="Link to this heading"></a></h2>
 <p>Triton includes four debugging operators that allow users to check and inspect tensor values:</p>
 <ul class="simple">
 <li><p><code class="code docutils literal notranslate"><span class="pre">static_print</span></code> and <code class="code docutils literal notranslate"><span class="pre">static_assert</span></code> are intended for compile-time debugging.</p></li>
@@ -117,7 +129,7 @@ can refer to this <a class="reference external" href="https://github.com/triton-
 Other debugging operators execute regardless of the value of <code class="code docutils literal notranslate"><span class="pre">TRITON_DEBUG</span></code>.</p>
 </section>
 <section id="using-the-interpreter">
-<h2>Using the Interpreter<a class="headerlink" href="#using-the-interpreter" title="Link to this heading">¶</a></h2>
+<h2>Using the Interpreter<a class="headerlink" href="#using-the-interpreter" title="Link to this heading"></a></h2>
 <p>The interpreter is a straightforward and helpful tool for debugging Triton programs.
 It allows Triton users to run Triton programs on the CPU and inspect the intermediate results of each operation.
 To enable the interpreter mode, set the environment variable <code class="code docutils literal notranslate"><span class="pre">TRITON_INTERPRET</span></code> to <code class="code docutils literal notranslate"><span class="pre">1</span></code>.
@@ -149,7 +161,7 @@ r
 </li>
 </ul>
 <section id="limitations">
-<h3>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h3>
+<h3>Limitations<a class="headerlink" href="#limitations" title="Link to this heading"></a></h3>
 <p>The interpreter has several known limitations:</p>
 <ul>
 <li><p>It does not support operations on <code class="code docutils literal notranslate"><span class="pre">bfloat16</span></code> numeric types. To perform operations on <code class="code docutils literal notranslate"><span class="pre">bfloat16</span></code> tensors, use <code class="code docutils literal notranslate"><span class="pre">tl.cast(tensor)</span></code> to convert the tensor to <code class="code docutils literal notranslate"><span class="pre">float32</span></code>.</p></li>
@@ -163,7 +175,7 @@ r
 </section>
 </section>
 <section id="using-third-party-tools">
-<h2>Using Third-party Tools<a class="headerlink" href="#using-third-party-tools" title="Link to this heading">¶</a></h2>
+<h2>Using Third-party Tools<a class="headerlink" href="#using-third-party-tools" title="Link to this heading"></a></h2>
 <p>For debugging on NVIDIA GPUs, <a class="reference external" href="https://docs.nvidia.com/cuda/compute-sanitizer/index.html">compute-sanitizer</a> is an effective tool for checking data races and memory access issues.
 To use it, prepend <code class="code docutils literal notranslate"><span class="pre">compute-sanitizer</span></code> to your command to run the Triton program.</p>
 <p>For debugging on AMD GPUs, you may want to try the LLVM <a class="reference external" href="https://rocm.docs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html">AddressSanitizer</a> for ROCm.</p>

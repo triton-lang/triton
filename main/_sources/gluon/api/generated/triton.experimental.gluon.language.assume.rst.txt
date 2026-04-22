@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.assume
+=========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: assume

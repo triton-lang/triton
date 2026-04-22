@@ -1,0 +1,37 @@
+﻿triton.experimental.gluon.language.DistributedLinearLayout
+==========================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autoclass:: DistributedLinearLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~DistributedLinearLayout.__init__
+      ~DistributedLinearLayout.format_hardware_view
+      ~DistributedLinearLayout.format_tensor_view
+      ~DistributedLinearLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~DistributedLinearLayout.rank
+      ~DistributedLinearLayout.type
+      ~DistributedLinearLayout.reg_bases
+      ~DistributedLinearLayout.lane_bases
+      ~DistributedLinearLayout.warp_bases
+      ~DistributedLinearLayout.block_bases
+      ~DistributedLinearLayout.shape
+   
+   

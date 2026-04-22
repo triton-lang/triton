@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.amd.cdna3.mfma
+=================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna3
+
+.. autofunction:: mfma

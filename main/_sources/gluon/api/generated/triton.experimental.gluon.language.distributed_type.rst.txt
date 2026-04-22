@@ -1,0 +1,73 @@
+﻿triton.experimental.gluon.language.distributed\_type
+====================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autoclass:: distributed_type
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~distributed_type.__init__
+      ~distributed_type.codegen_name
+      ~distributed_type.get_block_shapes
+      ~distributed_type.get_int_max_value
+      ~distributed_type.get_int_min_value
+      ~distributed_type.is_bf16
+      ~distributed_type.is_block
+      ~distributed_type.is_bool
+      ~distributed_type.is_const
+      ~distributed_type.is_dtype
+      ~distributed_type.is_floating
+      ~distributed_type.is_fp16
+      ~distributed_type.is_fp32
+      ~distributed_type.is_fp64
+      ~distributed_type.is_fp8
+      ~distributed_type.is_fp8e4b15
+      ~distributed_type.is_fp8e4b8
+      ~distributed_type.is_fp8e4nv
+      ~distributed_type.is_fp8e5
+      ~distributed_type.is_fp8e5b16
+      ~distributed_type.is_int
+      ~distributed_type.is_int1
+      ~distributed_type.is_int16
+      ~distributed_type.is_int32
+      ~distributed_type.is_int64
+      ~distributed_type.is_int8
+      ~distributed_type.is_int_signed
+      ~distributed_type.is_int_unsigned
+      ~distributed_type.is_ptr
+      ~distributed_type.is_standard_floating
+      ~distributed_type.is_uint16
+      ~distributed_type.is_uint32
+      ~distributed_type.is_uint64
+      ~distributed_type.is_uint8
+      ~distributed_type.is_void
+      ~distributed_type.kind
+      ~distributed_type.mangle
+      ~distributed_type.to_ir
+      ~distributed_type.with_element_ty
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~distributed_type.FP_TYPES
+      ~distributed_type.OTHER_TYPES
+      ~distributed_type.SINT_TYPES
+      ~distributed_type.STANDARD_FP_TYPES
+      ~distributed_type.UINT_TYPES
+      ~distributed_type.cache_key_part
+      ~distributed_type.nbytes
+      ~distributed_type.scalar
+   
+   

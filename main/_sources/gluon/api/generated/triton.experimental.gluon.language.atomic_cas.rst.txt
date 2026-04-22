@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.atomic\_cas
+==============================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: atomic_cas

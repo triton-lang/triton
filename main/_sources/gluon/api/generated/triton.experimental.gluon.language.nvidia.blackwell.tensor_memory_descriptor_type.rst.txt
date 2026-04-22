@@ -1,0 +1,30 @@
+﻿triton.experimental.gluon.language.nvidia.blackwell.tensor\_memory\_descriptor\_type
+====================================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
+
+.. autoclass:: tensor_memory_descriptor_type
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~tensor_memory_descriptor_type.__init__
+      ~tensor_memory_descriptor_type.mangle
+      ~tensor_memory_descriptor_type.to_ir
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~tensor_memory_descriptor_type.get_reg_layout
+   
+   

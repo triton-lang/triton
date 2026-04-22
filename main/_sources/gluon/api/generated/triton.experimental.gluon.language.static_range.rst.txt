@@ -1,0 +1,28 @@
+﻿triton.experimental.gluon.language.static\_range
+================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autoclass:: static_range
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~static_range.__init__
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~static_range.type
+   
+   

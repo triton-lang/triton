@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.cluster.barrier
+================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.cluster
+
+.. autofunction:: barrier

@@ -13,12 +13,17 @@
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
 
   
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
       <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../_static/design-tabs.js?v=f930bc37"></script>
       <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-mml-chtml.js"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -77,6 +82,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
 </ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/api/index.html">API Reference</a></li>
+</ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
@@ -119,7 +131,7 @@
 to download the full example code.</p>
 </div>
 <section class="sphx-glr-example-title" id="layer-normalization">
-<span id="sphx-glr-getting-started-tutorials-05-layer-norm-py"></span><h1>Layer Normalization<a class="headerlink" href="#layer-normalization" title="Link to this heading">¶</a></h1>
+<span id="sphx-glr-getting-started-tutorials-05-layer-norm-py"></span><h1>Layer Normalization<a class="headerlink" href="#layer-normalization" title="Link to this heading"></a></h1>
 <p>In this tutorial, you will write a high-performance layer normalization
 kernel that runs faster than the PyTorch implementation.</p>
 <p>In doing so, you will learn about:</p>
@@ -128,7 +140,7 @@ kernel that runs faster than the PyTorch implementation.</p>
 <li><p>Implementing parallel reduction in Triton.</p></li>
 </ul>
 <section id="motivations">
-<h2>Motivations<a class="headerlink" href="#motivations" title="Link to this heading">¶</a></h2>
+<h2>Motivations<a class="headerlink" href="#motivations" title="Link to this heading"></a></h2>
 <p>The <em>LayerNorm</em> operator was first introduced in <a class="reference internal" href="#ba2016" id="id1"><span>[BA2016]</span></a> as a way to improve the performance
 of sequential models (e.g., Transformers) or neural networks with small batch size.
 It takes a vector <span class="math notranslate nohighlight">\(x\)</span> as input and produces a vector <span class="math notranslate nohighlight">\(y\)</span> of the same shape as output.
@@ -207,7 +219,7 @@ Let’s first take a look at the forward pass implementation.</p>
 </div>
 </section>
 <section id="backward-pass">
-<h2>Backward pass<a class="headerlink" href="#backward-pass" title="Link to this heading">¶</a></h2>
+<h2>Backward pass<a class="headerlink" href="#backward-pass" title="Link to this heading"></a></h2>
 <p>The backward pass for the layer normalization operator is a bit more involved than the forward pass.
 Let <span class="math notranslate nohighlight">\(\hat{x}\)</span> be the normalized inputs <span class="math notranslate nohighlight">\(\frac{ x - \text{E}[x] }{ \sqrt{\text{Var}(x) + \epsilon} }\)</span> before the linear transformation,
 the Vector-Jacobian Products (VJP) <span class="math notranslate nohighlight">\(\nabla_{x}\)</span> of <span class="math notranslate nohighlight">\(x\)</span> are given by:</p>
@@ -324,7 +336,7 @@ In the following implementation, Stage 1 is implemented by the function <code cl
 </div>
 </section>
 <section id="benchmark">
-<h2>Benchmark<a class="headerlink" href="#benchmark" title="Link to this heading">¶</a></h2>
+<h2>Benchmark<a class="headerlink" href="#benchmark" title="Link to this heading"></a></h2>
 <p>We can now compare the performance of our kernel against that of PyTorch.
 Here we focus on inputs that have Less than 64KB per feature.
 Specifically, one can set <code class="code docutils literal notranslate"><span class="pre">'mode':</span> <span class="pre">'backward'</span></code> to benchmark the backward pass.</p>
@@ -475,48 +487,48 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
 </div>
 <img src="../../_images/sphx_glr_05-layer-norm_001.png" srcset="../../_images/sphx_glr_05-layer-norm_001.png" alt="05 layer norm" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>layer-norm-backward:
           N  Triton (GB/s)  Torch (GB/s)
-0    1024.0     113.253460    372.363633
-1    1536.0     169.880189    444.144584
-2    2048.0     260.063494    511.999982
-3    2560.0     321.675394    558.545450
-4    3072.0     390.095241    585.142862
-5    3584.0     394.568805    515.065851
-6    4096.0     455.111110    522.893602
-7    4608.0     509.640568    529.148312
-8    5120.0     558.545450    541.321594
-9    5632.0     598.088486    553.967224
-10   6144.0     698.843582    562.809189
+0    1024.0     136.155125    366.805965
+1    1536.0     191.999993    438.857146
+2    2048.0     264.258058    511.999982
+3    2560.0     357.209302    558.545450
+4    3072.0     452.319007    580.535403
+5    3584.0     443.381459    515.065851
+6    4096.0     501.551037    520.126988
+7    4608.0     658.285720    529.148312
+8    5120.0     700.170950    541.321594
+9    5632.0     814.265070    553.967224
+10   6144.0     867.388239    562.809189
 11   6656.0     768.000009    572.559140
-12   7168.0     877.714314    546.133312
+12   7168.0     950.453061    546.133312
 13   7680.0     955.025907    555.180730
-14   8192.0     987.979890    561.737163
-15   8704.0     678.233793    569.198909
-16   9216.0     727.578980    575.999980
-17   9728.0     755.572827    577.901003
-18  10240.0     775.268143    579.622644
-19  10752.0     777.253021    564.656471
+14   8192.0     983.040025    561.737163
+15   8704.0     676.038845    567.652161
+16   9216.0     725.193457    575.999980
+17   9728.0     753.135476    577.901003
+18  10240.0     777.721542    578.258816
+19  10752.0     774.918911    564.656471
 20  11264.0     802.183964    570.329113
-21  11776.0     846.179612    573.273800
+21  11776.0     846.179612    572.113386
 22  12288.0     867.388239    583.984154
-23  12800.0     890.434763    585.142878
-24  13312.0     880.132233    586.216495
-25  13824.0     896.691906    589.300199
-26  14336.0     922.423622    576.321603
-27  14848.0     957.935459    579.434122
-28  15360.0     977.824961    587.006361
-29  15872.0     959.516382    586.946076
+23  12800.0     887.861307    585.142878
+24  13312.0     877.714269    586.216495
+25  13824.0     891.870945    589.300199
+26  14336.0     922.423622    575.357847
+27  14848.0     952.812845    578.493529
+28  15360.0     970.105232    586.073117
+29  15872.0     954.706740    586.043075
 </pre></div>
 </div>
 </section>
 <section id="references">
-<h2>References<a class="headerlink" href="#references" title="Link to this heading">¶</a></h2>
+<h2>References<a class="headerlink" href="#references" title="Link to this heading"></a></h2>
 <div role="list" class="citation-list">
 <div class="citation" id="ba2016" role="doc-biblioentry">
 <span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id1">BA2016</a><span class="fn-bracket">]</span></span>
 <p>Jimmy Lei Ba and Jamie Ryan Kiros and Geoffrey E. Hinton, “Layer Normalization”, Arxiv 2016</p>
 </div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 28.434 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 28.119 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-05-layer-norm-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/ae7fff29e1b574187bc930ed94bcc353/05-layer-norm.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">05-layer-norm.ipynb</span></code></a></p>

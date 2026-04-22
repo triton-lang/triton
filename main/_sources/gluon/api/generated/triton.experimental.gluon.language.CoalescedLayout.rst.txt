@@ -1,0 +1,32 @@
+﻿triton.experimental.gluon.language.CoalescedLayout
+==================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autoclass:: CoalescedLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~CoalescedLayout.__init__
+      ~CoalescedLayout.format_hardware_view
+      ~CoalescedLayout.format_tensor_view
+      ~CoalescedLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~CoalescedLayout.rank
+      ~CoalescedLayout.type
+   
+   

@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.ceil
+=======================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: ceil

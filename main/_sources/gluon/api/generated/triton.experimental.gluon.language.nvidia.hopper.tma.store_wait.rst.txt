@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.tma.store\_wait
+================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.tma
+
+.. autofunction:: store_wait

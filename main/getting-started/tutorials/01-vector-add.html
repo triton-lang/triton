@@ -13,12 +13,17 @@
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
 
   
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
       <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../_static/design-tabs.js?v=f930bc37"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -74,6 +79,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
 </ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/api/index.html">API Reference</a></li>
+</ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
@@ -116,7 +128,7 @@
 to download the full example code.</p>
 </div>
 <section class="sphx-glr-example-title" id="vector-addition">
-<span id="sphx-glr-getting-started-tutorials-01-vector-add-py"></span><h1>Vector Addition<a class="headerlink" href="#vector-addition" title="Link to this heading">¶</a></h1>
+<span id="sphx-glr-getting-started-tutorials-01-vector-add-py"></span><h1>Vector Addition<a class="headerlink" href="#vector-addition" title="Link to this heading"></a></h1>
 <p>In this tutorial, you will write a simple vector addition using Triton.</p>
 <p>In doing so, you will learn about:</p>
 <ul class="simple">
@@ -125,7 +137,7 @@ to download the full example code.</p>
 <li><p>The best practices for validating and benchmarking your custom ops against native reference implementations.</p></li>
 </ul>
 <section id="compute-kernel">
-<h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Link to this heading">¶</a></h2>
+<h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Link to this heading"></a></h2>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
@@ -204,7 +216,7 @@ The maximum difference between torch and triton is 0.0
 <p>Seems like we’re good to go!</p>
 </section>
 <section id="benchmark">
-<h2>Benchmark<a class="headerlink" href="#benchmark" title="Link to this heading">¶</a></h2>
+<h2>Benchmark<a class="headerlink" href="#benchmark" title="Link to this heading"></a></h2>
 <p>We can now benchmark our custom op on vectors of increasing sizes to get a sense of how it does relative to PyTorch.
 To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of our custom ops.
 for different problem sizes.</p>
@@ -250,15 +262,15 @@ for different problem sizes.</p>
 7      524288.0     614.400016    614.400016
 8     1048576.0     819.200021    819.200021
 9     2097152.0    1023.999964   1023.999964
-10    4194304.0    1228.800031   1260.307736
+10    4194304.0    1228.800031   1228.800031
 11    8388608.0    1424.695621   1424.695621
 12   16777216.0    1560.380965   1560.380965
 13   33554432.0    1624.859540   1624.859540
 14   67108864.0    1669.706983   1669.706983
-15  134217728.0    1685.813499   1684.008546
+15  134217728.0    1684.910539   1684.008546
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 10.168 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 14.563 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-01-vector-add-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/f191ee1e78dc52eb5f7cba88f71cef2f/01-vector-add.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">01-vector-add.ipynb</span></code></a></p>

@@ -1,0 +1,29 @@
+﻿triton.experimental.gluon.language.amd.warp\_pipeline\_stage
+============================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd
+
+.. autoclass:: warp_pipeline_stage
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~warp_pipeline_stage.__init__
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~warp_pipeline_stage.label
+      ~warp_pipeline_stage.priority
+   
+   

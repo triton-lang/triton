@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.sqrt\_rn
+===========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: sqrt_rn

@@ -1,0 +1,33 @@
+triton.experimental.gluon.language.nvidia.hopper.tma.tensor\_descriptor\_im2col\_type
+=====================================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.tma
+
+.. autoclass:: tensor_descriptor_im2col_type
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~tensor_descriptor_im2col_type.__init__
+      ~tensor_descriptor_im2col_type.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~tensor_descriptor_im2col_type.nbytes_per_cta
+      ~tensor_descriptor_im2col_type.block_type
+      ~tensor_descriptor_im2col_type.shape_type
+      ~tensor_descriptor_im2col_type.strides_type
+      ~tensor_descriptor_im2col_type.layout
+   
+   

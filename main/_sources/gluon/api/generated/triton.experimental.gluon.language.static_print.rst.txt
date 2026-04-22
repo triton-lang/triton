@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.static\_print
+================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: static_print

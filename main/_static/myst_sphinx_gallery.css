@@ -1,0 +1,160 @@
+.msg-sd-row {
+    width: 100%;
+    margin: 0 0 20px;
+    justify-content: space-between;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--msg-box-min-width), var(--msg-box-max-width)));
+    gap: 15px
+}
+
+.msg-sd-row .sd-col {
+    margin: 0px;
+    padding: 0px;
+}
+
+.msg-sd-card {
+    background-color: var(--msg-box-background-color);
+    border-radius: var(--msg-box-border-radius);
+}
+
+.msg-sd-card-hover:hover {
+
+    transform: scale(1.01);
+    border: var(--msg-box-hover-border-width) solid var(--msg-box-hover-border-color);
+    border-radius: var(--msg-box-border-radius);
+    --sd-color-shadow: var(--msg-box-hover-shadow-color);
+}
+
+.msg-sd-card-img-top {
+    margin: 10px auto;
+    background: none;
+    width: 90%;
+    display: block;
+}
+
+.msg-sd-card-title .reference {
+    color: var(--msg-font-color-title);
+    font-size: var(--msg-title-font-size);
+    font-weight: lighter;
+    text-decoration: none;
+}
+
+.msg-sd-card-title .reference:hover {
+    text-decoration: none;
+}
+
+.msg-sd-card-body {
+    padding: 0px 10px 5px 10px;
+}
+
+.msg-tooltip[tooltip]::before {
+    -webkit-border-radius: var(--msg-box-border-radius);
+    -moz-border-radius: var(--msg-box-border-radius);
+    border-radius: var(--msg-box-border-radius);
+    content: "";
+    position: absolute;
+    pointer-events: none;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 97;
+    background-color: var(--msg-tooltip-background);
+    backdrop-filter: blur(3px);
+    opacity: 0;
+}
+
+.msg-tooltip[tooltip]:hover::before {
+    opacity: 1
+}
+
+.msg-tooltip[tooltip]:hover::after {
+    -webkit-border-radius: var(--msg-box-border-radius);
+    -moz-border-radius: var(--msg-box-border-radius);
+    border-radius: var(--msg-box-border-radius);
+    color: var(--msg-tooltip-foreground);
+    content: attr(tooltip);
+    padding: 10px 10px 5px;
+    z-index: 98;
+    width: 100%;
+    max-height: 100%;
+    position: absolute;
+    pointer-events: none;
+    top: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 6
+}
+
+:root {
+    --msg-title-font-size: 1.0rem;
+    --msg-box-border-radius: 0.3rem;
+    --sd-color-shadow: var(--msg-box-shadow-color);
+    --msg-box-min-width: 160px;
+    --msg-box-max-width: 1fr;
+
+}
+
+:root,
+html[data-theme=light],
+body[data-theme=light] {
+    --msg-tooltip-foreground: black;
+    --msg-tooltip-background: rgba(250, 250, 250, 0.9);
+    --msg-tooltip-border: #ccc transparent;
+    --msg-box-background-color: #ffffff7a;
+    --msg-box-shadow-color: #6c757d40;
+    --msg-box-hover-shadow-color: #06060640;
+    --msg-box-hover-border-color: #0069d9;
+    --msg-box-hover-border-width: 1px;
+    --msg-font-color-title: black;
+}
+
+@media(prefers-color-scheme: light) {
+
+    :root[data-theme=auto],
+    html[data-theme=auto],
+    body[data-theme=auto] {
+        --msg-tooltip-foreground: black;
+        --msg-tooltip-background: rgba(250, 250, 250, 0.9);
+        --msg-tooltip-border: #ccc transparent;
+        --msg-box-background-color: #ffffff7a;
+        --msg-box-shadow-color: #6c757d40;
+        --msg-box-hover-shadow-color: #06060640;
+        --msg-box-hover-border-color: #0069d9;
+        --msg-box-hover-border-width: 1px;
+        --msg-font-color-title: black;
+    }
+}
+
+:root,
+html[data-theme=dark],
+body[data-theme=dark] {
+    --msg-tooltip-foreground: white;
+    --msg-tooltip-background: rgba(10, 10, 10, 0.9);
+    --msg-tooltip-border: #333 transparent;
+    --msg-box-background-color: #9494947a;
+    --msg-box-shadow-color: #79848d40;
+    --msg-box-hover-shadow-color: #e6e6e640;
+    --msg-box-hover-border-color: #003975;
+    --msg-box-hover-border-width: 2px;
+    --msg-font-color-title: white;
+}
+
+@media(prefers-color-scheme: dark) {
+
+    html[data-theme=auto],
+    body[data-theme=auto] {
+        --msg-tooltip-foreground: white;
+        --msg-tooltip-background: rgba(10, 10, 10, 0.9);
+        --msg-tooltip-border: #333 transparent;
+        --msg-box-background-color: #9494947a;
+        --msg-box-shadow-color: #79848d40;
+        --msg-box-hover-shadow-color: #e6e6e640;
+        --msg-box-hover-border-color: #003975;
+        --msg-box-hover-border-width: 2px;
+        --msg-font-color-title: white;
+
+    }
+}

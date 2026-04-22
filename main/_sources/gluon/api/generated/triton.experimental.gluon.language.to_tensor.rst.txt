@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.to\_tensor
+=============================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: to_tensor

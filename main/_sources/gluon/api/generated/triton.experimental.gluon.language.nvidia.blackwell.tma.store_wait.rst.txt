@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.blackwell.tma.store\_wait
+===================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell.tma
+
+.. autofunction:: store_wait

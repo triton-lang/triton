@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.erf
+======================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: erf

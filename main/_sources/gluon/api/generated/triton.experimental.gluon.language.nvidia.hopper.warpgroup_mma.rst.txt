@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.hopper.warpgroup\_mma
+===============================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper
+
+.. autofunction:: warpgroup_mma

@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.inline\_asm\_elementwise
+===========================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: inline_asm_elementwise

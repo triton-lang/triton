@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.expand\_dims
+===============================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: expand_dims

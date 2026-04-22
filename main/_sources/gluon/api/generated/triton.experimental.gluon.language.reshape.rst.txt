@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.reshape
+==========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: reshape

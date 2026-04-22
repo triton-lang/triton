@@ -1,0 +1,974 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tensor Layouts &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/custom.css" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Async Copy in Gluon" href="async-copy.html" />
+    <link rel="prev" title="Introduction to Gluon" href="intro.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="intro.html">Introduction to Gluon</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Tensor Layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="async-copy.html">Async Copy in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tma.html">TMA in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="wgmma.html">Warp-Group MMA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05.html">The 5th Generation TensorCore<sup>TM</sup></a></li>
+<li class="toctree-l2"><a class="reference internal" href="persistence.html">Persistent Kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="warp-specialization.html">Warp Specialization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tma-gather-scatter.html">Native TMA Gather and Scatter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-copy.html">TCGen05 Copy Instruction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-mma-scaled.html">Blocked-Scaled Matrix Multiplication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cluster-launch-control.html">Cluster Launch Control (CLC)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="conv-im2col.html">TMA im2col mode and Convolution via Implicit GEMM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html">Multi-CTA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html#benchmarking-matmul-multicta">Benchmarking matmul_multicta</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/api/index.html">API Reference</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Gluon Tutorials</a></li>
+      <li class="breadcrumb-item active">Tensor Layouts</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/getting-started/tutorials/gluon/layouts.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="tensor-layouts">
+<span id="example-layouts"></span><h1>Tensor Layouts<a class="headerlink" href="#tensor-layouts" title="Link to this heading"></a></h1>
+<p>Tensors in Gluon require layouts. Layouts specify how the elements of the tensor
+are distributed among the threads in a thread block. Tensors are distributed
+with respect to the hierarchy of the GPU beginning with thread blocks, then
+warps, then lanes, and finally individual registers in each lane.</p>
+<p>Tensors are evenly distributed across theads, meaning that all threads own the
+same number of elements. Because Triton requires that all tile dimensions are
+powers of 2, this means that the number of elements per thread is a power of 2.</p>
+<p>A layout, in general, defines a mapping stating the element owned by a given
+register, lane, and warp. <code class="docutils literal notranslate"><span class="pre">BlockedLayout</span></code> is the most common kind of layout in
+Gluon. A <code class="docutils literal notranslate"><span class="pre">BlockedLayout</span></code> defines how elements are organized in a “block” of the
+same rank as the tensor.</p>
+<p>Consider the following example:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">(</span>
+    <span class="n">size_per_thread</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span>
+    <span class="n">threads_per_warp</span><span class="o">=</span><span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span>
+    <span class="n">warps_per_cta</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span>
+    <span class="n">order</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>We obtain the block shape by multiplying <code class="docutils literal notranslate"><span class="pre">size_per_thread</span></code>, <code class="docutils literal notranslate"><span class="pre">threads_per_warp</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">warps_per_cta</span></code> elementwise: [64, 16]. Within this block, the layout
+describes a hierarchy of register, thread, and warp tiling over the logical
+elements of the tensor. The <code class="docutils literal notranslate"><span class="pre">order</span></code> specifies the order in which the dimensions
+of the tensor are tiled.</p>
+<p>In this example, <code class="docutils literal notranslate"><span class="pre">size_per_thread=[2,</span> <span class="pre">4]</span></code> indicates that within each block, each
+thread owns a contiguous <code class="docutils literal notranslate"><span class="pre">2x4</span></code> subtile of the tensor, stored as registers in
+that thread. <code class="docutils literal notranslate"><span class="pre">order=[1,</span> <span class="pre">0]</span></code> indicates that the layout tiles the rows first
+then the columns, i.e. row-major order. For a thread T, the tile looks like:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[[</span><span class="n">T</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span> <span class="n">T</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span> <span class="n">T</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span> <span class="n">T</span><span class="p">:</span><span class="mi">3</span><span class="p">],</span>
+ <span class="p">[</span><span class="n">T</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span> <span class="n">T</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span> <span class="n">T</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span> <span class="n">T</span><span class="p">:</span><span class="mi">7</span><span class="p">]]</span>
+</pre></div>
+</div>
+<p>When visualizing layouts, we sometimes represent which warp, lane, and register
+are mapped to which tensor element. Notice that the registers increment over the
+inner dimension.</p>
+<p>If <code class="docutils literal notranslate"><span class="pre">order</span></code> was <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1]</span></code> (col-major order), the tile would look like:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[[</span><span class="n">T</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span> <span class="n">T</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span> <span class="n">T</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span> <span class="n">T</span><span class="p">:</span><span class="mi">6</span><span class="p">],</span>
+ <span class="p">[</span><span class="n">T</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span> <span class="n">T</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="n">T</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span> <span class="n">T</span><span class="p">:</span><span class="mi">7</span><span class="p">]]</span>
+</pre></div>
+</div>
+<p>Likewise, <code class="docutils literal notranslate"><span class="pre">threads_per_warp=[16,</span> <span class="pre">2]</span></code> indicates how the tensor elements owned by
+a single thread are tiled to obtain the elements owned by a single warp. For
+<code class="docutils literal notranslate"><span class="pre">order=[1,</span> <span class="pre">0]</span></code>, the warp tile of threads looks like:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[[</span> <span class="n">T0</span><span class="p">,</span>  <span class="n">T1</span><span class="p">],</span>
+ <span class="p">[</span> <span class="n">T2</span><span class="p">,</span>  <span class="n">T3</span><span class="p">],</span>
+ <span class="o">...</span>
+ <span class="p">[</span><span class="n">T28</span><span class="p">,</span> <span class="n">T29</span><span class="p">],</span>
+ <span class="p">[</span><span class="n">T30</span><span class="p">,</span> <span class="n">T31</span><span class="p">]]</span>
+</pre></div>
+</div>
+<p>Note that the size of the warp tile must match the number of threads per warp,
+which for NVIDIA hardware is 32. If we substitute each thread with its thread
+tile, we obtain the warp tile over the elements of the tensor:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[[</span> <span class="n">T0</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">3</span><span class="p">],</span>
+ <span class="p">[</span> <span class="n">T0</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">7</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">7</span><span class="p">],</span>
+ <span class="p">[</span> <span class="n">T2</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span>  <span class="n">T2</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>  <span class="n">T2</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span>  <span class="n">T2</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">3</span><span class="p">],</span>
+ <span class="p">[</span> <span class="n">T2</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span>  <span class="n">T2</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span>  <span class="n">T2</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span>  <span class="n">T2</span><span class="p">:</span><span class="mi">7</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">7</span><span class="p">],</span>
+ <span class="o">...</span>
+ <span class="p">[</span><span class="n">T28</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span> <span class="n">T28</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span> <span class="n">T28</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span> <span class="n">T28</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">3</span><span class="p">],</span>
+ <span class="p">[</span><span class="n">T28</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span> <span class="n">T28</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span> <span class="n">T28</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span> <span class="n">T28</span><span class="p">:</span><span class="mi">7</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">7</span><span class="p">],</span>
+ <span class="p">[</span><span class="n">T30</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span> <span class="n">T30</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span> <span class="n">T30</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span> <span class="n">T30</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">3</span><span class="p">],</span>
+ <span class="p">[</span><span class="n">T30</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span> <span class="n">T30</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span> <span class="n">T30</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span> <span class="n">T30</span><span class="p">:</span><span class="mi">7</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">7</span><span class="p">]]</span>
+</pre></div>
+</div>
+<p>We can again repeat this process for <code class="docutils literal notranslate"><span class="pre">warps_per_cta=[2,</span> <span class="pre">2]</span></code> to obtain a full
+mapping of tensor elements within a block to all the threads in a program.</p>
+<p>If the tensor is the same size as the block, then the elements are distributed
+according to the block layout. If the tensor shape is different, we need to
+either tile the block or broadcast the tensor elements. Consider a <code class="docutils literal notranslate"><span class="pre">128x128xf32</span></code>
+tensor. Dividing the block shape into the tensor shape, we obtain a <code class="docutils literal notranslate"><span class="pre">[2,</span> <span class="pre">8]</span></code>
+tiling of the block. The block is tiled according to <code class="docutils literal notranslate"><span class="pre">order=[1,</span> <span class="pre">0]</span></code> by adding
+more registers to each thread:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[[</span> <span class="n">B0</span><span class="p">,</span>  <span class="n">B1</span><span class="p">,</span>  <span class="n">B2</span><span class="p">,</span>  <span class="n">B3</span><span class="p">,</span>  <span class="n">B4</span><span class="p">,</span>  <span class="n">B5</span><span class="p">,</span>  <span class="n">B6</span><span class="p">,</span>  <span class="n">B7</span><span class="p">],</span>
+ <span class="p">[</span> <span class="n">B8</span><span class="p">,</span>  <span class="n">B9</span><span class="p">,</span> <span class="n">B10</span><span class="p">,</span> <span class="n">B11</span><span class="p">,</span> <span class="n">B12</span><span class="p">,</span> <span class="n">B13</span><span class="p">,</span> <span class="n">B14</span><span class="p">,</span> <span class="n">B15</span><span class="p">]]</span>
+</pre></div>
+</div>
+<p>In each block, each thread owns 8 registers. Thus over the whole tensor, each
+thread owns <code class="docutils literal notranslate"><span class="pre">8</span> <span class="pre">*</span> <span class="pre">16</span> <span class="pre">=</span> <span class="pre">128</span></code> registers. Knowing how many registers a tensor uses
+is important for managing register pressure and budget in the kernel.</p>
+<p>Consider a smaller tensor, say <code class="docutils literal notranslate"><span class="pre">32x8xf32</span></code>. The number of tiles at each level of
+the block does not change, thus even though the tensor has only <code class="docutils literal notranslate"><span class="pre">32</span> <span class="pre">*</span> <span class="pre">8</span> <span class="pre">=</span> <span class="pre">256</span></code>
+elements, it will be stored as <code class="docutils literal notranslate"><span class="pre">64</span> <span class="pre">*</span> <span class="pre">16</span> <span class="pre">=</span> <span class="pre">1024</span></code> physical registers in each
+program. The tensor is broadcasted along each dimension to fit the block
+starting with warps, then threads, then registers.</p>
+<p>Dividing the tensor shape into the block shape, we obtain <code class="docutils literal notranslate"><span class="pre">[2,</span> <span class="pre">2]</span></code>. Since this
+exactly matches <code class="docutils literal notranslate"><span class="pre">warps_per_cta=[2,</span> <span class="pre">2]</span></code>, this means each warp has a full copy of
+the tensor, mapped to its lanes in the same way. From the perspective of the
+tensor, this looks like:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[[</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span> <span class="n">T32</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span> <span class="n">T64</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span> <span class="n">T96</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span>   <span class="n">T1</span><span class="p">:</span><span class="mi">3</span><span class="o">|</span> <span class="n">T33</span><span class="p">:</span><span class="mi">3</span><span class="o">|</span> <span class="n">T65</span><span class="p">:</span><span class="mi">3</span><span class="o">|</span> <span class="n">T97</span><span class="p">:</span><span class="mi">3</span><span class="p">],</span>
+ <span class="p">[</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span> <span class="n">T32</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span> <span class="n">T64</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span> <span class="n">T96</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span>   <span class="n">T1</span><span class="p">:</span><span class="mi">7</span><span class="o">|</span> <span class="n">T33</span><span class="p">:</span><span class="mi">7</span><span class="o">|</span> <span class="n">T65</span><span class="p">:</span><span class="mi">7</span><span class="o">|</span> <span class="n">T97</span><span class="p">:</span><span class="mi">7</span><span class="p">],</span>
+ <span class="o">...</span>
+ <span class="p">[</span> <span class="n">T30</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span> <span class="n">T62</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span> <span class="n">T94</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span><span class="n">T126</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span>  <span class="n">T31</span><span class="p">:</span><span class="mi">3</span><span class="o">|</span> <span class="n">T63</span><span class="p">:</span><span class="mi">3</span><span class="o">|</span> <span class="n">T95</span><span class="p">:</span><span class="mi">3</span><span class="o">|</span><span class="n">T127</span><span class="p">:</span><span class="mi">3</span><span class="p">]</span>
+ <span class="p">[</span> <span class="n">T30</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span> <span class="n">T62</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span> <span class="n">T94</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span><span class="n">T126</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span>  <span class="n">T31</span><span class="p">:</span><span class="mi">7</span><span class="o">|</span> <span class="n">T63</span><span class="p">:</span><span class="mi">7</span><span class="o">|</span> <span class="n">T95</span><span class="p">:</span><span class="mi">7</span><span class="o">|</span><span class="n">T127</span><span class="p">:</span><span class="mi">7</span><span class="p">]]</span>
+</pre></div>
+</div>
+<p>There are many different kinds of layouts in Gluon. Many of them are specialized
+layouts required for specific operations, like MMA instructions utilizing tensor
+cores. Some of them are used to represent the results of manipulating the shape
+of tensors via <code class="docutils literal notranslate"><span class="pre">expand_dims</span></code>, <code class="docutils literal notranslate"><span class="pre">broadcast</span></code>, <code class="docutils literal notranslate"><span class="pre">reshape</span></code>, <code class="docutils literal notranslate"><span class="pre">join</span></code>, <code class="docutils literal notranslate"><span class="pre">split</span></code>, etc.
+Please see TritonGPUAttrDefs.td for more information on layouts.</p>
+<p>Blocked layouts are typically the most common form of layouts in Gluon. They are
+primarily used to represent coalesced layouts for global memory accesses and to
+represent certain register layouts for tensors stored in Tensor Memory on
+NVIDIA Blackwell GPUs.</p>
+<p>Now that we have a basic understanding of blocked layouts, let’s look at an
+example of how layouts can affect the performance of the kernel by expanding on
+the <code class="docutils literal notranslate"><span class="pre">memcpy</span></code> example from the previous tutorial. Using a <code class="docutils literal notranslate"><span class="pre">BlockedLayout</span></code>, we
+will have each program load and store a whole tile rather than one scalar.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">partial</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental</span><span class="w"> </span><span class="kn">import</span> <span class="n">gluon</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon</span><span class="w"> </span><span class="kn">import</span> <span class="n">language</span> <span class="k">as</span> <span class="n">gl</span>
+</pre></div>
+</div>
+<p>This is a helper for toggling specific parts of the tutorial. Run the tutorial
+with <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">02-layouts.py</span></code> to run everything, but you can select specific
+parts with <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">02-layouts.py</span> <span class="pre">R_vs_throughput,LDG_STG_instructions</span></code>.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_enabled</span><span class="p">(</span><span class="n">label</span><span class="p">):</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">sys</span><span class="w"> </span><span class="kn">import</span> <span class="n">argv</span>
+    <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="n">argv</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="ow">or</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Parameterize the kernel over the layout so we can test different layouts. Each
+program copies a block of data, but we will use the layout to distribute
+the work over all the threads.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">memcpy_1d_kernel</span><span class="p">(</span><span class="n">in_ptr</span><span class="p">,</span> <span class="n">out_ptr</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">pid</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">start</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">XBLOCK</span>
+
+    <span class="c1"># The main difference between writing this kernel in Triton and Gluon is</span>
+    <span class="c1"># we need to specify the layout of the 1D tensor. Layouts are propagated</span>
+    <span class="c1"># forwards through type inference, so we only need to specify the layout for</span>
+    <span class="c1"># the indices tensor.</span>
+    <span class="n">indices</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">layout</span><span class="p">)</span>
+
+    <span class="n">offsets</span> <span class="o">=</span> <span class="n">start</span> <span class="o">+</span> <span class="n">indices</span>
+    <span class="n">in_ptrs</span> <span class="o">=</span> <span class="n">in_ptr</span> <span class="o">+</span> <span class="n">offsets</span>
+    <span class="n">mask</span> <span class="o">=</span> <span class="n">offsets</span> <span class="o">&lt;</span> <span class="n">xnumel</span>
+
+    <span class="n">value</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">in_ptrs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+    <span class="n">out_ptrs</span> <span class="o">=</span> <span class="n">out_ptr</span> <span class="o">+</span> <span class="n">offsets</span>
+    <span class="n">gl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">out_ptrs</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">memcpy_1d_impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">layout</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">):</span>
+    <span class="n">xnumel</span> <span class="o">=</span> <span class="nb">input</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">),</span> <span class="p">)</span>
+    <span class="n">compiled_kernel</span> <span class="o">=</span> <span class="n">memcpy_1d_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">layout</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">compiled_kernel</span>
+</pre></div>
+</div>
+<p>Let’s benchmark the kernel with a variety of layouts. Start with XBLOCK=2048,
+which was the best value obtained in the last tutorial.</p>
+<p>For 1D tensors, there are few choices for blocked layouts. Assuming
+num_warps=4, the only valid layouts are</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">(</span>
+    <span class="n">size_per_thread</span><span class="o">=</span><span class="p">[</span><span class="n">R</span><span class="p">],</span>
+    <span class="n">threads_per_warp</span><span class="o">=</span><span class="p">[</span><span class="mi">32</span><span class="p">],</span>
+    <span class="n">warps_per_cta</span><span class="o">=</span><span class="p">[</span><span class="mi">4</span><span class="p">],</span>
+    <span class="n">order</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+</pre></div>
+</div>
+<p>Where <code class="docutils literal notranslate"><span class="pre">R</span></code> is a power of 2.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">get_throughput</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">ms</span><span class="p">):</span>
+    <span class="n">tbytes</span> <span class="o">=</span> <span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="nb">input</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">*</span> <span class="nb">input</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span> <span class="o">&gt;&gt;</span> <span class="mi">30</span><span class="p">)</span> <span class="o">/</span> <span class="mi">1024</span>
+    <span class="k">return</span> <span class="n">tbytes</span> <span class="o">/</span> <span class="p">(</span><span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-3</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">bench_memcpy_impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">impl</span><span class="p">):</span>
+    <span class="n">compiled_kernel</span> <span class="o">=</span> <span class="n">impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span>
+    <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span>
+    <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="n">fn</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">compiled_kernel</span><span class="p">,</span> <span class="n">get_throughput</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">ms</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">bench_memcpy</span><span class="p">(</span><span class="n">impl</span><span class="p">):</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">xnumel</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">&lt;&lt;</span> <span class="mi">30</span>
+    <span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">bench_memcpy_impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">impl</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;XBLOCK&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;xnumel&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">200</span><span class="p">,</span> <span class="mi">1000</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_warps&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">])</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_memcpy_1d</span><span class="p">(</span><span class="n">XBLOCK</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">):</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="n">num_warps</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="n">memcpy_1d_impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">layout</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>By choosing XBLOCK=2048, the largest value we can pick for R without
+incurring redundant values is R=16.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="n">_enabled</span><span class="p">(</span><span class="s2">&quot;R_vs_throughput&quot;</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;R vs. Throughput&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;================&quot;</span><span class="p">)</span>
+    <span class="n">XBLOCK</span> <span class="o">=</span> <span class="mi">2048</span>
+    <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">4</span>
+    <span class="n">kernel</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">memcpy_1d_impl</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="o">=</span><span class="n">XBLOCK</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">compiled_kernels</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">5</span><span class="p">):</span>
+        <span class="n">R</span> <span class="o">=</span> <span class="mi">2</span><span class="o">**</span><span class="n">i</span>
+        <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="n">R</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="n">num_warps</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="n">impl</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">kernel</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">layout</span><span class="p">)</span>
+        <span class="n">compiled_kernel</span><span class="p">,</span> <span class="n">throughput</span> <span class="o">=</span> <span class="n">bench_memcpy</span><span class="p">(</span><span class="n">impl</span><span class="p">)</span>
+        <span class="n">compiled_kernels</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">R</span><span class="p">,</span> <span class="n">compiled_kernel</span><span class="p">))</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;R=</span><span class="si">{</span><span class="n">R</span><span class="si">:</span><span class="s2">&lt;3</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">throughput</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>Running this on GB200, we obtain</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">R</span><span class="o">=</span><span class="mi">1</span>   <span class="mf">6.574</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+<span class="n">R</span><span class="o">=</span><span class="mi">2</span>   <span class="mf">6.476</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+<span class="n">R</span><span class="o">=</span><span class="mi">4</span>   <span class="mf">6.474</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+<span class="n">R</span><span class="o">=</span><span class="mi">8</span>   <span class="mf">6.502</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+<span class="n">R</span><span class="o">=</span><span class="mi">16</span>  <span class="mf">6.214</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+</pre></div>
+</div>
+<p>Observe that the layout does affect performance. Let’s dig deeper into why
+by examining the SASS.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="n">_enabled</span><span class="p">(</span><span class="s2">&quot;LDG_STG_instructions&quot;</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;LDG/STG instructions&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;====================&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">R</span><span class="p">,</span> <span class="n">compiled_kernel</span> <span class="ow">in</span> <span class="n">compiled_kernels</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">R=</span><span class="si">{</span><span class="n">R</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;==========&quot;</span><span class="p">)</span>
+        <span class="n">sass</span> <span class="o">=</span> <span class="n">compiled_kernel</span><span class="o">.</span><span class="n">asm</span><span class="p">[</span><span class="s2">&quot;sass&quot;</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">sass</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">):</span>
+            <span class="k">if</span> <span class="s2">&quot;LDG.E&quot;</span> <span class="ow">in</span> <span class="n">line</span> <span class="ow">or</span> <span class="s2">&quot;STG.E&quot;</span> <span class="ow">in</span> <span class="n">line</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="n">line</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>We see that the layout affects read/write vectorization and striding:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>R</p></th>
+<th class="head"><p>width</p></th>
+<th class="head"><p>vec_len</p></th>
+<th class="head"><p>n_loads</p></th>
+<th class="head"><p>stride</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>1</p></td>
+<td><p>32</p></td>
+<td><p>32</p></td>
+<td><p>1</p></td>
+<td><p>0x00</p></td>
+</tr>
+<tr class="row-odd"><td><p>2</p></td>
+<td><p>64</p></td>
+<td><p>64</p></td>
+<td><p>1</p></td>
+<td><p>0x00</p></td>
+</tr>
+<tr class="row-even"><td><p>4</p></td>
+<td><p>128</p></td>
+<td><p>128</p></td>
+<td><p>1</p></td>
+<td><p>0x00</p></td>
+</tr>
+<tr class="row-odd"><td><p>8</p></td>
+<td><p>256</p></td>
+<td><p>128</p></td>
+<td><p>2</p></td>
+<td><p>0x10</p></td>
+</tr>
+<tr class="row-even"><td><p>16</p></td>
+<td><p>512</p></td>
+<td><p>128</p></td>
+<td><p>4</p></td>
+<td><p>0x10</p></td>
+</tr>
+</tbody>
+</table>
+<p>Modern NVIDIA GPUs have 128-byte cache lines, divided into 32-byte sectors.
+These sectors are the granularity at which global memory is accessed. Thus,
+the GPU attempts to minimize the number of sector accesses by “coalescing”
+contiguous accesses to the same sectors.</p>
+<p>When R=1, each <code class="docutils literal notranslate"><span class="pre">LDG.E</span></code> at the warp level reads exactly 128 contiguous bytes of
+global memory, which fits into a cache line. Note that PyTorch allocates
+tensors aligned to 256 bytes.</p>
+<p>Increasing R to 2 or 4 widens each <code class="docutils literal notranslate"><span class="pre">LDG.E</span></code> instruction but slows down the
+kernel, despite the number of 32B sector reads remaining unchanged. This can
+be due to a variety of obscure hardware factors, but if you look at the
+annotations printed to the left of the instructions, you can see one potential
+factor:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>16:1:2:-:1	@!P0 LDG.E R0, desc[UR4][R8.64];
+--:-:3:-:1	@!P0 LDG.E R15, desc[UR4][R4.64];
+--:-:4:-:1	@!P0 LDG.E R17, desc[UR4][R4.64+0x200];
+...
+08:0:-:-:1	@!P0 STG.E desc[UR4][R6.64], R15;
+16:0:-:-:1	@!P0 STG.E desc[UR4][R6.64+0x200], R17;
+04:0:-:-:1	@!P0 STG.E desc[UR4][R6.64+0x400], R19;
+</pre></div>
+</div>
+<p>These annotations are</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">wait_mask</span> <span class="p">:</span> <span class="n">read_barrier</span> <span class="p">:</span> <span class="n">write_barrier</span> <span class="p">:</span> <span class="k">yield</span> <span class="p">:</span> <span class="n">stall</span>
+</pre></div>
+</div>
+<p>The load instructions set a <code class="docutils literal notranslate"><span class="pre">write_barrier</span></code> because they are writing to
+registers. Subsequent <code class="docutils literal notranslate"><span class="pre">STG.E</span></code> instructions have a <code class="docutils literal notranslate"><span class="pre">wait_mask</span></code> that block until
+the barrier is cleared. By issuing smaller granularity loads, the store
+instructions can start executing earlier.</p>
+<p>It is difficult to tell why R=8 is faster than R=2 and R=4 without a profiler.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="n">_enabled</span><span class="p">(</span><span class="s2">&quot;XBLOCK_R_vs_throughput&quot;</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;(XBLOCK, R) vs. Throughput&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;==========================&quot;</span><span class="p">)</span>
+    <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">4</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;XBLOCK   &quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot; &quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">5</span><span class="p">):</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;R=</span><span class="si">{</span><span class="mi">2</span><span class="o">**</span><span class="n">i</span><span class="si">:</span><span class="s2">&lt;3</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot; &quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">()</span>
+
+    <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">15</span><span class="p">):</span>
+        <span class="n">XBLOCK</span> <span class="o">=</span> <span class="mi">2</span><span class="o">**</span><span class="n">j</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">XBLOCK</span><span class="si">:</span><span class="s2">&lt;8</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot; &quot;</span><span class="p">)</span>
+        <span class="n">kernel</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">memcpy_1d_impl</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="o">=</span><span class="n">XBLOCK</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">5</span><span class="p">):</span>
+            <span class="n">R</span> <span class="o">=</span> <span class="mi">2</span><span class="o">**</span><span class="n">i</span>
+            <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="n">R</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="n">num_warps</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+            <span class="n">impl</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">kernel</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">layout</span><span class="p">)</span>
+            <span class="n">compiled_kernel</span><span class="p">,</span> <span class="n">throughput</span> <span class="o">=</span> <span class="n">bench_memcpy</span><span class="p">(</span><span class="n">impl</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">throughput</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot; &quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>If we run this experiment with a variety of XBLOCK, we see that R=8 is
+not always faster than R=2 and R=4.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">XBLOCK</span>    <span class="n">R</span><span class="o">=</span><span class="mi">1</span>   <span class="n">R</span><span class="o">=</span><span class="mi">2</span>   <span class="n">R</span><span class="o">=</span><span class="mi">4</span>   <span class="n">R</span><span class="o">=</span><span class="mi">8</span>   <span class="n">R</span><span class="o">=</span><span class="mi">16</span>
+<span class="mi">1024</span>     <span class="mf">6.566</span> <span class="mf">6.548</span> <span class="mf">6.542</span> <span class="mf">6.550</span> <span class="mf">5.226</span>
+<span class="mi">2048</span>     <span class="mf">6.572</span> <span class="mf">6.474</span> <span class="mf">6.474</span> <span class="mf">6.504</span> <span class="mf">6.218</span>
+<span class="mi">4096</span>     <span class="mf">6.554</span> <span class="mf">6.492</span> <span class="mf">6.454</span> <span class="mf">6.396</span> <span class="mf">6.182</span>
+<span class="mi">8192</span>     <span class="mf">6.606</span> <span class="mf">6.532</span> <span class="mf">6.482</span> <span class="mf">6.478</span> <span class="mf">6.176</span>
+<span class="mi">16384</span>    <span class="mf">6.522</span> <span class="mf">6.556</span> <span class="mf">6.486</span> <span class="mf">6.510</span> <span class="mf">6.146</span>
+</pre></div>
+</div>
+<p>From these tests, R=1 and XBLOCK=8192 give the best throughput. These
+parameters can be autotuned over a larger range if needed.</p>
+<p>Picking the right layout for higher-dimensional tensors is a lot less
+forgiving because the tensors can be accessed in non-contiguous ways. We will
+illustrate this with a 2D memcpy.</p>
+<p>We index into a strided 2D tensor by computing 1D offsets for the rows and
+columns, multiplying them by the strides, and broadcasting and adding them
+together. The offsets will have a 2D BlockedLayout, but we need to use a
+SliceLayout for the 1D offsets.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">parent</span><span class="o">=</span><span class="n">layout</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>A slice layout is obtained from a parent layout by dropping the <code class="docutils literal notranslate"><span class="pre">dim</span></code>
+dimension. For example, consider this blocked layout</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">(</span>
+    <span class="n">size_per_thread</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span>
+    <span class="n">threads_per_warp</span><span class="o">=</span><span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span>
+    <span class="n">warps_per_cta</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span>
+    <span class="n">order</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>The tensor element mapping is:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[[</span> <span class="n">T0</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">3</span><span class="p">],</span>
+ <span class="p">[</span> <span class="n">T0</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">7</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span>  <span class="n">T1</span><span class="p">:</span><span class="mi">7</span><span class="p">],</span>
+ <span class="p">[</span> <span class="n">T2</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span>  <span class="n">T2</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>  <span class="n">T2</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span>  <span class="n">T2</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">3</span><span class="p">],</span>
+ <span class="p">[</span> <span class="n">T2</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span>  <span class="n">T2</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span>  <span class="n">T2</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span>  <span class="n">T2</span><span class="p">:</span><span class="mi">7</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span>  <span class="n">T3</span><span class="p">:</span><span class="mi">7</span><span class="p">],</span>
+ <span class="o">...</span>
+ <span class="p">[</span><span class="n">T28</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span> <span class="n">T28</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span> <span class="n">T28</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span> <span class="n">T28</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">3</span><span class="p">],</span>
+ <span class="p">[</span><span class="n">T28</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span> <span class="n">T28</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span> <span class="n">T28</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span> <span class="n">T28</span><span class="p">:</span><span class="mi">7</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span> <span class="n">T29</span><span class="p">:</span><span class="mi">7</span><span class="p">],</span>
+ <span class="p">[</span><span class="n">T30</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span> <span class="n">T30</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span> <span class="n">T30</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span> <span class="n">T30</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">3</span><span class="p">],</span>
+ <span class="p">[</span><span class="n">T30</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span> <span class="n">T30</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span> <span class="n">T30</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span> <span class="n">T30</span><span class="p">:</span><span class="mi">7</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">4</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">5</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span> <span class="n">T31</span><span class="p">:</span><span class="mi">7</span><span class="p">]]</span>
+</pre></div>
+</div>
+<p>To form the slice layout along dim=1, first collapse the mappings in each row
+together:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span> <span class="n">T0</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span> <span class="n">T0</span><span class="p">:</span><span class="mi">2</span><span class="o">|</span> <span class="n">T0</span><span class="p">:</span><span class="mi">3</span><span class="o">|</span> <span class="n">T1</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span> <span class="n">T1</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span> <span class="n">T1</span><span class="p">:</span><span class="mi">2</span><span class="o">|</span> <span class="n">T1</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span>
+   <span class="n">T0</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span> <span class="n">T0</span><span class="p">:</span><span class="mi">5</span><span class="o">|</span> <span class="n">T0</span><span class="p">:</span><span class="mi">6</span><span class="o">|</span> <span class="n">T0</span><span class="p">:</span><span class="mi">7</span><span class="o">|</span> <span class="n">T1</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span> <span class="n">T1</span><span class="p">:</span><span class="mi">5</span><span class="o">|</span> <span class="n">T1</span><span class="p">:</span><span class="mi">6</span><span class="o">|</span> <span class="n">T1</span><span class="p">:</span><span class="mi">7</span><span class="p">,</span>
+   <span class="n">T2</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span> <span class="n">T2</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span> <span class="n">T2</span><span class="p">:</span><span class="mi">2</span><span class="o">|</span> <span class="n">T2</span><span class="p">:</span><span class="mi">3</span><span class="o">|</span> <span class="n">T3</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span> <span class="n">T3</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span> <span class="n">T3</span><span class="p">:</span><span class="mi">2</span><span class="o">|</span> <span class="n">T3</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span>
+   <span class="n">T2</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span> <span class="n">T2</span><span class="p">:</span><span class="mi">5</span><span class="o">|</span> <span class="n">T2</span><span class="p">:</span><span class="mi">6</span><span class="o">|</span> <span class="n">T2</span><span class="p">:</span><span class="mi">7</span><span class="o">|</span> <span class="n">T3</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span> <span class="n">T3</span><span class="p">:</span><span class="mi">5</span><span class="o">|</span> <span class="n">T3</span><span class="p">:</span><span class="mi">6</span><span class="o">|</span> <span class="n">T3</span><span class="p">:</span><span class="mi">7</span><span class="p">,</span>
+ <span class="o">...</span>
+  <span class="n">T28</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span><span class="n">T28</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span><span class="n">T28</span><span class="p">:</span><span class="mi">2</span><span class="o">|</span><span class="n">T28</span><span class="p">:</span><span class="mi">3</span><span class="o">|</span><span class="n">T29</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span><span class="n">T29</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span><span class="n">T29</span><span class="p">:</span><span class="mi">2</span><span class="o">|</span><span class="n">T29</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span>
+  <span class="n">T28</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span><span class="n">T28</span><span class="p">:</span><span class="mi">5</span><span class="o">|</span><span class="n">T28</span><span class="p">:</span><span class="mi">6</span><span class="o">|</span><span class="n">T28</span><span class="p">:</span><span class="mi">7</span><span class="o">|</span><span class="n">T29</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span><span class="n">T29</span><span class="p">:</span><span class="mi">5</span><span class="o">|</span><span class="n">T29</span><span class="p">:</span><span class="mi">6</span><span class="o">|</span><span class="n">T29</span><span class="p">:</span><span class="mi">7</span><span class="p">,</span>
+  <span class="n">T30</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span><span class="n">T30</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span><span class="n">T30</span><span class="p">:</span><span class="mi">2</span><span class="o">|</span><span class="n">T30</span><span class="p">:</span><span class="mi">3</span><span class="o">|</span><span class="n">T31</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span><span class="n">T31</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span><span class="n">T31</span><span class="p">:</span><span class="mi">2</span><span class="o">|</span><span class="n">T31</span><span class="p">:</span><span class="mi">3</span><span class="p">,</span>
+  <span class="n">T30</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span><span class="n">T30</span><span class="p">:</span><span class="mi">5</span><span class="o">|</span><span class="n">T30</span><span class="p">:</span><span class="mi">6</span><span class="o">|</span><span class="n">T30</span><span class="p">:</span><span class="mi">7</span><span class="o">|</span><span class="n">T31</span><span class="p">:</span><span class="mi">4</span><span class="o">|</span><span class="n">T31</span><span class="p">:</span><span class="mi">5</span><span class="o">|</span><span class="n">T31</span><span class="p">:</span><span class="mi">6</span><span class="o">|</span><span class="n">T31</span><span class="p">:</span><span class="mi">7</span><span class="p">]</span>
+</pre></div>
+</div>
+<p>Then remove redundant register mappings within each thread:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[</span>  <span class="n">T0</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span> <span class="n">T1</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span>
+   <span class="n">T0</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span> <span class="n">T1</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>
+   <span class="n">T2</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span> <span class="n">T3</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span>
+   <span class="n">T2</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span> <span class="n">T3</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>
+ <span class="o">...</span>
+  <span class="n">T28</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span><span class="n">T29</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span>
+  <span class="n">T28</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span><span class="n">T29</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>
+  <span class="n">T30</span><span class="p">:</span><span class="mi">0</span><span class="o">|</span><span class="n">T31</span><span class="p">:</span><span class="mi">0</span><span class="p">,</span>
+  <span class="n">T30</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span><span class="n">T31</span><span class="p">:</span><span class="mi">1</span><span class="p">]</span>
+</pre></div>
+</div>
+<p>This layout would result from reducing a 2D tensor along dim=1. You can see
+that each element in the reduction result would be broadcasted to two threads.</p>
+<p>Likewise, to expand a 1D tensor to 2D, we start with the tensor in slice
+layout and perform the reverse transformation by duplicating each element of
+the 1D tensor until it fills the rows to the desired size. Because this
+happens in virtual registers, broadcasting is a zero-cost operation.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">memcpy_2d_kernel</span><span class="p">(</span><span class="n">in_ptr</span><span class="p">,</span> <span class="n">out_ptr</span><span class="p">,</span>  <span class="c1">#</span>
+                     <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">xstride_in</span><span class="p">,</span> <span class="n">ystride_in</span><span class="p">,</span> <span class="n">xstride_out</span><span class="p">,</span> <span class="n">ystride_out</span><span class="p">,</span>  <span class="c1">#</span>
+                     <span class="n">layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">pid_x</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">pid_y</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">start_x</span> <span class="o">=</span> <span class="n">pid_x</span> <span class="o">*</span> <span class="n">XBLOCK</span>
+    <span class="n">start_y</span> <span class="o">=</span> <span class="n">pid_y</span> <span class="o">*</span> <span class="n">YBLOCK</span>
+    <span class="c1"># For the 1D indices, use a SliceLayout along the dimensions we will expand.</span>
+    <span class="n">indices_x</span> <span class="o">=</span> <span class="n">start_x</span> <span class="o">+</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">parent</span><span class="o">=</span><span class="n">layout</span><span class="p">))</span>
+    <span class="n">indices_y</span> <span class="o">=</span> <span class="n">start_y</span> <span class="o">+</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">parent</span><span class="o">=</span><span class="n">layout</span><span class="p">))</span>
+
+    <span class="c1"># expand_dims along the slice dimension returns a tensor with the parent</span>
+    <span class="c1"># layout, so this yields [XBLOCK, 1] and [1, YBLOCK] tensors with the same</span>
+    <span class="c1"># layout which can be broadcasted together to [XBLOCK, YBLOCK].</span>
+    <span class="n">in_offsets</span> <span class="o">=</span> <span class="n">xstride_in</span> <span class="o">*</span> <span class="n">indices_x</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">+</span> <span class="n">ystride_in</span> <span class="o">*</span> <span class="n">indices_y</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
+    <span class="n">out_offsets</span> <span class="o">=</span> <span class="n">xstride_out</span> <span class="o">*</span> <span class="n">indices_x</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">+</span> <span class="n">ystride_out</span> <span class="o">*</span> <span class="n">indices_y</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
+
+    <span class="c1"># Compute the mask the same way: select for indices along each dimension</span>
+    <span class="c1"># that are in bounds and broadcast them together.</span>
+    <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">indices_x</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">xnumel</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">indices_y</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">ynumel</span><span class="p">)</span>
+
+    <span class="n">value</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">in_ptr</span> <span class="o">+</span> <span class="n">in_offsets</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+    <span class="n">gl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">out_ptr</span> <span class="o">+</span> <span class="n">out_offsets</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">memcpy_2d_impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">layout</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">):</span>
+    <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span> <span class="o">=</span> <span class="nb">input</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">),</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">ynumel</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">))</span>
+    <span class="c1"># Pass the strides of the input and output tensors into the kernel. The</span>
+    <span class="c1"># compiler will specialize the kernel if any of the strides are 1, which is</span>
+    <span class="c1"># common for the inner dimension of tensors.</span>
+    <span class="n">compiled_kernel</span> <span class="o">=</span> <span class="n">memcpy_2d_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>  <span class="c1">#</span>
+        <span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="o">*</span><span class="nb">input</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="o">*</span><span class="n">output</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span>  <span class="c1">#</span>
+        <span class="n">layout</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">compiled_kernel</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;XBLOCK, YBLOCK&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">),</span> <span class="p">(</span><span class="mi">256</span><span class="p">,</span> <span class="mi">128</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;xnumel, ynumel&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">2000</span><span class="p">),</span> <span class="p">(</span><span class="mi">1000</span><span class="p">,</span> <span class="mi">200</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;transposed&quot;</span><span class="p">,</span> <span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">True</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_warps&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">])</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_memcpy_2d</span><span class="p">(</span><span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">transposed</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">):</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+    <span class="c1"># Transposing the tensor makes it non-contiguous along the inner dimension.</span>
+    <span class="nb">input</span> <span class="o">=</span> <span class="nb">input</span><span class="o">.</span><span class="n">T</span> <span class="k">if</span> <span class="n">transposed</span> <span class="k">else</span> <span class="nb">input</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">output</span><span class="o">.</span><span class="n">T</span> <span class="k">if</span> <span class="n">transposed</span> <span class="k">else</span> <span class="n">output</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+    <span class="n">memcpy_2d_impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">layout</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Instead of autotuning, we should just pick the layout we know will work based
+based on our findings in 1D. Assuming the 2D tensor is just a contiguous
+memory block underneath, we can try to reduce the 2D memcpy into a 1D memcpy.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">bench_memcpy_2d</span><span class="p">(</span><span class="n">impl</span><span class="p">,</span> <span class="n">transposed</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="c1"># 8 GB tensor, but spread across 2 dimensions.</span>
+    <span class="n">xnumel</span> <span class="o">=</span> <span class="mi">32</span> <span class="o">*</span> <span class="mi">1024</span>
+    <span class="n">ynumel</span> <span class="o">=</span> <span class="mi">64</span> <span class="o">*</span> <span class="mi">1024</span>
+    <span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+    <span class="nb">input</span> <span class="o">=</span> <span class="nb">input</span><span class="o">.</span><span class="n">T</span> <span class="k">if</span> <span class="n">transposed</span> <span class="k">else</span> <span class="nb">input</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">output</span><span class="o">.</span><span class="n">T</span> <span class="k">if</span> <span class="n">transposed</span> <span class="k">else</span> <span class="n">output</span>
+    <span class="k">return</span> <span class="n">bench_memcpy_impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">impl</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Choosing XBLOCK=1 means each program will process a row vector, and we can
+pick a blocked layout that behaves the same as the R=1 layout does in 1D.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="n">_enabled</span><span class="p">(</span><span class="s2">&quot;memcpy_2d_layout&quot;</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Benchmarking 2D memcpy&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;======================&quot;</span><span class="p">)</span>
+    <span class="n">XBLOCK</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">YBLOCK</span> <span class="o">=</span> <span class="mi">2048</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+    <span class="n">impl</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">memcpy_2d_impl</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="o">=</span><span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="o">=</span><span class="n">YBLOCK</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">layout</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+    <span class="n">_</span><span class="p">,</span> <span class="n">throughput</span> <span class="o">=</span> <span class="n">bench_memcpy_2d</span><span class="p">(</span><span class="n">impl</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Throughput: </span><span class="si">{</span><span class="n">throughput</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>This yields 6.260 TB/s, which is 5% slower than the 1D memcpy. There are a
+variety of reasons why, such as more complex 2D arithmetic, but let’s dig
+deeper first.</p>
+<p>Our 2D memcpy kernel has another problem: the optimal layout depends on the
+layout of the tensors in global memory. Let’s check the throughput when the
+input tensor is transposed:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="n">_enabled</span><span class="p">(</span><span class="s2">&quot;memcpy_2d_layout&quot;</span><span class="p">):</span>
+    <span class="n">_</span><span class="p">,</span> <span class="n">throughput</span> <span class="o">=</span> <span class="n">bench_memcpy_2d</span><span class="p">(</span><span class="n">impl</span><span class="p">,</span> <span class="n">transposed</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Transposed throughput: </span><span class="si">{</span><span class="n">throughput</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Performance craters to 0.774 TB/s. Because the inner dimension is no longer
+contiguous, we get no coalescing. Simply swapping the block sizes and
+transposing the layout restores performance:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="n">_enabled</span><span class="p">(</span><span class="s2">&quot;memcpy_2d_layout&quot;</span><span class="p">):</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span>
+    <span class="n">impl</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">memcpy_2d_impl</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="o">=</span><span class="mi">2048</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">layout</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+    <span class="n">_</span><span class="p">,</span> <span class="n">throughput</span> <span class="o">=</span> <span class="n">bench_memcpy_2d</span><span class="p">(</span><span class="n">impl</span><span class="p">,</span> <span class="n">transposed</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Fixed throughput: </span><span class="si">{</span><span class="n">throughput</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>This yields 6.590 TB/s, slightly faster than the 1D memcpy!</p>
+<p>Between the transposed and non-transposed inputs and layouts, each program
+accesses memory in the same way. The variation in performance is due to where
+the programs get scheduled on the GPU, which affects data locality. Even
+though each program accesses unique data, there are many mechanisms in the GPU
+cache structure that favour access locality. For example, the GPU caches
+virtual address translations in TLBs, and on H100 the L2 cache is divided into
+partitions that communicate with each other.</p>
+<p>In a subsequent tutorial, we will explore implementing persistent kernels and
+how they can be used to better control scheduling, among other benefits, to
+improve performance.</p>
+<p>One can conclude that the 1D memcpy provides more consistent performance than
+the 2D memcpy, but it only works if the input AND output tensors are views
+over a contiguous memory block. The 2D memcpy shines when either input or
+output has a more exotic layout.</p>
+<p>Consider a non-contiguous input tensor, which we can construct by taking a
+view of every second row of an 8 GB tensor. We can copy this into a contiguous
+output tensor, which is the same as performing <code class="docutils literal notranslate"><span class="pre">x.contiguous()</span></code> in PyTorch.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="n">_enabled</span><span class="p">(</span><span class="s2">&quot;memcpy_2d_contig&quot;</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Non-contiguous memcpy&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;=====================&quot;</span><span class="p">)</span>
+    <span class="c1"># 8 GB tensor.</span>
+    <span class="n">xnumel</span> <span class="o">=</span> <span class="mi">32</span> <span class="o">*</span> <span class="mi">1024</span>
+    <span class="n">ynumel</span> <span class="o">=</span> <span class="mi">64</span> <span class="o">*</span> <span class="mi">1024</span>
+    <span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="c1"># Take a view over every other row.</span>
+    <span class="nb">input</span> <span class="o">=</span> <span class="nb">input</span><span class="p">[::</span><span class="mi">2</span><span class="p">]</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="ow">not</span> <span class="nb">input</span><span class="o">.</span><span class="n">is_contiguous</span><span class="p">()</span> <span class="ow">and</span> <span class="n">output</span><span class="o">.</span><span class="n">is_contiguous</span><span class="p">()</span>
+
+    <span class="c1"># Benchmark 2D memcpy.</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+    <span class="n">impl</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">memcpy_2d_impl</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="o">=</span><span class="mi">2048</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">layout</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+    <span class="n">_</span><span class="p">,</span> <span class="n">throughput</span> <span class="o">=</span> <span class="n">bench_memcpy_impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">impl</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;2D memcpy: </span><span class="si">{</span><span class="n">throughput</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Benchmark PyTorch contiguous.</span>
+    <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="nb">input</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+    <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="n">fn</span><span class="p">)</span>
+    <span class="n">throughput</span> <span class="o">=</span> <span class="n">get_throughput</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">ms</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;torch.Tensor.contiguous: </span><span class="si">{</span><span class="n">throughput</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+
+    <span class="c1"># We can eke out even more performance by using the transposed &quot;trick&quot;.</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span>
+    <span class="n">impl</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">memcpy_2d_impl</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="o">=</span><span class="mi">2048</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">layout</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+    <span class="n">_</span><span class="p">,</span> <span class="n">throughput</span> <span class="o">=</span> <span class="n">bench_memcpy_impl</span><span class="p">(</span><span class="nb">input</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">output</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">impl</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;2D memcpy (transposed): </span><span class="si">{</span><span class="n">throughput</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">()</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="mi">2</span><span class="n">D</span> <span class="n">memcpy</span><span class="p">:</span> <span class="mf">6.258</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+<span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="o">.</span><span class="n">contiguous</span><span class="p">:</span> <span class="mf">2.946</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+<span class="mi">2</span><span class="n">D</span> <span class="n">memcpy</span> <span class="p">(</span><span class="n">transposed</span><span class="p">):</span> <span class="mf">6.398</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+</pre></div>
+</div>
+<p>Our 2D memcpy provides similar performance even when the input tensor has
+an exotic layout. It’s already over 2x faster than the PyTorch implementation</p>
+<p>We have seen how picking the wrong layouts for global memory accesses can
+crater performance and that the right layout depends on the layout of the
+global tensors. What happens if the input and output tensors have opposite
+layouts?</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="n">_enabled</span><span class="p">(</span><span class="s2">&quot;memcpy_2d_inout&quot;</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;2D memcpy in/out layouts&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;=========================&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Input is contiguous along dim 1.</span>
+    <span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">32</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="mi">32</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Output is contiguous along dim 0.</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="nb">input</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="nb">input</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">T</span>
+
+    <span class="c1"># order=[1, 0]</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+    <span class="n">impl</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">memcpy_2d_impl</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="o">=</span><span class="mi">2048</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">layout</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+    <span class="n">_</span><span class="p">,</span> <span class="n">throughput</span> <span class="o">=</span> <span class="n">bench_memcpy_impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">impl</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;2D memcpy (order=[1, 0]): </span><span class="si">{</span><span class="n">throughput</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+
+    <span class="c1"># order=[0, 1]</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span>
+    <span class="n">impl</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">memcpy_2d_impl</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="o">=</span><span class="mi">2048</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">layout</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+    <span class="n">_</span><span class="p">,</span> <span class="n">throughput</span> <span class="o">=</span> <span class="n">bench_memcpy_impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">impl</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;2D memcpy (order=[0, 1]): </span><span class="si">{</span><span class="n">throughput</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Performance is terrible regardless of which layout we pick:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="mi">2</span><span class="n">D</span> <span class="n">memcpy</span> <span class="p">(</span><span class="n">order</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]):</span> <span class="mf">0.978</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+<span class="mi">2</span><span class="n">D</span> <span class="n">memcpy</span> <span class="p">(</span><span class="n">order</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]):</span> <span class="mf">1.674</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+</pre></div>
+</div>
+<p>The solution is to use two layouts for <code class="docutils literal notranslate"><span class="pre">gl.load</span></code> and <code class="docutils literal notranslate"><span class="pre">gl.store</span></code>, both derived
+from the layouts of the global tensors.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">get_layout_for_gmem_access</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">):</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="n">num_warps</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;only 1D and 2D tensors are supported&quot;</span>
+    <span class="k">assert</span> <span class="mi">1</span> <span class="ow">in</span> <span class="n">tensor</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="s2">&quot;expected at least 1 contiguous dimension&quot;</span>
+    <span class="k">if</span> <span class="n">tensor</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="n">num_warps</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span>
+</pre></div>
+</div>
+<p>However, this means the Gluon tensor that results from the global memory load
+will have a different layout than what is required for the store. We need to
+perform a layout conversion.</p>
+<p>Layout conversions are potentially expensive operations, because they often
+result in data movement across threads and warps. Data movement across warps
+also requires using shared memory, which is a precious resource on the GPU.</p>
+<p>Using shared memory for layout conversions can adversely affect performance
+by reducing occupancy and maximum pipeline depth, which is something we will
+explore in the next tutorial where we cover software pipelining.</p>
+<p>However, in our case the cost of the layout conversion is unavoidable, and it
+is far less than the cost of inefficient global memory accesses. We will also
+need to pick a more square-ish block shape, since coalescing occurs along
+different dimensions for the input and output.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_mask_and_offsets</span><span class="p">(</span><span class="n">start_x</span><span class="p">,</span> <span class="n">start_y</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">xstride</span><span class="p">,</span> <span class="n">ystride</span><span class="p">,</span>  <span class="c1">#</span>
+                         <span class="n">XBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">indices_x</span> <span class="o">=</span> <span class="n">start_x</span> <span class="o">+</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">parent</span><span class="o">=</span><span class="n">layout</span><span class="p">))</span>
+    <span class="n">indices_y</span> <span class="o">=</span> <span class="n">start_y</span> <span class="o">+</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">parent</span><span class="o">=</span><span class="n">layout</span><span class="p">))</span>
+
+    <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">indices_x</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">xnumel</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">indices_y</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">ynumel</span><span class="p">)</span>
+    <span class="n">offsets</span> <span class="o">=</span> <span class="n">xstride</span> <span class="o">*</span> <span class="n">indices_x</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">+</span> <span class="n">ystride</span> <span class="o">*</span> <span class="n">indices_y</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
+    <span class="k">return</span> <span class="n">mask</span><span class="p">,</span> <span class="n">offsets</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">memcpy_2d_inout_kernel</span><span class="p">(</span><span class="n">in_ptr</span><span class="p">,</span> <span class="n">out_ptr</span><span class="p">,</span>  <span class="c1">#</span>
+                           <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">xstride_in</span><span class="p">,</span> <span class="n">ystride_in</span><span class="p">,</span> <span class="n">xstride_out</span><span class="p">,</span> <span class="n">ystride_out</span><span class="p">,</span>  <span class="c1">#</span>
+                           <span class="n">layout_in</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">layout_out</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                           <span class="n">XBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">pid_x</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">pid_y</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">start_x</span> <span class="o">=</span> <span class="n">pid_x</span> <span class="o">*</span> <span class="n">XBLOCK</span>
+    <span class="n">start_y</span> <span class="o">=</span> <span class="n">pid_y</span> <span class="o">*</span> <span class="n">YBLOCK</span>
+
+    <span class="c1"># We need two sets of indices and masks for each layout. If the layouts</span>
+    <span class="c1"># happen to be the same, the compiler will optimize away the extra code and</span>
+    <span class="c1"># layout conversion.</span>
+    <span class="n">mask_in</span><span class="p">,</span> <span class="n">in_offsets</span> <span class="o">=</span> <span class="n">get_mask_and_offsets</span><span class="p">(</span><span class="n">start_x</span><span class="p">,</span> <span class="n">start_y</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">xstride_in</span><span class="p">,</span> <span class="n">ystride_in</span><span class="p">,</span>  <span class="c1">#</span>
+                                               <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">layout_in</span><span class="p">)</span>
+    <span class="n">mask_out</span><span class="p">,</span> <span class="n">out_offsets</span> <span class="o">=</span> <span class="n">get_mask_and_offsets</span><span class="p">(</span><span class="n">start_x</span><span class="p">,</span> <span class="n">start_y</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">xstride_out</span><span class="p">,</span> <span class="n">ystride_out</span><span class="p">,</span>  <span class="c1">#</span>
+                                                 <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">layout_out</span><span class="p">)</span>
+
+    <span class="n">value</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">in_ptr</span> <span class="o">+</span> <span class="n">in_offsets</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask_in</span><span class="p">)</span>
+
+    <span class="c1"># Use `gl.convert_layout` to perform layout conversions.</span>
+    <span class="n">value</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">convert_layout</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">layout_out</span><span class="p">)</span>
+
+    <span class="n">gl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">out_ptr</span> <span class="o">+</span> <span class="n">out_offsets</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask_out</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">memcpy_2d_inout</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">):</span>
+    <span class="k">assert</span> <span class="nb">input</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="s2">&quot;input and output must have the same shape&quot;</span>
+    <span class="n">XBLOCK</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="n">YBLOCK</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="n">layout_in</span> <span class="o">=</span> <span class="n">get_layout_for_gmem_access</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">layout_out</span> <span class="o">=</span> <span class="n">get_layout_for_gmem_access</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="nb">input</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">XBLOCK</span><span class="p">),</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="nb">input</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">YBLOCK</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">memcpy_2d_inout_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>  <span class="c1">#</span>
+        <span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="nb">input</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="nb">input</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>  <span class="c1">#</span>
+        <span class="o">*</span><span class="nb">input</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="o">*</span><span class="n">output</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span>  <span class="c1">#</span>
+        <span class="n">layout_in</span><span class="p">,</span> <span class="n">layout_out</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;xnumel, ynumel&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">300</span><span class="p">,</span> <span class="mi">400</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;transpose_in, transpose_out&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span> <span class="p">(</span><span class="kc">False</span><span class="p">,</span> <span class="kc">True</span><span class="p">)])</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_memcpy_2d_inout</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">transpose_in</span><span class="p">,</span> <span class="n">transpose_out</span><span class="p">):</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">transpose_in</span><span class="p">:</span>
+        <span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">ynumel</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">T</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">transpose_out</span><span class="p">:</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">ynumel</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">T</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">memcpy_2d_inout</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="n">_enabled</span><span class="p">(</span><span class="s2">&quot;memcpy_2d_inout&quot;</span><span class="p">):</span>
+    <span class="n">_</span><span class="p">,</span> <span class="n">throughput</span> <span class="o">=</span> <span class="n">bench_memcpy_impl</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">memcpy_2d_inout</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;2D memcpy (in/out layouts): </span><span class="si">{</span><span class="n">throughput</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>This yields much more reasonable performance:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="mi">2</span><span class="n">D</span> <span class="n">memcpy</span> <span class="p">(</span><span class="ow">in</span><span class="o">/</span><span class="n">out</span> <span class="n">layouts</span><span class="p">):</span> <span class="mf">4.814</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+</pre></div>
+</div>
+<p>Note that the cost of the layout conversion is incurred in our overall
+throughput. We will see in subsequent tutorials how to hide this cost.</p>
+<p>So far in this tutorial, we have covered block layouts, slice layouts, and
+layout conversions. We have also explored the performance implications of
+layouts. Here are other of things where layouts can affect performance:</p>
+<p>Reductions, scans, gathers, or in general any operation that may require
+communication across threads and/or warps, can be more efficient if the layout
+of the inputs is selected to reduce the amount of communication. This includes
+layout conversions themselves.</p>
+<p>Suppose that we have a <code class="docutils literal notranslate"><span class="pre">128x128xf32</span></code> tensor that we want to reduce along the
+inner dimension. If the layout is:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+</pre></div>
+</div>
+<p>Which is a layout we might use to load the tensor from global memory, then
+every elements in a row is owned by a different thread. The compiler will
+generate butterfly shuffles to reduce within each warp, then pick a leader
+warp to reduce the remaining 4 values per row through shared memory.</p>
+<p>If instead the layout is</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">128</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span>
+</pre></div>
+</div>
+<p>Then each thread owns exactly one row of the tensor. Thus, the reduction
+requires no inter-thread communication.</p>
+<p>Unlike global memory accesses, the compiler does a good job of generating
+efficient reductions, scans, etc. regardless of the input layout, thus it is
+typically more expensive to convert_layout to an efficient layout and then
+perform the reeduction. However, in cases where you can choose between
+multiple layouts at the same cost, keep in mind efficient reduction layouts.</p>
+<p>Reads and writes to shared memory are affected by both the shared memory
+layout and the register layout of the tensor. This is because shared memory is
+organized into banks that can only serve one address per cycle per warp. The
+compiler generates code that minimizes bank conflicts, but the number of bank
+conflicts is still affected by the layouts.</p>
+<p>In Gluon, there is no canonical layout representation. Multiple layouts can
+represent the same tensor element mapping. For example, the following layouts
+are equivalent:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<span class="n">gl</span><span class="o">.</span><span class="n">SliceLayout</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]))</span>
+</pre></div>
+</div>
+<p>When converting between layouts you know are equivalent, or at most only
+require reordering registers within a thread (which is free), you can use
+<code class="docutils literal notranslate"><span class="pre">gl.convert_layout(x,</span> <span class="pre">layout,</span> <span class="pre">assert_trivial=True)</span></code> to ensure this.</p>
+<p>While Gluon layouts have no canonical representation, all Gluon layouts can be
+represented as linear layouts. Linear layouts are the most expressive and
+powerful layout representation in Gluon: they allow expressing zero-cost
+splits, joins, reshapes, and permutes. However, they are relatively uncommon
+and can be difficult to understand.</p>
+<p>See <code class="docutils literal notranslate"><span class="pre">include/triton/Tools/LinearLayout.h</span></code> for more details on the data
+structure, and see the associated paper https://arxiv.org/abs/2505.23819 for
+a deeper dive into linear layouts.</p>
+<p>The linear layout equivalent to the 2 layouts above is:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">gl</span><span class="o">.</span><span class="n">DistributedLinearLayout</span><span class="p">(</span>
+  <span class="n">reg_bases</span><span class="o">=</span><span class="p">[],</span>
+  <span class="n">lane_bases</span><span class="o">=</span><span class="p">[[</span><span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">8</span><span class="p">],</span> <span class="p">[</span><span class="mi">16</span><span class="p">]],</span>
+  <span class="n">warp_bases</span><span class="o">=</span><span class="p">[[</span><span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">64</span><span class="p">]],</span>
+  <span class="n">block_bases</span><span class="o">=</span><span class="p">[],</span>
+  <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">128</span><span class="p">],</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>You can see that this linear layout is a 7x7 identity matrix over the bits of
+the 1D tensor element index, where we interpret the lower 5 bits as the lane
+and the upper 2 bits as the warp.</p>
+<p>Linear layouts are extremely poweful, and can be used in conjunction with
+higher dimensional tensors (e.g. 5D or 7D) and reshapes to perform coalesced
+loads and efficient transformations of data within the kernel.</p>
+<p>Main takeaways:</p>
+<ul class="simple">
+<li><p>Gluon requires explicit layout management, and there many kinds of layouts
+in Gluon that serve different purposes.</p></li>
+<li><p>Layouts affect performance, sometimes dramatically. Layouts affect
+performance of global memory accesses, operations that may require
+inter-thread communication, among other things.</p></li>
+<li><p>Layouts are powerful tools for writing flexible yet performant kernels.</p></li>
+</ul>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="intro.html" class="btn btn-neutral float-left" title="Introduction to Gluon" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="async-copy.html" class="btn btn-neutral float-right" title="Async Copy in Gluon" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.ampere.async\_copy.commit\_group
+==========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.ampere.async_copy
+
+.. autofunction:: commit_group

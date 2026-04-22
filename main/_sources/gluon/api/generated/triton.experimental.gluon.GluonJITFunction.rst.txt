@@ -1,0 +1,39 @@
+﻿triton.experimental.gluon.GluonJITFunction
+==========================================
+
+.. currentmodule:: triton.experimental.gluon
+
+.. autoclass:: GluonJITFunction
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~GluonJITFunction.__init__
+      ~GluonJITFunction.add_pre_run_hook
+      ~GluonJITFunction.create_binder
+      ~GluonJITFunction.get_capture_scope
+      ~GluonJITFunction.is_gluon
+      ~GluonJITFunction.parse
+      ~GluonJITFunction.preload
+      ~GluonJITFunction.repr
+      ~GluonJITFunction.run
+      ~GluonJITFunction.warmup
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~GluonJITFunction.cache_key
+      ~GluonJITFunction.src
+      ~GluonJITFunction.type
+   
+   

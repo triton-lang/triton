@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.must\_use\_result
+===========================================
+
+.. currentmodule:: triton.experimental.gluon
+
+.. autofunction:: must_use_result

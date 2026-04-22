@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.mbarrier.wait
+==============================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.mbarrier
+
+.. autofunction:: wait

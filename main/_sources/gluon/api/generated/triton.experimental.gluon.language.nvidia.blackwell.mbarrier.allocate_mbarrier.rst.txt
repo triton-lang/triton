@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.blackwell.mbarrier.allocate\_mbarrier
+===============================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
+
+.. autofunction:: mbarrier.allocate_mbarrier

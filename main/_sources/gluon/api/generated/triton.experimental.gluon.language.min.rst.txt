@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.min
+======================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: min

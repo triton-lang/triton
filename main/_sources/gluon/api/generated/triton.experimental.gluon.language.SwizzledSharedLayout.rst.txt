@@ -1,0 +1,36 @@
+﻿triton.experimental.gluon.language.SwizzledSharedLayout
+=======================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autoclass:: SwizzledSharedLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~SwizzledSharedLayout.__init__
+      ~SwizzledSharedLayout.format_hardware_view
+      ~SwizzledSharedLayout.format_tensor_view
+      ~SwizzledSharedLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~SwizzledSharedLayout.type
+      ~SwizzledSharedLayout.vec
+      ~SwizzledSharedLayout.per_phase
+      ~SwizzledSharedLayout.max_phase
+      ~SwizzledSharedLayout.order
+      ~SwizzledSharedLayout.cga_layout
+   
+   

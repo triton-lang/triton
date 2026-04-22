@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.mbarrier.fence\_init\_release\_cluster
+=======================================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.mbarrier
+
+.. autofunction:: fence_init_release_cluster

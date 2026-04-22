@@ -1,0 +1,504 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TMA in Gluon &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/custom.css" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Warp-Group MMA" href="wgmma.html" />
+    <link rel="prev" title="Async Copy in Gluon" href="async-copy.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="intro.html">Introduction to Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="layouts.html">Tensor Layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="async-copy.html">Async Copy in Gluon</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">TMA in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="wgmma.html">Warp-Group MMA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05.html">The 5th Generation TensorCore<sup>TM</sup></a></li>
+<li class="toctree-l2"><a class="reference internal" href="persistence.html">Persistent Kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="warp-specialization.html">Warp Specialization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tma-gather-scatter.html">Native TMA Gather and Scatter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-copy.html">TCGen05 Copy Instruction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-mma-scaled.html">Blocked-Scaled Matrix Multiplication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cluster-launch-control.html">Cluster Launch Control (CLC)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="conv-im2col.html">TMA im2col mode and Convolution via Implicit GEMM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html">Multi-CTA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html#benchmarking-matmul-multicta">Benchmarking matmul_multicta</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/api/index.html">API Reference</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Gluon Tutorials</a></li>
+      <li class="breadcrumb-item active">TMA in Gluon</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/getting-started/tutorials/gluon/tma.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="tma-in-gluon">
+<span id="example-tma"></span><h1>TMA in Gluon<a class="headerlink" href="#tma-in-gluon" title="Link to this heading"></a></h1>
+<p>The main problem with global memory accesses is register pressure. For each
+<code class="docutils literal notranslate"><span class="pre">LDG.E</span></code> or <code class="docutils literal notranslate"><span class="pre">STG.E</span></code>, we need to compute the 64-bit address, compute the mask if
+needed, and store the result in registers. Vectorization can reduce register
+pressure, but the problem remains.</p>
+<p>On Hopper and newer, TMA (Tensor Memory Accelerator) is a hardware feature for
+addressing N-dimensional arrays in global memory. TMAs trade the addressing
+flexibility of regular global memory instructions for a more concise address
+representation – the “tensor descriptor”.</p>
+<p>TMAs memory transactions are also handled by a separate hardware path called the
+“async proxy”. This boosts the performance of global memory accesses, but it
+adds an additional layer of synchronization needed.</p>
+<p>In this tutorial, we will cover how to use TMAs in Gluon, demonstrate how they
+boost performance, and how to pipeline with TMAs.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">importlib</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental</span><span class="w"> </span><span class="kn">import</span> <span class="n">gluon</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon</span><span class="w"> </span><span class="kn">import</span> <span class="n">language</span> <span class="k">as</span> <span class="n">gl</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.nvidia.hopper</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.language.nvidia.hopper</span><span class="w"> </span><span class="kn">import</span> <span class="n">tma</span><span class="p">,</span> <span class="n">mbarrier</span><span class="p">,</span> <span class="n">fence_async_shared</span>
+
+<span class="c1"># Re-use utilities from the previous tutorial.</span>
+<span class="n">t3</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">import_module</span><span class="p">(</span><span class="s2">&quot;03-async-copy&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">is_hopper_or_newer</span><span class="p">():</span>
+    <span class="n">target</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">target</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;cuda&quot;</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">9</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_hopper_or_newer</span><span class="p">():</span>
+    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;This tutorial requires Hopper or newer NVIDIA GPU&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>TMA is used through objects called “tensor descriptors”. Tensor descriptors
+live in global memory and contain the shape, strides, base pointer, layout,
+and other information about the tensor. TMA reads and writes are fundamentally
+async, and we will need “mbarrier” objects to synchronize them.</p>
+<p>Kernels that use TMAs accept descriptors as kernel arguments, which we can use
+to issue async tranfers:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">memcpy_1d_tma_kernel</span><span class="p">(</span><span class="n">in_desc</span><span class="p">,</span> <span class="n">out_desc</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="c1"># We don&#39;t need to pass the tensor strides because they are stored in the</span>
+    <span class="c1"># tensor descriptors</span>
+    <span class="n">pid</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="c1"># Each tensor descriptor contains a shared memory layout. Data is</span>
+    <span class="c1"># transferred between global and shared memory according to that layout.</span>
+    <span class="n">smem_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">in_desc</span><span class="o">.</span><span class="n">layout</span>
+    <span class="n">smem</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">in_desc</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">XBLOCK</span><span class="p">],</span> <span class="n">smem_layout</span><span class="p">)</span>
+
+    <span class="c1"># Completion of async TMA reads are tracked by mbarrier objects. These</span>
+    <span class="c1"># are 64-bit objects that live in shared memory.</span>
+    <span class="c1">#</span>
+    <span class="c1"># An mbarrier is initialized with a count. Each time a mbarrier is</span>
+    <span class="c1"># &quot;arrived&quot; on, the count is decremented. When the count reaches 0, the</span>
+    <span class="c1"># current phase of the mbarrier is marked as complete and it moves to the</span>
+    <span class="c1"># next phase. The mbarrier only tracks the state of the current and</span>
+    <span class="c1"># previous phase. This is important, because if an mbarrier&#39;s phase races</span>
+    <span class="c1"># too far ahead, its waiter will become out of sync.</span>
+    <span class="n">bar</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+
+    <span class="c1"># Completion of an async TMA arrives on an mbarrier once. Thus, initialize</span>
+    <span class="c1"># the mbarrier with a count of 1 so its phase will complete when the TMA is</span>
+    <span class="c1"># complete.</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="c1"># Tensor descriptors have an associated block shape. Each TMA request will</span>
+    <span class="c1"># copy one block of the tensor descriptor. The coordinates of the TMA</span>
+    <span class="c1"># request are specified as offsets to the beginning of the block. Masking</span>
+    <span class="c1"># of out-of-bounds reads and writes is handled automatically by TMAs, using</span>
+    <span class="c1"># the shape specified on the tensor descriptor.</span>
+    <span class="n">gl</span><span class="o">.</span><span class="n">static_assert</span><span class="p">(</span><span class="n">in_desc</span><span class="o">.</span><span class="n">block_type</span> <span class="o">==</span> <span class="n">out_desc</span><span class="o">.</span><span class="n">block_type</span><span class="p">)</span>
+    <span class="n">gl</span><span class="o">.</span><span class="n">static_assert</span><span class="p">(</span><span class="n">in_desc</span><span class="o">.</span><span class="n">layout</span> <span class="o">==</span> <span class="n">out_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+
+    <span class="c1"># Track completion of the TMA read based on the number of bytes copied.</span>
+    <span class="c1"># mbarrier.expect sets the number of outstanding bytes tracked by the</span>
+    <span class="c1"># mbarrier. If we pass the barrier to the TMA copy, it will atomically</span>
+    <span class="c1"># decrement the number of outstanding bytes as transactions complete. When</span>
+    <span class="c1"># it reaches 0, the mbarrier is arrived on once.</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">in_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">in_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">pid</span> <span class="o">*</span> <span class="n">XBLOCK</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">smem</span><span class="p">)</span>
+
+    <span class="c1"># Wait for completion of the read. We query the completion state of the</span>
+    <span class="c1"># mbarrier using the parity of the phase, i.e. either 0 or 1. mbarriers are</span>
+    <span class="c1"># initialized to parity 1 complete, so we wait for parity 0.</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="c1"># When we are done using the mbarrier, we need to invalidate it.</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">invalidate</span><span class="p">(</span><span class="n">bar</span><span class="p">)</span>
+
+    <span class="c1"># Since the TMA store reads from shared memory, we don&#39;t even need to load</span>
+    <span class="c1"># the result into registers. We can just store the result directly.</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">pid</span> <span class="o">*</span> <span class="n">XBLOCK</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
+
+    <span class="c1"># Unlike TMA reads, the completion of TMA stores is tracked by commit</span>
+    <span class="c1"># groups, just like async copies. Each async TMA store is implicitly</span>
+    <span class="c1"># committed to an async store group. We can wait until there are at most</span>
+    <span class="c1"># `pendings` outstanding TMA stores using `store_wait`. Note that the commit</span>
+    <span class="c1"># groups for async copy and async TMA stores are separate.</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">memcpy_1d_tma</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="o">=</span><span class="mi">8192</span><span class="p">):</span>
+    <span class="k">assert</span> <span class="nb">input</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">output</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="c1"># The layout for a tensor descriptor is always an NVMMASharedLayout. We can</span>
+    <span class="c1"># use this helper to grab the default NVMMASharedLayout, but sometimes you</span>
+    <span class="c1"># might need a different layout.</span>
+    <span class="n">block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">XBLOCK</span><span class="p">]</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span><span class="n">block_shape</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+    <span class="c1"># Wrap the tensors in tensor descriptors.</span>
+    <span class="n">in_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+    <span class="n">out_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+
+    <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="nb">input</span><span class="o">.</span><span class="n">numel</span><span class="p">(),</span> <span class="n">XBLOCK</span><span class="p">),</span> <span class="p">)</span>
+    <span class="c1"># Our kernel only uses scalars, so just a single warp is enough.</span>
+    <span class="n">memcpy_1d_tma_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">in_desc</span><span class="p">,</span> <span class="n">out_desc</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;XBLOCK&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">64</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;xnumel&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">40</span><span class="p">,</span> <span class="mi">500</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper or newer&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_memcpy_1d_tma</span><span class="p">(</span><span class="n">XBLOCK</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">):</span>
+    <span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+    <span class="n">memcpy_1d_tma</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Let’s rewrite the pipelined elementwise add kernel using TMAs. The structure
+of the kernel is almost the same. However, we now need to allocate one
+mbarrier per buffer to track completion of the reads. We will also use TMA for
+the store, meaning we need to allocate more shared memory for it.</p>
+<p>TMAs access shared memory through a different hardware called the “async
+proxy”. However, reading and writing shared memory from registers accesses it
+through the “generic proxy”. Memory operations across proxies are not ordered,
+so we have to use <code class="docutils literal notranslate"><span class="pre">fence_async_shared</span></code> to establish ordering. Here are some
+examples of hazards that require fences:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">value</span> <span class="o">=</span> <span class="n">smem</span><span class="o">.</span><span class="n">load</span><span class="p">()</span>
+<span class="n">fence_async_shared</span><span class="p">()</span>
+<span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">smem</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Without the fence, async_copy_global_to_shared can start copying into <code class="docutils literal notranslate"><span class="pre">smem</span></code>
+while the shared memory load is still in progress.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+<span class="n">fence_async_shared</span><span class="p">()</span>
+<span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Without the fence, async_copy_shared_to_global can start copying from <code class="docutils literal notranslate"><span class="pre">smem</span></code>
+before the shared memory store is complete.</p>
+<p>Note that certain cases imply total completion of a memory transaction and
+do not require a fence. For example, waiting on the result of a TMA load:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">smem</span><span class="p">)</span>
+<span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">value</span> <span class="o">=</span> <span class="n">smem</span><span class="o">.</span><span class="n">load</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>fence_async_shared is not needed because after the mbarrier.wait on the TMA
+read barrier, we know it has finished writing into shared memory via the async
+proxy. Thus the read via the generic proxy will be ordered after. This applies
+specifically to the TMA read barrier, a fence is still needed in this case:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+<span class="n">mbarrier</span><span class="o">.</span><span class="n">arrive</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">fence_async_shared</span><span class="p">()</span>
+<span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">issue_loads</span><span class="p">(</span><span class="n">copy_index</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">a_smem</span><span class="p">,</span> <span class="n">b_smem</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">xoff</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+                <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="c1"># Track completion of both TMA reads with the same mbarrier.</span>
+    <span class="n">yoff</span> <span class="o">=</span> <span class="n">copy_index</span> <span class="o">*</span> <span class="n">YBLOCK</span>
+    <span class="n">bar</span> <span class="o">=</span> <span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">copy_index</span> <span class="o">%</span> <span class="n">num_buffers</span><span class="p">)</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span> <span class="o">+</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">xoff</span><span class="p">,</span> <span class="n">yoff</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">a_smem</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">copy_index</span> <span class="o">%</span> <span class="n">num_buffers</span><span class="p">))</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">b_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">xoff</span><span class="p">,</span> <span class="n">yoff</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">b_smem</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">copy_index</span> <span class="o">%</span> <span class="n">num_buffers</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">copy_index</span> <span class="o">+</span> <span class="mi">1</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">perform_add</span><span class="p">(</span><span class="n">read_index</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_smem</span><span class="p">,</span> <span class="n">b_smem</span><span class="p">,</span> <span class="n">c_smem</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">xoff</span><span class="p">,</span> <span class="n">layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+                <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="c1"># Wait for the copy from num_buffers-1 iterations ago to complete.</span>
+    <span class="n">read_phase</span> <span class="o">=</span> <span class="n">read_index</span> <span class="o">//</span> <span class="n">num_buffers</span> <span class="o">&amp;</span> <span class="mi">1</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">read_index</span> <span class="o">%</span> <span class="n">num_buffers</span><span class="p">),</span> <span class="n">read_phase</span><span class="p">)</span>
+    <span class="n">a_val</span> <span class="o">=</span> <span class="n">a_smem</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">read_index</span> <span class="o">%</span> <span class="n">num_buffers</span><span class="p">)</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">b_val</span> <span class="o">=</span> <span class="n">b_smem</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">read_index</span> <span class="o">%</span> <span class="n">num_buffers</span><span class="p">)</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">c_val</span> <span class="o">=</span> <span class="n">a_val</span> <span class="o">+</span> <span class="n">b_val</span>
+    <span class="n">yoff</span> <span class="o">=</span> <span class="n">read_index</span> <span class="o">*</span> <span class="n">YBLOCK</span>
+    <span class="c1"># Pipeline the store by rotating the store wait.</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">c_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c_val</span><span class="p">)</span>
+    <span class="n">fence_async_shared</span><span class="p">()</span>
+    <span class="c1"># Issue the store without waiting for it.</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">xoff</span><span class="p">,</span> <span class="n">yoff</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">read_index</span> <span class="o">+</span> <span class="mi">1</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">elementwise_add_tma_kernel</span><span class="p">(</span>  <span class="c1">#</span>
+        <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">XBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">pid</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+    <span class="n">xoff</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">XBLOCK</span>
+
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">type</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">element_ty</span>
+    <span class="c1"># Allocate multibuffered shared memory for the input buffers.</span>
+    <span class="n">a_smem</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">],</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">b_smem</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">],</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+
+    <span class="c1"># Allocate shared memory for the TMA store.</span>
+    <span class="n">c_smem</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">],</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+
+    <span class="c1"># Allocate mbarriers to track completion of the TMA reads.</span>
+    <span class="n">bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">copy_index</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">read_index</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
+        <span class="n">copy_index</span> <span class="o">=</span> <span class="n">issue_loads</span><span class="p">(</span><span class="n">copy_index</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">a_smem</span><span class="p">,</span> <span class="n">b_smem</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">xoff</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">ynumel</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">)</span> <span class="o">-</span> <span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)):</span>
+        <span class="n">copy_index</span> <span class="o">=</span> <span class="n">issue_loads</span><span class="p">(</span><span class="n">copy_index</span><span class="p">,</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">a_smem</span><span class="p">,</span> <span class="n">b_smem</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">xoff</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+        <span class="n">read_index</span> <span class="o">=</span> <span class="n">perform_add</span><span class="p">(</span><span class="n">read_index</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_smem</span><span class="p">,</span> <span class="n">b_smem</span><span class="p">,</span> <span class="n">c_smem</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">xoff</span><span class="p">,</span> <span class="n">layout</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
+        <span class="n">read_index</span> <span class="o">=</span> <span class="n">perform_add</span><span class="p">(</span><span class="n">read_index</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">a_smem</span><span class="p">,</span> <span class="n">b_smem</span><span class="p">,</span> <span class="n">c_smem</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">xoff</span><span class="p">,</span> <span class="n">layout</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">invalidate</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">))</span>
+
+    <span class="c1"># Wait for the last store to complete.</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">elementwise_add_tma</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">num_buffers</span><span class="o">=</span><span class="mi">2</span><span class="p">):</span>
+    <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">c</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">),</span> <span class="p">)</span>
+
+    <span class="n">block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">]</span>
+    <span class="c1"># TMA descriptors require NVMMASharedLayout.</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span><span class="n">block_shape</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+    <span class="c1"># The strides of TMA descriptors must be 16-byte aligned.</span>
+    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+    <span class="n">elementwise_add_tma_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;xnumel, ynumel&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">1000</span><span class="p">,</span> <span class="mi">2000</span><span class="p">),</span> <span class="p">(</span><span class="mi">4000</span><span class="p">,</span> <span class="mi">120</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;XBLOCK, YBLOCK&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_buffers&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper or newer&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_elementwise_add_pipelined</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">):</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">elementwise_add_tma</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">a</span> <span class="o">+</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Let’s compare the pipelined TMA kernel against the pipelined async copy kernel
+from the previous tutorial.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Benchmarking elementwise_add&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;============================&quot;</span><span class="p">)</span>
+    <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span> <span class="o">=</span> <span class="mi">32</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="mi">32</span> <span class="o">*</span> <span class="mi">1024</span>
+    <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+
+    <span class="n">XBLOCK</span> <span class="o">=</span> <span class="mi">32</span>
+    <span class="n">YBLOCK</span> <span class="o">=</span> <span class="mi">64</span>
+    <span class="n">num_buffers</span> <span class="o">=</span> <span class="mi">2</span>
+
+    <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">t3</span><span class="o">.</span><span class="n">elementwise_add_pipelined</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">))</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;elementwise_add_pipelined: </span><span class="si">{</span><span class="n">t3</span><span class="o">.</span><span class="n">get_throughput</span><span class="p">(</span><span class="n">ms</span><span class="p">,</span><span class="w"> </span><span class="n">C</span><span class="p">)</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+
+    <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">elementwise_add_tma</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">))</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;elementwise_add_tma: </span><span class="si">{</span><span class="n">t3</span><span class="o">.</span><span class="n">get_throughput</span><span class="p">(</span><span class="n">ms</span><span class="p">,</span><span class="w"> </span><span class="n">C</span><span class="p">)</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">elementwise_add_pipelined</span><span class="p">:</span> <span class="mf">4.20</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+<span class="n">elementwise_add_tma</span><span class="p">:</span> <span class="mf">5.50</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+</pre></div>
+</div>
+<p>Switching to TMAs already yields a large performance boost.</p>
+<p>Since our kernel has more register room, we can increase the block size. In
+practice, peak register usage will remain low, because the compiler will
+interleave the smem load, add, and smem store in the inner loop. The main
+limitation to block size is the amount of shared memory.</p>
+<p>Each SM has 228 KB of shared memory. If we use 128x128xf32 blocks, we don’t
+have enough shared memory to double buffer the inputs. If we use 64x128xf32
+triple buffering uses 224 KB, just barely fitting.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">XBLOCK</span> <span class="o">=</span> <span class="mi">64</span>
+    <span class="n">YBLOCK</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="n">num_buffers</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">elementwise_add_tma</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">))</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;elementwise_add_tma (64x128x3): </span><span class="si">{</span><span class="n">t3</span><span class="o">.</span><span class="n">get_throughput</span><span class="p">(</span><span class="n">ms</span><span class="p">,</span><span class="w"> </span><span class="n">C</span><span class="p">)</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">elementwise_add_tma</span> <span class="p">(</span><span class="mi">64</span><span class="n">x128x3</span><span class="p">):</span> <span class="mf">5.90</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+</pre></div>
+</div>
+<p>We get another modest speedup by increasing the block size and pipeline depth.</p>
+<p>Note the following restrctions for TMA operations:</p>
+<ul class="simple">
+<li><p>The innermost coordinate must be 16-byte aligned. For example, for dtype float16,
+an async_copy_global_to_shared with coordinates [8, 4] is illegal, but [4, 8] is legal.</p></li>
+<li><p>If the shared memory layout is fp4_padded, the innermost coordinate must be 128-byte aligned.</p></li>
+</ul>
+<p>Main takeaways:</p>
+<ul class="simple">
+<li><p>TMAs use a separate, often faster, hardware path for transferring between
+shared and global memory.</p></li>
+<li><p>TMA instructions are asynchronous; we use mbarriers to track completion of
+reads and commit groups to track completion of stores.</p></li>
+<li><p>TMAs reduce register pressure but restrict addressing flexibility. Depending
+on the layout of global tensors, it may not be possible to use TMAs.</p></li>
+<li><p>TMA instructions can be pipelined, but require explicit synchronization
+between the async proxy and generic proxy.</p></li>
+</ul>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="async-copy.html" class="btn btn-neutral float-left" title="Async Copy in Gluon" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="wgmma.html" class="btn btn-neutral float-right" title="Warp-Group MMA" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

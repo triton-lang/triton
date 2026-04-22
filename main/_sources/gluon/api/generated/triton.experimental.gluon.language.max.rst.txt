@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.max
+======================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: max

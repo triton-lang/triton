@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.div\_rn
+==========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: div_rn

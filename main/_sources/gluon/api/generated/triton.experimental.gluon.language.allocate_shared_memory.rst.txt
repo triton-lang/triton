@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.allocate\_shared\_memory
+===========================================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: allocate_shared_memory

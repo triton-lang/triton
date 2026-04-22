@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.hopper.fence\_async\_shared
+=====================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper
+
+.. autofunction:: fence_async_shared

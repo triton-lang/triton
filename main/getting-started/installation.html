@@ -13,12 +13,17 @@
       <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../_static/myst_sphinx_gallery.css?v=92de7a9e" />
       <link rel="stylesheet" type="text/css" href="../_static/css/custom.css" />
 
   
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../_static/documentation_options.js?v=5929fcd5"></script>
       <script src="../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -65,6 +70,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../python-api/triton.testing.html">triton.testing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../python-api/triton-semantics.html">Triton Semantics</a></li>
 </ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tutorials/gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../gluon/api/index.html">API Reference</a></li>
+</ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
@@ -101,10 +113,10 @@
            <div itemprop="articleBody">
              
   <section id="installation">
-<h1>Installation<a class="headerlink" href="#installation" title="Link to this heading">¶</a></h1>
+<h1>Installation<a class="headerlink" href="#installation" title="Link to this heading"></a></h1>
 <p>For supported platform/OS and supported hardware, review the <a class="reference external" href="https://github.com/triton-lang/triton?tab=readme-ov-file#compatibility">Compatibility</a> section on Github.</p>
 <section id="binary-distributions">
-<h2>Binary Distributions<a class="headerlink" href="#binary-distributions" title="Link to this heading">¶</a></h2>
+<h2>Binary Distributions<a class="headerlink" href="#binary-distributions" title="Link to this heading"></a></h2>
 <p>You can install the latest stable release of Triton from pip:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>triton
 </pre></div>
@@ -112,9 +124,9 @@
 <p>Binary wheels are available for CPython 3.10-3.14.</p>
 </section>
 <section id="from-source">
-<h2>From Source<a class="headerlink" href="#from-source" title="Link to this heading">¶</a></h2>
+<h2>From Source<a class="headerlink" href="#from-source" title="Link to this heading"></a></h2>
 <section id="python-package">
-<h3>Python Package<a class="headerlink" href="#python-package" title="Link to this heading">¶</a></h3>
+<h3>Python Package<a class="headerlink" href="#python-package" title="Link to this heading"></a></h3>
 <p>You can install the Python package from source by running the following commands:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/triton-lang/triton.git
 <span class="nb">cd</span><span class="w"> </span>triton

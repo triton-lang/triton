@@ -1,0 +1,40 @@
+﻿triton.experimental.gluon.language.amd.AMDMFMALayout
+====================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd
+
+.. autoclass:: AMDMFMALayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~AMDMFMALayout.__init__
+      ~AMDMFMALayout.format_hardware_view
+      ~AMDMFMALayout.format_tensor_view
+      ~AMDMFMALayout.mangle
+      ~AMDMFMALayout.verify
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~AMDMFMALayout.element_bitwidth
+      ~AMDMFMALayout.rank
+      ~AMDMFMALayout.tiles_per_warp
+      ~AMDMFMALayout.type
+      ~AMDMFMALayout.version
+      ~AMDMFMALayout.instr_shape
+      ~AMDMFMALayout.transposed
+      ~AMDMFMALayout.warps_per_cta
+      ~AMDMFMALayout.cga_layout
+   
+   

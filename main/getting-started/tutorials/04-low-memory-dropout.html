@@ -13,12 +13,17 @@
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
 
   
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
       <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../_static/design-tabs.js?v=f930bc37"></script>
       <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-mml-chtml.js"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -77,6 +82,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
 </ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/api/index.html">API Reference</a></li>
+</ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
@@ -119,7 +131,7 @@
 to download the full example code.</p>
 </div>
 <section class="sphx-glr-example-title" id="low-memory-dropout">
-<span id="sphx-glr-getting-started-tutorials-04-low-memory-dropout-py"></span><h1>Low-Memory Dropout<a class="headerlink" href="#low-memory-dropout" title="Link to this heading">¶</a></h1>
+<span id="sphx-glr-getting-started-tutorials-04-low-memory-dropout-py"></span><h1>Low-Memory Dropout<a class="headerlink" href="#low-memory-dropout" title="Link to this heading"></a></h1>
 <p>In this tutorial, you will write a memory-efficient implementation of dropout whose state
 will be composed of a single int32 seed. This differs from more traditional implementations of dropout,
 whose state is generally composed of a bit mask tensor of the same shape as the input.</p>
@@ -129,7 +141,7 @@ whose state is generally composed of a bit mask tensor of the same shape as the 
 <li><p>Parallel pseudo-random number generation in Triton.</p></li>
 </ul>
 <section id="baseline">
-<h2>Baseline<a class="headerlink" href="#baseline" title="Link to this heading">¶</a></h2>
+<h2>Baseline<a class="headerlink" href="#baseline" title="Link to this heading"></a></h2>
 <p>The <em>dropout</em> operator was first introduced in <a class="reference internal" href="#srivastava2014" id="id1"><span>[SRIVASTAVA2014]</span></a> as a way to improve the performance
 of deep neural networks in low-data regime (i.e. regularization).</p>
 <p>It takes a vector as input and produces a vector of the same shape as output. Each scalar in the
@@ -205,7 +217,7 @@ output      0         0        0         0        0         3.28183   0         
 </div>
 </section>
 <section id="seeded-dropout">
-<h2>Seeded dropout<a class="headerlink" href="#seeded-dropout" title="Link to this heading">¶</a></h2>
+<h2>Seeded dropout<a class="headerlink" href="#seeded-dropout" title="Link to this heading"></a></h2>
 <p>The above implementation of dropout works fine, but it can be a bit awkward to deal with. Firstly
 we need to store the dropout mask for backpropagation. Secondly, dropout state management can get
 very tricky when using recompute/checkpointing (e.g. see all the notes about <cite>preserve_rng_state</cite> in
@@ -282,7 +294,7 @@ If you’d like explore further applications of pseudorandomness in GPU programm
 to explore the <cite>python/triton/language/random.py</cite>!</p>
 </section>
 <section id="exercises">
-<h2>Exercises<a class="headerlink" href="#exercises" title="Link to this heading">¶</a></h2>
+<h2>Exercises<a class="headerlink" href="#exercises" title="Link to this heading"></a></h2>
 <ol class="arabic simple">
 <li><p>Extend the kernel to operate over a matrix and use a vector of seeds - one per row.</p></li>
 <li><p>Add support for striding.</p></li>
@@ -290,7 +302,7 @@ to explore the <cite>python/triton/language/random.py</cite>!</p>
 </ol>
 </section>
 <section id="references">
-<h2>References<a class="headerlink" href="#references" title="Link to this heading">¶</a></h2>
+<h2>References<a class="headerlink" href="#references" title="Link to this heading"></a></h2>
 <div role="list" class="citation-list">
 <div class="citation" id="salmon2011" role="doc-biblioentry">
 <span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id2">SALMON2011</a><span class="fn-bracket">]</span></span>
@@ -301,7 +313,7 @@ to explore the <cite>python/triton/language/random.py</cite>!</p>
 <p>Nitish Srivastava and Geoffrey Hinton and Alex Krizhevsky and Ilya Sutskever and Ruslan Salakhutdinov, “Dropout: A Simple Way to Prevent Neural Networks from Overfitting”, JMLR 2014</p>
 </div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.502 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.480 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-04-low-memory-dropout-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/bc847dec325798bdc436c4ef5ac8b78a/04-low-memory-dropout.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">04-low-memory-dropout.ipynb</span></code></a></p>

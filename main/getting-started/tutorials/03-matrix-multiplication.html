@@ -13,12 +13,17 @@
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
 
   
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
       <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../_static/design-tabs.js?v=f930bc37"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -84,6 +89,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
 </ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/api/index.html">API Reference</a></li>
+</ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
@@ -126,7 +138,7 @@
 to download the full example code.</p>
 </div>
 <section class="sphx-glr-example-title" id="matrix-multiplication">
-<span id="sphx-glr-getting-started-tutorials-03-matrix-multiplication-py"></span><h1>Matrix Multiplication<a class="headerlink" href="#matrix-multiplication" title="Link to this heading">¶</a></h1>
+<span id="sphx-glr-getting-started-tutorials-03-matrix-multiplication-py"></span><h1>Matrix Multiplication<a class="headerlink" href="#matrix-multiplication" title="Link to this heading"></a></h1>
 <p>In this tutorial, you will write a very short high-performance FP16 matrix multiplication kernel that achieves
 performance on par with cuBLAS or rocBLAS.</p>
 <p>You will specifically learn about:</p>
@@ -137,7 +149,7 @@ performance on par with cuBLAS or rocBLAS.</p>
 <li><p>Automatic performance tuning.</p></li>
 </ul>
 <section id="motivations">
-<h2>Motivations<a class="headerlink" href="#motivations" title="Link to this heading">¶</a></h2>
+<h2>Motivations<a class="headerlink" href="#motivations" title="Link to this heading"></a></h2>
 <p>Matrix multiplications are a key building block of most modern high-performance computing systems.
 They are notoriously hard to optimize, hence their implementation is generally done by
 hardware vendors themselves as part of so-called “kernel libraries” (e.g., cuBLAS).
@@ -164,13 +176,13 @@ algorithm to multiply a (M, K) by a (K, N) matrix:</p>
 <p>where each iteration of the doubly-nested for-loop is performed by a dedicated Triton program instance.</p>
 </section>
 <section id="compute-kernel">
-<h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Link to this heading">¶</a></h2>
+<h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Link to this heading"></a></h2>
 <p>The above algorithm is, actually, fairly straightforward to implement in Triton.
 The main difficulty comes from the computation of the memory locations at which blocks
 of <code class="code docutils literal notranslate"><span class="pre">A</span></code> and <code class="code docutils literal notranslate"><span class="pre">B</span></code> must be read in the inner loop. For that, we need
 multi-dimensional pointer arithmetic.</p>
 <section id="pointer-arithmetic">
-<h3>Pointer Arithmetic<a class="headerlink" href="#pointer-arithmetic" title="Link to this heading">¶</a></h3>
+<h3>Pointer Arithmetic<a class="headerlink" href="#pointer-arithmetic" title="Link to this heading"></a></h3>
 <p>For a row-major 2D tensor <code class="code docutils literal notranslate"><span class="pre">X</span></code>, the memory location of <code class="code docutils literal notranslate"><span class="pre">X[i,</span> <span class="pre">j]</span></code> is given
 by <code class="code docutils literal notranslate"><span class="pre">&amp;X[i,</span> <span class="pre">j]</span> <span class="pre">=</span> <span class="pre">X</span> <span class="pre">+</span> <span class="pre">i*stride_xi</span> <span class="pre">+</span> <span class="pre">j*stride_xj</span></code>.
 Therefore, blocks of pointers for <code class="code docutils literal notranslate"><span class="pre">A[m</span> <span class="pre">:</span> <span class="pre">m+BLOCK_SIZE_M,</span> <span class="pre">k:k+BLOCK_SIZE_K]</span></code> and
@@ -204,7 +216,7 @@ using masking load semantics.</p>
 </div></blockquote>
 </section>
 <section id="l2-cache-optimizations">
-<h3>L2 Cache Optimizations<a class="headerlink" href="#l2-cache-optimizations" title="Link to this heading">¶</a></h3>
+<h3>L2 Cache Optimizations<a class="headerlink" href="#l2-cache-optimizations" title="Link to this heading"></a></h3>
 <p>As mentioned above, each program instance computes a <code class="code docutils literal notranslate"><span class="pre">[BLOCK_SIZE_M,</span> <span class="pre">BLOCK_SIZE_N]</span></code>
 block of <code class="code docutils literal notranslate"><span class="pre">C</span></code>.
 It is important to remember that the order in which these blocks are computed does
@@ -257,7 +269,7 @@ more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</
 </section>
 </section>
 <section id="final-result">
-<h2>Final Result<a class="headerlink" href="#final-result" title="Link to this heading">¶</a></h2>
+<h2>Final Result<a class="headerlink" href="#final-result" title="Link to this heading"></a></h2>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
@@ -460,7 +472,7 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
 </div>
 </section>
 <section id="unit-test">
-<h2>Unit Test<a class="headerlink" href="#unit-test" title="Link to this heading">¶</a></h2>
+<h2>Unit Test<a class="headerlink" href="#unit-test" title="Link to this heading"></a></h2>
 <p>We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span> <span class="o">-</span> <span class="mf">0.5</span>
@@ -532,9 +544,9 @@ torch_output_with_fp8_inputs=tensor([[-21.4375,  13.1719,   6.0352,  ...,  28.70
 </div>
 </section>
 <section id="benchmark">
-<h2>Benchmark<a class="headerlink" href="#benchmark" title="Link to this heading">¶</a></h2>
+<h2>Benchmark<a class="headerlink" href="#benchmark" title="Link to this heading"></a></h2>
 <section id="square-matrix-performance">
-<h3>Square Matrix Performance<a class="headerlink" href="#square-matrix-performance" title="Link to this heading">¶</a></h3>
+<h3>Square Matrix Performance<a class="headerlink" href="#square-matrix-performance" title="Link to this heading"></a></h3>
 <p>We can now compare the performance of our kernel against that of cuBLAS or rocBLAS. Here we focus on square matrices,
 but feel free to arrange this script as you wish to benchmark any other matrix shape.</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">ref_lib</span> <span class="o">=</span> <span class="s1">&#39;cuBLAS&#39;</span> <span class="k">if</span> <span class="n">is_cuda</span><span class="p">()</span> <span class="k">else</span> <span class="s1">&#39;rocBLAS&#39;</span>
@@ -587,72 +599,72 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>matmul-performance-fp16:
          M       N       K  cuBLAS (TFLOPS)  Triton (TFLOPS)
 0    256.0   256.0   256.0         4.096000         4.096000
-1    384.0   384.0   384.0        12.288000        12.288000
-2    512.0   512.0   512.0        26.214401        26.214401
+1    384.0   384.0   384.0        11.059200        11.059200
+2    512.0   512.0   512.0        26.214401        23.831273
 3    640.0   640.0   640.0        42.666665        42.666665
 4    768.0   768.0   768.0        63.195428        63.195428
 5    896.0   896.0   896.0        78.051553        87.808000
 6   1024.0  1024.0  1024.0       104.857603        91.180520
-7   1152.0  1152.0  1152.0       135.726544       114.845540
+7   1152.0  1152.0  1152.0       129.825388       114.845540
 8   1280.0  1280.0  1280.0       157.538463       141.241376
 9   1408.0  1408.0  1408.0       151.438217       129.804192
 10  1536.0  1536.0  1536.0       172.631417       153.867127
 11  1664.0  1664.0  1664.0       179.978245       173.056002
 12  1792.0  1792.0  1792.0       172.914215       200.703997
-13  1920.0  1920.0  1920.0       197.485709       160.744186
-14  2048.0  2048.0  2048.0       220.752852       178.481016
+13  1920.0  1920.0  1920.0       194.704219       160.744186
+14  2048.0  2048.0  2048.0       217.885931       178.481016
 15  2176.0  2176.0  2176.0       214.081356       195.375226
-16  2304.0  2304.0  2304.0       231.921091       207.720621
-17  2432.0  2432.0  2432.0       205.069087       200.674737
-18  2560.0  2560.0  2560.0       224.438347       219.919464
-19  2688.0  2688.0  2688.0       199.647657       184.141051
-20  2816.0  2816.0  2816.0       208.680416       196.460394
-21  2944.0  2944.0  2944.0       219.541994       210.278616
-22  3072.0  3072.0  3072.0       209.715208       208.941345
-23  3200.0  3200.0  3200.0       214.046818       205.787774
-24  3328.0  3328.0  3328.0       211.118166       196.161569
-25  3456.0  3456.0  3456.0       220.277512       208.324461
-26  3584.0  3584.0  3584.0       218.772251       210.574693
-27  3712.0  3712.0  3712.0       212.547541       205.973906
-28  3840.0  3840.0  3840.0       210.651436       199.985526
-29  3968.0  3968.0  3968.0       211.479948       207.171367
-30  4096.0  4096.0  4096.0       221.116512       220.390365
+16  2304.0  2304.0  2304.0       234.194828       213.284569
+17  2432.0  2432.0  2432.0       202.118452       199.251522
+18  2560.0  2560.0  2560.0       219.919464       214.169933
+19  2688.0  2688.0  2688.0       197.567993       185.946356
+20  2816.0  2816.0  2816.0       209.683695       198.246398
+21  2944.0  2944.0  2944.0       222.482283       208.518962
+22  3072.0  3072.0  3072.0       211.280236       208.173173
+23  3200.0  3200.0  3200.0       215.488222       203.174595
+24  3328.0  3328.0  3328.0       211.118166       194.046619
+25  3456.0  3456.0  3456.0       219.677297       203.589824
+26  3584.0  3584.0  3584.0       220.380867       208.137481
+27  3712.0  3712.0  3712.0       212.547541       205.128011
+28  3840.0  3840.0  3840.0       212.268710       196.085111
+29  3968.0  3968.0  3968.0       209.663117       205.427508
+30  4096.0  4096.0  4096.0       220.752852       217.885931
 matmul-performance-fp8:
          M       N       K  Triton (TFLOPS)
 0    256.0   256.0   256.0         3.640889
 1    384.0   384.0   384.0        11.059200
-2    512.0   512.0   512.0        26.214401
+2    512.0   512.0   512.0        23.831273
 3    640.0   640.0   640.0        42.666665
-4    768.0   768.0   768.0        55.296000
+4    768.0   768.0   768.0        52.043293
 5    896.0   896.0   896.0        78.051553
-6   1024.0  1024.0  1024.0        91.180520
+6   1024.0  1024.0  1024.0        87.381330
 7   1152.0  1152.0  1152.0       114.845540
 8   1280.0  1280.0  1280.0       124.121211
 9   1408.0  1408.0  1408.0       123.903999
 10  1536.0  1536.0  1536.0       141.557764
-11  1664.0  1664.0  1664.0       149.981870
+11  1664.0  1664.0  1664.0       147.523150
 12  1792.0  1792.0  1792.0       172.914215
 13  1920.0  1920.0  1920.0       148.645157
 14  2048.0  2048.0  2048.0       169.466833
-15  2176.0  2176.0  2176.0       163.606887
+15  2176.0  2176.0  2176.0       162.287486
 16  2304.0  2304.0  2304.0       180.968726
-17  2432.0  2432.0  2432.0       175.590404
+17  2432.0  2432.0  2432.0       174.499773
 18  2560.0  2560.0  2560.0       192.752942
-19  2688.0  2688.0  2688.0       171.642791
-20  2816.0  2816.0  2816.0       184.026194
-21  2944.0  2944.0  2944.0       183.220703
-22  3072.0  3072.0  3072.0       190.650187
-23  3200.0  3200.0  3200.0       181.303111
-24  3328.0  3328.0  3328.0       179.978245
-25  3456.0  3456.0  3456.0       184.067512
-26  3584.0  3584.0  3584.0       195.468239
-27  3712.0  3712.0  3712.0       180.973445
-28  3840.0  3840.0  3840.0       183.099338
-29  3968.0  3968.0  3968.0       194.305628
-30  4096.0  4096.0  4096.0       203.052530
+19  2688.0  2688.0  2688.0       170.869620
+20  2816.0  2816.0  2816.0       182.486225
+21  2944.0  2944.0  2944.0       179.913464
+22  3072.0  3072.0  3072.0       189.374926
+23  3200.0  3200.0  3200.0       177.777775
+24  3328.0  3328.0  3328.0       178.638446
+25  3456.0  3456.0  3456.0       181.989997
+26  3584.0  3584.0  3584.0       192.744677
+27  3712.0  3712.0  3712.0       179.995222
+28  3840.0  3840.0  3840.0       183.707646
+29  3968.0  3968.0  3968.0       193.075854
+30  4096.0  4096.0  4096.0       203.668779
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 10.807 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 9.780 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b51b68bc1c6b1a5e509f67800b6235af/03-matrix-multiplication.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">03-matrix-multiplication.ipynb</span></code></a></p>

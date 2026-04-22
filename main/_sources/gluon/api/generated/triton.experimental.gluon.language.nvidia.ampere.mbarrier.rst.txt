@@ -1,0 +1,33 @@
+﻿triton.experimental.gluon.language.nvidia.ampere.mbarrier
+=========================================================
+
+.. automodule:: triton.experimental.gluon.language.nvidia.ampere.mbarrier
+
+
+
+
+.. rubric:: Functions
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   allocate_mbarrier
+   arrive
+   init
+   invalidate
+   wait
+
+
+
+.. rubric:: Classes
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   MBarrierLayout
+
+
+
+

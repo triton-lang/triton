@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.xor\_sum
+===========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: xor_sum

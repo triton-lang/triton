@@ -1,0 +1,30 @@
+triton.experimental.gluon.language.nvidia.blackwell.clc.clc\_result
+===================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell.clc
+
+.. autoclass:: clc_result
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~clc_result.__init__
+      ~clc_result.is_canceled
+      ~clc_result.program_id
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~clc_result.type
+   
+   

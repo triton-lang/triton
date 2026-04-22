@@ -12,12 +12,17 @@
       <link rel="stylesheet" type="text/css" href="_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="_static/myst_sphinx_gallery.css?v=92de7a9e" />
       <link rel="stylesheet" type="text/css" href="_static/css/custom.css" />
 
   
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="_static/documentation_options.js?v=5929fcd5"></script>
       <script src="_static/doctools.js?v=fd6eb6e6"></script>
       <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="_static/design-tabs.js?v=f930bc37"></script>
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="#" />
     <link rel="search" title="Search" href="search.html" /> 
@@ -54,6 +59,13 @@
 <li class="toctree-l1"><a class="reference internal" href="python-api/triton.language.html">triton.language</a></li>
 <li class="toctree-l1"><a class="reference internal" href="python-api/triton.testing.html">triton.testing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="getting-started/tutorials/gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="getting-started/examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gluon/api/index.html">API Reference</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
@@ -124,6 +136,76 @@
       <li><a href="python-api/generated/triton.Config.html#triton.Config.__init__">__init__() (triton.Config method)</a>
 
       <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.GluonJITFunction.html#triton.experimental.gluon.GluonJITFunction.__init__">(triton.experimental.gluon.GluonJITFunction method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.AMDMFMALayout.html#triton.experimental.gluon.language.amd.AMDMFMALayout.__init__">(triton.experimental.gluon.language.amd.AMDMFMALayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.AMDWMMALayout.html#triton.experimental.gluon.language.amd.AMDWMMALayout.__init__">(triton.experimental.gluon.language.amd.AMDWMMALayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.warp_pipeline_stage.html#triton.experimental.gluon.language.amd.warp_pipeline_stage.__init__">(triton.experimental.gluon.language.amd.warp_pipeline_stage method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.AutoLayout.html#triton.experimental.gluon.language.AutoLayout.__init__">(triton.experimental.gluon.language.AutoLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.BlockedLayout.html#triton.experimental.gluon.language.BlockedLayout.__init__">(triton.experimental.gluon.language.BlockedLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.CoalescedLayout.html#triton.experimental.gluon.language.CoalescedLayout.__init__">(triton.experimental.gluon.language.CoalescedLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.distributed_type.html#triton.experimental.gluon.language.distributed_type.__init__">(triton.experimental.gluon.language.distributed_type method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.DistributedLinearLayout.html#triton.experimental.gluon.language.DistributedLinearLayout.__init__">(triton.experimental.gluon.language.DistributedLinearLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.DotOperandLayout.html#triton.experimental.gluon.language.DotOperandLayout.__init__">(triton.experimental.gluon.language.DotOperandLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.MBarrierLayout.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.MBarrierLayout.__init__">(triton.experimental.gluon.language.nvidia.ampere.mbarrier.MBarrierLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.clc.clc_result.html#triton.experimental.gluon.language.nvidia.blackwell.clc.clc_result.__init__">(triton.experimental.gluon.language.nvidia.blackwell.clc.clc_result method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor.html#triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor.__init__">(triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor_type.html#triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor_type.__init__">(triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor_type method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout.html#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout.__init__">(triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout.html#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout.__init__">(triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor.html#triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor.__init__">(triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor_type.html#triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor_type.__init__">(triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor_type method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.MBarrierLayout.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.MBarrierLayout.__init__">(triton.experimental.gluon.language.nvidia.hopper.mbarrier.MBarrierLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor.html#triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor.__init__">(triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_im2col.html#triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_im2col.__init__">(triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_im2col method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_im2col_type.html#triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_im2col_type.__init__">(triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_im2col_type method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_type.html#triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_type.__init__">(triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_type method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.NVMMADistributedLayout.html#triton.experimental.gluon.language.NVMMADistributedLayout.__init__">(triton.experimental.gluon.language.NVMMADistributedLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.NVMMASharedLayout.html#triton.experimental.gluon.language.NVMMASharedLayout.__init__">(triton.experimental.gluon.language.NVMMASharedLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.PaddedSharedLayout.html#triton.experimental.gluon.language.PaddedSharedLayout.__init__">(triton.experimental.gluon.language.PaddedSharedLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor.__init__">(triton.experimental.gluon.language.shared_memory_descriptor method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.SharedLinearLayout.html#triton.experimental.gluon.language.SharedLinearLayout.__init__">(triton.experimental.gluon.language.SharedLinearLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.SliceLayout.html#triton.experimental.gluon.language.SliceLayout.__init__">(triton.experimental.gluon.language.SliceLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.static_range.html#triton.experimental.gluon.language.static_range.__init__">(triton.experimental.gluon.language.static_range method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.SwizzledSharedLayout.html#triton.experimental.gluon.language.SwizzledSharedLayout.__init__">(triton.experimental.gluon.language.SwizzledSharedLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor.__init__">(triton.experimental.gluon.language.tensor method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.nvidia.blackwell.TensorDescriptor.html#triton.experimental.gluon.nvidia.blackwell.TensorDescriptor.__init__">(triton.experimental.gluon.nvidia.blackwell.TensorDescriptor method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.nvidia.hopper.TensorDescriptor.html#triton.experimental.gluon.nvidia.hopper.TensorDescriptor.__init__">(triton.experimental.gluon.nvidia.hopper.TensorDescriptor method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.nvidia.hopper.TensorDescriptorIm2Col.html#triton.experimental.gluon.nvidia.hopper.TensorDescriptorIm2Col.__init__">(triton.experimental.gluon.nvidia.hopper.TensorDescriptorIm2Col method)</a>
+</li>
         <li><a href="python-api/generated/triton.language.range.html#triton.language.range.__init__">(triton.language.range method)</a>
 </li>
         <li><a href="python-api/generated/triton.language.static_range.html#triton.language.static_range.__init__">(triton.language.static_range method)</a>
@@ -141,39 +223,189 @@
 <h2 id="A">A</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.abs.html#triton.language.abs">abs() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.abs.html#triton.experimental.gluon.language.abs">abs() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.abs.html#triton.language.abs">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.add.html#triton.experimental.gluon.language.add">add() (in module triton.experimental.gluon.language)</a>
 </li>
       <li><a href="python-api/generated/triton.language.advance.html#triton.language.advance">advance() (in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.arange.html#triton.language.arange">arange() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.allocate_mbarrier.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.allocate_mbarrier">allocate_mbarrier() (in module triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.allocate_mbarrier.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.allocate_mbarrier">(in module triton.experimental.gluon.language.nvidia.hopper.mbarrier)</a>
 </li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.allocate_shared_memory.html#triton.experimental.gluon.language.allocate_shared_memory">allocate_shared_memory() (in module triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.allocate_tensor_memory.html#triton.experimental.gluon.language.nvidia.blackwell.allocate_tensor_memory">allocate_tensor_memory() (in module triton.experimental.gluon.language.nvidia.blackwell)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.AMDMFMALayout.html#triton.experimental.gluon.language.amd.AMDMFMALayout">AMDMFMALayout (class in triton.experimental.gluon.language.amd)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.AMDWMMALayout.html#triton.experimental.gluon.language.amd.AMDWMMALayout">AMDWMMALayout (class in triton.experimental.gluon.language.amd)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.arange.html#triton.experimental.gluon.language.arange">arange() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.arange.html#triton.language.arange">(in module triton.language)</a>
+</li>
+      </ul></li>
       <li><a href="python-api/generated/triton.language.argmax.html#triton.language.argmax">argmax() (in module triton.language)</a>
 </li>
       <li><a href="python-api/generated/triton.language.argmin.html#triton.language.argmin">argmin() (in module triton.language)</a>
 </li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.arrive.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.arrive">arrive() (in module triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.cluster.arrive.html#triton.experimental.gluon.language.nvidia.hopper.cluster.arrive">(in module triton.experimental.gluon.language.nvidia.hopper.cluster)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.arrive.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.arrive">(in module triton.experimental.gluon.language.nvidia.hopper.mbarrier)</a>
+</li>
+      </ul></li>
       <li><a href="python-api/generated/triton.testing.assert_close.html#triton.testing.assert_close">assert_close() (in module triton.testing)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.associative_scan.html#triton.language.associative_scan">associative_scan() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.associative_scan.html#triton.experimental.gluon.language.associative_scan">associative_scan() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.associative_scan.html#triton.language.associative_scan">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.assume.html#triton.language.assume">assume() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.assume.html#triton.experimental.gluon.language.assume">assume() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.assume.html#triton.language.assume">(in module triton.language)</a>
 </li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_add.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_add">async_atomic_add() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_add.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_add">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_and.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_and">async_atomic_and() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_and.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_and">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_max.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_max">async_atomic_max() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_max.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_max">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_min.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_min">async_atomic_min() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_min.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_min">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_or.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_or">async_atomic_or() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_or.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_or">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_xor.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_xor">async_atomic_xor() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_xor.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_xor">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
+</li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.atomic_add.html#triton.language.atomic_add">atomic_add() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.async_copy_global_to_shared.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.async_copy_global_to_shared">async_copy_global_to_shared() (in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_copy_global_to_shared.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_copy_global_to_shared">(in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.atomic_and.html#triton.language.atomic_and">atomic_and() (in module triton.language)</a>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_copy_global_to_shared.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_copy_global_to_shared">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.atomic_cas.html#triton.language.atomic_cas">atomic_cas() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_copy_global_to_shared_im2col.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_copy_global_to_shared_im2col">async_copy_global_to_shared_im2col() (in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.atomic_max.html#triton.language.atomic_max">atomic_max() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_copy_shared_to_global.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_copy_shared_to_global">async_copy_shared_to_global() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_copy_shared_to_global.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_copy_shared_to_global">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.atomic_min.html#triton.language.atomic_min">atomic_min() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_gather.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_gather">async_gather() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.atomic_or.html#triton.language.atomic_or">atomic_or() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.async_load.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.async_load">async_load() (in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_load.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_load">(in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.atomic_xchg.html#triton.language.atomic_xchg">atomic_xchg() (in module triton.language)</a>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_load.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_load">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.atomic_xor.html#triton.language.atomic_xor">atomic_xor() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_load_im2col.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_load_im2col">async_load_im2col() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_load_im2col.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_load_im2col">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_scatter.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_scatter">async_scatter() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_store.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_store">async_store() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_store.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_store">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.atomic_add.html#triton.experimental.gluon.language.atomic_add">atomic_add() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.atomic_add.html#triton.language.atomic_add">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.atomic_and.html#triton.experimental.gluon.language.atomic_and">atomic_and() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.atomic_and.html#triton.language.atomic_and">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.atomic_cas.html#triton.experimental.gluon.language.atomic_cas">atomic_cas() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.atomic_cas.html#triton.language.atomic_cas">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.atomic_max.html#triton.experimental.gluon.language.atomic_max">atomic_max() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.atomic_max.html#triton.language.atomic_max">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.atomic_min.html#triton.experimental.gluon.language.atomic_min">atomic_min() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.atomic_min.html#triton.language.atomic_min">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.atomic_or.html#triton.experimental.gluon.language.atomic_or">atomic_or() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.atomic_or.html#triton.language.atomic_or">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.atomic_xchg.html#triton.experimental.gluon.language.atomic_xchg">atomic_xchg() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.atomic_xchg.html#triton.language.atomic_xchg">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.atomic_xor.html#triton.experimental.gluon.language.atomic_xor">atomic_xor() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.atomic_xor.html#triton.language.atomic_xor">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.AutoLayout.html#triton.experimental.gluon.language.AutoLayout">AutoLayout (class in triton.experimental.gluon.language)</a>
 </li>
       <li><a href="python-api/generated/triton.autotune.html#triton.autotune">autotune() (in module triton)</a>
 </li>
@@ -183,36 +415,134 @@
 <h2 id="B">B</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.bank_conflicts.html#triton.experimental.gluon.language.bank_conflicts">bank_conflicts() (in module triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.barrier.html#triton.experimental.gluon.language.barrier">barrier() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.cluster.barrier.html#triton.experimental.gluon.language.nvidia.hopper.cluster.barrier">(in module triton.experimental.gluon.language.nvidia.hopper.cluster)</a>
+</li>
+      </ul></li>
       <li><a href="python-api/generated/triton.testing.Benchmark.html#triton.testing.Benchmark">Benchmark (class in triton.testing)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.broadcast.html#triton.language.broadcast">broadcast() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.BlockedLayout.html#triton.experimental.gluon.language.BlockedLayout">BlockedLayout (class in triton.experimental.gluon.language)</a>
 </li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.broadcast.html#triton.experimental.gluon.language.broadcast">broadcast() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.broadcast.html#triton.language.broadcast">(in module triton.language)</a>
+</li>
+      </ul></li>
       <li><a href="python-api/generated/triton.language.broadcast_to.html#triton.language.broadcast_to">broadcast_to() (in module triton.language)</a>
 </li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna3.buffer_atomic_add.html#triton.experimental.gluon.language.amd.cdna3.buffer_atomic_add">buffer_atomic_add() (in module triton.experimental.gluon.language.amd.cdna3)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.buffer_atomic_add.html#triton.experimental.gluon.language.amd.cdna4.buffer_atomic_add">(in module triton.experimental.gluon.language.amd.cdna4)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna3.buffer_atomic_and.html#triton.experimental.gluon.language.amd.cdna3.buffer_atomic_and">buffer_atomic_and() (in module triton.experimental.gluon.language.amd.cdna3)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.buffer_atomic_and.html#triton.experimental.gluon.language.amd.cdna4.buffer_atomic_and">(in module triton.experimental.gluon.language.amd.cdna4)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna3.buffer_atomic_max.html#triton.experimental.gluon.language.amd.cdna3.buffer_atomic_max">buffer_atomic_max() (in module triton.experimental.gluon.language.amd.cdna3)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.buffer_atomic_max.html#triton.experimental.gluon.language.amd.cdna4.buffer_atomic_max">(in module triton.experimental.gluon.language.amd.cdna4)</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna3.buffer_atomic_min.html#triton.experimental.gluon.language.amd.cdna3.buffer_atomic_min">buffer_atomic_min() (in module triton.experimental.gluon.language.amd.cdna3)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.buffer_atomic_min.html#triton.experimental.gluon.language.amd.cdna4.buffer_atomic_min">(in module triton.experimental.gluon.language.amd.cdna4)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna3.buffer_atomic_or.html#triton.experimental.gluon.language.amd.cdna3.buffer_atomic_or">buffer_atomic_or() (in module triton.experimental.gluon.language.amd.cdna3)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.buffer_atomic_or.html#triton.experimental.gluon.language.amd.cdna4.buffer_atomic_or">(in module triton.experimental.gluon.language.amd.cdna4)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna3.buffer_atomic_xchg.html#triton.experimental.gluon.language.amd.cdna3.buffer_atomic_xchg">buffer_atomic_xchg() (in module triton.experimental.gluon.language.amd.cdna3)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.buffer_atomic_xchg.html#triton.experimental.gluon.language.amd.cdna4.buffer_atomic_xchg">(in module triton.experimental.gluon.language.amd.cdna4)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna3.buffer_atomic_xor.html#triton.experimental.gluon.language.amd.cdna3.buffer_atomic_xor">buffer_atomic_xor() (in module triton.experimental.gluon.language.amd.cdna3)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.buffer_atomic_xor.html#triton.experimental.gluon.language.amd.cdna4.buffer_atomic_xor">(in module triton.experimental.gluon.language.amd.cdna4)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna3.buffer_load.html#triton.experimental.gluon.language.amd.cdna3.buffer_load">buffer_load() (in module triton.experimental.gluon.language.amd.cdna3)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.buffer_load.html#triton.experimental.gluon.language.amd.cdna4.buffer_load">(in module triton.experimental.gluon.language.amd.cdna4)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna3.buffer_store.html#triton.experimental.gluon.language.amd.cdna3.buffer_store">buffer_store() (in module triton.experimental.gluon.language.amd.cdna3)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.buffer_store.html#triton.experimental.gluon.language.amd.cdna4.buffer_store">(in module triton.experimental.gluon.language.amd.cdna4)</a>
+</li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
 <h2 id="C">C</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.cast.html#triton.language.cast">cast() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.cast.html#triton.experimental.gluon.language.cast">cast() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.cast.html#triton.language.cast">(in module triton.language)</a>
 </li>
+      </ul></li>
       <li><a href="python-api/generated/triton.language.cat.html#triton.language.cat">cat() (in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.cdiv.html#triton.language.cdiv">cdiv() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.cdiv.html#triton.experimental.gluon.language.cdiv">cdiv() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.cdiv.html#triton.language.cdiv">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.ceil.html#triton.language.ceil">ceil() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.ceil.html#triton.experimental.gluon.language.ceil">ceil() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.ceil.html#triton.language.ceil">(in module triton.language)</a>
 </li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.clamp.html#triton.experimental.gluon.language.clamp">clamp() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.clamp.html#triton.language.clamp">(in module triton.language)</a>
+</li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.clamp.html#triton.language.clamp">clamp() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.clc.clc_result.html#triton.experimental.gluon.language.nvidia.blackwell.clc.clc_result">clc_result (class in triton.experimental.gluon.language.nvidia.blackwell.clc)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.CoalescedLayout.html#triton.experimental.gluon.language.CoalescedLayout">CoalescedLayout (class in triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.commit_group.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.commit_group">commit_group() (in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
 </li>
       <li><a href="python-api/generated/triton.Config.html#triton.Config">Config (class in triton)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.cos.html#triton.language.cos">cos() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.constexpr_function.html#triton.experimental.gluon.constexpr_function">constexpr_function() (in module triton.experimental.gluon)</a>
 </li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.convert_layout.html#triton.experimental.gluon.language.convert_layout">convert_layout() (in module triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.cos.html#triton.experimental.gluon.language.cos">cos() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.cos.html#triton.language.cos">(in module triton.language)</a>
+</li>
+      </ul></li>
       <li><a href="python-api/generated/triton.language.cumprod.html#triton.language.cumprod">cumprod() (in module triton.language)</a>
 </li>
       <li><a href="python-api/generated/triton.language.cumsum.html#triton.language.cumsum">cumsum() (in module triton.language)</a>
@@ -225,21 +555,41 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="python-api/generated/triton.language.debug_barrier.html#triton.language.debug_barrier">debug_barrier() (in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.device_assert.html#triton.language.device_assert">device_assert() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.device_assert.html#triton.experimental.gluon.language.device_assert">device_assert() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.device_assert.html#triton.language.device_assert">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.device_print.html#triton.language.device_print">device_print() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.device_print.html#triton.experimental.gluon.language.device_print">device_print() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.device_print.html#triton.language.device_print">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.div_rn.html#triton.language.div_rn">div_rn() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.distributed_type.html#triton.experimental.gluon.language.distributed_type">distributed_type (class in triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.DistributedLinearLayout.html#triton.experimental.gluon.language.DistributedLinearLayout">DistributedLinearLayout (class in triton.experimental.gluon.language)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.div_rn.html#triton.experimental.gluon.language.div_rn">div_rn() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.div_rn.html#triton.language.div_rn">(in module triton.language)</a>
+</li>
+      </ul></li>
       <li><a href="python-api/generated/triton.testing.do_bench.html#triton.testing.do_bench">do_bench() (in module triton.testing)</a>
 </li>
       <li><a href="python-api/generated/triton.testing.do_bench_cudagraph.html#triton.testing.do_bench_cudagraph">do_bench_cudagraph() (in module triton.testing)</a>
 </li>
       <li><a href="python-api/generated/triton.language.dot.html#triton.language.dot">dot() (in module triton.language)</a>
 </li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.dot_fma.html#triton.experimental.gluon.language.dot_fma">dot_fma() (in module triton.experimental.gluon.language)</a>
+</li>
       <li><a href="python-api/generated/triton.language.dot_scaled.html#triton.language.dot_scaled">dot_scaled() (in module triton.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.DotOperandLayout.html#triton.experimental.gluon.language.DotOperandLayout">DotOperandLayout (class in triton.experimental.gluon.language)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -247,15 +597,33 @@
 <h2 id="E">E</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.erf.html#triton.language.erf">erf() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.erf.html#triton.experimental.gluon.language.erf">erf() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.erf.html#triton.language.erf">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.exp.html#triton.language.exp">exp() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.exp.html#triton.experimental.gluon.language.exp">exp() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.exp.html#triton.language.exp">(in module triton.language)</a>
 </li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.exp2.html#triton.language.exp2">exp2() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.exp2.html#triton.experimental.gluon.language.exp2">exp2() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.exp2.html#triton.language.exp2">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.expand_dims.html#triton.language.expand_dims">expand_dims() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.expand_dims.html#triton.experimental.gluon.language.expand_dims">expand_dims() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.expand_dims.html#triton.language.expand_dims">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.expect.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.expect">expect() (in module triton.experimental.gluon.language.nvidia.hopper.mbarrier)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -263,17 +631,45 @@
 <h2 id="F">F</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.fdiv.html#triton.language.fdiv">fdiv() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.fdiv.html#triton.experimental.gluon.language.fdiv">fdiv() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.fdiv.html#triton.language.fdiv">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.fence_async_shared.html#triton.experimental.gluon.language.nvidia.blackwell.fence_async_shared">fence_async_shared() (in module triton.experimental.gluon.language.nvidia.blackwell)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.fence_async_shared.html#triton.experimental.gluon.language.nvidia.hopper.fence_async_shared">(in module triton.experimental.gluon.language.nvidia.hopper)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.fence_init_release_cluster.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.fence_init_release_cluster">fence_init_release_cluster() (in module triton.experimental.gluon.language.nvidia.hopper.mbarrier)</a>
 </li>
       <li><a href="python-api/generated/triton.language.flip.html#triton.language.flip">flip() (in module triton.language)</a>
 </li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.floor.html#triton.experimental.gluon.language.floor">floor() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.floor.html#triton.language.floor">(in module triton.language)</a>
+</li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.floor.html#triton.language.floor">floor() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.fma.html#triton.experimental.gluon.language.fma">fma() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.fma.html#triton.language.fma">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.fma.html#triton.language.fma">fma() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.fp4_to_fp.html#triton.experimental.gluon.language.fp4_to_fp">fp4_to_fp() (in module triton.experimental.gluon.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.full.html#triton.language.full">full() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.full.html#triton.experimental.gluon.language.full">full() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.full.html#triton.language.full">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.full_like.html#triton.experimental.gluon.language.full_like">full_like() (in module triton.experimental.gluon.language)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -281,13 +677,21 @@
 <h2 id="G">G</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.gather.html#triton.language.gather">gather() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.gather.html#triton.experimental.gluon.language.gather">gather() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.gather.html#triton.language.gather">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="python-api/generated/triton.language.extra.cuda.gdc_launch_dependents.html#triton.language.extra.cuda.gdc_launch_dependents">gdc_launch_dependents() (in module triton.language.extra.cuda)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.extra.cuda.gdc_launch_dependents.html#triton.language.extra.cuda.gdc_launch_dependents">gdc_launch_dependents() (in module triton.language.extra.cuda)</a>
-</li>
       <li><a href="python-api/generated/triton.language.extra.cuda.gdc_wait.html#triton.language.extra.cuda.gdc_wait">gdc_wait() (in module triton.language.extra.cuda)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.get_mfma_scale_layout.html#triton.experimental.gluon.language.amd.cdna4.get_mfma_scale_layout">get_mfma_scale_layout() (in module triton.experimental.gluon.language.amd.cdna4)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.GluonJITFunction.html#triton.experimental.gluon.GluonJITFunction">GluonJITFunction (class in triton.experimental.gluon)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -299,20 +703,40 @@
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.histogram.html#triton.language.histogram">histogram() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.histogram.html#triton.experimental.gluon.language.histogram">histogram() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.histogram.html#triton.language.histogram">(in module triton.language)</a>
 </li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
 <h2 id="I">I</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.inline_asm_elementwise.html#triton.language.inline_asm_elementwise">inline_asm_elementwise() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.init.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.init">init() (in module triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.init.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.init">(in module triton.experimental.gluon.language.nvidia.hopper.mbarrier)</a>
 </li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.inline_asm_elementwise.html#triton.experimental.gluon.language.inline_asm_elementwise">inline_asm_elementwise() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.inline_asm_elementwise.html#triton.language.inline_asm_elementwise">(in module triton.language)</a>
+</li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="python-api/generated/triton.language.interleave.html#triton.language.interleave">interleave() (in module triton.language)</a>
 </li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.invalidate.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.invalidate">invalidate() (in module triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.invalidate.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.invalidate">(in module triton.experimental.gluon.language.nvidia.hopper.mbarrier)</a>
+</li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
@@ -320,27 +744,49 @@
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="python-api/generated/triton.jit.html#triton.jit">jit() (in module triton)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.jit.html#triton.experimental.gluon.jit">(in module triton.experimental.gluon)</a>
 </li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.join.html#triton.language.join">join() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.join.html#triton.experimental.gluon.language.join">join() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.join.html#triton.language.join">(in module triton.language)</a>
 </li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
 <h2 id="L">L</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.load.html#triton.language.load">load() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.load.html#triton.experimental.gluon.language.load">load() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.load.html#triton.language.load">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.clc.load_result.html#triton.experimental.gluon.language.nvidia.blackwell.clc.load_result">load_result() (in module triton.experimental.gluon.language.nvidia.blackwell.clc)</a>
 </li>
       <li><a href="python-api/generated/triton.language.load_tensor_descriptor.html#triton.language.load_tensor_descriptor">load_tensor_descriptor() (in module triton.language)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.log.html#triton.language.log">log() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.log.html#triton.experimental.gluon.language.log">log() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.log.html#triton.language.log">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.log2.html#triton.language.log2">log2() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.log2.html#triton.experimental.gluon.language.log2">log2() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.log2.html#triton.language.log2">(in module triton.language)</a>
 </li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
@@ -349,23 +795,114 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="python-api/generated/triton.language.make_block_ptr.html#triton.language.make_block_ptr">make_block_ptr() (in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.make_tensor_descriptor.html#triton.language.make_tensor_descriptor">make_tensor_descriptor() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.make_tensor_descriptor.html#triton.experimental.gluon.language.nvidia.blackwell.tma.make_tensor_descriptor">make_tensor_descriptor() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.make_tensor_descriptor.html#triton.experimental.gluon.language.nvidia.hopper.tma.make_tensor_descriptor">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.max.html#triton.language.max">max() (in module triton.language)</a>
+        <li><a href="python-api/generated/triton.language.make_tensor_descriptor.html#triton.language.make_tensor_descriptor">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.max_constancy.html#triton.language.max_constancy">max_constancy() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.map_elementwise.html#triton.experimental.gluon.language.map_elementwise">map_elementwise() (in module triton.experimental.gluon.language)</a>
 </li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.max.html#triton.experimental.gluon.language.max">max() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.max.html#triton.language.max">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.max_constancy.html#triton.experimental.gluon.language.max_constancy">max_constancy() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.max_constancy.html#triton.language.max_constancy">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.max_contiguous.html#triton.experimental.gluon.language.max_contiguous">max_contiguous() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.max_contiguous.html#triton.language.max_contiguous">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.maximum.html#triton.experimental.gluon.language.maximum">maximum() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.maximum.html#triton.language.maximum">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.mbarrier_arrive.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.mbarrier_arrive">mbarrier_arrive() (in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.MBarrierLayout.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.MBarrierLayout">MBarrierLayout (class in triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.MBarrierLayout.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.MBarrierLayout">(class in triton.experimental.gluon.language.nvidia.hopper.mbarrier)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna3.mfma.html#triton.experimental.gluon.language.amd.cdna3.mfma">mfma() (in module triton.experimental.gluon.language.amd.cdna3)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.mfma.html#triton.experimental.gluon.language.amd.cdna4.mfma">(in module triton.experimental.gluon.language.amd.cdna4)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.mfma_scaled.html#triton.experimental.gluon.language.amd.cdna4.mfma_scaled">mfma_scaled() (in module triton.experimental.gluon.language.amd.cdna4)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.min.html#triton.experimental.gluon.language.min">min() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.min.html#triton.language.min">(in module triton.language)</a>
+</li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.max_contiguous.html#triton.language.max_contiguous">max_contiguous() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.minimum.html#triton.experimental.gluon.language.minimum">minimum() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.minimum.html#triton.language.minimum">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.maximum.html#triton.language.maximum">maximum() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mma_v2.html#triton.experimental.gluon.language.nvidia.ampere.mma_v2">mma_v2() (in module triton.experimental.gluon.language.nvidia.ampere)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.mma_v2.html#triton.experimental.gluon.language.nvidia.blackwell.mma_v2">(in module triton.experimental.gluon.language.nvidia.blackwell)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.min.html#triton.language.min">min() (in module triton.language)</a>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mma_v2.html#triton.experimental.gluon.language.nvidia.hopper.mma_v2">(in module triton.experimental.gluon.language.nvidia.hopper)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.minimum.html#triton.language.minimum">minimum() (in module triton.language)</a>
+      </ul></li>
+      <li>
+    module
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.async_copy.html#module-triton.experimental.gluon.language.amd.cdna4.async_copy">triton.experimental.gluon.language.amd.cdna4.async_copy</a>
 </li>
-      <li><a href="python-api/generated/triton.language.multiple_of.html#triton.language.multiple_of">multiple_of() (in module triton.language)</a>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.html#module-triton.experimental.gluon.language.nvidia.ampere.async_copy">triton.experimental.gluon.language.nvidia.ampere.async_copy</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.html#module-triton.experimental.gluon.language.nvidia.ampere.mbarrier">triton.experimental.gluon.language.nvidia.ampere.mbarrier</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.async_copy.html#module-triton.experimental.gluon.language.nvidia.blackwell.async_copy">triton.experimental.gluon.language.nvidia.blackwell.async_copy</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.clc.html#module-triton.experimental.gluon.language.nvidia.blackwell.clc">triton.experimental.gluon.language.nvidia.blackwell.clc</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.mbarrier.html#module-triton.experimental.gluon.language.nvidia.blackwell.mbarrier">triton.experimental.gluon.language.nvidia.blackwell.mbarrier</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.html#module-triton.experimental.gluon.language.nvidia.blackwell.tma">triton.experimental.gluon.language.nvidia.blackwell.tma</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.async_copy.html#module-triton.experimental.gluon.language.nvidia.hopper.async_copy">triton.experimental.gluon.language.nvidia.hopper.async_copy</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.cluster.html#module-triton.experimental.gluon.language.nvidia.hopper.cluster">triton.experimental.gluon.language.nvidia.hopper.cluster</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.html#module-triton.experimental.gluon.language.nvidia.hopper.mbarrier">triton.experimental.gluon.language.nvidia.hopper.mbarrier</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.html#module-triton.experimental.gluon.language.nvidia.hopper.tma">triton.experimental.gluon.language.nvidia.hopper.tma</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.mul.html#triton.experimental.gluon.language.mul">mul() (in module triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.multiple_of.html#triton.experimental.gluon.language.multiple_of">multiple_of() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.multiple_of.html#triton.language.multiple_of">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.must_use_result.html#triton.experimental.gluon.must_use_result">must_use_result() (in module triton.experimental.gluon)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -373,7 +910,21 @@
 <h2 id="N">N</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.num_programs.html#triton.language.num_programs">num_programs() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.num_ctas.html#triton.experimental.gluon.language.num_ctas">num_ctas() (in module triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.num_programs.html#triton.experimental.gluon.language.num_programs">num_programs() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.num_programs.html#triton.language.num_programs">(in module triton.language)</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.num_warps.html#triton.experimental.gluon.language.num_warps">num_warps() (in module triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.NVMMADistributedLayout.html#triton.experimental.gluon.language.NVMMADistributedLayout">NVMMADistributedLayout (class in triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.NVMMASharedLayout.html#triton.experimental.gluon.language.NVMMASharedLayout">NVMMASharedLayout (class in triton.experimental.gluon.language)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -381,14 +932,24 @@
 <h2 id="P">P</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.PaddedSharedLayout.html#triton.experimental.gluon.language.PaddedSharedLayout">PaddedSharedLayout (class in triton.experimental.gluon.language)</a>
+</li>
       <li><a href="python-api/generated/triton.testing.perf_report.html#triton.testing.perf_report">perf_report() (in module triton.testing)</a>
 </li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.permute.html#triton.experimental.gluon.language.permute">permute() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.permute.html#triton.language.permute">(in module triton.language)</a>
+</li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.permute.html#triton.language.permute">permute() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.program_id.html#triton.experimental.gluon.language.program_id">program_id() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.program_id.html#triton.language.program_id">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.program_id.html#triton.language.program_id">program_id() (in module triton.language)</a>
-</li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
@@ -403,53 +964,125 @@
 </li>
       <li><a href="python-api/generated/triton.language.randn.html#triton.language.randn">randn() (in module triton.language)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="python-api/generated/triton.language.range.html#triton.language.range">range (class in triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.ravel.html#triton.language.ravel">ravel() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.ravel.html#triton.experimental.gluon.language.ravel">ravel() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.ravel.html#triton.language.ravel">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.reduce.html#triton.language.reduce">reduce() (in module triton.language)</a>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.reduce.html#triton.experimental.gluon.language.reduce">reduce() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.reduce.html#triton.language.reduce">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.reshape.html#triton.language.reshape">reshape() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.reduce_or.html#triton.experimental.gluon.language.reduce_or">reduce_or() (in module triton.experimental.gluon.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.rsqrt.html#triton.language.rsqrt">rsqrt() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.reshape.html#triton.experimental.gluon.language.reshape">reshape() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.reshape.html#triton.language.reshape">(in module triton.language)</a>
 </li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.rsqrt.html#triton.experimental.gluon.language.rsqrt">rsqrt() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.rsqrt.html#triton.language.rsqrt">(in module triton.language)</a>
+</li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
 <h2 id="S">S</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.set_auto_layout.html#triton.experimental.gluon.language.set_auto_layout">set_auto_layout() (in module triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor">shared_memory_descriptor (class in triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.SharedLinearLayout.html#triton.experimental.gluon.language.SharedLinearLayout">SharedLinearLayout (class in triton.experimental.gluon.language)</a>
+</li>
       <li><a href="python-api/generated/triton.language.sigmoid.html#triton.language.sigmoid">sigmoid() (in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.sin.html#triton.language.sin">sin() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.sin.html#triton.experimental.gluon.language.sin">sin() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.sin.html#triton.language.sin">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.SliceLayout.html#triton.experimental.gluon.language.SliceLayout">SliceLayout (class in triton.experimental.gluon.language)</a>
 </li>
       <li><a href="python-api/generated/triton.language.softmax.html#triton.language.softmax">softmax() (in module triton.language)</a>
 </li>
       <li><a href="python-api/generated/triton.language.sort.html#triton.language.sort">sort() (in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.split.html#triton.language.split">split() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.split.html#triton.experimental.gluon.language.split">split() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.split.html#triton.language.split">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.sqrt.html#triton.language.sqrt">sqrt() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.sqrt.html#triton.experimental.gluon.language.sqrt">sqrt() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.sqrt.html#triton.language.sqrt">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.sqrt_rn.html#triton.language.sqrt_rn">sqrt_rn() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.sqrt_rn.html#triton.experimental.gluon.language.sqrt_rn">sqrt_rn() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.sqrt_rn.html#triton.language.sqrt_rn">(in module triton.language)</a>
 </li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.static_assert.html#triton.language.static_assert">static_assert() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.static_assert.html#triton.experimental.gluon.language.static_assert">static_assert() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.static_assert.html#triton.language.static_assert">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.static_print.html#triton.language.static_print">static_print() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.static_print.html#triton.experimental.gluon.language.static_print">static_print() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.static_print.html#triton.language.static_print">(in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.static_range.html#triton.language.static_range">static_range (class in triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.static_range.html#triton.experimental.gluon.language.static_range">static_range (class in triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.static_range.html#triton.language.static_range">(class in triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.store.html#triton.language.store">store() (in module triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.store.html#triton.experimental.gluon.language.store">store() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.store.html#triton.language.store">(in module triton.language)</a>
 </li>
+      </ul></li>
       <li><a href="python-api/generated/triton.language.store_tensor_descriptor.html#triton.language.store_tensor_descriptor">store_tensor_descriptor() (in module triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.sum.html#triton.language.sum">sum() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.store_wait.html#triton.experimental.gluon.language.nvidia.blackwell.tma.store_wait">store_wait() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.store_wait.html#triton.experimental.gluon.language.nvidia.hopper.tma.store_wait">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.sub.html#triton.experimental.gluon.language.sub">sub() (in module triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.sum.html#triton.experimental.gluon.language.sum">sum() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.sum.html#triton.language.sum">(in module triton.language)</a>
+</li>
+      </ul></li>
       <li><a href="python-api/generated/triton.language.swizzle2d.html#triton.language.swizzle2d">swizzle2d() (in module triton.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.SwizzledSharedLayout.html#triton.experimental.gluon.language.SwizzledSharedLayout">SwizzledSharedLayout (class in triton.experimental.gluon.language)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -457,15 +1090,134 @@
 <h2 id="T">T</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.tensor.html#triton.language.tensor">tensor (class in triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor">tensor (class in triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.tensor.html#triton.language.tensor">(class in triton.language)</a>
 </li>
-      <li><a href="python-api/generated/triton.language.tensor_descriptor.html#triton.language.tensor_descriptor">tensor_descriptor (class in triton.language)</a>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor.html#triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor">tensor_descriptor (class in triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor.html#triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor">(class in triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="python-api/generated/triton.language.tensor_descriptor.html#triton.language.tensor_descriptor">(class in triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_im2col.html#triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_im2col">tensor_descriptor_im2col (class in triton.experimental.gluon.language.nvidia.hopper.tma)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_im2col_type.html#triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_im2col_type">tensor_descriptor_im2col_type (class in triton.experimental.gluon.language.nvidia.hopper.tma)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor_type.html#triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor_type">tensor_descriptor_type (class in triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_type.html#triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_type">(class in triton.experimental.gluon.language.nvidia.hopper.tma)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor.html#triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor">tensor_memory_descriptor (class in triton.experimental.gluon.language.nvidia.blackwell)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor_type.html#triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor_type">tensor_memory_descriptor_type (class in triton.experimental.gluon.language.nvidia.blackwell)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.nvidia.blackwell.TensorDescriptor.html#triton.experimental.gluon.nvidia.blackwell.TensorDescriptor">TensorDescriptor (class in triton.experimental.gluon.nvidia.blackwell)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.nvidia.hopper.TensorDescriptor.html#triton.experimental.gluon.nvidia.hopper.TensorDescriptor">(class in triton.experimental.gluon.nvidia.hopper)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.nvidia.hopper.TensorDescriptorIm2Col.html#triton.experimental.gluon.nvidia.hopper.TensorDescriptorIm2Col">TensorDescriptorIm2Col (class in triton.experimental.gluon.nvidia.hopper)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout.html#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout">TensorMemoryLayout (class in triton.experimental.gluon.language.nvidia.blackwell)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout.html#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout">TensorMemoryScalesLayout (class in triton.experimental.gluon.language.nvidia.blackwell)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.to_linear_layout.html#triton.experimental.gluon.language.to_linear_layout">to_linear_layout() (in module triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.to_tensor.html#triton.experimental.gluon.language.to_tensor">to_tensor() (in module triton.experimental.gluon.language)</a>
+</li>
       <li><a href="python-api/generated/triton.language.topk.html#triton.language.topk">topk() (in module triton.language)</a>
 </li>
       <li><a href="python-api/generated/triton.language.trans.html#triton.language.trans">trans() (in module triton.language)</a>
+</li>
+      <li>
+    triton.experimental.gluon.language.amd.cdna4.async_copy
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.async_copy.html#module-triton.experimental.gluon.language.amd.cdna4.async_copy">module</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li>
+    triton.experimental.gluon.language.nvidia.ampere.async_copy
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.html#module-triton.experimental.gluon.language.nvidia.ampere.async_copy">module</a>
+</li>
+      </ul></li>
+      <li>
+    triton.experimental.gluon.language.nvidia.ampere.mbarrier
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.html#module-triton.experimental.gluon.language.nvidia.ampere.mbarrier">module</a>
+</li>
+      </ul></li>
+      <li>
+    triton.experimental.gluon.language.nvidia.blackwell.async_copy
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.async_copy.html#module-triton.experimental.gluon.language.nvidia.blackwell.async_copy">module</a>
+</li>
+      </ul></li>
+      <li>
+    triton.experimental.gluon.language.nvidia.blackwell.clc
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.clc.html#module-triton.experimental.gluon.language.nvidia.blackwell.clc">module</a>
+</li>
+      </ul></li>
+      <li>
+    triton.experimental.gluon.language.nvidia.blackwell.mbarrier
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.mbarrier.html#module-triton.experimental.gluon.language.nvidia.blackwell.mbarrier">module</a>
+</li>
+      </ul></li>
+      <li>
+    triton.experimental.gluon.language.nvidia.blackwell.tma
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.html#module-triton.experimental.gluon.language.nvidia.blackwell.tma">module</a>
+</li>
+      </ul></li>
+      <li>
+    triton.experimental.gluon.language.nvidia.hopper.async_copy
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.async_copy.html#module-triton.experimental.gluon.language.nvidia.hopper.async_copy">module</a>
+</li>
+      </ul></li>
+      <li>
+    triton.experimental.gluon.language.nvidia.hopper.cluster
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.cluster.html#module-triton.experimental.gluon.language.nvidia.hopper.cluster">module</a>
+</li>
+      </ul></li>
+      <li>
+    triton.experimental.gluon.language.nvidia.hopper.mbarrier
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.html#module-triton.experimental.gluon.language.nvidia.hopper.mbarrier">module</a>
+</li>
+      </ul></li>
+      <li>
+    triton.experimental.gluon.language.nvidia.hopper.tma
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.html#module-triton.experimental.gluon.language.nvidia.hopper.tma">module</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.clc.try_cancel.html#triton.experimental.gluon.language.nvidia.blackwell.clc.try_cancel">try_cancel() (in module triton.experimental.gluon.language.nvidia.blackwell.clc)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -473,8 +1225,12 @@
 <h2 id="U">U</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.umulhi.html#triton.language.umulhi">umulhi() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.umulhi.html#triton.experimental.gluon.language.umulhi">umulhi() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.umulhi.html#triton.language.umulhi">(in module triton.language)</a>
 </li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
@@ -489,28 +1245,70 @@
 <h2 id="W">W</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.where.html#triton.language.where">where() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.wait.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.wait">wait() (in module triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.cluster.wait.html#triton.experimental.gluon.language.nvidia.hopper.cluster.wait">(in module triton.experimental.gluon.language.nvidia.hopper.cluster)</a>
 </li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.wait.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.wait">(in module triton.experimental.gluon.language.nvidia.hopper.mbarrier)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.wait_group.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.wait_group">wait_group() (in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.warp_pipeline_stage.html#triton.experimental.gluon.language.amd.warp_pipeline_stage">warp_pipeline_stage (class in triton.experimental.gluon.language.amd)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.warp_specialize.html#triton.experimental.gluon.language.warp_specialize">warp_specialize() (in module triton.experimental.gluon.language)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.warpgroup_mma.html#triton.experimental.gluon.language.nvidia.hopper.warpgroup_mma">warpgroup_mma() (in module triton.experimental.gluon.language.nvidia.hopper)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.warpgroup_mma_wait.html#triton.experimental.gluon.language.nvidia.hopper.warpgroup_mma_wait">warpgroup_mma_wait() (in module triton.experimental.gluon.language.nvidia.hopper)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.where.html#triton.experimental.gluon.language.where">where() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.where.html#triton.language.where">(in module triton.language)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.rdna3.wmma.html#triton.experimental.gluon.language.amd.rdna3.wmma">wmma() (in module triton.experimental.gluon.language.amd.rdna3)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.rdna4.wmma.html#triton.experimental.gluon.language.amd.rdna4.wmma">(in module triton.experimental.gluon.language.amd.rdna4)</a>
+</li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
 <h2 id="X">X</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.xor_sum.html#triton.language.xor_sum">xor_sum() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.xor_sum.html#triton.experimental.gluon.language.xor_sum">xor_sum() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.xor_sum.html#triton.language.xor_sum">(in module triton.language)</a>
 </li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
 <h2 id="Z">Z</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.zeros.html#triton.language.zeros">zeros() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.zeros.html#triton.experimental.gluon.language.zeros">zeros() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.zeros.html#triton.language.zeros">(in module triton.language)</a>
 </li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.zeros_like.html#triton.language.zeros_like">zeros_like() (in module triton.language)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.zeros_like.html#triton.experimental.gluon.language.zeros_like">zeros_like() (in module triton.experimental.gluon.language)</a>
+
+      <ul>
+        <li><a href="python-api/generated/triton.language.zeros_like.html#triton.language.zeros_like">(in module triton.language)</a>
 </li>
+      </ul></li>
   </ul></td>
 </tr></table>
 

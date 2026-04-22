@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.tma.make\_tensor\_descriptor
+=============================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.tma
+
+.. autofunction:: make_tensor_descriptor

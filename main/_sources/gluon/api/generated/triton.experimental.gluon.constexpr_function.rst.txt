@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.constexpr\_function
+=============================================
+
+.. currentmodule:: triton.experimental.gluon
+
+.. autofunction:: constexpr_function

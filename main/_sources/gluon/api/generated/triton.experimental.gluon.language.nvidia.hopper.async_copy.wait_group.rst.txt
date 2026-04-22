@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.async\_copy.wait\_group
+========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper
+
+.. autofunction:: async_copy.wait_group

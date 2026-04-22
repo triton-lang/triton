@@ -1,0 +1,780 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Warp Specialization &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/custom.css" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Native TMA Gather and Scatter" href="tma-gather-scatter.html" />
+    <link rel="prev" title="Persistent Kernels" href="persistence.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="intro.html">Introduction to Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="layouts.html">Tensor Layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="async-copy.html">Async Copy in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tma.html">TMA in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="wgmma.html">Warp-Group MMA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05.html">The 5th Generation TensorCore<sup>TM</sup></a></li>
+<li class="toctree-l2"><a class="reference internal" href="persistence.html">Persistent Kernels</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Warp Specialization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tma-gather-scatter.html">Native TMA Gather and Scatter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-copy.html">TCGen05 Copy Instruction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-mma-scaled.html">Blocked-Scaled Matrix Multiplication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cluster-launch-control.html">Cluster Launch Control (CLC)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="conv-im2col.html">TMA im2col mode and Convolution via Implicit GEMM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html">Multi-CTA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html#benchmarking-matmul-multicta">Benchmarking matmul_multicta</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/api/index.html">API Reference</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Gluon Tutorials</a></li>
+      <li class="breadcrumb-item active">Warp Specialization</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/getting-started/tutorials/gluon/warp-specialization.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="warp-specialization">
+<span id="example-warp-specialization"></span><h1>Warp Specialization<a class="headerlink" href="#warp-specialization" title="Link to this heading"></a></h1>
+<p>This tutorial covers warp specialization. In typical GPU kernels, all the warps
+in the kernel are performing parallel slices of the same task. Warp
+specialization, however, is a technique where different warps in the kernel are
+doing completely different tasks.</p>
+<p>With warp specialization, we can overlap execution of independent parts of the
+kernel by placing the work in different warps. This minimizes the critical path
+in each warp, and we rely on the warp scheduler to dynamically schedule the
+warps. We can also overlap non-async operations that exercise different parts of
+the hardware without relying on precise SASS-level instruction interleaving.</p>
+<p>However, warp specialization comes at the cost of additional synchronization
+overhead, potentially higher shared memory usage for communicating data, and
+higher overall register pressure.</p>
+<p>Warp specialization in Gluon is only supported on Hopper and newer GPUs.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">importlib</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">partial</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental</span><span class="w"> </span><span class="kn">import</span> <span class="n">gluon</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon</span><span class="w"> </span><span class="kn">import</span> <span class="n">language</span> <span class="k">as</span> <span class="n">gl</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.nvidia.hopper</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.language.nvidia.hopper</span><span class="w"> </span><span class="kn">import</span> <span class="n">tma</span><span class="p">,</span> <span class="n">mbarrier</span><span class="p">,</span> <span class="n">fence_async_shared</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.language.nvidia.blackwell</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">TensorMemoryLayout</span><span class="p">,</span>
+    <span class="n">tensor_memory_descriptor</span><span class="p">,</span>
+    <span class="n">allocate_tensor_memory</span><span class="p">,</span>
+    <span class="n">tcgen05_mma</span><span class="p">,</span>
+    <span class="n">tcgen05_commit</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">():</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">triton._C.libtriton</span><span class="w"> </span><span class="kn">import</span> <span class="n">nvidia</span>
+    <span class="n">cublas_workspace</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="mi">32</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+    <span class="n">cublas</span> <span class="o">=</span> <span class="n">nvidia</span><span class="o">.</span><span class="n">cublas</span><span class="o">.</span><span class="n">CublasLt</span><span class="p">(</span><span class="n">cublas_workspace</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">cublas</span> <span class="o">=</span> <span class="kc">None</span>
+
+<span class="c1"># Re-use utilities from the previous tutorial.</span>
+<span class="n">t3</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">import_module</span><span class="p">(</span><span class="s2">&quot;03-async-copy&quot;</span><span class="p">)</span>
+<span class="n">t4</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">import_module</span><span class="p">(</span><span class="s2">&quot;04-tma&quot;</span><span class="p">)</span>
+<span class="n">t7</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">import_module</span><span class="p">(</span><span class="s2">&quot;07-persistence&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">is_hopper_or_newer</span><span class="p">():</span>
+    <span class="n">target</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">target</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;cuda&quot;</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">9</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">is_blackwell</span><span class="p">():</span>
+    <span class="n">target</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">target</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;cuda&quot;</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">10</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_hopper_or_newer</span><span class="p">():</span>
+    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;This tutorial requires Hopper or newer NVIDIA GPU&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Let’s revisit our elementwise add kernel and implement a warp-specialized
+version. In a warp-specialized kernel, groups of warps that perform a specific
+task are called “partitions”, and each can have a different number of warps
+and registers.</p>
+<p>First, we need to decide what the partitions will be and how many registers
+they will get. One of the benefits of warp specialization is that partitions
+that only use scalar values require only 1 warp and often very few registers.
+For example, we can have one partition that just issues async TMA loads and
+one partition that just issues TMA stores, each with 1 warp and 24 registers,
+the minimum number of registers we can assign to a warp.</p>
+<p>Then we have one compute partition, with either 4 or 8 warps, which performs
+the vector addition. Estimating the right register allocation is difficult,
+and often involves trial and error, profiling, and autotuning. We will need to
+use mbarriers to signal between the partitions using producer-consumer pairs.</p>
+<p>To write a warp-specialized kernel, we need to write a separate function for
+each partition. One of the partitions must be chosen as the “default”
+partition and it always has the same number of warps as <code class="docutils literal notranslate"><span class="pre">num_warps</span></code> passed to
+the kernel. The other partitions, i.e. the “worker” partitions, can have
+different numbers of warps. The signature of the worker partition functions
+must all be the same. Only the default partition can accept tensor arguments.</p>
+<p>To quickly sketch out the partitions: load partition will fetch inputs to smem
+and signal the compute partition. The compute partition will consume the
+operands and send them to the store partition over smem.</p>
+<p>Recall that we need fence_async_shared to synchronize the async and generic
+proxies. This also applies if the buffer accesses are initiated in different
+partitions, even when they are sequenced by mbarrier.arrive:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>  <span class="c1"># in partition A</span>
+<span class="n">fence_async_shared</span><span class="p">()</span>
+<span class="n">mbarrier</span><span class="o">.</span><span class="n">arrive</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># in partition B</span>
+<span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>A fence is needed somewhere between the shared memory store and the TMA store.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">value</span> <span class="o">=</span> <span class="n">smem</span><span class="o">.</span><span class="n">load</span><span class="p">()</span>
+<span class="n">mbarrier</span><span class="o">.</span><span class="n">arrive</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">fence_async_shared</span><span class="p">()</span>
+<span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">smem</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>A fence is needed somewhere between the shared memory load and the TMA load.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">load_partition</span><span class="p">(</span><span class="n">descs</span><span class="p">,</span> <span class="n">barriers</span><span class="p">,</span> <span class="n">buffers</span><span class="p">,</span> <span class="n">xoff</span><span class="p">,</span> <span class="n">numel</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="c1"># Unpack the arguments.</span>
+    <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span> <span class="o">=</span> <span class="n">descs</span>
+    <span class="n">load_empty_bars</span><span class="p">,</span> <span class="n">load_ready_bars</span><span class="p">,</span> <span class="n">c_empty_bars</span><span class="p">,</span> <span class="n">c_ready_bars</span> <span class="o">=</span> <span class="n">barriers</span>
+    <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">c_bufs</span> <span class="o">=</span> <span class="n">buffers</span>
+    <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span> <span class="o">=</span> <span class="n">numel</span>
+
+    <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_bufs</span><span class="o">.</span><span class="n">type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="c1"># All the partitions need to have the same number of inner loop iterations.</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">ynumel</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">)):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">i</span> <span class="o">%</span> <span class="n">num_buffers</span>
+        <span class="n">phase</span> <span class="o">=</span> <span class="n">i</span> <span class="o">//</span> <span class="n">num_buffers</span> <span class="o">&amp;</span> <span class="mi">1</span>
+        <span class="n">a_buf</span> <span class="o">=</span> <span class="n">a_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">b_buf</span> <span class="o">=</span> <span class="n">b_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">load_empty_bar</span> <span class="o">=</span> <span class="n">load_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">load_ready_bar</span> <span class="o">=</span> <span class="n">load_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+
+        <span class="c1"># Wait for the current buffers to be empty. Recall that mbarriers are</span>
+        <span class="c1"># initialized to phase 1 complete, so we wait starting with phase 1 to</span>
+        <span class="c1"># allow the producer to begin filling the pipeline.</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">load_empty_bar</span><span class="p">,</span> <span class="n">phase</span> <span class="o">^</span> <span class="mi">1</span><span class="p">)</span>
+
+        <span class="c1"># Okay, a_buf and b_buf are empty. Issue the TMA loads, and have them</span>
+        <span class="c1"># signal the operand buffers as ready when they complete.</span>
+        <span class="n">yoff</span> <span class="o">=</span> <span class="n">i</span> <span class="o">*</span> <span class="n">YBLOCK</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">load_ready_bar</span><span class="p">,</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span> <span class="o">+</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">xoff</span><span class="p">,</span> <span class="n">yoff</span><span class="p">],</span> <span class="n">load_ready_bar</span><span class="p">,</span> <span class="n">a_buf</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">b_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">xoff</span><span class="p">,</span> <span class="n">yoff</span><span class="p">],</span> <span class="n">load_ready_bar</span><span class="p">,</span> <span class="n">b_buf</span><span class="p">)</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">store_partition</span><span class="p">(</span><span class="n">descs</span><span class="p">,</span> <span class="n">barriers</span><span class="p">,</span> <span class="n">buffers</span><span class="p">,</span> <span class="n">xoff</span><span class="p">,</span> <span class="n">numel</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span> <span class="o">=</span> <span class="n">descs</span>
+    <span class="n">load_empty_bars</span><span class="p">,</span> <span class="n">load_ready_bars</span><span class="p">,</span> <span class="n">c_empty_bars</span><span class="p">,</span> <span class="n">c_ready_bars</span> <span class="o">=</span> <span class="n">barriers</span>
+    <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">c_bufs</span> <span class="o">=</span> <span class="n">buffers</span>
+    <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span> <span class="o">=</span> <span class="n">numel</span>
+
+    <span class="c1"># This partition consumes the addition result, passed over smem, and stores</span>
+    <span class="c1"># them to global memory.</span>
+    <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">c_bufs</span><span class="o">.</span><span class="n">type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="c1"># We will keep `num_buffers-1` stores in flight by software pipelining.</span>
+    <span class="n">outstanding_stores</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">num_buffers</span> <span class="o">-</span> <span class="mi">1</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">ynumel</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">)):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">i</span> <span class="o">%</span> <span class="n">num_buffers</span>
+        <span class="n">phase</span> <span class="o">=</span> <span class="n">i</span> <span class="o">//</span> <span class="n">num_buffers</span> <span class="o">&amp;</span> <span class="mi">1</span>
+        <span class="n">c_buf</span> <span class="o">=</span> <span class="n">c_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">c_ready_bar</span> <span class="o">=</span> <span class="n">c_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+
+        <span class="c1"># Wait for the compute partition to produce c.</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">c_ready_bar</span><span class="p">,</span> <span class="n">phase</span><span class="p">)</span>
+        <span class="n">yoff</span> <span class="o">=</span> <span class="n">i</span> <span class="o">*</span> <span class="n">YBLOCK</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">xoff</span><span class="p">,</span> <span class="n">yoff</span><span class="p">],</span> <span class="n">c_buf</span><span class="p">)</span>
+
+        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">outstanding_stores</span><span class="p">)</span>
+        <span class="n">c_empty_bar</span> <span class="o">=</span> <span class="n">c_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">((</span><span class="n">i</span> <span class="o">-</span> <span class="n">outstanding_stores</span><span class="p">)</span> <span class="o">%</span> <span class="n">num_buffers</span><span class="p">)</span>
+        <span class="c1"># Signal the compute partition that the buffer `outstanding_stores`</span>
+        <span class="c1"># iterations ago is consumed, predicated on there having been at least</span>
+        <span class="c1"># that many outstanding stores.</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">arrive</span><span class="p">(</span><span class="n">c_empty_bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">pred</span><span class="o">=</span><span class="n">i</span> <span class="o">&gt;=</span> <span class="n">outstanding_stores</span><span class="p">)</span>
+
+    <span class="c1"># Since we waited for the last value of c, all the other partitions have</span>
+    <span class="c1"># exited by now. We just need to wait the stores to complete.</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="c1"># The default partition can have a different signature than the worker partition</span>
+<span class="c1"># functions.</span>
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">compute_partition</span><span class="p">(</span><span class="n">barriers</span><span class="p">,</span> <span class="n">buffers</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">load_empty_bars</span><span class="p">,</span> <span class="n">load_ready_bars</span><span class="p">,</span> <span class="n">c_empty_bars</span><span class="p">,</span> <span class="n">c_ready_bars</span> <span class="o">=</span> <span class="n">barriers</span>
+    <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">c_bufs</span> <span class="o">=</span> <span class="n">buffers</span>
+
+    <span class="n">num_load_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_bufs</span><span class="o">.</span><span class="n">type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">num_store_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">c_bufs</span><span class="o">.</span><span class="n">type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">ynumel</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">)):</span>
+        <span class="n">load_index</span> <span class="o">=</span> <span class="n">i</span> <span class="o">%</span> <span class="n">num_load_buffers</span>
+        <span class="n">load_phase</span> <span class="o">=</span> <span class="n">i</span> <span class="o">//</span> <span class="n">num_load_buffers</span> <span class="o">&amp;</span> <span class="mi">1</span>
+        <span class="n">a_buf</span> <span class="o">=</span> <span class="n">a_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">load_index</span><span class="p">)</span>
+        <span class="n">b_buf</span> <span class="o">=</span> <span class="n">b_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">load_index</span><span class="p">)</span>
+        <span class="n">load_ready_bar</span> <span class="o">=</span> <span class="n">load_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">load_index</span><span class="p">)</span>
+        <span class="n">load_empty_bar</span> <span class="o">=</span> <span class="n">load_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">load_index</span><span class="p">)</span>
+
+        <span class="c1"># Wait for the operands then consume them.</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">load_ready_bar</span><span class="p">,</span> <span class="n">load_phase</span><span class="p">)</span>
+        <span class="n">a_val</span> <span class="o">=</span> <span class="n">a_buf</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">layout</span><span class="p">)</span>
+        <span class="n">b_val</span> <span class="o">=</span> <span class="n">b_buf</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">layout</span><span class="p">)</span>
+        <span class="c1"># Fence before signalling the load partitions so the TMA load is</span>
+        <span class="c1"># ordered with the shared load.</span>
+        <span class="n">fence_async_shared</span><span class="p">()</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">arrive</span><span class="p">(</span><span class="n">load_empty_bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+        <span class="n">c_val</span> <span class="o">=</span> <span class="n">a_val</span> <span class="o">+</span> <span class="n">b_val</span>
+
+        <span class="n">store_idx</span> <span class="o">=</span> <span class="n">i</span> <span class="o">%</span> <span class="n">num_store_buffers</span>
+        <span class="n">store_phase</span> <span class="o">=</span> <span class="n">i</span> <span class="o">//</span> <span class="n">num_store_buffers</span> <span class="o">&amp;</span> <span class="mi">1</span>
+        <span class="n">c_buf</span> <span class="o">=</span> <span class="n">c_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">store_idx</span><span class="p">)</span>
+        <span class="n">c_empty_bar</span> <span class="o">=</span> <span class="n">c_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">store_idx</span><span class="p">)</span>
+        <span class="n">c_ready_bar</span> <span class="o">=</span> <span class="n">c_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">store_idx</span><span class="p">)</span>
+
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">c_empty_bar</span><span class="p">,</span> <span class="n">store_phase</span> <span class="o">^</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">c_buf</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c_val</span><span class="p">)</span>
+        <span class="c1"># Fence to order with TMA store.</span>
+        <span class="n">fence_async_shared</span><span class="p">()</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">arrive</span><span class="p">(</span><span class="n">c_ready_bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">elementwise_add_warp_specialized_kernel</span><span class="p">(</span>  <span class="c1">#</span>
+        <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">num_load_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_store_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="c1"># Pick a layout that makes it easy to avoid bank conflicts.</span>
+    <span class="n">layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+
+    <span class="c1"># Allocate all the buffers and barriers.</span>
+    <span class="n">a_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">a_desc</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_load_buffers</span><span class="p">]</span> <span class="o">+</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">b_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">b_desc</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_load_buffers</span><span class="p">]</span> <span class="o">+</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">c_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">c_desc</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_store_buffers</span><span class="p">]</span> <span class="o">+</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">load_empty_bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="n">num_load_buffers</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="n">load_ready_bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="n">num_load_buffers</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="n">c_empty_bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="n">num_store_buffers</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="n">c_ready_bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="n">num_store_buffers</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_load_buffers</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">load_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">load_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_store_buffers</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">c_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">c_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">descs</span> <span class="o">=</span> <span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">)</span>
+    <span class="n">barriers</span> <span class="o">=</span> <span class="p">(</span><span class="n">load_empty_bars</span><span class="p">,</span> <span class="n">load_ready_bars</span><span class="p">,</span> <span class="n">c_empty_bars</span><span class="p">,</span> <span class="n">c_ready_bars</span><span class="p">)</span>
+    <span class="n">buffers</span> <span class="o">=</span> <span class="p">(</span><span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">c_bufs</span><span class="p">)</span>
+    <span class="n">numel</span> <span class="o">=</span> <span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">)</span>
+
+    <span class="n">pid</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">xoff</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">XBLOCK</span>
+
+    <span class="c1"># `gl.warp_specialize` declares a warp-specialized section of the kernel.</span>
+    <span class="c1"># It accepts arguments for the default partition function, which can include</span>
+    <span class="c1"># tensors, and the default partition function. It takes arguments for all</span>
+    <span class="c1"># the worker partitions, which cannot include tensors, and takes a list of</span>
+    <span class="c1"># worker partition functions. The warps and register budget for each</span>
+    <span class="c1"># partition are passed as lists.</span>
+    <span class="c1">#</span>
+    <span class="c1"># Note that warp and register allocation on NVIDIA GPUs is by warpgroup,</span>
+    <span class="c1"># which are 4 consecutive warps. The number of warps used by a kernel is</span>
+    <span class="c1"># rounded to the nearest multiple of 4. The compiler tries to organize the</span>
+    <span class="c1"># warps to reduce the amount of registers allocated. The default partition</span>
+    <span class="c1"># receives whatever registers are left over, based on `maxnreg` passed to</span>
+    <span class="c1"># the kernel.</span>
+    <span class="n">gl</span><span class="o">.</span><span class="n">warp_specialize</span><span class="p">([</span>
+        <span class="p">(</span><span class="n">compute_partition</span><span class="p">,</span> <span class="p">(</span><span class="n">barriers</span><span class="p">,</span> <span class="n">buffers</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">layout</span><span class="p">)),</span>
+        <span class="p">(</span><span class="n">load_partition</span><span class="p">,</span> <span class="p">(</span><span class="n">descs</span><span class="p">,</span> <span class="n">barriers</span><span class="p">,</span> <span class="n">buffers</span><span class="p">,</span> <span class="n">xoff</span><span class="p">,</span> <span class="n">numel</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">)),</span>
+        <span class="p">(</span><span class="n">store_partition</span><span class="p">,</span> <span class="p">(</span><span class="n">descs</span><span class="p">,</span> <span class="n">barriers</span><span class="p">,</span> <span class="n">buffers</span><span class="p">,</span> <span class="n">xoff</span><span class="p">,</span> <span class="n">numel</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">)),</span>
+    <span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">24</span><span class="p">,</span> <span class="mi">24</span><span class="p">])</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">elementwise_add_warp_specialized</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>  <span class="c1">#</span>
+                                     <span class="n">num_load_buffers</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">num_store_buffers</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">):</span>
+    <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">),</span> <span class="p">)</span>
+
+    <span class="n">block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">]</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span><span class="n">block_shape</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+
+    <span class="c1"># By default, a warp-specialized kernel assumes maxnreg=256, the maximum</span>
+    <span class="c1"># allowed per thread, in order to determine how to reallocate registers.</span>
+    <span class="c1"># We need to intentionally set the register limit. Since the kernel will</span>
+    <span class="c1"># have `num_warps+4` warps total, register usage will be</span>
+    <span class="c1">#</span>
+    <span class="c1">#     maxnreg * (num_warps+4) * 32</span>
+    <span class="c1">#</span>
+    <span class="c1"># Keep this in mind when deciding how much occupancy you want.</span>
+    <span class="n">elementwise_add_warp_specialized_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>  <span class="c1">#</span>
+        <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_load_buffers</span><span class="p">,</span> <span class="n">num_store_buffers</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span> <span class="n">maxnreg</span><span class="o">=</span><span class="mi">128</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;xnumel, ynumel&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">1000</span><span class="p">,</span> <span class="mi">2000</span><span class="p">),</span> <span class="p">(</span><span class="mi">4000</span><span class="p">,</span> <span class="mi">120</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;XBLOCK, YBLOCK&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_load_buffers, num_store_buffers&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_warps&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper or newer&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_elementwise_add_warp_specialized</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_load_buffers</span><span class="p">,</span> <span class="n">num_store_buffers</span><span class="p">,</span>
+                                          <span class="n">num_warps</span><span class="p">):</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">elementwise_add_warp_specialized</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_load_buffers</span><span class="p">,</span> <span class="n">num_store_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">a</span> <span class="o">+</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Benchmarking elementwise_add&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;============================&quot;</span><span class="p">)</span>
+    <span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span> <span class="o">=</span> <span class="mi">32</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="mi">32</span> <span class="o">*</span> <span class="mi">1024</span>
+    <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">xnumel</span><span class="p">,</span> <span class="n">ynumel</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+
+    <span class="n">XBLOCK</span> <span class="o">=</span> <span class="mi">64</span>
+    <span class="n">YBLOCK</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="n">num_load_buffers</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="n">num_store_buffers</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">4</span>
+
+    <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">t4</span><span class="o">.</span><span class="n">elementwise_add_tma</span><span class="p">(</span>  <span class="c1">#</span>
+        <span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_load_buffers</span><span class="p">))</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;elementwise_add_tma: </span><span class="si">{</span><span class="n">t3</span><span class="o">.</span><span class="n">get_throughput</span><span class="p">(</span><span class="n">ms</span><span class="p">,</span><span class="w"> </span><span class="n">C</span><span class="p">)</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+
+    <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">elementwise_add_warp_specialized</span><span class="p">(</span>  <span class="c1">#</span>
+        <span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="p">,</span> <span class="n">YBLOCK</span><span class="p">,</span> <span class="n">num_load_buffers</span><span class="p">,</span> <span class="n">num_store_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">))</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;elementwise_add_warp_specialized: </span><span class="si">{</span><span class="n">t3</span><span class="o">.</span><span class="n">get_throughput</span><span class="p">(</span><span class="n">ms</span><span class="p">,</span><span class="w"> </span><span class="n">C</span><span class="p">)</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> TB/s&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>Results on GB200:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">elementwise_add_tma</span><span class="p">:</span> <span class="mf">5.89</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+<span class="n">elementwise_add_warp_specialized</span><span class="p">:</span> <span class="mf">5.98</span> <span class="n">TB</span><span class="o">/</span><span class="n">s</span>
+</pre></div>
+</div>
+<p>The warp specialized implementation ekes out another performance gain over
+the software pipelined kernel from 04-tma.py by relying on the warp scheduler
+to hide latencies. The gains are modest because the kernel is very bandwidth
+bound, but this shows how warp specialization can more efficiently issue
+loads.</p>
+<p>Recall in previous tutorials we sometimes designed kernels to run with
+occupancy greater than 1. This is typical of kernels that we expect to stall
+or otherwise cannot exhaustively use the SM’s resources. In doing so, we
+relied on the warp scheduler to overlap kernel instances and hide latencies.</p>
+<p>However, because programs cannot see what other programs on the SM are doing,
+they cannot coordinate usage of SM compute units or share resources. Warp
+specialization is especially powerful when used to build intricate schedules
+that minimize the critical path and maximize hardware utilization. In other
+words, warp specialization allows us to fuse multiple programs into
+one kernel.</p>
+<p>Since we have unfinished business with Blackwell matmul from the last
+tutorial, let’s demonstrate a warp-specialized persistent matmul with tcgen05.</p>
+<ul class="simple">
+<li><p>Use the same block sizes BLOCK_{M,N,K} = (128, 256, 64)</p></li>
+<li><p>Aim for 4 buffers using techniques to reduce epilogue smem.</p></li>
+<li><p>Double-buffer the accumulator to fully overlap the epilogue.</p></li>
+</ul>
+<p>Because the epilogue is overlapped, we can subtile by a factor of 4 to allow
+4 buffers. However, for tiny K, it might still be better to steal B.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="c1"># Helper class for passing arguments around partitions.</span>
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">aggregate</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">PartitionArgs</span><span class="p">:</span>
+    <span class="n">a_desc</span><span class="p">:</span> <span class="n">tma</span><span class="o">.</span><span class="n">tensor_descriptor</span>
+    <span class="n">b_desc</span><span class="p">:</span> <span class="n">tma</span><span class="o">.</span><span class="n">tensor_descriptor</span>
+    <span class="n">c_desc</span><span class="p">:</span> <span class="n">tma</span><span class="o">.</span><span class="n">tensor_descriptor</span>
+    <span class="n">a_bufs</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">shared_memory_descriptor</span>
+    <span class="n">b_bufs</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">shared_memory_descriptor</span>
+    <span class="n">load_empty_bars</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">shared_memory_descriptor</span>
+    <span class="n">load_ready_bars</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">shared_memory_descriptor</span>
+    <span class="n">acc_bufs</span><span class="p">:</span> <span class="n">tensor_memory_descriptor</span>
+    <span class="n">acc_empty_bars</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">shared_memory_descriptor</span>
+    <span class="n">acc_ready_bars</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">shared_memory_descriptor</span>
+    <span class="n">SUBTILE_FACTOR</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
+    <span class="n">num_warps</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
+
+
+<span class="c1"># Counter abstraction for tracking barrier index and phase.</span>
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">aggregate</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Counter</span><span class="p">:</span>
+    <span class="n">index</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+    <span class="n">phase</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+    <span class="n">num_barriers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">create</span><span class="p">(</span><span class="n">phase</span><span class="p">,</span> <span class="n">num_barriers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">Counter</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">to_tensor</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">gl</span><span class="o">.</span><span class="n">to_tensor</span><span class="p">(</span><span class="n">phase</span><span class="p">),</span> <span class="n">num_barriers</span><span class="p">)</span>
+
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">must_use_result</span>
+    <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">next</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pred</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="n">incr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">index</span> <span class="o">+</span> <span class="n">gl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">pred</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="n">rollover</span> <span class="o">=</span> <span class="n">incr</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_barriers</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">rollover</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">incr</span><span class="p">)</span>
+        <span class="n">phase</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">rollover</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">phase</span> <span class="o">^</span> <span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">phase</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">Counter</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">phase</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_barriers</span><span class="p">)</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_load_partition</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">BLOCK_K</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">K</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">a_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="n">empty_bars</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">load_empty_bars</span>
+    <span class="n">ready_bars</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">load_ready_bars</span>
+    <span class="n">state</span> <span class="o">=</span> <span class="n">Counter</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">empty_bars</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+    <span class="c1"># Just loop over all tiles and issue loads.</span>
+    <span class="n">scheduler</span> <span class="o">=</span> <span class="n">SchedulerImpl</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">scheduler</span><span class="o">.</span><span class="n">get_num_tiles</span><span class="p">()):</span>
+        <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span> <span class="o">=</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">get_tile</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+        <span class="n">off_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
+        <span class="n">off_n</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_N</span>
+        <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+            <span class="c1"># Acquire buffers, issue loads, and complete them asynchronously.</span>
+            <span class="n">bar</span> <span class="o">=</span> <span class="n">ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+            <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">index</span><span class="p">),</span> <span class="n">state</span><span class="o">.</span><span class="n">phase</span><span class="p">)</span>
+            <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span> <span class="o">+</span> <span class="n">p</span><span class="o">.</span><span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
+            <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">a_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">k</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">a_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">index</span><span class="p">))</span>
+            <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">b_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">k</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">b_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">index</span><span class="p">))</span>
+            <span class="n">state</span> <span class="o">=</span> <span class="n">state</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_mma_partition</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">BLOCK_K</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">K</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">a_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="n">load_empty_bars</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">load_empty_bars</span>
+    <span class="n">load_ready_bars</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">load_ready_bars</span>
+    <span class="n">load_state</span> <span class="o">=</span> <span class="n">Counter</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">load_empty_bars</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+    <span class="n">acc_empty_bars</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">acc_empty_bars</span>
+    <span class="n">acc_ready_bars</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">acc_ready_bars</span>
+    <span class="n">acc_state</span> <span class="o">=</span> <span class="n">Counter</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">acc_empty_bars</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+    <span class="n">scheduler</span> <span class="o">=</span> <span class="n">SchedulerImpl</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">scheduler</span><span class="o">.</span><span class="n">get_num_tiles</span><span class="p">()):</span>
+        <span class="c1"># Acquire the accumulator for the entire inner loop.</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">acc_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">acc_state</span><span class="o">.</span><span class="n">index</span><span class="p">),</span> <span class="n">acc_state</span><span class="o">.</span><span class="n">phase</span><span class="p">)</span>
+        <span class="n">acc_buf</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">acc_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">acc_state</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">use_acc</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+            <span class="c1"># Acquire operands, issue MMA, and complete asynchronously.</span>
+            <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">load_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">load_state</span><span class="o">.</span><span class="n">index</span><span class="p">),</span> <span class="n">load_state</span><span class="o">.</span><span class="n">phase</span><span class="p">)</span>
+            <span class="n">tcgen05_mma</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">a_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">load_state</span><span class="o">.</span><span class="n">index</span><span class="p">),</span> <span class="n">p</span><span class="o">.</span><span class="n">b_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">load_state</span><span class="o">.</span><span class="n">index</span><span class="p">),</span> <span class="n">acc_buf</span><span class="p">,</span> <span class="n">use_acc</span><span class="o">=</span><span class="n">use_acc</span><span class="p">)</span>
+            <span class="n">tcgen05_commit</span><span class="p">(</span><span class="n">load_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">load_state</span><span class="o">.</span><span class="n">index</span><span class="p">))</span>
+            <span class="n">load_state</span> <span class="o">=</span> <span class="n">load_state</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
+            <span class="n">use_acc</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="c1"># Complete the accumulator asynchronously.</span>
+        <span class="n">tcgen05_commit</span><span class="p">(</span><span class="n">acc_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">acc_state</span><span class="o">.</span><span class="n">index</span><span class="p">))</span>
+        <span class="n">acc_state</span> <span class="o">=</span> <span class="n">acc_state</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
+
+
+<span class="c1"># Helper for splitting a tensor along N. For our kernel, this only works for</span>
+<span class="c1"># BLOCK_M=128 and num_warps=4, where all BLOCK_N elements are contiguously</span>
+<span class="c1"># mapped to the same thread.</span>
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_split_n</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">SUBTILE_FACTOR</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">split_count</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">SUBTILE_FACTOR</span><span class="o">.</span><span class="n">bit_length</span><span class="p">()</span> <span class="o">-</span> <span class="mi">1</span>  <span class="c1"># log2</span>
+    <span class="n">xs</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">)</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">split_count</span><span class="p">):</span>
+        <span class="n">next_xs</span> <span class="o">=</span> <span class="p">()</span>
+        <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">xs</span><span class="p">)):</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">xs</span><span class="p">[</span><span class="n">j</span><span class="p">]</span>
+            <span class="c1"># Reshape to (M, 2, N//2) then permute so that tensor elements</span>
+            <span class="c1"># remain contiguous along N.</span>
+            <span class="n">next_xs</span> <span class="o">+=</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">2</span><span class="p">,</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">//</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">()</span>
+        <span class="n">xs</span> <span class="o">=</span> <span class="n">next_xs</span>
+    <span class="k">return</span> <span class="n">xs</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_epilogue_partition</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="o">.</span><span class="n">dtype</span>
+
+    <span class="n">acc_empty_bars</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">acc_empty_bars</span>
+    <span class="n">acc_ready_bars</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">acc_ready_bars</span>
+    <span class="n">acc_state</span> <span class="o">=</span> <span class="n">Counter</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">acc_empty_bars</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="n">SPLIT_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">BLOCK_N</span> <span class="o">//</span> <span class="n">p</span><span class="o">.</span><span class="n">SUBTILE_FACTOR</span>
+    <span class="n">acc_smem</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">SPLIT_N</span><span class="p">],</span> <span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+
+    <span class="n">scheduler</span> <span class="o">=</span> <span class="n">SchedulerImpl</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">scheduler</span><span class="o">.</span><span class="n">get_num_tiles</span><span class="p">()):</span>
+        <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span> <span class="o">=</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">get_tile</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+        <span class="n">off_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
+        <span class="n">off_n</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_N</span>
+
+        <span class="c1"># Wait for the accumulator. Since BLOCK_N=256, we need to interleave</span>
+        <span class="c1"># the TMEM loads with the SMEM stores to avoid spilling.</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">acc_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">acc_state</span><span class="o">.</span><span class="n">index</span><span class="p">),</span> <span class="n">acc_state</span><span class="o">.</span><span class="n">phase</span><span class="p">)</span>
+        <span class="n">acc</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">acc_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">acc_state</span><span class="o">.</span><span class="n">index</span><span class="p">)</span><span class="o">.</span><span class="n">load</span><span class="p">()</span>
+        <span class="n">acc_state</span> <span class="o">=</span> <span class="n">acc_state</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
+
+        <span class="n">accs</span> <span class="o">=</span> <span class="n">_split_n</span><span class="p">(</span><span class="n">acc</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">SUBTILE_FACTOR</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">accs</span><span class="p">)):</span>
+            <span class="n">acc</span> <span class="o">=</span> <span class="n">accs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
+            <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># overlap with downcast</span>
+            <span class="n">acc_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
+            <span class="c1"># Arrive after the first SMEM store and rely on ptxas to interleave.</span>
+            <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">mbarrier</span><span class="o">.</span><span class="n">arrive</span><span class="p">(</span><span class="n">acc_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">acc_state</span><span class="o">.</span><span class="n">index</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+            <span class="n">fence_async_shared</span><span class="p">()</span>
+            <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span> <span class="o">+</span> <span class="n">SPLIT_N</span> <span class="o">*</span> <span class="n">i</span><span class="p">],</span> <span class="n">acc_smem</span><span class="p">)</span>
+    <span class="c1"># Overlap the last store with the wait, then wait for the last store here.</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_warp_specialized_kernel</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+                                   <span class="n">SUBTILE_FACTOR</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">dtype</span>
+
+    <span class="n">a_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">]</span> <span class="o">+</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">b_bufs</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">]</span> <span class="o">+</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">load_empty_bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="n">load_ready_bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="n">num_buffers</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">load_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">load_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">tmem_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">TensorMemoryLayout</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">col_stride</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">acc_bufs</span> <span class="o">=</span> <span class="n">allocate_tensor_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">tmem_layout</span><span class="p">)</span>
+    <span class="n">acc_empty_bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="n">acc_ready_bars</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="mi">2</span><span class="p">):</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">acc_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">acc_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">p</span> <span class="o">=</span> <span class="n">PartitionArgs</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">a_bufs</span><span class="p">,</span> <span class="n">b_bufs</span><span class="p">,</span> <span class="n">load_empty_bars</span><span class="p">,</span> <span class="n">load_ready_bars</span><span class="p">,</span> <span class="n">acc_bufs</span><span class="p">,</span>
+                      <span class="n">acc_empty_bars</span><span class="p">,</span> <span class="n">acc_ready_bars</span><span class="p">,</span> <span class="n">SUBTILE_FACTOR</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">gl</span><span class="o">.</span><span class="n">warp_specialize</span><span class="p">([</span>
+        <span class="p">(</span><span class="n">matmul_epilogue_partition</span><span class="p">,</span> <span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">)),</span>
+        <span class="p">(</span><span class="n">matmul_load_partition</span><span class="p">,</span> <span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">)),</span>
+        <span class="p">(</span><span class="n">matmul_mma_partition</span><span class="p">,</span> <span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">)),</span>
+    <span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">24</span><span class="p">,</span> <span class="mi">24</span><span class="p">])</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_warp_specialized</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">SUBTILE_FACTOR</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">):</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">C</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="n">a_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">b_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">c_layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">([</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">gl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+
+    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">],</span> <span class="n">a_layout</span><span class="p">)</span>
+    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">b_layout</span><span class="p">)</span>
+    <span class="c1"># Reduce the block size of the C tensor descriptor to account for the subtiled epilogue.</span>
+    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span> <span class="o">//</span> <span class="n">SUBTILE_FACTOR</span><span class="p">],</span> <span class="n">c_layout</span><span class="p">)</span>
+
+    <span class="n">num_sms</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">multi_processor_count</span>
+    <span class="n">num_pid</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">num_sms</span><span class="p">,</span> <span class="n">num_pid</span><span class="p">),</span> <span class="p">)</span>
+    <span class="n">matmul_warp_specialized_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">SUBTILE_FACTOR</span><span class="p">,</span>
+                                         <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;M, N, K&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">208</span><span class="p">,</span> <span class="mi">416</span><span class="p">,</span> <span class="mi">304</span><span class="p">),</span> <span class="p">(</span><span class="mi">2000</span><span class="p">,</span> <span class="mi">1000</span><span class="p">,</span> <span class="mi">2000</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;BLOCK_M, BLOCK_N, BLOCK_K&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">64</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_buffers&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;SUBTILE_FACTOR&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;num_warps&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;SchedulerImpl&quot;</span><span class="p">,</span> <span class="n">t7</span><span class="o">.</span><span class="n">schedulers</span><span class="p">)</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Blackwell&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_matmul_warp_specialized</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">SUBTILE_FACTOR</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">,</span>
+                                 <span class="n">SchedulerImpl</span><span class="p">):</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">matmul_warp_specialized</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">SUBTILE_FACTOR</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">,</span> <span class="n">SchedulerImpl</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">A</span> <span class="o">@</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-1</span><span class="p">)</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="n">is_blackwell</span><span class="p">():</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Benchmarking matmul_warp_specialized&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;====================================&quot;</span><span class="p">)</span>
+    <span class="n">args</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;BLOCK_M&quot;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="s2">&quot;BLOCK_N&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
+        <span class="s2">&quot;BLOCK_K&quot;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+        <span class="s2">&quot;num_buffers&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+        <span class="s2">&quot;SUBTILE_FACTOR&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+        <span class="s2">&quot;num_warps&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+        <span class="s2">&quot;SchedulerImpl&quot;</span><span class="p">:</span> <span class="n">t7</span><span class="o">.</span><span class="n">GroupedPersistentTileScheduler</span><span class="p">(</span><span class="mi">8</span><span class="p">),</span>
+    <span class="p">}</span>
+
+    <span class="n">M</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;    K  warp-specialized    cublas&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">K</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">2</span><span class="o">**</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">9</span><span class="p">,</span> <span class="mi">15</span><span class="p">)]:</span>
+        <span class="n">as_flops</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">t7</span><span class="o">.</span><span class="n">get_flops</span><span class="p">,</span> <span class="n">M</span><span class="o">=</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="o">=</span><span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="o">=</span><span class="n">K</span><span class="p">)</span>
+        <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+        <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+        <span class="n">BT</span> <span class="o">=</span> <span class="n">B</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+        <span class="n">r0</span> <span class="o">=</span> <span class="n">as_flops</span><span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">matmul_warp_specialized</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="o">**</span><span class="n">args</span><span class="p">)))</span>
+        <span class="n">r1</span> <span class="o">=</span> <span class="n">as_flops</span><span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">cublas</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">BT</span><span class="p">,</span> <span class="n">C</span><span class="p">)))</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">K</span><span class="si">:</span><span class="s2">&gt;5</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">r0</span><span class="si">:</span><span class="s2">&gt;17.2f</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">r1</span><span class="si">:</span><span class="s2">&gt;9.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>K  warp-specialized    cublas
+512           1004.18   1191.77
+1024           1182.61   1334.85
+2048           1313.71   1400.35
+4096           1317.58   1432.32
+8192           1291.56   1301.11
+16384           1256.74   1335.24</p>
+<p>Much better! We are now quite competitive with cublas.
+We will show in tutorial 14-multicta.py how we can use multicta and a few other
+tricks to consistently beat cublas in a wide range of shapes.</p>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="persistence.html" class="btn btn-neutral float-left" title="Persistent Kernels" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="tma-gather-scatter.html" class="btn btn-neutral float-right" title="Native TMA Gather and Scatter" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

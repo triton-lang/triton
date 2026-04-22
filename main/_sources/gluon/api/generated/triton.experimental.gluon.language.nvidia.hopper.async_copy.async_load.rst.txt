@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.async\_copy.async\_load
+========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper
+
+.. autofunction:: async_copy.async_load

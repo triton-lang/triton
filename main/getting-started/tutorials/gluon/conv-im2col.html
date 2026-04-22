@@ -1,0 +1,1413 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TMA im2col mode and Convolution via Implicit GEMM &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/custom.css" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Multi-CTA" href="multicta.html" />
+    <link rel="prev" title="Cluster Launch Control (CLC)" href="cluster-launch-control.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="intro.html">Introduction to Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="layouts.html">Tensor Layouts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="async-copy.html">Async Copy in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tma.html">TMA in Gluon</a></li>
+<li class="toctree-l2"><a class="reference internal" href="wgmma.html">Warp-Group MMA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05.html">The 5th Generation TensorCore<sup>TM</sup></a></li>
+<li class="toctree-l2"><a class="reference internal" href="persistence.html">Persistent Kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="warp-specialization.html">Warp Specialization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tma-gather-scatter.html">Native TMA Gather and Scatter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-copy.html">TCGen05 Copy Instruction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tcgen05-mma-scaled.html">Blocked-Scaled Matrix Multiplication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cluster-launch-control.html">Cluster Launch Control (CLC)</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">TMA im2col mode and Convolution via Implicit GEMM</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#tutorial-motivation">Tutorial Motivation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#what-is-a-2d-convolution">What is a 2D Convolution?</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#the-im2col-algorithm">The im2col Algorithm</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#shared-kernel-for-all-examples">Shared Kernel for All Examples</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#example-1-basic-loading-no-padding">Example 1: Basic Loading (No Padding)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#example-1-explanation">Example 1 Explanation:</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#expected-output">Expected output:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#example-2-loading-from-padded-region">Example 2: Loading from Padded Region</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#example-2-explanation">Example 2 Explanation:</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id1">Expected output:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#visualization">Visualization:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#example-3-offset-shifts-access-boundary">Example 3: Offset Shifts Access Boundary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#example-3-explanation">Example 3 Explanation:</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#comparison-example-2-vs-example-3">Comparison (Example 2 vs Example 3):</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#example-4-loading-across-multiple-batches">Example 4: Loading Across Multiple Batches</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#example-4-explanation">Example 4 Explanation:</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#input-layout-values-1-32">Input layout (values 1-32):</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#example-5-multi-batch-with-padded-access-boundary">Example 5: Multi-Batch with Padded Access Boundary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#example-5-explanation">Example 5 Explanation:</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#access-boundary-visualization-per-batch">Access boundary visualization (per batch):</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#implicit-gemm-with-tma-im2col">Implicit GEMM with TMA im2col</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#gluon-kernel">Gluon Kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#host-side-launcher">Host-Side Launcher</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#testing">Testing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#summary">Summary</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html">Multi-CTA</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multicta.html#benchmarking-matmul-multicta">Benchmarking matmul_multicta</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../gluon/api/index.html">API Reference</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Gluon Tutorials</a></li>
+      <li class="breadcrumb-item active">TMA im2col mode and Convolution via Implicit GEMM</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/getting-started/tutorials/gluon/conv-im2col.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="tma-im2col-mode-and-convolution-via-implicit-gemm">
+<span id="example-conv-im2col"></span><h1>TMA im2col mode and Convolution via Implicit GEMM<a class="headerlink" href="#tma-im2col-mode-and-convolution-via-implicit-gemm" title="Link to this heading"></a></h1>
+<p>This tutorial explains NVIDIA TMA’s im2col mode and then applies it to an
+end-to-end convolution kernel.</p>
+<p>We cover:</p>
+<ol class="arabic simple">
+<li><p>TMA im2col fundamentals on a 4-D NHWC tensor</p></li>
+<li><p>How TensorDescriptorIm2Col parameters control access boundaries</p></li>
+<li><p>Practical loading patterns (basic, padded, shifted-offset, multi-batch)</p></li>
+<li><p>How 2D convolution works (the sliding window)</p></li>
+<li><p>The im2col algorithm that reshapes convolution into GEMM</p></li>
+<li><p>A convolution kernel using TMA im2col + MMA (works on both Hopper and Blackwell)</p></li>
+</ol>
+<p>We re-use the MMA abstraction from <code class="docutils literal notranslate"><span class="pre">07-persistence.py</span></code> so that the same kernel
+runs on Hopper (WGMMA) and Blackwell (tcgen05 MMA) without code duplication.</p>
+<p>Prerequisites:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">04-tma.py</span></code>: TMA basics (tensor descriptors, async copies)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">05-wgmma.py</span></code>: Hopper warp-group MMA (WGMMA) basics</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">06-tcgen05.py</span></code>: tcgen05 MMA for matrix multiplication on Blackwell</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">07-persistence.py</span></code>: MMA abstraction (WGMMA / MMAv5) and persistent kernels</p></li>
+</ul>
+<p>Reference:
+https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode</p>
+<p>TMA im2col Mode Parameters:
+The following descriptor fields and boundary rules are specific to
+TensorDescriptorIm2Col in im2col mode.</p>
+<p>Block Shape:
+block_shape = [pixelsPerColumn, channelsPerPixel]
+- pixelsPerColumn: number of pixels from spatial dims [N, H, W]
+- channelsPerPixel: number of channels per pixel from [C]</p>
+<p>TensorDescriptor Parameters:
+- Input tensor: [N, H, W, C] in NHWC format
+- pixel_box_lower_corner: [H_lo, W_lo] offset from (0, 0)
+- pixel_box_upper_corner: [H_hi, W_hi] offset from [H - 1, W - 1]
+- element_strides: [1, 1, 1, 1] for contiguous element access
+- padding: “zero” or “nan” for out-of-bounds fills</p>
+<p>Access Boundary:
+pixel_box_lower_corner, pixel_box_upper_corner, and offsets define the
+spatial access window:
+- Lower bound = pixel_box_lower_corner + offsets
+- Upper bound = [H - 1, W - 1] + pixel_box_upper_corner + offsets
+- Bounds are interpreted as closed (inclusive): [lower, upper]</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>The input tensor in global memory is NOT padded. When accessing outside
+[0, 0] to [H-1, W-1], TMA fills with the padding value.
+</pre></div>
+</div>
+<p>async_copy_global_to_shared_im2col:
+async_copy_global_to_shared_im2col(tensor_desc, coord, offsets, barrier, result)
+- coord: [batch_idx, start_h, start_w, channel_start] start coords
+- offsets: [h_offset, w_offset] spatial offsets (i16)</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>Starting position (the first pixel): (batch_idx, start_h + h_offset, start_w + w_offset, channel_start)
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">importlib</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental</span><span class="w"> </span><span class="kn">import</span> <span class="n">gluon</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon</span><span class="w"> </span><span class="kn">import</span> <span class="n">language</span> <span class="k">as</span> <span class="n">ttgl</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.nvidia.hopper</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span><span class="p">,</span> <span class="n">TensorDescriptorIm2Col</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.language.nvidia.hopper</span><span class="w"> </span><span class="kn">import</span> <span class="n">fence_async_shared</span><span class="p">,</span> <span class="n">mbarrier</span><span class="p">,</span> <span class="n">tma</span>
+
+<span class="n">t7</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">import_module</span><span class="p">(</span><span class="s2">&quot;07-persistence&quot;</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">t7</span><span class="o">.</span><span class="n">is_hopper_or_newer</span><span class="p">():</span>
+    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;This tutorial requires Hopper or newer NVIDIA GPU&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="tutorial-motivation">
+<h2>Tutorial Motivation<a class="headerlink" href="#tutorial-motivation" title="Link to this heading"></a></h2>
+<p>Before diving into kernels, we first explain the concept of
+<strong>im2col convolution</strong>: rewriting convolution as GEMM by flattening each
+sliding-window patch into a row.</p>
+<p>Then we motivate why <strong>TMA im2col mode</strong> is helpful for this pattern:
+it performs convolution-style address generation and padding handling in
+hardware, so the kernel uses simpler indexing and can spend more resources on
+MMA compute.</p>
+</section>
+<section id="what-is-a-2d-convolution">
+<h2>What is a 2D Convolution?<a class="headerlink" href="#what-is-a-2d-convolution" title="Link to this heading"></a></h2>
+<p>A 2D convolution slides a small filter (kernel) across an input image and
+computes a weighted sum at every position. For a single-channel example
+with a 3x3 input and a 2x2 filter (stride=1, no padding), the output is 2x2:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Input (3x3):        Filter (2x2):       Output (2x2):
++---+---+---+       +----+----+          +----+----+
+| a | b | c |       | w0 | w1 |          | y0 | y1 |
++---+---+---+       +----+----+          +----+----+
+| d | e | f |       | w2 | w3 |          | y2 | y3 |
++---+---+---+       +----+----+          +----+----+
+| g | h | i |
++---+---+---+
+</pre></div>
+</div>
+<p>Each output element is the dot product of the filter with a region of the input:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>y0 = a*w0 + b*w1 + d*w2 + e*w3
+y1 = b*w0 + c*w1 + e*w2 + f*w3
+y2 = d*w0 + e*w1 + g*w2 + h*w3
+y3 = e*w0 + f*w1 + h*w2 + i*w3
+</pre></div>
+</div>
+<p>With <strong>multiple input channels</strong> (Ci) and <strong>multiple output channels</strong> (Co):</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>y[n, oh, ow, co] = SUM over (r, s, ci) of:
+    input[n, oh*stride + r - pad, ow*stride + s - pad, ci] * weight[co, r, s, ci]
+</pre></div>
+</div>
+<p>This nested summation over (r, s, ci) is the key insight for converting
+convolution into matrix multiplication.</p>
+</section>
+<section id="the-im2col-algorithm">
+<h2>The im2col Algorithm<a class="headerlink" href="#the-im2col-algorithm" title="Link to this heading"></a></h2>
+<p><strong>im2col</strong> (image to column) rearranges the input so that convolution becomes
+a standard matrix multiplication (GEMM). The idea is:</p>
+<ol class="arabic simple">
+<li><p>For each output position (n, oh, ow), extract the R x S x Ci input
+patch that the filter overlaps with.</p></li>
+<li><p>Flatten this patch into a single row of length <code class="docutils literal notranslate"><span class="pre">R</span> <span class="pre">*</span> <span class="pre">S</span> <span class="pre">*</span> <span class="pre">Ci</span></code>.</p></li>
+<li><p>Stack all such rows into a matrix <strong>A</strong> of shape <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">K]</span></code>.</p></li>
+<li><p>Reshape the filter into a matrix <strong>W</strong> of shape <code class="docutils literal notranslate"><span class="pre">[Co,</span> <span class="pre">K]</span></code>.</p></li>
+<li><p>The output is simply <code class="docutils literal notranslate"><span class="pre">A</span> <span class="pre">&#64;</span> <span class="pre">W^T</span></code> (a GEMM!).</p></li>
+</ol>
+<p>where <code class="docutils literal notranslate"><span class="pre">M</span> <span class="pre">=</span> <span class="pre">N</span> <span class="pre">*</span> <span class="pre">out_h</span> <span class="pre">*</span> <span class="pre">out_w</span></code> and <code class="docutils literal notranslate"><span class="pre">K</span> <span class="pre">=</span> <span class="pre">R</span> <span class="pre">*</span> <span class="pre">S</span> <span class="pre">*</span> <span class="pre">Ci</span></code>.</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Example: 3x3 input, 2x2 filter, stride=1, no padding =&gt; 2x2 output
+
+Step 1: Extract patches for each output position
+-------------------------------------------------
+y0 at (0,0): patch = [a, b, d, e]
+y1 at (0,1): patch = [b, c, e, f]
+y2 at (1,0): patch = [d, e, g, h]
+y3 at (1,1): patch = [e, f, h, i]
+
+Step 2: Stack patches into im2col matrix A (M=4, K=4)
+-----------------------------------------------------
+         K = R*S*Ci = 4
+         &lt;-------------&gt;
+     A = | a  b  d  e |  &lt;- y0     ^
+         | b  c  e  f |  &lt;- y1     | M = 4
+         | d  e  g  h |  &lt;- y2     |
+         | e  f  h  i |  &lt;- y3     v
+
+Note: overlapping patches share input elements (e.g., &#39;e&#39; appears in all 4 rows).
+
+Step 3: Reshape filter into weight matrix W (Co=1, K=4)
+-------------------------------------------------------
+     W = | w0 w1 w2 w3 |
+
+Step 4: Output = A @ W^T
+------------------------
+                   | w0 |     | y0 |
+     A  @  W^T  =  | w1 |  =  | y1 |
+     (4x4)(4x1)    | w2 |     | y2 |
+                   | w3 |     | y3 |
+                              (4x1)
+
+With Co output channels, W is (Co x K) and Output is (M x Co).
+</pre></div>
+</div>
+<p>Why TMA im2col mode is helpful for convolution:</p>
+<ul class="simple">
+<li><p>In the matrix view above, each row of <strong>A</strong> is one output position’s patch.</p></li>
+<li><p>The indexing term <code class="docutils literal notranslate"><span class="pre">oh*stride</span> <span class="pre">+</span> <span class="pre">r</span> <span class="pre">-</span> <span class="pre">pad</span></code> / <code class="docutils literal notranslate"><span class="pre">ow*stride</span> <span class="pre">+</span> <span class="pre">s</span> <span class="pre">-</span> <span class="pre">pad</span></code> must be
+evaluated for every filter tap and channel block in the inner loop.</p></li>
+<li><p>Software address generation and bounds handling increase integer ALU work
+and register pressure right where we want to maximize MMA throughput.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">TensorDescriptorIm2Col</span></code> encodes stride/padding/pixel-box once, and TMA
+hardware computes the gather addresses and out-of-bounds padding fills.</p></li>
+<li><p>The kernel can focus on MMA scheduling while using simple <code class="docutils literal notranslate"><span class="pre">coord</span></code> +
+<code class="docutils literal notranslate"><span class="pre">offsets</span></code> loads, which is both cleaner and typically faster.</p></li>
+</ul>
+<p>Example (multiple TMA im2col loads -&gt; rows of A):</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Use the same setup as above: 3x3 input, 2x2 filter, stride=1, pad=0.
+
+Input (same symbols as the matrix example):
+      W=0 W=1 W=2
+H=0    a   b   c
+H=1    d   e   f
+H=2    g   h   i
+
+For each output position (oh, ow), TMA im2col uses:
+  coord = [n, oh*stride - pad, ow*stride - pad, ci_blk]
+
+Then one load is issued per filter offset (r, s):
+  offsets=[0,0], [0,1], [1,0], [1,1]
+
+(oh=0, ow=0), coord=[n,0,0,ci_blk] -&gt; first column of A:
+  [ a,
+    b,
+    d,
+    e ]
+The width/channel dimension is Ci.
+(oh=0, ow=1), coord=[n,0,1,ci_blk] -&gt; [b, c, e, f] = second column of A
+(oh=1, ow=0), coord=[n,1,0,ci_blk] -&gt; [d, e, g, h] = third column of A
+(oh=1, ow=1), coord=[n,1,1,ci_blk] -&gt; [e, f, h, i] = fourth column of A
+This is exactly the &quot;image to column&quot; idea: each output-position patch
+from the image is flattened and stored as one column of A.
+
+Stacking these multiple loads across output positions forms A:
+  | a  b  d  e |
+  | b  c  e  f |
+  | d  e  g  h |
+  | e  f  h  i |
+
+In the real kernel, this is executed in the K-loop as one
+async_copy_global_to_shared_im2col per (r, s, ci_block).
+</pre></div>
+</div>
+</section>
+<section id="shared-kernel-for-all-examples">
+<h2>Shared Kernel for All Examples<a class="headerlink" href="#shared-kernel-for-all-examples" title="Link to this heading"></a></h2>
+<p>All examples use the same kernel structure - only the TensorDescriptor
+configuration and load coordinates differ.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">tma_im2col_kernel</span><span class="p">(</span><span class="n">in_desc</span><span class="p">,</span> <span class="n">out_desc</span><span class="p">,</span> <span class="n">coord_n</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">coord_h</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">coord_w</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">coord_c</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">offset_h</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+                      <span class="n">offset_w</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generic im2col kernel with configurable coordinates and offsets.&quot;&quot;&quot;</span>
+    <span class="n">smem</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">in_desc</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">in_desc</span><span class="o">.</span><span class="n">block_shape</span><span class="p">,</span> <span class="n">in_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+
+    <span class="n">bar</span> <span class="o">=</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">allocate_mbarrier</span><span class="p">()</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">in_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
+
+    <span class="c1"># TMA im2col load with specified coordinates and offsets</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_load_im2col</span><span class="p">(</span>
+        <span class="n">in_desc</span><span class="p">,</span>
+        <span class="p">[</span><span class="n">coord_n</span><span class="p">,</span> <span class="n">coord_h</span><span class="p">,</span> <span class="n">coord_w</span><span class="p">,</span> <span class="n">coord_c</span><span class="p">],</span>
+        <span class="p">[</span><span class="n">offset_h</span><span class="p">,</span> <span class="n">offset_w</span><span class="p">],</span>
+        <span class="n">bar</span><span class="p">,</span>
+        <span class="n">smem</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">invalidate</span><span class="p">(</span><span class="n">bar</span><span class="p">)</span>
+
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">run_tma_im2col</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">pixel_box_lower_corner</span><span class="p">,</span> <span class="n">pixel_box_upper_corner</span><span class="p">,</span> <span class="n">coord</span><span class="p">,</span> <span class="n">offsets</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Shared function for all im2col examples.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        title: Description to print</span>
+<span class="sd">        pixel_box_lower_corner: [H_lo, W_lo] lower boundary for TMA access</span>
+<span class="sd">        pixel_box_upper_corner: [H_hi, W_hi] upper boundary offset for TMA access</span>
+<span class="sd">        coord: [N, H, W, C] starting coordinates</span>
+<span class="sd">        offsets: [h_offset, w_offset] spatial offsets</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Create input tensor with values 1-16 and output tensor</span>
+    <span class="n">inp</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">17</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+    <span class="n">block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">32</span><span class="p">]</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="p">(</span><span class="n">swizzle_byte_width</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">element_bitwidth</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">rank</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+    <span class="n">in_desc</span> <span class="o">=</span> <span class="n">TensorDescriptorIm2Col</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span>
+        <span class="n">inp</span><span class="p">,</span>
+        <span class="n">block_shape</span><span class="p">,</span>
+        <span class="n">layout</span><span class="p">,</span>
+        <span class="n">padding</span><span class="o">=</span><span class="s2">&quot;zero&quot;</span><span class="p">,</span>
+        <span class="n">element_strides</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+        <span class="n">pixel_box_lower_corner</span><span class="o">=</span><span class="n">pixel_box_lower_corner</span><span class="p">,</span>
+        <span class="n">pixel_box_upper_corner</span><span class="o">=</span><span class="n">pixel_box_upper_corner</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">out_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+
+    <span class="n">tma_im2col_kernel</span><span class="p">[(</span><span class="mi">1</span><span class="p">,</span> <span class="p">)](</span><span class="n">in_desc</span><span class="p">,</span> <span class="n">out_desc</span><span class="p">,</span> <span class="o">*</span><span class="n">coord</span><span class="p">,</span> <span class="o">*</span><span class="n">offsets</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="n">title</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Loaded data (pixel_id, value):&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">pixel_id</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">16</span><span class="p">):</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">out</span><span class="p">[</span><span class="n">pixel_id</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">())</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  pixel </span><span class="si">{</span><span class="n">pixel_id</span><span class="si">:</span><span class="s2">2d</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">inp</span><span class="p">,</span> <span class="n">out</span>
+</pre></div>
+</div>
+</section>
+<section id="example-1-basic-loading-no-padding">
+<h2>Example 1: Basic Loading (No Padding)<a class="headerlink" href="#example-1-basic-loading-no-padding" title="Link to this heading"></a></h2>
+<p>Load all 16 pixels (4x4 grid) from a [1, 4, 4, 32] tensor.</p>
+<ul class="simple">
+<li><p>coord = [0, 0, 0, 0], offsets = [0, 0]</p></li>
+<li><p>Access boundary: H in [0, 3], W in [0, 3] (original tensor)</p></li>
+</ul>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">run_tma_im2col_simple</span><span class="p">():</span>
+    <span class="n">inp</span><span class="p">,</span> <span class="n">out</span> <span class="o">=</span> <span class="n">run_tma_im2col</span><span class="p">(</span>
+        <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Example 1: Basic loading (no padding)&quot;</span><span class="p">,</span>
+        <span class="n">pixel_box_lower_corner</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+        <span class="n">pixel_box_upper_corner</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+        <span class="n">coord</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+        <span class="n">offsets</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">inp</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">t7</span><span class="o">.</span><span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_tma_im2col_simple</span><span class="p">():</span>
+    <span class="n">run_tma_im2col_simple</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="example-1-explanation">
+<h2>Example 1 Explanation:<a class="headerlink" href="#example-1-explanation" title="Link to this heading"></a></h2>
+<p>Configuration:</p>
+<ul class="simple">
+<li><p>pixel_box_lower_corner = [0, 0], pixel_box_upper_corner = [0, 0] (no padding)</p></li>
+<li><p>coord = [0, 0, 0, 0], offsets = [0, 0]</p></li>
+<li><p>Access boundary: H in [0, 3], W in [0, 3]</p></li>
+</ul>
+<section id="expected-output">
+<h3>Expected output:<a class="headerlink" href="#expected-output" title="Link to this heading"></a></h3>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>Loaded data: pixel 0-&gt;1, pixel 1-&gt;2, ..., pixel 15-&gt;16
+
+Input [1, 4, 4, 32] spatial layout:     Output [16, 32] pixel order:
+Channel dimension is contiguous: each pixel stores 32 channels in order.
+
++----+----+----+----+                   pixel  0 = (H=0,W=0) -&gt; value 1
+|  1 |  2 |  3 |  4 |  H=0              pixel  1 = (H=0,W=1) -&gt; value 2
++----+----+----+----+                   ...
+|  5 |  6 |  7 |  8 |  H=1              pixel 15 = (H=3,W=3) -&gt; value 16
++----+----+----+----+
+|  9 | 10 | 11 | 12 |  H=2
++----+----+----+----+
+| 13 | 14 | 15 | 16 |  H=3
++----+----+----+----+
+  W=0  W=1  W=2  W=3
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">run_tma_im2col_simple</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;=&quot;</span> <span class="o">*</span> <span class="mi">50</span> <span class="o">+</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Example</span> <span class="mi">1</span><span class="p">:</span> <span class="n">Basic</span> <span class="n">loading</span> <span class="p">(</span><span class="n">no</span> <span class="n">padding</span><span class="p">)</span>
+
+<span class="n">Loaded</span> <span class="n">data</span> <span class="p">(</span><span class="n">pixel_id</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+  <span class="n">pixel</span>  <span class="mi">0</span><span class="p">:</span> <span class="mi">1</span>
+  <span class="n">pixel</span>  <span class="mi">1</span><span class="p">:</span> <span class="mi">2</span>
+  <span class="n">pixel</span>  <span class="mi">2</span><span class="p">:</span> <span class="mi">3</span>
+  <span class="n">pixel</span>  <span class="mi">3</span><span class="p">:</span> <span class="mi">4</span>
+  <span class="n">pixel</span>  <span class="mi">4</span><span class="p">:</span> <span class="mi">5</span>
+  <span class="n">pixel</span>  <span class="mi">5</span><span class="p">:</span> <span class="mi">6</span>
+  <span class="n">pixel</span>  <span class="mi">6</span><span class="p">:</span> <span class="mi">7</span>
+  <span class="n">pixel</span>  <span class="mi">7</span><span class="p">:</span> <span class="mi">8</span>
+  <span class="n">pixel</span>  <span class="mi">8</span><span class="p">:</span> <span class="mi">9</span>
+  <span class="n">pixel</span>  <span class="mi">9</span><span class="p">:</span> <span class="mi">10</span>
+  <span class="n">pixel</span> <span class="mi">10</span><span class="p">:</span> <span class="mi">11</span>
+  <span class="n">pixel</span> <span class="mi">11</span><span class="p">:</span> <span class="mi">12</span>
+  <span class="n">pixel</span> <span class="mi">12</span><span class="p">:</span> <span class="mi">13</span>
+  <span class="n">pixel</span> <span class="mi">13</span><span class="p">:</span> <span class="mi">14</span>
+  <span class="n">pixel</span> <span class="mi">14</span><span class="p">:</span> <span class="mi">15</span>
+  <span class="n">pixel</span> <span class="mi">15</span><span class="p">:</span> <span class="mi">16</span>
+
+<span class="o">==================================================</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="example-2-loading-from-padded-region">
+<h2>Example 2: Loading from Padded Region<a class="headerlink" href="#example-2-loading-from-padded-region" title="Link to this heading"></a></h2>
+<p>With pixel_box_lower_corner=[-1,-1] and pixel_box_upper_corner=[-1,-1],
+access boundary is H in [-1, 2], W in [-1, 2].
+Negative coordinates are outside tensor -&gt; filled with padding (0).</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">run_tma_im2col_padded</span><span class="p">():</span>
+    <span class="n">_</span><span class="p">,</span> <span class="n">out</span> <span class="o">=</span> <span class="n">run_tma_im2col</span><span class="p">(</span>
+        <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Example 2: Loading from padded region&quot;</span><span class="p">,</span>
+        <span class="n">pixel_box_lower_corner</span><span class="o">=</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+        <span class="n">pixel_box_upper_corner</span><span class="o">=</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+        <span class="n">coord</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+        <span class="n">offsets</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="c1"># Expected: row H=-1 all padded, then each row has W=-1 padded</span>
+    <span class="n">expected</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">out</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">expected</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">t7</span><span class="o">.</span><span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_tma_im2col_padded</span><span class="p">():</span>
+    <span class="n">run_tma_im2col_padded</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="example-2-explanation">
+<h2>Example 2 Explanation:<a class="headerlink" href="#example-2-explanation" title="Link to this heading"></a></h2>
+<p>Configuration:</p>
+<ul class="simple">
+<li><p>pixel_box_lower_corner = [-1, -1], pixel_box_upper_corner = [-1, -1]</p></li>
+<li><p>coord = [0, -1, -1, 0], offsets = [0, 0]</p></li>
+</ul>
+<p>Access Boundary with offsets=[0, 0]:</p>
+<ul class="simple">
+<li><p>Lower = pixel_box_lower_corner + offsets = [-1, -1] + [0, 0]</p></li>
+<li><p>Upper = [H - 1, W - 1] + pixel_box_upper_corner + offsets = [3, 3] + [-1, -1] + [0, 0]</p></li>
+<li><p>Result: H in [-1, 2], W in [-1, 2]</p></li>
+<li><p>Negative coordinates are outside tensor -&gt; filled with padding (0)</p></li>
+</ul>
+<section id="id1">
+<h3>Expected output:<a class="headerlink" href="#id1" title="Link to this heading"></a></h3>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>pixel  0: 0  (H=-1, W=-1) padded     pixel  8: 0  (H=1, W=-1) padded
+pixel  1: 0  (H=-1, W=0)  padded     pixel  9: 5  (H=1, W=0)  actual
+pixel  2: 0  (H=-1, W=1)  padded     pixel 10: 6  (H=1, W=1)  actual
+pixel  3: 0  (H=-1, W=2)  padded     pixel 11: 7  (H=1, W=2)  actual
+pixel  4: 0  (H=0, W=-1)  padded     pixel 12: 0  (H=2, W=-1) padded
+pixel  5: 1  (H=0, W=0)   actual     pixel 13: 9  (H=2, W=0)  actual
+pixel  6: 2  (H=0, W=1)   actual     pixel 14: 10 (H=2, W=1)  actual
+pixel  7: 3  (H=0, W=2)   actual     pixel 15: 11 (H=2, W=2)  actual
+</pre></div>
+</div>
+</section>
+<section id="visualization">
+<h3>Visualization:<a class="headerlink" href="#visualization" title="Link to this heading"></a></h3>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>Original 4x4 tensor:              Access boundary H in [-1,2], W in [-1,2]:
+Note: padded cells are not stored in global memory; TMA fills them on load.
+
+     W=0  W=1  W=2  W=3                 W=-1  W=0  W=1  W=2
+    +----+----+----+----+              +----+----+----+----+
+H=0 |  1 |  2 |  3 |  4 |          H=-1|  0 |  0 |  0 |  0 | &lt;- padded
+    +----+----+----+----+              +----+----+----+----+
+H=1 |  5 |  6 |  7 |  8 |          H=0 |  0 |  1 |  2 |  3 |
+    +----+----+----+----+              +----+----+----+----+
+H=2 |  9 | 10 | 11 | 12 |          H=1 |  0 |  5 |  6 |  7 |
+    +----+----+----+----+              +----+----+----+----+
+H=3 | 13 | 14 | 15 | 16 |          H=2 |  0 |  9 | 10 | 11 |
+    +----+----+----+----+              +----+----+----+----+
+                                        ^
+                                     padded (W&lt;0)
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">run_tma_im2col_padded</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;=&quot;</span> <span class="o">*</span> <span class="mi">50</span> <span class="o">+</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Example</span> <span class="mi">2</span><span class="p">:</span> <span class="n">Loading</span> <span class="kn">from</span><span class="w"> </span><span class="nn">padded</span> <span class="n">region</span>
+
+<span class="n">Loaded</span> <span class="n">data</span> <span class="p">(</span><span class="n">pixel_id</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+  <span class="n">pixel</span>  <span class="mi">0</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span>  <span class="mi">1</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span>  <span class="mi">2</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span>  <span class="mi">3</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span>  <span class="mi">4</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span>  <span class="mi">5</span><span class="p">:</span> <span class="mi">1</span>
+  <span class="n">pixel</span>  <span class="mi">6</span><span class="p">:</span> <span class="mi">2</span>
+  <span class="n">pixel</span>  <span class="mi">7</span><span class="p">:</span> <span class="mi">3</span>
+  <span class="n">pixel</span>  <span class="mi">8</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span>  <span class="mi">9</span><span class="p">:</span> <span class="mi">5</span>
+  <span class="n">pixel</span> <span class="mi">10</span><span class="p">:</span> <span class="mi">6</span>
+  <span class="n">pixel</span> <span class="mi">11</span><span class="p">:</span> <span class="mi">7</span>
+  <span class="n">pixel</span> <span class="mi">12</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span> <span class="mi">13</span><span class="p">:</span> <span class="mi">9</span>
+  <span class="n">pixel</span> <span class="mi">14</span><span class="p">:</span> <span class="mi">10</span>
+  <span class="n">pixel</span> <span class="mi">15</span><span class="p">:</span> <span class="mi">11</span>
+
+<span class="o">==================================================</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="example-3-offset-shifts-access-boundary">
+<h2>Example 3: Offset Shifts Access Boundary<a class="headerlink" href="#example-3-offset-shifts-access-boundary" title="Link to this heading"></a></h2>
+<p>Same TensorDescriptor as Example 2, but with offsets=[1, 1].
+This shifts the access boundary from [-1, 2] to [0, 3], covering the original tensor.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">run_tma_im2col_offset</span><span class="p">():</span>
+    <span class="n">inp</span><span class="p">,</span> <span class="n">out</span> <span class="o">=</span> <span class="n">run_tma_im2col</span><span class="p">(</span>
+        <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Example 3: Offset shifts access to original tensor&quot;</span><span class="p">,</span>
+        <span class="n">pixel_box_lower_corner</span><span class="o">=</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+        <span class="n">pixel_box_upper_corner</span><span class="o">=</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+        <span class="n">coord</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+        <span class="n">offsets</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="c1"># Offset shifts access to exactly the original tensor [0,3] x [0,3]</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">inp</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">t7</span><span class="o">.</span><span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_tma_im2col_offset</span><span class="p">():</span>
+    <span class="n">run_tma_im2col_offset</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="example-3-explanation">
+<h2>Example 3 Explanation:<a class="headerlink" href="#example-3-explanation" title="Link to this heading"></a></h2>
+<p>Configuration:</p>
+<ul class="simple">
+<li><p>pixel_box_lower_corner = [-1, -1], pixel_box_upper_corner = [-1, -1]</p></li>
+<li><p>coord = [0, -1, -1, 0], offsets = [1, 1]</p></li>
+</ul>
+<p>Access Boundary with offsets=[1, 1]:</p>
+<ul class="simple">
+<li><p>Lower = pixel_box_lower_corner + offsets = [-1, -1] + [1, 1]</p></li>
+<li><p>Upper = [H - 1, W - 1] + pixel_box_upper_corner + offsets = [3, 3] + [-1, -1] + [1, 1]</p></li>
+<li><p>Result: H in [0, 3], W in [0, 3] -&gt; exactly the original tensor</p></li>
+</ul>
+<section id="comparison-example-2-vs-example-3">
+<h3>Comparison (Example 2 vs Example 3):<a class="headerlink" href="#comparison-example-2-vs-example-3" title="Link to this heading"></a></h3>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>Example 2 (offsets=[0,0]):           Example 3 (offsets=[1,1]):
+Access H in [-1, 2], W in [-1, 2]    Access H in [0, 3], W in [0, 3]
+
+     W=-1  W=0  W=1  W=2                  W=0  W=1  W=2  W=3
+    +----+----+----+----+              +----+----+----+----+
+H=-1|  0 |  0 |  0 |  0 |          H=0 |  1 |  2 |  3 |  4 |
+    +----+----+----+----+              +----+----+----+----+
+H=0 |  0 |  1 |  2 |  3 |          H=1 |  5 |  6 |  7 |  8 |
+    +----+----+----+----+              +----+----+----+----+
+H=1 |  0 |  5 |  6 |  7 |          H=2 |  9 | 10 | 11 | 12 |
+    +----+----+----+----+              +----+----+----+----+
+H=2 |  0 |  9 | 10 | 11 |          H=3 | 13 | 14 | 15 | 16 |
+    +----+----+----+----+              +----+----+----+----+
+
+Key insight: offsets=[1,1] shifts the 4x4 access window from
+the padded region to exactly cover the original tensor data.
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">run_tma_im2col_offset</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;=&quot;</span> <span class="o">*</span> <span class="mi">50</span> <span class="o">+</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Example</span> <span class="mi">3</span><span class="p">:</span> <span class="n">Offset</span> <span class="n">shifts</span> <span class="n">access</span> <span class="n">to</span> <span class="n">original</span> <span class="n">tensor</span>
+
+<span class="n">Loaded</span> <span class="n">data</span> <span class="p">(</span><span class="n">pixel_id</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+  <span class="n">pixel</span>  <span class="mi">0</span><span class="p">:</span> <span class="mi">1</span>
+  <span class="n">pixel</span>  <span class="mi">1</span><span class="p">:</span> <span class="mi">2</span>
+  <span class="n">pixel</span>  <span class="mi">2</span><span class="p">:</span> <span class="mi">3</span>
+  <span class="n">pixel</span>  <span class="mi">3</span><span class="p">:</span> <span class="mi">4</span>
+  <span class="n">pixel</span>  <span class="mi">4</span><span class="p">:</span> <span class="mi">5</span>
+  <span class="n">pixel</span>  <span class="mi">5</span><span class="p">:</span> <span class="mi">6</span>
+  <span class="n">pixel</span>  <span class="mi">6</span><span class="p">:</span> <span class="mi">7</span>
+  <span class="n">pixel</span>  <span class="mi">7</span><span class="p">:</span> <span class="mi">8</span>
+  <span class="n">pixel</span>  <span class="mi">8</span><span class="p">:</span> <span class="mi">9</span>
+  <span class="n">pixel</span>  <span class="mi">9</span><span class="p">:</span> <span class="mi">10</span>
+  <span class="n">pixel</span> <span class="mi">10</span><span class="p">:</span> <span class="mi">11</span>
+  <span class="n">pixel</span> <span class="mi">11</span><span class="p">:</span> <span class="mi">12</span>
+  <span class="n">pixel</span> <span class="mi">12</span><span class="p">:</span> <span class="mi">13</span>
+  <span class="n">pixel</span> <span class="mi">13</span><span class="p">:</span> <span class="mi">14</span>
+  <span class="n">pixel</span> <span class="mi">14</span><span class="p">:</span> <span class="mi">15</span>
+  <span class="n">pixel</span> <span class="mi">15</span><span class="p">:</span> <span class="mi">16</span>
+
+<span class="o">==================================================</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="example-4-loading-across-multiple-batches">
+<h2>Example 4: Loading Across Multiple Batches<a class="headerlink" href="#example-4-loading-across-multiple-batches" title="Link to this heading"></a></h2>
+<p>This example shows loading pixels that span across multiple images (batches).
+Input: [2, 4, 4, 32] - 2 batches of 4x4 images with 32 channels
+Starting at coord=[0, 1, 3, 0] (batch 0, H=1, W=3) and loading 16 pixels
+wraps from batch 0 into batch 1.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">run_tma_im2col_multi_batch</span><span class="p">():</span>
+    <span class="c1"># Input: [2, 4, 4, 32] - 2 batches of 4x4 images (32 pixels total)</span>
+    <span class="c1"># Values 1-32 for easy tracking</span>
+    <span class="n">inp</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">33</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+    <span class="n">block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">32</span><span class="p">]</span>  <span class="c1"># load 16 pixels</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="p">(</span><span class="n">swizzle_byte_width</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">element_bitwidth</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">rank</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+    <span class="n">in_desc</span> <span class="o">=</span> <span class="n">TensorDescriptorIm2Col</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span>
+        <span class="n">inp</span><span class="p">,</span>
+        <span class="n">block_shape</span><span class="p">,</span>
+        <span class="n">layout</span><span class="p">,</span>
+        <span class="n">padding</span><span class="o">=</span><span class="s2">&quot;zero&quot;</span><span class="p">,</span>
+        <span class="n">element_strides</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+        <span class="n">pixel_box_lower_corner</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+        <span class="n">pixel_box_upper_corner</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="n">out_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+
+    <span class="c1"># coord=[0, 1, 3, 0] - start from batch 0, H=1, W=3, C=0</span>
+    <span class="c1"># This is pixel index 1*4 + 3 = 7 in batch 0</span>
+    <span class="n">tma_im2col_kernel</span><span class="p">[(</span><span class="mi">1</span><span class="p">,</span> <span class="p">)](</span><span class="n">in_desc</span><span class="p">,</span> <span class="n">out_desc</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Example 4: Loading across multiple batches&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Input shape: [2, 4, 4, 32] (2 batches of 4x4 images)&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Starting at: batch=0, H=1, W=3 (pixel 8 in input)&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Loaded data (pixel_id, value):&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">pixel_id</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">16</span><span class="p">):</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">out</span><span class="p">[</span><span class="n">pixel_id</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">())</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  pixel </span><span class="si">{</span><span class="n">pixel_id</span><span class="si">:</span><span class="s2">2d</span><span class="si">}</span><span class="s2">: value </span><span class="si">{</span><span class="n">value</span><span class="si">:</span><span class="s2">2d</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Expected: values 8-16 from batch 0, then 17-23 from batch 1</span>
+    <span class="n">expected</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">13</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">17</span><span class="p">,</span> <span class="mi">18</span><span class="p">,</span> <span class="mi">19</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">21</span><span class="p">,</span> <span class="mi">22</span><span class="p">,</span> <span class="mi">23</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span>
+                            <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">out</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">expected</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">t7</span><span class="o">.</span><span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_tma_im2col_multi_batch</span><span class="p">():</span>
+    <span class="n">run_tma_im2col_multi_batch</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="example-4-explanation">
+<h2>Example 4 Explanation:<a class="headerlink" href="#example-4-explanation" title="Link to this heading"></a></h2>
+<p>Configuration:</p>
+<ul class="simple">
+<li><p>Input: [2, 4, 4, 32] - 2 batches of 4x4 images</p></li>
+<li><p>block_shape = [16, 32] - load 16 pixels</p></li>
+<li><p>coord = [0, 1, 3, 0] - start at batch 0, H=1, W=3</p></li>
+</ul>
+<section id="input-layout-values-1-32">
+<h3>Input layout (values 1-32):<a class="headerlink" href="#input-layout-values-1-32" title="Link to this heading"></a></h3>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>Batch 0 (4x4):                      Batch 1 (4x4):
+[x] = accessed pixel                 [x] = accessed pixel
+
+     W=0  W=1  W=2  W=3                  W=0  W=1  W=2  W=3
+    +----+----+----+----+              +----+----+----+----+
+H=0 |  1 |  2 |  3 |  4 |          H=0 |[17]|[18]|[19]|[20]|
+    +----+----+----+----+              +----+----+----+----+
+H=1 |  5 |  6 |  7 | [8]| &lt;-start  H=1 |[21]|[22]|[23]| 24 |
+    +----+----+----+----+              +----+----+----+----+
+H=2 |[ 9]|[10]|[11]|[12]|          H=2 | 25 | 26 | 27 | 28 |
+    +----+----+----+----+              +----+----+----+----+
+H=3 |[13]|[14]|[15]|[16]|          H=3 | 29 | 30 | 31 | 32 |
+    +----+----+----+----+              +----+----+----+----+
+</pre></div>
+</div>
+<p>Starting at (N=0, H=1, W=3), loading 16 pixels in row-major order:
+pixel  0: (N=0, H=1, W=3) -&gt; value 8   (start position)
+pixel  1: (N=0, H=2, W=0) -&gt; value 9
+pixel  2: (N=0, H=2, W=1) -&gt; value 10
+pixel  3: (N=0, H=2, W=2) -&gt; value 11
+pixel  4: (N=0, H=2, W=3) -&gt; value 12
+pixel  5: (N=0, H=3, W=0) -&gt; value 13
+pixel  6: (N=0, H=3, W=1) -&gt; value 14
+pixel  7: (N=0, H=3, W=2) -&gt; value 15
+pixel  8: (N=0, H=3, W=3) -&gt; value 16  (last pixel in batch 0)
+pixel  9: (N=1, H=0, W=0) -&gt; value 17  (wraps to batch 1)
+pixel 10: (N=1, H=0, W=1) -&gt; value 18
+pixel 11: (N=1, H=0, W=2) -&gt; value 19
+pixel 12: (N=1, H=0, W=3) -&gt; value 20
+pixel 13: (N=1, H=1, W=0) -&gt; value 21
+pixel 14: (N=1, H=1, W=1) -&gt; value 22
+pixel 15: (N=1, H=1, W=2) -&gt; value 23</p>
+<p>Key insight: Loading wraps from batch 0 into batch 1 seamlessly,
+enabling efficient access patterns for convolution operations.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">run_tma_im2col_multi_batch</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;=&quot;</span> <span class="o">*</span> <span class="mi">50</span> <span class="o">+</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Example</span> <span class="mi">4</span><span class="p">:</span> <span class="n">Loading</span> <span class="n">across</span> <span class="n">multiple</span> <span class="n">batches</span>
+<span class="n">Input</span> <span class="n">shape</span><span class="p">:</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">32</span><span class="p">]</span> <span class="p">(</span><span class="mi">2</span> <span class="n">batches</span> <span class="n">of</span> <span class="mi">4</span><span class="n">x4</span> <span class="n">images</span><span class="p">)</span>
+<span class="n">Starting</span> <span class="n">at</span><span class="p">:</span> <span class="n">batch</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">H</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">W</span><span class="o">=</span><span class="mi">3</span> <span class="p">(</span><span class="n">pixel</span> <span class="mi">8</span> <span class="ow">in</span> <span class="nb">input</span><span class="p">)</span>
+
+<span class="n">Loaded</span> <span class="n">data</span> <span class="p">(</span><span class="n">pixel_id</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+  <span class="n">pixel</span>  <span class="mi">0</span><span class="p">:</span> <span class="n">value</span>  <span class="mi">8</span>
+  <span class="n">pixel</span>  <span class="mi">1</span><span class="p">:</span> <span class="n">value</span>  <span class="mi">9</span>
+  <span class="n">pixel</span>  <span class="mi">2</span><span class="p">:</span> <span class="n">value</span> <span class="mi">10</span>
+  <span class="n">pixel</span>  <span class="mi">3</span><span class="p">:</span> <span class="n">value</span> <span class="mi">11</span>
+  <span class="n">pixel</span>  <span class="mi">4</span><span class="p">:</span> <span class="n">value</span> <span class="mi">12</span>
+  <span class="n">pixel</span>  <span class="mi">5</span><span class="p">:</span> <span class="n">value</span> <span class="mi">13</span>
+  <span class="n">pixel</span>  <span class="mi">6</span><span class="p">:</span> <span class="n">value</span> <span class="mi">14</span>
+  <span class="n">pixel</span>  <span class="mi">7</span><span class="p">:</span> <span class="n">value</span> <span class="mi">15</span>
+  <span class="n">pixel</span>  <span class="mi">8</span><span class="p">:</span> <span class="n">value</span> <span class="mi">16</span>
+  <span class="n">pixel</span>  <span class="mi">9</span><span class="p">:</span> <span class="n">value</span> <span class="mi">17</span>
+  <span class="n">pixel</span> <span class="mi">10</span><span class="p">:</span> <span class="n">value</span> <span class="mi">18</span>
+  <span class="n">pixel</span> <span class="mi">11</span><span class="p">:</span> <span class="n">value</span> <span class="mi">19</span>
+  <span class="n">pixel</span> <span class="mi">12</span><span class="p">:</span> <span class="n">value</span> <span class="mi">20</span>
+  <span class="n">pixel</span> <span class="mi">13</span><span class="p">:</span> <span class="n">value</span> <span class="mi">21</span>
+  <span class="n">pixel</span> <span class="mi">14</span><span class="p">:</span> <span class="n">value</span> <span class="mi">22</span>
+  <span class="n">pixel</span> <span class="mi">15</span><span class="p">:</span> <span class="n">value</span> <span class="mi">23</span>
+
+<span class="o">==================================================</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="example-5-multi-batch-with-padded-access-boundary">
+<h2>Example 5: Multi-Batch with Padded Access Boundary<a class="headerlink" href="#example-5-multi-batch-with-padded-access-boundary" title="Link to this heading"></a></h2>
+<p>This example combines multi-batch loading with padding.
+With pixel_box_lower_corner=[-1,-1] and pixel_box_upper_corner=[-1,-1],
+the access boundary is H in [-1, 2], W in [-1, 2] per batch.
+Starting at H=1, W=2 loads pixels that wrap across batches within
+this constrained boundary.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">run_tma_im2col_multi_batch_padded</span><span class="p">():</span>
+    <span class="c1"># Input: [2, 4, 4, 32] - 2 batches of 4x4 images (32 pixels total)</span>
+    <span class="n">inp</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">33</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+    <span class="n">block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">32</span><span class="p">]</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="p">(</span><span class="n">swizzle_byte_width</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">element_bitwidth</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">rank</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+    <span class="n">in_desc</span> <span class="o">=</span> <span class="n">TensorDescriptorIm2Col</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span>
+        <span class="n">inp</span><span class="p">,</span>
+        <span class="n">block_shape</span><span class="p">,</span>
+        <span class="n">layout</span><span class="p">,</span>
+        <span class="n">padding</span><span class="o">=</span><span class="s2">&quot;zero&quot;</span><span class="p">,</span>
+        <span class="n">element_strides</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+        <span class="n">pixel_box_lower_corner</span><span class="o">=</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+        <span class="n">pixel_box_upper_corner</span><span class="o">=</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="n">out_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+
+    <span class="c1"># coord=[0, 1, 2, 0] - start from batch 0, H=1, W=2, C=0</span>
+    <span class="n">tma_im2col_kernel</span><span class="p">[(</span><span class="mi">1</span><span class="p">,</span> <span class="p">)](</span><span class="n">in_desc</span><span class="p">,</span> <span class="n">out_desc</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Example 5: Multi-batch with padded access boundary&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Input shape: [2, 4, 4, 32], pixel_box_lower_corner=[-1,-1], &quot;</span>
+          <span class="s2">&quot;pixel_box_upper_corner=[-1,-1]&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Access boundary per batch: H in [-1, 2], W in [-1, 2]&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Starting at: batch=0, H=1, W=2&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Loaded data (pixel_id, value):&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">pixel_id</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">16</span><span class="p">):</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">out</span><span class="p">[</span><span class="n">pixel_id</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">())</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  pixel </span><span class="si">{</span><span class="n">pixel_id</span><span class="si">:</span><span class="s2">2d</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Expected: 7, then padding + data pattern as described in documentation</span>
+    <span class="n">expected</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mi">7</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">17</span><span class="p">,</span> <span class="mi">18</span><span class="p">,</span> <span class="mi">19</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">21</span><span class="p">,</span> <span class="mi">22</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">out</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">expected</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">t7</span><span class="o">.</span><span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_tma_im2col_multi_batch_padded</span><span class="p">():</span>
+    <span class="n">run_tma_im2col_multi_batch_padded</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="example-5-explanation">
+<h2>Example 5 Explanation:<a class="headerlink" href="#example-5-explanation" title="Link to this heading"></a></h2>
+<p>Configuration:</p>
+<ul class="simple">
+<li><p>Input: [2, 4, 4, 32] - 2 batches of 4x4 images</p></li>
+<li><p>pixel_box_lower_corner = [-1, -1], pixel_box_upper_corner = [-1, -1]</p></li>
+<li><p>Lower = pixel_box_lower_corner + offsets = [-1, -1] + [0, 0]</p></li>
+<li><p>Upper = [H - 1, W - 1] + pixel_box_upper_corner + offsets = [3, 3] + [-1, -1] + [0, 0]</p></li>
+<li><p>Access boundary per batch: H in [-1, 2], W in [-1, 2] (4x4 shifted region)</p></li>
+<li><p>coord = [0, 1, 2, 0] - start at batch 0, H=1, W=2</p></li>
+</ul>
+<section id="access-boundary-visualization-per-batch">
+<h3>Access boundary visualization (per batch):<a class="headerlink" href="#access-boundary-visualization-per-batch" title="Link to this heading"></a></h3>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>Batch 0 - Original 4x4 tensor:     Batch 0 - Access boundary H in [-1,2], W in [-1,2]:
+[x] = accessed pixel                [x] = accessed pixel, [0] = accessed padding
+
+     W=0  W=1  W=2  W=3                 W=-1  W=0  W=1  W=2
+    +----+----+----+----+              +----+----+----+----+
+H=0 |  1 |  2 |  3 |  4 |          H=-1|  0 |  0 |  0 |  0 |
+    +----+----+----+----+              +----+----+----+----+
+H=1 |  5 |  6 | [7]|  8 |          H=0 |  0 |  1 |  2 |  3 |
+    +----+----+----+----+              +----+----+----+----+
+H=2 | [9]|[10]|[11]| 12 |          H=1 |  0 |  5 |  6 | [7]| &lt;-start
+    +----+----+----+----+              +----+----+----+----+
+H=3 | 13 | 14 | 15 | 16 |          H=2 | [0]| [9]|[10]|[11]|
+    +----+----+----+----+              +----+----+----+----+
+
+Batch 1 - Original 4x4 tensor:     Batch 1 - Access boundary H in [-1,2], W in [-1,2]:
+[x] = accessed pixel                [x] = accessed pixel, [0] = accessed padding
+
+     W=0  W=1  W=2  W=3                 W=-1  W=0  W=1  W=2
+    +----+----+----+----+              +----+----+----+----+
+H=0 |[17]|[18]|[19]| 20 |          H=-1| [0]| [0]| [0]| [0]| &lt;- accessed padding
+    +----+----+----+----+              +----+----+----+----+
+H=1 |[21]|[22]| 23 | 24 |          H=0 | [0]|[17]|[18]|[19]|
+    +----+----+----+----+              +----+----+----+----+
+H=2 | 25 | 26 | 27 | 28 |          H=1 | [0]|[21]|[22]| 23 |
+    +----+----+----+----+              +----+----+----+----+
+H=3 | 29 | 30 | 31 | 32 |          H=2 |  0 | 25 | 26 | 27 |
+    +----+----+----+----+              +----+----+----+----+
+</pre></div>
+</div>
+<p>Starting at H=1, W=2 (value 7), loading 16 pixels within the boundary:
+pixel  0: (N=0, H=1, W=2) -&gt; value 7   (start position)
+pixel  1: (N=0, H=2, W=-1) -&gt; value 0  (padded, W=-1)
+pixel  2: (N=0, H=2, W=0) -&gt; value 9
+pixel  3: (N=0, H=2, W=1) -&gt; value 10
+pixel  4: (N=0, H=2, W=2) -&gt; value 11
+pixel  5: (N=1, H=-1, W=-1) -&gt; value 0 (wraps to batch 1, padded)
+pixel  6: (N=1, H=-1, W=0) -&gt; value 0  (padded)
+pixel  7: (N=1, H=-1, W=1) -&gt; value 0  (padded)
+pixel  8: (N=1, H=-1, W=2) -&gt; value 0  (padded)
+pixel  9: (N=1, H=0, W=-1) -&gt; value 0  (padded)
+pixel 10: (N=1, H=0, W=0) -&gt; value 17
+pixel 11: (N=1, H=0, W=1) -&gt; value 18
+pixel 12: (N=1, H=0, W=2) -&gt; value 19
+pixel 13: (N=1, H=1, W=-1) -&gt; value 0  (padded)
+pixel 14: (N=1, H=1, W=0) -&gt; value 21
+pixel 15: (N=1, H=1, W=1) -&gt; value 22</p>
+<p>Key insight: The access boundary constrains the 4x4 window per batch.
+When wrapping to the next batch, the boundary resets and padded regions
+(H=-1 or W=-1) are filled with zeros. This is useful for convolution
+operations, where it allows seamlessly processing pixel data across
+image boundaries in a single block.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">run_tma_im2col_multi_batch_padded</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;=&quot;</span> <span class="o">*</span> <span class="mi">50</span> <span class="o">+</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Example</span> <span class="mi">5</span><span class="p">:</span> <span class="n">Multi</span><span class="o">-</span><span class="n">batch</span> <span class="k">with</span> <span class="n">padded</span> <span class="n">access</span> <span class="n">boundary</span>
+<span class="n">Input</span> <span class="n">shape</span><span class="p">:</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="n">pixel_box_lower_corner</span><span class="o">=</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">pixel_box_upper_corner</span><span class="o">=</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+<span class="n">Access</span> <span class="n">boundary</span> <span class="n">per</span> <span class="n">batch</span><span class="p">:</span> <span class="n">H</span> <span class="ow">in</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">W</span> <span class="ow">in</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
+<span class="n">Starting</span> <span class="n">at</span><span class="p">:</span> <span class="n">batch</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">H</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">W</span><span class="o">=</span><span class="mi">2</span>
+
+<span class="n">Loaded</span> <span class="n">data</span> <span class="p">(</span><span class="n">pixel_id</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+  <span class="n">pixel</span>  <span class="mi">0</span><span class="p">:</span> <span class="mi">7</span>
+  <span class="n">pixel</span>  <span class="mi">1</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span>  <span class="mi">2</span><span class="p">:</span> <span class="mi">9</span>
+  <span class="n">pixel</span>  <span class="mi">3</span><span class="p">:</span> <span class="mi">10</span>
+  <span class="n">pixel</span>  <span class="mi">4</span><span class="p">:</span> <span class="mi">11</span>
+  <span class="n">pixel</span>  <span class="mi">5</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span>  <span class="mi">6</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span>  <span class="mi">7</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span>  <span class="mi">8</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span>  <span class="mi">9</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span> <span class="mi">10</span><span class="p">:</span> <span class="mi">17</span>
+  <span class="n">pixel</span> <span class="mi">11</span><span class="p">:</span> <span class="mi">18</span>
+  <span class="n">pixel</span> <span class="mi">12</span><span class="p">:</span> <span class="mi">19</span>
+  <span class="n">pixel</span> <span class="mi">13</span><span class="p">:</span> <span class="mi">0</span>
+  <span class="n">pixel</span> <span class="mi">14</span><span class="p">:</span> <span class="mi">21</span>
+  <span class="n">pixel</span> <span class="mi">15</span><span class="p">:</span> <span class="mi">22</span>
+
+<span class="o">==================================================</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="implicit-gemm-with-tma-im2col">
+<h2>Implicit GEMM with TMA im2col<a class="headerlink" href="#implicit-gemm-with-tma-im2col" title="Link to this heading"></a></h2>
+<p><strong>Explicit im2col</strong> physically constructs the matrix A in memory. This is
+simple but wastes memory because overlapping patches duplicate input data.
+For an R x S filter, each input element may be copied up to R * S times!</p>
+<p><strong>Implicit GEMM</strong> avoids materializing A. During the GEMM K-loop, it computes
+input addresses on the fly for each filter position <code class="docutils literal notranslate"><span class="pre">(r,</span> <span class="pre">s)</span></code> and channel
+block. On Hopper+ GPUs, TMA provides a dedicated <strong>im2col mode</strong> that performs
+this address generation in hardware. We configure one
+<code class="docutils literal notranslate"><span class="pre">TensorDescriptorIm2Col</span></code> (see the launcher), and each TMA load receives a
+filter offset <code class="docutils literal notranslate"><span class="pre">[r,</span> <span class="pre">s]</span></code> that selects which kernel position to gather. TMA
+then handles output-position strides, zero-padding for out-of-bounds
+accesses, and batch-boundary wrapping automatically, with no register-level
+index arithmetic.</p>
+<p>Pseudocode:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># GEMM dimensions</span>
+<span class="n">M</span> <span class="o">=</span> <span class="n">N</span> <span class="o">*</span> <span class="n">out_h</span> <span class="o">*</span> <span class="n">out_w</span>        <span class="c1"># output spatial positions</span>
+<span class="n">N_gemm</span> <span class="o">=</span> <span class="n">Co</span>                  <span class="c1"># output channels</span>
+<span class="n">K</span> <span class="o">=</span> <span class="n">R</span> <span class="o">*</span> <span class="n">S</span> <span class="o">*</span> <span class="n">Ci</span>               <span class="c1"># reduction dimension</span>
+
+<span class="k">for</span> <span class="n">each</span> <span class="n">M</span><span class="o">-</span><span class="n">tile</span> <span class="p">(</span><span class="n">output</span> <span class="n">positions</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">each</span> <span class="n">N</span><span class="o">-</span><span class="n">tile</span> <span class="p">(</span><span class="n">output</span> <span class="n">channels</span><span class="p">):</span>
+        <span class="n">acc</span> <span class="o">=</span> <span class="n">zeros</span><span class="p">(</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">R</span><span class="p">):</span>                  <span class="c1"># filter height</span>
+            <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">S</span><span class="p">):</span>              <span class="c1"># filter width</span>
+                <span class="k">for</span> <span class="n">ci_block</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">Ci</span> <span class="o">//</span> <span class="n">BLOCK_K</span><span class="p">):</span>
+                    <span class="c1"># Input tile via TMA im2col:</span>
+                    <span class="c1"># input[batch, out_y*stride+r-pad, out_x*stride+s-pad, ci_block*BLOCK_K:...]</span>
+                    <span class="n">tma</span><span class="o">.</span><span class="n">async_load_im2col</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+                    <span class="n">A_tile</span> <span class="o">=</span> <span class="n">a_smem</span>         <span class="c1"># [BLOCK_M, BLOCK_K]</span>
+
+                    <span class="c1"># Weight tile via standard TMA:</span>
+                    <span class="c1"># weight[co_start:..., r, s, ci_block*BLOCK_K:...]</span>
+                    <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+                    <span class="n">B_tile</span> <span class="o">=</span> <span class="n">b_smem</span>         <span class="c1"># [BLOCK_N, BLOCK_K]</span>
+
+                    <span class="c1"># Matrix multiply-accumulate (details omitted here)</span>
+                    <span class="n">acc</span> <span class="o">+=</span> <span class="n">A_tile</span> <span class="o">@</span> <span class="n">B_tile</span><span class="o">^</span><span class="n">T</span>
+
+        <span class="c1"># Store output tile via TMA</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Key insight: we never materialize the full im2col matrix; address generation
+happens inside the K-loop via TMA im2col.</p>
+</section>
+<section id="gluon-kernel">
+<h2>Gluon Kernel<a class="headerlink" href="#gluon-kernel" title="Link to this heading"></a></h2>
+<p>The kernel below implements a single-buffered implicit GEMM convolution.
+<code class="docutils literal notranslate"><span class="pre">store_output_tile</span></code> is factored out as a helper; everything else is
+inline so the reader can follow the im2col algorithm top-to-bottom.</p>
+<p><code class="docutils literal notranslate"><span class="pre">MMAImpl</span></code> (from <code class="docutils literal notranslate"><span class="pre">07-persistence.py</span></code>) lets the same kernel run on Hopper
+(WGMMA, accumulator in registers) and Blackwell (tcgen05, accumulator in
+tensor memory) without any code changes.</p>
+<p>Convolution data layout convention for this section:</p>
+<ul class="simple">
+<li><p>Input:  NHWC  <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">H,</span> <span class="pre">W,</span> <span class="pre">Ci]</span></code></p></li>
+<li><p>Weight: <code class="docutils literal notranslate"><span class="pre">[Co,</span> <span class="pre">R,</span> <span class="pre">S,</span> <span class="pre">Ci]</span></code>  (output-channels first)</p></li>
+<li><p>Output: NHWC  <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">out_h,</span> <span class="pre">out_w,</span> <span class="pre">Co]</span></code></p></li>
+</ul>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">decompose_m_offset</span><span class="p">(</span><span class="n">pid_m</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Map M-tile index to (offs_m, batch, out_y, out_x) for TMA im2col coordinates.&quot;&quot;&quot;</span>
+    <span class="n">offs_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
+    <span class="n">batch_id</span> <span class="o">=</span> <span class="n">offs_m</span> <span class="o">//</span> <span class="p">(</span><span class="n">out_h</span> <span class="o">*</span> <span class="n">out_w</span><span class="p">)</span>
+    <span class="n">m_residual</span> <span class="o">=</span> <span class="n">offs_m</span> <span class="o">%</span> <span class="p">(</span><span class="n">out_h</span> <span class="o">*</span> <span class="n">out_w</span><span class="p">)</span>
+    <span class="n">out_y</span> <span class="o">=</span> <span class="n">m_residual</span> <span class="o">//</span> <span class="n">out_w</span>
+    <span class="n">out_x</span> <span class="o">=</span> <span class="n">m_residual</span> <span class="o">%</span> <span class="n">out_w</span>
+    <span class="k">return</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">batch_id</span><span class="p">,</span> <span class="n">out_y</span><span class="p">,</span> <span class="n">out_x</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">init_accumulator</span><span class="p">(</span><span class="n">in_desc</span><span class="p">,</span> <span class="n">weight_desc</span><span class="p">,</span> <span class="n">MMAImpl</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+                     <span class="n">num_warps</span><span class="p">:</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Allocate shared-memory tiles, MMA accumulator, and TMA barrier.&quot;&quot;&quot;</span>
+    <span class="n">a_smem</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">in_desc</span><span class="o">.</span><span class="n">block_shape</span><span class="p">,</span> <span class="n">in_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">b_smem</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">weight_desc</span><span class="o">.</span><span class="n">block_shape</span><span class="p">,</span> <span class="n">weight_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">MMAImpl</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">tma_bar</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">ttgl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">tma_bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">a_smem</span><span class="p">,</span> <span class="n">b_smem</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">tma_bar</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">store_output_tile</span><span class="p">(</span><span class="n">mma</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">out_desc</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Wait for the final MMA, downcast, and write the output tile via TMA.&quot;&quot;&quot;</span>
+    <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">acc</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">take_result</span><span class="p">()</span>
+    <span class="n">c_smem</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">out_desc</span><span class="o">.</span><span class="n">block_shape</span><span class="p">,</span> <span class="n">out_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+    <span class="n">c_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
+    <span class="n">fence_async_shared</span><span class="p">()</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">conv2d_im2col_kernel</span><span class="p">(</span>
+    <span class="n">in_desc</span><span class="p">,</span>
+    <span class="n">weight_desc</span><span class="p">,</span>
+    <span class="n">out_desc</span><span class="p">,</span>
+    <span class="n">R</span><span class="p">,</span>
+    <span class="n">S</span><span class="p">,</span>
+    <span class="n">Ci</span><span class="p">,</span>
+    <span class="n">out_h</span><span class="p">,</span>
+    <span class="n">out_w</span><span class="p">,</span>
+    <span class="n">pad_h</span><span class="p">,</span>
+    <span class="n">pad_w</span><span class="p">,</span>
+    <span class="n">stride_h</span><span class="p">:</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">stride_w</span><span class="p">:</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">MMAImpl</span><span class="p">:</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">BLOCK_K</span><span class="p">:</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">num_warps</span><span class="p">:</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Implicit GEMM convolution kernel using TMA im2col + MMA.</span>
+<span class="sd">    Works on both Hopper (WGMMA) and Blackwell (tcgen05) via MMAImpl.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">in_desc</span><span class="o">.</span><span class="n">dtype</span>
+
+    <span class="c1"># for each M-tile / N-tile:</span>
+    <span class="n">pid_m</span><span class="p">,</span> <span class="n">pid_n</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">offs_m</span><span class="p">,</span> <span class="n">batch_id</span><span class="p">,</span> <span class="n">out_y</span><span class="p">,</span> <span class="n">out_x</span> <span class="o">=</span> <span class="n">decompose_m_offset</span><span class="p">(</span><span class="n">pid_m</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">)</span>
+
+    <span class="c1"># acc = zeros(BLOCK_M, BLOCK_N)</span>
+    <span class="n">a_smem</span><span class="p">,</span> <span class="n">b_smem</span><span class="p">,</span> <span class="n">mma</span><span class="p">,</span> <span class="n">tma_bar</span> <span class="o">=</span> <span class="n">init_accumulator</span><span class="p">(</span><span class="n">in_desc</span><span class="p">,</span> <span class="n">weight_desc</span><span class="p">,</span> <span class="n">MMAImpl</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
+    <span class="n">phase</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="c1"># for r in range(R): for s in range(S): for ci_blk in range(ceil(Ci/BLOCK_K))</span>
+    <span class="c1"># When Ci is not a multiple of BLOCK_K, last channel block is partial; TMA zero-fills OOB.</span>
+    <span class="n">ci_num_blocks</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">Ci</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">)</span>
+    <span class="n">total_k_iters</span> <span class="o">=</span> <span class="n">R</span> <span class="o">*</span> <span class="n">S</span> <span class="o">*</span> <span class="n">ci_num_blocks</span>
+    <span class="k">for</span> <span class="n">k_iter</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">total_k_iters</span><span class="p">):</span>
+        <span class="n">ci_block</span><span class="p">,</span> <span class="n">rs_idx</span> <span class="o">=</span> <span class="n">k_iter</span> <span class="o">%</span> <span class="n">ci_num_blocks</span><span class="p">,</span> <span class="n">k_iter</span> <span class="o">//</span> <span class="n">ci_num_blocks</span>
+        <span class="n">r</span><span class="p">,</span> <span class="n">s</span> <span class="o">=</span> <span class="n">rs_idx</span> <span class="o">//</span> <span class="n">S</span><span class="p">,</span> <span class="n">rs_idx</span> <span class="o">%</span> <span class="n">S</span>
+
+        <span class="c1"># A = load_input[batch, oh*stride+r-pad, ow*stride+s-pad, ci_blk*BLOCK_K:…]</span>
+        <span class="c1"># Equivalent TMA-im2col mapping:</span>
+        <span class="c1">#   coord   = [batch_id, out_y*stride_h-pad_h, out_x*stride_w-pad_w, ci_block*BLOCK_K]</span>
+        <span class="c1">#   offsets = [r, s]</span>
+        <span class="c1"># TMA applies offsets to the spatial coords, so start is:</span>
+        <span class="c1">#   [batch_id, out_y*stride_h-pad_h+r, out_x*stride_w-pad_w+s, ci_block*BLOCK_K]</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">tma_bar</span><span class="p">,</span> <span class="n">in_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span> <span class="o">+</span> <span class="n">weight_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_load_im2col</span><span class="p">(</span>
+            <span class="n">in_desc</span><span class="p">,</span>
+            <span class="p">[</span><span class="n">batch_id</span><span class="p">,</span> <span class="n">out_y</span> <span class="o">*</span> <span class="n">stride_h</span> <span class="o">-</span> <span class="n">pad_h</span><span class="p">,</span> <span class="n">out_x</span> <span class="o">*</span> <span class="n">stride_w</span> <span class="o">-</span> <span class="n">pad_w</span><span class="p">,</span> <span class="n">ci_block</span> <span class="o">*</span> <span class="n">BLOCK_K</span><span class="p">],</span>
+            <span class="p">[</span><span class="n">r</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">int16</span><span class="p">),</span> <span class="n">s</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">int16</span><span class="p">)],</span>
+            <span class="n">tma_bar</span><span class="p">,</span>
+            <span class="n">a_smem</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="c1"># B = load_weight[co_start:…, k_offset:k_offset+BLOCK_K].  Uses Ci (not</span>
+        <span class="c1"># ci_num_blocks*BLOCK_K) as the per-(r,s) stride so offsets stay aligned with the</span>
+        <span class="c1"># flat (Co, R*S*Ci) layout.  When the last ci block bleeds into the next (r,s)</span>
+        <span class="c1"># group, those weight elements are multiplied by zero-filled input channels (TMA</span>
+        <span class="c1"># zero-fills input channels past Ci), so the result is still correct.</span>
+        <span class="n">k_offset</span> <span class="o">=</span> <span class="n">r</span> <span class="o">*</span> <span class="n">S</span> <span class="o">*</span> <span class="n">Ci</span> <span class="o">+</span> <span class="n">s</span> <span class="o">*</span> <span class="n">Ci</span> <span class="o">+</span> <span class="n">ci_block</span> <span class="o">*</span> <span class="n">BLOCK_K</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">weight_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">k_offset</span><span class="p">],</span> <span class="n">tma_bar</span><span class="p">,</span> <span class="n">b_smem</span><span class="p">)</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">tma_bar</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="n">phase</span><span class="p">)</span>
+
+        <span class="c1"># acc += A @ B^T</span>
+        <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">issue_async_mma</span><span class="p">(</span><span class="n">a_smem</span><span class="p">,</span> <span class="n">b_smem</span><span class="o">.</span><span class="n">permute</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">)))</span>
+
+        <span class="n">phase</span> <span class="o">^=</span> <span class="mi">1</span>
+
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">invalidate</span><span class="p">(</span><span class="n">tma_bar</span><span class="p">)</span>
+
+    <span class="c1"># store output[...] = acc</span>
+    <span class="n">store_output_tile</span><span class="p">(</span><span class="n">mma</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">out_desc</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_N</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="host-side-launcher">
+<h2>Host-Side Launcher<a class="headerlink" href="#host-side-launcher" title="Link to this heading"></a></h2>
+<p>The host side sets up TMA descriptors and launches the kernel.
+The critical part is configuring the <code class="docutils literal notranslate"><span class="pre">TensorDescriptorIm2Col</span></code> with the
+correct <code class="docutils literal notranslate"><span class="pre">pixel_box</span></code>, <code class="docutils literal notranslate"><span class="pre">element_strides</span></code>, and <code class="docutils literal notranslate"><span class="pre">padding</span></code> to match
+the convolution parameters.</p>
+<p><code class="docutils literal notranslate"><span class="pre">t7.select_mma_impl()</span></code> automatically picks the right MMA backend:
+<code class="docutils literal notranslate"><span class="pre">WGMMA</span></code> on Hopper (SM 9.x) or <code class="docutils literal notranslate"><span class="pre">MMAv5</span></code> on Blackwell (SM 10.x).</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">conv2d_tma_im2col</span><span class="p">(</span><span class="n">input_nhwc</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    2D convolution using TMA im2col + MMA (Hopper / Blackwell).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        input_nhwc: [N, H, W, Ci] in NHWC format, float16</span>
+<span class="sd">        weight:     [Co, R, S, Ci] filter tensor, float16</span>
+<span class="sd">        stride:     convolution stride (default: 1)</span>
+<span class="sd">        padding:    convolution padding (default: 0)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">MMAImpl</span> <span class="o">=</span> <span class="n">t7</span><span class="o">.</span><span class="n">select_mma_impl</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="n">MMAImpl</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;conv2d_tma_im2col requires a Hopper or Blackwell GPU&quot;</span>
+
+    <span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span> <span class="o">=</span> <span class="n">input_nhwc</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">Ci_w</span> <span class="o">=</span> <span class="n">weight</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">Ci</span> <span class="o">==</span> <span class="n">Ci_w</span><span class="p">,</span> <span class="s2">&quot;Channel mismatch&quot;</span>
+    <span class="k">assert</span> <span class="n">stride</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;stride must be positive, got </span><span class="si">{</span><span class="n">stride</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="k">assert</span> <span class="n">padding</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;padding must be non-negative, got </span><span class="si">{</span><span class="n">padding</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="c1"># Ci may be any positive value; when not divisible by BLOCK_K, last tile is partial (TMA zero-fills OOB).</span>
+
+    <span class="n">out_h</span> <span class="o">=</span> <span class="p">(</span><span class="n">H</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">padding</span> <span class="o">-</span> <span class="n">R</span><span class="p">)</span> <span class="o">//</span> <span class="n">stride</span> <span class="o">+</span> <span class="mi">1</span>
+    <span class="n">out_w</span> <span class="o">=</span> <span class="p">(</span><span class="n">W</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">padding</span> <span class="o">-</span> <span class="n">S</span><span class="p">)</span> <span class="o">//</span> <span class="n">stride</span> <span class="o">+</span> <span class="mi">1</span>
+    <span class="k">assert</span> <span class="n">out_h</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">out_w</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid convolution geometry: out_h=</span><span class="si">{</span><span class="n">out_h</span><span class="si">}</span><span class="s2">, out_w=</span><span class="si">{</span><span class="n">out_w</span><span class="si">}</span><span class="s2">, &quot;</span>
+                                     <span class="sa">f</span><span class="s2">&quot;H=</span><span class="si">{</span><span class="n">H</span><span class="si">}</span><span class="s2">, W=</span><span class="si">{</span><span class="n">W</span><span class="si">}</span><span class="s2">, R=</span><span class="si">{</span><span class="n">R</span><span class="si">}</span><span class="s2">, S=</span><span class="si">{</span><span class="n">S</span><span class="si">}</span><span class="s2">, stride=</span><span class="si">{</span><span class="n">stride</span><span class="si">}</span><span class="s2">, padding=</span><span class="si">{</span><span class="n">padding</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">M_GEMM</span> <span class="o">=</span> <span class="n">N</span> <span class="o">*</span> <span class="n">out_h</span> <span class="o">*</span> <span class="n">out_w</span>
+    <span class="n">N_GEMM</span> <span class="o">=</span> <span class="n">Co</span>
+
+    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">M_GEMM</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">input_nhwc</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">input_nhwc</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+
+    <span class="c1"># ── TMA im2col descriptor for input ──────────────────────────────────</span>
+    <span class="c1"># This configures TMA&#39;s hardware im2col mode on the [N, H, W, Ci]</span>
+    <span class="c1"># input tensor. Key parameters:</span>
+    <span class="c1">#</span>
+    <span class="c1">#   block_shape  = [BLOCK_M, BLOCK_K]</span>
+    <span class="c1">#       BLOCK_M output positions x BLOCK_K channels per async copy.</span>
+    <span class="c1">#</span>
+    <span class="c1">#   element_strides = [1, stride, stride, 1]</span>
+    <span class="c1">#       TMA steps by `stride` in H/W between consecutive output</span>
+    <span class="c1">#       positions, matching the convolution stride.</span>
+    <span class="c1">#</span>
+    <span class="c1">#   pixel_box_{lower,upper}_corner</span>
+    <span class="c1">#       Defines the spatial window that TMA traverses per batch.</span>
+    <span class="c1">#       The window must cover exactly out_h * out_w pixels:</span>
+    <span class="c1">#         window_h = (out_h - 1) * stride + 1</span>
+    <span class="c1">#         upper_h  = window_h - H - padding</span>
+    <span class="c1">#       Lower corner is [-padding, -padding].</span>
+    <span class="c1">#</span>
+    <span class="c1">#   padding = &quot;zero&quot;</span>
+    <span class="c1">#       Out-of-bounds reads (from conv padding) return 0 automatically.</span>
+    <span class="c1">#</span>
+    <span class="n">upper_h</span> <span class="o">=</span> <span class="p">(</span><span class="n">out_h</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">stride</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">H</span> <span class="o">-</span> <span class="n">padding</span>
+    <span class="n">upper_w</span> <span class="o">=</span> <span class="p">(</span><span class="n">out_w</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">stride</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">W</span> <span class="o">-</span> <span class="n">padding</span>
+
+    <span class="n">input_block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">]</span>
+    <span class="n">input_layout</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span><span class="n">input_block_shape</span><span class="p">,</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">in_desc</span> <span class="o">=</span> <span class="n">TensorDescriptorIm2Col</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span>
+        <span class="n">input_nhwc</span><span class="p">,</span>
+        <span class="n">input_block_shape</span><span class="p">,</span>
+        <span class="n">input_layout</span><span class="p">,</span>
+        <span class="n">padding</span><span class="o">=</span><span class="s2">&quot;zero&quot;</span><span class="p">,</span>
+        <span class="n">element_strides</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+        <span class="n">pixel_box_lower_corner</span><span class="o">=</span><span class="p">[</span><span class="o">-</span><span class="n">padding</span><span class="p">,</span> <span class="o">-</span><span class="n">padding</span><span class="p">],</span>
+        <span class="n">pixel_box_upper_corner</span><span class="o">=</span><span class="p">[</span><span class="n">upper_h</span><span class="p">,</span> <span class="n">upper_w</span><span class="p">],</span>
+    <span class="p">)</span>
+
+    <span class="c1"># ── TMA descriptor for weight ────────────────────────────────────────</span>
+    <span class="c1"># Reshape weight [Co, R, S, Ci] -&gt; [Co, R*S*Ci] for standard 2D TMA</span>
+    <span class="n">weight_2d</span> <span class="o">=</span> <span class="n">weight</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">Co</span><span class="p">,</span> <span class="n">R</span> <span class="o">*</span> <span class="n">S</span> <span class="o">*</span> <span class="n">Ci</span><span class="p">)</span>
+    <span class="n">weight_block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">]</span>
+    <span class="n">weight_layout</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span><span class="n">weight_block_shape</span><span class="p">,</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">weight_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">weight_2d</span><span class="p">,</span> <span class="n">weight_block_shape</span><span class="p">,</span> <span class="n">weight_layout</span><span class="p">)</span>
+
+    <span class="c1"># ── TMA descriptor for output ────────────────────────────────────────</span>
+    <span class="c1"># Output is [M_GEMM, Co] (flattened spatial dims).</span>
+    <span class="n">out_block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">]</span>
+    <span class="n">out_layout</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span><span class="n">out_block_shape</span><span class="p">,</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">out_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">out_block_shape</span><span class="p">,</span> <span class="n">out_layout</span><span class="p">)</span>
+
+    <span class="c1"># ── Launch kernel ────────────────────────────────────────────────────</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M_GEMM</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">),</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N_GEMM</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">))</span>
+    <span class="n">conv2d_im2col_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
+        <span class="n">in_desc</span><span class="p">,</span>
+        <span class="n">weight_desc</span><span class="p">,</span>
+        <span class="n">out_desc</span><span class="p">,</span>
+        <span class="n">R</span><span class="p">,</span>
+        <span class="n">S</span><span class="p">,</span>
+        <span class="n">Ci</span><span class="p">,</span>
+        <span class="n">out_h</span><span class="p">,</span>
+        <span class="n">out_w</span><span class="p">,</span>
+        <span class="n">padding</span><span class="p">,</span>
+        <span class="n">padding</span><span class="p">,</span>
+        <span class="n">stride</span><span class="p">,</span>
+        <span class="n">stride</span><span class="p">,</span>
+        <span class="n">MMAImpl</span><span class="o">=</span><span class="n">MMAImpl</span><span class="p">,</span>
+        <span class="n">BLOCK_M</span><span class="o">=</span><span class="n">BLOCK_M</span><span class="p">,</span>
+        <span class="n">BLOCK_N</span><span class="o">=</span><span class="n">BLOCK_N</span><span class="p">,</span>
+        <span class="n">BLOCK_K</span><span class="o">=</span><span class="n">BLOCK_K</span><span class="p">,</span>
+        <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">output</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">,</span> <span class="n">Co</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="testing">
+<h2>Testing<a class="headerlink" href="#testing" title="Link to this heading"></a></h2>
+<p>We compare our TMA im2col convolution against PyTorch’s conv2d.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;N&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;H,W&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">16</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;Ci,Co&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="p">(</span><span class="mi">96</span><span class="p">,</span> <span class="mi">96</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;R,S&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;stride&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;padding&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">t7</span><span class="o">.</span><span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper or newer GPU (SM 9.x+)&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_conv2d_tma_im2col</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">):</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">x_nhwc</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">w_co_r_s_ci</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+
+    <span class="c1"># Our kernel</span>
+    <span class="n">triton_out</span> <span class="o">=</span> <span class="n">conv2d_tma_im2col</span><span class="p">(</span><span class="n">x_nhwc</span><span class="p">,</span> <span class="n">w_co_r_s_ci</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="n">padding</span><span class="p">)</span>
+
+    <span class="c1"># PyTorch reference (input NCHW, weight OIHW)</span>
+    <span class="n">x_nchw</span> <span class="o">=</span> <span class="n">x_nhwc</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+    <span class="n">w_oihw</span> <span class="o">=</span> <span class="n">w_co_r_s_ci</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+    <span class="n">torch_out</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">functional</span><span class="o">.</span><span class="n">conv2d</span><span class="p">(</span><span class="n">x_nchw</span><span class="p">,</span> <span class="n">w_oihw</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="n">padding</span><span class="p">)</span>
+    <span class="n">torch_out_nhwc</span> <span class="o">=</span> <span class="n">torch_out</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">triton_out</span><span class="p">,</span> <span class="n">torch_out_nhwc</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="summary">
+<h2>Summary<a class="headerlink" href="#summary" title="Link to this heading"></a></h2>
+<p>In this tutorial we learned:</p>
+<ol class="arabic">
+<li><p><strong>TMA im2col fundamentals</strong>: How <code class="docutils literal notranslate"><span class="pre">TensorDescriptorIm2Col</span></code> parameters
+(<code class="docutils literal notranslate"><span class="pre">pixel_box_lower_corner</span></code>, <code class="docutils literal notranslate"><span class="pre">pixel_box_upper_corner</span></code>, <code class="docutils literal notranslate"><span class="pre">element_strides</span></code>,
+<code class="docutils literal notranslate"><span class="pre">padding</span></code>) control access boundaries on NHWC tensors, including padded
+regions, offset shifts, and multi-batch wrapping.</p></li>
+<li><p><strong>Convolution as GEMM</strong>: The im2col transformation converts convolution
+into a matrix multiplication by rearranging input patches into rows of
+a matrix.</p></li>
+<li><p><strong>Implicit GEMM</strong>: Instead of materializing the im2col matrix, we compute
+input addresses on-the-fly during the GEMM K-loop, saving memory.</p></li>
+<li><p><strong>TMA im2col</strong>: TMA hardware natively supports im2col address
+computation, eliminating register pressure from index arithmetic. We
+configure a <code class="docutils literal notranslate"><span class="pre">TensorDescriptorIm2Col</span></code> with convolution parameters
+(strides, padding, pixel box), and TMA handles the rest. This feature
+is available on both Hopper and Blackwell GPUs.</p></li>
+<li><p><strong>Unified kernel via MMA abstraction</strong>: By using the <code class="docutils literal notranslate"><span class="pre">WGMMA</span></code> / <code class="docutils literal notranslate"><span class="pre">MMAv5</span></code>
+abstraction from <code class="docutils literal notranslate"><span class="pre">07-persistence.py</span></code>, a single kernel implementation
+works on both Hopper and Blackwell. The abstraction handles:</p>
+<ul class="simple">
+<li><p>Accumulator allocation (registers on Hopper, tensor memory on Blackwell)</p></li>
+<li><p>MMA barrier management</p></li>
+<li><p>Async MMA issue and wait</p></li>
+</ul>
+<p>The kernel itself only deals with TMA loads and the unified MMA API:
+<code class="docutils literal notranslate"><span class="pre">initialize</span></code>, <code class="docutils literal notranslate"><span class="pre">issue_async_mma</span></code>, <code class="docutils literal notranslate"><span class="pre">wait_num_outstanding</span></code>, <code class="docutils literal notranslate"><span class="pre">take_result</span></code>.</p>
+</li>
+</ol>
+<p>For a production-quality implementation with warp specialization and
+pipelining, see <code class="docutils literal notranslate"><span class="pre">examples/gluon/02-convolution.py</span></code>.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="c1"># Conv2d demo</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span>
+    <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span>
+
+    <span class="n">x_nhwc</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">w_co_r_s_ci</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+
+    <span class="n">triton_out</span> <span class="o">=</span> <span class="n">conv2d_tma_im2col</span><span class="p">(</span><span class="n">x_nhwc</span><span class="p">,</span> <span class="n">w_co_r_s_ci</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="n">padding</span><span class="p">)</span>
+
+    <span class="c1"># Compare with PyTorch (input NCHW, weight OIHW)</span>
+    <span class="n">x_nchw</span> <span class="o">=</span> <span class="n">x_nhwc</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+    <span class="n">w_oihw</span> <span class="o">=</span> <span class="n">w_co_r_s_ci</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+    <span class="n">torch_out</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">functional</span><span class="o">.</span><span class="n">conv2d</span><span class="p">(</span><span class="n">x_nchw</span><span class="p">,</span> <span class="n">w_oihw</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="n">padding</span><span class="p">)</span>
+    <span class="n">torch_out_nhwc</span> <span class="o">=</span> <span class="n">torch_out</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">max_err</span> <span class="o">=</span> <span class="p">(</span><span class="n">triton_out</span> <span class="o">-</span> <span class="n">torch_out_nhwc</span><span class="p">)</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Conv2d: N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, H=</span><span class="si">{</span><span class="n">H</span><span class="si">}</span><span class="s2">, W=</span><span class="si">{</span><span class="n">W</span><span class="si">}</span><span class="s2">, Ci=</span><span class="si">{</span><span class="n">Ci</span><span class="si">}</span><span class="s2">, Co=</span><span class="si">{</span><span class="n">Co</span><span class="si">}</span><span class="s2">, R=</span><span class="si">{</span><span class="n">R</span><span class="si">}</span><span class="s2">, S=</span><span class="si">{</span><span class="n">S</span><span class="si">}</span><span class="s2">, &quot;</span>
+          <span class="sa">f</span><span class="s2">&quot;stride=</span><span class="si">{</span><span class="n">stride</span><span class="si">}</span><span class="s2">, pad=</span><span class="si">{</span><span class="n">padding</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Output shape: </span><span class="si">{</span><span class="nb">list</span><span class="p">(</span><span class="n">triton_out</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Max absolute error vs PyTorch: </span><span class="si">{</span><span class="n">max_err</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;PASSED!&quot;</span> <span class="k">if</span> <span class="n">max_err</span> <span class="o">&lt;</span> <span class="mf">0.02</span> <span class="k">else</span> <span class="s2">&quot;FAILED!&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>Conv2d: N=4, H=16, W=16, Ci=64, Co=64, R=3, S=3, stride=1, pad=1
+Output shape: [4, 16, 16, 64]
+Max absolute error vs PyTorch: 0.000000
+PASSED!
+</pre></div>
+</div>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="cluster-launch-control.html" class="btn btn-neutral float-left" title="Cluster Launch Control (CLC)" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="multicta.html" class="btn btn-neutral float-right" title="Multi-CTA" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

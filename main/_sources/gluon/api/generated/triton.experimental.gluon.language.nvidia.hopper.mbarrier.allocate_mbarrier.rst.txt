@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.mbarrier.allocate\_mbarrier
+============================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.mbarrier
+
+.. autofunction:: allocate_mbarrier

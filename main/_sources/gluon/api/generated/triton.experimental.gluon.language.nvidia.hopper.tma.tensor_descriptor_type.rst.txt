@@ -1,0 +1,33 @@
+triton.experimental.gluon.language.nvidia.hopper.tma.tensor\_descriptor\_type
+=============================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.tma
+
+.. autoclass:: tensor_descriptor_type
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~tensor_descriptor_type.__init__
+      ~tensor_descriptor_type.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~tensor_descriptor_type.nbytes_per_cta
+      ~tensor_descriptor_type.block_type
+      ~tensor_descriptor_type.shape_type
+      ~tensor_descriptor_type.strides_type
+      ~tensor_descriptor_type.layout
+   
+   
