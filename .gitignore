@@ -76,8 +76,11 @@ third_party/nvidia/backend/lib/gsan.ll
 
 # Docs
 docs/_build/
+docs/_generated/
+docs/gluon/api/generated/
 docs/python-api/generated/
 docs/dialects/
+docs/getting-started/examples
 docs/getting-started/tutorials
 docs/sg_execution_times.rst
 !python/tutorials/*.py

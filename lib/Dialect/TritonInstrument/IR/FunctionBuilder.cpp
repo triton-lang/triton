@@ -1674,13 +1674,13 @@ void FunctionBuilder::createTrackVisibleReadsCall(ImplicitLocOpBuilder &b,
 void FunctionBuilder::createTrackBarrierWriteForBufferCall(
     ImplicitLocOpBuilder &b, Value mbar, Value buf, uint32_t length, Value pred,
     MemType memType, Operation *insertPoint, Value barrierRecipientCTAs,
-    Value effectRecipientCTAs) {
+    Value effectRecipientCTAs, bool diagonalEffectRecipientCTAs) {
   if (auxData.barriers.empty() || auxData.buffers[(int)memType].empty() ||
       auxData.writeTracking[(int)memType].empty()) {
     return;
   }
   assert(!auxData.barrierWriteRecipients.empty() &&
-         "barrier write recipients must exist when tracking TMA writes");
+         "barrier write recipients must exist when tracking EffectWrites");
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   Value barriersVal = auxData.barriers.at(insertPoint).value;
@@ -1717,10 +1717,10 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
       b, "track_barrier_write_for_buffer", args,
       /*assertInfo=*/std::nullopt,
       {barriersType, buffersType, writeTrackingType, barrierWriteRecipientsType,
-       (uint64_t)memType},
-      [barriersType, buffersType, writeTrackingType,
-       barrierWriteRecipientsType](ImplicitLocOpBuilder &fb,
-                                   Block *entryBlock) {
+       (uint64_t)memType, (uint64_t)diagonalEffectRecipientCTAs},
+      [barriersType, buffersType, writeTrackingType, barrierWriteRecipientsType,
+       diagonalEffectRecipientCTAs](ImplicitLocOpBuilder &fb,
+                                    Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value mbarLengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -1747,6 +1747,30 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
             createCmpIntTensorScalar(fb, barriers, barrierDescriptor);
         Value effectRecipientCTAsTensor = triton::SplatOp::create(
             fb, barrierWriteRecipientsType, effectRecipientCTAs);
+        if (diagonalEffectRecipientCTAs) {
+          // Expand the effect CTA mask diagonally: barrier row i publishes only
+          // bit i. This models per-CTA results, while the default replicated
+          // mask models TMA multicast where a barrier publishes all result
+          // rows.
+          auto encoding = cast<ttg::DistributedEncodingTrait>(
+              barrierWriteRecipientsType.getEncoding());
+          auto rowSliceEncoding =
+              tti::getSingleDimSliceEncoding(encoding, /*dim=*/0);
+          int numCTAs = barrierWriteRecipientsType.getShape()[0];
+          auto rowType = RankedTensorType::get({numCTAs}, fb.getI32Type(),
+                                               rowSliceEncoding);
+          Value rowIdx = triton::MakeRangeOp::create(fb, rowType,
+                                                     /*start=*/0,
+                                                     /*end=*/numCTAs);
+          auto indexType =
+              cast<RankedTensorType>(barrierWriteRecipientsType.cloneWith(
+                  std::nullopt, fb.getI32Type()));
+          rowIdx = convertAndBroadcast(fb, rowIdx, {0}, indexType);
+          Value one = tti::createConstIntTensor(fb, fb.getLoc(), 1, indexType);
+          Value rowBit = arith::ShLIOp::create(fb, one, rowIdx);
+          effectRecipientCTAsTensor =
+              arith::AndIOp::create(fb, effectRecipientCTAsTensor, rowBit);
+        }
         Value updatedBarrierWriteRecipients = arith::OrIOp::create(
             fb, barrierWriteRecipients, effectRecipientCTAsTensor);
         updatedBarrierWriteRecipients = arith::SelectOp::create(
@@ -2365,11 +2389,10 @@ void FunctionBuilder::createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b,
         Value zeroTensor =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
 
-        constexpr uint64_t fullMask =
-            tti::THREADS_BITMASK_SIZE == 64
-                ? std::numeric_limits<uint64_t>::max()
-                : (std::numeric_limits<uint64_t>::max() >>
-                   (64 - tti::THREADS_BITMASK_SIZE));
+        uint64_t fullMask = tti::THREADS_BITMASK_SIZE == 64
+                                ? std::numeric_limits<uint64_t>::max()
+                                : (std::numeric_limits<uint64_t>::max() >>
+                                   (64 - tti::THREADS_BITMASK_SIZE));
         Value fullMaskVal = arith::ConstantIntOp::create(fb, fullMask, 64);
         Value destMaskElem = adjustIntegerWidth(fb, destMaskVal, elemType);
         Value fullMaskElem = adjustIntegerWidth(fb, fullMaskVal, elemType);

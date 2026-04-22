@@ -9,10 +9,10 @@ Auxiliary state is kept in distributed tensors and global scratch memory, with t
 ### Thread model
 
 - Base threads: 16 warp-specialization (WS) threads (allowing for up to 16 partitions).
-- Peer classes: +16 Tensor Core (TC) threads and +16 TMA threads to model lack of ordering with base threads.
-- Total logical threads: 48. Bitmasks are sized to the next power of two: 64.
+- Peer classes: +16 TMA threads, +16 Tensor Core (TC) threads, and +16 CLC threads to model lack of ordering with base threads.
+- Total logical threads: 64.
 
-Indexing uses a logical thread id in [0, 48), with column vectors sized to 64 for layout convenience.
+Indexing uses a logical thread id in [0, 64), with column vectors sized to 64 for layout convenience.
 
 ## Auxiliary data structures
 
@@ -21,7 +21,7 @@ All types are generated on-demand (per partition) based on:
 - B: number of tracked buffers (power-of-two padded)
 - K: number of mbarriers (power-of-two padded)
 - T_bits: 64 (bitmask width)
-- T_commits: 16 (base threads; commit counters do not apply to TC/TMA helpers)
+- T_commits: 16 (base threads; commit counters do not apply to TC/TMA/CLC helpers)
 
 “tensor” means a distributed Triton tensor; “scratch” means a pointer into global scratch memory. Shapes below are logical; actual encodings are partition-local blocked layouts.
 
@@ -53,7 +53,7 @@ ConSan separates “tracking” from “visibility transfer”:
   - experimental_set_read_visibility / experimental_set_write_visibility updates the appropriate visibility table for the current thread and buffer.
   - experimental_track_visible_reads / experimental_track_visible_writes snapshots current per-buffer visibility into readTracking/writeTracking for the given barrier.
 - At arrive/commit sites (e.g., tc commit, arrive on mbarrier): ConSan emits the track ops for both reads and writes.
-- At waits: experimental_transfer_visible_reads / experimental_transfer_visible_writes propagates tracked visibility from the barrier back into the waiting thread’s visibility, and this transfer is repeated to peer threads (base, TMA, TC) to keep the three classes consistent.
+- At waits: experimental_transfer_visible_reads / experimental_transfer_visible_writes propagates tracked visibility from the barrier back into the waiting thread’s visibility, and this transfer is repeated to peer threads (base, TMA, TC, CLC) to keep the classes consistent.
 
 ### Barrier phase/count tracking
 
