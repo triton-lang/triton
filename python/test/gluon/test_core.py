@@ -2548,14 +2548,20 @@ def shared_atomic_add_kernel(
     axis: ttgl.constexpr,
     dtype: ttgl.constexpr,
     sem: ttgl.constexpr,
+    use_full_rhs: ttgl.constexpr,
     layout_2d: ttgl.constexpr,
     shared_layout: ttgl.constexpr,
 ):
     indices_x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
     indices_y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
     offsets_2d = indices_x[:, None] * M + indices_y[None, :]
-    values = ttgl.load(values_ptr + offsets_2d)
     indices = ttgl.load(indices_ptr + offsets_2d)
+    if use_full_rhs:
+        # To test a special case where the hardware can optimize the atomic add
+        # e.g., on NVIDIA GPUs, we can use atom.inc 
+        values = ttgl.full([N, M], 1, dtype, layout_2d)
+    else:
+        values = ttgl.load(values_ptr + offsets_2d)
 
     smem = ttgl.allocate_shared_memory(dtype, [N, M], layout=shared_layout)
     smem.store(ttgl.zeros([N, M], dtype, layout=layout_2d))
@@ -2567,19 +2573,23 @@ def shared_atomic_add_kernel(
     ttgl.store(final_ptr + offsets_2d, final)
 
 
-@pytest.mark.parametrize("torch_dtype,gluon_dtype", [
-    (torch.int32, ttgl.int32),
-    (torch.float16, ttgl.float16),
-    (torch.float32, ttgl.float32),
+@pytest.mark.parametrize("torch_dtype,gluon_dtype,use_full_rhs", [
+    (torch.int32, ttgl.int32, False),
+    pytest.param(torch.int32, ttgl.int32, True, id="int32_full_rhs"),
+    (torch.float16, ttgl.float16, False),
+    (torch.float32, ttgl.float32, False),
 ])
 @pytest.mark.parametrize("N,M,axis", [
     (16, 32, 1),
     (32, 16, 0),
 ])
-def test_shared_atomic_add_dtypes(torch_dtype, gluon_dtype, N, M, axis):
+def test_shared_atomic_add_dtypes(torch_dtype, gluon_dtype, use_full_rhs, N, M, axis):
     device = torch.device("cuda")
 
-    values = (torch.arange(N * M, dtype=torch.int32, device=device).reshape(N, M) % 7 + 1).to(torch_dtype)
+    if use_full_rhs:
+        values = torch.ones((N, M), dtype=torch_dtype, device=device)
+    else:
+        values = (torch.arange(N * M, dtype=torch.int32, device=device).reshape(N, M) % 7 + 1).to(torch_dtype)
     torch.manual_seed(17)
     upper = M if axis == 1 else N
     indices = torch.randint(0, upper, (N, M), dtype=torch.int32, device=device)
@@ -2602,6 +2612,7 @@ def test_shared_atomic_add_dtypes(torch_dtype, gluon_dtype, N, M, axis):
         axis=axis,
         dtype=gluon_dtype,
         sem="relaxed",
+        use_full_rhs=use_full_rhs,
         layout_2d=layout_2d,
         shared_layout=shared_layout,
         num_warps=1,
