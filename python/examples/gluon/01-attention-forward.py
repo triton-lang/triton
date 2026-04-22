@@ -866,6 +866,18 @@ def attention_kernel(  #
 # ===-----------------------------------------------------------------------===#
 
 
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+def is_blackwell():
+    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
+
+
+def is_blackwell_ultra():
+    return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
+
+
 @dataclass(frozen=True, slots=True)
 class KernelConfig:
     BLOCK_M: int = 256
@@ -882,10 +894,6 @@ class KernelConfig:
 
 def _default_split_exp_factor(head_dim: int) -> int:
     return max(1, 256 // head_dim)
-
-
-def _is_blackwell_ultra_device() -> bool:
-    return torch.cuda.is_available() and torch.cuda.get_device_capability()[0:2] == (10, 3)
 
 
 def _default_num_kv_buffers(head_dim: int, dtype: torch.dtype) -> int:
@@ -905,7 +913,7 @@ def select_kernel_config(
 ) -> KernelConfig:
     is_fp8 = dtype == torch.float8_e5m2
     is_bf16 = dtype == torch.bfloat16
-    is_bwu = _is_blackwell_ultra_device()
+    is_bwu = is_blackwell_ultra()
 
     block_m = 256
     block_n = 128
@@ -968,7 +976,6 @@ def select_kernel_config(
             num_kv_buffers = 4
             use_exp2_turnstile = False
         else:
-            # Keep unsearched fp8 dimensions on the original conservative policy.
             group_size_n = 4 if causal else 1
             split_exp_factor = _default_split_exp_factor(head_dim)
             use_selected_tmem_red = use_tmem_red and not causal
@@ -1004,7 +1011,7 @@ def make_tensor_desc(x, shape, strides, block_shape):
     return TensorDescriptor(x, shape=shape, strides=strides, block_shape=block_shape, layout=layout)
 
 
-def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, use_tmem_red=False, p: KernelConfig | None = None):
+def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red=False, p: KernelConfig | None = None):
     if isinstance(o, bool) and M is None and use_tmem_red is False:
         use_tmem_red = o
         o = None
@@ -1057,18 +1064,6 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, use_tmem_red=Fa
 # ===-----------------------------------------------------------------------===#
 
 
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_blackwell():
-    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
-
-
-def is_blackwell_ultra():
-    return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
-
-
 @pytest.mark.parametrize("Z", [1, 4])
 @pytest.mark.parametrize("H", [32])
 @pytest.mark.parametrize("N_CTX", [1024, 2048, 4096, 8192])
@@ -1096,7 +1091,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, profile=False):
 
     ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
 
-    tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red)
+    tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red=use_tmem_red)
     torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
 
 
@@ -1158,7 +1153,7 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, use_tmem_red, provider):
 
     with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.CUDNN_ATTENTION]):
         if provider == "triton":
-            fn = lambda: attention_forward(q, k, v, causal, sm_scale, o, M, use_tmem_red)
+            fn = lambda: attention_forward(q, k, v, causal, sm_scale, o, M, use_tmem_red=use_tmem_red)
         elif provider == "cudnn":
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         else:
