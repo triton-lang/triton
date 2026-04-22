@@ -388,7 +388,7 @@ def _matmul(
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
 
             if is_x_microscaled:
-                x_scales = tl.load(XMxScalePtrs, mask=mask_x_k_scale[None, :])
+                x_scales = tl.load(XMxScalePtrs, mask=mask_x_k_scale[None, :], other=0.0)
             elif x_format == "fp16" or x_format == "bf16":
                 x_scales: tl.constexpr = None
             else:
@@ -409,7 +409,7 @@ def _matmul(
             elif SWIZZLE_MX_SCALE == "GFX1250_SCALE":
                 w_scales = unswizzle_mx_scale_gfx1250(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
             else:
-                w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :])
+                w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
 
             if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
                 # Handshake with the swizzling code
@@ -522,6 +522,12 @@ def _matmul(
         MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
         N_MX_BLOCK = tl.cdiv(N, MX_BLOCK_SIZE)
         tl.static_assert(EPILOGUE_FN is not None)
+        if PER_BATCH_OUT_SCALE:
+            YExpectedScale = YExpectedScale + start_z_out
+        # OCP MX outputs leave YExpectedScale unset, so this is an identity there.
+        # NVFP4 uses YExpectedScale to precondition the dense output before the
+        # microscaling epilogue writes direct e4m3 block scales.
+        out = float_to_flex(out, YExpectedScale, None, None, mask, Y, False)
         out, out_scale = EPILOGUE_FN(out, mask, *epilogue_fn_args)
         tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
         offs_y_n_scale = MX_SCALE_BLOCK_N * pid_n + tl.arange(0, MX_SCALE_BLOCK_N)

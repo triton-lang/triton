@@ -13,7 +13,9 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace mlir::triton::gpu {
 
-static SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
+namespace {
+
+SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
   SmallVector<int64_t> result(rank, 1);
   assert(shape.size() <= rank);
   auto rankDiff = rank - shape.size();
@@ -58,6 +60,8 @@ CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
   return CGAEncodingAttr::get(ctx, std::move(ll));
 }
 
+} // namespace
+
 SharedEncodingTrait updateEncodingForShape(Operation *op,
                                            SharedEncodingTrait encoding,
                                            RankedTensorType tensorType) {
@@ -94,6 +98,24 @@ SharedEncodingTrait updateEncodingForShape(Operation *op,
         ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
         order, newCgaEnc);
   }
+  if (auto paddedEnc = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
+    auto existingCga = paddedEnc.getCGALayout();
+    if (!existingCga)
+      return paddedEnc;
+
+    auto newCgaEnc =
+        ttg::updateCGALayoutForShape(cgaLayout, tensorType.getShape());
+    auto rank = tensorType.getRank();
+    SmallVector<unsigned> order(rank);
+    std::iota(order.rbegin(), order.rend(), 0);
+    auto shape = tensorType.getShape();
+    SmallVector<std::pair<unsigned, unsigned>> intervalPads;
+    for (auto [interval, padding] :
+         llvm::zip(paddedEnc.getIntervals(), paddedEnc.getPaddings()))
+      intervalPads.push_back({interval, padding});
+    return ttg::PaddedSharedEncodingAttr::get(ctx, intervalPads, order, shape,
+                                              newCgaEnc);
+  }
 
   constexpr auto msg = "Internal Error: Unhandled tensor descriptor encoding";
   if (op)
@@ -103,13 +125,13 @@ SharedEncodingTrait updateEncodingForShape(Operation *op,
 
 // Build shared encoding for a tensor descriptor by applying callback to adjust
 // for block shape of the descriptor
-TensorDescType getTensorDescTypeWithEncoding(Operation *op,
-                                             RankedTensorType existingTy,
-                                             Attribute encoding) {
+static TensorDescType getTensorDescTypeWithEncoding(Operation *op,
+                                                    RankedTensorType existingTy,
+                                                    Attribute encoding) {
   auto sharedEnc = cast<SharedEncodingTrait>(encoding);
   encoding = updateEncodingForShape(op, sharedEnc, existingTy);
-  auto blockTy = existingTy.cloneWithEncoding(encoding);
-  return TensorDescType::get(existingTy.getContext(), blockTy);
+  return TensorDescType::get(existingTy.getShape(), existingTy.getElementType(),
+                             encoding);
 }
 
 struct UseInfo {
@@ -258,25 +280,15 @@ std::optional<UseInfo>
 AssignDescriptorMemoryLayouts::getUseInfo(Operation *op) {
   UseInfo info;
   info.use = op;
-  if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
+  if (auto load = dyn_cast<DescriptorLoadLikeOpInterface>(op)) {
     info.descriptor = load.getDesc();
     info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
+    auto resultTy = cast<RankedTensorType>(op->getResult(0).getType());
     auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
-                                               : load.getType().getEncoding();
+                                               : resultTy.getEncoding();
     info.cgaLayout = getCGALayout(encoding);
-    auto shape = load.getResult().getType().getShape();
-    auto rank = load.getDesc().getType().getBlockType().getRank();
-    info.shape = expandToRank(shape, rank);
-    return info;
-  }
-  if (auto gather = dyn_cast<DescriptorGatherOp>(op)) {
-    info.descriptor = gather.getDesc();
-    info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
-    auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
-                                               : gather.getType().getEncoding();
-    info.cgaLayout = getCGALayout(encoding);
-    auto shape = gather.getResult().getType().getShape();
-    auto rank = gather.getDesc().getType().getBlockType().getRank();
+    auto shape = resultTy.getShape();
+    auto rank = info.descriptor.getType().getShape().size();
     info.shape = expandToRank(shape, rank);
     return info;
   }
@@ -285,7 +297,7 @@ AssignDescriptorMemoryLayouts::getUseInfo(Operation *op) {
     auto encoding = store.getSrc().getType().getEncoding();
     info.cgaLayout = getCGALayout(encoding);
     auto shape = store.getSrc().getType().getShape();
-    auto rank = store.getDesc().getType().getBlockType().getRank();
+    auto rank = store.getDesc().getType().getShape().size();
     info.shape = expandToRank(shape, rank);
     return info;
   }
@@ -335,7 +347,7 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
       auto itr = valueToEncodingInfo.find(typedVal);
       if (itr != valueToEncodingInfo.end())
         info = combineEncodings(*itr->second, info,
-                                typedVal.getType().getBlockType().getRank());
+                                typedVal.getType().getShape().size());
     }
 
     auto einfo = internEncoding(encodings, info);

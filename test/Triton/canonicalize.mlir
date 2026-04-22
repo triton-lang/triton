@@ -173,3 +173,76 @@ tt.func @fold_transpose_constant() -> tensor<128x16xf32> {
     // CHECK-NEXT: tt.return %[[cst]] : tensor<128x16xf32>
     tt.return %r : tensor<128x16xf32>
 }
+// -----
+
+// CHECK-LABEL: @canonicalize_int_to_ptr_of_ptr_to_int
+// Test: int_to_ptr(ptr_to_int(ptr)) -> ptr (round-trip elimination)
+tt.func @canonicalize_int_to_ptr_of_ptr_to_int(%ptr: tensor<64x!tt.ptr<f32>>) -> tensor<64x!tt.ptr<f32>> {
+  // CHECK-NOT: tt.ptr_to_int
+  // CHECK-NOT: tt.int_to_ptr
+  // CHECK: tt.return %{{.*}} : tensor<64x!tt.ptr<f32>>
+  %int = tt.ptr_to_int %ptr : tensor<64x!tt.ptr<f32>> -> tensor<64xi64>
+  %result = tt.int_to_ptr %int : tensor<64xi64> -> tensor<64x!tt.ptr<f32>>
+  tt.return %result : tensor<64x!tt.ptr<f32>>
+}
+
+// -----
+
+// CHECK-LABEL: @canonicalize_int_to_ptr_with_constant_offset_f32
+// Test: int_to_ptr(addi(ptr_to_int(ptr), constant)) -> addptr(ptr, element_offset)
+// For f32 (4 bytes): 16 bytes = 4 elements
+tt.func @canonicalize_int_to_ptr_with_constant_offset_f32(%base: tensor<128x!tt.ptr<f32>>) -> tensor<128x!tt.ptr<f32>> {
+  // CHECK: %[[OFFSET:.*]] = arith.constant dense<4> : tensor<128xi64>
+  // CHECK-NEXT: %[[RESULT:.*]] = tt.addptr %{{.*}}, %[[OFFSET]] : tensor<128x!tt.ptr<f32>>, tensor<128xi64>
+  %byte_offset = arith.constant dense<16> : tensor<128xi64>
+  %ptr_as_int = tt.ptr_to_int %base : tensor<128x!tt.ptr<f32>> -> tensor<128xi64>
+  %offset_ptr_int = arith.addi %ptr_as_int, %byte_offset : tensor<128xi64>
+  %result = tt.int_to_ptr %offset_ptr_int : tensor<128xi64> -> tensor<128x!tt.ptr<f32>>
+  // CHECK-NEXT: tt.return %[[RESULT]] : tensor<128x!tt.ptr<f32>>
+  tt.return %result : tensor<128x!tt.ptr<f32>>
+}
+
+// -----
+
+// CHECK-LABEL: @canonicalize_int_to_ptr_with_constant_offset_f16
+// Test: For f16 (2 bytes): 32 bytes = 16 elements
+tt.func @canonicalize_int_to_ptr_with_constant_offset_f16(%base: tensor<1024x!tt.ptr<f16>>) -> tensor<1024x!tt.ptr<f16>> {
+  // CHECK: %[[OFFSET:.*]] = arith.constant dense<16> : tensor<1024xi64>
+  // CHECK-NEXT: %[[RESULT:.*]] = tt.addptr %{{.*}}, %[[OFFSET]] : tensor<1024x!tt.ptr<f16>>, tensor<1024xi64>
+  %byte_offset = arith.constant dense<32> : tensor<1024xi64>
+  %ptr_as_int = tt.ptr_to_int %base : tensor<1024x!tt.ptr<f16>> -> tensor<1024xi64>
+  %offset_ptr_int = arith.addi %ptr_as_int, %byte_offset : tensor<1024xi64>
+  %result = tt.int_to_ptr %offset_ptr_int : tensor<1024xi64> -> tensor<1024x!tt.ptr<f16>>
+  // CHECK-NEXT: tt.return %[[RESULT]] : tensor<1024x!tt.ptr<f16>>
+  tt.return %result : tensor<1024x!tt.ptr<f16>>
+}
+
+// -----
+
+// CHECK-LABEL: @no_canonicalize_non_constant_offset
+// Test: Non-constant offsets should not be canonicalized
+tt.func @no_canonicalize_non_constant_offset(%base: tensor<128x!tt.ptr<f32>>, %offset: tensor<128xi64>) -> tensor<128x!tt.ptr<f32>> {
+  // CHECK: tt.ptr_to_int
+  // CHECK-NEXT: arith.addi
+  // CHECK-NEXT: tt.int_to_ptr
+  %ptr_as_int = tt.ptr_to_int %base : tensor<128x!tt.ptr<f32>> -> tensor<128xi64>
+  %offset_ptr_int = arith.addi %ptr_as_int, %offset : tensor<128xi64>
+  %result = tt.int_to_ptr %offset_ptr_int : tensor<128xi64> -> tensor<128x!tt.ptr<f32>>
+  tt.return %result : tensor<128x!tt.ptr<f32>>
+}
+
+// -----
+
+// CHECK-LABEL: @no_canonicalize_indivisible_offset
+// Test: Offset not divisible by element size should not be canonicalized
+tt.func @no_canonicalize_indivisible_offset(%base: tensor<128x!tt.ptr<f32>>) -> tensor<128x!tt.ptr<f32>> {
+  // 7 bytes is not divisible by 4 (size of f32)
+  // CHECK: tt.ptr_to_int
+  // CHECK-NEXT: arith.addi
+  // CHECK-NEXT: tt.int_to_ptr
+  %byte_offset = arith.constant dense<7> : tensor<128xi64>
+  %ptr_as_int = tt.ptr_to_int %base : tensor<128x!tt.ptr<f32>> -> tensor<128xi64>
+  %offset_ptr_int = arith.addi %ptr_as_int, %byte_offset : tensor<128xi64>
+  %result = tt.int_to_ptr %offset_ptr_int : tensor<128xi64> -> tensor<128x!tt.ptr<f32>>
+  tt.return %result : tensor<128x!tt.ptr<f32>>
+}

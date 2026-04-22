@@ -106,6 +106,14 @@ public:
   virtual bool supportLdStMatrixB8() const { return false; }
   virtual bool supportBitwidth16Elementwise() const { return false; }
   virtual bool supportBitwidth32Elementwise() const { return false; }
+
+  // Returns the preferred arity of the in-thread reduction tree for the given
+  // combiner operation. The default is 2 (binary tree). Targets that have
+  // native ternary instructions (e.g. AMD v_maximum3/v_minimum3) can return 3
+  // to generate a ternary reduction tree that maps directly to hardware.
+  virtual unsigned getReductionTreeArity(Operation *combinerOp) const {
+    return 2;
+  }
   virtual bool isCuda() const { return false; }
 
   // Returns the shared memory partition size in bytes. A value of 0 means

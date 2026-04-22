@@ -329,30 +329,6 @@ private:
   }
 };
 
-// Helper class to load tensor memory following MMAv5 layout.
-class DotOpMmaV5TmemLoader : public DotOpMmaMemLoader {
-public:
-  DotOpMmaV5TmemLoader() {}
-  static DotOpMmaV5TmemLoader build(Location loc, RewriterBase &rewriter,
-                                    gpu::MemDescType memTy, Value tmemBase);
-
-  MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                          Location loc) const;
-
-  MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                         Location loc) const override {
-    return tmemLoad(a, b, rewriter, loc);
-  }
-
-private:
-  DotOpMmaV5TmemLoader(LinearLayout ll, Value address, int bitwidth)
-      : ll(std::move(ll)), address(address), bitwidth(bitwidth) {}
-
-  LinearLayout ll;
-  Value address;
-  int bitwidth;
-};
-
 static Value getOffsetedBase(Value v, gpu::MemDescType memDescTy,
                              const TypeConverter *typeConverter,
                              ConversionPatternRewriter &rewriter,

@@ -92,14 +92,14 @@ class cpu_timed_scope(scope):
     def _enter_scope(self):
         if not flags.profiling_on:
             return
-        self.start_time = time.time_ns()
+        self.start_time = time.perf_counter_ns()
         super()._enter_scope()
 
     def _exit_scope(self):
         if not flags.profiling_on:
             return
         if self.start_time is not None:
-            cpu_time = time.time_ns() - self.start_time
+            cpu_time = time.perf_counter_ns() - self.start_time
             libproton.add_metrics(self.id, {"cpu_time (ns)(exc)": cpu_time})
         super()._exit_scope()
 

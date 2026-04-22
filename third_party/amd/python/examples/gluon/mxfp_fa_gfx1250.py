@@ -1,12 +1,6 @@
 """
 Multi-head attention kernel in Gluon
 """
-# ruff: noqa: E402
-import hip
-
-# Needed for internal dev flow for now; will remove later
-hip.hip.hipInit(0)
-
 import os
 import sys
 import inspect
@@ -18,7 +12,6 @@ import torch
 import math
 
 from triton import cdiv
-from triton.language.core import _aggregate as aggregate
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
@@ -116,7 +109,7 @@ def get_wmma_layout(shape, num_warps, packed=False, preshuffled=False, warp_axis
     return ttgl.amd.AMDWMMALayout(3, True, warp_bases, reg_bases, instr_shape, rank=rank)
 
 
-@aggregate
+@gluon.aggregate
 class MemoryBlock:
     """
     MemoryBlock groups variables to describe a block of 2D/3D tensor in global memory.
@@ -161,7 +154,7 @@ class MemoryBlock:
         return MemoryBlock(base, offs, mask, block_shape)
 
 
-@aggregate
+@gluon.aggregate
 class MemoryUnit:
     """
     MemoryUnit wraps a global-memory tensor descriptor and its corresponding shared-memory slots.
@@ -198,7 +191,7 @@ class MemoryUnit:
         return MemoryUnit(smem, desc)
 
 
-@aggregate
+@gluon.aggregate
 class KVMemory:
     k_mem: MemoryUnit
     v_mem: MemoryUnit
@@ -361,7 +354,7 @@ class KVMemory:
         return buffer
 
 
-@aggregate
+@gluon.aggregate
 class KVScaleMemory:
     k_mem: MemoryUnit
     v_mem: MemoryUnit
@@ -516,7 +509,7 @@ class KVScaleMemory:
         return buffer
 
 
-@aggregate
+@gluon.aggregate
 class AttentionConfigBase:
     Q_TYPE: ttgl.constexpr  # the data type for Q, either 'e5m2' or 'e4m3'
     P_TYPE: ttgl.constexpr  # the data type for P; we always assume P_TYPE == Q_TYPE
@@ -558,7 +551,7 @@ class AttentionConfigBase:
 
 
 @composition
-@aggregate
+@gluon.aggregate
 class GlobalScaledAttentionConfig:
     base: AttentionConfigBase
 
@@ -622,7 +615,7 @@ class GlobalScaledAttentionConfig:
         self.CONVERT_LAYOUT_TRIVIAL = ttgl.constexpr(True if P_K_WIDTH == 8 else False)
 
 
-@aggregate
+@gluon.aggregate
 class GlobalScaledAttentionProgram:
     cfg: GlobalScaledAttentionConfig
 
@@ -1413,7 +1406,7 @@ class GlobalScaledAttentionProgram:
 
 
 @composition
-@aggregate
+@gluon.aggregate
 class BlockScaledAttentionConfig:
     base: AttentionConfigBase
 
@@ -1502,7 +1495,7 @@ class BlockScaledAttentionConfig:
         self.P_SCALING = ttgl.constexpr(P_SCALING)
 
 
-@aggregate
+@gluon.aggregate
 class BlockScaledAttentionProgram:
     cfg: BlockScaledAttentionConfig
 
@@ -1559,6 +1552,8 @@ class BlockScaledAttentionProgram:
         ttgl.static_assert(SEQLEN_K % SPLIT_K == 0)
 
         if SEQLEN_Q == SEQLEN_K:
+            off_hk = off_h // GROUP_SZ
+
             q_off = SEQLEN_Q * HEAD_SZ * (NUM_Q_HEADS * off_z + off_h) + \
                     BLOCK_M * HEAD_SZ * off_m
             q_blk = MemoryBlock.initialize(  #
@@ -1576,6 +1571,8 @@ class BlockScaledAttentionProgram:
                 layout=cfg.q_scale_layout)
 
         else:
+            off_hk = off_h
+
             q_off = GROUP_SZ * HEAD_SZ * (NUM_GROUPS * off_z + off_h) + \
                     BLOCK_M * HEAD_SZ * off_m
             q_scale_off = GROUP_SZ * (HEAD_SZ // 32) * (NUM_GROUPS * off_z + off_h) + \
@@ -1604,11 +1601,11 @@ class BlockScaledAttentionProgram:
                     block_shape=[1, BLOCK_M, HEAD_SZ // 32],  #
                     layout=cfg.q_scale_layout)
 
-        k_off = [kv_mem.k_shape[2] * (kv_mem.k_shape[1] * off_z + off_h), 0]
-        v_off = [kv_mem.v_shape[2] * (kv_mem.v_shape[1] * off_z + off_h), 0]
+        k_off = [kv_mem.k_shape[2] * (kv_mem.k_shape[1] * off_z + off_hk), 0]
+        v_off = [kv_mem.v_shape[2] * (kv_mem.v_shape[1] * off_z + off_hk), 0]
 
-        k_scale_off = [kv_scale_mem.k_shape[2] * (kv_scale_mem.k_shape[1] * off_z + off_h), 0]
-        v_scale_off = [kv_scale_mem.v_shape[2] * (kv_scale_mem.v_shape[1] * off_z + off_h), 0]
+        k_scale_off = [kv_scale_mem.k_shape[2] * (kv_scale_mem.k_shape[1] * off_z + off_hk), 0]
+        v_scale_off = [kv_scale_mem.v_shape[2] * (kv_scale_mem.v_shape[1] * off_z + off_hk), 0]
 
         return BlockScaledAttentionProgram(  #
             cfg,  #
@@ -2663,8 +2660,6 @@ def attn_fwd(  #
 
     if seqlen_q == seqlen_k:
         assert split_k == 1
-        group_sz = num_q_heads // num_k_heads
-        assert group_sz == 1
         # q: [BATCH, NUM_Q_HEADS, SEQLEN_Q, HEAD_SZ]
         # k: [BATCH, NUM_K_HEADS, SEQLEN_K, HEAD_SZ]
         # v: [BATCH, NUM_K_HEADS, SEQLEN_K, HEAD_SZ]
@@ -2900,6 +2895,8 @@ def get_fwd_test_cases(block_scaling: bool):
              for batch in [1]
              for seqlen_q, seqlen_k, num_q_heads, num_k_heads in [
                  (1024, 1024, 1, 1),
+                 (1024, 1024, 4, 1),
+                 (1024, 1024, 4, 2),
                  (1, 1024, 1, 1),
                  (1, 8192, 64, 1),
                  (1, 8192, 64, 2),
@@ -2922,7 +2919,7 @@ def get_fwd_test_cases(block_scaling: bool):
     for test in tests:
         seqlen_q, seqlen_k, num_q_heads, num_k_heads = test[3:7]
         if seqlen_q == seqlen_k:
-            # MHA Prefill
+            # MHA/GQA Prefill
             param.append((*test, *configs["4warp_128x128_loop"]))
             param.append((*test, *configs["4warp_128x128_pipeline"]))
             param.append((*test, *configs["4warp_256x128_pipeline"]))

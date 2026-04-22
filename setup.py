@@ -285,6 +285,7 @@ class CMakeBuild(build_ext):
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external]),
             "-DTRITON_WHEEL_DIR=" + wheeldir,
             f"-DTRITON_CACHE_PATH={get_triton_cache_path()}",
+            f"-DTRITON_VERSION={TRITON_VERSION}",
         ]
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
@@ -554,7 +555,7 @@ def get_triton_version_suffix():
 
 
 # keep it separate for easy substitution
-TRITON_VERSION = "3.6.0" + get_triton_version_suffix()
+TRITON_VERSION = "3.7.0" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 10)

@@ -69,31 +69,8 @@ public:
     // kernel activity records. We track the expected fanout here and keep
     // updating it when we have processed each kernel activity record.
     size_t numNodes{1};
-
-    struct GraphNodeState {
-      // Per-node launch status bits (missing-name / metric-node).
-      NodeStatus status{};
-
-      // If the node is launched as a metric kernel, ignore its timing data.
-      bool isMetricNode() const { return status.isMetricNode(); }
-      bool isMissingName() const { return status.isMissingName(); }
-
-      void setEntry(Data *data, const DataEntry &entry) {
-        dataToEntry.insert_or_assign(data, entry);
-      }
-
-      template <typename FnT> void forEachEntry(FnT &&fn) {
-        for (auto &[data, entry] : dataToEntry)
-          fn(data, entry);
-      }
-
-      DataToEntryMap dataToEntry;
-    };
-
-    using GraphNodeStateTable = RangeTable<GraphNodeState>;
-
-    // graphNodeId -> per-node entries across active data sinks
-    GraphNodeStateTable graphNodeIdToState;
+    DataToEntryMap dataToGraphEntry;
+    GraphState::NodeIdToStateMap *nodeIdToState{nullptr};
   };
 
   using ExternIdToStateMap =
@@ -130,7 +107,7 @@ protected:
   virtual void doStart() override { pImpl->doStart(); }
   virtual void doFlush() override { pImpl->doFlush(); }
   virtual void doStop() override { pImpl->doStop(); }
-  virtual void doAddMetrics(
+  virtual void addMetrics(
       size_t scopeId,
       const std::map<std::string, MetricValueType> &scalarMetrics,
       const std::map<std::string, TensorMetric> &tensorMetrics) override {

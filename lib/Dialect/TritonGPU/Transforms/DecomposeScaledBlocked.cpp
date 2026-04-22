@@ -199,7 +199,6 @@ DecomposeScaledBlocked::scaleArg(PatternRewriter &rewriter,
   auto isFp4 =
       ScaleDotElemType::E2M1 ==
       (opIdx == 0 ? scaledDotOp.getAElemType() : scaledDotOp.getBElemType());
-  auto fastMath = scaledDotOp.getFastMath();
 
   auto loc = v.getLoc();
   auto rank = v.getType().getRank();

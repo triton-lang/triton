@@ -75,15 +75,13 @@ struct TCGen5MMAScaleSharedToTmemConversion
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);
     auto tmemAlloc = TMEMAllocOp::create(rewriter, loc, scaleAType, Value());
-    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc,
-                       /*barrier*/ Value());
+    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc);
     operand.set(tmemAlloc);
     return true;
   }
 
   LogicalResult matchAndRewrite(TCGen5MMAScaledOp op,
                                 PatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
     MLIRContext *context = op->getContext();
     auto aScaleType = op.getAScale().getType();
     auto bScaleType = op.getBScale().getType();
@@ -120,15 +118,19 @@ collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
   SmallVector<Value> commitPredicates;
   auto mmaPred = mmaOp.getPredicate();
   Operation *nextOp = mmaOp->getNextNode();
+  SmallVector<Value> mmaDescs = mmaOp.getCompletionDescs();
 
   while (nextOp) {
     if (auto commit = dyn_cast<TCGen5CommitOp>(nextOp)) {
       // If the mma predicate is true, or mma and commit ops use the same
-      // predicate, it is safe to merge them
-      if (isConstTrue(mmaPred) || mmaPred == commit.getPred()) {
-        commitOps.push_back(commit);
-        commitPredicates.push_back(commit.getPred());
-      }
+      // predicate, it is safe to merge them. Otherwise, keep commit order by
+      // not merging later commits across this one.
+      if (!isConstTrue(mmaPred) && mmaPred != commit.getPred())
+        break;
+      if (!llvm::equal(mmaDescs, commit.getDescs()))
+        break;
+      commitOps.push_back(commit);
+      commitPredicates.push_back(commit.getPred());
     } else if (!isPure(nextOp)) {
       // Only move commits across pure ops. We also bail here when encountering
       // another MMAv5 op.
@@ -182,7 +184,7 @@ public:
   LogicalResult matchAndRewrite(MMAv5OpInterface op,
                                 PatternRewriter &rewriter) const override {
     auto [commitOps, predicates] = collectCommitOpsAfter(op);
-    if (commitOps.size() == 0) {
+    if (commitOps.empty()) {
       return llvm::failure();
     }
     for (auto [commit, pred] : llvm::zip(commitOps, predicates)) {
@@ -194,7 +196,7 @@ public:
           !moveDefiningOpsBefore(pred, op)) {
         // Give up merging a commit if its defining ops cannot be moved above
         // the mma op.
-        continue;
+        break;
       }
       op.addCompletionBarrier(barrier, pred);
       rewriter.eraseOp(commit);

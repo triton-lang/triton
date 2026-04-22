@@ -657,6 +657,8 @@ bool canBeRemat(Operation *op) {
     return false;
   if (auto gather = dyn_cast<GatherOp>(op))
     return !gather.getEfficientLayout();
+  if (auto reshape = dyn_cast<ReshapeOp>(op))
+    return !reshape.getEfficientLayout();
 
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
@@ -1263,16 +1265,17 @@ bool LayoutRematerialization::hoistConvertDotOperand(
       return false;
     }
 
-    // We expect the leaves of the slice to be Load, DescriptorLoad or
-    // arith::Constant This could be generalised if necessary
-    if (!isa<LoadOp, DescriptorLoadOp>(v.getDefiningOp())) {
+    // We expect the leaves of the slice to be Load, descriptor load-like ops,
+    // or arith::Constant. This could be generalised if necessary.
+    if (!isa<LoadOp, DescriptorLoadLikeOpInterface>(v.getDefiningOp())) {
       auto op = v.getDefiningOp();
       if (isa<arith::ConstantOp>(op) || noDataMovement(op)) {
         innerSlice.insert(v);
         continue;
       } else {
         LLVM_DEBUG({
-          DBGS() << "  Leaves must be Load, DescriptorLoad or Constant. Got "
+          DBGS() << "  Leaves must be Load, descriptor load-like ops, or "
+                    "Constant. Got "
                  << v << "\n";
         });
         return false;

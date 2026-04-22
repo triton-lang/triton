@@ -1,12 +1,12 @@
 #include "ir.h"
 
+#include <cstring>
 #include <optional>
 #include <pybind11/cast.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
@@ -184,8 +184,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       continue;
 
     bool isIm2Col = isa<ttng::TensorDescIm2ColType>(arg.getType());
-    auto blockType = descTy.getBlockType();
-    auto encoding = blockType.getEncoding();
+    auto encoding = descTy.getSharedLayout();
 
     py::dict metadata;
     if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
@@ -196,21 +195,23 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
         throw py::type_error("invalid TMA descriptor type");
       auto tmaMode = isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
       auto blockSize =
-          ttng::getTMABlockShape(blockType, /*packedSize=*/false, tmaMode);
+          ttng::getTMABlockShape(descTy, /*packedSize=*/false, tmaMode);
       metadata["swizzle"] = *swizzle;
-      metadata["elem_size"] = blockType.getElementTypeBitWidth() / 8;
+      metadata["elem_size"] =
+          descTy.getElementType().getIntOrFloatBitWidth() / 8;
       metadata["elem_type"] = *elemType;
       metadata["block_size"] =
           std::vector<int>(blockSize.begin(), blockSize.end());
       metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
       metadata["is_im2col"] = isIm2Col;
     } else {
-      auto blockShape = blockType.getShape();
+      auto blockShape = descTy.getShape();
       metadata["block_size"] =
           std::vector<int>(blockShape.begin(), blockShape.end());
-      metadata["elem_bits"] = blockType.getElementTypeBitWidth();
+      metadata["elem_bits"] = descTy.getElementType().getIntOrFloatBitWidth();
 
-      if (auto paddedEnc = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
+      if (auto paddedEnc =
+              dyn_cast_if_present<ttg::PaddedSharedEncodingAttr>(encoding)) {
         py::list intervalPaddingPairs;
         for (auto [interval, padding] : llvm::zip_equal(
                  paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
@@ -220,8 +221,6 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
           intervalPaddingPairs.append(pair);
         }
         metadata["interval_padding_pairs"] = intervalPaddingPairs;
-
-        auto blockShape = blockType.getShape();
       }
     }
     result.append(std::move(metadata));
@@ -423,6 +422,16 @@ void init_triton_ir(py::module &&m) {
                  owner->getParentOp()->setAttr(attrName, attr);
                }
              }
+           })
+      .def("get_shape",
+           [](Value &self) -> py::object {
+             auto type = self.getType();
+             if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+               auto shape = tensorType.getShape();
+               return py::cast(
+                   std::vector<int64_t>(shape.begin(), shape.end()));
+             }
+             return py::none();
            })
       .def("get_context", &Value::getContext)
       .def("get_loc", &Value::getLoc)
@@ -629,6 +638,26 @@ void init_triton_ir(py::module &&m) {
              if (!ret)
                return py::none();
              return py::int_(ret.getInt());
+           })
+      .def("get_constant_value",
+           [](Operation &self) -> py::object {
+             auto constOp = dyn_cast<arith::ConstantOp>(self);
+             if (!constOp)
+               return py::none();
+
+             auto attr = constOp.getValue();
+
+             if (auto intAttr = dyn_cast<IntegerAttr>(attr))
+               return py::int_(intAttr.getValue().getSExtValue());
+
+             if (auto denseAttr = dyn_cast<DenseIntElementsAttr>(attr)) {
+               if (denseAttr.isSplat())
+                 return py::int_(
+                     denseAttr.getSplatValue<APInt>().getSExtValue());
+               return py::none();
+             }
+
+             return py::none();
            })
       .def("get_bool_attr",
            [](Operation &self, const std::string &name) -> py::object {
@@ -1507,9 +1536,9 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_tensor_descriptor_type",
            [](TritonOpBuilder &self, Type blockTy, bool isSigned) -> Type {
-             auto ctx = self.getContext();
-             return triton::TensorDescType::get(
-                 ctx, cast<RankedTensorType>(blockTy), isSigned);
+             auto rtt = cast<RankedTensorType>(blockTy);
+             return triton::TensorDescType::get(rtt.getShape(),
+                                                rtt.getElementType(), isSigned);
            })
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
@@ -1836,7 +1865,9 @@ void init_triton_ir(py::module &&m) {
     for (const auto &op : plugin.listOps()) {
       TritonOpBuilderBinding.def(
           op.name, [op](TritonOpBuilder &self, std::vector<Value> args) {
+            args.insert(args.begin(), Value());
             op.addOp(self, args);
+            return args[0];
           });
     }
   }
@@ -1949,6 +1980,8 @@ void init_triton_ir(py::module &&m) {
           py::call_guard<py::gil_scoped_release>());
 }
 
+namespace {
+
 bool str_eq_ignore_case(const char *s1, const char *s2, int n) {
   for (int i = 0; i < n; ++i) {
     if (tolower(s1[i]) != s2[i])
@@ -1957,17 +1990,10 @@ bool str_eq_ignore_case(const char *s1, const char *s2, int n) {
   return true;
 }
 
-int strlen_max(const char *str, int max) {
-  for (int i = 0; i <= max; ++i) {
-    if (str[i] == '\0') {
-      return i;
-    }
-  }
-  return 0;
-}
-
 bool is_truthy(char *str) {
-  int len = strlen_max(str, 4);
+  int len = strnlen(str, 5);
+  if (len > 4)
+    return false;
   switch (len) {
   case 1:
     return str[0] == '1' || tolower(str[0]) == 'y';
@@ -2022,11 +2048,13 @@ PyObject *py_getenv_bool(PyObject *self, PyObject *const *args,
   return res;
 }
 
-static PyMethodDef ModuleMethods[] = {
+PyMethodDef ModuleMethods[] = {
     {"getenv", (PyCFunction)py_getenv, METH_FASTCALL, NULL},
     {"getenv_bool", (PyCFunction)py_getenv_bool, METH_FASTCALL, NULL},
     {NULL, NULL, 0, NULL} // sentinel
 };
+
+} // namespace
 
 void init_triton_env_vars(py::module &m) {
   m.def("get_cache_invalidating_env_vars",

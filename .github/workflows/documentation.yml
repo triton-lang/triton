@@ -2,7 +2,7 @@ name: Documentation
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 9 * * *"
 
 permissions:
   contents: write
@@ -10,7 +10,7 @@ permissions:
 jobs:
   Build-Documentation:
     runs-on: [nvidia-a100]
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       PYTHON: "python3"
 

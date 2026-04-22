@@ -22,6 +22,7 @@
  */
 
 #include "Utilities.h"
+#include "lib/Dialect/TritonGPU/Transforms/WarpSpecialization/PartitionAttrs.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 
 #include "Utilities.h"

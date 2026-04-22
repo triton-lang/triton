@@ -43,9 +43,9 @@ Flags getNodeFlags(Node *node) {
     if (op->hasAttr("store"))
       return Flags::STORE;
 
-    if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
+    if (isa<tt::DescriptorLoadLikeOpInterface>(op))
       return Flags::LOAD;
-    if (isa<tt::DescriptorStoreOp, tt::DescriptorScatterOp>(op))
+    if (isa<tt::DescriptorStoreLikeOpInterface>(op))
       return Flags::STORE;
     if (isa<ttng::MMAv5OpInterface>(op) || op->hasAttr("mma"))
       return Flags::MMA;
