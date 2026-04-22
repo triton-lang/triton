@@ -37,7 +37,6 @@ from triton._internal_testing import (
     is_hip_rdna4,
     is_hip_gfx1250,
     is_xpu,
-    get_arch,
     torch_float8_dtypes,
     torch_dtypes,
     numpy_random,
@@ -1021,6 +1020,29 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
 
     kernel[(1, )](x, y, out, out_ref, BLOCK=shape[0], num_ctas=num_ctas)
     assert torch.all(out == out_ref)  # bitwise exact
+
+
+@pytest.mark.interpreter
+def test_fdiv_ieee_rounding(device):
+
+    @triton.jit
+    def kernel(X, Y, OUT_IEEE, OUT_RN, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        ieee = tl.math.fdiv(x, y, ieee_rounding=True)
+        rn = tl.math.div_rn(x, y)
+        tl.store(OUT_IEEE + offs, ieee)
+        tl.store(OUT_RN + offs, rn)
+
+    shape = (128, )
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    y = torch.randn(shape, dtype=torch.float32, device=device) + 1e-6
+    out_ieee = torch.zeros(shape, dtype=torch.float32, device=device)
+    out_rn = torch.zeros(shape, dtype=torch.float32, device=device)
+
+    kernel[(1, )](x, y, out_ieee, out_rn, BLOCK=shape[0], num_ctas=1)
+    assert torch.all(out_ieee == out_rn)  # bitwise exact
 
 
 # ----------------
@@ -3148,6 +3170,12 @@ def get_test_dot_base_cases():
 
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+def get_test_dot_small_fp64_cases():
+    return [(*shape, 1, False, False, 'none', 'ieee', 'float64', 'float64', 1, None)
+            for shape in [(8, 8, 4), (8, 8, 8), (16, 8, 4), (8, 8, 16)]]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 def get_test_dot_softmax():
     return [(128, 128, 64, 8, False, False, 'softmax', 'ieee', 'float16', 'float32', 1, None)]
 
@@ -3275,7 +3303,8 @@ def get_test_small_dots_cases():
     get_test_dot_small_mn_wmma_cases() + \
     get_test_dot_small_k_wmma_cases() + \
     get_test_dot_softmax() + \
-    get_test_small_dots_cases())
+    get_test_small_dots_cases() + \
+    get_test_dot_small_fp64_cases())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size,
              num_ctas, device):
@@ -3286,7 +3315,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             pytest.skip(f"input_precision {input_precision} is not supported in the interpreter")
     else:
         if not is_hip() and K < 16:
-            pytest.skip("small dots are supported only on HIP at the moment")
+            if in_dtype != 'float64':
+                pytest.skip("small dots are supported only on HIP at the moment")
         if is_cuda():
             capability = torch.cuda.get_device_capability()
 
@@ -4302,7 +4332,7 @@ def test_masked_load_shared_memory(dtype, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("cache", ["", ".ca", ".cg", ".cv"])
+@pytest.mark.parametrize("cache", ["", ".ca", ".cg", ".cs", ".cv"])
 def test_load_cache_modifier(cache, device):
     src = torch.empty(128, device=device)
     dst = torch.empty(128, device=device)
@@ -4316,12 +4346,12 @@ def test_load_cache_modifier(cache, device):
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
     if is_hip():
-        target_arch = get_arch()
         # TODO: support testing for remaining architectures
-        if 'gfx94' not in target_arch:
+        if not is_hip_cdna3() and not is_hip_cdna4():
             return
         amdgcn = pgm.asm['amdgcn']
         cg_cache_modifier_str = 'nt'
+        cs_cache_modifier_str = 'sc0 nt'
         cv_cache_modifier_str = 'sc0 sc1'
         buffer_load_line = [line for line in amdgcn.splitlines() if "buffer_load" in line]
         global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
@@ -4330,20 +4360,19 @@ def test_load_cache_modifier(cache, device):
             assert cg_cache_modifier_str not in load_line
         if cache == '.cg':
             assert cg_cache_modifier_str in load_line
+        if cache == ".cs":
+            assert cs_cache_modifier_str in load_line
         if cache == '.cv':
             assert cv_cache_modifier_str in load_line
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        if cache == '':
-            assert 'ld.global.ca' not in ptx
-            assert 'ld.global.cg' not in ptx
-        if cache == '.cg':
-            assert 'ld.global.cg' in ptx
-            assert 'ld.global.ca' not in ptx
-        if cache == '.ca':
-            assert 'ld.global.ca' in ptx
-            assert 'ld.global.cg' not in ptx
+        all_modifiers = ['.ca', '.cg', '.cs', '.cv']
+        for modifier in all_modifiers:
+            if modifier == cache:
+                assert f'ld.global{modifier}' in ptx
+            else:
+                assert f'ld.global{modifier}' not in ptx
 
 
 @pytest.mark.interpreter
@@ -4444,9 +4473,8 @@ def test_store_cache_modifier(cache, device):
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
     if is_hip():
-        target_arch = get_arch()
         # TODO: support testing for remaining architectures
-        if 'gfx94' not in target_arch:
+        if not is_hip_cdna3() and not is_hip_cdna4():
             return
         amdgcn = pgm.asm['amdgcn']
         cs_cache_modifier_str = 'nt'
@@ -4454,7 +4482,7 @@ def test_store_cache_modifier(cache, device):
         buffer_store_line = [line for line in amdgcn.splitlines() if "buffer_store" in line]
         global_store_line = [line for line in amdgcn.splitlines() if "global_store" in line]
         store_line = global_store_line[0] if global_store_line else buffer_store_line[0]
-        if cache == '' or cache == '.cg':
+        if cache == '' or cache == '.wb' or cache == '.cg':
             assert cs_cache_modifier_str not in store_line
             assert wt_cache_modifier_str not in store_line
         if cache == '.cs':
@@ -4466,31 +4494,12 @@ def test_store_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        if cache == '':
-            assert 'st.global.wb' not in ptx
-            assert 'st.global.cg' not in ptx
-            assert 'st.global.cs' not in ptx
-            assert 'st.global.wt' not in ptx
-        if cache == '.wb':
-            assert 'st.global.wb' in ptx
-            assert 'st.global.cg' not in ptx
-            assert 'st.global.cs' not in ptx
-            assert 'st.global.wt' not in ptx
-        if cache == '.cg':
-            assert 'st.global.wb' not in ptx
-            assert 'st.global.cg' in ptx
-            assert 'st.global.cs' not in ptx
-            assert 'st.global.wt' not in ptx
-        if cache == '.cs':
-            assert 'st.global.wb' not in ptx
-            assert 'st.global.cg' not in ptx
-            assert 'st.global.cs' in ptx
-            assert 'st.global.wt' not in ptx
-        if cache == '.wt':
-            assert 'st.global.wb' not in ptx
-            assert 'st.global.cg' not in ptx
-            assert 'st.global.cs' not in ptx
-            assert 'st.global.wt' in ptx
+        all_modifiers = ['.wb', '.cg', '.cs', '.wt']
+        for modifier in all_modifiers:
+            if modifier == cache:
+                assert f'st.global{modifier}' in ptx
+            else:
+                assert f'st.global{modifier}' not in ptx
 
 
 @pytest.mark.interpreter

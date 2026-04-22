@@ -1,4 +1,4 @@
-from triton.language.core import _aggregate as aggregate
+from triton.experimental.gluon import aggregate
 from triton.experimental.gluon.language import _core as ttgl, _standard as stdlib
 from triton.experimental.gluon._runtime import constexpr_function, jit
 

@@ -287,6 +287,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                      .global()
                      .o("ca", op.getCache() == triton::CacheModifier::CA)
                      .o("cg", op.getCache() == triton::CacheModifier::CG)
+                     .o("cs", op.getCache() == triton::CacheModifier::CS)
+                     .o("cv", op.getCache() == triton::CacheModifier::CV)
                      .o("L1::evict_first",
                         op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
                      .o("L1::evict_last",
