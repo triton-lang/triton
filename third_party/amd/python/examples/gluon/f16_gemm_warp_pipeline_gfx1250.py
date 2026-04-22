@@ -192,7 +192,8 @@ def gemm_tdm_pipelined_warp_pipelined_kernelB(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.parametrize("TRANSPOSE_B", [True])
 @pytest.mark.parametrize("M,N,K", [(2048, 2048, 2048)])
 @pytest.mark.parametrize("DUMP", [False])
-def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP):
+@pytest.mark.parametrize("USE_KERNEL_B", [False])
+def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP, USE_KERNEL_B):
     if triton.cdiv(K, BLOCK_K) < NUM_BUFFERS:
         pytest.skip("Skip tests where K/BLOCK_K < NUM_BUFFERS")
 
@@ -217,7 +218,9 @@ def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
 
     warp_bases = tuple(WARP_BASES)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    kernel = gemm_tdm_pipelined_warp_pipelined_kernel[grid](
+    kernel_fn = (gemm_tdm_pipelined_warp_pipelined_kernelB
+                 if USE_KERNEL_B else gemm_tdm_pipelined_warp_pipelined_kernel)
+    kernel = kernel_fn[grid](
         a_device, b_device, c_device,  #
         M, N, K,  #
         stride_am, stride_ak,  #
@@ -248,6 +251,7 @@ if __name__ == "__main__":
     parser.add_argument("-K", type=int, default=1024, help='problem K size')
     parser.add_argument("--num-buffers", type=int, choices=[2, 3, 4], default=3, help='num shared memory buffers')
     parser.add_argument("--dump", action="store_true", help="Print out result/golden tensors")
+    parser.add_argument("--kernelB", action="store_true", help="Use the kernelB variant")
     args = parser.parse_args()
 
     M, N, K = args.M, args.N, args.K
@@ -256,6 +260,7 @@ if __name__ == "__main__":
     NUM_WARPS = 8
     TRANSPOSE_B = True
     DUMP = args.dump
-    print(f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, {NUM_WARPS=}, {NUM_BUFFERS=}")
+    USE_KERNEL_B = args.kernelB
+    print(f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, {NUM_WARPS=}, {NUM_BUFFERS=}, {USE_KERNEL_B=}")
 
-    test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP)
+    test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP, USE_KERNEL_B)
