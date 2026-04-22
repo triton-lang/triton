@@ -70,6 +70,8 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 
 namespace mlir::triton::amdgpu {
 
+namespace {
+
 std::string getStringFromCoords(mlir::triton::AMD::ElemLocationKey coords) {
   std::string result;
   llvm::raw_string_ostream os(result);
@@ -81,8 +83,7 @@ std::string getStringFromCoords(mlir::triton::AMD::ElemLocationKey coords) {
 }
 
 // Helper function to verify TDM block dimensions
-static LogicalResult verifyTDMBlockSize(Operation *op,
-                                        ArrayRef<int64_t> blockShape) {
+LogicalResult verifyTDMBlockSize(Operation *op, ArrayRef<int64_t> blockShape) {
   constexpr int64_t maxBlockSize = std::numeric_limits<uint16_t>::max();
   for (size_t i = 0; i < blockShape.size(); ++i) {
     if (blockShape[i] > maxBlockSize) {
@@ -93,6 +94,8 @@ static LogicalResult verifyTDMBlockSize(Operation *op,
   }
   return success();
 }
+
+} // namespace
 
 LogicalResult ExtractSliceOp::verify() {
   // Basic type/rank checks.
@@ -576,8 +579,8 @@ LogicalResult LocalLoadPackedTransposedOp::verify() {
 
 // This pattern removes a concatOp if it has a single input operand.
 // This scenario can potentially happen as a result of ops refinement.
-mlir::LogicalResult foldConcatOpFromSingleSource(amdgpu::ConcatOp op,
-                                                 PatternRewriter &rewriter) {
+static mlir::LogicalResult
+foldConcatOpFromSingleSource(amdgpu::ConcatOp op, PatternRewriter &rewriter) {
   auto sources = op.getSources();
   if (sources.size() == 1) {
     auto source = sources.front();

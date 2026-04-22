@@ -471,7 +471,7 @@ def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, warmup_reps=10):
             _ = cublas_block_scaled_matmul(a, a_scale_cublas, b, b_scale_cublas, block_scale_type=block_scale_type)
 
     # Benchmark
-    proton.activate(0)
+    proton.activate()
     for _ in range(reps):
         _ = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n, rep_k,
                                 configs)
@@ -482,7 +482,7 @@ def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, warmup_reps=10):
             with proton.scope(f"cublas [M={M}, N={N}, K={K}]",
                               {"bytes": bytes_per_elem * (M * K_bytes + N * K_bytes + M * N), "flops": 2. * M * N * K}):
                 _ = cublas_block_scaled_matmul(a, a_scale_cublas, b, b_scale_cublas, block_scale_type=block_scale_type)
-    proton.deactivate(0)
+    proton.deactivate()
     print("Done benchmarking")
 
 
@@ -704,10 +704,10 @@ def bench_block_scaled_amd(K, block_scale_type="mxfp4", reps=10, mfma_nonkdim=16
     x = x_mxfp4.to_packed_tensor(dim=1)
     w = w_mxfp4.to_packed_tensor(dim=1)
 
-    proton.activate(0)
+    proton.activate()
     for _ in range(reps):
         _ = block_scaled_matmul_amd(x, w, x_scales_triton, w_scales_triton, configs)
-    proton.deactivate(0)
+    proton.deactivate()
     print("Done benchmarking")
 
 
@@ -738,7 +738,7 @@ if __name__ == "__main__":
 
         if args.bench:
             proton.start("block_scaled_matmul", hook="triton")
-            proton.deactivate(0)  # Skip argument creation
+            proton.deactivate()  # Skip argument creation
             for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
                 if is_cuda():
                     bench_block_scaled(K, reps=10000, block_scale_type=args.format)

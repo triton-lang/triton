@@ -50,6 +50,8 @@ using StreamOpVariant =
     std::variant<StreamCopyChainOps, AsyncCopyChainOps, TDMCopyChainOps>;
 using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 
+namespace {
+
 TDMCopyChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
                                    Value extractIdx) {
   OpBuilder builder(loadOp);
@@ -429,7 +431,10 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
   return loadToStreamOp;
 }
 
+} // namespace
+
 namespace SingleDotSchedule {
+namespace {
 using namespace mlir::SingleDotSchedule;
 using ClusterMap = DenseMap<tt::CoarseSchedule::ClusterHash, int>;
 
@@ -704,9 +709,11 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   ttg::scheduleRemainingToLastStage(forOp, schedule, computeCluster);
   dumpScheduleDebug(schedule, DEBUG_TYPE, "Final coarse schedule:");
 }
+} // namespace
 } // namespace SingleDotSchedule
 
 namespace ChainedDotSchedule {
+namespace {
 using namespace mlir::ChainedDotSchedule;
 
 void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
@@ -823,11 +830,12 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   triton::gpu::scheduleRemainingToLastStage(forOp, schedule, lastCluster);
   dumpScheduleDebug(schedule, DEBUG_TYPE, "Final coarse schedule:");
 }
+} // namespace
 } // namespace ChainedDotSchedule
 
-void lowerLoop(scf::ForOp forOp,
-               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-               bool useAsyncCopy, bool usePingpong) {
+static void lowerLoop(scf::ForOp forOp,
+                      triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                      bool useAsyncCopy, bool usePingpong) {
   tt::CoarseSchedule schedule;
   if (failed(schedule.deSerialize(forOp, /*normalizeClusterId=*/false))) {
     return;

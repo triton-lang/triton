@@ -20,6 +20,8 @@
 
 namespace py = pybind11;
 
+namespace {
+
 void init_triton_analysis(py::module &&m) {
   py::class_<mlir::ModuleAllocation>(m, "allocation", py::module_local())
       .def(py::init<mlir::ModuleOp>());
@@ -141,6 +143,8 @@ void init_gluon_passes(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_infer_coalesced_encodings",
                      gluon::createGluonInferCoalescedEncodingsPass);
 }
+
+} // namespace
 
 void init_triton_passes(py::module &&m) {
   init_triton_analysis(m.def_submodule("analysis"));

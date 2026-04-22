@@ -1115,7 +1115,7 @@ std::optional<StringRef> getAMDArch(Operation *module) {
   return ref.drop_front(4); // drop the "hip:"
 }
 
-inline ttg::SwizzledSharedEncodingAttr
+static inline ttg::SwizzledSharedEncodingAttr
 swizzleDotOperandLike(RankedTensorType type, ttg::CGAEncodingAttr cgaLayout) {
   // We want to see if the linear layout has the same order as an mma microtile
   // of shape (8, 4*kWidth) or (4*kWidth, 8). If so, we return a
