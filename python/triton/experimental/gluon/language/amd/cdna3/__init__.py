@@ -191,6 +191,9 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
     Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the
     CDNA3 scaled-upcast op.
 
+    CDNA3 lowers this through the software-emulated scaled-upcast path; it
+    does not use native hardware scaled-upcast instructions.
+
     The scale tensor must use raw E8M0 payload in `int8` or `uint8`, and must
     already have the expanded output shape and scaled-upcast result layout.
     For fp4 inputs, that is the canonical unpacked layout implied by `src`
