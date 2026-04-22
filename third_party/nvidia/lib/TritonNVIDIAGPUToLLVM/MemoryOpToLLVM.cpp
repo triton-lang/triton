@@ -32,6 +32,8 @@ bool isConstI32OneTensor(Value value) {
 Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
                     Value ptr, bool returnOld) {
   PTXBuilder ptxBuilder;
+  // PTX atom/red.inc resets to 0 only when the old value reaches the bound, so
+  // using UINT32_MAX makes it equivalent to a wrapping increment-by-1.
   auto *boundOpr = ptxBuilder.newConstantOperand("0xffffffff");
   if (!returnOld) {
     auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
