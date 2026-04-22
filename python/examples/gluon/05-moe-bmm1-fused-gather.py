@@ -58,40 +58,22 @@ def unpack_block_schedule(schedule: gl.tensor) -> tuple[gl.tensor, gl.tensor]:
 
 
 @gluon.jit
-def banded_row_major(lin_idx, m_tiles, n_tiles, BAND_N: gl.constexpr):
-    if BAND_N >= n_tiles:
-        return lin_idx // n_tiles, lin_idx % n_tiles
+def banded_row_major(block_id, grid_m, GRID_N: gl.constexpr, BAND_N: gl.constexpr):
+    if BAND_N >= GRID_N:
+        return block_id // GRID_N, block_id % GRID_N
 
-    full_band_tiles = m_tiles * BAND_N
-    n_full_bands = n_tiles // BAND_N
+    full_band_tiles = grid_m * BAND_N
+    n_full_bands = GRID_N // BAND_N
     full_band_work = n_full_bands * full_band_tiles
 
-    if lin_idx < full_band_work:
-        band_id = lin_idx // full_band_tiles
-        within_band = lin_idx % full_band_tiles
+    if block_id < full_band_work:
+        band_id = block_id // full_band_tiles
+        within_band = block_id % full_band_tiles
         return within_band // BAND_N, band_id * BAND_N + (within_band % BAND_N)
 
-    tail_n = n_tiles - n_full_bands * BAND_N
-    tail_idx = lin_idx - full_band_work
+    tail_n = GRID_N - n_full_bands * BAND_N
+    tail_idx = block_id - full_band_work
     return tail_idx // tail_n, n_full_bands * BAND_N + (tail_idx % tail_n)
-
-
-@gluon.jit
-def banded_row_major_m(lin_idx, m_tiles, n_tiles, BAND_N: gl.constexpr):
-    if BAND_N >= n_tiles:
-        return lin_idx // n_tiles
-
-    full_band_tiles = m_tiles * BAND_N
-    n_full_bands = n_tiles // BAND_N
-    full_band_work = n_full_bands * full_band_tiles
-
-    if lin_idx < full_band_work:
-        within_band = lin_idx % full_band_tiles
-        return within_band // BAND_N
-
-    tail_n = n_tiles - n_full_bands * BAND_N
-    tail_idx = lin_idx - full_band_work
-    return tail_idx // tail_n
 
 
 @gluon.jit
@@ -103,43 +85,12 @@ def apply_block_schedule(
     block_schedule: gl.tensor,
     BAND_N: gl.constexpr,
 ) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
-    # The persistent loop bounds block_id by grid_m * GRID_N, so no wraparound
-    # modulo is needed on the hot scheduling path.
     schedule_pid_m, pid_n = banded_row_major(block_id, grid_m, GRID_N, BAND_N=BAND_N)
 
     slice_idx, pid_m = unpack_block_schedule(gl.load(block_schedule + schedule_pid_m))
-    pid_n = pid_n.to(gl.int32)
     slice_offset = gl.load(slice_offsets + slice_idx)
 
     return pid_m, pid_n, slice_idx, slice_offset
-
-
-@gluon.jit
-def apply_weight_schedule(
-    block_id: gl.tensor,
-    grid_m: gl.tensor,
-    GRID_N: gl.constexpr,
-    block_schedule: gl.tensor,
-    BAND_N: gl.constexpr,
-) -> tuple[gl.tensor, gl.tensor]:
-    schedule_pid_m, pid_n = banded_row_major(block_id, grid_m, GRID_N, BAND_N=BAND_N)
-    slice_idx, _ = unpack_block_schedule(gl.load(block_schedule + schedule_pid_m))
-    return pid_n.to(gl.int32), slice_idx
-
-
-@gluon.jit
-def apply_activation_schedule(
-    block_id: gl.tensor,
-    grid_m: gl.tensor,
-    GRID_N: gl.constexpr,
-    slice_offsets: gl.tensor,
-    block_schedule: gl.tensor,
-    BAND_N: gl.constexpr,
-) -> tuple[gl.tensor, gl.tensor, gl.tensor]:
-    schedule_pid_m = banded_row_major_m(block_id, grid_m, GRID_N, BAND_N=BAND_N)
-    slice_idx, pid_m = unpack_block_schedule(gl.load(block_schedule + schedule_pid_m))
-    slice_offset = gl.load(slice_offsets + slice_idx)
-    return pid_m, slice_idx, slice_offset
 
 
 @gluon.jit
@@ -158,22 +109,22 @@ def unswizzle_mx_scale(
 
 
 @gluon.jit
-def alloc_barrier_ring(num_bufs: gl.constexpr, two_ctas: gl.constexpr = False, count: gl.constexpr = 1):
+def alloc_barrier_ring(num_bufs: gl.constexpr, two_ctas: gl.constexpr = False):
     bars = mbarrier.allocate_mbarrier(batch=num_bufs, two_ctas=two_ctas)
     for i in gl.static_range(num_bufs):
-        mbarrier.init(bars.index(i), count=count)
+        mbarrier.init(bars.index(i))
     return bars
 
 
 @gluon.jit
-def alloc_empty_ready_barriers(
+def alloc_ring_barriers(
     num_bufs: gl.constexpr,
-    empty_two_ctas: gl.constexpr = False,
-    ready_two_ctas: gl.constexpr = False,
+    producer_two_ctas: gl.constexpr = False,
+    consumer_two_ctas: gl.constexpr = False,
 ):
     return (
-        alloc_barrier_ring(num_bufs, two_ctas=empty_two_ctas),
-        alloc_barrier_ring(num_bufs, two_ctas=ready_two_ctas),
+        alloc_barrier_ring(num_bufs, two_ctas=producer_two_ctas),
+        alloc_barrier_ring(num_bufs, two_ctas=consumer_two_ctas),
     )
 
 
@@ -268,14 +219,10 @@ class PartitionArgs:
     w_scale_bufs: gl.shared_memory_descriptor
     w_empty_bars: gl.shared_memory_descriptor
     w_ready_bars: gl.shared_memory_descriptor
-    w_scale_empty_bars: gl.shared_memory_descriptor
-    w_scale_ready_bars: gl.shared_memory_descriptor
     w_num_bufs: gl.constexpr
-    w_scale_num_bufs: gl.constexpr
 
     x_scale_tmem: blackwell.tensor_memory_descriptor
     w_scale_tmem: blackwell.tensor_memory_descriptor
-    w_scale_tmem_alt: blackwell.tensor_memory_descriptor
     acc_bufs: blackwell.tensor_memory_descriptor
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
@@ -293,7 +240,6 @@ class PartitionArgs:
     num_blocks: gl.tensor
 
     NUM_SMS: gl.constexpr
-    NUM_WARPS: gl.constexpr
     USE_2CTA: gl.constexpr
     BLOCK_M_PER_CTA: gl.constexpr
     BLOCK_M: gl.constexpr
@@ -327,28 +273,6 @@ class PartitionArgs:
             BAND_N=self.BAND_N,
         )
 
-    @gluon.jit
-    def apply_weight_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor]:
-        return apply_weight_schedule(
-            block_id=block_id,
-            grid_m=self.grid_m,
-            GRID_N=self.GRID_N,
-            block_schedule=self.x_block_schedule,
-            BAND_N=self.BAND_N,
-        )
-
-    @gluon.jit
-    def apply_activation_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor]:
-        return apply_activation_schedule(
-            block_id=block_id,
-            grid_m=self.grid_m,
-            GRID_N=self.GRID_N,
-            slice_offsets=self.x_slice_offs,
-            block_schedule=self.x_block_schedule,
-            BAND_N=self.BAND_N,
-        )
-
-
 @gluon.jit
 def load_activations(p: PartitionArgs):
     local_cga_layout: gl.constexpr = ((0, 1), ) if p.USE_2CTA else ()
@@ -363,7 +287,7 @@ def load_activations(p: PartitionArgs):
     issued = 0
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        pid_m, slice_idx, slice_offset = p.apply_activation_schedule(block_id)
+        pid_m, _, slice_idx, slice_offset = p.apply_block_schedule(block_id)
         off_m = pid_m * p.BLOCK_M
         shape_m = gl.load(p.x_slice_sizes + slice_idx)
         offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=offs_layout)
@@ -407,12 +331,11 @@ def load_weights(p: PartitionArgs):
     issued = 0
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        pid_n, slice_idx = p.apply_weight_schedule(block_id)
+        _, pid_n, slice_idx, _ = p.apply_block_schedule(block_id)
 
         scale_idx = slice_idx * p.SCALE_FLAT_N + pid_n * p.SCALE_BLOCK_N_DIV
-        scale_k_stride: gl.constexpr = p.BLOCK_K // (p.MXFP_BLOCK_SIZE * p.SCALE_SIZE_INNER)
         for ki in range(p.K_TILES):
-            off_k_scale = ki * scale_k_stride
+            off_k_scale = ki * p.BLOCK_K // (p.MXFP_BLOCK_SIZE * p.SCALE_SIZE_INNER)
 
             w_empty_bar = p.w_empty_bars.index(idx)
             w_ready_bar = p.w_ready_bars.index(idx)
@@ -674,25 +597,14 @@ def apply_bias_and_scale(
     acc_buf = p.acc_bufs.index(idx)
 
     offs_bias_n = off_n + gl.arange(0, p.BLOCK_N, layout=bias_layout)
-    if p.USE_DIRECT_EPILOGUE_STORE:
-        bias = gl.convert_layout(
-            gl.expand_dims(gl.load(p.bias_ptr + slice_idx * p.bias_stride + offs_bias_n), axis=0),
-            split_layout,
-        )
-        mbarrier.wait(acc_ready_bar, phase)
-        idx, phase = advance(idx, phase, p.acc_num_bufs)
-        acc_regs_raw = acc_buf.load()
-        mbarrier.arrive(acc_empty_bar)
-        acc_regs = acc_regs_raw.permute((1, 0))
-    else:
-        mbarrier.wait(acc_ready_bar, phase)
-        idx, phase = advance(idx, phase, p.acc_num_bufs)
-        bias = gl.convert_layout(
-            gl.expand_dims(gl.load(p.bias_ptr + slice_idx * p.bias_stride + offs_bias_n), axis=0),
-            split_layout,
-        )
-        acc_regs = acc_buf.load().permute((1, 0))
-        mbarrier.arrive(acc_empty_bar)
+    bias = gl.convert_layout(
+        gl.expand_dims(gl.load(p.bias_ptr + slice_idx * p.bias_stride + offs_bias_n), axis=0),
+        split_layout,
+    )
+    mbarrier.wait(acc_ready_bar, phase)
+    acc_regs = acc_buf.load().permute((1, 0))
+    mbarrier.arrive(acc_empty_bar)
+    idx, phase = advance(idx, phase, p.acc_num_bufs)
     acc = gl.convert_layout(acc_regs, split_layout)
     acc_packed = float2.pack(acc, axis=1)
     bias_packed = float2.pack(bias, axis=1)
@@ -887,10 +799,9 @@ def ws_matmul_kernel(
         [x_num_bufs, BLOCK_M, x_desc.block_type.shape[1]],
         x_desc.layout,
     )
-    x_empty_bars, x_ready_bars = alloc_empty_ready_barriers(x_num_bufs, ready_two_ctas=use_2cta)
+    x_empty_bars, x_ready_bars = alloc_ring_barriers(x_num_bufs, consumer_two_ctas=use_2cta)
 
     w_num_bufs: gl.constexpr = W_NUM_BUFS
-    w_scale_num_bufs: gl.constexpr = w_num_bufs
     w_bufs = gl.allocate_shared_memory(
         w_desc.dtype,
         [w_num_bufs] + w_desc.block_type.shape,
@@ -898,16 +809,13 @@ def ws_matmul_kernel(
     )
     w_scale_bufs = gl.allocate_shared_memory(
         scale_desc.dtype,
-        [w_scale_num_bufs] + scale_desc.block_type.shape,
+        [w_num_bufs] + scale_desc.block_type.shape,
         scale_desc.layout,
     )
-    w_empty_bars, w_ready_bars = alloc_empty_ready_barriers(w_num_bufs, ready_two_ctas=use_2cta)
-    w_scale_empty_bars = w_empty_bars
-    w_scale_ready_bars = w_ready_bars
+    w_empty_bars, w_ready_bars = alloc_ring_barriers(w_num_bufs, consumer_two_ctas=use_2cta)
 
     x_scale_tmem = blackwell.allocate_tensor_memory(gl.uint8, [BLOCK_M, scale_k], x_scale_layout)
     w_scale_tmem = blackwell.allocate_tensor_memory(gl.uint8, [BLOCK_N, scale_k], w_scale_layout)
-    w_scale_tmem_alt = w_scale_tmem
 
     acc_num_bufs: gl.constexpr = ACC_NUM_BUFS
     acc_tmem = blackwell.allocate_tensor_memory(
@@ -915,7 +823,7 @@ def ws_matmul_kernel(
         [acc_num_bufs, BLOCK_N, BLOCK_M],
         acc_layout,
     )
-    acc_empty_bars, acc_ready_bars = alloc_empty_ready_barriers(acc_num_bufs, empty_two_ctas=use_2cta)
+    acc_empty_bars, acc_ready_bars = alloc_ring_barriers(acc_num_bufs, producer_two_ctas=use_2cta)
 
     if USE_DIRECT_EPILOGUE_STORE:
         store_bufs = x_bufs
@@ -931,7 +839,7 @@ def ws_matmul_kernel(
             [EPILOGUE_BUFFER_DEPTH, frag_rows, out_packed_n],
             gl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=((0, 1), ) if use_2cta else ()),
         )
-        store_empty_bars, store_ready_bars = alloc_empty_ready_barriers(EPILOGUE_BUFFER_DEPTH)
+        store_empty_bars, store_ready_bars = alloc_ring_barriers(EPILOGUE_BUFFER_DEPTH)
 
     x_scale_tmem.store(gl.full((BLOCK_M, scale_k), 127, dtype=gl.uint8, layout=x_scale_tmem.get_reg_layout()))
 
@@ -962,14 +870,10 @@ def ws_matmul_kernel(
         w_scale_bufs=w_scale_bufs,
         w_empty_bars=w_empty_bars,
         w_ready_bars=w_ready_bars,
-        w_scale_empty_bars=w_scale_empty_bars,
-        w_scale_ready_bars=w_scale_ready_bars,
         w_num_bufs=w_num_bufs,
-        w_scale_num_bufs=w_scale_num_bufs,
         #
         x_scale_tmem=x_scale_tmem,
         w_scale_tmem=w_scale_tmem,
-        w_scale_tmem_alt=w_scale_tmem_alt,
         acc_bufs=acc_tmem,
         acc_empty_bars=acc_empty_bars,
         acc_ready_bars=acc_ready_bars,
@@ -1125,7 +1029,6 @@ class KernelConfig:
     NUM_CTAS: int = 1
     X_NUM_BUFS: int = 5
     W_NUM_BUFS: int = 4
-    W_SCALE_NUM_BUFS: int = 0
     ACC_NUM_BUFS: int = 1
 
     NUM_WARPS: int = 8
@@ -1331,40 +1234,6 @@ def select_kernel_config(slice_size: int) -> KernelConfig:
     return p
 
 
-_dynamic_block_schedule_cache: dict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] = {}
-
-
-def get_block_schedule_tensors(
-    ragged_metadata: RaggedTensorMetadata,
-    block_size: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    precomputed_sizes = RaggedTensorMetadata.block_sizes()
-    if block_size in precomputed_sizes:
-        block_idx = precomputed_sizes.index(block_size)
-        return ragged_metadata.block_offs_data[block_idx], ragged_metadata.block_schedule_data[block_idx]
-
-    key = (id(ragged_metadata), block_size)
-    cached = _dynamic_block_schedule_cache.get(key)
-    if cached is not None:
-        return cached
-
-    slice_sizes_cpu = ragged_metadata.slice_sizes.cpu().tolist()
-    block_counts = [(int(size) + block_size - 1) // block_size for size in slice_sizes_cpu]
-    block_offs = [0]
-    for count in block_counts:
-        block_offs.append(block_offs[-1] + count)
-
-    packed_schedule = [(pid_m << 16) | slice_idx
-                       for slice_idx, count in enumerate(block_counts)
-                       for pid_m in range(count)]
-
-    device = ragged_metadata.slice_sizes.device
-    block_offs_t = torch.tensor(block_offs, dtype=torch.int32, device=device)
-    block_schedule_t = torch.tensor(packed_schedule, dtype=torch.int32, device=device)
-    _dynamic_block_schedule_cache[key] = (block_offs_t, block_schedule_t)
-    return block_offs_t, block_schedule_t
-
-
 def matmul(
     a: torch.Tensor,
     b: torch.Tensor | Tensor,
@@ -1400,7 +1269,8 @@ def matmul(
     assert isinstance(b.storage.layout, BlackwellMX4ValueShuffledLayout)
     assert b.storage.layout.block_k == p.BLOCK_K
     assert b.storage.layout.block_n == p.BLOCK_N
-    x_block_offs, x_block_schedule = get_block_schedule_tensors(a_ragged_metadata, p.BLOCK_M)
+    x_block_offs = a_ragged_metadata.block_offs(p.BLOCK_M)
+    x_block_schedule = a_ragged_metadata.block_schedule(p.BLOCK_M)
     expected_grid_m = a_ragged_metadata.n_blocks(a_ragged_metadata.n_slices, m, p.BLOCK_M)
     grid_n = triton.cdiv(n, p.BLOCK_N)
     sms = torch.cuda.get_device_properties(bias.device).multi_processor_count
