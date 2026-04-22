@@ -32,8 +32,19 @@ AllocationSlice::AllocationSlice(Value value,
   // MemDescIndexOp selects a whole slot of a multi-buffered allocation;
   // record its index so intersects() can prove slot-level disjointness.
   // Sub-region offsets within a slot are captured by subsliceOffsets above.
-  if (auto indexOp = value.getDefiningOp<triton::gpu::MemDescIndexOp>())
-    bufferIndex = indexOp.getIndex();
+  // Walk through MemDescViewTrait producers (memdesc_trans/reshape/
+  // reinterpret/subslice) to the underlying memdesc_index: view ops
+  // never change which slot is selected.
+  Value v = value;
+  while (auto *def = v.getDefiningOp()) {
+    if (auto indexOp = dyn_cast<triton::gpu::MemDescIndexOp>(def)) {
+      bufferIndex = indexOp.getIndex();
+      break;
+    }
+    if (!def->hasTrait<OpTrait::MemDescViewTrait>())
+      break;
+    v = def->getOperand(0);
+  }
 }
 
 bool AllocationSlice::intersects(const AllocationSlice &other) const {

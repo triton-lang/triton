@@ -1340,6 +1340,38 @@ tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
   tt.return
 }
 
+// -----
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#shared_t = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: disjoint_remsi_through_memdesc_trans
+// The reader sees the slot through a memdesc_trans view. The buffer-index
+// lookup must walk through MemDescViewTrait producers (here: memdesc_trans)
+// to reach the underlying memdesc_index; otherwise the reader's index is
+// lost and the writer/reader pair falls back to conservative aliasing.
+tt.func @disjoint_remsi_through_memdesc_trans(%cst: tensor<128x128xf16>,
+                                              %phase: i32) {
+  %c2_i32 = arith.constant 2 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  %w_off = arith.addi %phase, %c2_i32 : i32
+  %w_idx = arith.remsi %w_off, %c3_i32 : i32
+  %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  %r_idx = arith.remsi %phase, %c3_i32 : i32
+  %r_index = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %r_view = ttg.memdesc_trans %r_index {order = array<i32: 1, 0>} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared_t, #smem, mutable>
+
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared_t, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
 // CHECK-LABEL: disjoint_select_cmpi_iter_arg
 // Pipeliner-style (base + 1) % N via select/cmpi where `base` is an
 // scf.for iter_arg with a compile-time init in [-1, N) and the yield
