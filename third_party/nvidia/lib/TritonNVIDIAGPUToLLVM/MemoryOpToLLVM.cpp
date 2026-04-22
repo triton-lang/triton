@@ -32,9 +32,9 @@ bool isConstI32OneTensor(Value value) {
 Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
                     Value ptr, bool returnOld) {
   PTXBuilder ptxBuilder;
-  auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
   auto *boundOpr = ptxBuilder.newConstantOperand("0xffffffff");
   if (!returnOld) {
+    auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
     auto &red = *ptxBuilder.create("red");
     red.shared().o("inc").o("u32");
     red(ptrOpr, boundOpr);
@@ -42,6 +42,7 @@ Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
   }
 
   auto *dstOpr = ptxBuilder.newOperand("=r", /*init=*/true);
+  auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
   auto &atom = *ptxBuilder.create("atom");
   atom.shared().o("inc").o("u32");
   atom(dstOpr, ptrOpr, boundOpr);
