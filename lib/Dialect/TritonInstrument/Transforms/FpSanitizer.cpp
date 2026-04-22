@@ -948,8 +948,8 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
   return ScratchInfo{ptr, tensorTy};
 }
 
-std::optional<ScratchInfo>
-createWGMMAScratch(PatternRewriter &rewriter, Location loc, Value operand) {
+std::optional<ScratchInfo> createWGMMAScratch(PatternRewriter &rewriter,
+                                              Location loc, Value operand) {
   if (auto memTy = dyn_cast<ttg::MemDescType>(operand.getType())) {
     auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
                                               memTy.getElementType());
@@ -1988,8 +1988,8 @@ struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
     if (op.getUseC()) {
       useCInt = arith::ExtUIOp::create(rewriter, loc, accElem, op.getUseC());
     } else {
-      useCInt = arith::ConstantOp::create(
-          rewriter, loc, rewriter.getIntegerAttr(accElem, 1));
+      useCInt = arith::ConstantOp::create(rewriter, loc,
+                                          rewriter.getIntegerAttr(accElem, 1));
     }
     Value predInt = arith::ConstantOp::create(
         rewriter, loc, rewriter.getIntegerAttr(accElem, 1));
@@ -2006,17 +2006,16 @@ struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
 
     auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
                                                      cTy.getElementType());
-    auto accTileTy = RankedTensorType::get(
-        {tileM, tileN}, cTy.getElementType(), accTileLayout);
-    auto aTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, k},
-                                                   aTy.getElementType());
+    auto accTileTy = RankedTensorType::get({tileM, tileN}, cTy.getElementType(),
+                                           accTileLayout);
+    auto aTileLayout =
+        getOptimizedBlockedEncoding(rewriter, {tileM, k}, aTy.getElementType());
     auto aTileTy =
         RankedTensorType::get({tileM, k}, aTy.getElementType(), aTileLayout);
     auto bTileLayout = getOptimizedBlockedEncoding(rewriter, {k, tileN},
                                                    bMemTy.getElementType());
     auto bTileTy =
-        RankedTensorType::get({k, tileN}, bMemTy.getElementType(),
-                              bTileLayout);
+        RankedTensorType::get({k, tileN}, bMemTy.getElementType(), bTileLayout);
 
     createGlobalScratchBarrier(rewriter, loc);
 
