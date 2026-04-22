@@ -209,8 +209,8 @@ class AttentionConfig:
     use_exp2_turnstile: gl.constexpr
 
     @gluon.constexpr_function
-    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, SPLIT_EXP_FACTOR, dtype,
-                 num_warps, NUM_KV_BUFFERS, USE_EXP2_TURNSTILE):
+    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE,
+                 SPLIT_EXP_FACTOR, dtype, num_warps, NUM_KV_BUFFERS, USE_EXP2_TURNSTILE):
         self.qk_scale = qk_scale
         self.Z = Z
         self.H = H
@@ -826,7 +826,8 @@ def attention_kernel(  #
         dtype: gl.constexpr, num_warps: gl.constexpr, use_tmem_red: gl.constexpr, NUM_KV_BUFFERS: gl.constexpr,
         USE_EXP2_TURNSTILE: gl.constexpr):
     qk_scale = sm_scale * 1.44269504
-    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, SPLIT_EXP_FACTOR,  #
+    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE,
+                             SPLIT_EXP_FACTOR,  #
                              dtype, num_warps, NUM_KV_BUFFERS, USE_EXP2_TURNSTILE)
 
     q_chnl = get_desc_channel(desc_q, num_buffers=2)
@@ -1051,8 +1052,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
         sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
         desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M, BLOCK_N, HEAD_DIM_K, GROUP_SIZE_N, NUM_SMS,  #
-        SPLIT_EXP_FACTOR=p.SPLIT_EXP_FACTOR,
-        STAGE=stage, dtype=torch_dtype_to_triton(q.dtype),  #
+        SPLIT_EXP_FACTOR=p.SPLIT_EXP_FACTOR, STAGE=stage, dtype=torch_dtype_to_triton(q.dtype),  #
         num_warps=p.NUM_WARPS, maxnreg=p.MAXNREG, use_tmem_red=p.USE_TMEM_RED, NUM_KV_BUFFERS=p.NUM_KV_BUFFERS,
         USE_EXP2_TURNSTILE=p.USE_EXP2_TURNSTILE)
 
