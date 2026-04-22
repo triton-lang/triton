@@ -54,8 +54,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: ttg.barrier global_read|global_write
     // CHECK: scf.for
     // CHECK: ttg.barrier global_read|global_write
-    // CHECK-NOT: ttng.warp_group_dot
-    // CHECK-NOT: ttng.warp_group_dot_wait
+    // CHECK-NOT: ttng.warp_group_dot {{.*}} :
+    // CHECK: ttng.warp_group_dot_wait
     %a = ttg.local_alloc : () -> !ttg.memdesc<64x32xf32, #shared, #smem, mutable>
     %b = ttg.local_alloc : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %c = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #mma>

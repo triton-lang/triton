@@ -2038,29 +2038,6 @@ struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
   }
 };
 
-struct WarpGroupDotWaitPattern
-    : public OpRewritePattern<ttng::WarpGroupDotWaitOp> {
-  using OpRewritePattern::OpRewritePattern;
-  LogicalResult matchAndRewrite(ttng::WarpGroupDotWaitOp op,
-                                PatternRewriter &rewriter) const override {
-    for (Value input : op.getInputs()) {
-      if (input.getDefiningOp<ttng::WarpGroupDotOp>())
-        return failure();
-    }
-    if (op.getInputs().empty()) {
-      bool hasRemainingWarpGroupDot = false;
-      op->getParentOfType<tt::FuncOp>().walk([&](ttng::WarpGroupDotOp) {
-        hasRemainingWarpGroupDot = true;
-      });
-      if (hasRemainingWarpGroupDot)
-        return failure();
-    }
-
-    rewriter.replaceOp(op, op.getInputs());
-    return success();
-  }
-};
-
 struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
   TCGen5MMAPattern(MLIRContext *ctx, TmemScratchManager *scratch)
       : OpRewritePattern(ctx), scratch(scratch) {}
@@ -2430,7 +2407,7 @@ public:
                  TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
                                                            &scratch);
     patterns.add<WarpGroupDotPattern>(&getContext());
-    patterns.add<TCGen5CommitPattern, WarpGroupDotWaitPattern>(&getContext());
+    patterns.add<TCGen5CommitPattern>(&getContext());
 
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       llvm::errs() << "FpSanitizer error: Failed to apply patterns\n";
