@@ -885,6 +885,9 @@ LogicalResult LocalAtomicAddOp::verify() {
   Type valuesEltTy = valuesTy.getElementType();
   unsigned axis = getAxis();
 
+  if (!dstTy.getMutableMemory())
+    return emitOpError("Cannot store into immutable memory");
+
   // Match Triton's existing atomic_add type support.
   if (!valuesEltTy.isIntOrFloat()) {
     return emitError("values must have integer or floating element type");

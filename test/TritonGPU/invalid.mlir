@@ -171,6 +171,19 @@ tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [4], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+tt.func public @local_atomic_add_immutable_dst(%values: tensor<4xi32, #blocked>,
+                                               %indices: tensor<4xi32, #blocked>,
+                                               %dst: !ttg.memdesc<4xi32, #shared, #smem>) {
+    // expected-error @+1 {{Cannot store into immutable memory}}
+    %0 = ttg.local_atomic_add relaxed, %dst[%indices], %values {axis = 0 : i32} : !ttg.memdesc<4xi32, #shared, #smem>, tensor<4xi32, #blocked>, tensor<4xi32, #blocked> -> tensor<4xi32, #blocked>
+    tt.return
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #shared1d = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0]}>
 #smem = #ttg.shared_memory
