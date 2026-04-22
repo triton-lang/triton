@@ -842,7 +842,7 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultTy, Value memDesc,
               int N) -> Value {
              return self.create<ttng::TMEMSubSliceOp>(resultTy, memDesc,
-                                                     /*M=*/0, N);
+                                                      /*M=*/0, N);
            })
       .def("create_mbarrier_init",
            [](GluonOpBuilder &self, Value memDesc, int count) {
