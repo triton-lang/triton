@@ -23,6 +23,11 @@ __all__ = [
     "async_load_im2col",
     "async_store",
     "store_wait",
+    "tensor_descriptor",
+    "tensor_descriptor_im2col",
+    "tensor_descriptor_type",
+    "tensor_descriptor_im2col_type",
+    "make_tensor_descriptor",
 ]
 
 

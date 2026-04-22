@@ -11,36 +11,61 @@ class TranslatorTarget(str, Enum):
     new AMD architectures work without adding an enum member.
     """
 
-    NVIDIA = "nvidia"
+    GENERIC = "generic"
+    SM80 = "sm80"
+    SM90 = "sm90"
+    SM100 = "sm100"
+    SM103 = "sm103"
     # AMD targets currently exercised by the translator test suite:
+    GFX90A = "gfx90a"
     GFX1250 = "gfx1250"
     GFX942 = "gfx942"
     GFX950 = "gfx950"
 
     @classmethod
     def _missing_(cls, value: object) -> "TranslatorTarget | None":
-        """Allow any ``gfx*`` string as a valid AMD target."""
-        if isinstance(value, str) and value.startswith("gfx"):
-            obj = str.__new__(cls, value)
-            obj._value_ = value
-            return obj
+        if value not in cls._value2member_map_:
+            return None
+        if isinstance(value, str):
+            return cls(value)
         return None
 
     @property
     def is_amd(self) -> bool:
-        return self != TranslatorTarget.NVIDIA
+        return self in (
+            TranslatorTarget.GFX90A,
+            TranslatorTarget.GFX942,
+            TranslatorTarget.GFX950,
+            TranslatorTarget.GFX1250,
+        )
+
+    @property
+    def is_nvidia(self) -> bool:
+        return self in (
+            TranslatorTarget.SM80,
+            TranslatorTarget.SM90,
+            TranslatorTarget.SM100,
+            TranslatorTarget.SM103,
+        )
 
     @property
     def tensor_descriptor_import(self) -> str:
-        """Return the import statement for the target's tensor descriptor module."""
-        if self.is_amd:
-            return "from triton.experimental.gluon.language.amd.gfx1250.tdm import tensor_descriptor"
-        return "from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor"
+        module = "amd.gfx1250.tdm" if self.is_amd else "nvidia.hopper.tma"
+        return f"from triton.experimental.gluon.language.{module} import tensor_descriptor"
 
     @property
     def helpers_module(self) -> str:
-        """Return the helpers module path for this target."""
         base = "triton.tools.triton_to_gluon_translator"
+
         if self.is_amd:
             return f"{base}.amd_helpers"
-        return f"{base}.nvidia_helpers"
+
+        if self.is_nvidia:
+            if self in (TranslatorTarget.SM100, TranslatorTarget.SM103):
+                return f"{base}.blackwell_helpers"
+            if self in (TranslatorTarget.SM90):
+                return f"{base}.hopper_helpers"
+            if self in (TranslatorTarget.SM80):
+                return f"{base}.nvidia_helpers"
+
+        return f"{base}.common_helpers"

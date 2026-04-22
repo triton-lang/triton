@@ -23,7 +23,7 @@ namespace mlir::triton::gpu {
 // scheduleLoops
 //===----------------------------------------------------------------------===//
 
-template <typename... OpTypes> bool containsAny(scf::ForOp forOp) {
+template <typename... OpTypes> static bool containsAny(scf::ForOp forOp) {
   WalkResult result = forOp.walk([&](Operation *op) {
     if (isa<OpTypes...>(op))
       return WalkResult::interrupt();

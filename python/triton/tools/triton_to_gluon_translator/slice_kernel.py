@@ -533,10 +533,10 @@ class ReferenceRewriter(ast.NodeTransformer):
 
 @dataclass
 class SliceRewriter(ReferenceRewriter):
+    target: TranslatorTarget = field(kw_only=True)
     translate_to_gluon: bool = False
     inline_helpers: ordered_set[str] = field(default_factory=ordered_set[str])
     cvt_context: list[bool] = field(default_factory=lambda: [False])
-    target: TranslatorTarget = TranslatorTarget.NVIDIA
 
     def __post_init__(self) -> None:
         # Special rules for sugaring imports.
@@ -627,8 +627,14 @@ def is_stdlib_module(module: ModuleType) -> bool:
     if origin in ["built-in", "frozen"]:
         return True
 
-    stdlib_path = Path(sysconfig.get_paths()["stdlib"])
-    return Path(origin).is_relative_to(stdlib_path)
+    origin_path = Path(origin)
+    sys_paths = sysconfig.get_paths()
+    site_package_paths = [Path(sys_paths[key]) for key in ("purelib", "platlib") if key in sys_paths]
+    if any(origin_path.is_relative_to(site_path) for site_path in site_package_paths):
+        return False
+
+    stdlib_paths = [Path(sys_paths[key]) for key in ("stdlib", "platstdlib") if key in sys_paths]
+    return any(origin_path.is_relative_to(stdlib_path) for stdlib_path in stdlib_paths)
 
 
 def find_references(
@@ -725,7 +731,8 @@ def slice_kernel(
     leaf_paths: list[str] | None = None,
     translate_to_gluon: bool = False,
     rewrite_spec: RewriteSpec | None = None,
-    target: TranslatorTarget = TranslatorTarget.NVIDIA,
+    *,
+    target: TranslatorTarget,
 ) -> str:
     rewrite_spec = rewrite_spec or RewriteSpec()
     base_values: list[GlobalValue] = [get_base_value(root_path) for root_path in root_paths]
@@ -826,7 +833,8 @@ def slice_kernel_from_trace(
     translate_to_gluon: bool,
     extra_modules: dict[str, str],
     rewrite_spec: RewriteSpec | None = None,
-    target: TranslatorTarget = TranslatorTarget.NVIDIA,
+    *,
+    target: TranslatorTarget,
 ) -> str:
     module_remap: dict[str, str] = {}
     for name, path in extra_modules.items():
@@ -873,7 +881,8 @@ def main(
     leaf_paths: list[str] | None = None,
     translate_to_gluon: bool = False,
     output_path: str = "/tmp/reference.py",
-    target: TranslatorTarget = TranslatorTarget.NVIDIA,
+    *,
+    target: TranslatorTarget,
 ) -> None:
     output = slice_kernel(
         root_paths=root_paths,
@@ -899,6 +908,7 @@ def _main_cli() -> None:
     parser.add_argument("--translate-to-gluon", action="store_true",
                         help="Translate Triton JIT callables to Gluon while slicing.")
     parser.add_argument("--output-path", default="/tmp/reference.py", help="Path to write the sliced output.")
+    parser.add_argument("--target", required=True, help="Target architecture (e.g. nvidia, gfx1250).")
     args = parser.parse_args()
     main(
         root_paths=args.root_paths,
@@ -907,6 +917,7 @@ def _main_cli() -> None:
         leaf_paths=args.leaf_paths or None,
         translate_to_gluon=args.translate_to_gluon,
         output_path=args.output_path,
+        target=TranslatorTarget(args.target),
     )
 
 
