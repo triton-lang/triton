@@ -37,11 +37,9 @@ def _make_package(tmp_path: Path, files: dict[str, str]) -> tuple[str, Callable[
 
 
 def assert_code_equal(actual: str, expected: str) -> None:
-    actual_lines: list[str] = actual.strip().splitlines()
-    actual_lines = [line.strip() for line in actual_lines if line]
-    expected_lines: list[str] = expected.strip().splitlines()
-    expected_lines = [line.strip() for line in expected_lines if line]
-    assert actual_lines == expected_lines
+    lhs = ast.dump(ast.parse(actual))
+    rhs = ast.dump(ast.parse(expected))
+    assert lhs == rhs
 
 
 def test_slice_kernel_basic_module_slicing(tmp_path):
