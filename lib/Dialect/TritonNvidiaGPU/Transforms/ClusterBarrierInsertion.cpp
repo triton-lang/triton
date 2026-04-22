@@ -108,11 +108,11 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
   if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
     return ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier());
   }
-  if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     return tma.getMulticast() && aliasesTracked(tma.getBarrier());
   }
-  if (auto tma = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
-    return tma.getMulticast() && aliasesTracked(tma.getBarrier());
+  if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op)) {
+    return aliasesTracked(clc.getMbarrier());
   }
   return false;
 }

@@ -220,24 +220,24 @@ def tl_dot(
     a: ttgl.tensor,
     b: ttgl.tensor,
     acc: ttgl.tensor | None = None,
-    input_precision_arg: builtins.str | None = None,
+    input_precision: builtins.str | None = None,
     allow_tf32: builtins.bool | None = None,
-    max_num_imprecise_acc_arg: int | None = None,
+    max_num_imprecise_acc: int | None = None,
     out_dtype: ttgl.dtype = ttgl.float32,
 ):
-    input_precision: ttgl.constexpr = _get_default_input_precision(
+    input_prec: ttgl.constexpr = _get_default_input_precision(
         allow_tf32,
-        input_precision_arg,
+        input_precision,
     )
-    max_num_imprecise_acc: ttgl.constexpr = _get_default_max_num_imprecise_acc(
+    max_num_imprecise: ttgl.constexpr = _get_default_max_num_imprecise_acc(
         a.type,
         b.type,
-        max_num_imprecise_acc_arg,
+        max_num_imprecise_acc,
     )
     num_warps: ttgl.constexpr = ttgl.num_warps()
 
-    if tl_dot_mmav3_supported(a.type, b.type, num_warps, input_precision, max_num_imprecise_acc, out_dtype):
-        return tl_dot_mmav3(a, b, acc, input_precision, max_num_imprecise_acc, out_dtype)
+    if tl_dot_mmav3_supported(a.type, b.type, num_warps, input_prec, max_num_imprecise, out_dtype):
+        return tl_dot_mmav3(a, b, acc, input_prec, max_num_imprecise, out_dtype)
     else:
         return tl_dot_mma_sync(a, b, acc, input_precision, out_dtype)
 

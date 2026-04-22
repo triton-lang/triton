@@ -12,7 +12,8 @@
 namespace tt = triton;
 namespace ttg = triton::gpu;
 
-namespace deduceMin {
+namespace {
+
 int deduceMinCountInBlock(Block &block,
                           const std::function<int(Operation *)> &countFunc);
 
@@ -59,17 +60,15 @@ int deduceMinCountInBlock(Block &block,
     return 0;
   return deduceMinCountBetweeOps(&block.front(), &block.back(), countFunc);
 }
-} // namespace deduceMin
 
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
                              const std::function<int(Operation *)> &countFunc,
                              int pathSum, int foundMin) {
-  using namespace deduceMin;
   // If the value is not defined in the same region as the consumer we need to
   // peel the parent region of consumer until we arrive at value's region
   while (consumerOp->getParentRegion() != defValue.getParentRegion()) {
-    pathSum += deduceMin::deduceMinCountBetweeOps(
-        &consumerOp->getBlock()->front(), consumerOp, countFunc);
+    pathSum += deduceMinCountBetweeOps(&consumerOp->getBlock()->front(),
+                                       consumerOp, countFunc);
     consumerOp = consumerOp->getParentOp();
   }
 
@@ -114,6 +113,8 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
   // Unsupported value, return 0 conservatively.
   return 0;
 }
+
+} // namespace
 
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
                              llvm::function_ref<int(Operation *)> countFunc) {
@@ -457,6 +458,13 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
   unsigned bankWrapInterval = ldsNumBanks * ldsBankWidthInBytes / elemBytes;
   unsigned padInterval =
       std::max(static_cast<unsigned>(innerDimLength), bankWrapInterval);
+
+  // TDM only supports a maximum pad interval of 256 * 32bit.
+  // TODO: this will produce conflicts for very large INNER_DIMS (>1024bytes),
+  // we could scale the pad amount if this becomes an issue.
+  unsigned maxPadIntervalElems = 256u * 32u / typeWidthInBit;
+  padInterval = std::min(padInterval, maxPadIntervalElems);
+
   auto *context = srcTy.getContext();
   return triton::gpu::PaddedSharedEncodingAttr::get(
       context, {{padInterval, padAmount}}, order, shape, CGALayout);

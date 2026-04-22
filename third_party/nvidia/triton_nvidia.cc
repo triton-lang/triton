@@ -125,8 +125,6 @@ public:
   void synchronize() { check(cuCtxSynchronize(), "cuCtxSynchronize"); }
 };
 
-} // namespace
-
 void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
@@ -144,14 +142,14 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
         });
 }
 
-static std::unique_ptr<mlir::Pass>
+std::unique_ptr<mlir::Pass>
 createTritonGPUFenceInsertionWrapper(int32_t capability) {
   ttng::TritonGPUFenceInsertionOptions options;
   options.computeCapability = capability;
   return ttng::createTritonGPUFenceInsertion(options);
 }
 
-static std::unique_ptr<mlir::Pass>
+std::unique_ptr<mlir::Pass>
 createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
   ttng::TritonGPUProxyFenceInsertionOptions options;
   options.computeCapability = capability;
@@ -205,12 +203,12 @@ void init_triton_hopper_passes(py::module &&m) {
                             mlir::createNVGPUWarpSpecialization, int, bool);
 }
 
-static void checkMatmulConstraints(const std::string &A_dtype,
-                                   const std::string &B_dtype,
-                                   const std::string &C_dtype,
-                                   const std::vector<int> &A_shape,
-                                   const std::vector<int> &B_shape,
-                                   const std::vector<int> &C_shape) {
+void checkMatmulConstraints(const std::string &A_dtype,
+                            const std::string &B_dtype,
+                            const std::string &C_dtype,
+                            const std::vector<int> &A_shape,
+                            const std::vector<int> &B_shape,
+                            const std::vector<int> &C_shape) {
   if (A_dtype != B_dtype || A_dtype != C_dtype) {
     throw std::runtime_error("Data types do not match.");
   }
@@ -252,6 +250,8 @@ static void checkMatmulConstraints(const std::string &A_dtype,
         "that B needs to be transposed.");
   }
 }
+
+} // namespace
 
 void init_triton_nvidia(py::module &&m) {
   auto passes = m.def_submodule("passes");
