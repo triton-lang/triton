@@ -2558,7 +2558,7 @@ def shared_atomic_add_kernel(
     indices = ttgl.load(indices_ptr + offsets_2d)
     if use_full_rhs:
         # To test a special case where the hardware can optimize the atomic add
-        # e.g., on NVIDIA GPUs, we can use atom.inc 
+        # e.g., on NVIDIA GPUs, we can use atom.inc
         values = ttgl.full([N, M], 1, dtype, layout_2d)
     else:
         values = ttgl.load(values_ptr + offsets_2d)
