@@ -1,7 +1,18 @@
-triton.language
-===============
+Language API
+============
 
-.. currentmodule:: triton.language
+.. currentmodule:: triton.experimental.gluon.language
+
+Types
+-----
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    tensor
+    shared_memory_descriptor
+    distributed_type
 
 
 Programming Model
@@ -11,10 +22,12 @@ Programming Model
     :toctree: generated
     :nosignatures:
 
-    tensor
-    tensor_descriptor
     program_id
     num_programs
+    num_warps
+    num_ctas
+    warp_specialize
+    barrier
 
 
 Creation Ops
@@ -24,13 +37,26 @@ Creation Ops
     :toctree: generated
     :nosignatures:
 
+    allocate_shared_memory
     arange
-    cat
+    cast
     full
+    full_like
     zeros
     zeros_like
-    cast
+    to_tensor
 
+Layout Ops
+----------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    bank_conflicts
+    convert_layout
+    set_auto_layout
+    to_linear_layout
 
 Shape Manipulation Ops
 ----------------------
@@ -40,31 +66,17 @@ Shape Manipulation Ops
     :nosignatures:
 
     broadcast
-    broadcast_to
     expand_dims
-    interleave
     join
+    map_elementwise
     permute
     ravel
     reshape
     split
-    trans
-    view
 
 
-Linear Algebra Ops
-------------------
-
-.. autosummary::
-    :toctree: generated
-    :nosignatures:
-
-    dot
-    dot_scaled
-
-
-Memory/Pointer Ops
-------------------
+Memory Ops
+----------
 
 .. autosummary::
     :toctree: generated
@@ -72,86 +84,7 @@ Memory/Pointer Ops
 
     load
     store
-    make_tensor_descriptor
-    load_tensor_descriptor
-    store_tensor_descriptor
-    make_block_ptr
-    advance
 
-
-Indexing Ops
-------------
-
-.. autosummary::
-    :toctree: generated
-    :nosignatures:
-
-    flip
-    where
-    swizzle2d
-
-
-Math Ops
---------
-
-.. autosummary::
-    :toctree: generated
-    :nosignatures:
-
-    abs
-    cdiv
-    ceil
-    clamp
-    cos
-    div_rn
-    erf
-    exp
-    exp2
-    fdiv
-    floor
-    fma
-    log
-    log2
-    maximum
-    minimum
-    rsqrt
-    sigmoid
-    sin
-    softmax
-    sqrt
-    sqrt_rn
-    umulhi
-
-
-Reduction Ops
--------------
-
-.. autosummary::
-    :toctree: generated
-    :nosignatures:
-
-    argmax
-    argmin
-    max
-    min
-    reduce
-    sum
-    xor_sum
-
-Scan/Sort Ops
--------------
-
-.. autosummary::
-    :toctree: generated
-    :nosignatures:
-
-    associative_scan
-    cumprod
-    cumsum
-    histogram
-    sort
-    topk
-    gather
 
 Atomic Ops
 ----------
@@ -169,32 +102,120 @@ Atomic Ops
     atomic_xchg
     atomic_xor
 
-Random Number Generation
-------------------------
+
+Linear Algebra Ops
+------------------
 
 .. autosummary::
     :toctree: generated
     :nosignatures:
 
-    randint4x
-    randint
-    rand
-    randn
+    dot_fma
+
+
+Indexing Ops
+------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    gather
+    where
+
+
+Math Ops
+--------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    abs
+    add
+    cdiv
+    ceil
+    clamp
+    cos
+    div_rn
+    erf
+    exp
+    exp2
+    fdiv
+    floor
+    fma
+    fp4_to_fp
+    log
+    log2
+    maximum
+    minimum
+    mul
+    rsqrt
+    sin
+    sqrt
+    sqrt_rn
+    sub
+    umulhi
+
+
+Reduction Ops
+-------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    reduce
+    reduce_or
+    sum
+    max
+    min
+    xor_sum
+
+
+Scan Ops
+--------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    associative_scan
+    histogram
+
+
+Layout Classes
+--------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    AutoLayout
+    BlockedLayout
+    CoalescedLayout
+    DotOperandLayout
+    DistributedLinearLayout
+    NVMMADistributedLayout
+    NVMMASharedLayout
+    PaddedSharedLayout
+    SharedLinearLayout
+    SliceLayout
+    SwizzledSharedLayout
 
 
 Iterators
------------------
+---------
 
 .. autosummary::
     :toctree: generated
     :nosignatures:
 
-    range
     static_range
 
 
 Inline Assembly
------------------
+---------------
 
 .. autosummary::
     :toctree: generated
@@ -203,28 +224,18 @@ Inline Assembly
     inline_asm_elementwise
 
 
-Compiler Hint Ops
------------------
+Compiler Hints and Debugging
+----------------------------
 
 .. autosummary::
     :toctree: generated
     :nosignatures:
 
     assume
-    debug_barrier
     max_constancy
     max_contiguous
     multiple_of
-
-
-Debug Ops
------------------
-
-.. autosummary::
-    :toctree: generated
-    :nosignatures:
-
-    static_print
     static_assert
-    device_print
+    static_print
     device_assert
+    device_print
