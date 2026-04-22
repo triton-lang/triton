@@ -456,6 +456,11 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
                                                    Type elemTy,
                                                    RewriterBase &rewriter);
 
+// Build a vector of shared-memory base pointers for dynamic partition
+// indexing (expects at least two bases).
+Value buildBasePtrVector(Location loc, RewriterBase &rewriter,
+                         ArrayRef<Value> smemBases);
+
 // Convert an \param index to a multi-dim coordinate given \param shape and
 // \param order.
 SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,

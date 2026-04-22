@@ -88,7 +88,6 @@ static int computeKPadding(int kBase, int64_t tensorK,
                            DotOperandEncodingAttr dotEnc, unsigned warpSize) {
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(dotEnc.getParent());
   auto mnkDim = wmmaLayout.getInstrShape();
-  int nonKInstrSize = dotEnc.getOpIdx() == 0 ? mnkDim[0] : mnkDim[1];
   int kInstrSize = mnkDim.back();
 
   if (tensorK >= kInstrSize)
@@ -97,26 +96,28 @@ static int computeKPadding(int kBase, int64_t tensorK,
   // Wmma operand layouts for narrow dtypes have multiple K repetitions per
   // lane, e.g. reg0-3 hold k[0-16] and reg 4-7 hold k[32-47] for lane0. This
   // means if tensorK is smaller than one k repetition we get broadcasts in the
-  // lane dimension so we have tensorK valid elements.
-  int lanesInKDim = warpSize / nonKInstrSize;
+  // lane dimension so we have tensorK valid elements per nonKRepeat subtile.
+  constexpr int wmmaTileDim = 16;
+  int nonKDim = dotEnc.getOpIdx() == 0 ? mnkDim[0] : mnkDim[1];
+  int nonKRepeat = nonKDim / wmmaTileDim;
+  int lanesInKDim = warpSize / wmmaTileDim;
   int elemsPerKRep = lanesInKDim * dotEnc.getKWidth();
   if (tensorK < elemsPerKRep)
-    return kBase - tensorK;
+    return kBase - tensorK * nonKRepeat;
 
   // If tensorK is at least one k repetition tile, pad full out-of-bounds tiles.
   return kBase - kBase * tensorK / kInstrSize;
 }
 
 // Returns a bitmask of the lane bits that will move in K direction. For WMMA
-// v2+ operand layouts the first nonKDim lanes (log2(nonKDim) bits)  walk the
-// non-K dimension and then wrap around moving in K dimension.
+// v2+ operand layouts the first nonKDim(=16) lanes (log2(nonKDim) bits) walk
+// the non-K dimension and then wrap around moving in K dimension.
 static int computeKLaneBitsMask(DotOperandEncodingAttr dotEnc) {
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(dotEnc.getParent());
   if (wmmaLayout.getVersion() < 2)
     return 0;
-  auto mnkDim = wmmaLayout.getInstrShape();
-  int nonKDim = dotEnc.getOpIdx() == 0 ? mnkDim[0] : mnkDim[1];
-  return ~(nonKDim - 1);
+  constexpr int wmmaTileDim = 16;
+  return ~(wmmaTileDim - 1);
 }
 
 // When the operand tensor K is smaller than the WMMA instruction K, the layout
@@ -205,8 +206,23 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
                                     rewriter.getZeroAttr(elemTy));
   }
 
+  // The register layout splits kBase into nonKRepeat subtiles of kPerSubtile
+  // registers:
+  //   regs [0, kPerSubtile)             -> M=0..15
+  //   regs [kPerSubtile, 2*kPerSubtile) -> M=16..31
+  // Padding must be applied per-subtile so each nonK half is padded
+  // independently.
+  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(dotEnc.getParent());
+  auto mnkDim = wmmaLayout.getInstrShape();
+  int nonKDim = dotEnc.getOpIdx() == 0 ? mnkDim[0] : mnkDim[1];
+  const int nonKTileDim = 16;
+  int nonKRepeat = nonKDim / nonKTileDim;
+  int kPerSubtile = kBase / nonKRepeat;
+  int validKPerSubTile = validK / nonKRepeat;
+
   for (int k = 0; k < kBase; ++k) {
-    Value elem = (k < validK) ? elems[startReg + k] : zero;
+    int subTilePos = k % kPerSubtile;
+    Value elem = (subTilePos < validKPerSubTile) ? elems[startReg + k] : zero;
     rawElems = tb.insert_element(vecTy, rawElems, elem, tb.i32_val(k));
   }
 
@@ -296,25 +312,20 @@ Value generateScaledWMMAIntrinsic(ConversionPatternRewriter &rewriter,
                                   Value valB, Value valScaleB, Value valC,
                                   Type aElType, Type aScaleElType, Type bElType,
                                   Type bScaleElType, Type dElType,
-                                  int scaleKWidth, int opSelScaleA,
-                                  int opSelScaleB) {
-  assert(scaleKWidth == 2 || scaleKWidth == 4 || scaleKWidth == 8);
+                                  int opSelScaleA, int opSelScaleB,
+                                  StringRef name) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  std::string name = "llvm.amdgcn.wmma.scale";
-  if (scaleKWidth == 8) {
-    name += "16";
-  }
-  name += ".f32.16x16x128.f8f6f4";
-
   SmallVector<Value> operands;
 
-  // Reference: llvm/include/llvm/IR/IntrinsicsAMDGPU.td,
-  // int_amdgcn_wmma_scale_f32_16x16x128_f8f6f4
-  Value fmtA = b.i32_val(getWmmaF8F6F4MatrixFormat(aElType));
-  operands.push_back(fmtA);
+  // F4 only intrinsic does not need matrix format args
+  bool isF4 = name.ends_with(".f4");
+  if (!isF4) {
+    operands.push_back(b.i32_val(getWmmaF8F6F4MatrixFormat(aElType)));
+  }
   operands.push_back(valA);
-  Value fmtB = b.i32_val(getWmmaF8F6F4MatrixFormat(bElType));
-  operands.push_back(fmtB);
+  if (!isF4) {
+    operands.push_back(b.i32_val(getWmmaF8F6F4MatrixFormat(bElType)));
+  }
   operands.push_back(valB);
   // C_mod is unused. Should be set to 0
   Value modC = b.i16_val(0);
@@ -595,16 +606,13 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   const auto rank = aTensorTy.getShape().size();
 
   unsigned kInstrSize = mnkDim[2];
-  unsigned kBase = 64;
 
   auto aElemType = op.getAElemType();
   bool isFp4A = aElemType == triton::ScaleDotElemType::E2M1;
-  int kBaseA = isFp4A ? kBase / 2 : kBase;
   int kDimA = isFp4A ? kInstrSize / 2 : kInstrSize;
 
   auto bElemType = op.getBElemType();
   bool isFp4B = bElemType == triton::ScaleDotElemType::E2M1;
-  int kBaseB = isFp4B ? kBase / 2 : kBase;
   int kDimB = isFp4B ? kInstrSize / 2 : kInstrSize;
 
   unsigned scaleFactor = op.deduceScaleFactor();
@@ -616,6 +624,29 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
                 (bElemType == triton::ScaleDotElemType::E3M2);
   if (isFp6A || isFp6B)
     return op.emitError("NYI: FP6 scaled dot");
+
+  Type scaledAElemType =
+      LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getAElemType());
+  Type scaledBElemType =
+      LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getBElemType());
+  auto KBaseScale = scaleFactor == 32 ? 4 : 8;
+
+  FailureOr<WmmaScaleIntrinsic> maybeWmmaScaleIntrinsic =
+      WmmaScaleIntrinsic::get(wmmaVer, mnkDim[0], mnkDim[1], scaledAElemType,
+                              scaledBElemType, dTensorTy.getElementType(),
+                              (scaleFactor == 16) /*isScale16*/);
+  if (failed(maybeWmmaScaleIntrinsic)) {
+    return op.emitError("no matching wmma scale intrinsic ")
+           << "for wmma version " << wmmaVer << " with instruction shape ["
+           << mnkDim[0] << ", " << mnkDim[1]
+           << "] and element types A=" << aElemType << ", B=" << bElemType
+           << ", D=" << dTensorTy.getElementType()
+           << ". Check whether the wmma version, instruction shape, and data "
+              "types are supported on the current AMD GPU architecture.";
+  }
+
+  auto kBaseA = maybeWmmaScaleIntrinsic->kBaseA;
+  auto kBaseB = maybeWmmaScaleIntrinsic->kBaseB;
 
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
@@ -639,7 +670,6 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   Value loadedC = adaptor.getC();
   const unsigned numRepK = std::max(static_cast<unsigned>(K / kDimA), 1u);
 
-  auto KBaseScale = scaleFactor == 32 ? 4 : 8;
   auto aLayout = triton::gpu::toLinearLayout(aTensorTy);
   auto bLayout = triton::gpu::toLinearLayout(bTensorTy);
   auto aScaleLayout = triton::gpu::toLinearLayout(aScaleTensorTy);
@@ -647,11 +677,6 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
 
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
-
-  Type scaledAElemType =
-      LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getAElemType());
-  Type scaledBElemType =
-      LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getBElemType());
 
   unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
 
@@ -719,17 +744,18 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
       sb = prepareOperands(rewriter, sb, bScaleTensorTy.getElementType(),
                            wmmaVer, KBaseScale, loc, /*isScale=*/true);
 
+      StringRef intrinsicName = maybeWmmaScaleIntrinsic->name;
       acc = wmmaLayout.getIsTransposed()
                 ? generateScaledWMMAIntrinsic(
                       rewriter, loc, hb, sb, ha, sa, acc, scaledBElemType,
                       bScaleTensorTy.getElementType(), scaledAElemType,
-                      aScaleTensorTy.getElementType(), dstElemTy, KBaseScale,
-                      scaleOpSelB, scaleOpSelA)
+                      aScaleTensorTy.getElementType(), dstElemTy, scaleOpSelB,
+                      scaleOpSelA, intrinsicName)
                 : generateScaledWMMAIntrinsic(
                       rewriter, loc, ha, sa, hb, sb, acc, scaledAElemType,
                       aScaleTensorTy.getElementType(), scaledBElemType,
-                      bScaleTensorTy.getElementType(), dstElemTy, KBaseScale,
-                      scaleOpSelA, scaleOpSelB);
+                      bScaleTensorTy.getElementType(), dstElemTy, scaleOpSelA,
+                      scaleOpSelB, intrinsicName);
     }
     for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
       fc[reg + v] = tb.extract_element(dstElemTy, acc, tb.i32_val(v));

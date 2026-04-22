@@ -108,8 +108,8 @@ def add_expr_rewrites(rewrites: list[RewriteFn]) -> None:
 
 @dataclass
 class Translator(ReferenceRewriter):
+    target: TranslatorTarget = field(kw_only=True)
     tensor_member_match_fns: list[str] = field(default_factory=list)
-    target: TranslatorTarget = TranslatorTarget.NVIDIA
 
     def __post_init__(self) -> None:
         import triton
@@ -127,7 +127,7 @@ class Translator(ReferenceRewriter):
         self.imports.add("import triton.experimental.gluon.language as gl")
         self.imports.add(f"import {self.target.helpers_module} as helpers")
 
-        self.tensor_member_match_fns = ["reshape", "trans", "permute", "split", "reduce", "sum"]
+        self.tensor_member_match_fns = ["reshape", "trans", "permute", "split", "reduce", "sum", "expand_dims"]
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         new_node = super().visit_Attribute(node)
@@ -170,6 +170,9 @@ class Translator(ReferenceRewriter):
             node.keywords = [kw for kw in node.keywords if kw.arg != "can_reorder"]
         elif value is tl.split:
             node.args[0] = parse_expr(f"helpers.set_split_src_layout({ast.unparse(node.args[0])})")
+        elif value is tl.expand_dims:
+            node.args[0] = parse_expr(
+                f"helpers.convert_to_expand_dims_layout({ast.unparse(node.args[0])}, [{ast.unparse(node.args[1])}])")
         elif value is tl.range:
             return ast.Call(
                 func=ast.Name("range", ast.Load()),
@@ -200,7 +203,7 @@ class Translator(ReferenceRewriter):
         return self.generic_visit(node)
 
 
-def translate_kernels(kernels: list[GlobalValue], target: TranslatorTarget = TranslatorTarget.NVIDIA) -> str:
+def translate_kernels(kernels: list[GlobalValue], target: TranslatorTarget) -> str:
 
     def filter(value: ModuleType | GlobalValue) -> bool:
         if isinstance(value, ModuleType):
@@ -253,12 +256,12 @@ def translate_kernels(kernels: list[GlobalValue], target: TranslatorTarget = Tra
     return output
 
 
-def translate_paths(kernel_paths: list[str], target: TranslatorTarget = TranslatorTarget.NVIDIA) -> str:
+def translate_paths(kernel_paths: list[str], target: TranslatorTarget) -> str:
     kernels = [get_base_value(kernel_path) for kernel_path in kernel_paths]
     return translate_kernels(kernels, target=target)
 
 
-def convert_triton_to_gluon(src: list[JITCallable], target: TranslatorTarget = TranslatorTarget.NVIDIA) -> str:
+def convert_triton_to_gluon(src: list[JITCallable], target: TranslatorTarget) -> str:
     kernels = [
         GlobalValue.wrap(
             kernel,
@@ -269,7 +272,7 @@ def convert_triton_to_gluon(src: list[JITCallable], target: TranslatorTarget = T
     return translate_kernels(kernels, target=target)
 
 
-def main(kernels: list[str], output_path: str, target: TranslatorTarget = TranslatorTarget.NVIDIA) -> None:
+def main(kernels: list[str], output_path: str, target: TranslatorTarget) -> None:
     output = translate_paths(kernels, target=target)
     with open(output_path, "w") as f:
         f.write(output)
@@ -279,7 +282,7 @@ def _main_cli() -> None:
     parser = argparse.ArgumentParser(description="Translate Triton kernels to Gluon source.")
     parser.add_argument("kernels", nargs="+", help="Kernel symbols in module.path:object format.")
     parser.add_argument("--output-path", required=True, help="Path to write the translated source.")
-    parser.add_argument("--target", default="nvidia", help="Target architecture (e.g. nvidia, amd_gfx1250).")
+    parser.add_argument("--target", required=True, help="Target architecture (e.g. nvidia, gfx1250).")
     args = parser.parse_args()
     main(args.kernels, args.output_path, target=TranslatorTarget(args.target))
 

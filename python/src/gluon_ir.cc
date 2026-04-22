@@ -33,7 +33,9 @@ namespace ttng = triton::nvidia_gpu;
 namespace gluon = mlir::triton::gluon;
 namespace ttag = mlir::triton::amdgpu;
 
-static ttg::CGAEncodingAttr
+namespace {
+
+ttg::CGAEncodingAttr
 buildCgaLayoutAttr(MLIRContext *ctx,
                    const std::vector<std::vector<int32_t>> &layout,
                    unsigned rank) {
@@ -45,7 +47,7 @@ buildCgaLayoutAttr(MLIRContext *ctx,
   return ttg::CGAEncodingAttr::get(ctx, std::move(ll));
 }
 
-static std::vector<std::vector<int32_t>>
+std::vector<std::vector<int32_t>>
 getCgaLayoutBases(ttg::CGAEncodingAttr layout) {
   std::vector<std::vector<int32_t>> result;
   auto ctx = layout.getContext();
@@ -58,15 +60,14 @@ getCgaLayoutBases(ttg::CGAEncodingAttr layout) {
 
 // Helper to check if an MLIR type or attribute has a verifier method.
 template <typename AttrOrType>
-static constexpr auto hasVerifier(AttrOrType t)
-    -> decltype(t.verifyInvariants, true) {
+constexpr auto hasVerifier(AttrOrType t) -> decltype(t.verifyInvariants, true) {
   return true;
 }
-static constexpr auto hasVerifier(...) { return false; }
+constexpr auto hasVerifier(...) { return false; }
 
 // Print a diagnostic without its location. The frontend will attach the AST
 // location to the error message.
-static void printDiagStr(llvm::raw_ostream &os, const Diagnostic &diag) {
+void printDiagStr(llvm::raw_ostream &os, const Diagnostic &diag) {
   for (const DiagnosticArgument &arg : diag.getArguments())
     arg.print(os);
   os << "\n";
@@ -177,7 +178,7 @@ struct GluonLayouts {
   }
 };
 
-static bool isConvertLayoutTrivial(RankedTensorType dstTy, Value value) {
+bool isConvertLayoutTrivial(RankedTensorType dstTy, Value value) {
   auto srcTy = cast<RankedTensorType>(value.getType());
   if (srcTy.getEncoding() == dstTy.getEncoding())
     return true;
@@ -307,10 +308,12 @@ py::object layoutToGluon(Attribute layout) {
   throw py::value_error("Unhandled encoding encountered");
 }
 
-template <typename CondT> static void check(CondT &&cond, const char *msg) {
+template <typename CondT> void check(CondT &&cond, const char *msg) {
   if (!std::forward<CondT>(cond))
     throw py::value_error(msg);
 }
+
+} // namespace
 
 void init_gluon_ir(py::module &&m) {
   using ret = py::return_value_policy;

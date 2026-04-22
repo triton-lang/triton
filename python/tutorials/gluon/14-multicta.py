@@ -81,7 +81,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 )
 from triton.experimental.gluon.language.nvidia.hopper import mbarrier, tma
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-from triton.language.core import _aggregate as aggregate
 
 # Re-use baseline tutorials for comparisons.
 t8 = importlib.import_module("08-warp-specialization")
@@ -224,6 +223,7 @@ benchmark_multicta_softmax_f32()
 
 # %%
 # Softmax benchmark results
+# ```text
 # Benchmarking multicta_softmax
 # ============================
 #   shape         CTAs  warps  time (ms)  bandwidth (GB/s)
@@ -238,6 +238,7 @@ benchmark_multicta_softmax_f32()
 #  32768 x 65536      4      4      2.836           6057.26
 #  16384 x 131072     8      4      3.142           5468.66
 #   8192 x 262144    16      4      3.627           4736.15
+# ```
 #
 # We see that here using multiCTA we are able to get very good performance across the board.
 #
@@ -367,8 +368,8 @@ def two_cta_tcgen05_kernel(a_desc, b_desc, c_desc):
     mbarrier.init(mma_bar, count=1)
 
     mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
-    tma.async_copy_global_to_shared(a_desc, [0, 0], tma_bar, smem_a)
-    tma.async_copy_global_to_shared(b_desc, [0, 0], tma_bar, smem_b)
+    tma.async_load(a_desc, [0, 0], tma_bar, smem_a)
+    tma.async_load(b_desc, [0, 0], tma_bar, smem_b)
     mbarrier.wait(tma_bar, phase=0, deps=[smem_a, smem_b])
     mbarrier.invalidate(tma_bar)
 
@@ -495,7 +496,7 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
     mbarrier.init(bar, count=1)
 
     mbarrier.expect(bar, in_desc.nbytes_per_cta)
-    tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem, multicast=True)
+    tma.async_load(in_desc, [0, 0], bar, smem, multicast=True)
     mbarrier.wait(bar, phase=0, deps=[smem])
 
     tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
@@ -559,8 +560,8 @@ def tma_tcgen05_kernel(a_desc, b_desc, out_desc, NUM_K_TILES: gl.constexpr, acc_
 
     for k in range(NUM_K_TILES):
         mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(a_desc, [0, k * block_k], tma_bar, smem_a, multicast=True)
-        tma.async_copy_global_to_shared(b_desc, [k * block_k, 0], tma_bar, smem_b, multicast=True)
+        tma.async_load(a_desc, [0, k * block_k], tma_bar, smem_a, multicast=True)
+        tma.async_load(b_desc, [k * block_k, 0], tma_bar, smem_b, multicast=True)
         mbarrier.wait(tma_bar, phase=phase_tma, deps=[smem_a, smem_b])
         phase_tma ^= 1
 
@@ -680,7 +681,7 @@ def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width
     return major, minor
 
 
-@aggregate
+@gluon.aggregate
 class ClcTileSchedulerConsumer:
     has_work: gl.tensor
     tile_id: gl.tensor
@@ -776,7 +777,7 @@ class ClcTileSchedulerConsumer:
         )
 
 
-@aggregate
+@gluon.aggregate
 class MatmulPartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor
@@ -867,8 +868,8 @@ def matmul_load_partition(p):
             mbarrier.wait(p.load_empty_bars.index(state.index), state.phase, pred=pred)
             bar = p.load_ready_bars.index(state.index)
             mbarrier.expect(bar, p.a_desc.nbytes_per_cta + p.b_desc.nbytes_per_cta)
-            tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index), multicast=True)
-            tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index), multicast=True)
+            tma.async_load(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index), multicast=True)
+            tma.async_load(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index), multicast=True)
             state = state.next()
         scheduler = scheduler.step(i)
         i += 1

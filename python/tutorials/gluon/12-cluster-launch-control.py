@@ -33,7 +33,6 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.nvidia.blackwell import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import tma, mbarrier, fence_async_shared, clc
-from triton.language.core import _aggregate as aggregate
 
 
 def is_blackwell():
@@ -56,7 +55,7 @@ t7 = importlib.import_module("07-persistence")
 # changed ClcTileScheduler interface to support dynamic scheduling.
 
 
-@aggregate
+@gluon.aggregate
 class ClcTileScheduler:
     has_work: gl.tensor
     tile_id: gl.tensor
@@ -94,7 +93,7 @@ class ClcTileScheduler:
 # so we can directly compare the benifits of dynamic scheduling.
 
 
-@aggregate
+@gluon.aggregate
 class StaticTileScheduler:
     has_work: gl.tensor
     tile_id: gl.tensor
