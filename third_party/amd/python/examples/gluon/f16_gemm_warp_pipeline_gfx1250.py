@@ -261,6 +261,8 @@ if __name__ == "__main__":
     TRANSPOSE_B = True
     DUMP = args.dump
     USE_KERNEL_B = args.kernelB
-    print(f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, {NUM_WARPS=}, {NUM_BUFFERS=}, {USE_KERNEL_B=}")
+    print(
+        f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, {NUM_WARPS=}, {NUM_BUFFERS=}, {USE_KERNEL_B=}"
+    )
 
     test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP, USE_KERNEL_B)
