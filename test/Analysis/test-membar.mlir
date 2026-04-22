@@ -1314,6 +1314,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 // Tests for the dynamic-buffer-index disjointness analysis.
 #shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#shared_t = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
@@ -1339,11 +1340,6 @@ tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
   %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
   tt.return
 }
-
-// -----
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#shared_t = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
-#smem = #ttg.shared_memory
 
 // CHECK-LABEL: disjoint_remsi_through_memdesc_trans
 // The reader sees the slot through a memdesc_trans view. The buffer-index
