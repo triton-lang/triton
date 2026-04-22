@@ -178,13 +178,7 @@ def tl_dot_mmav3(
 ):
     el_ty: ttgl.constexpr = a.type.element_ty
     allow_transpose: ttgl.constexpr = el_ty.is_fp16() or el_ty.is_bf16()
-    a_smem = get_shared_memory_mma_operand(
-        a,
-        0,
-        allow_transpose,
-        is_fp4_padded=False,
-        force_transpose=False,
-    )
+    a_smem = get_shared_memory_mma_operand(a, 0, allow_transpose, is_fp4_padded=False, force_transpose=False)
     b_smem = get_shared_memory_mma_operand(b, 1, allow_transpose, is_fp4_padded=False, force_transpose=False)
 
     c_shape: ttgl.constexpr = a.shape[:-1] + [b.shape[-1]]

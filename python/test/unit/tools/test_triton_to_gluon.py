@@ -195,18 +195,22 @@ def _make_dot_scaled_operand(fmt, rows, cols, *, device, is_rhs=False, k_pack=Tr
     raise ValueError(f"unsupported dot_scaled format: {fmt}")
 
 
-def _make_dot_scaled_scale(rows, k, *, device):
-    return MXScaleTensor(size=(rows, k // 32), device=device).random(high=32.0).data
+def _make_dot_scaled_scale(rows, k, *, device, scale_factor=32):
+    return MXScaleTensor(size=(rows, k // scale_factor), device=device).random(high=32.0).data
 
 
 @pytest.mark.parametrize(
-    "BLOCK_M,BLOCK_N,BLOCK_K,A_FORMAT,B_FORMAT,HAS_A_SCALE,HAS_B_SCALE,LHS_K_PACK,RHS_K_PACK,FAST_MATH,NUM_WARPS",
+    "BLOCK_M,BLOCK_N,BLOCK_K,A_FORMAT,B_FORMAT,HAS_A_SCALE,HAS_B_SCALE,LHS_K_PACK,RHS_K_PACK,FAST_MATH,NUM_WARPS,SCALE_FACTOR",
     [
-        pytest.param(128, 16, 32, "e5m2", "e5m2", True, True, True, True, True, 4, id="fp8-both-scales"),
-        pytest.param(128, 128, 64, "e2m1", "e2m1", True, True, True, True, True, 4, id="fp4-both-scales"),
-        pytest.param(128, 128, 128, "e2m1", "e5m2", True, True, True, True, True, 4, id="mixed-lhs-fp4"),
-        pytest.param(128, 128, 128, "e5m2", "e2m1", True, True, True, True, True, 4, id="mixed-rhs-fp4"),
-        pytest.param(64, 16, 32, "fp16", "e5m2", False, True, True, True, True, 4, id="rhs-scale-only-fallback"),
+        pytest.param(128, 16, 32, "e5m2", "e5m2", True, True, True, True, True, 4, 32, id="fp8-both-scales"),
+        pytest.param(64, 16, 32, "e5m2", "e5m2", True, True, True, True, True, 4, 16, id="fp8-both-scales-sf16"),
+        pytest.param(128, 128, 64, "e2m1", "e2m1", True, True, True, True, True, 4, 32, id="fp4-both-scales"),
+        pytest.param(128, 128, 64, "e2m1", "e2m1", True, True, True, True, True, 4, 16, id="fp4-both-scales-sf16"),
+        pytest.param(128, 128, 128, "e2m1", "e5m2", True, True, True, True, True, 4, 32, id="mixed-lhs-fp4"),
+        pytest.param(128, 128, 128, "e5m2", "e2m1", True, True, True, True, True, 4, 32, id="mixed-rhs-fp4"),
+        pytest.param(64, 16, 32, "e5m2", "bf16", True, False, True, True, True, 4, 16, id="lhs-scale-only-sf16"),
+        pytest.param(64, 16, 32, "fp16", "e5m2", False, True, True, True, True, 4, 32, id="rhs-scale-only-fallback"),
+        pytest.param(64, 16, 32, "fp16", "e5m2", False, True, True, True, True, 4, 16, id="rhs-scale-only-sf16"),
     ],
 )
 def test_triton_to_gluon_dot_scaled(
@@ -221,6 +225,7 @@ def test_triton_to_gluon_dot_scaled(
     RHS_K_PACK,
     FAST_MATH,
     NUM_WARPS,
+    SCALE_FACTOR,
     tmp_path,
 ):
     if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_gfx1250()):
@@ -231,8 +236,10 @@ def test_triton_to_gluon_dot_scaled(
     device = "cuda"
     a = _make_dot_scaled_operand(A_FORMAT, BLOCK_M, BLOCK_K, device=device, k_pack=LHS_K_PACK)
     b = _make_dot_scaled_operand(B_FORMAT, BLOCK_K, BLOCK_N, device=device, is_rhs=True, k_pack=RHS_K_PACK)
-    a_scale = _make_dot_scaled_scale(BLOCK_M, BLOCK_K, device=device) if HAS_A_SCALE else None
-    b_scale = _make_dot_scaled_scale(BLOCK_N, BLOCK_K, device=device) if HAS_B_SCALE else None
+    a_scale = _make_dot_scaled_scale(BLOCK_M, BLOCK_K, device=device,
+                                     scale_factor=SCALE_FACTOR) if HAS_A_SCALE else None
+    b_scale = _make_dot_scaled_scale(BLOCK_N, BLOCK_K, device=device,
+                                     scale_factor=SCALE_FACTOR) if HAS_B_SCALE else None
 
     c = torch.empty((BLOCK_M, BLOCK_N), device=device, dtype=torch.float32)
     ref = torch.empty_like(c)
@@ -253,6 +260,65 @@ def test_triton_to_gluon_dot_scaled(
     kernel[grid](a, b, a_scale, b_scale, c, *kernel_args, num_warps=NUM_WARPS)
     dot_scaled_tile_kernel[grid](a, b, a_scale, b_scale, ref, *kernel_args, num_warps=NUM_WARPS)
     torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)
+
+
+@triton.jit
+def dot_transposed_operand_tile_kernel(
+    a_ptr,
+    b_ptr,
+    c_ptr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    LHS_TRANSPOSED: tl.constexpr,
+    RHS_TRANSPOSED: tl.constexpr,
+):
+    offs_m = tl.arange(0, BLOCK_M)
+    offs_n = tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+
+    if LHS_TRANSPOSED:
+        a = tl.load(a_ptr + offs_k[:, None] * BLOCK_M + offs_m[None, :]).trans(1, 0)
+    else:
+        a = tl.load(a_ptr + offs_m[:, None] * BLOCK_K + offs_k[None, :])
+
+    if RHS_TRANSPOSED:
+        b = tl.load(b_ptr + offs_n[:, None] * BLOCK_K + offs_k[None, :]).trans(1, 0)
+    else:
+        b = tl.load(b_ptr + offs_k[:, None] * BLOCK_N + offs_n[None, :])
+
+    c = tl.dot(a, b)
+    tl.store(c_ptr + offs_m[:, None] * BLOCK_N + offs_n[None, :], c)
+
+
+@pytest.mark.parametrize(
+    "lhs_transposed,rhs_transposed",
+    [
+        pytest.param(True, False, id="lhs-transposed"),
+        pytest.param(False, True, id="rhs-transposed"),
+        pytest.param(True, True, id="both-transposed"),
+    ],
+)
+def test_triton_to_gluon_dot_transposed_operands(lhs_transposed, rhs_transposed, tmp_path):
+    if not is_hopper_or_newer():
+        pytest.skip("Requires Hopper or newer")
+
+    kernel = convert_kernel(dot_transposed_operand_tile_kernel, "dot_transposed_operand_tile_kernel", tmp_path)
+    block_m = block_n = block_k = 128
+    device = "cuda"
+
+    a_shape = (block_k, block_m) if lhs_transposed else (block_m, block_k)
+    b_shape = (block_n, block_k) if rhs_transposed else (block_k, block_n)
+    a = torch.randn(a_shape, device=device, dtype=torch.float16)
+    b = torch.randn(b_shape, device=device, dtype=torch.float16)
+    c = torch.empty((block_m, block_n), device=device, dtype=torch.float32)
+    ref = torch.empty_like(c)
+
+    grid = (1, )
+    args = (block_m, block_n, block_k, lhs_transposed, rhs_transposed)
+    kernel[grid](a, b, c, *args, num_warps=8)
+    dot_transposed_operand_tile_kernel[grid](a, b, ref, *args, num_warps=8)
+    torch.testing.assert_close(c, ref, atol=0, rtol=0)
 
 
 @triton.jit
