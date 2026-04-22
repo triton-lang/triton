@@ -14,41 +14,54 @@ namespace ttng = mlir::triton::nvidia_gpu;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 using ::mlir::triton::gpu::SharedLinearEncodingAttr;
 
-//===----------------------------------------------------------------------===//
-// DotOpMmaV5TmemLoader
-//===----------------------------------------------------------------------===//
+namespace {
 
-DotOpMmaV5TmemLoader mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::build(
-    Location loc, RewriterBase &rewriter, gpu::MemDescType memTy,
-    Value tmemBase) {
-  // We take the full layout even when it is a subview
-  // We'll just iterate the real shape when calling tmemLoad tho
-  auto ll = toLinearLayout(memTy);
-  auto bitwidth = memTy.getElementTypeBitWidth();
-  auto tb = TritonLLVMOpBuilder(loc, rewriter);
-  Value address = tb.ptrtoint(i32_ty, tmemBase);
-  return DotOpMmaV5TmemLoader(ll.pseudoinvert(), address, bitwidth);
-}
+// Helper class to load tensor memory following MMAv5 layout.
+class DotOpMmaV5TmemLoader : public DotOpMmaMemLoader {
+public:
+  static DotOpMmaV5TmemLoader build(Location loc, RewriterBase &rewriter,
+                                    mlir::triton::gpu::MemDescType memTy,
+                                    Value tmemBase) {
+    // We take the full layout even when it is a subview
+    // We'll just iterate the real shape when calling tmemLoad tho
+    auto ll = toLinearLayout(memTy);
+    auto bitwidth = memTy.getElementTypeBitWidth();
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
+    Value address = tb.ptrtoint(i32_ty, tmemBase);
+    return DotOpMmaV5TmemLoader(ll.pseudoinvert(), address, bitwidth);
+  }
 
-MemDescOperand mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::tmemLoad(
-    int a, int b, ConversionPatternRewriter &rewriter, Location loc) const {
-  auto dims = to_vector(ll.getInDimNames());
-  auto rowCol = ll.apply({{dims[0], a}, {dims[1], b}});
-  int row = rowCol[0].second;
-  int col = rowCol[1].second * bitwidth / 32;
-  int offset = col | (row << 16);
-  return {address, offset};
-}
+  MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
+                          Location loc) const {
+    auto dims = to_vector(ll.getInDimNames());
+    auto rowCol = ll.apply({{dims[0], a}, {dims[1], b}});
+    int row = rowCol[0].second;
+    int col = rowCol[1].second * bitwidth / 32;
+    int offset = col | (row << 16);
+    return {address, offset};
+  }
+
+  MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
+                         Location loc) const override {
+    return tmemLoad(a, b, rewriter, loc);
+  }
+
+private:
+  DotOpMmaV5TmemLoader(LinearLayout ll, Value address, int bitwidth)
+      : ll(std::move(ll)), address(address), bitwidth(bitwidth) {}
+
+  LinearLayout ll;
+  Value address;
+  int bitwidth;
+};
 
 //===----------------------------------------------------------------------===//
 // InstDescriptor
 //===----------------------------------------------------------------------===//
 
-namespace {
-
 enum class mxfpKind { mxf8f6f4 = 0, mxf4 = 1, mxf4nvf4 = 2 };
 
-static bool isTransposed(Value operand) {
+bool isTransposed(Value operand) {
   auto tensorTy = cast<MemDescType>(operand.getType());
   auto enc = tensorTy.getEncoding();
   if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(enc))
@@ -81,9 +94,9 @@ inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
   return mxfpKind::mxf8f6f4;
 };
 
-static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
-                                  ttng::TCGen5MMAOp op, int M, int N,
-                                  bool transposeA, bool transposeB) {
+Value createInstDescriptor(ConversionPatternRewriter &rewriter,
+                           ttng::TCGen5MMAOp op, int M, int N, bool transposeA,
+                           bool transposeB) {
   Location loc = op.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   union TCGen5InstructionDescriptor {
@@ -144,12 +157,11 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   return b.int_val(32, desc.descriptor);
 }
 
-static Value createScaleInstDescriptor(ConversionPatternRewriter &rewriter,
-                                       ttng::TCGen5MMAScaledOp op, int M, int N,
-                                       bool transposeA, bool transposeB,
-                                       int scaleFactorsubIdxA,
-                                       int scaleFactorsubIdxB,
-                                       mxfpKind mxfpInstKind) {
+Value createScaleInstDescriptor(ConversionPatternRewriter &rewriter,
+                                ttng::TCGen5MMAScaledOp op, int M, int N,
+                                bool transposeA, bool transposeB,
+                                int scaleFactorsubIdxA, int scaleFactorsubIdxB,
+                                mxfpKind mxfpInstKind) {
   Location loc = op.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   union TCGen5InstructionDescriptor {
@@ -239,10 +251,10 @@ static Value createScaleInstDescriptor(ConversionPatternRewriter &rewriter,
 // tcgen05 instructions
 //===----------------------------------------------------------------------===//
 
-static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
-                          ttng::TCGen5MMAOp op, MemDescOperand a, Value b,
-                          MemDescOperand d, Value pred, Value instDescriptor,
-                          Value useInitAcc, bool aInTMem, bool twoCTAs) {
+void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
+                   ttng::TCGen5MMAOp op, MemDescOperand a, Value b,
+                   MemDescOperand d, Value pred, Value instDescriptor,
+                   Value useInitAcc, bool aInTMem, bool twoCTAs) {
   PTXBuilder ptxBuilder;
   std::string opcode =
       "tcgen05.mma.cta_group::" + std::to_string(twoCTAs ? 2 : 1) + ".kind::";
@@ -272,13 +284,11 @@ static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
-                                Location loc, ttng::TCGen5MMAScaledOp op,
-                                MemDescOperand a, Value b, MemDescOperand d,
-                                Value scaleA, Value scaleB, Value pred,
-                                Value instDescriptor, Value useInitAcc,
-                                bool aInTmem, mxfpKind mxfpInstKind,
-                                bool twoCTAs) {
+void createScaledGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
+                         ttng::TCGen5MMAScaledOp op, MemDescOperand a, Value b,
+                         MemDescOperand d, Value scaleA, Value scaleB,
+                         Value pred, Value instDescriptor, Value useInitAcc,
+                         bool aInTmem, mxfpKind mxfpInstKind, bool twoCTAs) {
   PTXBuilder ptxBuilder;
   std::string opcode =
       "tcgen05.mma.cta_group::" + std::to_string(twoCTAs ? 2 : 1) + ".kind::";
@@ -306,9 +316,9 @@ static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
-                            Value barrier, Value pred, bool twoCTAs,
-                            ValueRange descs) {
+void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
+                     Value barrier, Value pred, bool twoCTAs,
+                     ValueRange descs) {
   PTXBuilder ptxBuilder;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value mask;
