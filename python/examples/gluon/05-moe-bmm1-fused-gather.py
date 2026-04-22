@@ -58,14 +58,6 @@ def unpack_block_schedule(schedule: gl.tensor) -> tuple[gl.tensor, gl.tensor]:
 
 
 @gluon.jit
-def unpack_full_tile_schedule(schedule: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor]:
-    slice_idx = (schedule & 0xFFFF).to(gl.int32)
-    pid_m = ((schedule >> 16) & 0xFFFF).to(gl.int32)
-    pid_n = ((schedule >> 32) & 0xFFFF).to(gl.int32)
-    return pid_m, pid_n, slice_idx
-
-
-@gluon.jit
 def banded_row_major(lin_idx, m_tiles, n_tiles, BAND_N: gl.constexpr):
     if BAND_N >= n_tiles:
         return lin_idx // n_tiles, lin_idx % n_tiles
@@ -103,63 +95,17 @@ def banded_row_major_m(lin_idx, m_tiles, n_tiles, BAND_N: gl.constexpr):
 
 
 @gluon.jit
-def planar_snake(lin_idx, m_tiles, n_tiles, MINOR_DIM: gl.constexpr, TILE_WIDTH: gl.constexpr):
-    major_size = n_tiles if MINOR_DIM == 0 else m_tiles
-    minor_size = m_tiles if MINOR_DIM == 0 else n_tiles
-
-    full_minor_tiles = minor_size // TILE_WIDTH
-    full_minor_size = full_minor_tiles * TILE_WIDTH
-    full_elements = full_minor_tiles * TILE_WIDTH * major_size
-
-    minor_tile_idx = lin_idx // (TILE_WIDTH * major_size)
-
-    full_minor_within = lin_idx % TILE_WIDTH
-    full_major_within = (lin_idx // TILE_WIDTH) % major_size
-    full_minor = minor_tile_idx * TILE_WIDTH + full_minor_within
-    full_major = gl.where((minor_tile_idx % 2) == 0, full_major_within, major_size - 1 - full_major_within)
-
-    partial_width = minor_size - full_minor_size
-    partial_width = gl.where(partial_width > 0, partial_width, 1)
-    partial_lin = lin_idx - full_elements
-    partial_minor_within = partial_lin % partial_width
-    partial_major_within = (partial_lin // partial_width) % major_size
-    partial_minor = minor_tile_idx * TILE_WIDTH + partial_minor_within
-    partial_major = gl.where((minor_tile_idx % 2) == 0, partial_major_within, major_size - 1 - partial_major_within)
-
-    in_full_tile = lin_idx < full_elements
-    minor = gl.where(in_full_tile, full_minor, partial_minor)
-    major = gl.where(in_full_tile, full_major, partial_major)
-
-    if MINOR_DIM == 0:
-        return minor, major
-    return major, minor
-
-
-@gluon.jit
 def apply_block_schedule(
     block_id: gl.tensor,
     grid_m: gl.tensor,
     GRID_N: gl.constexpr,
     slice_offsets: gl.tensor,
     block_schedule: gl.tensor,
-    USE_PLANAR_SNAKE: gl.constexpr,
-    GRID_MINOR_DIM: gl.constexpr,
-    GRID_TILE_WIDTH: gl.constexpr,
     BAND_N: gl.constexpr,
 ) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
     # The persistent loop bounds block_id by grid_m * GRID_N, so no wraparound
     # modulo is needed on the hot scheduling path.
-    pid_mn = block_id
-    if USE_PLANAR_SNAKE:
-        schedule_pid_m, pid_n = planar_snake(
-            pid_mn,
-            grid_m,
-            GRID_N,
-            MINOR_DIM=GRID_MINOR_DIM,
-            TILE_WIDTH=GRID_TILE_WIDTH,
-        )
-    else:
-        schedule_pid_m, pid_n = banded_row_major(pid_mn, grid_m, GRID_N, BAND_N=BAND_N)
+    schedule_pid_m, pid_n = banded_row_major(block_id, grid_m, GRID_N, BAND_N=BAND_N)
 
     slice_idx, pid_m = unpack_block_schedule(gl.load(block_schedule + schedule_pid_m))
     pid_n = pid_n.to(gl.int32)
@@ -169,44 +115,14 @@ def apply_block_schedule(
 
 
 @gluon.jit
-def apply_full_tile_schedule(
-    block_id: gl.tensor,
-    slice_offsets: gl.tensor,
-    tile_schedule: gl.tensor,
-) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
-    pid_m, pid_n, slice_idx = unpack_full_tile_schedule(gl.load(tile_schedule + block_id))
-    slice_offset = gl.load(slice_offsets + slice_idx)
-    return pid_m, pid_n, slice_idx, slice_offset
-
-
-@gluon.jit
 def apply_weight_schedule(
     block_id: gl.tensor,
     grid_m: gl.tensor,
     GRID_N: gl.constexpr,
     block_schedule: gl.tensor,
-    tile_schedule: gl.tensor,
-    USE_FULL_TILE_SCHEDULE: gl.constexpr,
-    USE_PLANAR_SNAKE: gl.constexpr,
-    GRID_MINOR_DIM: gl.constexpr,
-    GRID_TILE_WIDTH: gl.constexpr,
     BAND_N: gl.constexpr,
 ) -> tuple[gl.tensor, gl.tensor]:
-    if USE_FULL_TILE_SCHEDULE:
-        _, pid_n, slice_idx = unpack_full_tile_schedule(gl.load(tile_schedule + block_id))
-        return pid_n, slice_idx
-
-    if USE_PLANAR_SNAKE:
-        schedule_pid_m, pid_n = planar_snake(
-            block_id,
-            grid_m,
-            GRID_N,
-            MINOR_DIM=GRID_MINOR_DIM,
-            TILE_WIDTH=GRID_TILE_WIDTH,
-        )
-    else:
-        schedule_pid_m, pid_n = banded_row_major(block_id, grid_m, GRID_N, BAND_N=BAND_N)
-
+    schedule_pid_m, pid_n = banded_row_major(block_id, grid_m, GRID_N, BAND_N=BAND_N)
     slice_idx, _ = unpack_block_schedule(gl.load(block_schedule + schedule_pid_m))
     return pid_n.to(gl.int32), slice_idx
 
@@ -218,29 +134,9 @@ def apply_activation_schedule(
     GRID_N: gl.constexpr,
     slice_offsets: gl.tensor,
     block_schedule: gl.tensor,
-    tile_schedule: gl.tensor,
-    USE_FULL_TILE_SCHEDULE: gl.constexpr,
-    USE_PLANAR_SNAKE: gl.constexpr,
-    GRID_MINOR_DIM: gl.constexpr,
-    GRID_TILE_WIDTH: gl.constexpr,
     BAND_N: gl.constexpr,
 ) -> tuple[gl.tensor, gl.tensor, gl.tensor]:
-    if USE_FULL_TILE_SCHEDULE:
-        pid_m, _, slice_idx = unpack_full_tile_schedule(gl.load(tile_schedule + block_id))
-        slice_offset = gl.load(slice_offsets + slice_idx)
-        return pid_m, slice_idx, slice_offset
-
-    if USE_PLANAR_SNAKE:
-        schedule_pid_m, _ = planar_snake(
-            block_id,
-            grid_m,
-            GRID_N,
-            MINOR_DIM=GRID_MINOR_DIM,
-            TILE_WIDTH=GRID_TILE_WIDTH,
-        )
-    else:
-        schedule_pid_m = banded_row_major_m(block_id, grid_m, GRID_N, BAND_N=BAND_N)
-
+    schedule_pid_m = banded_row_major_m(block_id, grid_m, GRID_N, BAND_N=BAND_N)
     slice_idx, pid_m = unpack_block_schedule(gl.load(block_schedule + schedule_pid_m))
     slice_offset = gl.load(slice_offsets + slice_idx)
     return pid_m, slice_idx, slice_offset
@@ -362,7 +258,6 @@ class PartitionArgs:
     x_slice_offs: gl.tensor
     x_block_offs: gl.tensor
     x_block_schedule: gl.tensor
-    x_tile_schedule: gl.tensor
 
     x_bufs: gl.shared_memory_descriptor
     x_empty_bars: gl.shared_memory_descriptor
@@ -415,36 +310,20 @@ class PartitionArgs:
 
     SWIGLU_SUBTILE_FACTOR: gl.constexpr
     EPILOGUE_BUFFER_DEPTH: gl.constexpr
-    USE_PLANAR_SNAKE: gl.constexpr
-    GRID_MINOR_DIM: gl.constexpr
-    GRID_TILE_WIDTH: gl.constexpr
     BAND_N: gl.constexpr
-    USE_FULL_TILE_SCHEDULE: gl.constexpr
     X_GATHER_MULTICAST: gl.constexpr
     W_SCALE_MULTICAST: gl.constexpr
     FORCE_EPILOGUE_WARPS_N1: gl.constexpr
-    USE_WIDE_STORE_HANDOFF: gl.constexpr
     USE_DIRECT_EPILOGUE_STORE: gl.constexpr
-    REUSE_GATHER_INDICES: gl.constexpr
-    INLINE_MMA_INPUT_RELEASE: gl.constexpr
 
     @gluon.jit
     def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
-        if self.USE_FULL_TILE_SCHEDULE:
-            return apply_full_tile_schedule(
-                block_id=block_id,
-                slice_offsets=self.x_slice_offs,
-                tile_schedule=self.x_tile_schedule,
-            )
         return apply_block_schedule(
             block_id=block_id,
             grid_m=self.grid_m,
             GRID_N=self.GRID_N,
             slice_offsets=self.x_slice_offs,
             block_schedule=self.x_block_schedule,
-            USE_PLANAR_SNAKE=self.USE_PLANAR_SNAKE,
-            GRID_MINOR_DIM=self.GRID_MINOR_DIM,
-            GRID_TILE_WIDTH=self.GRID_TILE_WIDTH,
             BAND_N=self.BAND_N,
         )
 
@@ -455,11 +334,6 @@ class PartitionArgs:
             grid_m=self.grid_m,
             GRID_N=self.GRID_N,
             block_schedule=self.x_block_schedule,
-            tile_schedule=self.x_tile_schedule,
-            USE_FULL_TILE_SCHEDULE=self.USE_FULL_TILE_SCHEDULE,
-            USE_PLANAR_SNAKE=self.USE_PLANAR_SNAKE,
-            GRID_MINOR_DIM=self.GRID_MINOR_DIM,
-            GRID_TILE_WIDTH=self.GRID_TILE_WIDTH,
             BAND_N=self.BAND_N,
         )
 
@@ -471,11 +345,6 @@ class PartitionArgs:
             GRID_N=self.GRID_N,
             slice_offsets=self.x_slice_offs,
             block_schedule=self.x_block_schedule,
-            tile_schedule=self.x_tile_schedule,
-            USE_FULL_TILE_SCHEDULE=self.USE_FULL_TILE_SCHEDULE,
-            USE_PLANAR_SNAKE=self.USE_PLANAR_SNAKE,
-            GRID_MINOR_DIM=self.GRID_MINOR_DIM,
-            GRID_TILE_WIDTH=self.GRID_TILE_WIDTH,
             BAND_N=self.BAND_N,
         )
 
@@ -493,83 +362,38 @@ def load_activations(p: PartitionArgs):
     phase = 1
     issued = 0
 
-    if p.REUSE_GATHER_INDICES:
-        cached_pid_m = gl.full((), -1, dtype=gl.int32)
-        cached_slice_idx = gl.full((), -1, dtype=gl.int32)
-        cached_shape_m = gl.full((), 0, dtype=gl.int32)
-        cached_offs_x_m = gl.full((p.BLOCK_M, ), p.x_desc.shape[0], dtype=gl.int32, layout=offs_layout)
+    for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
+        pid_m, slice_idx, slice_offset = p.apply_activation_schedule(block_id)
+        off_m = pid_m * p.BLOCK_M
+        shape_m = gl.load(p.x_slice_sizes + slice_idx)
+        offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=offs_layout)
+        mask_m = offs_m < shape_m
+        offs_x_m = gl.load(
+            p.gather_indx_ptr + slice_offset + offs_m,
+            mask=mask_m,
+            other=p.x_desc.shape[0],
+        )
 
-        for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-            pid_m, slice_idx, slice_offset = p.apply_activation_schedule(block_id)
-            off_m = pid_m * p.BLOCK_M
-            reuse_gather = (pid_m == cached_pid_m) & (slice_idx == cached_slice_idx)
-            load_gather = ~reuse_gather
-            shape_m = gl.load(p.x_slice_sizes + slice_idx, mask=load_gather, other=cached_shape_m)
-            offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=offs_layout)
-            mask_m = (offs_m < shape_m) & load_gather
-            offs_x_m = gl.load(
-                p.gather_indx_ptr + slice_offset + offs_m,
-                mask=mask_m,
-                other=cached_offs_x_m,
-            )
-            cached_pid_m = pid_m
-            cached_slice_idx = slice_idx
-            cached_shape_m = shape_m
-            cached_offs_x_m = offs_x_m
+        for ki in range(p.K_TILES):
+            off_k_x = ki * p.BLOCK_K
 
-            for ki in range(p.K_TILES):
-                off_k_x = ki * p.BLOCK_K
+            empty_bar = p.x_empty_bars.index(idx)
+            ready_bar = p.x_ready_bars.index(idx)
+            x_buf = p.x_bufs.index(idx)
 
-                empty_bar = p.x_empty_bars.index(idx)
-                ready_bar = p.x_ready_bars.index(idx)
-                x_buf = p.x_bufs.index(idx)
-
-                mbarrier.wait(empty_bar, phase, pred=issued >= p.x_num_bufs)
-                mbarrier.expect(ready_bar, tile_x_bytes)
-                tma.async_gather(
-                    p.x_desc,
-                    offs_x_m,
-                    off_k_x,
-                    ready_bar,
-                    x_buf,
-                    multicast=p.USE_2CTA and p.X_GATHER_MULTICAST,
-                )
-
-                idx, phase = advance(idx, phase, p.x_num_bufs)
-                issued += 1
-    else:
-        for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-            pid_m, slice_idx, slice_offset = p.apply_activation_schedule(block_id)
-            off_m = pid_m * p.BLOCK_M
-            shape_m = gl.load(p.x_slice_sizes + slice_idx)
-            offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=offs_layout)
-            mask_m = offs_m < shape_m
-            offs_x_m = gl.load(
-                p.gather_indx_ptr + slice_offset + offs_m,
-                mask=mask_m,
-                other=p.x_desc.shape[0],
+            mbarrier.wait(empty_bar, phase, pred=issued >= p.x_num_bufs)
+            mbarrier.expect(ready_bar, tile_x_bytes)
+            tma.async_gather(
+                p.x_desc,
+                offs_x_m,
+                off_k_x,
+                ready_bar,
+                x_buf,
+                multicast=p.USE_2CTA and p.X_GATHER_MULTICAST,
             )
 
-            for ki in range(p.K_TILES):
-                off_k_x = ki * p.BLOCK_K
-
-                empty_bar = p.x_empty_bars.index(idx)
-                ready_bar = p.x_ready_bars.index(idx)
-                x_buf = p.x_bufs.index(idx)
-
-                mbarrier.wait(empty_bar, phase, pred=issued >= p.x_num_bufs)
-                mbarrier.expect(ready_bar, tile_x_bytes)
-                tma.async_gather(
-                    p.x_desc,
-                    offs_x_m,
-                    off_k_x,
-                    ready_bar,
-                    x_buf,
-                    multicast=p.USE_2CTA and p.X_GATHER_MULTICAST,
-                )
-
-                idx, phase = advance(idx, phase, p.x_num_bufs)
-                issued += 1
+            idx, phase = advance(idx, phase, p.x_num_bufs)
+            issued += 1
 
 
 @gluon.jit
@@ -643,31 +467,18 @@ def mma_partition(p: PartitionArgs):
             x_buf = p.x_bufs.index(x_idx)
             mbarrier.wait(x_ready_bar, x_phase)
 
-            if p.INLINE_MMA_INPUT_RELEASE:
-                blackwell.tcgen05_mma_scaled(
-                    w_buf.reshape((p.BLOCK_N, p.BLOCK_K // 2)),
-                    x_buf.permute((1, 0)),
-                    acc_buf,
-                    p.w_scale_tmem,
-                    p.x_scale_tmem,
-                    a_type="e2m1",
-                    b_type="e4m3",
-                    use_acc=use_acc,
-                    mbarriers=[x_empty_bar, w_empty_bar],
-                )
-            else:
-                blackwell.tcgen05_mma_scaled(
-                    w_buf.reshape((p.BLOCK_N, p.BLOCK_K // 2)),
-                    x_buf.permute((1, 0)),
-                    acc_buf,
-                    p.w_scale_tmem,
-                    p.x_scale_tmem,
-                    a_type="e2m1",
-                    b_type="e4m3",
-                    use_acc=use_acc,
-                )
-                blackwell.tcgen05_commit(x_empty_bar)
-                blackwell.tcgen05_commit(w_empty_bar)
+            blackwell.tcgen05_mma_scaled(
+                w_buf.reshape((p.BLOCK_N, p.BLOCK_K // 2)),
+                x_buf.permute((1, 0)),
+                acc_buf,
+                p.w_scale_tmem,
+                p.x_scale_tmem,
+                a_type="e2m1",
+                b_type="e4m3",
+                use_acc=use_acc,
+            )
+            blackwell.tcgen05_commit(x_empty_bar)
+            blackwell.tcgen05_commit(w_empty_bar)
 
             x_idx, x_phase = advance(x_idx, x_phase, p.x_num_bufs)
             w_idx, w_phase = advance(w_idx, w_phase, p.w_num_bufs)
@@ -744,10 +555,9 @@ def _store_out_subtile(
 @gluon.jit
 def get_store_layout(p: PartitionArgs):
     frag_rows: gl.constexpr = p.BLOCK_M // p.SWIGLU_SUBTILE_FACTOR
-    store_rows: gl.constexpr = p.BLOCK_M if p.USE_WIDE_STORE_HANDOFF else frag_rows
     local_cga_layout: gl.constexpr = ((0, 1), ) if p.USE_2CTA else ()
     return gl.BlockedLayout(
-        [store_rows // gl.num_warps(), 2],
+        [frag_rows // gl.num_warps(), 2],
         [1, 32],
         [gl.num_warps(), 1],
         [1, 0],
@@ -848,35 +658,6 @@ def epilogue_overlapped_store(
 
 
 @gluon.jit
-def epilogue_wide_store_handoff(
-    p: PartitionArgs,
-    acc_packed,
-    out_recip,
-    store_idx,
-    store_phase,
-    store_issued,
-):
-    gl.static_assert(p.SWIGLU_SUBTILE_FACTOR == 2, "wide store handoff is specialized for two M fragments")
-    acc_packed_0, acc_packed_1 = split_m_subtiles(acc_packed, p.SWIGLU_SUBTILE_FACTOR)
-    gelu_0, linear_0 = _swiglu_step1(acc_packed_0, p.SWIGLU_LIMIT)
-    gelu_1, linear_1 = _swiglu_step1(acc_packed_1, p.SWIGLU_LIMIT)
-    out_packed_0 = _swiglu_step2(gelu_0, linear_0, p.SWIGLU_ALPHA)
-    out_packed_1 = _swiglu_step2(gelu_1, linear_1, p.SWIGLU_ALPHA)
-    payload_0 = pack_fp8_out_fragment(out_packed_0, out_recip)
-    payload_1 = pack_fp8_out_fragment(out_packed_1, out_recip)
-    wide_payload = (gl.join(payload_0, payload_1).permute((2, 0, 1)).reshape(
-        (p.BLOCK_M, p.BLOCK_N // p.REDUCTION_N // 2)))
-
-    empty_bar = p.store_empty_bars.index(store_idx)
-    ready_bar = p.store_ready_bars.index(store_idx)
-    mbarrier.wait(empty_bar, store_phase, pred=store_issued >= p.EPILOGUE_BUFFER_DEPTH)
-    p.store_bufs.index(store_idx).store(wide_payload)
-    mbarrier.arrive(ready_bar)
-    next_store_idx, next_store_phase = advance(store_idx, store_phase, p.EPILOGUE_BUFFER_DEPTH)
-    return next_store_idx, next_store_phase, store_issued + 1
-
-
-@gluon.jit
 def apply_bias_and_scale(
     p: PartitionArgs,
     idx,
@@ -934,7 +715,8 @@ def epilogue_store_partition(p: PartitionArgs):
         off_m = pid_m * p.BLOCK_M
         shape_m = gl.load(p.x_slice_sizes + slice_idx)
         out_off_n_packed = pid_n * (p.BLOCK_N // p.REDUCTION_N // 4)
-        if p.USE_WIDE_STORE_HANDOFF:
+        for frag_idx in gl.static_range(p.SWIGLU_SUBTILE_FACTOR):
+            frag_off_m = off_m + frag_idx * frag_rows
             ready_bar = p.store_ready_bars.index(store_idx)
             empty_bar = p.store_empty_bars.index(store_idx)
             mbarrier.wait(ready_bar, store_phase)
@@ -943,29 +725,12 @@ def epilogue_store_partition(p: PartitionArgs):
             store_packed_out(
                 p,
                 packed_fp8,
-                off_m,
+                frag_off_m,
                 out_off_n_packed,
                 shape_m,
                 slice_offset,
             )
             store_idx, store_phase = advance(store_idx, store_phase, p.EPILOGUE_BUFFER_DEPTH)
-        else:
-            for frag_idx in gl.static_range(p.SWIGLU_SUBTILE_FACTOR):
-                frag_off_m = off_m + frag_idx * frag_rows
-                ready_bar = p.store_ready_bars.index(store_idx)
-                empty_bar = p.store_empty_bars.index(store_idx)
-                mbarrier.wait(ready_bar, store_phase)
-                packed_fp8 = p.store_bufs.index(store_idx).load(store_layout)
-                mbarrier.arrive(empty_bar)
-                store_packed_out(
-                    p,
-                    packed_fp8,
-                    frag_off_m,
-                    out_off_n_packed,
-                    shape_m,
-                    slice_offset,
-                )
-                store_idx, store_phase = advance(store_idx, store_phase, p.EPILOGUE_BUFFER_DEPTH)
 
 
 @gluon.jit
@@ -1022,15 +787,6 @@ def epilogue_partition(p: PartitionArgs):
                 slice_offset,
                 store_layout,
             )
-        elif p.USE_WIDE_STORE_HANDOFF:
-            store_idx, store_phase, store_issued = epilogue_wide_store_handoff(
-                p,
-                acc_packed,
-                out_recip,
-                store_idx,
-                store_phase,
-                store_issued,
-            )
         else:
             store_idx, store_phase, store_issued = epilogue_overlapped_store(
                 p,
@@ -1059,7 +815,6 @@ def ws_matmul_kernel(
     x_slice_offs: gl.tensor,
     x_block_offs: gl.tensor,
     x_block_schedule: gl.tensor,
-    x_tile_schedule: gl.tensor,
     #
     x_scale_ptr: gl.tensor,
     w_scale_ptr: gl.tensor,
@@ -1094,18 +849,11 @@ def ws_matmul_kernel(
     STORE_HELPER_REGS: gl.constexpr,
     SWIGLU_SUBTILE_FACTOR: gl.constexpr,
     EPILOGUE_BUFFER_DEPTH: gl.constexpr,
-    USE_PLANAR_SNAKE: gl.constexpr,
-    GRID_MINOR_DIM: gl.constexpr,
-    GRID_TILE_WIDTH: gl.constexpr,
     BAND_N: gl.constexpr,
-    USE_FULL_TILE_SCHEDULE: gl.constexpr,
     X_GATHER_MULTICAST: gl.constexpr,
     W_SCALE_MULTICAST: gl.constexpr,
     FORCE_EPILOGUE_WARPS_N1: gl.constexpr,
-    USE_WIDE_STORE_HANDOFF: gl.constexpr,
     USE_DIRECT_EPILOGUE_STORE: gl.constexpr,
-    REUSE_GATHER_INDICES: gl.constexpr,
-    INLINE_MMA_INPUT_RELEASE: gl.constexpr,
     SCALE_SIZE_OUTER: gl.constexpr,
     SCALE_SIZE_INNER: gl.constexpr,
     MXFP_BLOCK_SIZE: gl.constexpr,
@@ -1177,11 +925,10 @@ def ws_matmul_kernel(
         gl.static_assert(SWIGLU_SUBTILE_FACTOR > 1, "store helper requires row fragments")
         gl.static_assert(EPILOGUE_BUFFER_DEPTH >= 2, "store helper depth must be at least 2")
         frag_rows: gl.constexpr = BLOCK_M // SWIGLU_SUBTILE_FACTOR
-        store_rows: gl.constexpr = BLOCK_M if USE_WIDE_STORE_HANDOFF else frag_rows
         out_packed_n: gl.constexpr = BLOCK_N // REDUCTION_N // 2
         store_bufs = gl.allocate_shared_memory(
             gl.int16,
-            [EPILOGUE_BUFFER_DEPTH, store_rows, out_packed_n],
+            [EPILOGUE_BUFFER_DEPTH, frag_rows, out_packed_n],
             gl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=((0, 1), ) if use_2cta else ()),
         )
         store_empty_bars, store_ready_bars = alloc_empty_ready_barriers(EPILOGUE_BUFFER_DEPTH)
@@ -1205,7 +952,6 @@ def ws_matmul_kernel(
         x_slice_offs=x_slice_offs,
         x_block_offs=x_block_offs,
         x_block_schedule=x_block_schedule,
-        x_tile_schedule=x_tile_schedule,
         #
         x_bufs=x_bufs,
         x_empty_bars=x_empty_bars,
@@ -1258,18 +1004,11 @@ def ws_matmul_kernel(
         #
         SWIGLU_SUBTILE_FACTOR=SWIGLU_SUBTILE_FACTOR,
         EPILOGUE_BUFFER_DEPTH=EPILOGUE_BUFFER_DEPTH,
-        USE_PLANAR_SNAKE=USE_PLANAR_SNAKE,
-        GRID_MINOR_DIM=GRID_MINOR_DIM,
-        GRID_TILE_WIDTH=GRID_TILE_WIDTH,
         BAND_N=BAND_N,
-        USE_FULL_TILE_SCHEDULE=USE_FULL_TILE_SCHEDULE,
         X_GATHER_MULTICAST=X_GATHER_MULTICAST,
         W_SCALE_MULTICAST=W_SCALE_MULTICAST,
         FORCE_EPILOGUE_WARPS_N1=FORCE_EPILOGUE_WARPS_N1,
-        USE_WIDE_STORE_HANDOFF=USE_WIDE_STORE_HANDOFF,
         USE_DIRECT_EPILOGUE_STORE=USE_DIRECT_EPILOGUE_STORE,
-        REUSE_GATHER_INDICES=REUSE_GATHER_INDICES,
-        INLINE_MMA_INPUT_RELEASE=INLINE_MMA_INPUT_RELEASE,
     )
 
     if USE_DIRECT_EPILOGUE_STORE:
@@ -1397,18 +1136,11 @@ class KernelConfig:
 
     SWIGLU_SUBTILE_FACTOR: int = 8
     EPILOGUE_BUFFER_DEPTH: int = 2
-    USE_PLANAR_SNAKE: bool = False
-    GRID_MINOR_DIM: int = 0
-    GRID_TILE_WIDTH: int = 8
     BAND_N: int = 20
-    USE_FULL_TILE_SCHEDULE: bool = False
     X_GATHER_MULTICAST: bool = True
     W_SCALE_MULTICAST: bool = True
     FORCE_EPILOGUE_WARPS_N1: bool = False
-    USE_WIDE_STORE_HANDOFF: bool = False
     USE_DIRECT_EPILOGUE_STORE: bool = False
-    REUSE_GATHER_INDICES: bool = False
-    INLINE_MMA_INPUT_RELEASE: bool = False
 
     LOAD_ACTIVATION_REGS: int = 112
     LOAD_WEIGHT_REGS: int = 48
@@ -1600,8 +1332,6 @@ def select_kernel_config(slice_size: int) -> KernelConfig:
 
 
 _dynamic_block_schedule_cache: dict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] = {}
-_dynamic_full_tile_schedule_cache: dict[tuple[int, int, int, bool, int, int, int], torch.Tensor] = {}
-_dummy_full_tile_schedule_cache: dict[torch.device, torch.Tensor] = {}
 
 
 def get_block_schedule_tensors(
@@ -1633,118 +1363,6 @@ def get_block_schedule_tensors(
     block_schedule_t = torch.tensor(packed_schedule, dtype=torch.int32, device=device)
     _dynamic_block_schedule_cache[key] = (block_offs_t, block_schedule_t)
     return block_offs_t, block_schedule_t
-
-
-def _host_banded_row_major(lin_idx: int, m_tiles: int, n_tiles: int, band_n: int) -> tuple[int, int]:
-    full_band_tiles = m_tiles * band_n
-    n_full_bands = n_tiles // band_n
-    full_band_work = n_full_bands * full_band_tiles
-
-    if lin_idx < full_band_work:
-        band_id = lin_idx // full_band_tiles
-        within_band = lin_idx % full_band_tiles
-        return within_band // band_n, band_id * band_n + (within_band % band_n)
-
-    tail_n = n_tiles - n_full_bands * band_n
-    assert tail_n > 0
-    tail_idx = lin_idx - full_band_work
-    return tail_idx // tail_n, n_full_bands * band_n + (tail_idx % tail_n)
-
-
-def _host_planar_snake(
-    lin_idx: int,
-    m_tiles: int,
-    n_tiles: int,
-    minor_dim: int,
-    tile_width: int,
-) -> tuple[int, int]:
-    major_size = n_tiles if minor_dim == 0 else m_tiles
-    minor_size = m_tiles if minor_dim == 0 else n_tiles
-
-    full_minor_tiles = minor_size // tile_width
-    full_minor_size = full_minor_tiles * tile_width
-    full_elements = full_minor_tiles * tile_width * major_size
-    minor_tile_idx = lin_idx // (tile_width * major_size)
-
-    if lin_idx < full_elements:
-        minor_within = lin_idx % tile_width
-        major_within = (lin_idx // tile_width) % major_size
-    else:
-        partial_width = minor_size - full_minor_size
-        partial_width = partial_width if partial_width > 0 else 1
-        partial_lin = lin_idx - full_elements
-        minor_within = partial_lin % partial_width
-        major_within = (partial_lin // partial_width) % major_size
-
-    minor = minor_tile_idx * tile_width + minor_within
-    major = major_within if (minor_tile_idx % 2) == 0 else major_size - 1 - major_within
-    if minor_dim == 0:
-        return minor, major
-    return major, minor
-
-
-def get_full_tile_schedule_tensor(
-    ragged_metadata: RaggedTensorMetadata,
-    block_size: int,
-    grid_n: int,
-    *,
-    use_planar_snake: bool,
-    grid_minor_dim: int,
-    grid_tile_width: int,
-    band_n: int,
-) -> torch.Tensor:
-    key = (
-        id(ragged_metadata),
-        block_size,
-        grid_n,
-        use_planar_snake,
-        grid_minor_dim,
-        grid_tile_width,
-        band_n,
-    )
-    cached = _dynamic_full_tile_schedule_cache.get(key)
-    if cached is not None:
-        return cached
-
-    block_offs, block_schedule = get_block_schedule_tensors(ragged_metadata, block_size)
-    grid_m = int(block_offs[ragged_metadata.n_slices].item())
-    assert ragged_metadata.n_slices < (1 << 16)
-    assert grid_m < (1 << 16)
-    assert grid_n < (1 << 16)
-
-    block_schedule_cpu = block_schedule.cpu().tolist()
-    packed_schedule: list[int] = []
-    for lin_idx in range(grid_m * grid_n):
-        if use_planar_snake:
-            schedule_pid_m, pid_n = _host_planar_snake(
-                lin_idx,
-                grid_m,
-                grid_n,
-                grid_minor_dim,
-                grid_tile_width,
-            )
-        else:
-            schedule_pid_m, pid_n = _host_banded_row_major(lin_idx, grid_m, grid_n, band_n)
-
-        m_entry = int(block_schedule_cpu[schedule_pid_m])
-        slice_idx = m_entry & 0xFFFF
-        pid_m = m_entry >> 16
-        assert slice_idx < (1 << 16)
-        assert pid_m < (1 << 16)
-        assert pid_n < (1 << 16)
-        packed_schedule.append(slice_idx | (pid_m << 16) | (pid_n << 32))
-
-    tile_schedule = torch.tensor(packed_schedule, dtype=torch.int64, device=ragged_metadata.slice_sizes.device)
-    _dynamic_full_tile_schedule_cache[key] = tile_schedule
-    return tile_schedule
-
-
-def get_dummy_full_tile_schedule_tensor(device: torch.device) -> torch.Tensor:
-    cached = _dummy_full_tile_schedule_cache.get(device)
-    if cached is None:
-        cached = torch.zeros((1, ), dtype=torch.int64, device=device)
-        _dummy_full_tile_schedule_cache[device] = cached
-    return cached
 
 
 def matmul(
@@ -1788,15 +1406,6 @@ def matmul(
     sms = torch.cuda.get_device_properties(bias.device).multi_processor_count
     sms *= p.OCCUPANCY
     launch_grid = max(1, min(max(1, sms // p.NUM_CTAS), expected_grid_m * grid_n))
-    x_tile_schedule = (get_full_tile_schedule_tensor(
-        a_ragged_metadata,
-        p.BLOCK_M,
-        grid_n,
-        use_planar_snake=p.USE_PLANAR_SNAKE,
-        grid_minor_dim=p.GRID_MINOR_DIM,
-        grid_tile_width=p.GRID_TILE_WIDTH,
-        band_n=p.BAND_N,
-    ) if p.USE_FULL_TILE_SCHEDULE else get_dummy_full_tile_schedule_tensor(a_ragged_metadata.slice_sizes.device))
     grid = (launch_grid, )
 
     acc_cga_layout = get_acc_cga_layout(p.NUM_CTAS)
@@ -1840,7 +1449,6 @@ def matmul(
         x_slice_offs=a_ragged_metadata.slice_offs,
         x_block_offs=x_block_offs,
         x_block_schedule=x_block_schedule,
-        x_tile_schedule=x_tile_schedule,
         #
         x_scale_ptr=flex_ctx.lhs_data.scale,
         w_scale_ptr=flex_ctx.rhs_data.scale,
@@ -1875,18 +1483,11 @@ def matmul(
         STORE_HELPER_REGS=p.STORE_HELPER_REGS,
         SWIGLU_SUBTILE_FACTOR=p.SWIGLU_SUBTILE_FACTOR,
         EPILOGUE_BUFFER_DEPTH=p.EPILOGUE_BUFFER_DEPTH,
-        USE_PLANAR_SNAKE=p.USE_PLANAR_SNAKE,
-        GRID_MINOR_DIM=p.GRID_MINOR_DIM,
-        GRID_TILE_WIDTH=p.GRID_TILE_WIDTH,
         BAND_N=p.BAND_N,
-        USE_FULL_TILE_SCHEDULE=p.USE_FULL_TILE_SCHEDULE,
         X_GATHER_MULTICAST=p.X_GATHER_MULTICAST,
         W_SCALE_MULTICAST=p.W_SCALE_MULTICAST,
         FORCE_EPILOGUE_WARPS_N1=p.FORCE_EPILOGUE_WARPS_N1,
-        USE_WIDE_STORE_HANDOFF=p.USE_WIDE_STORE_HANDOFF,
         USE_DIRECT_EPILOGUE_STORE=p.USE_DIRECT_EPILOGUE_STORE,
-        REUSE_GATHER_INDICES=p.REUSE_GATHER_INDICES,
-        INLINE_MMA_INPUT_RELEASE=p.INLINE_MMA_INPUT_RELEASE,
         #
         SCALE_SIZE_OUTER=p.SCALE_SIZE_OUTER,
         SCALE_SIZE_INNER=p.SCALE_SIZE_INNER,
