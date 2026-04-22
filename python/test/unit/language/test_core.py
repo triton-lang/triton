@@ -4286,6 +4286,72 @@ def test_masked_load_scalar(num_ctas, mask_val, other_val, device):
     torch.testing.assert_close(output, reference_out)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", [torch.int32, torch.bfloat16, torch.float16, torch.float32])
+@pytest.mark.parametrize("care_padding", [False, True])
+@pytest.mark.parametrize("other", [None, 0, 7])
+def test_masked_load_care_padding(dtype, care_padding, other, device):
+    size = 128
+    input_size = size - 7
+    input = torch.arange(input_size, dtype=dtype, device=device)
+    output = torch.empty((size, ), dtype=dtype, device=device)
+
+    @triton.jit
+    def kernel(in_ptr, out_ptr, in_size: tl.constexpr, out_size: tl.constexpr, CARE_PADDING: tl.constexpr):
+        offsets = tl.arange(0, out_size)
+        x = GENERATE_TEST_HERE
+        tl.store(out_ptr + offsets, x)
+
+    load_expr = "tl.load(in_ptr + offsets, mask=offsets < in_size, care_padding=CARE_PADDING)"
+    if other is not None:
+        load_expr = f"tl.load(in_ptr + offsets, mask=offsets < in_size, other={other}, care_padding=CARE_PADDING)"
+    patched_kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': load_expr})
+
+    patched_kernel[(1, )](input, output, input_size, size, care_padding)
+
+    torch.testing.assert_close(output[:input_size], input)
+    if other is not None:
+        expected_padding = torch.full((size - input_size, ), other, dtype=dtype, device=device)
+        torch.testing.assert_close(output[input_size:], expected_padding)
+    elif care_padding:
+        expected_padding = torch.zeros((size - input_size, ), dtype=dtype, device=device)
+        torch.testing.assert_close(output[input_size:], expected_padding)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", [torch.int32, torch.bfloat16, torch.float16, torch.float32])
+@pytest.mark.parametrize("care_padding", [False, True])
+def test_block_ptr_load_care_padding(dtype, care_padding, device):
+    shape = (8, 8)
+    block_shape = (8, 8)
+    input_shape = (6, 5)
+    input = torch.arange(input_shape[0] * input_shape[1], dtype=dtype, device=device).reshape(input_shape)
+    output = torch.empty(shape, dtype=dtype, device=device)
+
+    @triton.jit
+    def kernel(in_ptr, out_ptr, in_shape0: tl.constexpr, in_shape1: tl.constexpr, block_shape0: tl.constexpr,
+               block_shape1: tl.constexpr, CARE_PADDING: tl.constexpr):
+        in_block_ptr = tl.make_block_ptr(
+            base=in_ptr,
+            shape=(in_shape0, in_shape1),
+            strides=(in_shape1, 1),
+            offsets=(0, 0),
+            block_shape=(block_shape0, block_shape1),
+            order=(1, 0),
+        )
+        x = tl.load(in_block_ptr, boundary_check=(0, 1), care_padding=CARE_PADDING)
+        offsets = tl.arange(0, block_shape0)[:, None] * block_shape1 + tl.arange(0, block_shape1)[None, :]
+        tl.store(out_ptr + offsets, x)
+
+    kernel[(1, )](input, output, input_shape[0], input_shape[1], block_shape[0], block_shape[1], care_padding)
+
+    torch.testing.assert_close(output[:input_shape[0], :input_shape[1]], input)
+    if care_padding:
+        expected = torch.zeros(shape, dtype=dtype, device=device)
+        expected[:input_shape[0], :input_shape[1]] = input
+        torch.testing.assert_close(output, expected)
+
+
 # Testing masked loads with a copy to shared memory.
 # FIXME: Shape too small for ldmatrix when num_ctas=4
 @pytest.mark.interpreter

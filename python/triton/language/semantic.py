@@ -996,7 +996,8 @@ class TritonSemantic(Generic[TensorTy]):
         return scope
 
     def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], boundary_check: Tuple,
-             padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool) -> TensorTy:
+             padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool,
+             care_padding: bool) -> TensorTy:
         cache = self._str_to_load_cache_modifier(cache_modifier)
         eviction = self._str_to_eviction_policy(eviction_policy)
         padding = self._str_to_padding_option(padding_option)
@@ -1011,6 +1012,12 @@ class TritonSemantic(Generic[TensorTy]):
                              "pointers or loading a scalar. Because the compiler does not know the boundary; please "
                              "use block pointers (defined by `make_block_ptr`) instead")
 
+        if mask is not None and other is None and care_padding:
+            # Get element type to determine default padding value
+            elt_ty = ptr.type.scalar.element_ty
+            # Use 0.0 for floating point types, 0 for integer types
+            default_value = 0.0 if elt_ty.is_floating() else 0
+            other = self.to_tensor(default_value)
         # For a pointer of scalar, check the type of `mask` and `other`
         if not ptr.type.is_block():
             if mask and mask.type.is_block():

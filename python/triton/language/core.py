@@ -1817,7 +1817,7 @@ class _block_ptr:
                           _semantic=_semantic)
 
     def load(self, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
-             volatile=False, _semantic=None):
+             volatile=False, care_padding=False, _semantic=None):
         if mask is not None or other is not None:
             raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
 
@@ -1825,6 +1825,7 @@ class _block_ptr:
         cache_modifier = _unwrap_if_constexpr(cache_modifier)
         eviction_policy = _unwrap_if_constexpr(eviction_policy)
         volatile = _unwrap_if_constexpr(volatile)
+        care_padding = _unwrap_if_constexpr(care_padding)
         if padding_option is None:
             padding_option = ""
         ptrs, mask = self._materialize(boundary_check, _semantic=_semantic)
@@ -1841,7 +1842,7 @@ class _block_ptr:
             raise ValueError(f"Padding option {padding_option} not supported")
 
         return load(ptrs, mask=mask, other=generated_other, cache_modifier=cache_modifier,
-                    eviction_policy=eviction_policy, volatile=volatile, _semantic=_semantic)
+                    eviction_policy=eviction_policy, volatile=volatile, care_padding=care_padding, _semantic=_semantic)
 
     def store(self, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _semantic=None):
         if mask is not None:
@@ -2393,7 +2394,7 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
 
 @builtin
 def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
-         volatile=False, _semantic=None):
+         volatile=False, care_padding=False, _semantic=None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
 
@@ -2436,11 +2437,16 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type eviction_policy: str, optional
     :param volatile: changes volatile option in NVIDIA PTX
     :type volatile: bool, optional
+    :param care_padding: represents whether user cares about padding value or not, default is False, works as below:
+        1. if 'other' is not None, 'care_padding' takes no effect.
+        2. if 'other' is None and 'care_padding' = True, loaded tensor will fill zeroes on masked places.
+        3. if 'other' is None and 'care_padding' = False, masked places on loaded tensor will be random values.
+    :type care_padding: bool, optional
     """
     if _is_block_ptr(pointer):
         return pointer.load(mask=mask, other=other, boundary_check=boundary_check, padding_option=padding_option,
                             cache_modifier=cache_modifier, eviction_policy=eviction_policy, volatile=volatile,
-                            _semantic=_semantic)
+                            care_padding=care_padding, _semantic=_semantic)
 
     # `mask` and `other` can be constexpr
     mask = _unwrap_if_constexpr(mask)
@@ -2453,8 +2459,9 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     cache_modifier = _unwrap_if_constexpr(cache_modifier)
     eviction_policy = _unwrap_if_constexpr(eviction_policy)
     volatile = _unwrap_if_constexpr(volatile)
+    care_padding = _unwrap_if_constexpr(care_padding)
     return _semantic.load(pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy,
-                          volatile)
+                          volatile, care_padding)
 
 
 @builtin
