@@ -595,6 +595,9 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
+// Compute per-element shared-memory pointers for a local atomic/ldst update by
+// replacing `coords[*][axis]` with `idxValues[*]` and mapping the resulting
+// logical coordinates back to shared-memory offsets.
 SmallVector<Value> computeLocalPtrs(Location loc,
                                     triton::gpu::MemDescType memDescTy,
                                     SharedMemoryObject smemObj, Type llvmElemTy,
