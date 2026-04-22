@@ -112,7 +112,7 @@ def unswizzle_mx_scale(
 def alloc_barrier_ring(num_bufs: gl.constexpr, two_ctas: gl.constexpr = False):
     bars = mbarrier.allocate_mbarrier(batch=num_bufs, two_ctas=two_ctas)
     for i in gl.static_range(num_bufs):
-        mbarrier.init(bars.index(i))
+        mbarrier.init(bars.index(i), count=1)
     return bars
 
 
@@ -747,7 +747,6 @@ def ws_matmul_kernel(
     BLOCK_N: gl.constexpr,
     BLOCK_K: gl.constexpr,
     NUM_SMS: gl.constexpr,
-    NUM_WARPS: gl.constexpr,
     X_NUM_BUFS: gl.constexpr,
     W_NUM_BUFS: gl.constexpr,
     ACC_NUM_BUFS: gl.constexpr,
@@ -891,7 +890,6 @@ def ws_matmul_kernel(
         num_blocks=num_blocks,
         #
         NUM_SMS=NUM_SMS,
-        NUM_WARPS=NUM_WARPS,
         USE_2CTA=use_2cta,
         BLOCK_M_PER_CTA=block_m_per_cta,
         BLOCK_M=BLOCK_M,
@@ -1339,7 +1337,6 @@ def matmul(
         BLOCK_N=p.BLOCK_N,
         BLOCK_K=p.BLOCK_K,
         NUM_SMS=launch_grid,
-        NUM_WARPS=p.NUM_WARPS,
         X_NUM_BUFS=p.X_NUM_BUFS,
         W_NUM_BUFS=p.W_NUM_BUFS,
         ACC_NUM_BUFS=p.ACC_NUM_BUFS,
