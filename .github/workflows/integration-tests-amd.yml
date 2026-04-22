@@ -188,6 +188,9 @@ jobs:
           dpkg -l clang lld 2>/dev/null | grep -E '^ii' || true
           rocminfo 2>/dev/null | head -n 50 || true
           rocm-smi --showproductname --showmeminfo vram 2>/dev/null || true
+          # Host kernel driver's page-fault retry policy. noretry=1 forces xnack-
+          # regardless of HSA_XNACK and would make ASan miss OOBs on this runner
+          echo "amdgpu.noretry=$(cat /sys/module/amdgpu/parameters/noretry 2>/dev/null || echo '?')"
           du -sh ~/.triton/cache 2>/dev/null || true
           env | grep -E '^(HSA|AMD|HIP|TRITON|LD_|ASAN)' | sort
           echo "host-toolchain-sig=$(sha256sum /usr/bin/clang /usr/bin/lld 2>/dev/null | sha256sum | awk '{print $1}')"

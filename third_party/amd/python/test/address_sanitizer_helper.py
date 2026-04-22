@@ -23,6 +23,12 @@ _diag_env = {
     )
 }
 print("ENV:", _diag_env, file=sys.stderr)
+
+try:
+    _props = torch.cuda.get_device_properties(0)
+    print(f"GCNARCH: {_props.gcnArchName}", file=sys.stderr)
+except Exception as _e:
+    print(f"GCNARCH: <unreadable: {_e}>", file=sys.stderr)
 try:
     with open(f"/proc/{os.getpid()}/maps") as _f:
         _hits = [ln for ln in _f if ("libamdhip64" in ln or "libclang_rt.asan" in ln)]
