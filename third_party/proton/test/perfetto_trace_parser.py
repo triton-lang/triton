@@ -1,6 +1,8 @@
 import pathlib
 import struct
 
+_PERFETTO_FLOW_ID_BASE = 1 << 32
+
 
 def parse_perfetto_trace(path: pathlib.Path | str, normalize_event):
 
@@ -86,6 +88,8 @@ def parse_perfetto_trace(path: pathlib.Path | str, normalize_event):
         track_uuid = None
         name = None
         category = None
+        flow_ids = []
+        terminating_flow_ids = []
         args = {}
         for field_id, value in fields(track_event):
             if field_id == 3:
@@ -100,9 +104,13 @@ def parse_perfetto_trace(path: pathlib.Path | str, normalize_event):
                 name = interned["event_names"].get(value)
             elif field_id == 11:
                 track_uuid = value
+            elif field_id == 36:
+                flow_ids.append(value)
+            elif field_id == 42:
+                terminating_flow_ids.append(value)
 
         if event_type != 1:
-            return None
+            return []
 
         call_stack = []
         for arg_key, arg_value in args.items():
@@ -116,7 +124,7 @@ def parse_perfetto_trace(path: pathlib.Path | str, normalize_event):
             call_stack.sort(key=lambda item: item[0])
             normalized_call_stack = [frame_name for _, frame_name in call_stack]
 
-        return normalize_event(
+        events = [normalize_event(
             name,
             category,
             track_names.get(track_uuid, track_uuid),
@@ -124,7 +132,22 @@ def parse_perfetto_trace(path: pathlib.Path | str, normalize_event):
             args,
             timestamp=timestamp,
             track_id=track_uuid,
-        )
+        )]
+        for phase, event_flow_ids in (("s", flow_ids), ("f", terminating_flow_ids)):
+            for flow_id in event_flow_ids:
+                events.append(normalize_event(
+                    "launch->kernel",
+                    "flow",
+                    track_names.get(track_uuid, track_uuid),
+                    None,
+                    {},
+                    id=flow_id - _PERFETTO_FLOW_ID_BASE,
+                    phase=phase,
+                    bp="e",
+                    timestamp=timestamp,
+                    track_id=track_uuid,
+                ))
+        return events
 
     def apply_interned_data(interned_data: bytes, interned):
         for field_id, value in fields(interned_data):
@@ -168,10 +191,10 @@ def parse_perfetto_trace(path: pathlib.Path | str, normalize_event):
         for payload in interned_payloads:
             apply_interned_data(payload, interned)
         track_names.update(parsed_track_names)
-        return [
-            event for event in (parse_track_event(track_event, timestamp, interned, track_names)
-                                for track_event in track_events) if event is not None
-        ]
+        parsed_events = []
+        for track_event in track_events:
+            parsed_events.extend(parse_track_event(track_event, timestamp, interned, track_names))
+        return parsed_events
 
     data = pathlib.Path(path).read_bytes()
     interned = {

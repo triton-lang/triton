@@ -1096,19 +1096,18 @@ def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, output_form
                 ("ROOT", "scope_3", "scope_6", "scope_7"),
             }
 
-    if output_format == "chrome_trace":
-        flow_events = [event for event in trace_events if event["category"] == "flow"]
-        assert len(flow_events) == 8
-        gpu_tid = kernel_events[0]["track_id"]
-        cpu_tid = metric_by_name["m1"]["track_id"]
-        flow_starts = {event["id"]: event for event in flow_events if event["phase"] == "s"}
-        flow_finishes = {event["id"]: event for event in flow_events if event["phase"] == "f"}
-        assert set(flow_starts) == set(flow_finishes)
-        assert len(flow_starts) == 4
-        assert all(event["name"] == "launch->kernel" and event["bp"] == "e" and event["track_id"] == cpu_tid
-                   for event in flow_starts.values())
-        assert all(event["name"] == "launch->kernel" and event["bp"] == "e" and event["track_id"] == gpu_tid
-                   for event in flow_finishes.values())
+    flow_events = [event for event in trace_events if event["category"] == "flow"]
+    assert len(flow_events) == 8
+    gpu_tid = kernel_events[0]["track_id"]
+    cpu_tid = metric_by_name["m1"]["track_id"]
+    flow_starts = {event["id"]: event for event in flow_events if event["phase"] == "s"}
+    flow_finishes = {event["id"]: event for event in flow_events if event["phase"] == "f"}
+    assert set(flow_starts) == set(flow_finishes)
+    assert len(flow_starts) == 4
+    assert all(event["name"] == "launch->kernel" and event["bp"] == "e" and event["track_id"] == cpu_tid
+               for event in flow_starts.values())
+    assert all(event["name"] == "launch->kernel" and event["bp"] == "e" and event["track_id"] == gpu_tid
+               for event in flow_finishes.values())
 
 
 @pytest.mark.parametrize("output_format", ["chrome_trace", "perfetto_trace"])
@@ -1201,24 +1200,21 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, output_forma
     assert metric_kernel_events[0]["call_stack"] == ["ROOT", "test0", "<captured_at>", "a", "b", "c", "<metric>"]
     assert all(event["name"] not in {"foo", "<metric>"} for event in metadata_kernel_events)
 
-    if output_format == "chrome_trace":
-        test0_scope = next(event for event in trace_events
-                           if event["category"] == "scope" and event["call_stack"] == ["ROOT", "test0"])
-        replay_kernel_points = {(event["track_id"], event["timestamp"]) for event in replay_kernel_events}
-        flow_events = [
-            event for event in trace_events if event["category"] == "flow" and event["name"] == "launch->kernel"
-        ]
-        flow_starts = [
-            event for event in flow_events if event["phase"] == "s" and event["track_id"] == test0_scope["track_id"]
-            and event["timestamp"] == test0_scope["timestamp"]
-        ]
-        flow_finishes = [
-            event for event in flow_events
-            if event["phase"] == "f" and (event["track_id"], event["timestamp"]) in replay_kernel_points
-        ]
-        assert any(start["id"] == finish["id"] and start["timestamp"] <= finish["timestamp"]
-                   for start in flow_starts
-                   for finish in flow_finishes)
+    test0_scope = next(event for event in trace_events
+                       if event["category"] == "scope" and event["call_stack"] == ["ROOT", "test0"])
+    replay_kernel_points = {(event["track_id"], event["timestamp"]) for event in replay_kernel_events}
+    flow_events = [event for event in trace_events if event["category"] == "flow" and event["name"] == "launch->kernel"]
+    flow_starts = [
+        event for event in flow_events if event["phase"] == "s" and event["track_id"] == test0_scope["track_id"]
+        and event["timestamp"] == test0_scope["timestamp"]
+    ]
+    flow_finishes = [
+        event for event in flow_events
+        if event["phase"] == "f" and (event["track_id"], event["timestamp"]) in replay_kernel_points
+    ]
+    assert any(start["id"] == finish["id"] and start["timestamp"] <= finish["timestamp"]
+               for start in flow_starts
+               for finish in flow_finishes)
 
 
 @pytest.mark.parametrize("profile_kind,output_format,suffix", [
