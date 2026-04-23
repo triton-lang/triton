@@ -1,5 +1,5 @@
-#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -1041,9 +1041,8 @@ Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
 Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc, Value base,
                            RankedTensorType tensorTy, int64_t stride0,
                            int64_t stride1) {
-  auto ptrTensor =
-      createPointerTensorStrided2D(rewriter, loc, base, tensorTy, stride0,
-                                   stride1);
+  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, tensorTy,
+                                                stride0, stride1);
   return tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
                             EvictionPolicy::NORMAL, false);
 }
@@ -1058,9 +1057,8 @@ Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
                                  Value base, Value tensor,
                                  RankedTensorType tensorTy, int64_t stride0,
                                  int64_t stride1) {
-  auto ptrTensor =
-      createPointerTensorStrided2D(rewriter, loc, base, tensorTy, stride0,
-                                   stride1);
+  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, tensorTy,
+                                                stride0, stride1);
   return tt::StoreOp::create(rewriter, loc, ptrTensor, tensor,
                              CacheModifier::NONE, EvictionPolicy::NORMAL);
 }
@@ -1275,8 +1273,7 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
     RankedTensorType accTileTy, ttg::DistributedEncodingTrait accLayout,
     IntegerType accElem, Value useDInt, Value predInt, int64_t aStride,
     int64_t bStride, int64_t dStride, const DotScaleConfig &scale = {},
-    int64_t aRowStride = 1, int64_t bRowStride = 1,
-    int64_t dRowStride = 1) {
+    int64_t aRowStride = 1, int64_t bRowStride = 1, int64_t dRowStride = 1) {
   if ((m % tileM) != 0 || (n % tileN) != 0)
     return std::nullopt;
 
@@ -1315,8 +1312,7 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
 
   Value mDOffset =
       arith::MulIOp::create(rewriter, loc, mIdxI32, dRowStrideConst);
-  Value nDOffset =
-      arith::MulIOp::create(rewriter, loc, nIdxI32, dStrideConst);
+  Value nDOffset = arith::MulIOp::create(rewriter, loc, nIdxI32, dStrideConst);
   Value dOffset = arith::AddIOp::create(rewriter, loc, mDOffset, nDOffset);
   Value dTilePtr =
       tt::AddPtrOp::create(rewriter, loc, dPtr.getType(), dPtr, dOffset);
@@ -1366,8 +1362,7 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
       tt::AddPtrOp::create(rewriter, loc, aPtr.getType(), aTilePtr, aOffset);
   Value aSlice = loadScratchStrided2D(rewriter, loc, aSlicePtr, aSliceTy,
                                       aRowStride, aStride);
-  Value bKOffset =
-      arith::MulIOp::create(rewriter, loc, bKIdx, bRowStrideConst);
+  Value bKOffset = arith::MulIOp::create(rewriter, loc, bKIdx, bRowStrideConst);
   Value bSlicePtr =
       tt::AddPtrOp::create(rewriter, loc, bPtr.getType(), bTilePtr, bKOffset);
   Value bSlice = loadScratchStrided2D(rewriter, loc, bSlicePtr, bSliceTy,
@@ -1756,45 +1751,39 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
         return emitFpSanUnsupported(op.getOperation());
       rewriter.setInsertionPointAfter(*mLoop);
     } else {
-      Value zero = arith::ConstantOp::create(
-          rewriter, loc, rewriter.getI32IntegerAttr(0));
+      Value zero = arith::ConstantOp::create(rewriter, loc,
+                                             rewriter.getI32IntegerAttr(0));
       Value batchUpper = arith::ConstantOp::create(
           rewriter, loc, rewriter.getI32IntegerAttr(batch));
-      Value one = arith::ConstantOp::create(
-          rewriter, loc, rewriter.getI32IntegerAttr(1));
-      auto batchLoop =
-          scf::ForOp::create(rewriter, loc, zero, batchUpper, one);
+      Value one = arith::ConstantOp::create(rewriter, loc,
+                                            rewriter.getI32IntegerAttr(1));
+      auto batchLoop = scf::ForOp::create(rewriter, loc, zero, batchUpper, one);
       rewriter.setInsertionPointToStart(batchLoop.getBody());
-      Value batchIdx =
-          arith::IndexCastOp::create(rewriter, loc, rewriter.getI32Type(),
-                                     batchLoop.getInductionVar());
+      Value batchIdx = arith::IndexCastOp::create(
+          rewriter, loc, rewriter.getI32Type(), batchLoop.getInductionVar());
       Value aBatchOffset = arith::MulIOp::create(
           rewriter, loc, batchIdx,
-          arith::ConstantOp::create(
-              rewriter, loc, rewriter.getI32IntegerAttr(aBatchStride)));
+          arith::ConstantOp::create(rewriter, loc,
+                                    rewriter.getI32IntegerAttr(aBatchStride)));
       Value bBatchOffset = arith::MulIOp::create(
           rewriter, loc, batchIdx,
-          arith::ConstantOp::create(
-              rewriter, loc, rewriter.getI32IntegerAttr(bBatchStride)));
+          arith::ConstantOp::create(rewriter, loc,
+                                    rewriter.getI32IntegerAttr(bBatchStride)));
       Value dBatchOffset = arith::MulIOp::create(
           rewriter, loc, batchIdx,
-          arith::ConstantOp::create(
-              rewriter, loc, rewriter.getI32IntegerAttr(dBatchStride)));
-      Value aBatchPtr =
-          tt::AddPtrOp::create(rewriter, loc, aPtr.getType(), aPtr,
-                               aBatchOffset);
-      Value bBatchPtr =
-          tt::AddPtrOp::create(rewriter, loc, bPtr.getType(), bPtr,
-                               bBatchOffset);
-      Value dBatchPtr =
-          tt::AddPtrOp::create(rewriter, loc, dPtr.getType(), dPtr,
-                               dBatchOffset);
+          arith::ConstantOp::create(rewriter, loc,
+                                    rewriter.getI32IntegerAttr(dBatchStride)));
+      Value aBatchPtr = tt::AddPtrOp::create(rewriter, loc, aPtr.getType(),
+                                             aPtr, aBatchOffset);
+      Value bBatchPtr = tt::AddPtrOp::create(rewriter, loc, bPtr.getType(),
+                                             bPtr, bBatchOffset);
+      Value dBatchPtr = tt::AddPtrOp::create(rewriter, loc, dPtr.getType(),
+                                             dPtr, dBatchOffset);
       auto mLoop = emitMmaEmulationLoops(
-          rewriter, loc, aBatchPtr, bBatchPtr, dBatchPtr, m, n, k, tileM,
-          tileN, aTileTy, bTileTy, accTileTy, accLayout, accElem, useDInt,
-          predInt, /*aStride=*/aKStride, /*bStride=*/bNStride,
-          /*dStride=*/dNStride, /*scale=*/{}, aRowStride, bKStride,
-          dRowStride);
+          rewriter, loc, aBatchPtr, bBatchPtr, dBatchPtr, m, n, k, tileM, tileN,
+          aTileTy, bTileTy, accTileTy, accLayout, accElem, useDInt, predInt,
+          /*aStride=*/aKStride, /*bStride=*/bNStride,
+          /*dStride=*/dNStride, /*scale=*/{}, aRowStride, bKStride, dRowStride);
       if (!mLoop)
         return emitFpSanUnsupported(op.getOperation());
       rewriter.setInsertionPointAfter(batchLoop);
@@ -2546,8 +2535,8 @@ public:
     patterns.add<WarpGroupDotPattern>(&getContext());
     patterns.add<TCGen5CommitPattern>(&getContext());
 
-    LogicalResult result = applyPatternsGreedily(getOperation(),
-                                                 std::move(patterns));
+    LogicalResult result =
+        applyPatternsGreedily(getOperation(), std::move(patterns));
     if (failed(result)) {
       llvm::errs() << "FpSanitizer error: Failed to apply patterns\n";
       signalPassFailure();
