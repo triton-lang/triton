@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 
@@ -32,6 +33,25 @@
 
 using namespace mlir;
 using namespace mlir::triton::nvws;
+
+static int getSemaphoreDepthFromBaseType(Type type) {
+  if (auto memTy = dyn_cast<triton::gpu::MemDescType>(type)) {
+    if (isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+            memTy.getEncoding()))
+      return 1;
+    auto shape = memTy.getShape();
+    if (shape.empty())
+      return -1;
+    return shape.front();
+  }
+  if (auto rankedTy = dyn_cast<RankedTensorType>(type)) {
+    auto shape = rankedTy.getShape();
+    if (shape.empty())
+      return -1;
+    return shape.front();
+  }
+  return -1;
+}
 
 void mlir::triton::nvws::NVWSDialect::initialize() {
   addAttributes<
@@ -55,3 +75,33 @@ void mlir::triton::nvws::NVWSDialect::initialize() {
 
 #define GET_TYPEDEF_CLASSES
 #include "Dialect/NVWS/IR/Types.cpp.inc"
+
+LogicalResult
+SemaphoreType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
+                      TypeArrayAttr baseType) {
+  int inferredNumStages = 1;
+  for (Type baseTy : baseType) {
+    int depth = getSemaphoreDepthFromBaseType(baseTy);
+    if (depth <= 1)
+      continue;
+    if (inferredNumStages == 1) {
+      inferredNumStages = depth;
+      continue;
+    }
+    if (inferredNumStages != depth) {
+      return emitError() << "inconsistent semaphore baseType depths: expected "
+                         << inferredNumStages << ", got " << depth;
+    }
+  }
+  return success();
+}
+
+int SemaphoreType::getNumStages() const {
+  int inferredNumStages = 1;
+  for (Type baseTy : getBaseType()) {
+    int depth = getSemaphoreDepthFromBaseType(baseTy);
+    if (depth > inferredNumStages)
+      inferredNumStages = depth;
+  }
+  return inferredNumStages;
+}

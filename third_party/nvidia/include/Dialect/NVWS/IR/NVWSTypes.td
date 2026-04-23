@@ -31,19 +31,20 @@ class NVWS_TypeDef<string name, string _mnemonic, list<Trait> traits = []>
     let mnemonic = _mnemonic;
 }
 
-def NVWS_ArefType : NVWS_TypeDef<"Aref", "aref"> {
-  let summary = "Asynchronous Reference";
+def NVWS_SemaphoreType : NVWS_TypeDef<"Semaphore", "semaphore"> {
+  let summary = "Semaphore with embedded buffer type";
   let description = [{
-        A meta-type that holds an asynchronous reference to an underlying Type.
-
-        Can wrap multiple underlying values simultaneously.
-
-        Useful for syncing asynchronous operations while doing transformations such
-        as pipelining and warp specialization. Lowers to the underlying type, and
-        operations that use this should insert appropriate barriers during lowering.
-    }];
+    A semaphore guards access to a multi-buffered allocation. It embeds the
+    buffer types, and infers the number of pipeline stages from their leading
+    dimension. Multiple semaphores can share the same buffer and will use a
+    shared stage counter.
+  }];
   let parameters = (ins "TypeArrayAttr":$baseType);
   let assemblyFormat = "`<` $baseType `>`";
+  let extraClassDeclaration = [{
+    int getNumStages() const;
+  }];
+  let genVerifyDecl = 1;
 }
 
 def NVWS_TokenType : NVWS_TypeDef<"Token", "token">;

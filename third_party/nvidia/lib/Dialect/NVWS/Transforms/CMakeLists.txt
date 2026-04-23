@@ -1,10 +1,10 @@
 add_triton_library(NVWSTransforms
+  AssignStagePhase.cpp
   LowerAref.cpp
   LowerWarpGroup.cpp
-  InsertAref.cpp
+  InsertSemaphore.cpp
   Utilities.cpp
-  AssignStagePhase.cpp
-  InsertTmemAref.cpp
+  InsertTmemSemaphore.cpp
   HoistTmemStore.cpp
 
   DEPENDS

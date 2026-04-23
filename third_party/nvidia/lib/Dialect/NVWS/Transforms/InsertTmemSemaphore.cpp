@@ -4,6 +4,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Visitors.h"
 #include "mlir/Support/DebugStringHelper.h"
 #include "mlir/Transforms/Passes.h"
@@ -25,10 +26,10 @@
 namespace mlir {
 namespace triton {
 
-#define GEN_PASS_DEF_NVWSINSERTTMEMAREF
+#define GEN_PASS_DEF_NVWSINSERTTMEMSEMAPHORE
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
 
-#define DEBUG_TYPE "nvws-insert-tmem-aref"
+#define DEBUG_TYPE "nvws-insert-tmem-semaphore"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -387,66 +388,51 @@ OpT createInto(
   return op;
 }
 
-struct TMEMAref {
-  enum Kind { PUT, GET };
+struct TMEMSemaphore {
+  enum Kind { PING, PONG };
 
-  TMEMAref(Value aref, Value origBuffer, Value replToken)
-      : aref(aref), origBuffer(origBuffer), replToken(replToken), kind(PUT) {}
+  TMEMSemaphore(Value ping, Value pong, Value allocBuf, Value origBuffer,
+                Value replToken)
+      : ping(ping), pong(pong), allocBuf(allocBuf), origBuffer(origBuffer),
+        replToken(replToken), kind(PING) {}
 
   void acquire(OpBuilder &b, Location loc,
                std::pair<std::optional<PartitionId>, StageCluster>
-                   paritionIdStageCluster) {
-    auto arefBufType =
-        cast<MemDescType>(aref.getDefiningOp()->getOperand(0).getType());
-    Type dataBufType = getArefViewBufferType(arefBufType);
-    SmallVector<Type> buffers{dataBufType};
-    SmallVector<Type> tokens{b.getType<AsyncTokenType>()};
-    if (kind == PUT) {
-      auto op =
-          createInto<ArefPutEnterOp>(b, loc, paritionIdStageCluster, aref,
-                                     buffers, b.getType<AsyncTokenType>());
-      token = op.getToken();
-    } else {
-      auto op =
-          createInto<ArefGetEnterOp>(b, loc, paritionIdStageCluster, aref,
-                                     buffers, b.getType<AsyncTokenType>());
-      token = op.getToken();
-    }
-    partitionId = paritionIdStageCluster.first;
+                   partitionIdStageCluster) {
+    Value sem = (kind == PING) ? ping : pong;
+    auto op = createInto<SemaphoreAcquireOp>(b, loc, partitionIdStageCluster,
+                                             sem, b.getType<AsyncTokenType>());
+    token = op.getToken();
+    partitionId = partitionIdStageCluster.first;
     if (partitionId)
-      stageClusters[*partitionId] = paritionIdStageCluster.second;
+      stageClusters[*partitionId] = partitionIdStageCluster.second;
     buffer = {};
   }
+
   void release(OpBuilder &b, Location loc) {
     assert(asyncOp[partitionId]);
     StageCluster stageCluster;
     if (partitionId)
       stageCluster = stageClusters[*partitionId];
-    if (kind == PUT) {
-      createInto<ArefPutExitOp>(
-          b, loc, {partitionId, stageCluster}, aref, token,
-          b.getArrayAttr(SmallVector<Attribute>{
-              AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
-      kind = GET;
-    } else {
-      createInto<ArefGetExitOp>(
-          b, loc, {partitionId, stageCluster}, aref, token,
-          b.getArrayAttr(SmallVector<Attribute>{
-              AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
-      kind = PUT;
-    }
+    // Cross-release: PING releases pong, PONG releases ping.
+    Value sem = (kind == PING) ? pong : ping;
+    createInto<SemaphoreReleaseOp>(
+        b, loc, {partitionId, stageCluster}, sem, token,
+        b.getArrayAttr(SmallVector<Attribute>{
+            AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
+    // Toggle kind
+    kind = (kind == PING) ? PONG : PING;
   }
-  Value getBuffer(OpBuilder &b, std::optional<PartitionId> partitionId,
-                  Operation *op) {
+
+  Value getBuffer(OpBuilder &b, std::optional<PartitionId> pid, Operation *op) {
     if (!buffer) {
       auto stageCluster = getStageCluster(op);
-      auto arefBufType =
-          cast<MemDescType>(aref.getDefiningOp()->getOperand(0).getType());
-      Type dataBufType = getArefViewBufferType(arefBufType);
-      SmallVector<Type> buffers{dataBufType};
-      auto bufferOp = createInto<ArefBufferOp>(
-          b, op->getLoc(), {partitionId, stageCluster}, aref, buffers, token);
-
+      auto bufType = cast<MemDescType>(allocBuf.getType());
+      Type dataBufType = getSemaphoreViewBufferType(bufType);
+      Value sem = (kind == PING) ? ping : pong;
+      auto bufferOp =
+          createInto<SemaphoreBufferOp>(b, op->getLoc(), {pid, stageCluster},
+                                        sem, TypeRange{dataBufType}, token);
       buffer = bufferOp.getBuffers()[0];
     }
     return buffer;
@@ -454,8 +440,10 @@ struct TMEMAref {
 
   // --------------------------------------------------------------------------
 
+  Value ping;     // semaphore: initially released
+  Value pong;     // semaphore: initially not released
+  Value allocBuf; // underlying TMEM buffer allocation
   Value origBuffer;
-  Value aref;
   Value replToken;
 
   Value buffer;
@@ -467,8 +455,9 @@ struct TMEMAref {
 };
 
 TmemAccessDag::Node *
-insertTmemArefImpl(TmemAccessDag::Node *node,
-                   std::optional<PartitionId> curPartitionId, TMEMAref &state) {
+insertTmemSemaphoreImpl(TmemAccessDag::Node *node,
+                        std::optional<PartitionId> curPartitionId,
+                        TMEMSemaphore &state) {
   // When entering a warp-specialized loop, curPartitionId is std::nullopt.
   // We skip ownership changes here since there's an implicit synchronization
   // barrier when entering the ws-loop that handles the transition safely.
@@ -517,7 +506,7 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
         subdagState.buffer = {};
       }
     }
-    insertTmemArefImpl(subDag.get(), node->partitionId, subdagState);
+    insertTmemSemaphoreImpl(subDag.get(), node->partitionId, subdagState);
 
     // subDag may change asyncOp value, update it after inserting arefs
     state.asyncOp = subdagState.asyncOp;
@@ -572,7 +561,7 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
   }
 
   if (node->user)
-    return insertTmemArefImpl(node->user.get(), node->partitionId, state);
+    return insertTmemSemaphoreImpl(node->user.get(), node->partitionId, state);
   return node;
 }
 
@@ -658,7 +647,7 @@ bool hasProducerConsumerPartitioning(TmemAccessDag &accessDag) {
   return valid;
 }
 
-int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
+int insertTmemSemaphore(TmemAccessDag &accessDag, int numTmemBlocks) {
   auto rootNode = accessDag.getRootNode();
   auto allocOp = cast<TMEMAllocOp>(rootNode->op);
 
@@ -688,8 +677,8 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
   // update numTmemBlocks for the number of TMEM blocks used by the aref buffer
   auto allocShape = allocOp.getType().getShape();
   numTmemBlocks += allocShape[0] * allocShape[1] * numStages;
-  auto arefBufType =
-      getArefMultiBufferedType(allocOp.getResult().getType(), numStages);
+  auto semBufType =
+      getSemaphoreMultiBufferedType(allocOp.getResult().getType(), numStages);
   OpBuilder b(allocOp);
 
   // alloc can be inside ws-loop, we need to find the entry point for ws-loop
@@ -698,10 +687,17 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
     outerWsLoop = outerWsLoop->getParentOfType<scf::ForOp>();
   if (outerWsLoop)
     b.setInsertionPoint(outerWsLoop);
-  auto arefAlloc =
-      cast<TMEMAllocOp>(createAlloc(b, allocOp.getLoc(), arefBufType, Value()));
-  auto arefOp = createArefCreateOp(b, {arefBufType}, {arefAlloc->getResult(0)},
-                                   allocOp.getLoc());
+
+  auto semAlloc =
+      cast<TMEMAllocOp>(createAlloc(b, allocOp.getLoc(), semBufType, Value()));
+
+  // Create ping/pong semaphore pair.
+  auto baseTypes = TypeArrayAttr::get(b.getContext(), {semBufType});
+  auto semaTy = SemaphoreType::get(b.getContext(), baseTypes);
+  auto pingSem = SemaphoreCreateOp::create(b, allocOp.getLoc(), semaTy,
+                                           semAlloc->getResults(), true);
+  auto pongSem = SemaphoreCreateOp::create(b, allocOp.getLoc(), semaTy,
+                                           semAlloc->getResults(), false);
 
   auto stageCluster = getStageCluster(allocOp);
   auto partitionId = accessDag.getRootNode()->partitionId;
@@ -710,8 +706,8 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
     partitionId = accessDag.getRootNode()->user->partitionId;
   }
 
-  TMEMAref state(
-      arefOp, allocOp.getResult(),
+  TMEMSemaphore state(
+      pingSem, pongSem, semAlloc->getResult(0), allocOp.getResult(),
       ub::PoisonOp::create(b, allocOp.getLoc(), b.getType<AsyncTokenType>()));
   b.setInsertionPoint(allocOp);
   state.acquire(b, allocOp.getLoc(), {partitionId, stageCluster});
@@ -739,7 +735,7 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
     // partitionId = accessDag.getRootNode()->user->partitionId;
   }
 
-  auto node = insertTmemArefImpl(rootNode->user.get(), partitionId, state);
+  auto node = insertTmemSemaphoreImpl(rootNode->user.get(), partitionId, state);
 
   if (outerWsLoop) {
     // aref is only used inside ws-loop, so we use the last op to insert
@@ -748,18 +744,18 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
   } else {
     // aref is used outside ws-loop, find the last point in the same block as
     // create op to have matching exit
-    auto op1 = arefOp->getBlock()->findAncestorOpInBlock(*node->op);
+    auto op1 = pingSem->getBlock()->findAncestorOpInBlock(*node->op);
     if (auto id = node->partitionId)
       state.stageClusters[*id] = {};
     b.setInsertionPointAfter(op1);
   }
   state.release(b, node->op->getLoc());
 
-  if (state.kind == TMEMAref::GET) {
-    // When the state ends up in a GET operation, we need to acquire and release
+  if (state.kind == TMEMSemaphore::PONG) {
+    // When the state ends up in PONG operation, we need to acquire and release
     // the corresponding partition to prevent deadlocks. This is necessary
     // because if we're inside an outer loop, re-entering the loop without
-    // posting a matching GET operation for the PUT would cause the dead-lock.
+    // posting a matching PONG operation for the PING would cause the dead-lock.
     auto [hasRootPartition, partitions] = accessDag.collectPartitionsSet();
     std::optional<PartitionId> otherPartitionId;
     // since we only have two partition, we just pick the other partition for
@@ -782,21 +778,21 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
   funcOp.walk([&](scf::IfOp ifOp) {
     auto firstOp = &*ifOp.thenBlock()->begin();
     auto lastOp = ifOp.thenBlock()->getTerminator()->getPrevNode();
-    if (isa<ArefPutExitOp>(firstOp) && isa<ArefPutEnterOp>(lastOp)) {
+    if (isa<SemaphoreReleaseOp>(firstOp) && isa<SemaphoreAcquireOp>(lastOp)) {
       ifs.push_back(ifOp);
     }
   });
 
-  // Transform if-statements that contain aref put.exit/put.enter pairs to work
+  // Transform if-statements that contain sema.acquire/release pairs to work
   // around loop scheduler limitations. The transformation splits a single if-op
   // with token-producing operations into three separate if-ops to ensure proper
   // scheduling and token handling.
   //
   // Original pattern:
   //   %results, %token, %more = scf.if %condition {
-  //     aref.put.exit                    // Release tensor memory
+  //     sema.release                     // Release tensor memory
   //     <computation_code>               // User computation
-  //     %new_token = aref.put.enter      // Acquire tensor memory
+  //     %new_token = sema.acquire        // Acquire tensor memory
   //     scf.yield %values, %new_token, %other_values
   //   } else {
   //     scf.yield %alt_values, %old_token, %alt_other_values
@@ -805,7 +801,7 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
   //
   // Transformed pattern:
   //   scf.if %condition {
-  //     aref.put.exit                    // Separate exit operation
+  //     sema.release                    // Separate release operation
   //   } { .. loop.stage = 1, ttg.partition = {1}, ttg.partition.outputs = [] }
   //   %results, %poison_tok, %more = scf.if %condition {
   //     <computation_code>               // Main computation without token ops
@@ -814,7 +810,7 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
   //     scf.yield %alt_values, %poison_tok, %alt_other_values
   //   } {.. ttg.partition = {0}, ttg.partition.outputs = [{0}, {0}, {0}, ..]}
   //   %token = scf.if %condition {
-  //     %new_token = aref.put.enter      // Separate enter operation
+  //     %new_token = sema.acquire       // Separate acquire operation
   //     scf.yield %new_token
   //   } else {
   //     scf.yield %old_token
@@ -825,24 +821,24 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
   for (auto ifOp : ifs) {
     ImplicitLocOpBuilder b(ifOp.getLoc(), ifOp);
 
-    // move putExitOp
+    // move releaseOp
     b.setInsertionPoint(ifOp);
     auto exitIf =
         scf::IfOp::create(b, SmallVector<Type>{}, ifOp.getCondition(), false);
-    auto putExitOp = cast<ArefPutExitOp>(*ifOp.thenBlock()->begin());
-    putExitOp->moveBefore(exitIf.thenBlock(), exitIf.thenBlock()->begin());
+    auto releaseOp = cast<SemaphoreReleaseOp>(*ifOp.thenBlock()->begin());
+    releaseOp->moveBefore(exitIf.thenBlock(), exitIf.thenBlock()->begin());
 
-    // move putEnterOp
+    // move acquireOp
     b.setInsertionPointAfter(ifOp);
     auto enterIf =
         scf::IfOp::create(b, SmallVector<Type>{b.getType<AsyncTokenType>()},
                           ifOp.getCondition(), true);
-    auto putEnterOp =
-        cast<ArefPutEnterOp>(ifOp.thenBlock()->getTerminator()->getPrevNode());
-    putEnterOp->moveBefore(enterIf.thenBlock(), enterIf.thenBlock()->begin());
+    auto acquireOp = cast<SemaphoreAcquireOp>(
+        ifOp.thenBlock()->getTerminator()->getPrevNode());
+    acquireOp->moveBefore(enterIf.thenBlock(), enterIf.thenBlock()->begin());
 
     // replace token uses
-    auto tok = putEnterOp.getToken();
+    auto tok = acquireOp.getToken();
     auto pos = *findValuePosInRange(ifOp.thenYield()->getOperands(), tok);
     ifOp.getResult(pos).replaceAllUsesWith(enterIf.getResult(0));
 
@@ -852,7 +848,7 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     b.setInsertionPointToEnd(enterIf.elseBlock());
     scf::YieldOp::create(b, ifOp.elseYield().getOperand(pos));
 
-    // invalid tokens in main ifOp
+    // invalidate tokens in main ifOp
     b.setInsertionPoint(ifOp);
     auto poisonToken = ub::PoisonOp::create(b, b.getType<AsyncTokenType>());
     ifOp.thenYield().setOperand(pos, poisonToken);
@@ -861,8 +857,8 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     // patch loop.stage=1
     enterIf->setAttrs(ifOp->getAttrs());
     exitIf->setAttrs(ifOp->getAttrs());
-    assignStage(b, enterIf, getStageCluster(putEnterOp));
-    assignStage(b, exitIf, getStageCluster(putExitOp));
+    assignStage(b, enterIf, getStageCluster(acquireOp));
+    assignStage(b, exitIf, getStageCluster(releaseOp));
 
     SetVector<int> enterExitIds, middleIds;
     enterExitIds.insert(1);
@@ -903,7 +899,7 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
     assert(partitions.size() <= 2 && "expecting at most 2 partitions");
     auto totalOwners = hasRootPartition + partitions.size();
     if (totalOwners > 1) {
-      numTmemBlocks = insertTmemAref(accessDag, numTmemBlocks);
+      numTmemBlocks = insertTmemSemaphore(accessDag, numTmemBlocks);
     }
   }
 
@@ -914,8 +910,9 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
 
 } // namespace
 
-class NVWSTmemArefInsertion
-    : public triton::impl::NVWSInsertTmemArefBase<NVWSTmemArefInsertion> {
+class NVWSInsertTmemSemaphore
+    : public triton::impl::NVWSInsertTmemSemaphoreBase<
+          NVWSInsertTmemSemaphore> {
 public:
   void runOnOperation() override {
     getOperation().walk([&](triton::FuncOp funcOp) {

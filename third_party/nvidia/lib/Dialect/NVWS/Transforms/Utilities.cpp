@@ -19,21 +19,14 @@ Operation *createAlloc(OpBuilder &builder, Location loc,
   }
 }
 
-ArefCreateOp createArefCreateOp(OpBuilder &builder, ArrayRef<Type> arefTypes,
-                                ValueRange allocOps, Location loc) {
-  auto ctx = builder.getContext();
-  auto arefTy = ArefType::get(ctx, TypeArrayAttr::get(ctx, arefTypes));
-  return ArefCreateOp::create(builder, loc, arefTy, allocOps);
-}
-
-int getArefDepth(MemDescType bufTy) {
+int getSemaphoreDepth(MemDescType bufTy) {
   auto shape = bufTy.getShape();
   return isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding())
              ? 1
              : shape[0];
 }
 
-MemDescType getArefViewBufferType(MemDescType bufTy) {
+MemDescType getSemaphoreViewBufferType(MemDescType bufTy) {
   auto isScalesEnc =
       isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding());
   auto shape = bufTy.getShape();
@@ -44,7 +37,7 @@ MemDescType getArefViewBufferType(MemDescType bufTy) {
                                /*allocShape=*/bufTy.getAllocShape());
 }
 
-MemDescType getArefMultiBufferedType(MemDescType bufTy, int depth) {
+MemDescType getSemaphoreMultiBufferedType(MemDescType bufTy, int depth) {
   auto shape = bufTy.getShape();
   SmallVector<int64_t> bufferShape(shape.begin(), shape.end());
   if (!isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding()))
