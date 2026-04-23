@@ -13,6 +13,7 @@ from typing import NamedTuple
 import pathlib
 import threading
 
+from perfetto_trace_parser import parse_perfetto_trace
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
@@ -84,68 +85,7 @@ def _chrome_trace_to_python(path: pathlib.Path | str):
 
 
 def _perfetto_trace_to_python(path: pathlib.Path | str):
-    import perfetto.trace_processor as trace_processor
-    TraceProcessor = trace_processor.TraceProcessor
-    path = str(path)
-
-    def _arg_value(row):
-        if row.string_value is not None:
-            return row.string_value
-        if row.int_value is not None:
-            return row.int_value
-        if row.real_value is not None:
-            return row.real_value
-        return None
-
-    with TraceProcessor(trace=path) as tp:
-        slices = list(
-            tp.query("""
-                SELECT slice.id, slice.ts, slice.name, slice.category, slice.arg_set_id, track.name AS track_name
-                FROM slice
-                JOIN track ON slice.track_id = track.id
-                ORDER BY slice.ts, slice.id
-                """))
-        arg_set_ids = sorted({row.arg_set_id for row in slices if row.arg_set_id is not None})
-        arg_set_filter = ",".join(str(arg_set_id) for arg_set_id in arg_set_ids)
-        arg_rows = []
-        if arg_set_filter:
-            arg_rows = list(
-                tp.query(f"""
-                    SELECT arg_set_id, flat_key, key, string_value, int_value, real_value
-                    FROM args
-                    WHERE arg_set_id IN ({arg_set_filter})
-                      AND (
-                        flat_key GLOB 'debug.call_stack_*' OR key GLOB 'call_stack_*'
-                        OR flat_key GLOB 'debug.metric.*' OR key GLOB 'metric.*'
-                      )
-                    ORDER BY arg_set_id, flat_key, key
-                    """))
-
-    args_by_arg_set = {}
-    for row in arg_rows:
-        arg_key = row.flat_key if row.flat_key is not None else row.key
-        if arg_key is None:
-            continue
-        args_by_arg_set.setdefault(row.arg_set_id, {})[arg_key] = _arg_value(row)
-
-    track_events = []
-    for row in slices:
-        args = args_by_arg_set.get(row.arg_set_id, {})
-        call_stack = []
-        for arg_key, arg_value in args.items():
-            key = arg_key.split(".")[-1]
-            if not key.startswith("call_stack_"):
-                continue
-            frame_index = int(key.removeprefix("call_stack_"))
-            call_stack.append((frame_index, arg_value))
-        normalized_call_stack = None
-        if call_stack:
-            call_stack.sort(key=lambda item: item[0])
-            normalized_call_stack = [frame_name for _, frame_name in call_stack]
-        event = _normalize_trace_event(row.name, row.category, row.track_name, normalized_call_stack, args)
-        track_events.append(event)
-
-    return {"track_events": track_events}
+    return parse_perfetto_trace(path, _normalize_trace_event)
 
 
 def _trace_to_python(path: pathlib.Path | str, output_format: str):
