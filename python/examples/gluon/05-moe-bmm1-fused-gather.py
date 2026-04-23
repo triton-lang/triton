@@ -254,6 +254,8 @@ class PartitionArgs:
     X_GATHER_MULTICAST: gl.constexpr
     W_SCALE_MULTICAST: gl.constexpr
     FORCE_EPILOGUE_WARPS_N1: gl.constexpr
+    REUSE_GATHER_INDICES: gl.constexpr
+    INLINE_MMA_INPUT_RELEASE: gl.constexpr
 
     @gluon.jit
     def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
@@ -280,38 +282,83 @@ def load_activations(p: PartitionArgs):
     phase = 1
     issued = 0
 
-    for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        pid_m, _, slice_idx, slice_offset = p.apply_block_schedule(block_id)
-        off_m = pid_m * p.BLOCK_M
-        shape_m = gl.load(p.x_slice_sizes + slice_idx)
-        offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=offs_layout)
-        mask_m = offs_m < shape_m
-        offs_x_m = gl.load(
-            p.gather_indx_ptr + slice_offset + offs_m,
-            mask=mask_m,
-            other=p.x_desc.shape[0],
-        )
+    if p.REUSE_GATHER_INDICES:
+        cached_pid_m = gl.full((), -1, dtype=gl.int32)
+        cached_slice_idx = gl.full((), -1, dtype=gl.int32)
+        cached_shape_m = gl.full((), 0, dtype=gl.int32)
+        cached_offs_x_m = gl.full((p.BLOCK_M, ), p.x_desc.shape[0], dtype=gl.int32, layout=offs_layout)
 
-        for ki in range(p.K_TILES):
-            off_k_x = ki * p.BLOCK_K
+        for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
+            pid_m, _, slice_idx, slice_offset = p.apply_block_schedule(block_id)
+            off_m = pid_m * p.BLOCK_M
+            reuse_gather = (pid_m == cached_pid_m) & (slice_idx == cached_slice_idx)
+            load_gather = ~reuse_gather
+            shape_m = gl.load(p.x_slice_sizes + slice_idx, mask=load_gather, other=cached_shape_m)
+            offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=offs_layout)
+            mask_m = (offs_m < shape_m) & load_gather
+            offs_x_m = gl.load(
+                p.gather_indx_ptr + slice_offset + offs_m,
+                mask=mask_m,
+                other=cached_offs_x_m,
+            )
+            cached_pid_m = pid_m
+            cached_slice_idx = slice_idx
+            cached_shape_m = shape_m
+            cached_offs_x_m = offs_x_m
 
-            empty_bar = p.x_empty_bars.index(idx)
-            ready_bar = p.x_ready_bars.index(idx)
-            x_buf = p.x_bufs.index(idx)
+            for ki in range(p.K_TILES):
+                off_k_x = ki * p.BLOCK_K
 
-            mbarrier.wait(empty_bar, phase, pred=issued >= p.x_num_bufs)
-            mbarrier.expect(ready_bar, tile_x_bytes)
-            tma.async_gather(
-                p.x_desc,
-                offs_x_m,
-                off_k_x,
-                ready_bar,
-                x_buf,
-                multicast=p.USE_2CTA and p.X_GATHER_MULTICAST,
+                empty_bar = p.x_empty_bars.index(idx)
+                ready_bar = p.x_ready_bars.index(idx)
+                x_buf = p.x_bufs.index(idx)
+
+                mbarrier.wait(empty_bar, phase, pred=issued >= p.x_num_bufs)
+                mbarrier.expect(ready_bar, tile_x_bytes)
+                tma.async_gather(
+                    p.x_desc,
+                    offs_x_m,
+                    off_k_x,
+                    ready_bar,
+                    x_buf,
+                    multicast=p.USE_2CTA and p.X_GATHER_MULTICAST,
+                )
+
+                idx, phase = advance(idx, phase, p.x_num_bufs)
+                issued += 1
+    else:
+        for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
+            pid_m, _, slice_idx, slice_offset = p.apply_block_schedule(block_id)
+            off_m = pid_m * p.BLOCK_M
+            shape_m = gl.load(p.x_slice_sizes + slice_idx)
+            offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=offs_layout)
+            mask_m = offs_m < shape_m
+            offs_x_m = gl.load(
+                p.gather_indx_ptr + slice_offset + offs_m,
+                mask=mask_m,
+                other=p.x_desc.shape[0],
             )
 
-            idx, phase = advance(idx, phase, p.x_num_bufs)
-            issued += 1
+            for ki in range(p.K_TILES):
+                off_k_x = ki * p.BLOCK_K
+
+                empty_bar = p.x_empty_bars.index(idx)
+                ready_bar = p.x_ready_bars.index(idx)
+                x_buf = p.x_bufs.index(idx)
+
+                mbarrier.wait(empty_bar, phase, pred=issued >= p.x_num_bufs)
+                mbarrier.expect(ready_bar, tile_x_bytes)
+                tma.async_gather(
+                    p.x_desc,
+                    offs_x_m,
+                    off_k_x,
+                    ready_bar,
+                    x_buf,
+                    multicast=p.USE_2CTA and p.X_GATHER_MULTICAST,
+                )
+
+                idx, phase = advance(idx, phase, p.x_num_bufs)
+                issued += 1
 
 
 @gluon.jit
@@ -384,18 +431,31 @@ def mma_partition(p: PartitionArgs):
             x_buf = p.x_bufs.index(x_idx)
             mbarrier.wait(x_ready_bar, x_phase)
 
-            blackwell.tcgen05_mma_scaled(
-                w_buf.reshape((p.BLOCK_N, p.BLOCK_K // 2)),
-                x_buf.permute((1, 0)),
-                acc_buf,
-                p.w_scale_tmem,
-                p.x_scale_tmem,
-                a_type="e2m1",
-                b_type="e4m3",
-                use_acc=use_acc,
-            )
-            blackwell.tcgen05_commit(x_empty_bar)
-            blackwell.tcgen05_commit(w_empty_bar)
+            if p.INLINE_MMA_INPUT_RELEASE:
+                blackwell.tcgen05_mma_scaled(
+                    w_buf.reshape((p.BLOCK_N, p.BLOCK_K // 2)),
+                    x_buf.permute((1, 0)),
+                    acc_buf,
+                    p.w_scale_tmem,
+                    p.x_scale_tmem,
+                    a_type="e2m1",
+                    b_type="e4m3",
+                    use_acc=use_acc,
+                    mbarriers=[x_empty_bar, w_empty_bar],
+                )
+            else:
+                blackwell.tcgen05_mma_scaled(
+                    w_buf.reshape((p.BLOCK_N, p.BLOCK_K // 2)),
+                    x_buf.permute((1, 0)),
+                    acc_buf,
+                    p.w_scale_tmem,
+                    p.x_scale_tmem,
+                    a_type="e2m1",
+                    b_type="e4m3",
+                    use_acc=use_acc,
+                )
+                blackwell.tcgen05_commit(x_empty_bar)
+                blackwell.tcgen05_commit(w_empty_bar)
 
             x_idx, x_phase = advance(x_idx, x_phase, p.x_num_bufs)
             w_idx, w_phase = advance(w_idx, w_phase, p.w_num_bufs)
@@ -624,6 +684,8 @@ def ws_matmul_kernel(
     X_GATHER_MULTICAST: gl.constexpr,
     W_SCALE_MULTICAST: gl.constexpr,
     FORCE_EPILOGUE_WARPS_N1: gl.constexpr,
+    REUSE_GATHER_INDICES: gl.constexpr,
+    INLINE_MMA_INPUT_RELEASE: gl.constexpr,
     SCALE_SIZE_OUTER: gl.constexpr,
     SCALE_SIZE_INNER: gl.constexpr,
     MXFP_BLOCK_SIZE: gl.constexpr,
@@ -747,6 +809,8 @@ def ws_matmul_kernel(
         X_GATHER_MULTICAST=X_GATHER_MULTICAST,
         W_SCALE_MULTICAST=W_SCALE_MULTICAST,
         FORCE_EPILOGUE_WARPS_N1=FORCE_EPILOGUE_WARPS_N1,
+        REUSE_GATHER_INDICES=REUSE_GATHER_INDICES,
+        INLINE_MMA_INPUT_RELEASE=INLINE_MMA_INPUT_RELEASE,
     )
 
     gl.warp_specialize(
@@ -845,6 +909,8 @@ class KernelConfig:
     X_GATHER_MULTICAST: bool = True
     W_SCALE_MULTICAST: bool = True
     FORCE_EPILOGUE_WARPS_N1: bool = False
+    REUSE_GATHER_INDICES: bool = False
+    INLINE_MMA_INPUT_RELEASE: bool = False
 
     LOAD_ACTIVATION_REGS: int = 112
     LOAD_WEIGHT_REGS: int = 48
@@ -1088,6 +1154,8 @@ def matmul(
         X_GATHER_MULTICAST=p.X_GATHER_MULTICAST,
         W_SCALE_MULTICAST=p.W_SCALE_MULTICAST,
         FORCE_EPILOGUE_WARPS_N1=p.FORCE_EPILOGUE_WARPS_N1,
+        REUSE_GATHER_INDICES=p.REUSE_GATHER_INDICES,
+        INLINE_MMA_INPUT_RELEASE=p.INLINE_MMA_INPUT_RELEASE,
         #
         SCALE_SIZE_OUTER=p.SCALE_SIZE_OUTER,
         SCALE_SIZE_INNER=p.SCALE_SIZE_INNER,
