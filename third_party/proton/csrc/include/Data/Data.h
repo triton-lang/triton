@@ -160,13 +160,11 @@ public:
   /// To Json
   virtual std::string toJsonString(size_t phase) const = 0;
 
-  /// To MsgPack
+  /// To MsgPack for tree data
   virtual std::vector<uint8_t> toMsgPack(size_t phase) const = 0;
 
-  /// To Perfetto Trace protobuf
-  virtual std::vector<uint8_t> toPerfettoTrace(size_t phase) const {
-    throw std::logic_error("Output format not supported");
-  }
+  /// To Perfetto for trace data
+  virtual std::vector<uint8_t> toPerfettoTrace(size_t phase) const = 0;
 
 protected:
   /// The actual implementations
