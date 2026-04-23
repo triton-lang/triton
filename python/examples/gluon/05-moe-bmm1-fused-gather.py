@@ -970,7 +970,219 @@ def _select_base_config(slice_size: int) -> KernelConfig:
     )
 
 
+def _select_ported_tiny16_config(slice_size: int) -> KernelConfig | None:
+    if slice_size not in (4, 5, 6, 7, 8, 10, 12, 14):
+        return None
+
+    p = KernelConfig(
+        BLOCK_M=16,
+        BLOCK_N=256,
+        NUM_CTAS=2,
+        X_NUM_BUFS=10,
+        W_NUM_BUFS=6,
+        ACC_NUM_BUFS=2,
+        NUM_WARPS=4,
+        LOAD_ACTIVATION_WARPS=1,
+        LOAD_WEIGHT_WARPS=1,
+        MMA_WARPS=1,
+        SWIGLU_SUBTILE_FACTOR=1,
+        BAND_N=26,
+        X_GATHER_MULTICAST=True,
+        W_SCALE_MULTICAST=True,
+        FORCE_EPILOGUE_WARPS_N1=True,
+        LOAD_ACTIVATION_REGS=40,
+        LOAD_WEIGHT_REGS=32,
+        MMA_REGS=32,
+        MAXNREG=52,
+        OCCUPANCY=2,
+    )
+    if slice_size == 4:
+        return replace(p, ACC_NUM_BUFS=1)
+    if slice_size == 12:
+        return replace(p, BAND_N=30)
+    return p
+
+
+def _select_ported_low32_config(slice_size: int) -> KernelConfig | None:
+    if slice_size not in (16, 20, 24, 32):
+        return None
+
+    p = KernelConfig(
+        BLOCK_M=32,
+        BLOCK_N=256,
+        NUM_CTAS=2,
+        X_NUM_BUFS=5,
+        W_NUM_BUFS=6,
+        ACC_NUM_BUFS=2,
+        NUM_WARPS=4,
+        LOAD_ACTIVATION_WARPS=2,
+        LOAD_WEIGHT_WARPS=1,
+        MMA_WARPS=1,
+        SWIGLU_SUBTILE_FACTOR=1,
+        BAND_N=26,
+        X_GATHER_MULTICAST=False,
+        W_SCALE_MULTICAST=False,
+        FORCE_EPILOGUE_WARPS_N1=True,
+        LOAD_ACTIVATION_REGS=40,
+        LOAD_WEIGHT_REGS=32,
+        MMA_REGS=32,
+        MAXNREG=48,
+        OCCUPANCY=2,
+    )
+    if slice_size == 16:
+        return replace(p, BAND_N=32)
+    if slice_size == 24:
+        return replace(p, ACC_NUM_BUFS=1, BAND_N=28)
+    return p
+
+
+def _select_ported_slice28_config(slice_size: int) -> KernelConfig | None:
+    if slice_size != 28:
+        return None
+
+    return KernelConfig(
+        BLOCK_M=32,
+        BLOCK_N=256,
+        NUM_CTAS=2,
+        X_NUM_BUFS=5,
+        W_NUM_BUFS=6,
+        ACC_NUM_BUFS=2,
+        NUM_WARPS=4,
+        LOAD_ACTIVATION_WARPS=2,
+        LOAD_WEIGHT_WARPS=1,
+        MMA_WARPS=1,
+        SWIGLU_SUBTILE_FACTOR=1,
+        BAND_N=28,
+        X_GATHER_MULTICAST=True,
+        W_SCALE_MULTICAST=True,
+        FORCE_EPILOGUE_WARPS_N1=False,
+        LOAD_ACTIVATION_REGS=32,
+        LOAD_WEIGHT_REGS=32,
+        MMA_REGS=32,
+        MAXNREG=48,
+        OCCUPANCY=2,
+    )
+
+
+def _select_ported_mid64_config(slice_size: int) -> KernelConfig | None:
+    if not 36 <= slice_size <= 72:
+        return None
+
+    p = KernelConfig(
+        BLOCK_M=64,
+        BLOCK_N=256,
+        NUM_CTAS=2,
+        X_NUM_BUFS=5,
+        W_NUM_BUFS=5,
+        ACC_NUM_BUFS=1,
+        NUM_WARPS=8,
+        LOAD_ACTIVATION_WARPS=4,
+        LOAD_WEIGHT_WARPS=1,
+        MMA_WARPS=1,
+        SWIGLU_SUBTILE_FACTOR=2,
+        BAND_N=24,
+        X_GATHER_MULTICAST=True,
+        W_SCALE_MULTICAST=True,
+        FORCE_EPILOGUE_WARPS_N1=True,
+        LOAD_ACTIVATION_REGS=64,
+        LOAD_WEIGHT_REGS=48,
+        MMA_REGS=48,
+        MAXNREG=64,
+        OCCUPANCY=2,
+    )
+    if slice_size == 36:
+        return replace(p, ACC_NUM_BUFS=2, REUSE_GATHER_INDICES=True, INLINE_MMA_INPUT_RELEASE=True)
+    if slice_size == 40:
+        return replace(p, BAND_N=22, MAXNREG=56)
+    if slice_size == 48:
+        return replace(p, MAXNREG=56)
+    if slice_size == 56:
+        return replace(p, LOAD_ACTIVATION_REGS=72)
+    if slice_size == 64:
+        return replace(p, X_GATHER_MULTICAST=False, W_SCALE_MULTICAST=False, REUSE_GATHER_INDICES=True)
+    if slice_size == 72:
+        return p
+    return None
+
+
+def _select_ported_high128_config(slice_size: int) -> KernelConfig | None:
+    if slice_size < 80:
+        return None
+
+    p = KernelConfig(
+        BLOCK_M=128,
+        BLOCK_N=512,
+        NUM_CTAS=2,
+        X_NUM_BUFS=6,
+        W_NUM_BUFS=5,
+        ACC_NUM_BUFS=1,
+        NUM_WARPS=8,
+        LOAD_ACTIVATION_WARPS=4,
+        LOAD_WEIGHT_WARPS=1,
+        MMA_WARPS=1,
+        SWIGLU_SUBTILE_FACTOR=8,
+        BAND_N=18,
+        X_GATHER_MULTICAST=True,
+        W_SCALE_MULTICAST=True,
+        FORCE_EPILOGUE_WARPS_N1=True,
+        LOAD_ACTIVATION_REGS=112,
+        LOAD_WEIGHT_REGS=48,
+        MMA_REGS=48,
+        OCCUPANCY=1,
+    )
+    if slice_size in (96, 544, 576, 608, 640):
+        return p
+    if slice_size in (112, 128, 256, 704, 736, 768, 800, 864):
+        return replace(p, BAND_N=20)
+    if slice_size in (192, 224, 672, 928, 960):
+        return replace(p, BAND_N=24)
+    if slice_size in (288, 320, 352, 480):
+        return replace(p, X_NUM_BUFS=5, BAND_N=26, LOAD_ACTIVATION_REGS=104)
+    if slice_size in (160, 512, 992):
+        return replace(p, X_NUM_BUFS=5)
+    if slice_size == 80:
+        return replace(p, X_NUM_BUFS=5, BAND_N=24, LOAD_ACTIVATION_REGS=104)
+    if slice_size == 384:
+        return replace(p, LOAD_ACTIVATION_REGS=104)
+    if slice_size == 416:
+        return replace(p, REUSE_GATHER_INDICES=True)
+    if slice_size == 448:
+        return replace(p, BAND_N=22)
+    if slice_size == 832:
+        return p
+    if slice_size == 896:
+        return replace(
+            p,
+            BAND_N=24,
+            FORCE_EPILOGUE_WARPS_N1=False,
+            W_SCALE_MULTICAST=False,
+            REUSE_GATHER_INDICES=True,
+            INLINE_MMA_INPUT_RELEASE=True,
+        )
+    return None
+
+
+def _select_ported_best_batch_config(slice_size: int) -> KernelConfig | None:
+    # Exact-slice projection of the current branch quiet-GPU best-row winners,
+    # limited to the knobs upstream main can express today.
+    for selector in (
+        _select_ported_tiny16_config,
+        _select_ported_low32_config,
+        _select_ported_slice28_config,
+        _select_ported_mid64_config,
+        _select_ported_high128_config,
+    ):
+        p = selector(slice_size)
+        if p is not None:
+            return p
+    return None
+
+
 def select_kernel_config(slice_size: int) -> KernelConfig:
+    p = _select_ported_best_batch_config(slice_size)
+    if p is not None:
+        return p
+
     p = _select_base_config(slice_size)
 
     if p.BLOCK_M == 32 and p.BLOCK_N == 128 and slice_size in (16, 20, 24, 32):
