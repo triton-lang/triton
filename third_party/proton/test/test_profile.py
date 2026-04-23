@@ -49,7 +49,7 @@ def _normalize_trace_event(name, category, track_name, call_stack=None, args=Non
     }
 
 
-def _chrome_trace_to_python(path: str):
+def _chrome_trace_to_python(path: pathlib.Path | str):
     with open(path, "r", encoding="utf-8") as f:
         raw_events = json.load(f)["traceEvents"]
 
@@ -83,9 +83,10 @@ def _chrome_trace_to_python(path: str):
     }
 
 
-def _perfetto_trace_to_python(path: str):
+def _perfetto_trace_to_python(path: pathlib.Path | str):
     import perfetto.trace_processor as trace_processor
     TraceProcessor = trace_processor.TraceProcessor
+    path = str(path)
 
     def _arg_value(row):
         if row.string_value is not None:
@@ -149,7 +150,7 @@ def _perfetto_trace_to_python(path: str):
     }
 
 
-def _trace_to_python(path: str, output_format: str):
+def _trace_to_python(path: pathlib.Path | str, output_format: str):
     if output_format == "chrome_trace":
         return _chrome_trace_to_python(path)
     if output_format == "perfetto_trace":
@@ -157,7 +158,7 @@ def _trace_to_python(path: str, output_format: str):
     raise ValueError(f"Unsupported trace output format: {output_format}")
 
 
-def _assert_trace_file(path: str, output_format: str, expected_event_name: str | None = None,
+def _assert_trace_file(path: pathlib.Path | str, output_format: str, expected_event_name: str | None = None,
                        expected_call_stack: list[str] | None = None):
     trace = _trace_to_python(path, output_format)
     assert trace["has_track_descriptor"]
@@ -173,12 +174,6 @@ def _assert_trace_file(path: str, output_format: str, expected_event_name: str |
     assert matched_event is not None
     if expected_call_stack is not None:
         assert matched_event["call_stack"] == expected_call_stack
-
-
-def _assert_perfetto_trace_file(path: str, expected_event_name: str | None = None,
-                                expected_call_stack: list[str] | None = None):
-    _assert_trace_file(path, "perfetto_trace", expected_event_name, expected_call_stack)
-
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path, device: str):
@@ -1674,7 +1669,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
     num_scopes = 0
     for hatchet_file in hatchet_files:
         if data_format == "perfetto_trace":
-            _assert_perfetto_trace_file(hatchet_file)
+            _assert_trace_file(hatchet_file, data_format)
             continue
         if data_format == "hatchet_msgpack":
             with open(hatchet_file, "rb") as f:
@@ -1739,7 +1734,7 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
     assert len(hatchet_files) == 10
     for hatchet_file in hatchet_files:
         if data_format == "perfetto_trace":
-            _assert_perfetto_trace_file(hatchet_file)
+            _assert_trace_file(hatchet_file, data_format)
             continue
         if data_format == "hatchet_msgpack":
             with open(hatchet_file, "rb") as f:
