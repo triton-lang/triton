@@ -8,6 +8,7 @@ import triton
 import triton.profiler as proton
 import json
 import pytest
+import re
 from typing import NamedTuple
 import pathlib
 import threading
@@ -38,6 +39,9 @@ def _normalize_trace_event(name, category, track_name, call_stack=None, args=Non
         for key, value in args.items()
         if key.startswith("metric.") or key.startswith("debug.metric.")
     })
+    if not metrics and category == "metric":
+        if match := re.search(r"<([^,]+), ([^>]+)>", name):
+            metrics[match.group(1)] = _normalize_metric_value(match.group(2))
     return {
         "name": name,
         "category": category,
