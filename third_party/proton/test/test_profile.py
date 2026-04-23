@@ -8,7 +8,6 @@ import triton
 import triton.profiler as proton
 import json
 import pytest
-import re
 from typing import NamedTuple
 import pathlib
 import threading
@@ -41,8 +40,8 @@ def _normalize_trace_event(name, category, track_name, call_stack=None, args=Non
         if key.startswith("metric.") or key.startswith("debug.metric.")
     })
     if not metrics and category == "metric":
-        if match := re.search(r"<([^,]+), ([^>]+)>", name):
-            metrics[match.group(1)] = _normalize_metric_value(match.group(2))
+        metric_name, metric_value = name[name.rfind("<") + 1:-1].split(", ", 1)
+        metrics[metric_name] = _normalize_metric_value(metric_value)
     return {
         "name": name,
         "category": category,
@@ -84,15 +83,11 @@ def _chrome_trace_to_python(path: pathlib.Path | str):
     return {"track_events": track_events}
 
 
-def _perfetto_trace_to_python(path: pathlib.Path | str):
-    return parse_perfetto_trace(path, _normalize_trace_event)
-
-
 def _trace_to_python(path: pathlib.Path | str, output_format: str):
     if output_format == "chrome_trace":
         return _chrome_trace_to_python(path)
     if output_format == "perfetto_trace":
-        return _perfetto_trace_to_python(path)
+        return parse_perfetto_trace(path, _normalize_trace_event)
     raise ValueError(f"Unsupported trace output format: {output_format}")
 
 
