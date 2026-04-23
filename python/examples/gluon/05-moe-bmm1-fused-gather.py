@@ -1132,9 +1132,9 @@ def _select_ported_high128_config(slice_size: int) -> KernelConfig | None:
     )
     if slice_size in (96, 544, 576, 608, 640):
         return p
-    if slice_size in (112, 128, 256, 704, 736, 768, 800, 864):
+    if slice_size in (112, 128, 256, 704, 768, 800, 864):
         return replace(p, BAND_N=20)
-    if slice_size in (192, 224, 672, 928, 960):
+    if slice_size in (192, 672, 928):
         return replace(p, BAND_N=24)
     if slice_size in (288, 320, 352, 480):
         return replace(p, X_NUM_BUFS=5, BAND_N=26, LOAD_ACTIVATION_REGS=104)
@@ -1142,12 +1142,16 @@ def _select_ported_high128_config(slice_size: int) -> KernelConfig | None:
         return replace(p, X_NUM_BUFS=5)
     if slice_size == 80:
         return replace(p, X_NUM_BUFS=5, BAND_N=24, LOAD_ACTIVATION_REGS=104)
+    if slice_size == 224:
+        return replace(p, X_NUM_BUFS=5, BAND_N=24)
     if slice_size == 384:
         return replace(p, LOAD_ACTIVATION_REGS=104)
     if slice_size == 416:
         return replace(p, REUSE_GATHER_INDICES=True)
     if slice_size == 448:
         return replace(p, BAND_N=22)
+    if slice_size == 736:
+        return replace(p, BAND_N=20, LOAD_ACTIVATION_REGS=104)
     if slice_size == 832:
         return p
     if slice_size == 896:
@@ -1159,6 +1163,8 @@ def _select_ported_high128_config(slice_size: int) -> KernelConfig | None:
             REUSE_GATHER_INDICES=True,
             INLINE_MMA_INPUT_RELEASE=True,
         )
+    if slice_size == 960:
+        return replace(p, BAND_N=24, LOAD_ACTIVATION_REGS=104)
     return None
 
 
