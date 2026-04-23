@@ -3,6 +3,7 @@ import struct
 
 
 def parse_perfetto_trace(path: pathlib.Path | str, normalize_event):
+
     def read_varint(data: bytes, offset: int):
         value = 0
         shift = 0
@@ -168,10 +169,8 @@ def parse_perfetto_trace(path: pathlib.Path | str, normalize_event):
             apply_interned_data(payload, interned)
         track_names.update(parsed_track_names)
         return [
-            event for event in (
-                parse_track_event(track_event, timestamp, interned, track_names)
-                for track_event in track_events
-            ) if event is not None
+            event for event in (parse_track_event(track_event, timestamp, interned, track_names)
+                                for track_event in track_events) if event is not None
         ]
 
     data = pathlib.Path(path).read_bytes()
