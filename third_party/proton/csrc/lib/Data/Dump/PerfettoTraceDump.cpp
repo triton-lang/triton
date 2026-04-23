@@ -27,8 +27,8 @@ constexpr uint32_t kPerfettoChildTracksOrderingExplicit = 3;
 struct PerfettoAnnotation {
   enum class Kind { String, UInt64, Int64, Double, Bool };
 
-  std::string name;
-  std::string stringValue;
+  uint64_t nameIid{};
+  uint64_t stringValueIid{};
   uint64_t uintValue{};
   int64_t intValue{};
   double doubleValue{};
@@ -104,8 +104,23 @@ struct PerfettoInternedNames {
   }
 };
 
+struct PerfettoSliceEventInternedIds {
+  uint64_t nameIid{};
+  std::optional<uint64_t> categoryIid;
+};
+
 uint64_t getPerfettoLaneTrackUuid(uint64_t laneId) {
   return kPerfettoLaneTrackUuidBase + laneId;
+}
+
+uint64_t internPerfettoString(PerfettoInternedStringTable &internedStrings,
+                              PerfettoInternedStringTable &newInternedStrings,
+                              const std::string &name) {
+  const auto [iid, inserted] = internedStrings.intern(name);
+  if (inserted) {
+    newInternedStrings.internWithIid(name, iid);
+  }
+  return iid;
 }
 
 void appendTracePacket(ProtoWriter &trace, const ProtoWriter &packet) {
@@ -149,11 +164,18 @@ void setTracePacketSequence(ProtoWriter &packet, uint32_t sequenceFlags) {
 }
 
 void appendCallStackAnnotations(std::vector<PerfettoAnnotation> &annotations,
-                                const std::vector<Context> &contexts) {
+                                const std::vector<Context> &contexts,
+                                PerfettoInternedNames &internedNames,
+                                PerfettoInternedNames &newInternedNames) {
   for (size_t i = 0; i < contexts.size(); ++i) {
     PerfettoAnnotation annotation;
-    annotation.name = "call_stack_" + std::to_string(i);
-    annotation.stringValue = contexts[i].name;
+    annotation.nameIid = internPerfettoString(
+        internedNames.debugAnnotationNames,
+        newInternedNames.debugAnnotationNames,
+        "call_stack_" + std::to_string(i));
+    annotation.stringValueIid = internPerfettoString(
+        internedNames.debugAnnotationStringValues,
+        newInternedNames.debugAnnotationStringValues, contexts[i].name);
     annotation.kind = PerfettoAnnotation::Kind::String;
     annotations.push_back(std::move(annotation));
   }
@@ -161,13 +183,18 @@ void appendCallStackAnnotations(std::vector<PerfettoAnnotation> &annotations,
 
 void appendFlexibleMetricAnnotations(
     std::vector<PerfettoAnnotation> &annotations,
-    const DataEntry::FlexibleMetricMap &flexibleMetrics) {
+    const DataEntry::FlexibleMetricMap &flexibleMetrics,
+    PerfettoInternedNames &internedNames,
+    PerfettoInternedNames &newInternedNames) {
   for (const auto &[metricName, metricValue] : flexibleMetrics) {
     PerfettoAnnotation annotation;
-    annotation.name = "metric." + metricName;
+    annotation.nameIid = internPerfettoString(
+        internedNames.debugAnnotationNames,
+        newInternedNames.debugAnnotationNames, "metric." + metricName);
     const auto &value = metricValue.getValues()[0];
     std::visit(
-        [&annotation, &value](const auto &metricValue) {
+        [&annotation, &value, &internedNames,
+         &newInternedNames](const auto &metricValue) {
           using T = std::decay_t<decltype(metricValue)>;
           if constexpr (std::is_same_v<T, uint64_t>) {
             annotation.uintValue = metricValue;
@@ -179,12 +206,17 @@ void appendFlexibleMetricAnnotations(
             annotation.doubleValue = metricValue;
             annotation.kind = PerfettoAnnotation::Kind::Double;
           } else if constexpr (std::is_same_v<T, std::string>) {
-            annotation.stringValue = metricValue;
+            annotation.stringValueIid = internPerfettoString(
+                internedNames.debugAnnotationStringValues,
+                newInternedNames.debugAnnotationStringValues, metricValue);
             annotation.kind = PerfettoAnnotation::Kind::String;
           } else if constexpr (std::is_same_v<T, std::vector<uint64_t>> ||
                                std::is_same_v<T, std::vector<int64_t>> ||
                                std::is_same_v<T, std::vector<double>>) {
-            annotation.stringValue = details::formatFlexibleMetricValue(value);
+            annotation.stringValueIid = internPerfettoString(
+                internedNames.debugAnnotationStringValues,
+                newInternedNames.debugAnnotationStringValues,
+                details::formatFlexibleMetricValue(value));
             annotation.kind = PerfettoAnnotation::Kind::String;
           } else {
             static_assert(sizeof(T) == 0, "Unsupported MetricValueType");
@@ -195,37 +227,19 @@ void appendFlexibleMetricAnnotations(
   }
 }
 
-void internSliceEvent(PerfettoInternedNames &internedNames,
-                      PerfettoInternedNames &newInternedNames,
-                      const std::string &name, const std::string &category,
-                      const std::vector<PerfettoAnnotation> &annotations) {
-  if (const auto [iid, inserted] = internedNames.eventNames.intern(name);
-      inserted) {
-    newInternedNames.eventNames.internWithIid(name, iid);
-  }
+PerfettoSliceEventInternedIds
+internSliceEvent(PerfettoInternedNames &internedNames,
+                 PerfettoInternedNames &newInternedNames,
+                 const std::string &name, const std::string &category) {
+  PerfettoSliceEventInternedIds ids;
+  ids.nameIid = internPerfettoString(internedNames.eventNames,
+                                     newInternedNames.eventNames, name);
   if (!category.empty()) {
-    if (const auto [iid, inserted] =
-            internedNames.eventCategories.intern(category);
-        inserted) {
-      newInternedNames.eventCategories.internWithIid(category, iid);
-    }
+    ids.categoryIid = internPerfettoString(
+        internedNames.eventCategories, newInternedNames.eventCategories,
+        category);
   }
-  for (const auto &annotation : annotations) {
-    if (const auto [iid, inserted] =
-            internedNames.debugAnnotationNames.intern(annotation.name);
-        inserted) {
-      newInternedNames.debugAnnotationNames.internWithIid(annotation.name, iid);
-    }
-    if (annotation.kind == PerfettoAnnotation::Kind::String) {
-      if (const auto [iid, inserted] =
-              internedNames.debugAnnotationStringValues.intern(
-                  annotation.stringValue);
-          inserted) {
-        newInternedNames.debugAnnotationStringValues.internWithIid(
-            annotation.stringValue, iid);
-      }
-    }
-  }
+  return ids;
 }
 
 void appendInternedDataPacket(ProtoWriter &trace,
@@ -274,32 +288,27 @@ void appendInternedDataPacket(ProtoWriter &trace,
 
 void appendTrackEventPacket(ProtoWriter &trace, uint64_t timestampNs,
                             uint32_t type, uint64_t trackUuid,
-                            const std::string &name,
-                            const std::string &category,
+                            const PerfettoSliceEventInternedIds &eventIds,
                             const std::vector<PerfettoAnnotation> &annotations,
                             std::optional<uint64_t> flowId,
-                            std::optional<uint64_t> terminatingFlowId,
-                            const PerfettoInternedNames &internedNames) {
+                            std::optional<uint64_t> terminatingFlowId) {
   ProtoWriter trackEvent;
   trackEvent.writeUInt32(/*TrackEvent.type=*/9, type);
   trackEvent.writeUInt64(/*TrackEvent.track_uuid=*/11, trackUuid);
-  trackEvent.writeUInt64(/*TrackEvent.name_iid=*/10,
-                         internedNames.eventNames.get(name));
+  trackEvent.writeUInt64(/*TrackEvent.name_iid=*/10, eventIds.nameIid);
   if (type == 1) {
-    if (!category.empty()) {
+    if (eventIds.categoryIid.has_value()) {
       trackEvent.writeUInt64(/*TrackEvent.category_iids=*/3,
-                             internedNames.eventCategories.get(category));
+                             *eventIds.categoryIid);
     }
     for (const auto &annotation : annotations) {
       ProtoWriter message;
-      message.writeUInt64(
-          /*DebugAnnotation.name_iid=*/1,
-          internedNames.debugAnnotationNames.get(annotation.name));
+      message.writeUInt64(/*DebugAnnotation.name_iid=*/1,
+                          annotation.nameIid);
       switch (annotation.kind) {
       case PerfettoAnnotation::Kind::String:
         message.writeUInt64(/*DebugAnnotation.string_value_iid=*/17,
-                            internedNames.debugAnnotationStringValues.get(
-                                annotation.stringValue));
+                            annotation.stringValueIid);
         break;
       case PerfettoAnnotation::Kind::UInt64:
         message.writeUInt64(/*DebugAnnotation.uint_value=*/3,
@@ -349,19 +358,19 @@ void appendSlicePackets(ProtoWriter &trace, uint64_t minTimeStamp,
                         const std::vector<PerfettoAnnotation> &annotations,
                         std::optional<uint64_t> flowId,
                         std::optional<uint64_t> terminatingFlowId,
+                        PerfettoInternedNames &newInternedNames,
+                        bool incrementalStateCleared,
                         PerfettoInternedNames &internedNames) {
-  PerfettoInternedNames newInternedNames;
-  const bool incrementalStateCleared = internedNames.empty();
-  internSliceEvent(internedNames, newInternedNames, name, category,
-                   annotations);
+  const auto eventIds =
+      internSliceEvent(internedNames, newInternedNames, name, category);
   appendInternedDataPacket(trace, newInternedNames, incrementalStateCleared);
 
   appendTrackEventPacket(trace, getRelativeTimestamp(minTimeStamp, startTimeNs),
-                         1, trackUuid, name, category, annotations, flowId,
-                         terminatingFlowId, internedNames);
+                         1, trackUuid, eventIds, annotations, flowId,
+                         terminatingFlowId);
   appendTrackEventPacket(trace, getRelativeTimestamp(minTimeStamp, endTimeNs),
-                         2, trackUuid, name, category, annotations,
-                         std::nullopt, std::nullopt, internedNames);
+                         2, trackUuid, eventIds, annotations, std::nullopt,
+                         std::nullopt);
 }
 
 void appendCpuTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
@@ -370,15 +379,19 @@ void appendCpuTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
     const auto trackUuid =
         getPerfettoLaneTrackUuid(details::getCpuLaneId(threadId));
     for (const auto &event : cpuEvents) {
+      PerfettoInternedNames newInternedNames;
+      const bool incrementalStateCleared = internedNames.empty();
       std::vector<PerfettoAnnotation> annotations;
-      appendCallStackAnnotations(annotations, event.contexts);
+      appendCallStackAnnotations(annotations, event.contexts, internedNames,
+                                 newInternedNames);
       std::string name;
       std::string category;
       if (event.flexibleMetrics != nullptr && !event.flexibleMetrics->empty()) {
         name = details::buildFlexibleMetricEventName(event.contexts,
                                                      *event.flexibleMetrics);
         category = "metric";
-        appendFlexibleMetricAnnotations(annotations, *event.flexibleMetrics);
+        appendFlexibleMetricAnnotations(annotations, *event.flexibleMetrics,
+                                        internedNames, newInternedNames);
       } else {
         name = event.contexts.empty() ? "" : event.contexts.back().name;
         category = "scope";
@@ -391,7 +404,8 @@ void appendCpuTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
 
       appendSlicePackets(trace, traceDump.minTimeStamp, trackUuid,
                          event.startTimeNs, event.endTimeNs, name, category,
-                         annotations, flowId, std::nullopt, internedNames);
+                         annotations, flowId, std::nullopt, newInternedNames,
+                         incrementalStateCleared, internedNames);
     }
   }
 }
@@ -402,6 +416,8 @@ void appendGraphTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
     const auto trackUuid =
         getPerfettoLaneTrackUuid(details::getGraphLaneId(streamId));
     for (const auto &event : graphEvents) {
+      PerfettoInternedNames newInternedNames;
+      const bool incrementalStateCleared = internedNames.empty();
       std::vector<PerfettoAnnotation> annotations;
       std::string name;
       std::string category;
@@ -409,7 +425,8 @@ void appendGraphTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
         name = details::buildFlexibleMetricEventName(event.context,
                                                      *event.flexibleMetrics);
         category = "metric";
-        appendFlexibleMetricAnnotations(annotations, *event.flexibleMetrics);
+        appendFlexibleMetricAnnotations(annotations, *event.flexibleMetrics,
+                                        internedNames, newInternedNames);
       } else {
         name = event.context.name;
         category = "scope";
@@ -418,6 +435,7 @@ void appendGraphTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
       appendSlicePackets(trace, traceDump.minTimeStamp, trackUuid,
                          event.startTimeNs, event.endTimeNs, name, category,
                          annotations, std::nullopt, std::nullopt,
+                         newInternedNames, incrementalStateCleared,
                          internedNames);
     }
   }
@@ -429,10 +447,14 @@ void appendKernelTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
     const auto trackUuid =
         getPerfettoLaneTrackUuid(details::getGpuLaneId(streamId));
     for (const auto &event : streamKernelEvents) {
+      PerfettoInternedNames newInternedNames;
+      const bool incrementalStateCleared = internedNames.empty();
       std::vector<PerfettoAnnotation> annotations;
-      appendCallStackAnnotations(annotations, event.contexts);
+      appendCallStackAnnotations(annotations, event.contexts, internedNames,
+                                 newInternedNames);
       if (event.flexibleMetrics != nullptr) {
-        appendFlexibleMetricAnnotations(annotations, *event.flexibleMetrics);
+        appendFlexibleMetricAnnotations(annotations, *event.flexibleMetrics,
+                                        internedNames, newInternedNames);
       }
 
       std::optional<uint64_t> terminatingFlowId;
@@ -443,7 +465,8 @@ void appendKernelTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
       appendSlicePackets(trace, traceDump.minTimeStamp, trackUuid,
                          event.getStartTimeNs(), event.getEndTimeNs(),
                          event.getName(), "kernel", annotations, std::nullopt,
-                         terminatingFlowId, internedNames);
+                         terminatingFlowId, newInternedNames,
+                         incrementalStateCleared, internedNames);
     }
   }
 }
