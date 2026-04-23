@@ -518,11 +518,6 @@ void TraceData::withTraceData(size_t phase, CycleHandler &&onCycleTrace,
     }
 
     if (!traceDump.kernelEvents.empty()) {
-      // Sort all kernel events in order.
-      for (auto &[streamId, streamKernelEvents] : traceDump.kernelEvents) {
-        std::sort(streamKernelEvents.begin(), streamKernelEvents.end(),
-                  trace_data_dump::KernelEvent::compare);
-      }
       // Graph scopes are constructed in order.
       reconstructGraphScopeEvents(traceDump.kernelEvents,
                                   traceDump.graphScopeEvents);
