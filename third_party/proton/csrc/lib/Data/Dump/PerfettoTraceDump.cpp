@@ -387,16 +387,13 @@ uint64_t getRelativeTimestamp(uint64_t minTimeStamp, uint64_t timestamp) {
 
 void appendSlicePackets(ProtoWriter &trace, uint64_t minTimeStamp,
                         uint64_t trackUuid, uint64_t startTimeNs,
-                        uint64_t endTimeNs, const std::string &name,
-                        PerfettoEventCategory category,
+                        uint64_t endTimeNs,
+                        const PerfettoSliceEventInternedIds &eventIds,
                         const std::vector<PerfettoAnnotation> &annotations,
                         std::optional<uint64_t> flowId,
                         std::optional<uint64_t> terminatingFlowId,
                         PerfettoInternedNames &newInternedNames,
-                        bool incrementalStateCleared,
-                        PerfettoInternedNames &internedNames) {
-  const auto eventIds =
-      internSliceEvent(internedNames, newInternedNames, name, category);
+                        bool incrementalStateCleared) {
   appendInternedDataPacket(trace, newInternedNames, incrementalStateCleared);
 
   appendTrackEventPacket(trace, getRelativeTimestamp(minTimeStamp, startTimeNs),
@@ -430,6 +427,8 @@ void appendCpuTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
         name = event.contexts.empty() ? "" : event.contexts.back().name;
         category = PerfettoEventCategory::Scope;
       }
+      const auto eventIds =
+          internSliceEvent(internedNames, newInternedNames, name, category);
 
       std::optional<uint64_t> flowId;
       if (event.targetEventId != details::kNoLaunchEventId) {
@@ -437,9 +436,9 @@ void appendCpuTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
       }
 
       appendSlicePackets(trace, traceDump.minTimeStamp, trackUuid,
-                         event.startTimeNs, event.endTimeNs, name, category,
+                         event.startTimeNs, event.endTimeNs, eventIds,
                          annotations, flowId, std::nullopt, newInternedNames,
-                         incrementalStateCleared, internedNames);
+                         incrementalStateCleared);
     }
   }
 }
@@ -466,11 +465,12 @@ void appendGraphTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
         category = PerfettoEventCategory::Scope;
       }
 
+      const auto eventIds =
+          internSliceEvent(internedNames, newInternedNames, name, category);
       appendSlicePackets(trace, traceDump.minTimeStamp, trackUuid,
-                         event.startTimeNs, event.endTimeNs, name, category,
+                         event.startTimeNs, event.endTimeNs, eventIds,
                          annotations, std::nullopt, std::nullopt,
-                         newInternedNames, incrementalStateCleared,
-                         internedNames);
+                         newInternedNames, incrementalStateCleared);
     }
   }
 }
@@ -496,12 +496,14 @@ void appendKernelTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
         terminatingFlowId = kPerfettoFlowIdBase + event.launchEventId;
       }
 
+      const auto eventIds = internSliceEvent(
+          internedNames, newInternedNames, event.getName(),
+          PerfettoEventCategory::Kernel);
       appendSlicePackets(trace, traceDump.minTimeStamp, trackUuid,
                          event.getStartTimeNs(), event.getEndTimeNs(),
-                         event.getName(), PerfettoEventCategory::Kernel,
-                         annotations, std::nullopt, terminatingFlowId,
-                         newInternedNames, incrementalStateCleared,
-                         internedNames);
+                         eventIds, annotations, std::nullopt,
+                         terminatingFlowId, newInternedNames,
+                         incrementalStateCleared);
     }
   }
 }
