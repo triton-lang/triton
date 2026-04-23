@@ -4359,7 +4359,7 @@ def test_load_cache_modifier(cache, device):
             if is_hip_cdna():
                 expected_cache_modifiers = {"": "", \
                                             ".ca": "", \
-                                            ".cg": "nt", \
+                                            ".cg": "sc0 nt", \
                                             ".cs": "sc0 nt", \
                                             ".cv": "sc0 sc1"}
             elif is_hip_rdna3():
