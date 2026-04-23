@@ -831,6 +831,61 @@ def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch,
     kernel[(1, )](input, output, FAILURE=FAILURE, MEM_ACCESS_KIND=MEM_ACCESS_KIND, num_warps=4, num_ctas=num_ctas)
 
 
+def run_tcgen5_copy_tma_scale_wait_visibility(device, num_ctas):
+    os.environ["TRITON_INSTRUMENTATION_MODE"] = "consan"
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    knobs.refresh_knobs()
+    import importlib.util
+    import pathlib
+
+    module_path = pathlib.Path(__file__).resolve().parents[2] / "examples" / "gluon" / "04-2cta-block-scale-matmul.py"
+    spec = importlib.util.spec_from_file_location("two_cta_block_scale_matmul", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    block_m = 256 if num_ctas > 1 else 128
+    block_n = 256
+    epilogue_block_n = 64 if num_ctas > 1 else 256
+    num_buffers = 5 if num_ctas > 1 else 3
+    m = n = 256
+    k = 128
+    torch.manual_seed(0)
+    a, a_scale, a_ref = module.random_quantized_tensor(m, k, "mxfp8")
+    b, b_scale, b_ref = module.random_quantized_tensor(n, k, "mxfp8")
+    a_scale = module.swizzle_scales_packed_block(a_scale)
+    b_scale = module.swizzle_scales_packed_block(b_scale)
+    out = module.mma_scaled_warp_specialized(
+        a,
+        b,
+        a_scale,
+        b_scale,
+        32,
+        BLOCK_M=block_m,
+        BLOCK_N=block_n,
+        EPILOGUE_BLOCK_N=epilogue_block_n,
+        num_buffers=num_buffers,
+        num_ctas=num_ctas,
+    )
+    ref = a_ref @ b_ref.T
+    torch.testing.assert_close(ref, out.to(torch.float32), atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+def test_tcgen5_copy_tma_scale_wait_visibility(device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(run_tcgen5_copy_tma_scale_wait_visibility, (device, 1))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+
+        result = run_in_process(run_tcgen5_copy_tma_scale_wait_visibility, (device, 2))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+
+    run_tcgen5_copy_tma_scale_wait_visibility(device, 1)
+    run_tcgen5_copy_tma_scale_wait_visibility(device, 2)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch, num_ctas):

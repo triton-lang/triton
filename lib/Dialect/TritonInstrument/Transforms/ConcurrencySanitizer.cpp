@@ -198,6 +198,24 @@ Value getMulticastRecipientCTAs(ImplicitLocOpBuilder &b, Value alloc) {
   return createCTABitset(b, encoding.pattern, encoding.fixedBits);
 }
 
+Value getTMAEffectRecipientCTAs(ImplicitLocOpBuilder &b,
+                                ttng::TMALoadLikeOpInterface tmaLoad) {
+  if (!tmaLoad.getMulticast() && !ttng::getModuleTwoCTAs(tmaLoad.getOperation()))
+    return currentCTAMask(b);
+  uint16_t broadcastMask = getBlockBroadcastMask(tmaLoad.getResult());
+  if (ttng::getModuleTwoCTAs(tmaLoad.getOperation())) {
+    // In 2CTA mode, a TMA load always lowers to cta_group::2 and materializes
+    // data for both CTAs in the pair, even when the destination alloc itself
+    // has no block-broadcast bits.
+    broadcastMask |= 0x1;
+  }
+  if (!broadcastMask)
+    return currentCTAMask(b);
+  int numCTAs = ttg::lookupNumCTAs(b);
+  auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastMask);
+  return createCTABitset(b, encoding.pattern, encoding.fixedBits);
+}
+
 Value getLeaderCTA(ImplicitLocOpBuilder &b, Value barrier) {
   uint16_t broadcastMask = getBlockBroadcastMask(barrier);
   if (!broadcastMask)
@@ -266,9 +284,7 @@ Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op);
 
 Value getMemEffectRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
-    if (tmaLoad.getMulticast())
-      return getMulticastRecipientCTAs(b, tmaLoad.getResult());
-    return currentCTAMask(b);
+    return getTMAEffectRecipientCTAs(b, tmaLoad);
   }
   if (isa<ttng::CLCTryCancelOp>(op))
     return allCTAsMask(b);

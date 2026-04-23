@@ -1745,6 +1745,10 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
             createBufferDescriptor(fb, mbarOffset, mbarLengthVal);
         Value barriersEqBar =
             createCmpIntTensorScalar(fb, barriers, barrierDescriptor);
+        Value barrierCTAMask = createRecipientCTAMask(
+            fb, barrierWriteRecipientsType, barrierRecipientCTAs);
+        Value selectedBarriers =
+            arith::AndIOp::create(fb, barriersEqBar, barrierCTAMask);
         Value effectRecipientCTAsTensor = triton::SplatOp::create(
             fb, barrierWriteRecipientsType, effectRecipientCTAs);
         if (diagonalEffectRecipientCTAs) {
@@ -1774,14 +1778,31 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
         Value updatedBarrierWriteRecipients = arith::OrIOp::create(
             fb, barrierWriteRecipients, effectRecipientCTAsTensor);
         updatedBarrierWriteRecipients = arith::SelectOp::create(
-            fb, barriersEqBar, updatedBarrierWriteRecipients,
+            fb, selectedBarriers, updatedBarrierWriteRecipients,
             barrierWriteRecipients);
         createCTAScopedStoreScratchMemory(
             fb, fb.getLoc(), barrierWriteRecipientsPtr,
             updatedBarrierWriteRecipients, barrierWriteRecipientsType,
             barrierRecipientCTAs);
-        barriersEqBar =
-            convertAndBroadcast(fb, barriersEqBar, {0, 2}, writeTrackingType);
+        Value trackedBarriers = selectedBarriers;
+        if (!diagonalEffectRecipientCTAs) {
+          // The producer barrier can live on a different CTA row than the
+          // buffer it publishes (for example, leader-issued or broadcast
+          // writes). Collapse the barrier row, then re-expand only onto the
+          // buffer rows that the write actually reaches.
+          trackedBarriers = reduce<arith::OrIOp>(fb, trackedBarriers,
+                                                 /*axis=*/0);
+          trackedBarriers =
+              convertAndBroadcast(fb, trackedBarriers, {2},
+                                  writeTrackingType);
+          Value effectCTAMask = createRecipientCTAMask(fb, writeTrackingType,
+                                                       effectRecipientCTAs);
+          trackedBarriers =
+              arith::AndIOp::create(fb, trackedBarriers, effectCTAMask);
+        } else {
+          trackedBarriers = convertAndBroadcast(fb, trackedBarriers, {0, 2},
+                                                writeTrackingType);
+        }
         Value bufferDescriptor =
             createBufferDescriptor(fb, bufOffset, bufLengthVal);
         Value buffersEqBuf =
@@ -1789,7 +1810,7 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
         buffersEqBuf =
             convertAndBroadcast(fb, buffersEqBuf, {0, 1}, writeTrackingType);
         Value trackMask =
-            arith::AndIOp::create(fb, barriersEqBar, buffersEqBuf);
+            arith::AndIOp::create(fb, trackedBarriers, buffersEqBuf);
         Value writeTrackingOne =
             tti::createConstIntTensor(fb, fb.getLoc(), 1, writeTrackingType);
         Value newTracking = arith::SelectOp::create(
@@ -1874,12 +1895,18 @@ void FunctionBuilder::createClearBarrierWriteTrackingCall(
         createCTAScopedStoreScratchMemory(
             fb, fb.getLoc(), barrierWriteRecipientsPtr, updatedRecipients,
             barrierWriteRecipientsType, barrierRecipientCTAs);
-        barriersEqBar =
-            convertAndBroadcast(fb, barriersEqBar, {0, 2}, writeTrackingType);
+        Value trackedBarriers = reduce<arith::OrIOp>(fb, selectedBarrier,
+                                                     /*axis=*/0);
+        trackedBarriers =
+            convertAndBroadcast(fb, trackedBarriers, {2}, writeTrackingType);
+        Value effectCTAMask = createRecipientCTAMask(fb, writeTrackingType,
+                                                     effectRecipientCTAs);
+        trackedBarriers =
+            arith::AndIOp::create(fb, trackedBarriers, effectCTAMask);
         Value zero =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeTrackingType);
         Value updated =
-            arith::SelectOp::create(fb, barriersEqBar, zero, writeTracking);
+            arith::SelectOp::create(fb, trackedBarriers, zero, writeTracking);
         createCTAScopedStoreScratchMemory(fb, fb.getLoc(), writeTrackingPtr,
                                           updated, writeTrackingType,
                                           recipientCTAs);
@@ -2030,12 +2057,18 @@ void FunctionBuilder::createTransferVisibleWritesCall(
             fb, arith::ConstantIntOp::create(fb, 1, 32), ctaId);
         Value recipientCTAs =
             arith::OrIOp::create(fb, currentCTA, trackedRecipientCTAs);
-        barriersEqBar =
-            convertAndBroadcast(fb, barriersEqBar, {0, 2}, writeTrackingType);
+        Value trackedBarriers = reduce<arith::OrIOp>(fb, selectedBarrier,
+                                                     /*axis=*/0);
+        trackedBarriers =
+            convertAndBroadcast(fb, trackedBarriers, {2}, writeTrackingType);
+        Value effectCTAMask = createRecipientCTAMask(
+            fb, writeTrackingType, recipientCTAs);
+        trackedBarriers =
+            arith::AndIOp::create(fb, trackedBarriers, effectCTAMask);
         Value zeroTracking =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeTrackingType);
         Value trackingBuffers = arith::SelectOp::create(
-            fb, barriersEqBar, writeTracking, zeroTracking);
+            fb, trackedBarriers, writeTracking, zeroTracking);
         trackingBuffers = reduceLastDim<arith::OrIOp>(fb, trackingBuffers);
         trackingBuffers = createConvertLayout(
             fb, trackingBuffers, writeVisibilityType.getEncoding());
