@@ -200,7 +200,8 @@ Value getMulticastRecipientCTAs(ImplicitLocOpBuilder &b, Value alloc) {
 
 Value getTMAEffectRecipientCTAs(ImplicitLocOpBuilder &b,
                                 ttng::TMALoadLikeOpInterface tmaLoad) {
-  if (!tmaLoad.getMulticast() && !ttng::getModuleTwoCTAs(tmaLoad.getOperation()))
+  if (!tmaLoad.getMulticast() &&
+      !ttng::getModuleTwoCTAs(tmaLoad.getOperation()))
     return currentCTAMask(b);
   uint16_t broadcastMask = getBlockBroadcastMask(tmaLoad.getResult());
   if (ttng::getModuleTwoCTAs(tmaLoad.getOperation())) {

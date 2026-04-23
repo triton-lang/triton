@@ -1793,8 +1793,7 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
           trackedBarriers = reduce<arith::OrIOp>(fb, trackedBarriers,
                                                  /*axis=*/0);
           trackedBarriers =
-              convertAndBroadcast(fb, trackedBarriers, {2},
-                                  writeTrackingType);
+              convertAndBroadcast(fb, trackedBarriers, {2}, writeTrackingType);
           Value effectCTAMask = createRecipientCTAMask(fb, writeTrackingType,
                                                        effectRecipientCTAs);
           trackedBarriers =
@@ -1899,8 +1898,8 @@ void FunctionBuilder::createClearBarrierWriteTrackingCall(
                                                      /*axis=*/0);
         trackedBarriers =
             convertAndBroadcast(fb, trackedBarriers, {2}, writeTrackingType);
-        Value effectCTAMask = createRecipientCTAMask(fb, writeTrackingType,
-                                                     effectRecipientCTAs);
+        Value effectCTAMask =
+            createRecipientCTAMask(fb, writeTrackingType, effectRecipientCTAs);
         trackedBarriers =
             arith::AndIOp::create(fb, trackedBarriers, effectCTAMask);
         Value zero =
@@ -2061,8 +2060,8 @@ void FunctionBuilder::createTransferVisibleWritesCall(
                                                      /*axis=*/0);
         trackedBarriers =
             convertAndBroadcast(fb, trackedBarriers, {2}, writeTrackingType);
-        Value effectCTAMask = createRecipientCTAMask(
-            fb, writeTrackingType, recipientCTAs);
+        Value effectCTAMask =
+            createRecipientCTAMask(fb, writeTrackingType, recipientCTAs);
         trackedBarriers =
             arith::AndIOp::create(fb, trackedBarriers, effectCTAMask);
         Value zeroTracking =
