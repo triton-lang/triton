@@ -754,14 +754,21 @@ void init_gluon_ir(py::module &&m) {
       .def("create_split",
            [](GluonOpBuilder &self, Value &a) -> py::tuple {
              auto argTy = cast<RankedTensorType>(a.getType());
-             auto ctx = argTy.getContext();
-             auto enc = ttg::SliceEncodingAttr::get(
-                 ctx, argTy.getRank() - 1,
-                 cast<ttg::DistributedEncodingTrait>(argTy.getEncoding()));
-             auto resTy =
-                 RankedTensorType::get(ArrayRef(argTy.getShape()).drop_back(),
-                                       argTy.getElementType(), enc);
-             auto op = self.create<triton::SplitOp>(TypeRange{resTy, resTy}, a);
+             auto enc = argTy.getEncoding();
+             triton::SplitOp op;
+             if (isa<gluon::AutoEncodingAttr, gluon::CoalescedEncodingAttr>(
+                     enc)) {
+               op = self.create<triton::SplitOp>(a);
+             } else {
+               auto ctx = argTy.getContext();
+               auto sliceEnc = ttg::SliceEncodingAttr::get(
+                   ctx, argTy.getRank() - 1,
+                   cast<ttg::DistributedEncodingTrait>(enc));
+               auto resTy =
+                   RankedTensorType::get(ArrayRef(argTy.getShape()).drop_back(),
+                                         argTy.getElementType(), sliceEnc);
+               op = self.create<triton::SplitOp>(TypeRange{resTy, resTy}, a);
+             }
              return py::make_tuple(op->getResult(0), op->getResult(1));
            })
       .def("create_warpgroup_mma",
@@ -1016,6 +1023,18 @@ void init_gluon_ir(py::module &&m) {
               tt::CacheModifier cacheModifier) {
              self.create<ttag::BufferLoadToLocalOp>(
                  dest, ptr, offsets, mask, other, stride, cacheModifier);
+           })
+      .def("create_scaled_upcast_fp4",
+           [](GluonOpBuilder &self, Value input, Value scale, Type elemType,
+              int axis) -> Value {
+             return self.create<ttag::ScaledUpcastFp4Op>(input, scale, elemType,
+                                                         axis);
+           })
+      .def("create_scaled_upcast_fp8",
+           [](GluonOpBuilder &self, Type resultType, Value input,
+              Value scale) -> Value {
+             return self.create<ttag::ScaledUpcastFp8Op>(resultType, input,
+                                                         scale);
            })
       .def("create_make_tensor_descriptor",
            [](TritonOpBuilder &self, Type resultTy, Value &base,

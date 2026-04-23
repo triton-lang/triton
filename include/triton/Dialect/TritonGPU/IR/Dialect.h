@@ -112,6 +112,10 @@ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
 SmallVector<unsigned> getElemsPerThread(Type type);
 
+FailureOr<RankedTensorType> inferFp4ToFpResultType(RankedTensorType srcType,
+                                                   Type elemType, int32_t axis,
+                                                   std::optional<Location> loc);
+
 // Returns the number of warps per CTA that have access to non-replicated
 // elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,
 // 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4] and tensor shape = [2, 2],

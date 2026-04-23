@@ -1237,14 +1237,14 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     }
 
     SmallVector<Value> desc =
-        unpackLLElements(loc, adaptor.getDesc(), rewriter);
+        mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, adaptor.getDesc());
 
     SmallVector<int64_t> blockShape = llvm::to_vector(tensorDescTy.getShape());
 
-    // 2D tensors: 12 dwords (group0: 4, group1: 8)
-    // 3D-5D tensors: 20 dwords (group0: 4, group1: 8, group2: 4, group3: 4)
-    assert((blockShape.size() <= 2 && desc.size() == 12) ||
-           (blockShape.size() > 2 && desc.size() == 20));
+    // 2D tensors: 2 vector groups (group0: <4 x i32>, group1: <8 x i32>)
+    // 3D-5D tensors: 4 vector groups (+group2, group3: <4 x i32>)
+    assert((blockShape.size() <= 2 && desc.size() == 2) ||
+           (blockShape.size() > 2 && desc.size() == 4));
 
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), elementType, rewriter);
@@ -1301,14 +1301,14 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
 
     SmallVector<Value> desc =
-        unpackLLElements(loc, adaptor.getDesc(), rewriter);
+        mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, adaptor.getDesc());
 
     SmallVector<int64_t> blockShape = llvm::to_vector(tensorDescTy.getShape());
 
-    // 2D tensors: 12 dwords (group0: 4, group1: 8)
-    // 3D-5D tensors: 20 dwords (group0: 4, group1: 8, group2: 4, group3: 4)
-    assert((blockShape.size() <= 2 && desc.size() == 12) ||
-           (blockShape.size() > 2 && desc.size() == 20));
+    // 2D tensors: 2 vector groups (group0: <4 x i32>, group1: <8 x i32>)
+    // 3D-5D tensors: 4 vector groups (+group2, group3: <4 x i32>)
+    assert((blockShape.size() <= 2 && desc.size() == 2) ||
+           (blockShape.size() > 2 && desc.size() == 4));
 
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(), elementType, rewriter);
@@ -1383,7 +1383,7 @@ struct AsyncTDMScatterOpConversion
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
 
     SmallVector<Value> desc =
-        unpackLLElements(loc, adaptor.getDesc(), rewriter);
+        mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, adaptor.getDesc());
 
     SmallVector<int64_t> blockShape = llvm::to_vector(tensorDescTy.getShape());
 
@@ -1483,7 +1483,7 @@ struct AsyncTDMGatherOpConversion
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
 
     SmallVector<Value> desc =
-        unpackLLElements(loc, adaptor.getDesc(), rewriter);
+        mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, adaptor.getDesc());
 
     SmallVector<int64_t> blockShape = llvm::to_vector(tensorDescTy.getShape());
 
@@ -2503,7 +2503,7 @@ struct TDMPrefetchConversion
     Type elementType =
         getTypeConverter()->convertType(tdescType.getElementType());
     SmallVector<Value> desc =
-        unpackLLElements(loc, adaptor.getDesc(), rewriter);
+        mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, adaptor.getDesc());
     SmallVector<Value> offset = adaptor.getIndices();
 
     auto mod = op->getParentOfType<ModuleOp>();

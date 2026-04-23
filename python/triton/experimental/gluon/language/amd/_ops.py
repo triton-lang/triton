@@ -9,6 +9,13 @@ from .._layouts import DotOperandLayout
 from ._layouts import AMDWMMALayout
 
 
+def _wrap_scaled_upcast_result(handle, elem_type, semantic):
+    shape = semantic.builder.get_shape_from_tensor(handle)
+    layout = semantic.builder.get_gluon_layout_from_tensor(handle)
+    ret_ty = ttgl.distributed_type(elem_type, shape, layout)
+    return ttgl.tensor(handle, ret_ty)
+
+
 def _verify_wmma(version, a, b, acc):
     _check(acc is not None, lambda: "acc is required")
 
@@ -100,3 +107,46 @@ def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, seman
     output = semantic.dot_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, fast_math=False, lhs_k_pack=True,
                                  rhs_k_pack=True, out_dtype=ttgl.float32)
     return ttgl.tensor(output.handle, acc.type)
+
+
+def _scaled_upcast(src, scale, elem_type, axis, semantic):
+    _check(isinstance(src.type, ttgl.distributed_type),
+           lambda: f"Expected src to have a distributed_type but got {src.type}")
+    _check(isinstance(scale.type, ttgl.distributed_type),
+           lambda: f"Expected scale to have a distributed_type but got {scale.type}")
+    _check(elem_type in {ttgl.float16, ttgl.bfloat16},
+           lambda: f"Expected elem_type to be fp16 or bf16 but got {elem_type}")
+
+    if src.dtype in {ttgl.float8e4nv, ttgl.float8e5}:
+        _check(axis is None, lambda: "axis must be None for fp8 scaled_upcast")
+        _check(scale.type.shape == src.type.shape,
+               lambda: f"Expected scale shape for fp8 scaled_upcast to be {src.type.shape} but got {scale.type.shape}")
+        _check(
+            scale.type.layout == src.type.layout,
+            lambda: f"Expected scale layout for fp8 scaled_upcast to be {src.type.layout} but got {scale.type.layout}")
+        # Note: bf16 is allowed due to CDNA3/CDNA4 conversion before passing to scaled_upcast
+        _check(scale.dtype in {ttgl.int8, ttgl.uint8, ttgl.bfloat16},
+               lambda: f"Unsupported scale dtype for fp8 scaled_upcast: {scale.dtype}")
+        ret_ty = scale.type.with_element_ty(elem_type)
+        handle = semantic.builder.create_scaled_upcast_fp8(ret_ty.to_ir(semantic.builder), src.handle, scale.handle)
+        return _wrap_scaled_upcast_result(handle, elem_type, semantic)
+
+    _check(src.dtype in {ttgl.int8, ttgl.uint8},
+           lambda: f"Expected packed fp4 input in int8/uint8 or fp8 input, but got {src.dtype}")
+    _check(axis is not None, lambda: "axis is required for packed fp4 scaled_upcast")
+
+    rank = len(src.type.shape)
+    _check(-rank <= axis < rank, lambda: f"axis {axis} out of range for rank {rank}")
+    if axis < 0:
+        axis += rank
+
+    expected_shape = list(src.type.shape)
+    expected_shape[axis] *= 2
+    _check(scale.type.shape == expected_shape,
+           lambda: f"Expected scale shape for fp4 scaled_upcast to be {expected_shape} but got {scale.type.shape}")
+    _check(scale.dtype in {ttgl.int8, ttgl.uint8, ttgl.bfloat16},
+           lambda: f"Unsupported scale dtype for fp4 scaled_upcast: {scale.dtype}")
+
+    handle = semantic.builder.create_scaled_upcast_fp4(src.handle, scale.handle, elem_type.to_ir(semantic.builder),
+                                                       axis)
+    return _wrap_scaled_upcast_result(handle, elem_type, semantic)
