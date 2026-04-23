@@ -1,7 +1,6 @@
 #include "Data/TraceData.h"
 #include "Dump/TraceDataDump.h"
 #include "Profiler/Graph.h"
-#include "Utility/MsgPackWriter.h"
 
 #include <algorithm>
 #include <chrono>
@@ -350,19 +349,22 @@ std::string TraceData::toJsonString(size_t phase) const {
   return os.str();
 }
 
-std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
-  std::ostringstream os;
-  dumpChromeTrace(os, phase);
-  MsgPackWriter writer;
-  writer.packStr(os.str());
-  return std::move(writer).take();
-}
-
 std::vector<uint8_t> TraceData::toPerfettoTrace(size_t phase) const {
   std::ostringstream os;
   dumpPerfettoTrace(os, phase);
   const auto bytes = os.str();
   return std::vector<uint8_t>(bytes.begin(), bytes.end());
+}
+
+Data::SerializedData TraceData::doSerialize(OutputFormat outputFormat,
+                                            size_t phase) const {
+  if (outputFormat == OutputFormat::ChromeTrace) {
+    const auto jsonStr = toJsonString(phase);
+    return {{jsonStr.begin(), jsonStr.end()}, /*binary=*/false};
+  } else if (outputFormat == OutputFormat::PerfettoTrace) {
+    return {toPerfettoTrace(phase), /*binary=*/true};
+  }
+  throw std::logic_error("Output format not supported");
 }
 
 template <typename CycleHandler, typename KernelHandler>
@@ -549,17 +551,6 @@ void TraceData::dumpPerfettoTrace(std::ostream &os, size_t phase) const {
       [&](trace_data_dump::TraceDump &traceDump) {
         trace_data_dump::dumpPerfettoTraceData(traceDump, os);
       });
-}
-
-void TraceData::doDump(std::ostream &os, OutputFormat outputFormat,
-                       size_t phase) const {
-  if (outputFormat == OutputFormat::ChromeTrace) {
-    dumpChromeTrace(os, phase);
-  } else if (outputFormat == OutputFormat::PerfettoTrace) {
-    dumpPerfettoTrace(os, phase);
-  } else {
-    throw std::logic_error("Output format not supported");
-  }
 }
 
 TraceData::TraceData(const std::string &path, ContextSource *contextSource)

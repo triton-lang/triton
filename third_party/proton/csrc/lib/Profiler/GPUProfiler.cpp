@@ -92,99 +92,58 @@ void periodicFlushDataPhases(Data &data, OutputFormat periodicFlushingFormat,
     auto pathWithPhase = path + ".part_" + std::to_string(startPhase) + "." +
                          periodicFlushingFormatString;
 
-    if (periodicFlushingFormat == OutputFormat::Hatchet ||
-        periodicFlushingFormat == OutputFormat::ChromeTrace) {
-      std::string jsonStr;
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        jsonStr = data.toJsonString(startPhase);
-        const auto t1 = Clock::now();
-        stats.totalToJsonUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
+    Data::SerializedData serialized;
+    if (timingEnabled) {
+      const auto t0 = Clock::now();
+      serialized = data.serialize(periodicFlushingFormat, startPhase);
+      const auto t1 = Clock::now();
+      const auto serializeUs =
+          std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+              .count();
+      if (periodicFlushingFormat == OutputFormat::Hatchet ||
+          periodicFlushingFormat == OutputFormat::ChromeTrace) {
+        stats.totalToJsonUs += serializeUs;
         ++stats.toJsonCalls;
-      } else {
-        jsonStr = data.toJsonString(startPhase);
-      }
-
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
-        ofs << jsonStr;
-        ofs.flush();
-        const auto t1 = Clock::now();
-        stats.totalJsonWriteUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        ++stats.jsonWriteCalls;
-      } else {
-        std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
-        ofs << jsonStr;
-      }
-    } else if (periodicFlushingFormat == OutputFormat::PerfettoTrace) {
-      std::vector<uint8_t> perfettoTrace;
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        perfettoTrace = data.toPerfettoTrace(startPhase);
-        const auto t1 = Clock::now();
-        stats.totalToPerfettoTraceUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
+      } else if (periodicFlushingFormat == OutputFormat::PerfettoTrace) {
+        stats.totalToPerfettoTraceUs += serializeUs;
         ++stats.toPerfettoTraceCalls;
-      } else {
-        perfettoTrace = data.toPerfettoTrace(startPhase);
-      }
-
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        std::ofstream ofs(pathWithPhase,
-                          std::ios::out | std::ios::binary | std::ios::trunc);
-        ofs.write(reinterpret_cast<const char *>(perfettoTrace.data()),
-                  perfettoTrace.size());
-        ofs.flush();
-        const auto t1 = Clock::now();
-        stats.totalPerfettoTraceWriteUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        ++stats.perfettoTraceWriteCalls;
-      } else {
-        std::ofstream ofs(pathWithPhase,
-                          std::ios::out | std::ios::binary | std::ios::trunc);
-        ofs.write(reinterpret_cast<const char *>(perfettoTrace.data()),
-                  perfettoTrace.size());
-      }
-    } else if (periodicFlushingFormat == OutputFormat::HatchetMsgPack) {
-      std::vector<uint8_t> msgPack;
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        msgPack = data.toMsgPack(startPhase);
-        const auto t1 = Clock::now();
-        stats.totalToMsgPackUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
+      } else if (periodicFlushingFormat == OutputFormat::HatchetMsgPack) {
+        stats.totalToMsgPackUs += serializeUs;
         ++stats.toMsgPackCalls;
-      } else {
-        msgPack = data.toMsgPack(startPhase);
       }
+    } else {
+      serialized = data.serialize(periodicFlushingFormat, startPhase);
+    }
 
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        std::ofstream ofs(pathWithPhase,
-                          std::ios::out | std::ios::binary | std::ios::trunc);
-        ofs.write(reinterpret_cast<const char *>(msgPack.data()),
-                  msgPack.size());
-        ofs.flush();
-        const auto t1 = Clock::now();
-        stats.totalMsgPackWriteUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
+    auto fileMode = std::ios::out | std::ios::trunc;
+    if (serialized.binary) {
+      fileMode |= std::ios::binary;
+    }
+    if (timingEnabled) {
+      const auto t0 = Clock::now();
+      std::ofstream ofs(pathWithPhase, fileMode);
+      ofs.write(reinterpret_cast<const char *>(serialized.bytes.data()),
+                serialized.bytes.size());
+      ofs.flush();
+      const auto t1 = Clock::now();
+      const auto writeUs =
+          std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+              .count();
+      if (periodicFlushingFormat == OutputFormat::Hatchet ||
+          periodicFlushingFormat == OutputFormat::ChromeTrace) {
+        stats.totalJsonWriteUs += writeUs;
+        ++stats.jsonWriteCalls;
+      } else if (periodicFlushingFormat == OutputFormat::PerfettoTrace) {
+        stats.totalPerfettoTraceWriteUs += writeUs;
+        ++stats.perfettoTraceWriteCalls;
+      } else if (periodicFlushingFormat == OutputFormat::HatchetMsgPack) {
+        stats.totalMsgPackWriteUs += writeUs;
         ++stats.msgPackWriteCalls;
-      } else {
-        std::ofstream ofs(pathWithPhase,
-                          std::ios::out | std::ios::binary | std::ios::trunc);
-        ofs.write(reinterpret_cast<const char *>(msgPack.data()),
-                  msgPack.size());
       }
+    } else {
+      std::ofstream ofs(pathWithPhase, fileMode);
+      ofs.write(reinterpret_cast<const char *>(serialized.bytes.data()),
+                serialized.bytes.size());
     }
   }
 }
