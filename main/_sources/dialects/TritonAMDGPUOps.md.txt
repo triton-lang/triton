@@ -1211,7 +1211,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Result | Description |
 | :----: | ----------- |
-| `output` | ranked tensor of 16-bit float or bfloat16 type or 32-bit float values |
+| `output` | ranked tensor of 16-bit float or bfloat16 type values |
 
 
 
@@ -1247,7 +1247,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Result | Description |
 | :----: | ----------- |
-| `output` | ranked tensor of 16-bit float or bfloat16 type or 32-bit float values |
+| `output` | ranked tensor of 16-bit float or bfloat16 type values |
 
 
 
