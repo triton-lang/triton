@@ -1216,15 +1216,15 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, output_forma
         test0_scope = next(
             event for event in trace_events
             if event["category"] == "scope" and event["call_stack"] == ["ROOT", "test0"])
-        replay_gpu_tid = foo_events[0]["track_id"]
         first_replay_kernel = min(replay_kernel_events, key=lambda event: event["timestamp"])
         flow_finish = next(event for event in trace_events
                            if event["category"] == "flow" and event["phase"] == "f"
-                           and event["name"] == "launch->kernel" and event["track_id"] == replay_gpu_tid
+                           and event["name"] == "launch->kernel"
                            and event["timestamp"] == first_replay_kernel["timestamp"])
         flow_start = next(event for event in trace_events
                           if event["category"] == "flow" and event["phase"] == "s"
                           and event["id"] == flow_finish["id"])
+        assert flow_finish["track_id"] == first_replay_kernel["track_id"]
         assert flow_start["track_id"] == test0_scope["track_id"]
         assert test0_scope["timestamp"] == flow_start["timestamp"] <= flow_finish["timestamp"]
 
