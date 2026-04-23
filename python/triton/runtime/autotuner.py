@@ -221,8 +221,15 @@ class Autotuner(KernelInterface):
                     key.append(str(arg.dtype))
             key = tuple(key)
             if key not in self.cache:
-                used_cached_result = False
                 pruned_configs = self.prune_configs(kwargs)
+
+                # If autotuning is disabled via environment knob, skip benchmarking
+                # and deterministically pick the first valid config after pruning.
+                if knobs.autotuning.disable:
+                    chosen_config = pruned_configs[0] if pruned_configs else self.configs[0]
+                    self.cache[key] = chosen_config
+                else:
+                    used_cached_result = False
 
                 def benchmark():
                     bench_start = time.time()
@@ -234,10 +241,11 @@ class Autotuner(KernelInterface):
                     self.pre_hook(full_nargs, reset_only=True)
                     self.configs_timings = timings
 
-                if self.cache_results:
-                    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
-                else:
-                    benchmark()
+                if not knobs.autotuning.disable:
+                    if self.cache_results:
+                        used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                    else:
+                        benchmark()
 
             config = self.cache[key]
         else:
