@@ -34,9 +34,9 @@ def _normalize_trace_event(name, category, track_name, call_stack=None, args=Non
     if isinstance(args.get("metrics"), dict):
         metrics.update({key: _normalize_metric_value(value) for key, value in args["metrics"].items()})
     metrics.update({
-        key.removeprefix("metric."): _normalize_metric_value(value)
+        key.removeprefix("debug.").removeprefix("metric."): _normalize_metric_value(value)
         for key, value in args.items()
-        if key.startswith("metric.")
+        if key.startswith("metric.") or key.startswith("debug.metric.")
     })
     return {
         "name": name,
@@ -113,8 +113,6 @@ def _perfetto_trace_to_python(path: pathlib.Path | str):
                 """
                 SELECT arg_set_id, flat_key, key, string_value, int_value, real_value
                 FROM args
-                WHERE flat_key GLOB 'debug.call_stack_*' OR key GLOB 'call_stack_*'
-                   OR flat_key GLOB 'debug.metric.*' OR key GLOB 'metric.*'
                 ORDER BY arg_set_id, flat_key, key
                 """
             ))
