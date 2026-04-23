@@ -78,21 +78,22 @@ struct PeriodicFlushStats {
   size_t perfettoTraceWriteCalls{0};
 };
 
-void periodicFlushDataPhases(Data &data,
-                             const std::string &periodicFlushingFormat,
+void periodicFlushDataPhases(Data &data, OutputFormat periodicFlushingFormat,
                              size_t minPhaseToFlush, size_t maxPhaseToFlush,
                              const bool timingEnabled,
                              PeriodicFlushStats &stats) {
   using Clock = std::chrono::steady_clock;
   const auto &path = data.getPath();
+  const auto periodicFlushingFormatString =
+      outputFormatToString(periodicFlushingFormat);
 
   for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
        startPhase++) {
     auto pathWithPhase = path + ".part_" + std::to_string(startPhase) + "." +
-                         periodicFlushingFormat;
+                         periodicFlushingFormatString;
 
-    if (periodicFlushingFormat == "hatchet" ||
-        periodicFlushingFormat == "chrome_trace") {
+    if (periodicFlushingFormat == OutputFormat::Hatchet ||
+        periodicFlushingFormat == OutputFormat::ChromeTrace) {
       std::string jsonStr;
       if (timingEnabled) {
         const auto t0 = Clock::now();
@@ -120,7 +121,7 @@ void periodicFlushDataPhases(Data &data,
         std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
         ofs << jsonStr;
       }
-    } else if (periodicFlushingFormat == "perfetto_trace") {
+    } else if (periodicFlushingFormat == OutputFormat::PerfettoTrace) {
       std::vector<uint8_t> perfettoTrace;
       if (timingEnabled) {
         const auto t0 = Clock::now();
@@ -152,7 +153,7 @@ void periodicFlushDataPhases(Data &data,
         ofs.write(reinterpret_cast<const char *>(perfettoTrace.data()),
                   perfettoTrace.size());
       }
-    } else if (periodicFlushingFormat == "hatchet_msgpack") {
+    } else if (periodicFlushingFormat == OutputFormat::HatchetMsgPack) {
       std::vector<uint8_t> msgPack;
       if (timingEnabled) {
         const auto t0 = Clock::now();
@@ -207,12 +208,12 @@ void periodicClearDataPhases(Data &data, size_t maxPhaseToFlush,
 } // namespace
 
 void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
-                             std::string &periodicFlushingFormat,
+                             OutputFormat &periodicFlushingFormat,
                              const std::vector<std::string> &modeAndOptions,
                              const char *profilerName) {
   periodicFlushingEnabled = true;
   if (modeAndOptions.size() < 2) {
-    periodicFlushingFormat = "hatchet";
+    periodicFlushingFormat = OutputFormat::Hatchet;
     return;
   }
 
@@ -224,14 +225,14 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
       throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
                                   ": unsupported option key: " + key);
     }
-    if (value != "hatchet_msgpack" && value != "chrome_trace" &&
-        value != "perfetto_trace" && value != "hatchet") {
+    try {
+      periodicFlushingFormat = parseOutputFormat(value);
+    } catch (const std::runtime_error &) {
       throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
                                   ": unsupported format: " + value);
     }
-    periodicFlushingFormat = value;
   } else {
-    periodicFlushingFormat = "hatchet";
+    periodicFlushingFormat = OutputFormat::Hatchet;
   }
 }
 
@@ -247,7 +248,7 @@ void updateDataPhases(std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
 }
 
 void flushDataPhasesImpl(
-    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
+    const bool periodicFlushEnabled, OutputFormat periodicFlushingFormat,
     std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
@@ -298,24 +299,32 @@ void flushDataPhasesImpl(
                             maxPhaseToFlush, timingEnabled, stats);
     periodicClearDataPhases(*data, maxPhaseToFlush, timingEnabled, stats);
     if (timingEnabled) {
+      const auto periodicFlushingFormatString =
+          outputFormatToString(periodicFlushingFormat);
       std::cerr << "[PROTON] periodicFlush timing: path=" << data->getPath()
-                << " format=" << periodicFlushingFormat << " phases=["
-                << minPhaseToFlush << "," << maxPhaseToFlush
-                << "] toJsonString_us=" << stats.totalToJsonUs
-                << " toJsonString_calls=" << stats.toJsonCalls
-                << " toMsgPack_us=" << stats.totalToMsgPackUs
-                << " toMsgPack_calls=" << stats.toMsgPackCalls
-                << " toPerfettoTrace_us=" << stats.totalToPerfettoTraceUs
-                << " toPerfettoTrace_calls=" << stats.toPerfettoTraceCalls
-                << " json_write_us=" << stats.totalJsonWriteUs
-                << " json_write_calls=" << stats.jsonWriteCalls
-                << " msgpack_write_us=" << stats.totalMsgPackWriteUs
-                << " msgpack_write_calls=" << stats.msgPackWriteCalls
-                << " perfetto_trace_write_us="
-                << stats.totalPerfettoTraceWriteUs
-                << " perfetto_trace_write_calls="
-                << stats.perfettoTraceWriteCalls
-                << " clear_us=" << stats.clearUs << std::endl;
+                << " format=" << periodicFlushingFormatString << " phases=["
+                << minPhaseToFlush << "," << maxPhaseToFlush << "]";
+      if (periodicFlushingFormat == OutputFormat::Hatchet ||
+          periodicFlushingFormat == OutputFormat::ChromeTrace) {
+        std::cerr << " toJsonString_us=" << stats.totalToJsonUs
+                  << " toJsonString_calls=" << stats.toJsonCalls
+                  << " json_write_us=" << stats.totalJsonWriteUs
+                  << " json_write_calls=" << stats.jsonWriteCalls;
+      } else if (periodicFlushingFormat == OutputFormat::HatchetMsgPack) {
+        std::cerr << " toMsgPack_us=" << stats.totalToMsgPackUs
+                  << " toMsgPack_calls=" << stats.toMsgPackCalls
+                  << " msgpack_write_us=" << stats.totalMsgPackWriteUs
+                  << " msgpack_write_calls=" << stats.msgPackWriteCalls;
+      } else if (periodicFlushingFormat == OutputFormat::PerfettoTrace) {
+        std::cerr << " toPerfettoTrace_us=" << stats.totalToPerfettoTraceUs
+                  << " toPerfettoTrace_calls="
+                  << stats.toPerfettoTraceCalls
+                  << " perfetto_trace_write_us="
+                  << stats.totalPerfettoTraceWriteUs
+                  << " perfetto_trace_write_calls="
+                  << stats.perfettoTraceWriteCalls;
+      }
+      std::cerr << " clear_us=" << stats.clearUs << std::endl;
     }
   }
 }

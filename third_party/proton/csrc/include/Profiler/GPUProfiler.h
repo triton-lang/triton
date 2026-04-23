@@ -2,6 +2,7 @@
 #define PROTON_PROFILER_GPU_PROFILER_H_
 
 #include "Context/Context.h"
+#include "Data/Data.h"
 #include "Data/Metric.h"
 #include "Profiler.h"
 #include "Profiler/Graph.h"
@@ -26,7 +27,7 @@ namespace proton {
 namespace detail {
 
 void flushDataPhasesImpl(
-    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
+    const bool periodicFlushEnabled, OutputFormat periodicFlushingFormat,
     std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
@@ -39,7 +40,7 @@ void updateDataPhases(
     Data *data, size_t phase);
 
 void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
-                             std::string &periodicFlushingFormat,
+                             OutputFormat &periodicFlushingFormat,
                              const std::vector<std::string> &modeAndOptions,
                              const char *profilerName);
 } // namespace detail
@@ -275,7 +276,7 @@ protected:
 
   bool pcSamplingEnabled{false};
   bool periodicFlushingEnabled{false};
-  std::string periodicFlushingFormat{};
+  OutputFormat periodicFlushingFormat{OutputFormat::Hatchet};
 };
 
 } // namespace proton
