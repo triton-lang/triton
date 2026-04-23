@@ -208,10 +208,10 @@ void appendCallStackAnnotations(std::vector<PerfettoAnnotation> &annotations,
                                 PerfettoInternedNames &newInternedNames) {
   for (size_t i = 0; i < contexts.size(); ++i) {
     PerfettoAnnotation annotation;
-    annotation.nameIid = internPerfettoString(
-        internedNames.debugAnnotationNames,
-        newInternedNames.debugAnnotationNames,
-        "call_stack_" + std::to_string(i));
+    annotation.nameIid =
+        internPerfettoString(internedNames.debugAnnotationNames,
+                             newInternedNames.debugAnnotationNames,
+                             "call_stack_" + std::to_string(i));
     annotation.stringValueIid = internPerfettoString(
         internedNames.debugAnnotationStringValues,
         newInternedNames.debugAnnotationStringValues, contexts[i].name);
@@ -337,8 +337,7 @@ void appendTrackEventPacket(ProtoWriter &trace, uint64_t timestampNs,
                            eventIds.categoryIid);
     for (const auto &annotation : annotations) {
       ProtoWriter message;
-      message.writeUInt64(/*DebugAnnotation.name_iid=*/1,
-                          annotation.nameIid);
+      message.writeUInt64(/*DebugAnnotation.name_iid=*/1, annotation.nameIid);
       switch (annotation.kind) {
       case PerfettoAnnotation::Kind::String:
         message.writeUInt64(/*DebugAnnotation.string_value_iid=*/17,
@@ -496,14 +495,13 @@ void appendKernelTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
         terminatingFlowId = kPerfettoFlowIdBase + event.launchEventId;
       }
 
-      const auto eventIds = internSliceEvent(
-          internedNames, newInternedNames, event.getName(),
-          PerfettoEventCategory::Kernel);
+      const auto eventIds =
+          internSliceEvent(internedNames, newInternedNames, event.getName(),
+                           PerfettoEventCategory::Kernel);
       appendSlicePackets(trace, traceDump.minTimeStamp, trackUuid,
-                         event.getStartTimeNs(), event.getEndTimeNs(),
-                         eventIds, annotations, std::nullopt,
-                         terminatingFlowId, newInternedNames,
-                         incrementalStateCleared);
+                         event.getStartTimeNs(), event.getEndTimeNs(), eventIds,
+                         annotations, std::nullopt, terminatingFlowId,
+                         newInternedNames, incrementalStateCleared);
     }
   }
 }
