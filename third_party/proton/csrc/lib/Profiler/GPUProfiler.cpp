@@ -317,8 +317,7 @@ void flushDataPhasesImpl(
                   << " msgpack_write_calls=" << stats.msgPackWriteCalls;
       } else if (periodicFlushingFormat == OutputFormat::PerfettoTrace) {
         std::cerr << " toPerfettoTrace_us=" << stats.totalToPerfettoTraceUs
-                  << " toPerfettoTrace_calls="
-                  << stats.toPerfettoTraceCalls
+                  << " toPerfettoTrace_calls=" << stats.toPerfettoTraceCalls
                   << " perfetto_trace_write_us="
                   << stats.totalPerfettoTraceWriteUs
                   << " perfetto_trace_write_calls="

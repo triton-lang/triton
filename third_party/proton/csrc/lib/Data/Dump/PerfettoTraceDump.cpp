@@ -100,8 +100,7 @@ struct PerfettoInternedNames {
 
   bool empty() const {
     return eventCategories.empty() && eventNames.empty() &&
-           debugAnnotationNames.empty() &&
-           debugAnnotationStringValues.empty();
+           debugAnnotationNames.empty() && debugAnnotationStringValues.empty();
   }
 };
 
@@ -260,8 +259,8 @@ void appendInternedDataPacket(ProtoWriter &trace,
     ProtoWriter entry;
     entry.writeUInt64(/*InternedString.iid=*/1, iid);
     entry.writeString(/*InternedString.name=*/2, value);
-    internedData.writeMessage(/*InternedData.debug_annotation_string_values=*/29,
-                              entry);
+    internedData.writeMessage(
+        /*InternedData.debug_annotation_string_values=*/29, entry);
   }
 
   ProtoWriter packet;

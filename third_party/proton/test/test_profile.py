@@ -104,22 +104,18 @@ def _perfetto_trace_to_python(path: pathlib.Path | str):
     with TraceProcessor(trace=path) as tp:
         has_track_descriptor = next(iter(tp.query("SELECT COUNT(*) AS cnt FROM track"))).cnt > 0
         slices = list(
-            tp.query(
-                """
+            tp.query("""
                 SELECT slice.id, slice.ts, slice.name, slice.category, slice.arg_set_id, track.name AS track_name
                 FROM slice
                 JOIN track ON slice.track_id = track.id
                 ORDER BY slice.ts, slice.id
-                """
-            ))
+                """))
         arg_rows = list(
-            tp.query(
-                """
+            tp.query("""
                 SELECT arg_set_id, flat_key, key, string_value, int_value, real_value
                 FROM args
                 ORDER BY arg_set_id, flat_key, key
-                """
-            ))
+                """))
 
     args_by_arg_set = {}
     for row in arg_rows:
@@ -1251,15 +1247,13 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, output_forma
                    for event in trace_events)
 
     replay_kernel_events = [
-        event for event in trace_events
-        if event["category"] == "kernel" and event["call_stack"] is not None
+        event for event in trace_events if event["category"] == "kernel" and event["call_stack"] is not None
         and event["call_stack"][:2] == ["ROOT", "test0"]
     ]
     foo_events = [event for event in replay_kernel_events if event["name"] == "foo"]
     metric_kernel_events = [event for event in replay_kernel_events if event["name"] == "<metric>"]
     metadata_kernel_events = [
-        event for event in replay_kernel_events
-        if COMPUTE_METADATA_SCOPE_NAME in event["call_stack"]
+        event for event in replay_kernel_events if COMPUTE_METADATA_SCOPE_NAME in event["call_stack"]
     ]
 
     assert len(foo_events) == 3
@@ -1270,26 +1264,27 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, output_forma
                 ("ROOT", "test0", "<captured_at>", "a", "foo"),
             }
     assert len(metric_kernel_events) == 1
-    assert metric_kernel_events[0]["call_stack"] == [
-        "ROOT", "test0", "<captured_at>", "a", "b", "c", "<metric>"
-    ]
+    assert metric_kernel_events[0]["call_stack"] == ["ROOT", "test0", "<captured_at>", "a", "b", "c", "<metric>"]
     assert all(event["name"] not in {"foo", "<metric>"} for event in metadata_kernel_events)
 
     if output_format == "chrome_trace":
-        test0_scope = next(
-            event for event in trace_events
-            if event["category"] == "scope" and event["call_stack"] == ["ROOT", "test0"])
+        test0_scope = next(event for event in trace_events
+                           if event["category"] == "scope" and event["call_stack"] == ["ROOT", "test0"])
         replay_kernel_points = {(event["track_id"], event["timestamp"]) for event in replay_kernel_events}
-        flow_events = [event for event in trace_events
-                       if event["category"] == "flow" and event["name"] == "launch->kernel"]
-        flow_starts = [event for event in flow_events
-                       if event["phase"] == "s" and event["track_id"] == test0_scope["track_id"]
-                       and event["timestamp"] == test0_scope["timestamp"]]
-        flow_finishes = [event for event in flow_events
-                         if event["phase"] == "f"
-                         and (event["track_id"], event["timestamp"]) in replay_kernel_points]
+        flow_events = [
+            event for event in trace_events if event["category"] == "flow" and event["name"] == "launch->kernel"
+        ]
+        flow_starts = [
+            event for event in flow_events if event["phase"] == "s" and event["track_id"] == test0_scope["track_id"]
+            and event["timestamp"] == test0_scope["timestamp"]
+        ]
+        flow_finishes = [
+            event for event in flow_events
+            if event["phase"] == "f" and (event["track_id"], event["timestamp"]) in replay_kernel_points
+        ]
         assert any(start["id"] == finish["id"] and start["timestamp"] <= finish["timestamp"]
-                   for start in flow_starts for finish in flow_finishes)
+                   for start in flow_starts
+                   for finish in flow_finishes)
 
 
 @pytest.mark.parametrize("profile_kind,output_format,suffix", [
