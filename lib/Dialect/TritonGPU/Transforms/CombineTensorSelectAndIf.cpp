@@ -22,7 +22,6 @@ static void canonicalizeSelectUsersInSCFIf(ModuleOp input) {
   llvm::MapVector<std::pair<Value, Value>, SmallVector<Operation *>>
       usersNeedreplaced;
   input.walk([&](arith::SelectOp selectOp) {
-    auto *parentBlock = selectOp->getBlock();
     Value condition = selectOp.getOperand(0);
     Value trueVal = selectOp.getOperand(1);
     Value falseVal = selectOp.getOperand(2);
@@ -135,7 +134,7 @@ public:
       } else {
         // Create an empty yield
         auto builder = newIfOp.getElseBodyBuilder();
-        auto yieldOp = scf::YieldOp::create(builder, loc);
+        scf::YieldOp::create(builder, loc);
       }
 
       SmallVector<Value> ifYieldOperands = newIfOp.thenYield().getOperands();

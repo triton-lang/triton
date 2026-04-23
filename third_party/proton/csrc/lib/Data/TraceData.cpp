@@ -18,89 +18,16 @@ namespace proton {
 namespace {
 inline constexpr size_t kMaxActiveEventStackCacheObjects = 10;
 
-void reconstructGraphScopeEvents(
-    const std::map<size_t, std::vector<trace_data_dump::KernelEvent>>
-        &kernelEvents,
-    std::map<size_t, std::vector<trace_data_dump::GraphScopeEvent>>
-        &graphScopeEvents) {
-  struct OpenGraphScope {
-    Context context;
-    uint64_t startTimeNs{};
-  };
+thread_local std::unordered_map<const TraceData *, std::vector<size_t>>
+    traceDataToActiveEventStack;
 
-  std::map</*stream_id=*/size_t, std::vector<OpenGraphScope>> openGraphScopes;
-  for (const auto &[streamId, streamKernelEvents] : kernelEvents) {
-    uint64_t lastEndTimeNs = 0;
-    for (const auto &kernelEvent : streamKernelEvents) {
-      if (!kernelEvent.isGraphLinked)
-        continue;
-
-      auto &openScopes = openGraphScopes[streamId];
-      std::vector<Context> graphContexts;
-      bool seenCaptureTag = false;
-      bool isMetadataKernel = false;
-      for (const auto &context : kernelEvent.contexts) {
-        if (context.name == GraphState::metricTag ||
-            context.name == GraphState::metadataTag) {
-          isMetadataKernel = true;
-          break;
-        }
-        if (context.name == GraphState::captureTag) {
-          seenCaptureTag = true;
-        }
-        if (seenCaptureTag) {
-          graphContexts.push_back(context);
-        }
-      }
-      if (!seenCaptureTag) {
-        throw std::runtime_error("Invalid graph contexts without capture tag");
-      }
-      if (!isMetadataKernel) {
-        graphContexts.pop_back();
-      }
-
-      const auto startTimeNs = std::get<uint64_t>(
-          kernelEvent.kernelMetric->getValue(KernelMetric::StartTime));
-      const auto endTimeNs = std::get<uint64_t>(
-          kernelEvent.kernelMetric->getValue(KernelMetric::EndTime));
-      if (openScopes.empty()) {
-        for (const auto &context : graphContexts) {
-          openScopes.push_back({context, startTimeNs});
-        }
-      } else {
-        size_t numCommonPrefixes = 0;
-        while (numCommonPrefixes < openScopes.size() &&
-               numCommonPrefixes < graphContexts.size()) {
-          if (openScopes[numCommonPrefixes].context !=
-              graphContexts[numCommonPrefixes]) {
-            break;
-          }
-          numCommonPrefixes++;
-        }
-        for (size_t i = openScopes.size(); i > numCommonPrefixes; --i) {
-          auto &tailOpenScope = openScopes[i - 1];
-          graphScopeEvents[streamId].push_back({tailOpenScope.context, streamId,
-                                                tailOpenScope.startTimeNs,
-                                                lastEndTimeNs});
-        }
-        for (size_t i = openScopes.size(); i > numCommonPrefixes; --i) {
-          openScopes.pop_back();
-        }
-        for (size_t i = numCommonPrefixes; i < graphContexts.size(); ++i) {
-          const auto &context = graphContexts[i];
-          openScopes.push_back({context, startTimeNs});
-        }
-      }
-      lastEndTimeNs = std::max(lastEndTimeNs, endTimeNs);
-    }
-
-    auto &openScopes = openGraphScopes[streamId];
-    for (const auto &openScope : openScopes) {
-      graphScopeEvents[streamId].push_back(
-          {openScope.context, streamId, openScope.startTimeNs, lastEndTimeNs});
-    }
-  }
+uint64_t getCurrentCpuTimestampNs() {
+  using Clock = std::chrono::system_clock;
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             Clock::now().time_since_epoch())
+      .count();
 }
+
 } // namespace
 
 class TraceData::Trace {
@@ -233,16 +160,6 @@ private:
   // tree node id -> trace context
   std::map<size_t, TraceContext> traceContextMap;
 };
-
-thread_local std::unordered_map<const TraceData *, std::vector<size_t>>
-    traceDataToActiveEventStack;
-
-uint64_t getCurrentCpuTimestampNs() {
-  using Clock = std::chrono::system_clock;
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(
-             Clock::now().time_since_epoch())
-      .count();
-}
 
 void TraceData::enterScope(const Scope &scope) {
   // enterOp and addMetric maybe called from different threads

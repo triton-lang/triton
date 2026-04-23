@@ -58,16 +58,15 @@ namespace {
 // mapping between global and shared memory addresses.
 int getNumberOfAsyncCopyInstructions(RankedTensorType globalType,
                                      ttg::MemDescType sharedType, Value mask,
-                                     int contig,
-                                     ModuleAxisInfoAnalysis &axisInfo) {
+                                     int ptrContig, int contigHint,
+                                     ModuleAxisInfoAnalysis &axisInfo,
+                                     const AMD::TargetInfo &targetInfo,
+                                     bool isStore) {
   LinearLayout globalLayout = tt::gpu::toLinearLayout(globalType);
-  LinearLayout sharedLayout;
-  if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-          sharedType.getEncoding())) {
-    sharedLayout = paddedEnc.getLinearComponent();
-  } else {
-    sharedLayout = triton::gpu::toLinearLayout(sharedType);
-  }
+  triton::LinearLayout sharedLayout =
+      triton::gpu::isPaddedEncoding(sharedType.getEncoding())
+          ? paddedLinearLayout(sharedType)
+          : toLinearLayout(sharedType);
   LinearLayout globalToSharedLayout =
       globalLayout.invertAndCompose(sharedLayout);
 
@@ -79,10 +78,26 @@ int getNumberOfAsyncCopyInstructions(RankedTensorType globalType,
   if (globalToSharedLayout.getFreeVariableMasks().lookup(kWarp) != 0) {
     return 0;
   }
-  contig = std::min(contig, globalToSharedLayout.getNumConsecutiveInOut());
 
+  // We progressively tighten the pointer contiguity to mirror the lowering of
+  // async ops, starting with the mask alignment.
   if (mask)
-    contig = std::min<int>(contig, axisInfo.getMaskAlignment(mask));
+    ptrContig = std::min<int>(ptrContig, axisInfo.getMaskAlignment(mask));
+
+  // Ops may carry a contiguity hint that raises the contiguity beyond what
+  // the pointer and mask axis info analysis can prove.
+  ptrContig = std::max<int>(ptrContig, contigHint);
+
+  // The global-to-shared layout limits the consecutive elements which can be
+  // transferred by a single async intrinsic.
+  ptrContig =
+      std::min(ptrContig, globalToSharedLayout.getNumConsecutiveInOut());
+
+  // For padded layouts the padding interval limits the vectorization.
+  auto srcEnc = sharedType.getEncoding();
+  if (auto padEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(srcEnc)) {
+    ptrContig = std::min<int>(ptrContig, padEnc.getMinInterval());
+  }
 
   // Divide number of registers by contig to get the number of async intrinsics.
   // Strip zero bases from the register dimension first — a zero basis means
@@ -91,7 +106,20 @@ int getNumberOfAsyncCopyInstructions(RankedTensorType globalType,
   auto kReg = StringAttr::get(globalType.getContext(), "register");
   int numberOfRegisters =
       globalToSharedLayout.removeZeroBasesAlongDim(kReg).getInDimSize(kReg);
-  return std::max(1, numberOfRegisters / contig);
+  int numInstructions = std::max(1, numberOfRegisters / ptrContig);
+
+  // When a given vector width is unsupported but half of it is, the store
+  // lowering splits each async store into two half-width stores.
+  if (isStore) {
+    int elemBitWidth = sharedType.getElementType().getIntOrFloatBitWidth();
+    int vecBits = ptrContig * elemBitWidth;
+    if (!targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits) &&
+        targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits / 2)) {
+      numInstructions *= 2;
+    }
+  }
+
+  return numInstructions;
 }
 
 // Return the number of generated intrinsics for async ops; 0 otherwise
@@ -103,9 +131,10 @@ int getOpNumberOfAsyncCopyInstructions(Operation *op,
                                        bool emitRemarkOnNonAsyncOp) {
   if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
     int contig = LLVM::AMD::getVectorSize(copyOp.getSrc(), axisInfo);
-    return getNumberOfAsyncCopyInstructions(copyOp.getSrc().getType(),
-                                            copyOp.getResult().getType(),
-                                            copyOp.getMask(), contig, axisInfo);
+    return getNumberOfAsyncCopyInstructions(
+        copyOp.getSrc().getType(), copyOp.getResult().getType(),
+        copyOp.getMask(), contig, copyOp.getContiguity(), axisInfo, targetInfo,
+        /*isStore=*/false);
   } else if (auto bufferOp = dyn_cast<amdgpu::BufferLoadToLocalOp>(op)) {
     auto ptrType = cast<RankedTensorType>(LLVM::AMD::getPointerTypeWithShape(
         bufferOp.getPtr(), bufferOp.getOffsets()));
@@ -113,12 +142,12 @@ int getOpNumberOfAsyncCopyInstructions(Operation *op,
                                           bufferOp.getOffsets(), axisInfo);
     return getNumberOfAsyncCopyInstructions(
         ptrType, bufferOp.getDest().getType(), bufferOp.getMask(), contig,
-        axisInfo);
+        bufferOp.getContiguity(), axisInfo, targetInfo, /*isStore=*/false);
   } else if (auto copyOp = dyn_cast<amdgpu::AsyncCopyLocalToGlobalOp>(op)) {
     int contig = LLVM::AMD::getVectorSize(copyOp.getDst(), axisInfo);
-    return getNumberOfAsyncCopyInstructions(copyOp.getDst().getType(),
-                                            copyOp.getSrc().getType(),
-                                            copyOp.getMask(), contig, axisInfo);
+    return getNumberOfAsyncCopyInstructions(
+        copyOp.getDst().getType(), copyOp.getSrc().getType(), copyOp.getMask(),
+        contig, copyOp.getContiguity(), axisInfo, targetInfo, /*isStore=*/true);
   } else if (emitRemarkOnNonAsyncOp) {
     SmallVector<mlir::MemoryEffects::EffectInstance> effects;
     if (auto memEffectIface = dyn_cast<MemoryEffectOpInterface>(op))
@@ -162,7 +191,7 @@ int computeMinCountBackward(Operation *cursor, Operation *cameFrom,
   assert(cameFrom != nullptr);
   // Step to the previous op within the current block; if none, step to
   // the parent op. Stop at the module since it asserts on ->getPrevNode().
-  auto getPredecessor = [&cameFrom](Operation *op) {
+  auto getPredecessor = [](Operation *op) {
     auto prevOp = op->getPrevNode();
     if (!prevOp) {
       prevOp = op->getParentOp();
@@ -397,46 +426,36 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
       return;
     }
 
-    // For HW which does not support async loads (GFX9) but only direct-to-lds,
-    // we still use the waitcnt to support interleaving of direct-to-lds loads
-    // when pipelining. The flag is used to emit warnings in case we find
-    // tt.loads/store which make the computed count conservative and hinder
-    // performance.
-    bool supportsAsyncLoads = true;
-    switch (targetInfo.getISAFamily()) {
-    case triton::AMD::ISAFamily::CDNA3:
-    case triton::AMD::ISAFamily::CDNA4:
-      supportsAsyncLoads = false;
-      break;
-    default:
-      break;
-    }
-
     ModuleOp m = getOperation();
 
-    // ttg.async_wait should only count async **non** tdm load:
-    SmallVector<ttg::AsyncWaitOp> waitOps;
-    getOperation()->walk(
-        [&](ttg::AsyncWaitOp waitOp) { waitOps.push_back(waitOp); });
+    // With asyncmark/wait_asyncmark, LLVM handles vmcnt computation —
+    // Triton no longer needs to walk the IR and count outstanding async
+    // intrinsics. Keep the ttg.async_wait ops unchanged (they track
+    // commit groups) and lower them directly to wait_asyncmark later.
+    if (!targetInfo.useAsyncMarks()) {
+      // GFX1250 (and future arches without asyncmark) use instruction counting.
+      SmallVector<ttg::AsyncWaitOp> waitOps;
+      getOperation()->walk(
+          [&](ttg::AsyncWaitOp waitOp) { waitOps.push_back(waitOp); });
 
-    ModuleAxisInfoAnalysis axisInfo(m);
-    // Cache #intrinsic per asyc op to avoid expensive recomputations
-    DenseMap<Operation *, int> intrinsicCountCache;
-    auto countAsyncLoadInstructions = [&](Operation *op) {
-      auto found = intrinsicCountCache.find(op);
-      if (found != intrinsicCountCache.end()) {
-        return found->second;
+      ModuleAxisInfoAnalysis axisInfo(m);
+      DenseMap<Operation *, int> intrinsicCountCache;
+      auto countAsyncLoadInstructions = [&](Operation *op) {
+        auto found = intrinsicCountCache.find(op);
+        if (found != intrinsicCountCache.end()) {
+          return found->second;
+        }
+        auto v = getOpNumberOfAsyncCopyInstructions(
+            op, targetInfo, axisInfo,
+            /*emitRemarkOnNonAsyncOp=*/false);
+        intrinsicCountCache[op] = v;
+        return v;
+      };
+
+      for (auto waitOp : waitOps) {
+        IRRewriter builder(waitOp->getContext());
+        updateWaitCount(waitOp, countAsyncLoadInstructions, builder);
       }
-      auto v = getOpNumberOfAsyncCopyInstructions(op, targetInfo, axisInfo,
-                                                  !supportsAsyncLoads);
-      intrinsicCountCache[op] = v;
-      return v;
-    };
-
-    // Note: AsyncWaits should ignore TDM ops; different HW counter
-    for (auto waitOp : waitOps) {
-      IRRewriter builder(waitOp->getContext());
-      updateWaitCount(waitOp, countAsyncLoadInstructions, builder);
     }
 
     // amdgpu.AsyncTDMWait should only count async tdm ops

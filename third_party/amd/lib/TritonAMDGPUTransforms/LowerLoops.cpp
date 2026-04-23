@@ -50,6 +50,8 @@ using StreamOpVariant =
     std::variant<StreamCopyChainOps, AsyncCopyChainOps, TDMCopyChainOps>;
 using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 
+namespace {
+
 TDMCopyChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
                                    Value extractIdx) {
   OpBuilder builder(loadOp);
@@ -185,13 +187,14 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         // the shared memory order to follow the thread order, while preserving
         // the fastest dimension from the memory order if it's contiguous > 1 to
         // keep vectorization.
-        auto llEnc =
-            triton::gpu::toLinearEncoding(cast<RankedTensorType>(srcTy));
-        auto threadOrder = llEnc.getThreadOrder();
+        auto srcTensorTy = cast<RankedTensorType>(srcTy);
+        auto regOrder = triton::gpu::getOrder(srcTensorTy);
+        auto threadOrder = triton::gpu::getThreadOrder(srcTensorTy);
 
         SetVector<unsigned> orderSet;
 
-        auto regContig = llEnc.getContigPerThread()[order[0]];
+        auto regContig =
+            triton::gpu::getContigPerThread(srcTensorTy)[regOrder[0]];
         unsigned elemBitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
         unsigned finalRegContig =
             fitToValidDirectToLdsVecSize(regContig, elemBitWidth, targetInfo);
@@ -429,7 +432,10 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
   return loadToStreamOp;
 }
 
+} // namespace
+
 namespace SingleDotSchedule {
+namespace {
 using namespace mlir::SingleDotSchedule;
 using ClusterMap = DenseMap<tt::CoarseSchedule::ClusterHash, int>;
 
@@ -449,7 +455,6 @@ ClusterMap createClusterMap(tt::CoarseSchedule &schedule) {
 void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
                    Clusters &clusters) {
   for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster) {
-    auto [stage, cluster] = stageAndCluster;
     tt::CoarseSchedule::ClusterHash clusterHash =
         tt::CoarseSchedule::hashCluster(stageAndCluster.second);
     int oldClusterId = clusterMap[clusterHash];
@@ -705,9 +710,11 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   ttg::scheduleRemainingToLastStage(forOp, schedule, computeCluster);
   dumpScheduleDebug(schedule, DEBUG_TYPE, "Final coarse schedule:");
 }
+} // namespace
 } // namespace SingleDotSchedule
 
 namespace ChainedDotSchedule {
+namespace {
 using namespace mlir::ChainedDotSchedule;
 
 void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
@@ -824,11 +831,12 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   triton::gpu::scheduleRemainingToLastStage(forOp, schedule, lastCluster);
   dumpScheduleDebug(schedule, DEBUG_TYPE, "Final coarse schedule:");
 }
+} // namespace
 } // namespace ChainedDotSchedule
 
-void lowerLoop(scf::ForOp forOp,
-               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-               bool useAsyncCopy, bool usePingpong) {
+static void lowerLoop(scf::ForOp forOp,
+                      triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                      bool useAsyncCopy, bool usePingpong) {
   tt::CoarseSchedule schedule;
   if (failed(schedule.deSerialize(forOp, /*normalizeClusterId=*/false))) {
     return;

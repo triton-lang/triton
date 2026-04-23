@@ -88,3 +88,92 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return %val : tensor<256xf32, #blocked3>
   }
 }
+
+// -----
+
+// Test that multiple loads sharing the same tt.addptr with i64 offset are both
+// converted without SSA dominance violations (regression test for #9907).
+
+#blocked4 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
+
+// CHECK-LABEL: @multi_load_shared_addptr_i64
+module attributes {"ttg.num-warps" = 2 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @multi_load_shared_addptr_i64(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>) {
+    %r = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #ttg.slice<{dim = 0, parent = #blocked4}>>
+    %ext = arith.extsi %r : tensor<8xi32, #ttg.slice<{dim = 0, parent = #blocked4}>> to tensor<8xi64, #ttg.slice<{dim = 0, parent = #blocked4}>>
+    %offset = tt.expand_dims %ext {axis = 0 : i32} : tensor<8xi64, #ttg.slice<{dim = 0, parent = #blocked4}>> -> tensor<1x8xi64, #blocked4>
+    %base = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1x8x!tt.ptr<f32>, #blocked4>
+    %ptr = tt.addptr %base, %offset : tensor<1x8x!tt.ptr<f32>, #blocked4>, tensor<1x8xi64, #blocked4>
+    %v1 = tt.load %ptr : tensor<1x8x!tt.ptr<f32>, #blocked4>
+    %v2 = tt.load %ptr : tensor<1x8x!tt.ptr<f32>, #blocked4>
+    // Each trunci is inserted right before its corresponding load.
+    // CHECK: arith.trunci {{.*}} tensor<1x8xi64, {{.*}}> to tensor<1x8xi32, {{.*}}>
+    // CHECK: amdg.buffer_load
+    // CHECK: arith.trunci {{.*}} tensor<1x8xi64, {{.*}}> to tensor<1x8xi32, {{.*}}>
+    // CHECK: amdg.buffer_load
+    // CHECK-NOT: tt.load
+    %sum = arith.addf %v1, %v2 : tensor<1x8xf32, #blocked4>
+    %st = tt.splat %arg1 : !tt.ptr<f32> -> tensor<1x8x!tt.ptr<f32>, #blocked4>
+    tt.store %st, %sum : tensor<1x8x!tt.ptr<f32>, #blocked4>
+    tt.return
+  }
+}
+
+// -----
+
+// Test that an atomic RMW with i64 offset and unsupported type (i8) is NOT
+// converted. canUseBufferOps is pure, so no stale trunci leaks into the IR
+// when the pattern bails on the type check.
+
+#blocked5 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+
+// CHECK-LABEL: @atomic_rmw_i64_offset_unsupported_type
+module attributes {"ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @atomic_rmw_i64_offset_unsupported_type(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}) {
+    %range = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked5>
+    %range_ext = arith.extsi %range : tensor<256xi32, #blocked5> to tensor<256xi64, #blocked5>
+    %c1024_i64 = arith.constant 1024 : i64
+    %stride = tt.splat %c1024_i64 : i64 -> tensor<256xi64, #blocked5>
+    %offset = arith.muli %range_ext, %stride : tensor<256xi64, #blocked5>
+    %base = tt.splat %arg0 : !tt.ptr<i8> -> tensor<256x!tt.ptr<i8>, #blocked5>
+    %ptr = tt.addptr %base, %offset : tensor<256x!tt.ptr<i8>, #blocked5>, tensor<256xi64, #blocked5>
+    %val = arith.constant dense<1> : tensor<256xi8, #blocked5>
+    %result = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (tensor<256x!tt.ptr<i8>, #blocked5>, tensor<256xi8, #blocked5>) -> tensor<256xi8, #blocked5>
+    // CHECK-NOT: arith.trunci
+    // CHECK-NOT: amdg.buffer_atomic_rmw
+    // CHECK: tt.atomic_rmw
+    tt.return
+  }
+}
+
+// -----
+
+// 2D offset = row * stride + col with i64 stride; extracted block stride is the
+// scalar splat source (i64) and must be truncated to i32 for amdg.buffer_load
+// operand #2 (regression: verifier expected i32, got i64).
+
+#blocked6 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+
+// CHECK-LABEL: @stride_i64_minimal
+module attributes {"ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @stride_i64_minimal(
+    %ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+    %stride: i64,
+    %row: tensor<256x1xi64, #blocked6>,
+    %col: tensor<1x64xi64, #blocked6>
+  ) -> tensor<256x64xf16, #blocked6> {
+    %s = tt.splat %stride : i64 -> tensor<256x1xi64, #blocked6>
+    %mul = arith.muli %row, %s : tensor<256x1xi64, #blocked6>
+    %bc0 = tt.broadcast %mul : tensor<256x1xi64, #blocked6> -> tensor<256x64xi64, #blocked6>
+    %bc1 = tt.broadcast %col : tensor<1x64xi64, #blocked6> -> tensor<256x64xi64, #blocked6>
+    %off = arith.addi %bc1, %bc0 : tensor<256x64xi64, #blocked6>
+    %base = tt.splat %ptr : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #blocked6>
+    %p = tt.addptr %base, %off : tensor<256x64x!tt.ptr<f16>, #blocked6>, tensor<256x64xi64, #blocked6>
+    // CHECK: arith.trunci {{.*}} : tensor<256x64xi64, {{.*}}> to tensor<256x64xi32, {{.*}}>
+    // CHECK: arith.trunci {{.*}} : i64 to i32
+    // CHECK: amdg.buffer_load
+    // CHECK-NOT: tt.load
+    %v = tt.load %p : tensor<256x64x!tt.ptr<f16>, #blocked6>
+    tt.return %v : tensor<256x64xf16, #blocked6>
+  }
+}

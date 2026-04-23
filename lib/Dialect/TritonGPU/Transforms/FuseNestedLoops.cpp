@@ -1180,7 +1180,7 @@ static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
 
   // Move the loop nest into the `else` branch.
   outerLoop.replaceAllUsesWith(ifOp.getResults());
-  Block *block = b.createBlock(&ifOp.getElseRegion());
+  b.createBlock(&ifOp.getElseRegion());
   outerLoop->remove();
   b.insert(outerLoop);
   scf::YieldOp::create(b, outerLoop.getResults());

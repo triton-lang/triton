@@ -50,6 +50,8 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 
 using namespace llvm;
 
+namespace {
+
 // Set an LLVM command-line option using addOccurrence (simulates command-line)
 // and return its original value. Using addOccurrence instead of setValue is
 // necessary because some LLVM passes (like schedulers) check whether the option
@@ -507,6 +509,8 @@ translateMIRToASM(const std::string &mirPath, const std::string &triple,
 
 using ret = py::return_value_policy;
 
+} // namespace
+
 void init_triton_llvm(py::module &&m) {
 
   py::class_<llvm::LLVMContext>(m, "context", py::module_local())
@@ -916,7 +920,7 @@ void init_triton_llvm(py::module &&m) {
   });
 }
 
-void triton_stacktrace_signal_handler(void *) {
+static void triton_stacktrace_signal_handler(void *) {
   llvm::sys::PrintStackTrace(llvm::errs());
   raise(SIGABRT);
 }

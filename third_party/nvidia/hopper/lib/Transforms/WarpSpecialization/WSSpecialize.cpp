@@ -35,12 +35,14 @@ namespace mlir {
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-static bool isWarpSpecializeBarrierAlloc(Value value) {
+namespace {
+
+bool isWarpSpecializeBarrierAlloc(Value value) {
   auto alloc = dyn_cast_or_null<ttg::LocalAllocOp>(value.getDefiningOp());
   return alloc && alloc->hasAttr(kWarpSpecializeGeneratedBarrierAttrName);
 }
 
-static void invalidateBarrierAlloc(OpBuilder &builder, Value barrierAlloc) {
+void invalidateBarrierAlloc(OpBuilder &builder, Value barrierAlloc) {
   auto barrierType = cast<ttg::MemDescType>(barrierAlloc.getType());
   int64_t numBarriers = barrierType.getShape().front();
   assert(numBarriers > 0 && "expected at least one barrier");
@@ -63,8 +65,8 @@ unsigned scanRegUsage(Block *block, AsyncTaskId asyncTaskId,
 }
 
 // Collect argument indices that are used by the specific taskId.
-static SmallVector<unsigned> collectBlockArgsForTask(scf::ForOp forOp,
-                                                     int asyncTaskId) {
+SmallVector<unsigned> collectBlockArgsForTask(scf::ForOp forOp,
+                                              int asyncTaskId) {
 
   // Collect argument indices that can be reached along the definition chain.
   SetVector<unsigned> argIndices;
@@ -368,6 +370,8 @@ Operation *SpecializeOp(Operation *op, IRMapping &mapping,
   return nullptr;
 }
 
+} // namespace
+
 void specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters) {
 
   LLVM_DEBUG({
@@ -500,18 +504,16 @@ void specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters) {
     LLVM_DEBUG({
       LDBG("erasing op ");
       op->dump();
-    });
-    // For debugging purposes, check to see if the original op is still in use.
-    bool hasUse = false;
-    for (unsigned i = 0; i < op->getNumResults(); ++i) {
-      for (Operation *user : op->getResult(i).getUsers()) {
-        hasUse = true;
-        LLVM_DEBUG({
+
+      // For debugging purposes, check to see if the original op is still in
+      // use.
+      for (unsigned i = 0; i < op->getNumResults(); ++i) {
+        for (Operation *user : op->getResult(i).getUsers()) {
           LDBG("op has use ");
           user->dump();
-        });
+        }
       }
-    }
+    });
     op->erase();
   }
 }
