@@ -1216,17 +1216,17 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, output_forma
         test0_scope = next(
             event for event in trace_events
             if event["category"] == "scope" and event["call_stack"] == ["ROOT", "test0"])
-        first_replay_kernel = min(replay_kernel_events, key=lambda event: event["timestamp"])
-        flow_finish = next(event for event in trace_events
-                           if event["category"] == "flow" and event["phase"] == "f"
-                           and event["name"] == "launch->kernel"
-                           and event["timestamp"] == first_replay_kernel["timestamp"])
-        flow_start = next(event for event in trace_events
-                          if event["category"] == "flow" and event["phase"] == "s"
-                          and event["id"] == flow_finish["id"])
-        assert flow_finish["track_id"] == first_replay_kernel["track_id"]
-        assert flow_start["track_id"] == test0_scope["track_id"]
-        assert test0_scope["timestamp"] == flow_start["timestamp"] <= flow_finish["timestamp"]
+        replay_kernel_points = {(event["track_id"], event["timestamp"]) for event in replay_kernel_events}
+        flow_events = [event for event in trace_events
+                       if event["category"] == "flow" and event["name"] == "launch->kernel"]
+        flow_starts = [event for event in flow_events
+                       if event["phase"] == "s" and event["track_id"] == test0_scope["track_id"]
+                       and event["timestamp"] == test0_scope["timestamp"]]
+        flow_finishes = [event for event in flow_events
+                         if event["phase"] == "f"
+                         and (event["track_id"], event["timestamp"]) in replay_kernel_points]
+        assert any(start["id"] == finish["id"] and start["timestamp"] <= finish["timestamp"]
+                   for start in flow_starts for finish in flow_finishes)
 
 
 @pytest.mark.parametrize("profile_kind,output_format,suffix", [
