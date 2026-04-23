@@ -113,8 +113,8 @@ def _perfetto_trace_to_python(path: pathlib.Path | str):
                 """
                 SELECT arg_set_id, flat_key, key, string_value, int_value, real_value
                 FROM args
-                WHERE flat_key GLOB 'call_stack_*' OR key GLOB 'call_stack_*'
-                   OR flat_key GLOB 'metric.*' OR key GLOB 'metric.*'
+                WHERE flat_key GLOB 'debug.call_stack_*' OR key GLOB 'call_stack_*'
+                   OR flat_key GLOB 'debug.metric.*' OR key GLOB 'metric.*'
                 ORDER BY arg_set_id, flat_key, key
                 """
             ))
@@ -168,12 +168,14 @@ def _assert_trace_file(path: pathlib.Path | str, output_format: str, expected_ev
 
     matched_event = None
     for event in trace["track_events"]:
-        if event["name"] == expected_event_name:
-            matched_event = event
-            break
+        if event["name"] != expected_event_name:
+            continue
+        if expected_call_stack is not None and event["call_stack"] != expected_call_stack:
+            continue
+        matched_event = event
+        break
     assert matched_event is not None
-    if expected_call_stack is not None:
-        assert matched_event["call_stack"] == expected_call_stack
+
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path, device: str):
