@@ -266,6 +266,7 @@ class PartitionArgs:
             BAND_N=self.BAND_N,
         )
 
+
 @gluon.jit
 def load_activations(p: PartitionArgs):
     local_cga_layout: gl.constexpr = ((0, 1), ) if p.USE_2CTA else ()
@@ -766,11 +767,11 @@ def ws_matmul_kernel(
 
 
 def make_tensor_descriptor(
-    t: torch.Tensor | Tensor,
-    block_shape: tuple[int, ...],
-    *,
-    layout_block_shape: tuple[int, ...] | None = None,
-    cga_layout: tuple[tuple[int, ...], ...] = (),
+        t: torch.Tensor | Tensor,
+        block_shape: tuple[int, ...],
+        *,
+        layout_block_shape: tuple[int, ...] | None = None,
+        cga_layout: tuple[tuple[int, ...], ...] = (),
 ):
     from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 
