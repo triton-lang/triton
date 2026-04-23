@@ -80,11 +80,7 @@ def _chrome_trace_to_python(path: pathlib.Path | str):
                 track_id=track_id,
             ))
 
-    return {
-        "has_track_descriptor": True,
-        "has_track_event": bool(track_events),
-        "track_events": track_events,
-    }
+    return {"track_events": track_events}
 
 
 def _perfetto_trace_to_python(path: pathlib.Path | str):
@@ -102,7 +98,6 @@ def _perfetto_trace_to_python(path: pathlib.Path | str):
         return None
 
     with TraceProcessor(trace=path) as tp:
-        has_track_descriptor = next(iter(tp.query("SELECT COUNT(*) AS cnt FROM track"))).cnt > 0
         slices = list(
             tp.query("""
                 SELECT slice.id, slice.ts, slice.name, slice.category, slice.arg_set_id, track.name AS track_name
@@ -110,12 +105,21 @@ def _perfetto_trace_to_python(path: pathlib.Path | str):
                 JOIN track ON slice.track_id = track.id
                 ORDER BY slice.ts, slice.id
                 """))
-        arg_rows = list(
-            tp.query("""
-                SELECT arg_set_id, flat_key, key, string_value, int_value, real_value
-                FROM args
-                ORDER BY arg_set_id, flat_key, key
-                """))
+        arg_set_ids = sorted({row.arg_set_id for row in slices if row.arg_set_id is not None})
+        arg_set_filter = ",".join(str(arg_set_id) for arg_set_id in arg_set_ids)
+        arg_rows = []
+        if arg_set_filter:
+            arg_rows = list(
+                tp.query(f"""
+                    SELECT arg_set_id, flat_key, key, string_value, int_value, real_value
+                    FROM args
+                    WHERE arg_set_id IN ({arg_set_filter})
+                      AND (
+                        flat_key GLOB 'debug.call_stack_*' OR key GLOB 'call_stack_*'
+                        OR flat_key GLOB 'debug.metric.*' OR key GLOB 'metric.*'
+                      )
+                    ORDER BY arg_set_id, flat_key, key
+                    """))
 
     args_by_arg_set = {}
     for row in arg_rows:
@@ -141,11 +145,7 @@ def _perfetto_trace_to_python(path: pathlib.Path | str):
         event = _normalize_trace_event(row.name, row.category, row.track_name, normalized_call_stack, args)
         track_events.append(event)
 
-    return {
-        "has_track_descriptor": has_track_descriptor,
-        "has_track_event": bool(track_events),
-        "track_events": track_events,
-    }
+    return {"track_events": track_events}
 
 
 def _trace_to_python(path: pathlib.Path | str, output_format: str):
@@ -159,8 +159,7 @@ def _trace_to_python(path: pathlib.Path | str, output_format: str):
 def _assert_trace_file(path: pathlib.Path | str, output_format: str, expected_event_name: str | None = None,
                        expected_call_stack: list[str] | None = None):
     trace = _trace_to_python(path, output_format)
-    assert trace["has_track_descriptor"]
-    assert trace["has_track_event"]
+    assert trace["track_events"]
     if expected_event_name is None:
         return
 
