@@ -4351,6 +4351,9 @@ def test_load_cache_modifier(cache, device):
         global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
         compiled_cache_modifiers = "invalid"
         expected_cache_modifiers = {}
+        if is_hip_cdna() or is_hip_cdna2():
+            # cache modifiers are not properly supported on CDNA1 and CDNA2, just check that kernel runs
+            return
         if buffer_load_line:
             # ", [0-9a-z]" matches last operand, which is expected to be constant
             # (offen)? matches an optional flag, the rest is expected to be cache related flags
@@ -4520,6 +4523,9 @@ def test_store_cache_modifier(cache, device):
         global_store_line = [line for line in amdgcn.splitlines() if "global_store" in line]
         compiled_cache_modifiers = "invalid"
         expected_cache_modifiers = {}
+        if is_hip_cdna() or is_hip_cdna2():
+            # cache modifiers are not properly supported on CDNA1 and CDNA2, just check that kernel runs
+            return
         if buffer_store_line:
             # ", [0-9a-z]" matches last operand, which is expected to be constant
             # (offen)? matches an optional flag, the rest is expected to be cache related flags
