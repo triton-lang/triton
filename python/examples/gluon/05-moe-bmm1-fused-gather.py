@@ -765,70 +765,6 @@ def ws_matmul_kernel(
 # ===-----------------------------------------------------------------------===#
 
 
-def get_acc_cga_layout(num_ctas: int) -> tuple[tuple[int, int], ...]:
-    if num_ctas == 1:
-        return ()
-    if num_ctas == 2:
-        return ((1, 0), )
-    raise ValueError(f"unsupported CTA count: {num_ctas}")
-
-
-def get_x_desc_cga_layout(acc_cga_layout: tuple[tuple[int, int], ...]) -> tuple[tuple[int, int], ...]:
-    return tuple((basis[0], 0) for basis in acc_cga_layout)
-
-
-def get_w_desc_cga_layout(acc_cga_layout: tuple[tuple[int, int], ...]) -> tuple[tuple[int, int, int, int, int], ...]:
-    # Sharded weight tiles use the physical [1, 1, 1, N, K/2] MX4 shuffled block layout.
-    return tuple((0, 0, 0, basis[0], 0) for basis in acc_cga_layout)
-
-
-def get_w_scale_desc_cga_layout(
-    acc_cga_layout: tuple[tuple[int, int], ...],
-) -> tuple[tuple[int, int, int, int, int], ...]:
-    # Weight scale tiles use the physical [1, N//128, K//(32*4), 2, 256] layout.
-    return tuple((0, basis[0], 0, 0, 0) for basis in acc_cga_layout)
-
-
-def make_shared_layout(
-    dtype,
-    block_shape: list[int],
-    cga_layout: tuple[tuple[int, ...], ...] = (),
-):
-    rank = len(block_shape)
-    if dtype == FP4:
-        assert rank == 5
-        return gl.NVMMASharedLayout(
-            swizzle_byte_width=128,
-            element_bitwidth=8,
-            rank=rank,
-            fp4_padded=True,
-            cga_layout=cga_layout,
-        )
-    if dtype == UINT8:
-        assert rank == 5
-        return gl.NVMMASharedLayout(
-            swizzle_byte_width=0,
-            element_bitwidth=8,
-            rank=rank,
-            cga_layout=cga_layout,
-        )
-    if dtype == torch.float32:
-        assert rank == 2
-        return gl.NVMMASharedLayout.get_default_for(
-            block_shape,
-            torch.float32,
-            cga_layout=cga_layout,
-        )
-
-    assert dtype == torch.float8_e4m3fn
-    return gl.NVMMASharedLayout(
-        swizzle_byte_width=block_shape[-1],
-        element_bitwidth=8,
-        rank=rank,
-        cga_layout=cga_layout,
-    )
-
-
 def make_tensor_descriptor(
     t: torch.Tensor | Tensor,
     block_shape: tuple[int, ...],
@@ -851,50 +787,40 @@ def make_tensor_descriptor(
         desc_block_shape[strides.index(1)] //= 2
         layout_shape = desc_block_shape
 
-    layout = make_shared_layout(t.dtype, layout_shape, cga_layout=cga_layout)
+    rank = len(layout_shape)
+    if t.dtype == FP4:
+        assert rank == 5
+        layout = gl.NVMMASharedLayout(
+            swizzle_byte_width=128,
+            element_bitwidth=8,
+            rank=rank,
+            fp4_padded=True,
+            cga_layout=cga_layout,
+        )
+    elif t.dtype == UINT8:
+        assert rank == 5
+        layout = gl.NVMMASharedLayout(
+            swizzle_byte_width=0,
+            element_bitwidth=8,
+            rank=rank,
+            cga_layout=cga_layout,
+        )
+    elif t.dtype == torch.float32:
+        assert rank == 2
+        layout = gl.NVMMASharedLayout.get_default_for(
+            layout_shape,
+            torch.float32,
+            cga_layout=cga_layout,
+        )
+    else:
+        assert t.dtype == torch.float8_e4m3fn
+        layout = gl.NVMMASharedLayout(
+            swizzle_byte_width=layout_shape[-1],
+            element_bitwidth=8,
+            rank=rank,
+            cga_layout=cga_layout,
+        )
     return TensorDescriptor(ptr, shape, strides, desc_block_shape, layout)
-
-
-def make_output_meta_descriptor(t: torch.Tensor, block_shape: tuple[int, int]):
-    # The output descriptor is only used for shape/stride metadata during
-    # direct stores, so cap the layout width to a legal FP8 swizzle size.
-    block_m, block_n = block_shape
-    return make_tensor_descriptor(t, (block_m, min(block_n, 128)))
-
-
-def make_matmul_descriptors(
-    a: torch.Tensor,
-    b: Tensor,
-    b_mx_scales: Tensor,
-    c: torch.Tensor,
-    p: "KernelConfig",
-    reduction_n: int,
-):
-    acc_cga_layout = get_acc_cga_layout(p.NUM_CTAS)
-    x_desc = make_tensor_descriptor(
-        a,
-        (1, p.BLOCK_K),
-        layout_block_shape=(p.BLOCK_M, p.BLOCK_K),
-        cga_layout=get_x_desc_cga_layout(acc_cga_layout),
-    )
-    w_desc = make_tensor_descriptor(
-        b,
-        (1, p.BLOCK_K, p.BLOCK_N),
-        cga_layout=get_w_desc_cga_layout(acc_cga_layout),
-    )
-    scale_desc = make_tensor_descriptor(
-        b_mx_scales,
-        (
-            1,
-            p.BLOCK_N // p.SCALE_SIZE_OUTER,
-            p.BLOCK_K // p.MXFP_BLOCK_SIZE // p.SCALE_SIZE_INNER,
-            2,
-            256,
-        ),
-        cga_layout=get_w_scale_desc_cga_layout(acc_cga_layout),
-    )
-    out_desc = make_output_meta_descriptor(c, (p.BLOCK_M, p.BLOCK_N // reduction_n))
-    return x_desc, w_desc, scale_desc, out_desc
 
 
 @dataclass(frozen=True, slots=True)
@@ -977,92 +903,60 @@ def _select_base_config(slice_size: int) -> KernelConfig:
     )
 
 
-def _select_band_n(slice_size: int) -> int:
-    if slice_size < 32:
-        return 22
-    elif slice_size < 416:
-        return 18
-    else:
-        return 26
+def select_kernel_config(slice_size: int) -> KernelConfig:
+    p = _select_base_config(slice_size)
 
-
-def _enable_low_batch_2cta(p: KernelConfig, slice_size: int) -> KernelConfig:
-    next_p = replace(
-        p,
-        BLOCK_N=256,
-        NUM_CTAS=2,
-        NUM_WARPS=4,
-        W_NUM_BUFS=5,
-        SWIGLU_SUBTILE_FACTOR=1,
-        LOAD_ACTIVATION_WARPS=2,
-        LOAD_WEIGHT_WARPS=1,
-        MMA_WARPS=1,
-        LOAD_ACTIVATION_REGS=40,
-        LOAD_WEIGHT_REGS=32,
-        MMA_REGS=32,
-        MAXNREG=52,
-        BAND_N=32,
-        FORCE_EPILOGUE_WARPS_N1=True,
-    )
-    if slice_size == 16:
-        return replace(next_p, X_NUM_BUFS=5)
-    if slice_size in (20, 24):
-        return replace(next_p, X_NUM_BUFS=6)
-    return replace(next_p, X_NUM_BUFS=6, X_GATHER_MULTICAST=False, W_SCALE_MULTICAST=False)
-
-
-def _enable_mid_batch_2cta(p: KernelConfig) -> KernelConfig:
-    return replace(
-        p,
-        BLOCK_M=64,
-        BLOCK_N=256,
-        NUM_CTAS=2,
-        OCCUPANCY=2,
-        X_NUM_BUFS=6,
-        W_NUM_BUFS=5,
-        SWIGLU_SUBTILE_FACTOR=4,
-        LOAD_ACTIVATION_REGS=64,
-        LOAD_WEIGHT_REGS=48,
-        MMA_REGS=48,
-        MAXNREG=64,
-    )
-
-
-def _enable_large_batch_2cta(p: KernelConfig) -> KernelConfig:
-    return replace(p, BLOCK_N=512, NUM_CTAS=2, W_NUM_BUFS=5)
-
-
-def apply_2cta_tuning(p: KernelConfig, slice_size: int) -> KernelConfig:
     if p.BLOCK_M == 32 and p.BLOCK_N == 128 and slice_size in (16, 20, 24, 32):
-        # Low-batch 2CTA only wins when the wider N tile is paired with a
-        # four-warp layout. Slice 28 remains on 1CTA because uniform routing
-        # still shows a stable regression there.
-        return _enable_low_batch_2cta(p, slice_size)
-    if 36 <= slice_size <= 72:
-        # The tuned 64-row multicta kernel wins through the 72-token slice
-        # crossover once it keeps the deeper x/w pipeline, shallower SwiGLU
-        # fragmentation, and the wider low-batch banded schedule together.
-        return _enable_mid_batch_2cta(p)
-    if p.BLOCK_M == 128 and p.BLOCK_N == 256 and slice_size >= 80:
-        # Along N, 2CTA doubles the output tile width without increasing the
-        # per-CTA weight tile footprint, which makes the extra synchronization
-        # pay back across the entire occ1 range.
-        return _enable_large_batch_2cta(p)
-    return p
+        p = replace(
+            p,
+            BLOCK_N=256,
+            NUM_CTAS=2,
+            NUM_WARPS=4,
+            W_NUM_BUFS=5,
+            SWIGLU_SUBTILE_FACTOR=1,
+            LOAD_ACTIVATION_WARPS=2,
+            LOAD_WEIGHT_WARPS=1,
+            MMA_WARPS=1,
+            LOAD_ACTIVATION_REGS=40,
+            LOAD_WEIGHT_REGS=32,
+            MMA_REGS=32,
+            MAXNREG=52,
+            BAND_N=32,
+            FORCE_EPILOGUE_WARPS_N1=True,
+        )
+        if slice_size == 16:
+            p = replace(p, X_NUM_BUFS=5)
+        elif slice_size in (20, 24):
+            p = replace(p, X_NUM_BUFS=6)
+        else:
+            p = replace(p, X_NUM_BUFS=6, X_GATHER_MULTICAST=False, W_SCALE_MULTICAST=False)
+    elif 36 <= slice_size <= 72:
+        p = replace(
+            p,
+            BLOCK_M=64,
+            BLOCK_N=256,
+            NUM_CTAS=2,
+            OCCUPANCY=2,
+            X_NUM_BUFS=6,
+            W_NUM_BUFS=5,
+            SWIGLU_SUBTILE_FACTOR=4,
+            LOAD_ACTIVATION_REGS=64,
+            LOAD_WEIGHT_REGS=48,
+            MMA_REGS=48,
+            MAXNREG=64,
+        )
+    elif p.BLOCK_M == 128 and p.BLOCK_N == 256 and slice_size >= 80:
+        p = replace(p, BLOCK_N=512, NUM_CTAS=2, W_NUM_BUFS=5)
 
-
-def apply_band_n_tuning(p: KernelConfig, slice_size: int) -> KernelConfig:
     if p.BLOCK_M == 32 and p.BLOCK_N == 256 and p.NUM_CTAS == 2 and slice_size <= 32:
         return replace(p, BAND_N=32)
     if p.BLOCK_M == 64 and p.BLOCK_N == 256 and p.NUM_CTAS == 2 and 36 <= slice_size <= 72:
         return replace(p, BAND_N=26)
-    return replace(p, BAND_N=_select_band_n(slice_size))
-
-
-def select_kernel_config(slice_size: int) -> KernelConfig:
-    p = _select_base_config(slice_size)
-    p = apply_2cta_tuning(p, slice_size)
-    return apply_band_n_tuning(p, slice_size)
+    if slice_size < 32:
+        return replace(p, BAND_N=22)
+    if slice_size < 416:
+        return replace(p, BAND_N=18)
+    return replace(p, BAND_N=26)
 
 
 def matmul(
@@ -1108,7 +1002,40 @@ def matmul(
     sms *= p.OCCUPANCY
     launch_grid = max(1, min(max(1, sms // p.NUM_CTAS), expected_grid_m * grid_n))
     grid = (launch_grid, )
-    x_desc, w_desc, scale_desc, out_desc = make_matmul_descriptors(a, b, b_mx_scales, c, p, reduction_n)
+    if p.NUM_CTAS == 1:
+        acc_cga_layout = ()
+    elif p.NUM_CTAS == 2:
+        acc_cga_layout = ((1, 0), )
+    else:
+        raise ValueError(f"unsupported CTA count: {p.NUM_CTAS}")
+
+    x_desc = make_tensor_descriptor(
+        a,
+        (1, p.BLOCK_K),
+        layout_block_shape=(p.BLOCK_M, p.BLOCK_K),
+        cga_layout=tuple((basis[0], 0) for basis in acc_cga_layout),
+    )
+    w_desc = make_tensor_descriptor(
+        b,
+        (1, p.BLOCK_K, p.BLOCK_N),
+        # Sharded weight tiles use the physical [1, 1, 1, N, K/2] MX4 shuffled block layout.
+        cga_layout=tuple((0, 0, 0, basis[0], 0) for basis in acc_cga_layout),
+    )
+    scale_desc = make_tensor_descriptor(
+        b_mx_scales,
+        (
+            1,
+            p.BLOCK_N // p.SCALE_SIZE_OUTER,
+            p.BLOCK_K // p.MXFP_BLOCK_SIZE // p.SCALE_SIZE_INNER,
+            2,
+            256,
+        ),
+        # Weight scale tiles use the physical [1, N//128, K//(32*4), 2, 256] layout.
+        cga_layout=tuple((0, basis[0], 0, 0, 0) for basis in acc_cga_layout),
+    )
+    # The output descriptor is only used for shape/stride metadata during
+    # direct stores, so cap the layout width to a legal FP8 swizzle size.
+    out_desc = make_tensor_descriptor(c, (p.BLOCK_M, min(p.BLOCK_N // reduction_n, 128)))
 
     ws_matmul_kernel[grid](
         x_desc=x_desc,
