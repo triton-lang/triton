@@ -164,8 +164,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     // Update the current block. The block transfer function is not monotonic,
     // so overwrite the output state entirely.
     outputBlockInfoMap[block] = inputBlockInfo;
-
-    for (VirtualBlock &successor : successors) {
+    // Update the successors
+    for (VirtualBlock successor : successors) {
       inputBlockInfoMap[successor].join(outputBlockInfoMap[block]);
       // Across a backedge, invalidate buffer indices: we cannot evaluate
       // index disjointness over loop iterations.
