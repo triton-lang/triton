@@ -438,15 +438,9 @@ void TraceData::withTraceData(size_t phase, CycleHandler &&onCycleTrace,
                     launchEventIdToTargetEventId.end()) {
               launchEventIdToTargetEventId.emplace(launchEventId, eventId);
             }
-            trace_data_dump::KernelEvent kernelEvent(
+            traceDump.kernelEvents[streamId].emplace_back(
                 eventId, kernelMetric, flexibleMetrics, contexts, launchEventId,
                 isGraphLinked);
-            auto &streamKernelEvents = traceDump.kernelEvents[streamId];
-            streamKernelEvents.insert(
-                std::lower_bound(streamKernelEvents.begin(),
-                                 streamKernelEvents.end(), kernelEvent,
-                                 trace_data_dump::KernelEvent::compare),
-                std::move(kernelEvent));
             traceDump.minTimeStamp =
                 std::min(traceDump.minTimeStamp, startTimeNs);
           }
@@ -509,6 +503,8 @@ void TraceData::withTraceData(size_t phase, CycleHandler &&onCycleTrace,
       }
     }
     for (auto &[_, streamKernelEvents] : traceDump.kernelEvents) {
+      std::stable_sort(streamKernelEvents.begin(), streamKernelEvents.end(),
+                       trace_data_dump::KernelEvent::compare);
       for (auto &kernelEvent : streamKernelEvents) {
         if (auto targetIt =
                 launchEventIdToTargetEventId.find(kernelEvent.launchEventId);
