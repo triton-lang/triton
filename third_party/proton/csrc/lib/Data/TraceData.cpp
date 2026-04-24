@@ -104,9 +104,9 @@ void reconstructGraphScopeEvents(
     auto &openScopes = openGraphScopes[streamId];
     for (size_t i = 0; i < openScopes.size(); ++i) {
       const auto &openScope = openScopes[i];
-      graphScopeEvents[streamId].push_back(
-          {openScope.context, streamId, openScope.startTimeNs, lastEndTimeNs,
-           i});
+      graphScopeEvents[streamId].push_back({openScope.context, streamId,
+                                            openScope.startTimeNs,
+                                            lastEndTimeNs, i});
     }
   }
 }

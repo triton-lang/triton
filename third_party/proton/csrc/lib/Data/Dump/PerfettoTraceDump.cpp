@@ -448,11 +448,11 @@ void appendGraphTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
     const auto trackUuid =
         getPerfettoLaneTrackUuid(details::getGraphLaneId(streamId));
     const auto maxDepth =
-        std::max_element(graphEvents.begin(), graphEvents.end(),
-                         [](const GraphScopeEvent &a,
-                            const GraphScopeEvent &b) {
-                           return a.depth < b.depth;
-                         })
+        std::max_element(
+            graphEvents.begin(), graphEvents.end(),
+            [](const GraphScopeEvent &a, const GraphScopeEvent &b) {
+              return a.depth < b.depth;
+            })
             ->depth;
     for (const auto &event : graphEvents) {
       PerfettoInternedNames newInternedNames;
@@ -475,18 +475,16 @@ void appendGraphTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
           internSliceEvent(internedNames, newInternedNames, name, category);
       appendInternedDataPacket(trace, newInternedNames,
                                incrementalStateCleared);
-      appendTrackEventPacket(trace,
-                             getRelativeTimestamp(traceDump.minTimeStamp,
-                                                  event.startTimeNs +
-                                                      event.depth),
-                             1, trackUuid, eventIds, annotations, std::nullopt,
-                             std::nullopt);
-      appendTrackEventPacket(trace,
-                             getRelativeTimestamp(traceDump.minTimeStamp,
-                                                  event.endTimeNs + maxDepth -
-                                                      event.depth),
-                             2, trackUuid, eventIds, annotations, std::nullopt,
-                             std::nullopt);
+      appendTrackEventPacket(
+          trace,
+          getRelativeTimestamp(traceDump.minTimeStamp,
+                               event.startTimeNs + event.depth),
+          1, trackUuid, eventIds, annotations, std::nullopt, std::nullopt);
+      appendTrackEventPacket(
+          trace,
+          getRelativeTimestamp(traceDump.minTimeStamp,
+                               event.endTimeNs + maxDepth - event.depth),
+          2, trackUuid, eventIds, annotations, std::nullopt, std::nullopt);
     }
   }
 }
