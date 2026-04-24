@@ -219,23 +219,23 @@ private:
   const NVIDIA::TargetInfo &targetInfo;
 };
 
-struct LocalAtomicAddOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::LocalAtomicAddOp> {
+struct LocalAtomicScatterAddOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalAtomicScatterAddOp> {
 public:
-  LocalAtomicAddOpConversion(const LLVMTypeConverter &converter,
-                             const NVIDIA::TargetInfo &targetInfo,
-                             PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<triton::gpu::LocalAtomicAddOp>(converter,
-                                                              benefit),
+  LocalAtomicScatterAddOpConversion(const LLVMTypeConverter &converter,
+                                    const NVIDIA::TargetInfo &targetInfo,
+                                    PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<triton::gpu::LocalAtomicScatterAddOp>(converter,
+                                                                     benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(triton::gpu::LocalAtomicAddOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::LocalAtomicScatterAddOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (op.getMask())
+      return failure();
     auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
     if (!valuesTy.getElementType().isInteger(32))
-      return failure();
-    if (op.getSem() != triton::MemSemantic::RELAXED)
       return failure();
 
     SmallVector<Value> values =
@@ -294,8 +294,8 @@ void mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
                                        benefit.getBenefit() + 1);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo,
                                        benefit.getBenefit() + 1);
-  patterns.add<LocalAtomicAddOpConversion>(typeConverter, targetInfo,
-                                           benefit.getBenefit() + 1);
+  patterns.add<LocalAtomicScatterAddOpConversion>(typeConverter, targetInfo,
+                                                  benefit.getBenefit() + 1);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo,
                                       benefit.getBenefit() + 1);
   mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,

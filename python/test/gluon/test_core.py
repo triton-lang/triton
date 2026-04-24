@@ -2538,7 +2538,7 @@ def test_shared_scatter(N, M):
 
 
 @gluon.jit
-def shared_atomic_add_kernel(
+def shared_atomic_scatter_add_kernel(
     values_ptr,
     indices_ptr,
     old_ptr,
@@ -2547,7 +2547,6 @@ def shared_atomic_add_kernel(
     M: ttgl.constexpr,
     axis: ttgl.constexpr,
     dtype: ttgl.constexpr,
-    sem: ttgl.constexpr,
     use_full_rhs: ttgl.constexpr,
     layout_2d: ttgl.constexpr,
     shared_layout: ttgl.constexpr,
@@ -2566,7 +2565,7 @@ def shared_atomic_add_kernel(
     smem = ttgl.allocate_shared_memory(dtype, [N, M], layout=shared_layout)
     smem.store(ttgl.zeros([N, M], dtype, layout=layout_2d))
 
-    old = smem.atomic_add(values, indices, axis=axis, sem=sem)
+    old = smem.atomic_scatter_add(values, indices, axis=axis)
     final = smem.load(layout=layout_2d)
 
     ttgl.store(old_ptr + offsets_2d, old)
@@ -2583,7 +2582,7 @@ def shared_atomic_add_kernel(
     (16, 32, 1),
     (32, 16, 0),
 ])
-def test_shared_atomic_add_dtypes(torch_dtype, gluon_dtype, use_full_rhs, N, M, axis):
+def test_shared_atomic_scatter_add_dtypes(torch_dtype, gluon_dtype, use_full_rhs, N, M, axis):
     device = torch.device("cuda")
 
     if use_full_rhs:
@@ -2602,7 +2601,7 @@ def test_shared_atomic_add_dtypes(torch_dtype, gluon_dtype, use_full_rhs, N, M, 
                                    warps_per_cta=[1, 1], order=[1, 0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
-    shared_atomic_add_kernel[(1, )](
+    shared_atomic_scatter_add_kernel[(1, )](
         values,
         indices,
         old,
@@ -2611,7 +2610,6 @@ def test_shared_atomic_add_dtypes(torch_dtype, gluon_dtype, use_full_rhs, N, M, 
         M=M,
         axis=axis,
         dtype=gluon_dtype,
-        sem="relaxed",
         use_full_rhs=use_full_rhs,
         layout_2d=layout_2d,
         shared_layout=shared_layout,

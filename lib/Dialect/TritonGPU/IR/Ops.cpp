@@ -877,18 +877,20 @@ LogicalResult LocalScatterOp::verify() {
   return success();
 }
 
-// LocalAtomicAddOp
-LogicalResult LocalAtomicAddOp::verify() {
+// LocalAtomicScatterAddOp
+LogicalResult LocalAtomicScatterAddOp::verify() {
   auto dstTy = getDst().getType();
   auto valuesTy = cast<RankedTensorType>(getValues().getType());
   auto indicesTy = cast<RankedTensorType>(getIndices().getType());
+  auto maskTy = getMask() ? cast<RankedTensorType>(getMask().getType())
+                          : RankedTensorType();
   Type valuesEltTy = valuesTy.getElementType();
   unsigned axis = getAxis();
 
   if (!dstTy.getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
 
-  // Match Triton's existing atomic_add type support.
+  // Match Triton's existing atomic add type support.
   if (!valuesEltTy.isIntOrFloat()) {
     return emitError("values must have integer or floating element type");
   }
@@ -916,6 +918,9 @@ LogicalResult LocalAtomicAddOp::verify() {
   // Verify values, indices, and result have the same layout
   if (valuesTy.getEncoding() != indicesTy.getEncoding()) {
     return emitError("values must have the same layout as indices");
+  }
+  if (maskTy && valuesTy.getEncoding() != maskTy.getEncoding()) {
+    return emitError("values must have the same layout as mask");
   }
   if (dstTy.getElementType() != valuesEltTy) {
     return emitError("values element type must match destination element type");

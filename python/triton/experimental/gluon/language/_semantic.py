@@ -308,7 +308,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         self.builder.create_local_scatter(mem_desc.handle, values.handle, indices.handle, axis)
 
-    def shared_atomic_add(self, mem_desc, values, indices, axis, sem):
+    def shared_atomic_scatter_add(self, mem_desc, values, indices, axis, mask):
         _check(isinstance(indices, ttgl.tensor),
                lambda: f"expected 'indices' to be a tensor, but got a {type(indices)}")
         _check(isinstance(axis, int), lambda: f"expected 'axis' to be an int, but got a {type(axis)}")
@@ -324,9 +324,17 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(
             values.dtype == mem_desc.dtype,
             lambda: f"values element type must match destination element type: got {values.dtype} and {mem_desc.dtype}")
+        if mask is not None:
+            if not isinstance(mask.type, ttgl.distributed_type):
+                mask = self.splat(mask, values.shape, values.type.layout)
+            _check(mask.dtype == ttgl.int1, lambda: f"mask must have boolean dtype, got {mask.dtype}")
+            _check(mask.shape == values.shape,
+                   lambda: f"mask must have the same shape as values: got {mask.shape} and {values.shape}")
+            _check(mask.type.layout == values.type.layout, lambda: "mask must have the same layout as values")
 
-        sem = self._str_to_sem(sem)
-        handle = self.builder.create_local_atomic_add(mem_desc.handle, values.handle, indices.handle, axis, sem)
+        mask_handle = mask.handle if mask is not None else None
+        handle = self.builder.create_local_atomic_scatter_add(mem_desc.handle, values.handle, indices.handle,
+                                                              mask_handle, axis)
         ret_ty = ttgl.distributed_type(mem_desc.dtype, values.shape, values.type.layout)
         return ttgl.tensor(handle, ret_ty)
 

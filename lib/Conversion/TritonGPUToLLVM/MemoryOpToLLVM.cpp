@@ -359,17 +359,17 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
-struct LocalAtomicAddOpConversion
-    : public ConvertOpToLLVMPattern<LocalAtomicAddOp> {
+struct LocalAtomicScatterAddOpConversion
+    : public ConvertOpToLLVMPattern<LocalAtomicScatterAddOp> {
 public:
-  LocalAtomicAddOpConversion(LLVMTypeConverter &typeConverter,
-                             const TargetInfoBase &targetInfo,
-                             PatternBenefit benefit = 1)
+  LocalAtomicScatterAddOpConversion(LLVMTypeConverter &typeConverter,
+                                    const TargetInfoBase &targetInfo,
+                                    PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
   LogicalResult
-  matchAndRewrite(LocalAtomicAddOp op, OpAdaptor adaptor,
+  matchAndRewrite(LocalAtomicScatterAddOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto memDescTy = cast<MemDescType>(op.getDst().getType());
@@ -388,6 +388,10 @@ public:
         unpackLLElements(loc, adaptor.getValues(), rewriter);
     SmallVector<Value> idxValues =
         unpackLLElements(loc, adaptor.getIndices(), rewriter);
+    SmallVector<Value> maskValues;
+    if (op.getMask()) {
+      maskValues = unpackLLElements(loc, adaptor.getMask(), rewriter);
+    }
     SmallVector<SmallVector<Value>> srcIndices =
         emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(), valuesTy,
                     /*withCTAOffset=*/true);
@@ -395,7 +399,7 @@ public:
     LLVM::AtomicBinOp atomicBinOp = isa<FloatType>(llvmElemTy)
                                         ? LLVM::AtomicBinOp::fadd
                                         : LLVM::AtomicBinOp::add;
-    auto ordering = getMemoryOrdering(op.getSem());
+    auto ordering = getMemoryOrdering(MemSemantic::RELAXED);
     if (!ordering.has_value()) {
       return rewriter.notifyMatchFailure(op, "unsupported memory semantic");
     }
@@ -405,10 +409,34 @@ public:
     SmallVector<Value> results;
     results.reserve(ptrs.size());
 
-    for (auto [ptr, value] : llvm::zip(ptrs, values)) {
-      results.push_back(LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp,
-                                                  ptr, value, *ordering)
-                            .getResult());
+    for (auto [i, ptrAndValue] : llvm::enumerate(llvm::zip(ptrs, values))) {
+      auto [ptr, value] = ptrAndValue;
+      if (maskValues.empty()) {
+        results.push_back(LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp,
+                                                    ptr, value, *ordering)
+                              .getResult());
+        continue;
+      }
+
+      Value undefVal = LLVM::UndefOp::create(rewriter, loc, llvmElemTy);
+      auto *curBlock = rewriter.getInsertionBlock();
+      auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+      auto *atomicBlock = rewriter.createBlock(
+          curBlock->getParent(), std::next(Region::iterator(curBlock)));
+      endBlock->addArgument({llvmElemTy}, {loc});
+
+      rewriter.setInsertionPointToEnd(curBlock);
+      LLVM::CondBrOp::create(rewriter, loc, maskValues[i], atomicBlock,
+                             endBlock, undefVal);
+
+      rewriter.setInsertionPointToEnd(atomicBlock);
+      Value atom = LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp, ptr,
+                                             value, *ordering)
+                       .getResult();
+      LLVM::BrOp::create(rewriter, loc, atom, endBlock);
+
+      rewriter.setInsertionPointToStart(endBlock);
+      results.push_back(endBlock->getArgument(0));
     }
 
     Value result =
@@ -432,7 +460,8 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<LocalAtomicAddOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<LocalAtomicScatterAddOpConversion>(typeConverter, targetInfo,
+                                                  benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BarrierOpConversion>(typeConverter, benefit);
 }

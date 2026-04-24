@@ -460,13 +460,15 @@ def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
   let hasVerifier = 1;
 }
 
-def TTG_LocalAtomicAddOp : TTG_Op<"local_atomic_add", [
-  TypesMatchWith<"result type matches values type", "result", "values", "$_self">
+def TTG_LocalAtomicScatterAddOp : TTG_Op<"local_atomic_scatter_add", [
+  TypesMatchWith<"result type matches values type", "result", "values", "$_self">,
+  OptionalTypesMatchWith<"mask type matches values type",
+                 "values", "mask", "getI1SameShape($_self)">
 ]> {
-  let summary = "Atomically add elements into shared memory along a specified axis";
+  let summary = "Atomically scatter-add elements into shared memory along a specified axis";
 
   let description = [{
-    Atomically adds elements to a shared memory descriptor using an indices tensor
+    Atomically scatter-adds elements to a shared memory descriptor using an indices tensor
     along a single specified axis. The values tensor has the same shape as the
     indices tensor and the result returns the previous values observed at each
     updated location.
@@ -479,14 +481,14 @@ def TTG_LocalAtomicAddOp : TTG_Op<"local_atomic_add", [
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$dst,
     TT_Tensor:$values,
     TT_IntTensor:$indices,
-    I32Attr:$axis,
-    TT_MemSemanticAttr:$sem
+    Optional<I1Tensor>:$mask,
+    I32Attr:$axis
   );
   let results = (outs TT_Tensor:$result);
 
   let assemblyFormat = [{
-    $sem `,` $dst `[` $indices `]` `,` $values attr-dict `:` qualified(type($dst)) `,`
-    type($indices) `,` type($values) `->` type($result)
+    $dst `[` $indices `]` `,` $values (`,` $mask^)? attr-dict `:`
+    functional-type(operands, results)
   }];
   let hasVerifier = 1;
 }
