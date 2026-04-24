@@ -403,6 +403,16 @@ void appendSlicePackets(ProtoWriter &trace, uint64_t minTimeStamp,
                          std::nullopt);
 }
 
+struct PendingPerfettoSlice {
+  uint64_t trackUuid{};
+  uint64_t startTimeNs{};
+  uint64_t endTimeNs{};
+  PerfettoSliceEventInternedIds eventIds;
+  std::vector<PerfettoAnnotation> annotations;
+  std::optional<uint64_t> flowId;
+  std::optional<uint64_t> terminatingFlowId;
+};
+
 void appendCpuTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
                            PerfettoInternedNames &internedNames) {
   for (const auto &[threadId, cpuEvents] : traceDump.cpuScopeEvents) {
@@ -444,6 +454,7 @@ void appendCpuTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
 
 void appendGraphTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
                              PerfettoInternedNames &internedNames) {
+  std::vector<PendingPerfettoSlice> pendingSlices;
   for (const auto &[streamId, graphEvents] : traceDump.graphScopeEvents) {
     const auto trackUuid =
         getPerfettoLaneTrackUuid(details::getGraphLaneId(streamId));
@@ -466,11 +477,24 @@ void appendGraphTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
 
       const auto eventIds =
           internSliceEvent(internedNames, newInternedNames, name, category);
-      appendSlicePackets(trace, traceDump.minTimeStamp, trackUuid,
-                         event.startTimeNs, event.endTimeNs, eventIds,
-                         annotations, std::nullopt, std::nullopt,
-                         newInternedNames, incrementalStateCleared);
+      appendInternedDataPacket(trace, newInternedNames,
+                               incrementalStateCleared);
+      pendingSlices.push_back({trackUuid, event.startTimeNs, event.endTimeNs,
+                               eventIds, std::move(annotations), std::nullopt,
+                               std::nullopt});
     }
+  }
+  for (const auto &slice : pendingSlices) {
+    appendTrackEventPacket(
+        trace, getRelativeTimestamp(traceDump.minTimeStamp, slice.startTimeNs),
+        1, slice.trackUuid, slice.eventIds, slice.annotations, slice.flowId,
+        slice.terminatingFlowId);
+  }
+  for (auto it = pendingSlices.rbegin(); it != pendingSlices.rend(); ++it) {
+    appendTrackEventPacket(
+        trace, getRelativeTimestamp(traceDump.minTimeStamp, it->endTimeNs), 2,
+        it->trackUuid, it->eventIds, it->annotations, std::nullopt,
+        std::nullopt);
   }
 }
 
