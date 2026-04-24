@@ -140,15 +140,7 @@ bool KernelEvent::compare(const KernelEvent &a, const KernelEvent &b) {
   if (a.getIsMetricKernel() != b.getIsMetricKernel()) {
     return a.getIsMetricKernel() < b.getIsMetricKernel();
   }
-  const auto aName = a.getName();
-  const auto bName = b.getName();
-  if (aName != bName) {
-    return aName < bName;
-  }
-  if (a.eventId != b.eventId) {
-    return a.eventId < b.eventId;
-  }
-  return std::less<const KernelMetric *>{}(a.kernelMetric, b.kernelMetric);
+  return a.eventId < b.eventId;
 }
 
 } // namespace proton::trace_data_dump
