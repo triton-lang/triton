@@ -54,14 +54,12 @@ Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
 
 FailureOr<Value> emitSharedAtomicAdd(ConversionPatternRewriter &rewriter,
                                      Location loc, Type valueElemTy, Value ptr,
-                                     Value value, bool returnOld,
-                                     Value pred) {
+                                     Value value, bool returnOld, Value pred) {
   unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
   if (valueElemNBits != 16 && valueElemNBits != 32 && valueElemNBits != 64)
     return failure();
 
-  std::string tyId =
-      getPtxRegisterSizeCode(valueElemNBits, /*isFloat=*/false);
+  std::string tyId = getPtxRegisterSizeCode(valueElemNBits, /*isFloat=*/false);
   std::string addOp = "add";
   std::string suffix;
   if (isa<IntegerType>(valueElemTy)) {
@@ -70,8 +68,8 @@ FailureOr<Value> emitSharedAtomicAdd(ConversionPatternRewriter &rewriter,
     suffix = "u" + std::to_string(valueElemNBits);
   } else if (isa<FloatType>(valueElemTy)) {
     addOp += valueElemNBits == 16 ? ".noftz" : "";
-    suffix = (valueElemTy.isBF16() ? "bf" : "f") +
-             std::to_string(valueElemNBits);
+    suffix =
+        (valueElemTy.isBF16() ? "bf" : "f") + std::to_string(valueElemNBits);
   } else {
     return failure();
   }
