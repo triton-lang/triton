@@ -12,6 +12,15 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     continue-on-error: ${{ matrix.runner[1] == 'gfx90a' || matrix.runner[0] == 'amd-gfx950' }}
+    # Serialize jobs that share the same physical AMD runner. The gfx950
+    # hardware hosts both this matrix entry and the integration-tests-amd-rocm712
+    # job below; running them concurrently causes HIP device-ordinal contention
+    # after `unset HIP_VISIBLE_DEVICES` in the Proton step (hipErrorInvalidDevice,
+    # 101). Per matrix entry we key the group on the runner label so gfx90a /
+    # gfx942 keep running in parallel.
+    concurrency:
+      group: integration-tests-amd-hw-${{ matrix.runner[0] }}-${{ github.run_id }}
+      cancel-in-progress: false
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
@@ -218,6 +227,12 @@ jobs:
     name: integration-tests-amd (gfx950-rocm712)
     runs-on: ["amd-gfx950"]
     timeout-minutes: 45
+    # Share the gfx950 concurrency group with the matrix job above so the two
+    # gfx950 consumers run back-to-back on the shared physical runner rather
+    # than fighting over the GPU.
+    concurrency:
+      group: integration-tests-amd-hw-amd-gfx950-${{ github.run_id }}
+      cancel-in-progress: false
     env:
       RUNNER_TYPE: gfx950-rocm712
       TRITON_BUILD_WITH_CCACHE: "true"
