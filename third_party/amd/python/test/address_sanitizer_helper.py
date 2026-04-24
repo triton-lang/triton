@@ -61,6 +61,7 @@ def add_kernel(
     output = x + y
     tl.store(output_ptr + offsets, output)
 
+
 torch.cuda.synchronize()
 pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
 amdgcn = pgm.asm['amdgcn']
