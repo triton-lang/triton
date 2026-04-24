@@ -1,4 +1,5 @@
 #include "triton/Analysis/Membar.h"
+#include "triton/Analysis/BufferIndexAnalysis.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -163,8 +164,11 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     outputBlockInfoMap[block] = inputBlockInfo;
 
     for (const auto &successor : successors) {
-      inputBlockInfoMap[successor.block].join(outputBlockInfoMap[block],
-                                              successor.isBackedge);
+      if (successor.isBackedge)
+        joinFromBackedge(inputBlockInfoMap[successor.block],
+                         outputBlockInfoMap[block]);
+      else
+        inputBlockInfoMap[successor.block].join(outputBlockInfoMap[block]);
       blockList.emplace_back(successor.block);
     }
   }

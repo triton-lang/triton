@@ -1,3 +1,4 @@
+#include "triton/Analysis/BufferIndexAnalysis.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -217,6 +218,18 @@ Value extractBufferIndex(Value value) {
     v = def->getOperand(0);
   }
   return Value();
+}
+
+void joinFromBackedge(BlockInfo &dest, const BlockInfo &src) {
+  auto mergeMap = [](BlockInfo::SliceMapT &lhs,
+                     const BlockInfo::SliceMapT &rhs) {
+    for (const auto &[slice, ops] : rhs) {
+      AllocationSlice key = slice.withInvalidatedBufferIndex();
+      lhs[key].insert(ops.begin(), ops.end());
+    }
+  };
+  mergeMap(dest.syncReadSlices, src.syncReadSlices);
+  mergeMap(dest.syncWriteSlices, src.syncWriteSlices);
 }
 
 } // namespace mlir

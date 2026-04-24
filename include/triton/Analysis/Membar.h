@@ -25,18 +25,6 @@ using MembarSliceFilterFn =
     std::function<bool(const AllocationSlice &, const AllocationSlice &,
                        bool /*lhsIsRead*/, bool /*rhsIsRead*/, Allocation *)>;
 
-/// Returns true only if `a` and `b` provably denote different buffer slots
-/// within a single execution of the enclosing region. Used by the membar
-/// analysis to skip barriers between multi-buffered shared-memory accesses
-/// whose dynamic slot indices are different. Implementation (and the
-/// invariants it relies on) lives in BufferIndexAnalysis.cpp.
-bool areIndicesProvablyDifferent(Value a, Value b);
-
-/// Returns the dynamic slot index of a multi-buffered shared-memory access,
-/// or a null Value if one cannot be recovered. Walks through
-/// MemDescViewTrait producers to the underlying MemDescIndexOp.
-Value extractBufferIndex(Value value);
-
 // Represents the access to a slice of an allocation
 // It contains information both on physical memory (the interval) and a
 // logical view on it (layout, subslice offsets and shape for the access)
@@ -122,13 +110,10 @@ struct BlockInfo {
 
   BlockInfo() = default;
 
-  /// Unions two BlockInfo objects. When `fromBackedge` is true, incoming
-  /// slices have their `bufferIndex` cleared: the SSA value that selected
-  /// a buffer slot on the carried side denotes a different runtime integer
-  /// at the backedge target, so the disjointness shortcut must not fire.
-  BlockInfo &join(const BlockInfo &other, bool fromBackedge = false) {
-    joinSlices(syncReadSlices, other.syncReadSlices, fromBackedge);
-    joinSlices(syncWriteSlices, other.syncWriteSlices, fromBackedge);
+  /// Unions two BlockInfo objects.
+  BlockInfo &join(const BlockInfo &other) {
+    joinSlices(syncReadSlices, other.syncReadSlices);
+    joinSlices(syncWriteSlices, other.syncWriteSlices);
     return *this;
   }
 
@@ -187,13 +172,9 @@ struct BlockInfo {
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
 private:
-  static void joinSlices(SliceMapT &lhs, const SliceMapT &rhs,
-                         bool fromBackedge) {
-    for (const auto &[slice, ops] : rhs) {
-      AllocationSlice key =
-          fromBackedge ? slice.withInvalidatedBufferIndex() : slice;
-      lhs[key].insert(ops.begin(), ops.end());
-    }
+  static void joinSlices(SliceMapT &lhs, const SliceMapT &rhs) {
+    for (const auto &[slice, ops] : rhs)
+      lhs[slice].insert(ops.begin(), ops.end());
   }
 
   bool isIntersected(const SliceMapT &lhsSlices, const SliceMapT &rhsSlices,
@@ -248,8 +229,8 @@ class MembarOrFenceAnalysis {
     VirtualBlock block;
     /// True when this edge is a loop backedge (e.g. scf.for yield back to
     /// the body region, scf.while after-region yield back to before).
-    /// Backedges propagate slices with invalidated bufferIndex; see
-    /// BlockInfo::join and AllocationSlice::withInvalidatedBufferIndex.
+    /// Backedges merge state via joinFromBackedge (see
+    /// BufferIndexAnalysis.h) instead of BlockInfo::join.
     bool isBackedge = false;
   };
 
