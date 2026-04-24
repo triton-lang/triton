@@ -9,7 +9,7 @@
   <title>triton.experimental.gluon.language.load &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
       <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
-      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery.css?v=fd6457a4" />
       <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
@@ -23,6 +23,7 @@
       <script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
       <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../../_static/sg-tags.js?v=d80f6fa4"></script>
       <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
@@ -174,7 +175,7 @@ tensor is loaded.  In this case:</p>
 <li><p><strong>pointer</strong> (<cite>triton.PointerType</cite>, or block of <cite>dtype=triton.PointerType</cite>) – Pointer to the data to be loaded</p></li>
 <li><p><strong>mask</strong> (Block of <cite>triton.int1</cite>, optional) – if <cite>mask[idx]</cite> is false, do not load the data at address <cite>pointer[idx]</cite>
 (must be <cite>None</cite> with block pointers)</p></li>
-<li><p><strong>other</strong> (<em>Block</em><em>, </em><em>optional</em>) – if <cite>mask[idx]</cite> is false, return <cite>other[idx]</cite></p></li>
+<li><p><strong>other</strong> (<em>Block</em><em>, </em><em>optional</em>) – if <cite>mask[idx]</cite> is false, return <cite>other[idx]</cite>. If <cite>other</cite> is <cite>None</cite>, the masked-out value is undefined.</p></li>
 <li><p><strong>boundary_check</strong> (<em>tuple</em><em> of </em><em>ints</em><em>, </em><em>optional</em>) – tuple of integers, indicating the dimensions which should do the boundary check</p></li>
 <li><p><strong>padding_option</strong> – should be one of {“”, “zero”, “nan”}, the padding value to use while out of bounds. “” means an undefined value.</p></li>
 <li><p><strong>cache_modifier</strong> (str, optional, should be one of {“”, “.ca”, “.cg”, “.cv”}, where “.ca” stands for
