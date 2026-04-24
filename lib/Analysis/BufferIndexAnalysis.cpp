@@ -1,4 +1,5 @@
 #include "triton/Analysis/Membar.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -200,6 +201,22 @@ bool areIndicesProvablyDifferent(Value a, Value b) {
   if (!a || !b)
     return false;
   return analyzeBufferIndex(a).isProvablyDifferentFrom(analyzeBufferIndex(b));
+}
+
+Value extractBufferIndex(Value value) {
+  // MemDescIndexOp selects a whole slot of a multi-buffered allocation; its
+  // index operand identifies the slot. MemDescViewTrait producers (trans,
+  // reshape, reinterpret, subslice) are slot-preserving, so we can walk
+  // through them to find the underlying MemDescIndexOp.
+  Value v = value;
+  while (auto *def = v.getDefiningOp()) {
+    if (auto indexOp = dyn_cast<triton::gpu::MemDescIndexOp>(def))
+      return indexOp.getIndex();
+    if (!def->hasTrait<OpTrait::MemDescViewTrait>())
+      break;
+    v = def->getOperand(0);
+  }
+  return Value();
 }
 
 } // namespace mlir

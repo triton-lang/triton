@@ -32,6 +32,11 @@ using MembarSliceFilterFn =
 /// invariants it relies on) lives in BufferIndexAnalysis.cpp.
 bool areIndicesProvablyDifferent(Value a, Value b);
 
+/// Returns the dynamic slot index of a multi-buffered shared-memory access,
+/// or a null Value if one cannot be recovered. Walks through
+/// MemDescViewTrait producers to the underlying MemDescIndexOp.
+Value extractBufferIndex(Value value);
+
 // Represents the access to a slice of an allocation
 // It contains information both on physical memory (the interval) and a
 // logical view on it (layout, subslice offsets and shape for the access)
@@ -72,30 +77,26 @@ public:
     return shifted;
   }
 
-  /// Returns a copy of this slice with isLoopCarried set. Used when
-  /// propagating BlockInfo across a CFG backedge; disables the
-  /// SSA-identity-based buffer-index disjointness shortcut, which
-  /// assumes both indices denote values from the same iteration.
-  AllocationSlice createLoopCarriedCopy() const {
+  /// Returns a copy of this slice with the `bufferIndex` cleared. Used
+  /// when propagating BlockInfo across a CFG backedge: the underlying
+  /// SSA value denotes a different runtime integer on the carried side
+  /// vs. the next iteration, so the analysis must not compare the two.
+  /// A null index fails the disjointness check and falls back to
+  /// conservative aliasing.
+  AllocationSlice withInvalidatedBufferIndex() const {
     AllocationSlice copy = *this;
-    copy.isLoopCarried = true;
+    copy.bufferIndex = Value();
     return copy;
   }
-
-  bool getIsLoopCarried() const { return isLoopCarried; }
 
   void print(raw_ostream &os) const;
 
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
-             llvm::ArrayRef<int64_t>, const void *, bool>
+             llvm::ArrayRef<int64_t>, const void *>
   asTuple() const {
-    return {allocationInterval,
-            bufferId,
-            accessTy.getAsOpaquePointer(),
-            subsliceOffsets,
-            bufferIndex.getAsOpaquePointer(),
-            isLoopCarried};
+    return {allocationInterval, bufferId, accessTy.getAsOpaquePointer(),
+            subsliceOffsets, bufferIndex.getAsOpaquePointer()};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
@@ -107,10 +108,10 @@ private:
   Allocation::BufferId bufferId;
   // Dynamic slot index of a multi-buffered allocation: the operand of
   // the MemDescIndexOp that produced this slice, or null when the access
-  // does not go through one. Distinguishes slices that target different
-  // slots of the same buffer so they stay as separate map entries.
+  // does not go through one or when this slice was propagated across a
+  // backedge (see withInvalidatedBufferIndex). Distinguishes slices that
+  // target different slots so they stay as separate map entries.
   Value bufferIndex;
-  bool isLoopCarried = false;
 };
 
 struct BlockInfo {
@@ -121,18 +122,13 @@ struct BlockInfo {
 
   BlockInfo() = default;
 
-  /// Unions two BlockInfo objects.
-  BlockInfo &join(const BlockInfo &other) {
-    joinSlices(syncReadSlices, other.syncReadSlices);
-    joinSlices(syncWriteSlices, other.syncWriteSlices);
-    return *this;
-  }
-
-  /// Unions two BlockInfo objects, marking all incoming slices as loop-carried.
-  /// Used when propagating state across loop backedges.
-  BlockInfo &joinLoopCarried(const BlockInfo &other) {
-    joinSlicesAsLoopCarried(syncReadSlices, other.syncReadSlices);
-    joinSlicesAsLoopCarried(syncWriteSlices, other.syncWriteSlices);
+  /// Unions two BlockInfo objects. When `fromBackedge` is true, incoming
+  /// slices have their `bufferIndex` cleared: the SSA value that selected
+  /// a buffer slot on the carried side denotes a different runtime integer
+  /// at the backedge target, so the disjointness shortcut must not fire.
+  BlockInfo &join(const BlockInfo &other, bool fromBackedge = false) {
+    joinSlices(syncReadSlices, other.syncReadSlices, fromBackedge);
+    joinSlices(syncWriteSlices, other.syncWriteSlices, fromBackedge);
     return *this;
   }
 
@@ -143,8 +139,6 @@ struct BlockInfo {
     for (auto &[slice, ops] : syncReadSlices) {
       err << "    ";
       slice.print(err);
-      if (slice.getIsLoopCarried())
-        err << " [loop-carried]";
       err << " ";
       for (auto &op : ops)
         err << op->getName() << " ";
@@ -154,8 +148,6 @@ struct BlockInfo {
     for (auto &[slice, ops] : syncWriteSlices) {
       err << "    ";
       slice.print(err);
-      if (slice.getIsLoopCarried())
-        err << " [loop-carried]";
       err << " ";
       for (auto &op : ops)
         err << op->getName() << " ";
@@ -195,15 +187,12 @@ struct BlockInfo {
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
 private:
-  static void joinSlices(SliceMapT &lhs, const SliceMapT &rhs) {
-    for (const auto &[slice, ops] : rhs)
-      lhs[slice].insert(ops.begin(), ops.end());
-  }
-
-  static void joinSlicesAsLoopCarried(SliceMapT &lhs, const SliceMapT &rhs) {
+  static void joinSlices(SliceMapT &lhs, const SliceMapT &rhs,
+                         bool fromBackedge) {
     for (const auto &[slice, ops] : rhs) {
-      AllocationSlice loopCarriedSlice = slice.createLoopCarriedCopy();
-      lhs[loopCarriedSlice].insert(ops.begin(), ops.end());
+      AllocationSlice key =
+          fromBackedge ? slice.withInvalidatedBufferIndex() : slice;
+      lhs[key].insert(ops.begin(), ops.end());
     }
   }
 
@@ -259,8 +248,8 @@ class MembarOrFenceAnalysis {
     VirtualBlock block;
     /// True when this edge is a loop backedge (e.g. scf.for yield back to
     /// the body region, scf.while after-region yield back to before).
-    /// Backedges propagate slices as loop-carried (see
-    /// BlockInfo::joinLoopCarried).
+    /// Backedges propagate slices with invalidated bufferIndex; see
+    /// BlockInfo::join and AllocationSlice::withInvalidatedBufferIndex.
     bool isBackedge = false;
   };
 

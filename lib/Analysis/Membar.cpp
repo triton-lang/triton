@@ -29,22 +29,7 @@ AllocationSlice::AllocationSlice(Value value,
     }
   }
 
-  // MemDescIndexOp selects a whole slot of a multi-buffered allocation;
-  // record its index so intersects() can prove slot-level disjointness.
-  // Sub-region offsets within a slot are captured by subsliceOffsets above.
-  // Walk through MemDescViewTrait producers (memdesc_trans/reshape/
-  // reinterpret/subslice) to the underlying memdesc_index: view ops
-  // never change which slot is selected.
-  Value v = value;
-  while (auto *def = v.getDefiningOp()) {
-    if (auto indexOp = dyn_cast<triton::gpu::MemDescIndexOp>(def)) {
-      bufferIndex = indexOp.getIndex();
-      break;
-    }
-    if (!def->hasTrait<OpTrait::MemDescViewTrait>())
-      break;
-    v = def->getOperand(0);
-  }
+  bufferIndex = extractBufferIndex(value);
 }
 
 bool AllocationSlice::intersects(const AllocationSlice &other) const {
@@ -52,10 +37,9 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
 
-  // Whole-slot disjointness via buffer-index matching. Skipped for
-  // loop-carried slices, where the SSA-identity invariant does not hold.
-  if (!isLoopCarried && !other.isLoopCarried &&
-      areIndicesProvablyDifferent(bufferIndex, other.bufferIndex))
+  // Whole-slot disjointness via buffer-index matching. A null index
+  // (never matched, or invalidated across a backedge) fails the check.
+  if (areIndicesProvablyDifferent(bufferIndex, other.bufferIndex))
     return false;
 
   // If access types are unknown, assume intersection
@@ -113,9 +97,6 @@ void AllocationSlice::print(raw_ostream &os) const {
   } else {
     os << "? layout=unknown";
   }
-
-  if (bufferIndex)
-    os << " bufIdx=" << bufferIndex;
 }
 
 void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
@@ -182,12 +163,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     outputBlockInfoMap[block] = inputBlockInfo;
 
     for (const auto &successor : successors) {
-      if (successor.isBackedge) {
-        inputBlockInfoMap[successor.block].joinLoopCarried(
-            outputBlockInfoMap[block]);
-      } else {
-        inputBlockInfoMap[successor.block].join(outputBlockInfoMap[block]);
-      }
+      inputBlockInfoMap[successor.block].join(outputBlockInfoMap[block],
+                                              successor.isBackedge);
       blockList.emplace_back(successor.block);
     }
   }
@@ -248,10 +225,14 @@ void MembarOrFenceAnalysis::visitTerminator(
   // Terminator of a region inside a region-branching op (e.g. scf.yield).
   // Successors are the first block of another region (re-entering a
   // loop body / condition region) or the parent op's continuation block.
-  // Backedge rule: a successor region with number <= the terminator's
-  // region number denotes re-entry into an earlier region. That covers
-  // scf.for yield -> body (same region) and scf.while after -> before
-  // (successor 0 <= terminator 1).
+  //
+  // Backedge detection is unavoidable here: forward vs. backward edges
+  // need different join semantics, since SSA values carried across a
+  // backedge denote a different runtime integer on the next iteration
+  // (see BlockInfo::join). A successor region with number <= the
+  // terminator's region number denotes re-entry into an earlier region,
+  // covering scf.for yield -> body (same region) and scf.while after
+  // -> before (successor 0 <= terminator 1).
   //
   // FIXME: `ReturnLike` adds `RegionBranchTerminatorOpInterface` for some
   // reason. Check that the parent is actually a `RegionBranchOpInterface`.
