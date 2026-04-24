@@ -244,7 +244,7 @@ void joinFromBackedge(BlockInfo &dest, const BlockInfo &src) {
   auto mergeMap = [](BlockInfo::SliceMapT &lhs,
                      const BlockInfo::SliceMapT &rhs) {
     for (const auto &[slice, ops] : rhs) {
-      AllocationSlice key = slice.withInvalidatedBufferIndex();
+      AllocationSlice key = withInvalidatedBufferIndex(slice);
       lhs[key].insert(ops.begin(), ops.end());
     }
   };

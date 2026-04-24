@@ -1,13 +1,14 @@
 #ifndef TRITON_ANALYSIS_BUFFER_INDEX_ANALYSIS_H
 #define TRITON_ANALYSIS_BUFFER_INDEX_ANALYSIS_H
 
+#include "triton/Analysis/Membar.h"
+
 #include "mlir/IR/Value.h"
 
 namespace mlir {
 
 class Block;
 class Operation;
-struct BlockInfo;
 
 /// Returns true only if `a` and `b` provably denote different buffer slots
 /// within a single execution of the enclosing region. Used by the membar
@@ -20,6 +21,29 @@ bool areIndicesProvablyDifferent(Value a, Value b);
 /// MemDescViewTrait producers to the underlying MemDescIndexOp.
 Value extractBufferIndex(Value value);
 
+/// Buffer-index payload stored in AllocationSlice::extensionKey.
+
+inline Value getBufferIndex(const AllocationSlice &slice) {
+  return Value::getFromOpaquePointer(slice.extensionKey);
+}
+
+inline void setBufferIndex(AllocationSlice &slice, Value value) {
+  slice.extensionKey = value.getAsOpaquePointer();
+}
+
+/// Returns a copy of `slice` with its buffer index cleared. Used when
+/// propagating BlockInfo across a CFG backedge: the underlying SSA
+/// value denotes a different runtime integer on the carried side vs.
+/// the next iteration, so the analysis must not compare the two. A
+/// null index fails areIndicesProvablyDifferent and falls back to
+/// conservative aliasing.
+inline AllocationSlice
+withInvalidatedBufferIndex(const AllocationSlice &slice) {
+  AllocationSlice copy = slice;
+  copy.extensionKey = nullptr;
+  return copy;
+}
+
 /// Returns true if `successor` is the entry block of a CFG edge from
 /// `terminator` that re-enters an earlier region (e.g. scf.for yield ->
 /// body, scf.while after -> before). Used by membar to dispatch
@@ -27,10 +51,8 @@ Value extractBufferIndex(Value value);
 bool isBackedgeSuccessor(Operation *terminator, Block *successor);
 
 /// Like BlockInfo::join, but for slices propagated across a CFG backedge:
-/// each incoming slice has its bufferIndex cleared before being merged
-/// into `dest`, since the SSA value denotes a different runtime integer
-/// on the carried side vs. the next iteration. A null index fails
-/// areIndicesProvablyDifferent and falls back to conservative aliasing.
+/// each incoming slice has its buffer index cleared (see
+/// withInvalidatedBufferIndex) before being merged into `dest`.
 void joinFromBackedge(BlockInfo &dest, const BlockInfo &src);
 
 } // namespace mlir

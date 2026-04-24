@@ -30,7 +30,7 @@ AllocationSlice::AllocationSlice(Value value,
     }
   }
 
-  bufferIndex = extractBufferIndex(value);
+  setBufferIndex(*this, extractBufferIndex(value));
 }
 
 bool AllocationSlice::intersects(const AllocationSlice &other) const {
@@ -40,7 +40,7 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
 
   // Whole-slot disjointness via buffer-index matching. A null index
   // (never matched, or invalidated across a backedge) fails the check.
-  if (areIndicesProvablyDifferent(bufferIndex, other.bufferIndex))
+  if (areIndicesProvablyDifferent(getBufferIndex(*this), getBufferIndex(other)))
     return false;
 
   // If access types are unknown, assume intersection

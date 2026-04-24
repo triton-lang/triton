@@ -65,26 +65,21 @@ public:
     return shifted;
   }
 
-  /// Returns a copy of this slice with the `bufferIndex` cleared. Used
-  /// when propagating BlockInfo across a CFG backedge: the underlying
-  /// SSA value denotes a different runtime integer on the carried side
-  /// vs. the next iteration, so the analysis must not compare the two.
-  /// A null index fails the disjointness check and falls back to
-  /// conservative aliasing.
-  AllocationSlice withInvalidatedBufferIndex() const {
-    AllocationSlice copy = *this;
-    copy.bufferIndex = Value();
-    return copy;
-  }
-
   void print(raw_ostream &os) const;
+
+  // Opaque key contributed by an external analysis (e.g. buffer-index
+  // disjointness in BufferIndexAnalysis.h) that participates in the
+  // slice's ordering and equality. Lets such an analysis keep slices
+  // that target distinct sub-resources as separate map entries without
+  // baking its semantics into this header.
+  const void *extensionKey = nullptr;
 
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
              llvm::ArrayRef<int64_t>, const void *>
   asTuple() const {
     return {allocationInterval, bufferId, accessTy.getAsOpaquePointer(),
-            subsliceOffsets, bufferIndex.getAsOpaquePointer()};
+            subsliceOffsets, extensionKey};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
@@ -94,12 +89,6 @@ private:
   triton::gpu::MemDescType accessTy;
   // Buffer id for partial sync on wait_barrier deps.
   Allocation::BufferId bufferId;
-  // Dynamic slot index of a multi-buffered allocation: the operand of
-  // the MemDescIndexOp that produced this slice, or null when the access
-  // does not go through one or when this slice was propagated across a
-  // backedge (see withInvalidatedBufferIndex). Distinguishes slices that
-  // target different slots so they stay as separate map entries.
-  Value bufferIndex;
 };
 
 struct BlockInfo {
