@@ -1232,7 +1232,7 @@ module attributes {"ttg.num-warps" = 2 : i32, "ttg.num-ctas" = 1 : i32} {
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
-#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
   tt.func public @reduce_cvt2(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<1x256xf32, #blocked>
@@ -4253,5 +4253,24 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
     // CHECK: tt.store {{.*}}, %[[CVT]]
     tt.store %ptr, %cvt : tensor<32x!tt.ptr<i32>, #linear_bcast>
     tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @register_reorder_convert_kept
+  tt.func public @register_reorder_convert_kept() -> (tensor<1x32xf32, #blocked1>, tensor<1x32xf32, #blocked>) {
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %expanded = tt.expand_dims %range {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xi32, #blocked>
+    %fp = arith.sitofp %expanded : tensor<1x32xi32, #blocked> to tensor<1x32xf32, #blocked>
+    %exp = math.exp2 %fp : tensor<1x32xf32, #blocked>
+    // CHECK: ttg.convert_layout
+    %cvt = ttg.convert_layout %exp : tensor<1x32xf32, #blocked> -> tensor<1x32xf32, #blocked1>
+    // CHECK: tt.return
+    tt.return %cvt, %exp : tensor<1x32xf32, #blocked1>, tensor<1x32xf32, #blocked>
   }
 }
