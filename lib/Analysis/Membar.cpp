@@ -138,7 +138,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     blockList.pop_front();
     // Make a copy of the inputblockInfo but not update
     auto inputBlockInfo = inputBlockInfoMap[block];
-    SmallVector<SuccessorInfo> successors;
+    SmallVector<VirtualBlock> successors;
+    SmallVector<bool> isBackedges;
     Block::iterator startIt =
         block.second.isValid() ? std::next(block.second) : block.first->begin();
     for (Operation &op : llvm::make_range(startIt, block.first->end())) {
@@ -148,7 +149,7 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
       update(&op, &inputBlockInfo, funcBlockInfoMap, builder);
       if (op.hasTrait<OpTrait::IsTerminator>() ||
           isa<RegionBranchOpInterface>(op)) {
-        visitTerminator(&op, successors);
+        visitTerminator(&op, successors, isBackedges);
         break;
       }
     }
@@ -163,13 +164,13 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     // so overwrite the output state entirely.
     outputBlockInfoMap[block] = inputBlockInfo;
 
-    for (const auto &successor : successors) {
-      if (successor.isBackedge)
-        joinFromBackedge(inputBlockInfoMap[successor.block],
+    for (auto [successor, isBackedge] : llvm::zip(successors, isBackedges)) {
+      if (isBackedge)
+        joinFromBackedge(inputBlockInfoMap[successor],
                          outputBlockInfoMap[block]);
       else
-        inputBlockInfoMap[successor.block].join(outputBlockInfoMap[block]);
-      blockList.emplace_back(successor.block);
+        inputBlockInfoMap[successor].join(outputBlockInfoMap[block]);
+      blockList.emplace_back(successor);
     }
   }
 
@@ -198,13 +199,20 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
 }
 
 void MembarOrFenceAnalysis::visitTerminator(
-    Operation *op, SmallVector<SuccessorInfo> &successors) {
+    Operation *op, SmallVector<VirtualBlock> &successors,
+    SmallVector<bool> &isBackedges) {
+  auto addSuccessor = [&](Block *block, Block::iterator it,
+                          bool isBackedge = false) {
+    successors.emplace_back(block, it);
+    isBackedges.push_back(isBackedge);
+  };
+
   // Plain CFG branch (cf.br, cf.cond_br, ...). Triton's membar runs
   // before any scf-to-cf lowering, so loops are not yet expressed as
   // cf.br cycles; treat all CFG edges as forward.
   if (isa<BranchOpInterface>(op)) {
     for (Block *successor : op->getSuccessors())
-      successors.emplace_back(successor, Block::iterator());
+      addSuccessor(successor, Block::iterator());
     return;
   }
 
@@ -217,10 +225,10 @@ void MembarOrFenceAnalysis::visitTerminator(
     br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
     for (RegionSuccessor &region : regions) {
       if (region.isParent()) {
-        successors.emplace_back(br->getBlock(), br->getIterator());
+        addSuccessor(br->getBlock(), br->getIterator());
       } else {
         Block &block = region.getSuccessor()->front();
-        successors.emplace_back(&block, Block::iterator());
+        addSuccessor(&block, Block::iterator());
       }
     }
     return;
@@ -233,10 +241,10 @@ void MembarOrFenceAnalysis::visitTerminator(
   // Backedge detection is unavoidable here: forward vs. backward edges
   // need different join semantics, since SSA values carried across a
   // backedge denote a different runtime integer on the next iteration
-  // (see BlockInfo::join). A successor region with number <= the
-  // terminator's region number denotes re-entry into an earlier region,
-  // covering scf.for yield -> body (same region) and scf.while after
-  // -> before (successor 0 <= terminator 1).
+  // (see joinFromBackedge in BufferIndexAnalysis.h). A successor region
+  // with number <= the terminator's region number denotes re-entry into
+  // an earlier region, covering scf.for yield -> body (same region) and
+  // scf.while after -> before (successor 0 <= terminator 1).
   //
   // FIXME: `ReturnLike` adds `RegionBranchTerminatorOpInterface` for some
   // reason. Check that the parent is actually a `RegionBranchOpInterface`.
@@ -250,12 +258,12 @@ void MembarOrFenceAnalysis::visitTerminator(
     for (const RegionSuccessor &region : regions) {
       if (region.isParent()) {
         Operation *parent = br->getParentOp();
-        successors.emplace_back(parent->getBlock(), parent->getIterator());
+        addSuccessor(parent->getBlock(), parent->getIterator());
       } else {
         Block &block = region.getSuccessor()->front();
         bool isBackedge =
             region.getSuccessor()->getRegionNumber() <= termRegionNo;
-        successors.emplace_back(&block, Block::iterator(), isBackedge);
+        addSuccessor(&block, Block::iterator(), isBackedge);
       }
     }
     return;

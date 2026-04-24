@@ -222,17 +222,6 @@ inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
 // Common class to analyze membar and fence placement.
 class MembarOrFenceAnalysis {
   using VirtualBlock = std::pair<Block *, Block::iterator>;
-  struct SuccessorInfo {
-    SuccessorInfo(Block *block, Block::iterator it, bool isBackedge = false)
-        : block(block, it), isBackedge(isBackedge) {}
-
-    VirtualBlock block;
-    /// True when this edge is a loop backedge (e.g. scf.for yield back to
-    /// the body region, scf.while after-region yield back to before).
-    /// Backedges merge state via joinFromBackedge (see
-    /// BufferIndexAnalysis.h) instead of BlockInfo::join.
-    bool isBackedge = false;
-  };
 
 public:
   using FuncBlockInfoMapT = triton::CallGraph<BlockInfo>::FuncDataMapT;
@@ -277,8 +266,10 @@ protected:
   void resolve(FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
                OpBuilder *builder);
 
-  /// Collects the successors of the terminator and populates
-  /// SuccessorInfo::isBackedge for each. Dispatches on the op's
+  /// Collects the successors of the terminator and, for each one, whether
+  /// the edge is a loop backedge (e.g. scf.for yield back to the body
+  /// region, scf.while after-region yield back to before). `successors`
+  /// and `isBackedges` are filled in lockstep. Dispatches on the op's
   /// control-flow interface (`BranchOpInterface`,
   /// `RegionBranchOpInterface`, or `RegionBranchTerminatorOpInterface`).
   /// Backedges are classified only for region-branch terminators, where a
@@ -286,7 +277,8 @@ protected:
   /// denotes a re-entry into an earlier region (scf.for yield -> body,
   /// scf.while after -> before).
   void visitTerminator(Operation *operation,
-                       SmallVector<SuccessorInfo> &successors);
+                       SmallVector<VirtualBlock> &successors,
+                       SmallVector<bool> &isBackedges);
 
   /// Updates the BlockInfo operation based on the operation.
   virtual void update(Operation *operation, BlockInfo *blockInfo,
