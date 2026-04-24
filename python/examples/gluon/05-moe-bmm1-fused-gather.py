@@ -920,19 +920,15 @@ def _select_tiny16_config(slice_size: int) -> KernelConfig | None:
 
     p = KernelConfig(
         BLOCK_M=16,
-        BLOCK_N=256,
         NUM_CTAS=2,
+        BLOCK_N=256,
         X_NUM_BUFS=10,
         W_NUM_BUFS=6,
         ACC_NUM_BUFS=2,
         NUM_WARPS=4,
         LOAD_ACTIVATION_WARPS=1,
-        LOAD_WEIGHT_WARPS=1,
-        MMA_WARPS=1,
         SWIGLU_SUBTILE_FACTOR=1,
         BAND_N=26,
-        X_GATHER_MULTICAST=True,
-        W_SCALE_MULTICAST=True,
         FORCE_EPILOGUE_WARPS_N1=True,
         LOAD_ACTIVATION_REGS=40,
         LOAD_WEIGHT_REGS=32,
@@ -953,15 +949,12 @@ def _select_low32_config(slice_size: int) -> KernelConfig | None:
 
     p = KernelConfig(
         BLOCK_M=32,
-        BLOCK_N=256,
         NUM_CTAS=2,
-        X_NUM_BUFS=5,
+        BLOCK_N=256,
         W_NUM_BUFS=6,
         ACC_NUM_BUFS=2,
         NUM_WARPS=4,
         LOAD_ACTIVATION_WARPS=2,
-        LOAD_WEIGHT_WARPS=1,
-        MMA_WARPS=1,
         SWIGLU_SUBTILE_FACTOR=1,
         BAND_N=26,
         X_GATHER_MULTICAST=False,
@@ -986,20 +979,14 @@ def _select_slice28_config(slice_size: int) -> KernelConfig | None:
 
     return KernelConfig(
         BLOCK_M=32,
-        BLOCK_N=256,
         NUM_CTAS=2,
-        X_NUM_BUFS=5,
+        BLOCK_N=256,
         W_NUM_BUFS=6,
         ACC_NUM_BUFS=2,
         NUM_WARPS=4,
         LOAD_ACTIVATION_WARPS=2,
-        LOAD_WEIGHT_WARPS=1,
-        MMA_WARPS=1,
         SWIGLU_SUBTILE_FACTOR=1,
         BAND_N=28,
-        X_GATHER_MULTICAST=True,
-        W_SCALE_MULTICAST=True,
-        FORCE_EPILOGUE_WARPS_N1=False,
         LOAD_ACTIVATION_REGS=32,
         LOAD_WEIGHT_REGS=32,
         MMA_REGS=32,
@@ -1014,23 +1001,13 @@ def _select_mid64_config(slice_size: int) -> KernelConfig | None:
 
     p = KernelConfig(
         BLOCK_M=64,
-        BLOCK_N=256,
         NUM_CTAS=2,
-        X_NUM_BUFS=5,
+        BLOCK_N=256,
         W_NUM_BUFS=5,
-        ACC_NUM_BUFS=1,
-        NUM_WARPS=8,
-        LOAD_ACTIVATION_WARPS=4,
-        LOAD_WEIGHT_WARPS=1,
-        MMA_WARPS=1,
         SWIGLU_SUBTILE_FACTOR=2,
         BAND_N=24,
-        X_GATHER_MULTICAST=True,
-        W_SCALE_MULTICAST=True,
         FORCE_EPILOGUE_WARPS_N1=True,
         LOAD_ACTIVATION_REGS=64,
-        LOAD_WEIGHT_REGS=48,
-        MMA_REGS=48,
         MAXNREG=64,
         OCCUPANCY=2,
     )
@@ -1054,25 +1031,12 @@ def _select_high128_config(slice_size: int) -> KernelConfig | None:
         return None
 
     p = KernelConfig(
-        BLOCK_M=128,
         BLOCK_N=512,
         NUM_CTAS=2,
         X_NUM_BUFS=6,
         W_NUM_BUFS=5,
-        ACC_NUM_BUFS=1,
-        NUM_WARPS=8,
-        LOAD_ACTIVATION_WARPS=4,
-        LOAD_WEIGHT_WARPS=1,
-        MMA_WARPS=1,
-        SWIGLU_SUBTILE_FACTOR=8,
         BAND_N=18,
-        X_GATHER_MULTICAST=True,
-        W_SCALE_MULTICAST=True,
         FORCE_EPILOGUE_WARPS_N1=True,
-        LOAD_ACTIVATION_REGS=112,
-        LOAD_WEIGHT_REGS=48,
-        MMA_REGS=48,
-        OCCUPANCY=1,
     )
     if slice_size in (96, 544, 576, 608, 640):
         return p
@@ -1126,110 +1090,11 @@ def _select_best_batch_config(slice_size: int) -> KernelConfig | None:
     return None
 
 
-def _select_default_config(slice_size: int) -> KernelConfig:
-    if slice_size <= 14:
-        p = KernelConfig(
-            BLOCK_M=16,
-            BLOCK_N=128,
-            X_NUM_BUFS=10,
-            W_NUM_BUFS=5,
-            SWIGLU_SUBTILE_FACTOR=2,
-            OCCUPANCY=2,
-            MAXNREG=64,
-            LOAD_ACTIVATION_REGS=48,
-            LOAD_WEIGHT_REGS=32,
-            MMA_REGS=32,
-        )
-    elif slice_size <= 32:
-        p = KernelConfig(
-            BLOCK_M=32,
-            BLOCK_N=128,
-            X_NUM_BUFS=5,
-            W_NUM_BUFS=5,
-            SWIGLU_SUBTILE_FACTOR=4,
-            OCCUPANCY=2,
-            MAXNREG=64,
-            LOAD_ACTIVATION_REGS=48,
-            LOAD_WEIGHT_REGS=32,
-            MMA_REGS=32,
-        )
-    elif slice_size <= 64:
-        p = KernelConfig(
-            BLOCK_M=64,
-            BLOCK_N=128,
-            X_NUM_BUFS=4,
-            W_NUM_BUFS=4,
-            SWIGLU_SUBTILE_FACTOR=8,
-            OCCUPANCY=2,
-            MAXNREG=64,
-            LOAD_ACTIVATION_REGS=48,
-            LOAD_WEIGHT_REGS=32,
-            MMA_REGS=32,
-        )
-    else:
-        p = KernelConfig(
-            BLOCK_M=128,
-            SWIGLU_SUBTILE_FACTOR=8,
-        )
-
-    if p.BLOCK_M == 32 and p.BLOCK_N == 128 and slice_size in (16, 20, 24, 32):
-        p = replace(
-            p,
-            BLOCK_N=256,
-            NUM_CTAS=2,
-            NUM_WARPS=4,
-            W_NUM_BUFS=5,
-            SWIGLU_SUBTILE_FACTOR=1,
-            LOAD_ACTIVATION_WARPS=2,
-            LOAD_WEIGHT_WARPS=1,
-            MMA_WARPS=1,
-            LOAD_ACTIVATION_REGS=40,
-            LOAD_WEIGHT_REGS=32,
-            MMA_REGS=32,
-            MAXNREG=52,
-            BAND_N=32,
-            FORCE_EPILOGUE_WARPS_N1=True,
-        )
-        if slice_size == 16:
-            p = replace(p, X_NUM_BUFS=5)
-        elif slice_size in (20, 24):
-            p = replace(p, X_NUM_BUFS=6)
-        else:
-            p = replace(p, X_NUM_BUFS=6, X_GATHER_MULTICAST=False, W_SCALE_MULTICAST=False)
-    elif 36 <= slice_size <= 72:
-        p = replace(
-            p,
-            BLOCK_M=64,
-            BLOCK_N=256,
-            NUM_CTAS=2,
-            OCCUPANCY=2,
-            X_NUM_BUFS=6,
-            W_NUM_BUFS=5,
-            SWIGLU_SUBTILE_FACTOR=4,
-            LOAD_ACTIVATION_REGS=64,
-            LOAD_WEIGHT_REGS=48,
-            MMA_REGS=48,
-            MAXNREG=64,
-        )
-    elif p.BLOCK_M == 128 and p.BLOCK_N == 256 and slice_size >= 80:
-        p = replace(p, BLOCK_N=512, NUM_CTAS=2, W_NUM_BUFS=5)
-
-    if p.BLOCK_M == 32 and p.BLOCK_N == 256 and p.NUM_CTAS == 2 and slice_size <= 32:
-        return replace(p, BAND_N=32)
-    if p.BLOCK_M == 64 and p.BLOCK_N == 256 and p.NUM_CTAS == 2 and 36 <= slice_size <= 72:
-        return replace(p, BAND_N=26)
-    if slice_size < 32:
-        return replace(p, BAND_N=22)
-    if slice_size < 416:
-        return replace(p, BAND_N=18)
-    return replace(p, BAND_N=26)
-
-
 def select_kernel_config(slice_size: int) -> KernelConfig:
     p = _select_best_batch_config(slice_size)
     if p is not None:
         return p
-    return _select_default_config(slice_size)
+    return KernelConfig()
 
 
 def matmul(
