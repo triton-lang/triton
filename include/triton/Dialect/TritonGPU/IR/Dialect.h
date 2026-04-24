@@ -101,16 +101,44 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
+// Returns true iff every non-broadcast basis of `ll`, after flattening in and
+// out dimensions, maps to a single power-of-2 in the flattened output.
+bool hasPowerOfTwoBases(const LinearLayout &ll);
+
+// Check whether after removing broadcast bases the flattened layout is a
+// permutation matrix (each non-broadcast basis maps to a distinct power-of-2
+// and the remaining layout is bijective).
+bool isPermutationMatrixLayout(const LinearLayout &ll);
+
+// Returns whether the attribute is a GenericLinearEncoding, a WMMA with warp
+// swizzling or a slice or DotOp of one of these.
+bool isGenericLinearEncoding(Attribute attr);
+
+// Create a GenericLinearEncoding if the source isGenericLinearEncoding, and a
+// LinearEncoding otherwise.
+Attribute inferEncodingFromLinearLayout(MLIRContext *ctx, LinearLayout ll,
+                                        Attribute srcEnc);
+
 // Convert a distributed layout to a linear encoding
 LinearEncodingAttr toLinearEncoding(RankedTensorType type);
 LinearEncodingAttr toLinearEncoding(DistributedEncodingTrait layout,
                                     ArrayRef<int64_t> shape);
+
+// Convert a distributed layout to a generic linear encoding
+GenericLinearEncodingAttr toGenericLinearEncoding(RankedTensorType type);
+GenericLinearEncodingAttr
+toGenericLinearEncoding(DistributedEncodingTrait layout,
+                        ArrayRef<int64_t> shape);
 
 unsigned getTotalElemsPerThread(Type type);
 
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
 SmallVector<unsigned> getElemsPerThread(Type type);
+
+FailureOr<RankedTensorType> inferFp4ToFpResultType(RankedTensorType srcType,
+                                                   Type elemType, int32_t axis,
+                                                   std::optional<Location> loc);
 
 // Returns the number of warps per CTA that have access to non-replicated
 // elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,

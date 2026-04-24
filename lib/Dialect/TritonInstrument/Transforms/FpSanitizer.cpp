@@ -948,6 +948,31 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
   return ScratchInfo{ptr, tensorTy};
 }
 
+std::optional<ScratchInfo> createWGMMAScratch(PatternRewriter &rewriter,
+                                              Location loc, Value operand) {
+  if (auto memTy = dyn_cast<ttg::MemDescType>(operand.getType())) {
+    auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
+                                              memTy.getElementType());
+    auto tensorTy =
+        RankedTensorType::get(memTy.getShape(), memTy.getElementType(), layout);
+    Value fullVal =
+        ttg::LocalLoadOp::create(rewriter, loc, tensorTy, operand, Value())
+            .getResult();
+    Value ptr = createScratchAndStore(rewriter, loc, fullVal, tensorTy);
+    if (!ptr)
+      return std::nullopt;
+    return ScratchInfo{ptr, tensorTy};
+  }
+
+  auto tensorTy = dyn_cast<RankedTensorType>(operand.getType());
+  if (!tensorTy)
+    return std::nullopt;
+  Value ptr = createScratchAndStore(rewriter, loc, operand, tensorTy);
+  if (!ptr)
+    return std::nullopt;
+  return ScratchInfo{ptr, tensorTy};
+}
+
 Value createAsyncToken(PatternRewriter &rewriter, Location loc,
                        ValueRange deps) {
   return ttg::AsyncCommitGroupOp::create(rewriter, loc, deps).getResult();
@@ -1916,6 +1941,102 @@ struct TCGen5CommitPattern : public OpRewritePattern<ttng::TCGen5CommitOp> {
   }
 };
 
+struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::WarpGroupDotOp op,
+                                PatternRewriter &rewriter) const override {
+    auto aTy = dyn_cast<ttg::TensorOrMemDesc>(op.getA().getType());
+    auto bMemTy = dyn_cast<ttg::MemDescType>(op.getB().getType());
+    auto cTy = dyn_cast<RankedTensorType>(op.getC().getType());
+    if (!aTy || !bMemTy || !cTy)
+      return emitFpSanInvariantError(op.getOperation());
+
+    if (auto aMemTy = dyn_cast<ttg::MemDescType>(op.getA().getType())) {
+      if (!isa<ttg::SharedMemorySpaceAttr>(aMemTy.getMemorySpace()))
+        return emitFpSanInvariantError(op.getOperation());
+    }
+    if (!isa<ttg::SharedMemorySpaceAttr>(bMemTy.getMemorySpace()))
+      return emitFpSanInvariantError(op.getOperation());
+
+    bool aIsFloat = isa<FloatType>(aTy.getElementType());
+    bool bIsFloat = isa<FloatType>(bMemTy.getElementType());
+    bool cIsFloat = isa<FloatType>(cTy.getElementType());
+    if (!aIsFloat && !bIsFloat && !cIsFloat)
+      return failure();
+    if (!aIsFloat || !bIsFloat || !cIsFloat)
+      return emitFpSanUnsupported(op.getOperation());
+
+    if (aTy.getRank() != 2 || bMemTy.getRank() != 2 || cTy.getRank() != 2)
+      return emitFpSanUnsupported(op.getOperation());
+    auto aShape = aTy.getShape();
+    auto bShape = bMemTy.getShape();
+    auto cShape = cTy.getShape();
+    if (aShape[1] != bShape[0] || aShape[0] != cShape[0] ||
+        bShape[1] != cShape[1])
+      return emitFpSanInvariantError(op.getOperation());
+
+    auto loc = op.getLoc();
+    int64_t m = aShape[0];
+    int64_t k = aShape[1];
+    int64_t n = bShape[1];
+
+    auto *ctx = rewriter.getContext();
+    auto accElem =
+        IntegerType::get(ctx, cTy.getElementType().getIntOrFloatBitWidth());
+    Value useCInt;
+    if (op.getUseC()) {
+      useCInt = arith::ExtUIOp::create(rewriter, loc, accElem, op.getUseC());
+    } else {
+      useCInt = arith::ConstantOp::create(rewriter, loc,
+                                          rewriter.getIntegerAttr(accElem, 1));
+    }
+    Value predInt = arith::ConstantOp::create(
+        rewriter, loc, rewriter.getIntegerAttr(accElem, 1));
+
+    rewriter.setInsertionPoint(op);
+    auto aScratch = createWGMMAScratch(rewriter, loc, op.getA());
+    auto bScratch = createWGMMAScratch(rewriter, loc, op.getB());
+    Value dPtr = createScratchAndStore(rewriter, loc, op.getC(), cTy);
+    if (!aScratch || !bScratch || !dPtr)
+      return emitFpSanCodegenError(op.getOperation());
+
+    int64_t tileM = std::min<int64_t>(kTileM, m);
+    int64_t tileN = std::min<int64_t>(kTileN, n);
+
+    auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
+                                                     cTy.getElementType());
+    auto accTileTy = RankedTensorType::get({tileM, tileN}, cTy.getElementType(),
+                                           accTileLayout);
+    auto aTileLayout =
+        getOptimizedBlockedEncoding(rewriter, {tileM, k}, aTy.getElementType());
+    auto aTileTy =
+        RankedTensorType::get({tileM, k}, aTy.getElementType(), aTileLayout);
+    auto bTileLayout = getOptimizedBlockedEncoding(rewriter, {k, tileN},
+                                                   bMemTy.getElementType());
+    auto bTileTy =
+        RankedTensorType::get({k, tileN}, bMemTy.getElementType(), bTileLayout);
+
+    createGlobalScratchBarrier(rewriter, loc);
+
+    auto mLoop = emitMmaEmulationLoops(
+        rewriter, loc, aScratch->ptr, bScratch->ptr, dPtr, m, n, k, tileM,
+        tileN, aTileTy, bTileTy, accTileTy, accTileLayout, accElem, useCInt,
+        predInt, /*aStride=*/m, /*bStride=*/k, /*dStride=*/m);
+    if (!mLoop)
+      return emitFpSanUnsupported(op.getOperation());
+    rewriter.setInsertionPointAfter(*mLoop);
+
+    createGlobalScratchBarrier(rewriter, loc);
+
+    Value out = loadScratchStrided2D(rewriter, loc, dPtr, cTy, /*stride1=*/m);
+    if (!out)
+      return emitFpSanCodegenError(op.getOperation());
+    rewriter.replaceOp(op, out);
+    return success();
+  }
+};
+
 struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
   TCGen5MMAPattern(MLIRContext *ctx, TmemScratchManager *scratch)
       : OpRewritePattern(ctx), scratch(scratch) {}
@@ -2284,6 +2405,7 @@ public:
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
                  TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
                                                            &scratch);
+    patterns.add<WarpGroupDotPattern>(&getContext());
     patterns.add<TCGen5CommitPattern>(&getContext());
 
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {

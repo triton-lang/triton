@@ -45,6 +45,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @warp_group_dot_emulation
+  tt.func public @warp_group_dot_emulation() -> tensor<64x32xf32, #mma> {
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK: scf.for
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NOT: ttng.warp_group_dot {{.*}} :
+    // CHECK: ttng.warp_group_dot_wait
+    %a = ttg.local_alloc : () -> !ttg.memdesc<64x32xf32, #shared, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    %c = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #mma>
+    %true = arith.constant true
+    %d = ttng.warp_group_dot %a, %b, %c, %true {inputPrecision = 1 : i32, isAsync = true} : !ttg.memdesc<64x32xf32, #shared, #smem, mutable> * !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<64x32xf32, #mma>
+    %wait = ttng.warp_group_dot_wait %d {pendings = 0 : i32} : tensor<64x32xf32, #mma>
+    tt.return %wait : tensor<64x32xf32, #mma>
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @binary_ops
   tt.func public @binary_ops(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
