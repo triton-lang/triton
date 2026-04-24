@@ -36,6 +36,9 @@ def test_address_sanitizer():
 
     os.environ["TRITON_ALWAYS_COMPILE"] = "1"
 
+    # Override the job-level TRITON_DISABLE_LINE_INFO=1
+    os.environ["TRITON_DISABLE_LINE_INFO"] = "0"
+
     helper = os.path.join(os.path.dirname(__file__), "address_sanitizer_helper.py")
 
     try:
@@ -58,6 +61,12 @@ def test_address_sanitizer():
     stderr = r.stderr.decode(errors="replace")
     has_begin = "Begin function __asan_report" in stdout
     has_overflow = "heap-buffer-overflow" in stderr
+
+    # Always forward the helper's stderr (ASan report + diagnostics) to the
+    # test runner's stderr so that CI logs contain the full report even on
+    # passing runs.
+    sys.stderr.write(stderr)
+    sys.stderr.flush()
 
     assert has_begin and has_overflow, ("ASan check failed\n"
                                         f"  returncode   = {r.returncode}\n"

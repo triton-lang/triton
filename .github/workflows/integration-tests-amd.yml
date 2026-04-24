@@ -201,7 +201,7 @@ jobs:
           }
           trap restore_hip EXIT INT TERM
           mv "$TORCH_PATH/libamdhip64.so" "$TORCH_PATH/libamdhip64_bck.so"
-          ASAN_OPTIONS=detect_leaks=0,alloc_dealloc_mismatch=0,abort_on_error=1,halt_on_error=1,handle_abort=1,print_stats=1,log_exe_name=1,symbolize=1 \
+          ASAN_OPTIONS=detect_leaks=0,alloc_dealloc_mismatch=0,abort_on_error=1,halt_on_error=1,handle_abort=1,print_stats=1,log_exe_name=1,symbolize=1,verbosity=1 \
           LD_PRELOAD=$CLANG_ASAN_LIB:$HIP_ASAN_LIB python3 -m pytest -s test_address_sanitizer.py
       - name: Run regression tests
         run: |
