@@ -96,6 +96,7 @@ struct GraphScopeEvent {
   size_t streamId{};
   uint64_t startTimeNs{};
   uint64_t endTimeNs{};
+  size_t depth{};
   const DataEntry::FlexibleMetricMap *flexibleMetrics{};
 };
 

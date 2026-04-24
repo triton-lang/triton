@@ -88,7 +88,7 @@ void reconstructGraphScopeEvents(
           auto &tailOpenScope = openScopes[i - 1];
           graphScopeEvents[streamId].push_back({tailOpenScope.context, streamId,
                                                 tailOpenScope.startTimeNs,
-                                                lastEndTimeNs});
+                                                lastEndTimeNs, i - 1});
         }
         for (size_t i = openScopes.size(); i > numCommonPrefixes; --i) {
           openScopes.pop_back();
@@ -102,9 +102,11 @@ void reconstructGraphScopeEvents(
     }
 
     auto &openScopes = openGraphScopes[streamId];
-    for (const auto &openScope : openScopes) {
+    for (size_t i = 0; i < openScopes.size(); ++i) {
+      const auto &openScope = openScopes[i];
       graphScopeEvents[streamId].push_back(
-          {openScope.context, streamId, openScope.startTimeNs, lastEndTimeNs});
+          {openScope.context, streamId, openScope.startTimeNs, lastEndTimeNs,
+           i});
     }
   }
 }
