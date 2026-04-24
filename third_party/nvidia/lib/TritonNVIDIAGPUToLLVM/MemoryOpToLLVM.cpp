@@ -1,6 +1,7 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
+#include "TritonNVIDIAGPUToLLVM/AtomicPTXBuilder.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -30,7 +31,7 @@ bool isConstI32OneTensor(Value value) {
 }
 
 Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
-                    Value ptr, bool returnOld) {
+                    Value ptr, bool returnOld, Value pred = Value()) {
   PTXBuilder ptxBuilder;
   // PTX atom/red.inc resets to 0 only when the old value reaches the bound, so
   // using UINT32_MAX makes it equivalent to a wrapping increment-by-1.
@@ -39,7 +40,7 @@ Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
     auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
     auto &red = *ptxBuilder.create("red");
     red.shared().o("inc").o("u32");
-    red(ptrOpr, boundOpr);
+    red(ptrOpr, boundOpr).maybePredicate(pred, "b");
     return ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
   }
 
@@ -47,8 +48,49 @@ Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
   auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
   auto &atom = *ptxBuilder.create("atom");
   atom.shared().o("inc").o("u32");
-  atom(dstOpr, ptrOpr, boundOpr);
+  atom(dstOpr, ptrOpr, boundOpr).maybePredicate(pred, "b");
   return ptxBuilder.launch(rewriter, loc, i32_ty);
+}
+
+FailureOr<Value> emitSharedAtomicAdd(ConversionPatternRewriter &rewriter,
+                                     Location loc, Type valueElemTy, Value ptr,
+                                     Value value, bool returnOld,
+                                     Value pred) {
+  unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
+  if (valueElemNBits != 16 && valueElemNBits != 32 && valueElemNBits != 64)
+    return failure();
+
+  std::string tyId =
+      getPtxRegisterSizeCode(valueElemNBits, /*isFloat=*/false);
+  std::string addOp = "add";
+  std::string suffix;
+  if (isa<IntegerType>(valueElemTy)) {
+    if (valueElemNBits < 32)
+      return failure();
+    suffix = "u" + std::to_string(valueElemNBits);
+  } else if (isa<FloatType>(valueElemTy)) {
+    addOp += valueElemNBits == 16 ? ".noftz" : "";
+    suffix = (valueElemTy.isBF16() ? "bf" : "f") +
+             std::to_string(valueElemNBits);
+  } else {
+    return failure();
+  }
+
+  PTXBuilder ptxBuilder;
+  auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
+  auto *valOpr = ptxBuilder.newOperand(value, tyId);
+  if (!returnOld) {
+    auto &red = *ptxBuilder.create("red");
+    red.shared().o(addOp).o(suffix);
+    red(ptrOpr, valOpr).maybePredicate(pred, "b");
+    return ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+  }
+
+  auto *dstOpr = ptxBuilder.newOperand("=" + tyId, /*init=*/true);
+  auto &atom = *ptxBuilder.create("atom");
+  atom.shared().o(addOp).o(suffix);
+  atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred, "b");
+  return ptxBuilder.launch(rewriter, loc, valueElemTy);
 }
 
 LogicalResult lowerLdStMatrix(
@@ -232,17 +274,7 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::LocalAtomicScatterAddOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (op.getMask())
-      return failure();
     auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
-    if (!valuesTy.getElementType().isInteger(32))
-      return failure();
-
-    SmallVector<Value> values =
-        unpackLLElements(op.getLoc(), adaptor.getValues(), rewriter);
-    if (!isConstI32OneTensor(op.getValues()))
-      return failure();
-
     auto memDescTy = cast<MemDescType>(op.getDst().getType());
     if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
             memDescTy.getEncoding())) {
@@ -261,19 +293,49 @@ public:
     SmallVector<Value> ptrs =
         computeLocalPtrs(op.getLoc(), memDescTy, smemObj, llvmElemTy, idxValues,
                          srcIndices, op.getAxis(), rewriter);
+    SmallVector<Value> values =
+        unpackLLElements(op.getLoc(), adaptor.getValues(), rewriter);
+    SmallVector<Value> maskValues;
+    if (op.getMask())
+      maskValues = unpackLLElements(op.getLoc(), adaptor.getMask(), rewriter);
+    bool isI32Inc = valuesTy.getElementType().isInteger(32) &&
+                    isConstI32OneTensor(op.getValues());
+
+    if (maskValues.empty() && !isI32Inc)
+      return failure();
 
     if (op.getResult().use_empty()) {
-      for (Value ptr : ptrs)
-        emitSharedInc(rewriter, op.getLoc(), ptr, /*returnOld=*/false);
+      for (auto [i, ptrAndValue] : llvm::enumerate(llvm::zip(ptrs, values))) {
+        auto [ptr, value] = ptrAndValue;
+        Value pred = maskValues.empty() ? Value() : maskValues[i];
+        if (isI32Inc) {
+          emitSharedInc(rewriter, op.getLoc(), ptr, /*returnOld=*/false, pred);
+          continue;
+        }
+        if (failed(emitSharedAtomicAdd(rewriter, op.getLoc(), llvmElemTy, ptr,
+                                       value, /*returnOld=*/false, pred)))
+          return failure();
+      }
       rewriter.eraseOp(op);
       return success();
     }
 
     SmallVector<Value> results;
     results.reserve(ptrs.size());
-    for (Value ptr : ptrs)
-      results.push_back(
-          emitSharedInc(rewriter, op.getLoc(), ptr, /*returnOld=*/true));
+    for (auto [i, ptrAndValue] : llvm::enumerate(llvm::zip(ptrs, values))) {
+      auto [ptr, value] = ptrAndValue;
+      Value pred = maskValues.empty() ? Value() : maskValues[i];
+      if (isI32Inc) {
+        results.push_back(emitSharedInc(rewriter, op.getLoc(), ptr,
+                                        /*returnOld=*/true, pred));
+        continue;
+      }
+      auto old = emitSharedAtomicAdd(rewriter, op.getLoc(), llvmElemTy, ptr,
+                                     value, /*returnOld=*/true, pred);
+      if (failed(old))
+        return failure();
+      results.push_back(*old);
+    }
 
     Value result = packLLElements(op.getLoc(), getTypeConverter(), results,
                                   rewriter, op.getType());

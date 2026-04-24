@@ -476,6 +476,10 @@ def TTG_LocalAtomicScatterAddOp : TTG_Op<"local_atomic_scatter_add", [
     For each input position I, the operation atomically updates dst where the
     coordinate at the axis is replaced by indices[I]:
       dst[I[0], ..., indices[I], ..., I[n]] += values[I]
+
+    If mask is present, the update is performed only for positions where
+    mask[I] is true. Masked-off positions do not update shared memory and return
+    an undefined old value.
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$dst,

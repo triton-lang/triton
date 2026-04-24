@@ -378,6 +378,11 @@ public:
       return rewriter.notifyMatchFailure(
           op, "PartitionedSharedEncoding not yet supported in lowering");
     }
+    if (op.getMask()) {
+      return rewriter.notifyMatchFailure(
+          op, "masked local_atomic_scatter_add requires backend-specific "
+              "lowering; it is not supported on AMD GPUs");
+    }
     auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
     auto typeConverter = getTypeConverter();
     auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
@@ -388,10 +393,6 @@ public:
         unpackLLElements(loc, adaptor.getValues(), rewriter);
     SmallVector<Value> idxValues =
         unpackLLElements(loc, adaptor.getIndices(), rewriter);
-    SmallVector<Value> maskValues;
-    if (op.getMask()) {
-      maskValues = unpackLLElements(loc, adaptor.getMask(), rewriter);
-    }
     SmallVector<SmallVector<Value>> srcIndices =
         emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(), valuesTy,
                     /*withCTAOffset=*/true);
@@ -409,34 +410,10 @@ public:
     SmallVector<Value> results;
     results.reserve(ptrs.size());
 
-    for (auto [i, ptrAndValue] : llvm::enumerate(llvm::zip(ptrs, values))) {
-      auto [ptr, value] = ptrAndValue;
-      if (maskValues.empty()) {
-        results.push_back(LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp,
-                                                    ptr, value, *ordering)
-                              .getResult());
-        continue;
-      }
-
-      Value undefVal = LLVM::UndefOp::create(rewriter, loc, llvmElemTy);
-      auto *curBlock = rewriter.getInsertionBlock();
-      auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
-      auto *atomicBlock = rewriter.createBlock(
-          curBlock->getParent(), std::next(Region::iterator(curBlock)));
-      endBlock->addArgument({llvmElemTy}, {loc});
-
-      rewriter.setInsertionPointToEnd(curBlock);
-      LLVM::CondBrOp::create(rewriter, loc, maskValues[i], atomicBlock,
-                             endBlock, undefVal);
-
-      rewriter.setInsertionPointToEnd(atomicBlock);
-      Value atom = LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp, ptr,
-                                             value, *ordering)
-                       .getResult();
-      LLVM::BrOp::create(rewriter, loc, atom, endBlock);
-
-      rewriter.setInsertionPointToStart(endBlock);
-      results.push_back(endBlock->getArgument(0));
+    for (auto [ptr, value] : llvm::zip(ptrs, values)) {
+      results.push_back(LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp,
+                                                  ptr, value, *ordering)
+                            .getResult());
     }
 
     Value result =
